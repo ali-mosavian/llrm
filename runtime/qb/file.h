@@ -22,10 +22,18 @@ typedef struct Fdb {
 
 /* B$OPEN, B$CLOS, B$GETn, B$PUTn, B$FLOF, B$FLOC, B$FEOF */
 void B_OPEN(SD *name, short channel, short record_length, unsigned short mode);
+long B_FATR(short channel, short field);
+void B_KILL(SD *name);
+void B_NAME(SD *old, SD *new_name);
+void B_MDIR(SD *name);
+void B_CDIR(SD *name);
+void B_RDIR(SD *name);
 void file_close(const int *channels, unsigned count);
 void B_GET3(short channel, qb_data_ptr record, short length);
 void B_PUT3(short channel, qb_data_ptr record, short length);
 long B_FLOF(short channel);
+long B_FLOC(short channel);
+long B_FSEK(short channel);
 void B_CHOU(short channel);
 void file_print_to(Fdb *fdb);
 void B_DSKI(short channel);

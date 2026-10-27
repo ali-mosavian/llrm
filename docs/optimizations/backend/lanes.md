@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/lanes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/lanes.rs sha256:b318e3a52b42da8b335c86a9ba9336d121693b0e58e972346d7cb3c271011dfe -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/lanes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/lanes.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/lanes.rs sha256:53dd34fcc7683e557d786e384bbf4fee3fb6d760487b9629456498ba9ea797ff -->
 
 # lanes
 
@@ -38,5 +38,5 @@ No example: a bit set type. `liveness.rs` shows what it holds.
 
 ## Used by
 `liveness`, `peephole` and its sub-passes (`copysink`, `postrasink`,
-`regthrash`, `exactaddress`, `sharedstores`, `machinecse`), `loopslots`,
+`regthrash`, `exactaddress`, `sharedstores`), `loopslots`,
 `schedule`, `parcopy`, and `peep/guards`, `peep/walk`, `peep/make`.

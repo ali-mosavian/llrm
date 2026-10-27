@@ -21,7 +21,7 @@ def test_a_value_a_rewrite_displaced_may_evict_before_it_is_spilled():
     compiler = llrmbin.bin_dir() / "llrm-qb"
     done = subprocess.run(
         [str(compiler), str(ROOT / "bench/matmul/matmul.bas"), "--dialect", "qb45", "-fqb-runtime=llrm", "-O2", "-fno-inline-functions",
-         "-fno-inline-functions-called-once", "-fno-allocation-routes", "-fno-allocation-search", "-S", "-o", os.devnull],
+         "-fno-inline-functions-called-once", "-fno-allocation-search", "-S", "-o", os.devnull],
         env={**os.environ, "LLRM_DEBUG": "cost"}, capture_output=True, text=True, check=True)
     found = re.search(r"BENCHMATMUL& executes \d+ instructions, (\d+) memory operands", done.stderr)
     assert found, done.stderr[-500:]

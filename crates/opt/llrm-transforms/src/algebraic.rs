@@ -523,10 +523,8 @@ fn _inverted_compare(
 /// `a`, as InstCombine's `foldICmpWithZextOrSext`: a `zext` pair orders as
 /// unsigned, a `sext` pair keeps its predicate, and a constant outside `a`'s
 /// range decides the answer. C's `int` promotion makes every `unsigned short`
-/// compare one of these. Where the extension lives on for another reader the
-/// compare narrows only for a loop-carried `a`, whose trip count is proven at
-/// its own width: narrowed elsewhere it moves the value to a byte-addressable
-/// register for nothing (grep grew 24 bytes).
+/// compare one of these. As the pin's, there is no use gate: the extension
+/// stays for its other readers and dies if it has none.
 fn _narrow_compare(
     context: &Context,
     function: &mut Function,
@@ -556,9 +554,6 @@ fn _narrow_compare(
     if let Some((other, b)) = extension(function, right)
         && other == kind
         && function.operand_type(context, b) == Some(narrow)
-        && (_loop_carried(function, a)
-            || _loop_carried(function, b)
-            || _single_use(function, left) && _single_use(function, right))
     {
         let predicate = if signed { predicate } else { unsigned_form(predicate) };
         _replace(function, inst, Opcode::ICmp(predicate), vec![a, b]);
@@ -580,9 +575,6 @@ fn _narrow_compare(
     }
     let c = if compared_signed || signed { ((bits as i128) << (128 - wide)) >> (128 - wide) } else { bits as i128 };
     if (low..=high).contains(&c) {
-        if !_loop_carried(function, a) && !_single_use(function, left) {
-            return false;
-        }
         let predicate = if signed { predicate } else { unsigned_form(predicate) };
         let number = Operand::Constant(context.int(narrow, c));
         _replace(function, inst, Opcode::ICmp(predicate), vec![a, number]);
@@ -2027,7 +2019,7 @@ fn _unsigned_divisions(
             lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
         })
         .collect();
-    let held = Ranges::of(context, layout, function, analyses, true);
+    let held = Ranges::of(context, layout, function, analyses);
     let unit = held.unit(context, layout, function, outer);
     let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, BinaryOp)> = candidates

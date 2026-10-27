@@ -13,12 +13,10 @@
 //! This is the first slice of the family. A step not translated yet stays in
 //! its place as a `// OWED:` comment naming the C++ function, so the order
 //! stays LLVM's. The owed steps, with their exits:
-//! `foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
-//! `canonicalizeICmpPredicate` (needs `canFreelyInvertAllUsersOf`,
-//! uselist-port's shared helper), `foldICmpWithConstant`,
-//! `foldICmpWithDominatingICmp`, `foldICmpUsingBoolRange`,
+//! `foldICmpTruncWithTruncOrExt`,
+//! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
-//! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
+//! `foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 //! `dyn_castNegVal` select fold.
@@ -51,15 +49,16 @@
 
 use llrm_mir::context::{mask, signed};
 use llrm_mir::knownbits::KnownBits;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
-use crate::combine_shared::{get_complexity, query};
+use crate::combine_shared::{get_complexity, has_one_use, query};
 
 /// `ICmpInst::isSigned`.
 fn is_signed(pred: IntPredicate) -> bool {
@@ -163,13 +162,19 @@ pub fn visit_icmp(
     }
     // OWED: the `abs(val) != 0` select fold (dyn_castNegVal).
     // OWED: foldICmpTruncWithTruncOrExt.
-    // OWED: canonicalizeICmpBool.
+    if let Some(r) = canonicalize_icmp_bool(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = canonicalize_cmp_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: canonicalizeICmpPredicate (canFreelyInvertAllUsersOf).
-    // OWED: foldICmpWithConstant, foldICmpWithDominatingICmp,
-    // foldICmpUsingBoolRange.
+    if let Some(r) = canonicalize_icmp_predicate(c, inst, pred) {
+        return r;
+    }
+    // OWED: foldICmpWithConstant, foldICmpUsingBoolRange.
+    if let Some(r) = fold_icmp_with_dominating_icmp(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_using_known_bits(c, inst, pred, op0, op1) {
         return r;
     }
@@ -204,14 +209,270 @@ pub fn visit_icmp(
             return new_icmp(c, inst, IntPredicate::Sgt, op0, ones);
         }
     }
-    // OWED: foldICmpBinOp.
+    if let Some(r) = fold_icmp_bin_op(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt,
-    // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
-    // the two-select fold.
+    if let Some(r) = fold_sign_bit_test(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_icmp_with_ext_of_ext(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
+        return r;
+    }
+    for operand in [op0, op1] {
+        if let Operand::Value(value) = operand
+            && let ValueDef::Instruction(phi) = c.function.value(value).def
+            && c.function.instruction(phi).opcode == Opcode::Phi
+        {
+            match c.fold_op_into_phi(inst, phi, false) {
+                Visit::None => {}
+                found => return found,
+            }
+        }
+    }
+    // foldICmpCommutative, its GEP step: both orders.
+    if let Some(r) = fold_gep_icmp(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_gep_icmp(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
+    // OWED: foldICmpInstWithConstantNotInt, foldICmpCommutative,
+    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `foldGEPICmp`
+/// ([:`foldGEPICmp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)),
+/// its first arm: `icmp (gep Ptr, OFFSET), Ptr` is `icmp OFFSET, 0`, for an
+/// equality or an unsigned predicate on a GEP with a no-wrap flag.
+///
+/// DEVIATE 1: one GEP between the compare and `Ptr` (`CommonPointerBase`
+/// walks a chain). Exit: translate `CommonPointerBase`.
+/// DEVIATE 2: the null arm and the GEP-against-GEP arms are not made.
+fn fold_gep_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    gep_operand: Operand,
+    rhs: Operand,
+) -> Option<Visit> {
+    use crate::combine_gep::GepFlags;
+    // Signed compares of GEPs are not index compares: the final add of the
+    // base can overflow.
+    if matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    ) {
+        return None;
+    }
+    let def = c.definition_of(gep_operand)?;
+    let gep = c.gep_of(def)?;
+    if gep.ptr != rhs {
+        return None;
+    }
+    let flags = GepFlags::of(gep.flags);
+    let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    if !equality && !(flags.in_bounds || flags.nusw || flags.nuw) {
+        return None;
+    }
+    let offset = c.emit_gep_offset(def, false);
+    let zero = c.int(c.type_of(offset), 0);
+    // Without nuw the offset can wrap the address space: compare it as signed.
+    let pred = match (flags.nuw, pred) {
+        (false, IntPredicate::Ugt) => IntPredicate::Sgt,
+        (false, IntPredicate::Uge) => IntPredicate::Sge,
+        (false, IntPredicate::Ult) => IntPredicate::Slt,
+        (false, IntPredicate::Ule) => IntPredicate::Sle,
+        (_, same) => same,
+    };
+    Some(new_icmp(c, inst, pred, offset, zero))
+}
+
+/// `foldSignBitTest`
+/// ([:1193](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1193)):
+/// `icmp eq/ne (trunc? (X >> (bits-1))), 0` tests the sign of `X`, as does the
+/// base of two right shifts that sum to the width less one.
+///
+/// DEVIATE: no vectors.
+fn fold_sign_bit_test(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::opcode::CastOp;
+    if !matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || constant(c, op1)?.0 != 0 {
+        return None;
+    }
+    let val = c.definition_of(op0)?;
+    let x = {
+        let q = query(c, Some(inst));
+        // m_TruncOrSelf(m_Shr(m_Value(X), m_Constant(C)))
+        let shifted = pattern::cast(&q, op0, CastOp::Trunc).map_or(op0, |(_, _, inner)| inner);
+        let shr = q.instruction_of(shifted).and_then(|(_, instruction)| match instruction.opcode {
+            Opcode::Binary(BinaryOp::LShr | BinaryOp::AShr) => Some((instruction.operands[0], instruction.operands[1])),
+            _ => None,
+        });
+        // `m_Constant(C)`: a shift by a value is the other arm's.
+        shr.filter(|&(_, amount)| constant(c, amount).is_some())
+    };
+    let x = match x {
+        Some((x, amount)) => {
+            let bits = c.context.types.int_bits(c.type_of(x))?;
+            let (shift, _) = constant(c, amount)?;
+            if shift != u128::from(bits) - 1 {
+                return None;
+            }
+            x
+        }
+        None => {
+            if !matches!(c.function.instruction(val).opcode, Opcode::Binary(_)) {
+                return None;
+            }
+            crate::combine_shifts::reassociate_shift_amts_of_two_same_direction_shifts(c, val, true)?
+        }
+    };
+    let zero = c.int(c.type_of(x), 0);
+    let sign = if pred == IntPredicate::Eq { IntPredicate::Sge } else { IntPredicate::Slt };
+    Some(new_icmp(c, inst, sign, x, zero))
+}
+
+/// `foldICmpWithZextOrSext`'s extension-against-extension arm
+/// ([:6724](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (ext X), (ext Y)` is the compare on `X` and `Y`, the narrower
+/// one extended to the wider's type when they differ (one extension must have
+/// one use). Equality, and a signed compare of two `sext`, keep the predicate;
+/// the other cases are unsigned. A `zext nneg` against a `sext` is a `sext`.
+///
+/// DEVIATE: no vectors.
+fn fold_icmp_with_ext_of_ext(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::opcode::CastOp;
+    let ext_of = |c: &Combiner, op: Operand| {
+        [CastOp::ZExt, CastOp::SExt].into_iter().find_map(|kind| {
+            pattern::cast(&query(c, Some(inst)), op, kind).map(|(_, instruction, x)| (kind, instruction.flags, x))
+        })
+    };
+    let (kind0, flags0, mut x) = ext_of(c, op0)?;
+    let (kind1, flags1, mut y) = ext_of(c, op1)?;
+    let mut signed_ext = kind0 == CastOp::SExt;
+    if kind0 != kind1 {
+        let (x_ty, y_ty) = (c.type_of(x), c.type_of(y));
+        if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
+            && c.context.types.int_bits(x_ty) == Some(1)
+            && c.context.types.int_bits(y_ty) == Some(1)
+        {
+            let or = c.create_binop(inst, BinaryOp::Or, x, y, Flags::default());
+            let zero = c.int(x_ty, 0);
+            return Some(new_icmp(c, inst, pred, or, zero));
+        }
+        // A `zext nneg` reads as a `sext`; any other mismatch is not folded.
+        let nneg = |kind: CastOp, flags: Flags| kind == CastOp::ZExt && flags.contains(Flags::NNEG);
+        if nneg(kind0, flags0) || nneg(kind1, flags1) {
+            signed_ext = true;
+        } else {
+            return None;
+        }
+    }
+    let (x_ty, y_ty) = (c.type_of(x), c.type_of(y));
+    if x_ty != y_ty {
+        if !has_one_use(c, op0) && !has_one_use(c, op1) {
+            return None;
+        }
+        let cast = if signed_ext { CastOp::SExt } else { CastOp::ZExt };
+        let (x_bits, y_bits) = (c.context.types.int_bits(x_ty)?, c.context.types.int_bits(y_ty)?);
+        if x_bits < y_bits {
+            x = c.create_cast(inst, cast, x, y_ty, Flags::default());
+        } else if y_bits < x_bits {
+            y = c.create_cast(inst, cast, y, x_ty, Flags::default());
+        } else {
+            return None;
+        }
+    }
+    let signed_pred = matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    );
+    let narrowed = if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (signed_pred && signed_ext) {
+        pred
+    } else {
+        match pred {
+            IntPredicate::Sgt => IntPredicate::Ugt,
+            IntPredicate::Sge => IntPredicate::Uge,
+            IntPredicate::Slt => IntPredicate::Ult,
+            IntPredicate::Sle => IntPredicate::Ule,
+            other => other,
+        }
+    };
+    Some(new_icmp(c, inst, narrowed, x, y))
+}
+
+/// `foldICmpWithCastOp`'s constant arm
+/// ([:6777](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (zext|sext X), C`, where `C` is an extension of a narrow
+/// constant, is the compare on `X`: always for `eq` and `ne`; for a relational
+/// predicate when it has the extension's signedness (`sext` with a signed one,
+/// `zext` with an unsigned one), for `zext` with a signed one as the unsigned
+/// predicate (the extended value and `C` are both non-negative), and for
+/// `sext` with an unsigned one when `C` is non-negative in the narrow type.
+///
+/// DEVIATE: no vectors; the `trunc` arm is owed.
+fn fold_icmp_with_cast_op_of_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::opcode::CastOp;
+    let (bits, width) = constant(c, op1)?;
+    for kind in [CastOp::ZExt, CastOp::SExt] {
+        let x = pattern::cast(&query(c, Some(inst)), op0, kind).map(|(_, _, x)| x);
+        let Some(x) = x else { continue };
+        let narrow = c.type_of(x);
+        let Some(narrow_width) = c.context.types.int_bits(narrow) else { continue };
+        let low = bits & mask(narrow_width);
+        let back = if kind == CastOp::ZExt { low } else { (signed(low, narrow_width) as u128) & mask(width) };
+        if back != bits {
+            return None;
+        }
+        let signed_pred = matches!(
+            pred,
+            IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+        );
+        let narrowed = if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (kind == CastOp::SExt) == signed_pred {
+            pred
+        } else if kind == CastOp::ZExt {
+            match pred {
+                IntPredicate::Sgt => IntPredicate::Ugt,
+                IntPredicate::Sge => IntPredicate::Uge,
+                IntPredicate::Slt => IntPredicate::Ult,
+                _ => IntPredicate::Ule,
+            }
+        } else if kind == CastOp::SExt && low >> (narrow_width - 1) == 0 {
+            // A negative `X` extends to a huge value, as it reads unsigned
+            // in the narrow type: the compare against a non-negative constant
+            // is the same.
+            pred
+        } else {
+            return None;
+        };
+        let constant = c.int(narrow, low);
+        return Some(new_icmp(c, inst, narrowed, x, constant));
+    }
+    None
 }
 
 /// The one user of `inst`'s result.
@@ -229,6 +490,218 @@ fn select_result(
     inst: InstId,
 ) -> llrm_mir::module::ValueId {
     c.function.instruction(inst).result.expect("a select's value")
+}
+
+/// `canonicalizeICmpBool`
+/// ([:7513](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7513)):
+/// a compare of two `i1` is bitwise logic. Against a constant, InstSimplify
+/// took 14 of the 20 cases; the rest are the `not` of the other operand.
+fn canonicalize_icmp_bool(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    a: Operand,
+    b: Operand,
+) -> Option<Visit> {
+    let i1 = c.context.types.int(1);
+    if c.type_of(a) != i1 {
+        return None;
+    }
+    let none = Flags::default();
+    let ones = c.all_ones(i1);
+    match constant(c, b).map(|(bits, _)| bits) {
+        Some(0) => {
+            return matches!(pred, IntPredicate::Eq | IntPredicate::Ule | IntPredicate::Sge)
+                .then(|| c.replace_with_binop(inst, BinaryOp::Xor, a, ones, none));
+        }
+        Some(1) => {
+            return matches!(pred, IntPredicate::Ne | IntPredicate::Ult | IntPredicate::Sgt)
+                .then(|| c.replace_with_binop(inst, BinaryOp::Xor, a, ones, none));
+        }
+        _ => {}
+    }
+    Some(match pred {
+        // icmp eq i1 A, B -> ~(A ^ B)
+        IntPredicate::Eq => {
+            let xor = c.create_binop(inst, BinaryOp::Xor, a, b, none);
+            c.replace_with_binop(inst, BinaryOp::Xor, xor, ones, none)
+        }
+        // icmp ne i1 A, B -> A ^ B
+        IntPredicate::Ne => c.replace_with_binop(inst, BinaryOp::Xor, a, b, none),
+        // icmp ult i1 A, B -> ~A & B; ugt is ult swapped
+        IntPredicate::Ult | IntPredicate::Ugt => {
+            let (a, b) = if pred == IntPredicate::Ugt { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, a);
+            c.replace_with_binop(inst, BinaryOp::And, not, b, none)
+        }
+        // icmp slt i1 A, B -> A & ~B; sgt is slt swapped
+        IntPredicate::Slt | IntPredicate::Sgt => {
+            let (a, b) = if pred == IntPredicate::Sgt { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, b);
+            c.replace_with_binop(inst, BinaryOp::And, a, not, none)
+        }
+        // icmp ule i1 A, B -> ~A | B; uge is ule swapped
+        IntPredicate::Ule | IntPredicate::Uge => {
+            let (a, b) = if pred == IntPredicate::Uge { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, a);
+            c.replace_with_binop(inst, BinaryOp::Or, not, b, none)
+        }
+        // icmp sle i1 A, B -> A | ~B; sge is sle swapped
+        IntPredicate::Sle | IntPredicate::Sge => {
+            let (a, b) = if pred == IntPredicate::Sge { (b, a) } else { (a, b) };
+            let not = c.create_not(inst, b);
+            c.replace_with_binop(inst, BinaryOp::Or, a, not, none)
+        }
+    })
+}
+
+/// `canonicalizeICmpPredicate`
+/// ([:7448](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L7448)):
+/// a compare with a non-canonical predicate (`ne`, `ule`, `sle`, `uge`, `sge`)
+/// becomes the inverse one, if every user can take the inversion: a branch
+/// swaps its successors, a select its values, a `not` is dropped
+/// (`canFreelyInvertAllUsersOf`, `freelyInvertAllUsersOf`).
+fn canonicalize_icmp_predicate(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+) -> Option<Visit> {
+    if is_canonical_predicate(pred) {
+        return None;
+    }
+    let result = c.function.instruction(inst).result?;
+    let users: Vec<(InstId, u32)> = c.function.users(result).iter().map(|one| (one.user, one.index)).collect();
+    for &(user, index) in &users {
+        let one = c.function.instruction(user);
+        let ok = match &one.opcode {
+            // Only as the condition, and not a logical and/or: absorbing the
+            // not would hide that pattern.
+            Opcode::Select => {
+                index == 0 && {
+                    let q = query(c, None);
+                    let value = Operand::Value(one.result?);
+                    pattern::logical_and(&q, value).is_none() && pattern::logical_or(&q, value).is_none()
+                }
+            }
+            Opcode::Br => one.operands.len() == 3,
+            Opcode::Binary(BinaryOp::Xor) => pattern::not(&query(c, None), Operand::Value(one.result?)).is_some(),
+            _ => false,
+        };
+        if !ok {
+            return None;
+        }
+    }
+    c.function.set_icmp_predicate(inst, pred.inverse());
+    for (user, _) in users {
+        match c.function.instruction(user).opcode {
+            Opcode::Select | Opcode::Br => {
+                let mut operands = c.function.instruction(user).operands.clone();
+                operands.swap(1, 2);
+                c.function.set_operands(user, operands);
+                c.add_to_worklist(user);
+            }
+            _ => {
+                c.replace_inst_with(user, Operand::Value(result));
+                c.add_to_worklist(user);
+            }
+        }
+    }
+    Some(Visit::Changed)
+}
+
+/// `foldICmpWithDominatingICmp`
+/// ([:1393](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1393)):
+/// `icmp pred x, C` in a block a branch on `icmp domPred x, DomC` dominates:
+/// the two ranges settle it, or leave one value, and it is an equality with it.
+fn fold_icmp_with_dominating_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    x: Operand,
+    y: Operand,
+) -> Option<Visit> {
+    use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
+    // The simple implications were InstSimplify's; only a constant is asked.
+    let (value, width) = constant(c, y)?;
+    let cr = ConstantRange::make_exact_icmp_region(pred, width, value);
+    let cmp_block = c.function.parent(inst)?;
+    let branches: Vec<InstId> = c.env.analyses.dom_conditions()?.conditions_for(x).to_vec();
+    for branch in branches {
+        let &[Operand::Value(cond), Operand::Block(on_true), Operand::Block(on_false)] =
+            &c.function.instruction(branch).operands[..]
+        else {
+            continue;
+        };
+        let llrm_mir::module::ValueDef::Instruction(dominating) = c.function.value(cond).def else { continue };
+        let Opcode::ICmp(dom_pred) = c.function.instruction(dominating).opcode else { continue };
+        let &[dom_x, dom_c] = &c.function.instruction(dominating).operands[..] else { continue };
+        let Some((dom_value, _)) = constant(c, dom_c) else { continue };
+        if dom_x != x {
+            continue;
+        }
+        let Some(branch_block) = c.function.parent(branch) else { continue };
+        let tree = c.env.analyses.dominator_tree();
+        let on_edge = if tree.dominates_edge(c.function, branch_block, on_true, cmp_block) {
+            dom_pred
+        } else if tree.dominates_edge(c.function, branch_block, on_false, cmp_block) {
+            dom_pred.inverse()
+        } else {
+            continue;
+        };
+        let dominating_cr = ConstantRange::make_exact_icmp_region(on_edge, width, dom_value);
+        let intersection = dominating_cr.intersect_with(&cr, PreferredRangeType::Smallest);
+        let difference = dominating_cr.difference(&cr);
+        let i1 = c.context.types.int(1);
+        if intersection.is_empty_set() {
+            return Some(Visit::Replace(c.int(i1, 0)));
+        }
+        if difference.is_empty_set() {
+            return Some(Visit::Replace(c.int(i1, 1)));
+        }
+        // Canonicalizing a sign bit comparison that a branch uses pessimizes
+        // codegen: a branch on zero instead of a test and branch.
+        let sign_bit = llrm_mir::valuetracking::fp::is_sign_bit_check(pred, value, width).is_some();
+        let branch_use = {
+            let result = c.function.instruction(inst).result?;
+            c.function
+                .users(result)
+                .iter()
+                .any(
+                    |one| {
+                        let user = c.function.instruction(one.user);
+                        user.opcode == Opcode::Br && user.operands.len() == 3
+                    },
+                )
+        };
+        if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (sign_bit && branch_use) {
+            continue;
+        }
+        // Avoid an infinite loop with min/max canonicalization.
+        if let Some(user) = only_user(c, inst) {
+            let q = query(c, None);
+            if matches!(
+                pattern::call_intrinsic(&q, user),
+                Some(
+                    pattern::IntrinsicId::Smax
+                        | pattern::IntrinsicId::Smin
+                        | pattern::IntrinsicId::Umax
+                        | pattern::IntrinsicId::Umin
+                )
+            ) {
+                continue;
+            }
+        }
+        let ty = c.type_of(x);
+        if let Some(only) = intersection.get_single_element() {
+            let only = c.int(ty, only);
+            return Some(new_icmp(c, inst, IntPredicate::Eq, x, only));
+        }
+        if let Some(missing) = difference.get_single_element() {
+            let missing = c.int(ty, missing);
+            return Some(new_icmp(c, inst, IntPredicate::Ne, x, missing));
+        }
+    }
+    None
 }
 
 /// `canonicalizeCmpWithConstant`

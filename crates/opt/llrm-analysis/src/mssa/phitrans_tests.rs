@@ -111,6 +111,42 @@ fn test_a_gep_off_a_global_base_folds_to_a_constant_expression() {
     assert_eq!(translated(&text, "q", "b0", true), "constant");
 }
 
+/// A GEP off `@g` that is already in the predecessor was not found: a constant
+/// has no use list, so PRE of every load of a global array element through a
+/// phi or select index (x_heapsort's sift loop) found nothing available.
+#[test]
+fn test_a_gep_off_a_global_base_is_found_in_a_dominating_block() {
+    let text = diamond(
+        "  %a = getelementptr i32, ptr @g, i16 %n",
+        "",
+        "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = getelementptr i32, ptr @g, i16 %p",
+    );
+    assert_eq!(translated(&text, "q", "b0", true), "%a");
+    assert_eq!(translated(&text, "q", "b1", true), "constant", "gep @g, 1 folds to a constant expression");
+}
+
+#[test]
+fn test_a_gep_off_a_global_base_is_not_invented_when_no_block_has_it() {
+    let text = diamond(
+        "  %a = getelementptr i32, ptr @g, i16 3",
+        "",
+        "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = getelementptr i32, ptr @g, i16 %p",
+    );
+    assert_eq!(translated(&text, "q", "b0", true), "none", "no gep of @g by %n is available");
+}
+
+#[test]
+fn test_a_gep_off_a_global_base_in_a_sibling_block_is_not_available() {
+    // %a is in b1, which does not dominate b0: a scan of the whole function
+    // would find it.
+    let text = diamond(
+        "",
+        "  %a = getelementptr i32, ptr @g, i16 %n",
+        "  %p = phi i16 [ %n, %b0 ], [ 1, %b1 ]\n  %q = getelementptr i32, ptr @g, i16 %p",
+    );
+    assert_eq!(translated(&text, "q", "b0", true), "none");
+}
+
 #[test]
 fn test_a_select_on_the_condition_resolves_to_each_side() {
     let module = parsed(&diamond("  %s = select i1 %c, ptr %x, ptr %y", "", "  %p = phi ptr [ %s, %b0 ], [ %y, %b1 ]"));

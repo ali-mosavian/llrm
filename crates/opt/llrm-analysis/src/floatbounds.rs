@@ -57,12 +57,11 @@
 //!
 //! # Provides
 //! `exact`, `evaluated`, `_memory`. No pass consumes them: only this module's
-//! tests call them, and `exact` fails unless the caller supplies the loop
-//! bounds in `Unit::bounds`.
+//! tests call them.
 //!
 //! # Needs
 //! [`crate::floatfacts`] (`rule`, `Format`, facts and `cells_before`),
-//! [`crate::consts`], [`crate::ranges`] (the intervals in `Unit::bounds`).
+//! [`crate::consts`], [`crate::ranges`] (the edges' intervals at a load).
 //!
 //! # See also
 //! LLVM ValueTracking's `computeKnownFPClass` with `isKnownExactCastIntToFP`.
@@ -224,9 +223,8 @@ pub fn exact(
     }
     let integers = consts::known_walked(unit, &Calls::default());
     let mut asked = consts::memory_queries(*unit, &integers);
-    // What the counted loops bound is the manager's: it is never solved here
-    // (no program in the corpus reached a solve here).
-    let scoped = unit.bounds.ok_or("float bounds without the manager's bounds of the body")?;
+    let scoped = ranges::dominated_edges(unit)?;
+    let empty = ranges::Intervals::default();
     let phis = function
         .walk()
         .map(|(_, inst)| inst)
@@ -276,7 +274,8 @@ pub fn exact(
                         &mut asked,
                     )
                 };
-                _memory(unit, inst, rule.inputs[0], &mut read, &scoped.scope(unit, cfg::id(block))).map(|one| vec![one])
+                _memory(unit, inst, rule.inputs[0], &mut read, scoped.get(&cfg::id(block)).unwrap_or(&empty))
+                    .map(|one| vec![one])
             } else {
                 rule.inputs
                     .iter()

@@ -34,6 +34,8 @@ pub struct DataLayout {
     /// The preferred alignment of an aggregate, in bytes: `a:0:64`.
     aggregate_pref: u64,
     pub alloca_space: u32,
+    /// The natural stack alignment in bytes: `S32`.
+    pub stack_align: Option<u64>,
 }
 
 impl Default for DataLayout {
@@ -53,6 +55,7 @@ impl Default for DataLayout {
             aggregate_align: 1,
             aggregate_pref: 8,
             alloca_space: 0,
+            stack_align: None,
         }
     }
 }
@@ -86,7 +89,8 @@ impl DataLayout {
                         layout.pointers.insert(space as u32, one);
                     }
                 }
-                "m" | "S" | "F" | "G" | "P" | "Fi" | "Fn" => {}
+                "S" => layout.stack_align = numbers(rest)?.first().map(|&bits| bytes(bits)).filter(|&one| one > 0),
+                "m" | "F" | "G" | "P" | "Fi" | "Fn" => {}
                 "A" => layout.alloca_space = numbers(rest)?.first().copied().unwrap_or(0) as u32,
                 "p" => {
                     let (space, fields) = match rest.split_once(':') {
@@ -307,8 +311,9 @@ impl DataLayout {
     /// and `AsmPrinter::getGVAlignment`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L380-L405>):
     /// the type's preferred alignment, raised to the stated one, and 16 for an
-    /// initialized global over 128 bits that states none. A stated alignment of
-    /// a global in a section is kept exactly.
+    /// initialized global over 128 bits that states none (`large_to_16`; a
+    /// target of 64K segments does not make it, `driver/data.rs` DEVIATE E2).
+    /// A stated alignment of a global in a section is kept exactly.
     pub fn global_align(
         &self,
         types: &Types,
@@ -316,13 +321,14 @@ impl DataLayout {
         stated: Option<u64>,
         in_section: bool,
         initialized: bool,
+        large_to_16: bool,
     ) -> u64 {
         let mut align = self.pref_align(types, ty);
         match stated {
             Some(stated) if in_section => return stated,
             Some(stated) if stated >= align => align = stated,
             Some(stated) => align = stated.max(self.align(types, ty)),
-            None if initialized && align < 16 && self.size_bits(types, ty) > 128 => align = 16,
+            None if large_to_16 && initialized && align < 16 && self.size_bits(types, ty) > 128 => align = 16,
             None => {}
         }
         match stated {
@@ -597,8 +603,9 @@ mod tests {
             variable.ty
         };
         let layout = DataLayout::parse("i32:32-i8:8").unwrap();
-        let align =
-            |name, stated, section, initialized| layout.global_align(types, of(name), stated, section, initialized);
+        let align = |name, stated, section, initialized| {
+            layout.global_align(types, of(name), stated, section, initialized, true)
+        };
         assert_eq!(align("w", None, false, true), 4);
         assert_eq!(align("b", None, false, true), 1);
         assert_eq!(align("big", None, false, true), 16, "over 128 bits and initialized");
@@ -606,5 +613,28 @@ mod tests {
         assert_eq!(align("small", Some(8), false, true), 8, "a stated alignment is kept");
         assert_eq!(align("w", Some(1), false, true), 4, "raised to the type's ABI alignment");
         assert_eq!(align("w", Some(1), true, true), 1, "kept exactly in a section");
+        assert_eq!(
+            layout.global_align(types, of("big"), None, false, true, false),
+            1,
+            "a target of 64K segments does not raise a large global"
+        );
+    }
+
+    /// The m16 datalayout names `f80:16` since the fork's clang does; the
+    /// string without it meant the same (a long double of 10 bytes, 2-aligned),
+    /// so no object of the Watcom front end changes.
+    #[test]
+    fn f80_16_states_what_a_layout_without_f80_already_meant() {
+        let old = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
+        let new = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32";
+        let (old, new) = (DataLayout::parse(old).unwrap(), DataLayout::parse(new).unwrap());
+        use crate::types::FloatKind;
+        for kind in [FloatKind::Float, FloatKind::Double, FloatKind::X86Fp80] {
+            assert_eq!(
+                (old.float_align(kind), old.float_alloc_size(kind)),
+                (new.float_align(kind), new.float_alloc_size(kind))
+            );
+        }
+        assert_eq!(new.float_alloc_size(FloatKind::X86Fp80), 10);
     }
 }

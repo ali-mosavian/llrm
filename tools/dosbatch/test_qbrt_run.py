@@ -78,3 +78,14 @@ def test_a_known_difference_is_expected_and_one_that_now_matches_fails():
     assert "remove it from KNOWN" in qbrt_run.unexpected(known, "scores", "flat", run_of())
     assert qbrt_run.unexpected(known, "other", "flat", run_of("x")) == "x"
     assert qbrt_run.unexpected(known, "other", "flat", run_of()) is None
+
+
+def test_a_reference_and_candidate_that_agree_but_are_not_real_bcs_text_are_named():
+    """real_print_wide: 9 lines unlike real BC (' 10000000' for ' 9999999.999999994') with reference == candidate, so the byte-for-byte differential passed."""
+    import qbrt_programs as q
+
+    stored = [" 9999999.999999994"]
+    wrong = " 10000000\r\n"
+    assert "agree but are not real BC's text" in q.not_real_bc(stored, wrong, wrong)
+    assert "candidate is not real BC's text" in q.not_real_bc(stored, " 9999999.999999994\n", wrong)
+    assert q.not_real_bc(stored, " 9999999.999999994 \r\n", " 9999999.999999994\n") is None

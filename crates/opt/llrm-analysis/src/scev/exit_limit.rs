@@ -30,7 +30,7 @@ use super::{Cx, ScalarEvolution};
 /// condition and whether it controls the only exit.
 #[derive(Default)]
 pub struct ExitLimitCache {
-    limits: Vec<((Operand, bool), ExitLimit)>,
+    limits: Vec<((Operand, bool, bool), ExitLimit)>,
 }
 
 impl ExitLimitCache {
@@ -38,18 +38,26 @@ impl ExitLimitCache {
         &self,
         exit_cond: Operand,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> Option<ExitLimit> {
-        self.limits.iter().find(|(key, _)| *key == (exit_cond, controls_only_exit)).map(|(_, limit)| *limit)
+        self.limits
+            .iter()
+            .find(|(key, _)| *key == (exit_cond, controls_only_exit, allow_predicates))
+            .map(|(_, limit)| limit.clone())
     }
 
     fn insert(
         &mut self,
         exit_cond: Operand,
         controls_only_exit: bool,
+        allow_predicates: bool,
         limit: ExitLimit,
     ) {
-        debug_assert!(self.find(exit_cond, controls_only_exit).is_none(), "Expected successful insertion!");
-        self.limits.push(((exit_cond, controls_only_exit), limit));
+        debug_assert!(
+            self.find(exit_cond, controls_only_exit, allow_predicates).is_none(),
+            "Expected successful insertion!"
+        );
+        self.limits.push(((exit_cond, controls_only_exit, allow_predicates), limit));
     }
 }
 
@@ -69,6 +77,7 @@ impl ScalarEvolution {
         header: BlockId,
         exiting_block: BlockId,
         is_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         let loop_ = cx.loops.get_loop_for(header).expect("the header of a loop");
         debug_assert!(loop_.contains(exiting_block), "Exit count for non-loop block?");
@@ -90,7 +99,7 @@ impl ScalarEvolution {
                 );
                 // Proceed to the next level to examine the exit condition
                 // expression.
-                self.compute_exit_limit_from_cond(cx, header, *condition, exit_if_true, is_only_exit)
+                self.compute_exit_limit_from_cond(cx, header, *condition, exit_if_true, is_only_exit, allow_predicates)
             }
             (Opcode::Switch, _) => {
                 // For switch, make sure that there is a single exit from the
@@ -106,7 +115,7 @@ impl ScalarEvolution {
                     }
                 }
                 let exit = exit.expect("Exiting block must have at least one exit");
-                self.compute_exit_limit_from_single_exit_switch(cx, header, term, exit, is_only_exit)
+                self.compute_exit_limit_from_single_exit_switch(cx, header, term, exit, is_only_exit, allow_predicates)
             }
             _ => ExitLimit::could_not_compute(self),
         }
@@ -121,9 +130,18 @@ impl ScalarEvolution {
         exit_cond: Operand,
         exit_if_true: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         let mut cache = ExitLimitCache::default();
-        self.compute_exit_limit_from_cond_cached(cx, &mut cache, header, exit_cond, exit_if_true, controls_only_exit)
+        self.compute_exit_limit_from_cond_cached(
+            cx,
+            &mut cache,
+            header,
+            exit_cond,
+            exit_if_true,
+            controls_only_exit,
+            allow_predicates,
+        )
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9207
@@ -136,14 +154,22 @@ impl ScalarEvolution {
         exit_cond: Operand,
         exit_if_true: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
-        if let Some(found) = cache.find(exit_cond, controls_only_exit) {
+        if let Some(found) = cache.find(exit_cond, controls_only_exit, allow_predicates) {
             return found;
         }
 
-        let limit =
-            self.compute_exit_limit_from_cond_impl(cx, cache, header, exit_cond, exit_if_true, controls_only_exit);
-        cache.insert(exit_cond, controls_only_exit, limit);
+        let limit = self.compute_exit_limit_from_cond_impl(
+            cx,
+            cache,
+            header,
+            exit_cond,
+            exit_if_true,
+            controls_only_exit,
+            allow_predicates,
+        );
+        cache.insert(exit_cond, controls_only_exit, allow_predicates, limit.clone());
         limit
     }
 
@@ -157,9 +183,12 @@ impl ScalarEvolution {
         exit_cond: Operand,
         exit_if_true: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         // Handle BinOp conditions (And, Or).
-        if let Some(limit) = self.compute_exit_limit_from_cond_from_bin_op(cx, cache, header, exit_cond, exit_if_true) {
+        if let Some(limit) =
+            self.compute_exit_limit_from_cond_from_bin_op(cx, cache, header, exit_cond, exit_if_true, allow_predicates)
+        {
             return limit;
         }
 
@@ -168,6 +197,19 @@ impl ScalarEvolution {
         // With an icmp, it may be feasible to compute an exact backedge-taken
         // count. Proceed to the next level to examine the icmp.
         if let Some((_, instruction, _, _, _)) = pattern::icmp(&query, exit_cond) {
+            let limit = self.compute_exit_limit_from_icmp_inst(
+                cx,
+                header,
+                exit_cond,
+                instruction,
+                exit_if_true,
+                controls_only_exit,
+                false,
+            );
+            if limit.has_full_info(self) || !allow_predicates {
+                return limit;
+            }
+            // Try again, but use SCEV predicates this time.
             return self.compute_exit_limit_from_icmp_inst(
                 cx,
                 header,
@@ -175,6 +217,7 @@ impl ScalarEvolution {
                 instruction,
                 exit_if_true,
                 controls_only_exit,
+                true,
             );
         }
 
@@ -203,8 +246,14 @@ impl ScalarEvolution {
         // intrinsic with a constant step, we can form an equivalent icmp
         // predicate and figure out how many iterations will be taken before
         // we exit.
-        if let Some(limit) = self.exit_limit_from_overflow_flag(cx, header, exit_cond, exit_if_true, controls_only_exit)
-        {
+        if let Some(limit) = self.exit_limit_from_overflow_flag(
+            cx,
+            header,
+            exit_cond,
+            exit_if_true,
+            controls_only_exit,
+            allow_predicates,
+        ) {
             return limit;
         }
 
@@ -223,6 +272,7 @@ impl ScalarEvolution {
         exit_cond: Operand,
         exit_if_true: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> Option<ExitLimit> {
         use llrm_mir::valuetracking::pattern::{IntrinsicId, intrinsic_id};
 
@@ -257,7 +307,8 @@ impl ScalarEvolution {
             lhs = self.get_add_expr(cx, vec![Use::of(lhs), Use::of(offset)], Default::default(), 0).scev;
         }
         let rhs = self.get_constant(super::ap::Ap::new(c_width, new_rhs_c));
-        let limit = self.compute_exit_limit_from_icmp_pred(cx, header, pred, lhs, rhs, controls_only_exit);
+        let limit =
+            self.compute_exit_limit_from_icmp_pred(cx, header, pred, lhs, rhs, controls_only_exit, allow_predicates);
         limit.has_any_info(self).then_some(limit)
     }
 
@@ -271,6 +322,7 @@ impl ScalarEvolution {
         header: BlockId,
         exit_cond: Operand,
         exit_if_true: bool,
+        allow_predicates: bool,
     ) -> Option<ExitLimit> {
         // Check if the controlling expression for this loop is an And or Or.
         let query = cx.query(None);
@@ -284,8 +336,10 @@ impl ScalarEvolution {
 
         // A sub-condition of a non-trivial binop never solely controls the
         // exit, whether we exit always depends on both conditions.
-        let el0 = self.compute_exit_limit_from_cond_cached(cx, cache, header, op0, exit_if_true, false);
-        let el1 = self.compute_exit_limit_from_cond_cached(cx, cache, header, op1, exit_if_true, false);
+        let el0 =
+            self.compute_exit_limit_from_cond_cached(cx, cache, header, op0, exit_if_true, false, allow_predicates);
+        let el1 =
+            self.compute_exit_limit_from_cond_cached(cx, cache, header, op1, exit_if_true, false, allow_predicates);
 
         // EitherMayExit is true in these two cases:
         //   br (and Op0 Op1), loop, exit
@@ -365,6 +419,7 @@ impl ScalarEvolution {
         exit_cond: &llrm_mir::module::Instruction,
         exit_if_true: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         let Opcode::ICmp(cmp) = exit_cond.opcode else { unreachable!("an icmp") };
         // If the condition was exit on true, convert the condition to exit on
@@ -375,7 +430,8 @@ impl ScalarEvolution {
         let lhs = self.get_scev(cx, exit_cond.operands[0]);
         let rhs = self.get_scev(cx, exit_cond.operands[1]);
 
-        let limit = self.compute_exit_limit_from_icmp_pred(cx, header, pred, lhs, rhs, controls_only_exit);
+        let limit =
+            self.compute_exit_limit_from_icmp_pred(cx, header, pred, lhs, rhs, controls_only_exit, allow_predicates);
         if limit.has_any_info(self) {
             return limit;
         }
@@ -399,6 +455,7 @@ impl ScalarEvolution {
         mut lhs: Scev,
         mut rhs: Scev,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         // Try to evaluate any dependencies out of the loop.
         lhs = self.get_scev_at_scope(cx, lhs, Some(header));
@@ -445,7 +502,7 @@ impl ScalarEvolution {
                     return ExitLimit::could_not_compute(self);
                 };
                 let diff = self.get_minus_scev(cx, Use::of(lhs), Use::of(rhs), 0, 0);
-                let limit = self.how_far_to_zero(cx, diff, header, controls_only_exit);
+                let limit = self.how_far_to_zero(cx, diff, header, controls_only_exit, allow_predicates);
                 if limit.has_any_info(self) {
                     return limit;
                 }
@@ -492,7 +549,15 @@ impl ScalarEvolution {
                     rhs = self.get_add_expr(cx, vec![Use::of(one), Use::of(rhs)], Default::default(), 0).scev;
                 }
                 // while (X < Y)
-                let limit = self.how_many_less_thans(cx, lhs, rhs, header, is_signed(pred), controls_only_exit);
+                let limit = self.how_many_less_thans(
+                    cx,
+                    lhs,
+                    rhs,
+                    header,
+                    is_signed(pred),
+                    controls_only_exit,
+                    allow_predicates,
+                );
                 if limit.has_any_info(self) {
                     return limit;
                 }
@@ -514,7 +579,15 @@ impl ScalarEvolution {
                 }
                 if !stop {
                     // while (X > Y)
-                    let limit = self.how_many_greater_thans(cx, lhs, rhs, header, is_signed(pred), controls_only_exit);
+                    let limit = self.how_many_greater_thans(
+                        cx,
+                        lhs,
+                        rhs,
+                        header,
+                        is_signed(pred),
+                        controls_only_exit,
+                        allow_predicates,
+                    );
                     if limit.has_any_info(self) {
                         return limit;
                     }
@@ -534,6 +607,7 @@ impl ScalarEvolution {
         switch: llrm_mir::module::InstId,
         exiting_block: BlockId,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         let instruction = cx.function.instruction(switch);
         // A switch's operands: the condition, the default, then (value, block)
@@ -568,7 +642,7 @@ impl ScalarEvolution {
 
         // while (X != Y) --> while (X-Y != 0)
         let diff = self.get_minus_scev(cx, Use::of(lhs), Use::of(rhs), 0, 0);
-        let limit = self.how_far_to_zero(cx, diff, header, controls_only_exit);
+        let limit = self.how_far_to_zero(cx, diff, header, controls_only_exit, allow_predicates);
         if limit.has_any_info(self) {
             return limit;
         }

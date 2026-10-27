@@ -1,7 +1,7 @@
 //! A static function called from one place goes with that call, whatever its
 //! size.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 static int sum(const int *a, int n)
@@ -32,7 +32,7 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-march=i486"])
         .args(flags)
@@ -43,18 +43,24 @@ fn listing(flags: &[&str]) -> String {
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
 
-/// Only a body under 24 operations was inlined into its one call, and
-/// `-fno-inline-functions` inlined nothing: queens' `safe` stayed a call (and
-/// `place` held its values in the frame) where gcc, whose
-/// `-fno-inline-functions` leaves called-once inlining on, ran 30% fewer
-/// clocks.
+/// Only a body under 24 operations was inlined into its one call: queens'
+/// `safe` stayed a call (and `place` held its values in the frame) where the
+/// pin ran 30% fewer clocks. The pin's `-O2` inlines `twice`, called twice, as
+/// well; its `-fno-inline-functions` is the always-inliner alone and leaves
+/// `sum` a call (clang-24 `-O2 -fno-inline-functions -emit-llvm`).
 #[test]
 fn test_a_static_function_called_once_is_inlined_at_any_size() {
-    for flags in [&["-O2"][..], &["-O2", "-fno-inline-functions"], &["-Os"]] {
+    for flags in [&["-O2"][..], &["-Os"]] {
         let text = listing(flags);
         assert!(!text.contains("sum_ proc"), "{flags:?}: sum survived: {text}");
-        assert!(text.contains("twice_ proc"), "{flags:?}: twice, called twice, is no last call: {text}");
     }
+    let text = listing(&["-O2"]);
+    assert!(!text.contains("twice_ proc"), "-O2: the pin inlines twice, called twice: {text}");
+    let text = listing(&["-O2", "-fno-inline-functions"]);
+    assert!(
+        text.contains("sum_ proc") && text.contains("twice_ proc"),
+        "-fno-inline-functions: the pin's always-inliner leaves both calls: {text}"
+    );
     // Where inlining is off, it is off.
     assert!(listing(&["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"]).contains("sum_ proc"));
 }
@@ -69,7 +75,7 @@ fn survives(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .output()

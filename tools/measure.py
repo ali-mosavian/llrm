@@ -155,7 +155,7 @@ def row_tolerance(tol: dict, label: str) -> dict:
 def method() -> str:
     """What the measurement is made of besides the compiler: the tools, the programs and QCport's modules. A stored measurement of
     another method is not comparable and is made again."""
-    files = [HERE / "compile-cost.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
+    files = [HERE / "compile-cost.py", HERE / "llrmbin.py", *(VSGCC / name for name in ("scaling_gate.py", "scaling.py", "levels_time.py", "programs.py", "wrap.py"))]
     files += benchlist.sources(".c", ROOT / "bench", parity=False) + sorted((VSGCC / "kernels").glob("*/*.c"))
     if qcport := os.environ.get("QCPORT"):
         files += sorted(Path(qcport).expanduser().glob("*/*.c"))

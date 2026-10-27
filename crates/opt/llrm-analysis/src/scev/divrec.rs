@@ -2,11 +2,13 @@
 //! `getAddRecExpr`, and the negation, complement and difference built on the
 //! folds, with `getPointerBase`.
 
+use std::borrow::Cow;
+
 use llrm_mir::module::BlockId;
 
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
-use super::{Cx, Flags, Key, ScalarEvolution};
+use super::{Cx, Flags, Key, KeyLike, ScalarEvolution};
 
 impl ScalarEvolution {
     /// `SCEVAddRecExpr::getStart`.
@@ -39,10 +41,12 @@ impl ScalarEvolution {
         lhs: Use,
         rhs: Use,
     ) -> Scev {
-        let key = Key { tag: Type::UDiv, ops: vec![lhs, rhs], ty: None, constant: None, value: None, header: None };
+        let pair = [lhs, rhs];
+        let key =
+            Key { tag: Type::UDiv, ops: Cow::Borrowed(&pair), ty: None, constant: None, value: None, header: None };
         let ty = self.type_of(lhs.scev);
         let size = self.compute_expression_size(&[lhs, rhs]);
-        self.intern(key, Kind::UDiv(lhs, rhs), Some(ty), size)
+        self.intern(key, || Kind::UDiv(lhs, rhs), Some(ty), size)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L3016
@@ -54,10 +58,11 @@ impl ScalarEvolution {
         l: BlockId,
         f: u8,
     ) -> Scev {
-        let key = Key { tag: Type::AddRec, ops: ops.to_vec(), ty: None, constant: None, value: None, header: Some(l) };
+        let key =
+            Key { tag: Type::AddRec, ops: Cow::Borrowed(ops), ty: None, constant: None, value: None, header: Some(l) };
         let ty = self.type_of(ops[0].scev);
         let size = self.compute_expression_size(ops);
-        let s = self.intern(key, Kind::AddRec(ops.to_vec(), l), Some(ty), size);
+        let s = self.intern(key, || Kind::AddRec(ops.to_vec(), l), Some(ty), size);
         self.set_no_wrap_flags(s, f);
         let _ = cx;
         s
@@ -113,8 +118,10 @@ impl ScalarEvolution {
         debug_assert!(!self.type_of(lhs.scev).is_pointer(), "SCEVUDivExpr operand can't be pointer!");
         debug_assert!(self.type_of(lhs.scev) == self.type_of(rhs.scev), "SCEVUDivExpr operand types don't match!");
 
-        let key = Key { tag: Type::UDiv, ops: vec![lhs, rhs], ty: None, constant: None, value: None, header: None };
-        if let Some(&found) = self.unique.get(&key) {
+        let pair = [lhs, rhs];
+        let key =
+            Key { tag: Type::UDiv, ops: Cow::Borrowed(&pair), ty: None, constant: None, value: None, header: None };
+        if let Some(&found) = self.unique.get(&key as &dyn KeyLike) {
             return found;
         }
 
@@ -591,9 +598,14 @@ impl ScalarEvolution {
             }
         }
 
+        if let Some(&made) = self.not_cache.get(&v) {
+            return made;
+        }
         let ty = self.get_effective_scev_type(cx, self.type_of(v));
         let minus_one = self.get_minus_one(cx, ty);
-        self.get_minus_scev(cx, Use::of(minus_one), Use::of(v), flags::NONE, 0)
+        let made = self.get_minus_scev(cx, Use::of(minus_one), Use::of(v), flags::NONE, 0);
+        self.not_cache.insert(v, made);
+        made
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4632

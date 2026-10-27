@@ -39,6 +39,7 @@ fill = rep_stos + 2*push_r + 2*pop_seg + 2*mov_ri
 fill_cell = rep_stos_cell
 copy = rep_movs + 2*push_r + 2*pop_seg + 3*mov_ri
 copy_cell = rep_movs_cell
+copy_variable = shift_ri + alu_ri + 2*mov_rr + rep_movs
 direction = 2*alu_rr
 # The operations a completely unrolled loop may total, before the work its copy no longer does boosts it up to
 # fourfold (peelsize). From GCC's `max-completely-peeled-insns` (200). Calibrated on tools/bench: at LLVM's 150

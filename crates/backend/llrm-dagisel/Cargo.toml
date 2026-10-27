@@ -1,0 +1,8 @@
+[package]
+name = "llrm-dagisel"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The pin's DAG instruction selector: the matcher table tblgen writes and the interpreter that walks it"
+
+[dependencies]

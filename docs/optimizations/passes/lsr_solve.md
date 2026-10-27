@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_solve.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_solve.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_solve.rs sha256:c6e32c9ef8c48245ebe95271ea667b576070e9d45caf751dc2413b28da63a91f -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_solve.rs sha256:e133c548a87593fab839b7baa85d66ceda8bc3c0676c3b2865a022a5d6c8a715 -->
 
 # lsr_solve
 
@@ -25,3 +25,4 @@ Nothing runs it yet: stage 5 of the translation of LSR.
 
 ## Limits
 DEVIATE: `AMK_PostIndexed` (x86 prefers none) is not ported.
+DEVIATE LU3: see `solve`, the drop of a rewrite that spills (real mode).

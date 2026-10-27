@@ -1,0 +1,70 @@
+Initial selection DAG: %bb.0 'f:'
+SelectionDAG has 28 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.2)> t0, FrameIndex:i32<-1>, poison:i32
+  t5: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-2>, poison:i32
+  t7: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-3>, poison:i32
+  t8: i32,i1 = saddo t3, t5
+  t9: i32,i1 = uaddo t3, t5
+  t11: i32,i1 = usubo t3, t5
+  t13: i32,i1 = umulo t3, t5
+              t18: i32 = add t8, t9
+              t10: i32,i1 = ssubo t3, t5
+            t19: i32 = add t18, t10
+          t20: i32 = add t19, t11
+          t12: i32,i1 = smulo t3, t5
+        t21: i32 = add t20, t12
+      t22: i32 = add t21, t13
+            t14: i1 = xor t8:1, t9:1
+          t15: i1 = xor t14, t11:1
+        t16: i1 = xor t15, t13:1
+      t17: i32 = zero_extend t16
+    t23: i32 = add t22, t17
+  t26: ch,glue = CopyToReg t0, Register:i32 $eax, t23
+  t27: ch = X86ISD::RET_GLUE t26, TargetConstant:i32<0>, Register:i32 $eax, t26:1
+
+
+
+Initial selection DAG: %bb.0 'g:'
+SelectionDAG has 12 nodes:
+  t0: ch,glue = EntryToken
+        t3: i16,ch = load<(load (s16) from %fixed-stack.1)> t0, FrameIndex:i32<-1>, poison:i32
+        t5: i16,ch = load<(load (s16) from %fixed-stack.0)> t0, FrameIndex:i32<-2>, poison:i32
+      t6: i16,i1 = uaddo t3, t5
+    t7: i8 = any_extend t6:1
+  t10: ch,glue = CopyToReg t0, Register:i8 $al, t7
+  t11: ch = X86ISD::RET_GLUE t10, TargetConstant:i32<0>, Register:i8 $al, t10:1
+
+
+
+Initial selection DAG: %bb.0 'h:'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t3: i8,ch = load<(load (s8) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+      t4: i1 = truncate t3
+    t5: i8 = zero_extend t4
+  t8: ch,glue = CopyToReg t0, Register:i8 $al, t5
+  t9: ch = X86ISD::RET_GLUE t8, TargetConstant:i32<0>, Register:i8 $al, t8:1
+
+
+
+Initial selection DAG: %bb.0 's:'
+SelectionDAG has 8 nodes:
+  t0: ch,glue = EntryToken
+    t3: i8,ch = load<(load (s8) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+  t6: ch,glue = CopyToReg t0, Register:i8 $al, t3
+  t7: ch = X86ISD::RET_GLUE t6, TargetConstant:i32<0>, Register:i8 $al, t6:1
+
+
+
+Initial selection DAG: %bb.0 'w:'
+SelectionDAG has 10 nodes:
+  t0: ch,glue = EntryToken
+        t3: i8,ch = load<(load (s8) from %fixed-stack.0)> t0, FrameIndex:i32<-1>, poison:i32
+      t4: i1 = truncate t3
+    t5: i16 = zero_extend t4
+  t8: ch,glue = CopyToReg t0, Register:i16 $ax, t5
+  t9: ch = X86ISD::RET_GLUE t8, TargetConstant:i32<0>, Register:i16 $ax, t8:1
+
+
+

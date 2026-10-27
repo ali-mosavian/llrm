@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:0785831225f7201ff3661862c6011c01acaaacedcabb32818d7fb2ea7c1f549f -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:a6eedbf7e67a64de0cd93cc4940ca85bc943a7dab6a5bb1120732a32d6b637a8 -->
 
 # combine_compares
 
@@ -18,12 +18,10 @@ MIRROR: the order of the steps and each condition of the steps below.
 This is the first slice of the family. A step not translated yet stays in
 its place as a `// OWED:` comment naming the C++ function, so the order
 stays LLVM's. The owed steps, with their exits:
-`foldICmpTruncWithTruncOrExt`, `canonicalizeICmpBool`,
-`canonicalizeICmpPredicate` (needs `canFreelyInvertAllUsersOf`,
-uselist-port's shared helper), `foldICmpWithConstant`,
-`foldICmpWithDominatingICmp`, `foldICmpUsingBoolRange`,
+`foldICmpTruncWithTruncOrExt`,
+`foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
-`foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
+`foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
 `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 `dyn_castNegVal` select fold.

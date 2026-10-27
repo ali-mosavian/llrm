@@ -52,9 +52,9 @@
 //! - D4: the epilog remainder is [`crate::loopunrollruntime`]'s: epilog only,
 //!   one exit, no weights.
 //! - D5: no optimization remarks.
-//! - D6: BasicAA has no `aliasPHI`/`aliasSelect`, so DA keeps a dependence
-//!   across a loop-carried pointer phi that LLVM disproves: two functions of
-//!   `pragma-explicit.ll` are not jammed. Exit: BasicAA translated.
+//! - D6: closed. BasicAA's `aliasPHI`/`aliasSelect` are translated; `function`
+//!   of `pragma-explicit.ll` is jammed as the pin does (`function2` still
+//!   differs in the remainder's phis: `tools/loopunrollandjam_expected.toml`).
 //! - D7: `ScalarEvolution::isKnownViaInduction` is a stub (S5), so the outer
 //!   latch compare `niter.next != N` stays where LLVM folds it to `false`
 //!   (`test6`, `test10`). Exit: S5.
@@ -1545,6 +1545,7 @@ impl FunctionPass for LoopUnrollAndJam {
             emptied: Vec::new(),
             peeled: Default::default(),
             created: Vec::new(),
+            scev: llrm_analysis::scev::ScalarEvolution::new(),
             options: UnrollOptions {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
