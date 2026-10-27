@@ -20,6 +20,10 @@ use crate::backend::memcpycall::inline_widths;
 /// `X86Subtarget::getMaxInlineSizeThreshold`.
 const MAX_INLINE_SIZE: u64 = 128;
 
+/// The bytes of a `rep stosb` fill in real mode: `lea di`, ES set, the byte,
+/// the count, the fill, DI's save.
+const FILL_BYTES: u64 = 3 + 4 + 2 + 3 + 2 + 2;
+
 impl Builder<'_> {
     pub(super) fn visit_intrinsic(
         &mut self,
@@ -397,6 +401,26 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&stores)))
     }
 
+    /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
+    /// stores take more bytes than a `rep stosb` fill is the fill. The pin
+    /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
+    /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
+    /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
+    /// hook on the target description.
+    fn fill_is_smaller(
+        &self,
+        length: u64,
+        opt_size: bool,
+    ) -> bool {
+        if !opt_size || self.target.dag.pointer.size_in_bits() != 16 {
+            return false;
+        }
+        let dwords = length / 4;
+        let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
+        let stored = setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 };
+        stored > FILL_BYTES
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -721,8 +745,10 @@ impl Builder<'_> {
             _ => {
                 let limit = if opt_size { 8 } else { 16 };
                 let inline = match constant {
-                    Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
-                    None => None,
+                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
+                        self.inline_memset(root, dst, other, bytes, limit, alignment)?
+                    }
+                    _ => None,
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
