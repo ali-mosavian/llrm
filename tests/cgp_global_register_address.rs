@@ -1,7 +1,7 @@
 //! A global indexed by two registers is one memory operand, not a `lea` made
 //! outside the loop.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 static short tile[64][64];
@@ -24,7 +24,7 @@ long walk(short dy)
 fn listing(target: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(target)
         .args(["--isel=dag", "-Os", "-S", "-o", "-", "a.c"])

@@ -37,3 +37,34 @@ fn test_an_array_element_in_a_later_block_is_addressed_without_a_zero_register()
     assert!(asm.contains("es:[4]") && asm.contains("es:[6]"), "{asm}");
     assert!(!asm.contains("es:[bx+4]") && !asm.contains("es:[bx+6]"), "{asm}");
 }
+
+const LOOP: &str = "DEFINT A-Z
+DECLARE SUB f ()
+f
+SUB f
+DIM pal(256, 3)
+FOR x = 0 TO 255
+  pal(x, 0) = INP(&H3C9)
+  pal(x, 1) = INP(&H3C9)
+NEXT
+PRINT pal(1, 1)
+END SUB
+";
+
+/// An address sunk into a loop still read the far pointer made before it, so
+/// its zero offset was a base register: `es:[bx+di+512]` where `es:[bx+512]`
+/// does (qbdemo WHITEFADE +48 B under the DAG selector).
+#[test]
+fn test_an_array_element_in_a_loop_is_addressed_without_a_zero_base() {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.bas"), LOOP).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .current_dir(scratch.path())
+        .args(["--isel=dag", "a.bas", "--dialect", "qb45", "--runtime", "qb45", "-Os", "-S", "-o", "-"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let asm = String::from_utf8_lossy(&output.stdout);
+    let store = asm.lines().find(|line| line.contains("+512]")).expect("the first store");
+    assert_eq!(store.matches('+').count(), 1, "{asm}");
+}

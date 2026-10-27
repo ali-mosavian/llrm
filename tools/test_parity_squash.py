@@ -749,11 +749,17 @@ def test_a_head_cached_with_a_bare_step_name_covers_that_steps_tests():
     assert ps.new_names({"ratchet:x"}, {"ratchet:x::t", "ratchet:y::t"}) == ["ratchet:y::t"]
 
 
-def test_a_listed_test_that_passes_refuses_the_batch_and_the_head_does_not_excuse_it():
-    """An `xpass unit ...` name from the lib layer is a refusal of its own: it is not a failure to compare with the head's."""
+def test_a_listed_test_that_passes_is_a_warning_and_a_report_line_not_a_refusal(tmp_path, monkeypatch, capsys):
+    """25 refusals and ~106 batch-minutes in 24 h (2026-10-27) were `xpass` names: an xfail row whose test now passes refused the batch; it warns, and the owner removes the row."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
     xpass = {"xpass unit llrm-nib::test_debug::fixed"}
     on_head = lambda by_package: pytest.fail("the head is asked about a pass")  # noqa: E731
-    assert ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == xpass
+    assert ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head) == set()
+    assert "WARNING xpass unit llrm-nib::test_debug::fixed" in capsys.readouterr().out
+    ps.new_lib_failures(["crates/frontends/nib/src/lib.rs"], on_merged=lambda packages: set(xpass), on_head=on_head)
+    assert (tmp_path / "xpass-report.txt").read_text() == "xpass unit llrm-nib::test_debug::fixed\n", "named once"
+    scanner = {"xpass integration masked::t", "integration docs_in_sync::t"}
+    assert ps.new_scanner_failures(["a.rs"], lambda targets: set(scanner), lambda targets: {"integration docs_in_sync::t"}, only=("x",), seen=tmp_path / "seen.json") == set()
 
 
 def _closure(path):
@@ -1088,7 +1094,7 @@ def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
     assert ps.rescanned_refusal("4039", {}, ["4042"], rescan=lambda n, i: set()) == ""
     import inspect
 
-    assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
+    assert "rescan_check(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
 
 
 def test_a_squash_github_refuses_prints_the_reason(capsys):
@@ -1276,6 +1282,51 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
+def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
+    """#5092 was refused alone at 02:31 for two scanners the head already had red, and the cached refusal (keyed by the PR head only) was replayed at 02:53 and 03:03 while parity moved."""
+    ran = []
+
+    def refusals(head, base):
+        ran.append(base)
+        return ["scanner red alone: x"] if base == "old" else []
+
+    heads = {"5092": "h" * 40}
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)
+    assert dropped == {"5092": "scanner red alone: x"} and ran == ["old"]
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)[1] and ran == ["old"], "the same base replays the refusal"
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="b" * 40)
+    assert kept == ["5092"] and not dropped and ran == ["old", "new"], "a moved base checks the PR again"
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="c" * 40)[0] == ["5092"] and ran == ["old", "new"], "a pass is kept per head"
+
+
+def test_a_cached_pass_is_rechecked_for_stale_pages_against_the_base_as_it_is_now(tmp_path):
+    """#5062, #5085 and #5088 passed alone against an older parity, the verdict was reused per head sha, and each made a generated page fail once merged with what landed since."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "h1").write_text("")  # passed alone earlier
+    (cache / "h2").write_text("")
+    checked = []
+    kept, dropped = ps.alone(["1", "2"], {"1": "h1", "2": "h2"}, refusals=lambda head, base: checked.append(head) or [], cache=cache, jobs=1,
+                             recheck=lambda head, base: "generated docs out of date: docs/a.md" if head == "h2" else "")
+    assert kept == ["1"] and dropped == {"2": "generated docs out of date: docs/a.md"} and checked == [], "a cached pass runs only the docs recheck"
+    assert (cache / "h2").read_text() == "", "the recheck does not overwrite the cached verdict"
+
+
+def test_a_head_whose_header_changed_without_its_page_is_named_once_merged_with_the_base(tmp_path):
+    """The recheck on a real merge: a head that changes a `//!` header and leaves its page alone."""
+
+
+def test_a_pr_the_cap_cuts_off_is_reported_unchecked_not_checked():
+    """The 00:32 batch's line said "9 checked, 0 dropped" while a single scanners check took 620 s against ALONE_CAP=600: #5050 and #5051, red alone, went into the batch."""
+    import threading
+
+    release = threading.Event()
+    kept, dropped = ps.alone(["1", "2"], {"1": "h1", "2": "h2"}, refusals=lambda head, base: [] if head == "h1" else (release.wait(5), [])[1], jobs=2, cap=0.2)
+    release.set()
+    assert kept == ["1", "2"] and dropped == {}, "kept unfiltered, as designed"
+    assert ps.UNCHECKED == ["2"], "but named as unchecked"
+
+
 def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
     """The 02:34 sub-batch merged #5088's 01:18 head (sinkcast.md stale) 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head w14 had moved."""
     infos = {"5088": {"headRefOid": "old" * 13 + "o", "title": "t"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
@@ -1286,6 +1337,22 @@ def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
     assert ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number]) == {}, "nothing moved the second time"
 
 
+def test_a_pr_whose_head_moved_is_left_out_and_not_held_as_its_own_refusal():
+    """A halved batch kept merging a head the owner had replaced, or (with the re-read alone) a new head that had not waited its 15 minutes."""
+    infos = {"5088": {"headRefOid": "o" * 40}, "5087": {"headRefOid": "s" * 40}}
+    views = {"5088": {"headRefOid": "n" * 40}, "5087": {"headRefOid": "s" * 40}}
+    left_out = {}
+    moved = ps.defer_moved(infos, ["5088", "5087"], left_out, view=lambda number: views[number])
+    assert list(moved) == ["5088"] and list(left_out) == ["5088"] and "waits its own head age" in left_out["5088"]
+    assert not ps.own_refusal(left_out["5088"]), "a moved head is not the PR's own refusal"
+
+
+def test_a_merge_batch_older_than_twenty_minutes_is_expired():
+    """The 01:45 batch ran 65+ minutes on the heads it assembled with, refusing PRs whose owners had fixed them."""
+    assert not ps.batch_expired(100.0, 100.0 + ps.BATCH_MAX_SECONDS) and ps.batch_expired(100.0, 100.0 + ps.BATCH_MAX_SECONDS + 1)
+    assert ps.BATCH_MAX_SECONDS == 1200
+
+
 def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
     """docs_in_sync was refused four times on trees the next check reset and nobody could reproduce: no evidence was kept."""
     def run(*args):
@@ -1293,6 +1360,25 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
 
     run("init", "-q", "-b", "main")
     (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text(
+        "import sys, pathlib\nheader = pathlib.Path('a.rs').read_text().strip()\npage = pathlib.Path('docs/a.md').read_text().strip()\n"
+        "if header != page:\n    print('generated docs are out of date')\n    print('  docs/a.md')\n    sys.exit(1)\n"
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "a.rs").write_text("//! v1\n")
+    (tmp_path / "docs/a.md").write_text("//! v1\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "base")
+    base = run("rev-parse", "HEAD")
+    run("checkout", "-q", "-b", "pr")
+    (tmp_path / "a.rs").write_text("//! v2\n")
+    run("commit", "-qam", "header changed, page not regenerated")
+    head = run("rev-parse", "HEAD")
+    run("checkout", "-q", "--detach", base)
+    assert "docs/a.md" in ps.docs_recheck(head, base, tmp_path, set())
+    assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
+
+
     (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
@@ -1330,3 +1416,71 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def test_land_skip_link_skips_the_link_stage_for_a_runtime_change(monkeypatch, capsys):
+    """The freeze break on feat/parity refused every batch that touched the runtime (09:42, 09:46, 09:48, 09:49); LAND_SKIP_LINK=1 is the user's way past it."""
+    monkeypatch.setenv("LAND_SKIP_LINK", "1")
+
+    def build():
+        raise AssertionError("the link stage built the release bins")
+
+    assert ps.new_link_failures(["runtime/qb/src/lib.rs"], build=build, check=lambda: ["qb x: freeze"], inputs=lambda: []) == []
+    assert "link: skipped (LAND_SKIP_LINK=1)" in capsys.readouterr().out
+    monkeypatch.delenv("LAND_SKIP_LINK")
+    assert ps.new_link_failures(["runtime/qb/src/lib.rs"], build=lambda: None, check=lambda: ["qb x: freeze"], inputs=lambda: []) == ["qb x: freeze"]
+
+
+def test_the_batch_age_limit_is_read_from_the_environment():
+    """The 20-minute cap ended the 48-PR batches the user asked for; BATCH_MAX_SECONDS sets it per batch (the runner's env), 1200 by default."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.BATCH_MAX_SECONDS)"], cwd=Path(__file__).parent, env={**os.environ, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"BATCH_MAX_SECONDS": "2400"}) == "2400"
+
+
+def test_merge_batch_takes_as_many_prs_as_batch_cap_says():
+    """10:24: the runner assembled 100 PRs (BATCH_CAP=100) and merge-batch died at once with 'takes at most 16 PRs per smoke': MAX_BATCH was a literal."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.MAX_BATCH)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "BATCH_CAP"}, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"LAND_FAST": "1", "BATCH_CAP": "100"}) == "100"
+    assert read({"LAND_FAST": "1"}) == "16" and read({}) == "8"
+
+
+def test_a_drop_after_the_scan_costs_one_rescan_for_the_rest_not_one_per_pr():
+    """10:48-10:50: after a PR was dropped at the squash every later PR got its own rescan (~30 s of 35 s per PR): 141 PRs would take 80 min. The remaining members are scanned once per new drop."""
+    groups, ones = [], []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(list(g)) or set(), rescan_one=lambda n, info: ones.append(n) or set())
+    infos = {n: {"headRefOid": n} for n in "abcd"}
+    assert check("a", infos, [], ["a", "b", "c", "d"]) == ""
+    assert [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"] == ["", "", ""]
+    assert len(groups) == 1 and not ones, "one group scan, no per-PR rescans"
+    assert check("d", infos, ["x", "y"], ["d"]) == "" and len(groups) == 2, "a new drop is scanned again"
+
+
+def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
+    """When the remaining tree is red the culprit is still found one PR at a time, and the group is not rescanned for every PR."""
+    groups, ones = [], []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(1) or {"integration x::t"}, rescan_one=lambda n, info: ones.append(n) or ({"integration x::t"} if n == "c" else set()))
+    infos = {n: {"headRefOid": n} for n in "bcd"}
+    whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
+    assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
+    assert len(groups) == 1 and ones == ["b", "c", "d"]
+
+
+def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
+    """11:04: the culprit probe ran `git diff origin/feat/parity...<head of #5183>`, a head pushed after the batch's fetch: 'Invalid symmetric difference', the merge-batch process died with no LANDED line."""
+    def sh(cwd, *a):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    origin, clone = tmp_path / "origin", tmp_path / "clone"
+    origin.mkdir()
+    sh(origin, "init", "-q", "-b", "main")
+    (origin / "a.txt").write_text("a\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "a")
+    sh(tmp_path, "clone", "-q", str(origin), str(clone))
+    (origin / "b.txt").write_text("b\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "b")
+    head = sh(origin, "rev-parse", "HEAD")
+    sh(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+    base = sh(clone, "rev-parse", "origin/main")
+    assert ps.head_files(head, base=base, cwd=clone) == ["b.txt"]
