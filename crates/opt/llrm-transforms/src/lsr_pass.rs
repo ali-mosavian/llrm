@@ -388,12 +388,32 @@ pub fn reduced_held(
                         changed: false,
                     };
                     run.implement_solution(&plan);
-                    let mut dead = std::mem::take(&mut run.dead);
+                    let dead = std::mem::take(&mut run.dead);
+                    let rewrote = run.changed;
+                    // `ImplementSolution`: the dead instructions go first, so
+                    // the increments move over only the
+                    // uses that are left.
+                    crate::dead::dead_from(context, outer.callees(), function, dead);
+                    let mut run = Implement {
+                        context,
+                        function,
+                        declared,
+                        se,
+                        env: &env,
+                        rewriter: &mut rewriter,
+                        tti,
+                        l: header,
+                        body: &lp_blocks,
+                        iv_inc_insert_pos: plan.iv_inc_insert_pos,
+                        dead: Vec::new(),
+                        changed: false,
+                    };
                     run.move_increments();
-                    changed |= run.changed;
-                    if run.changed {
+                    changed |= rewrote | run.changed;
+                    if rewrote | run.changed {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrRewritten);
                     }
+                    let mut dead = Vec::new();
                     // `DeleteDeadPHIs`: the phis nothing reads any more, those
                     // of a cycle included.
                     dead.extend(

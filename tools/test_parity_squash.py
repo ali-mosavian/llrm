@@ -1293,6 +1293,16 @@ def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs_and_
     assert ps.docs_detail({"integration docs_links::t"}, tmp_path, "main", stale=lambda root: pytest.fail("not a docs refusal")) == ""
 
 
+def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
+    """The 02:34 sub-batch merged #5088's 01:18 head (sinkcast.md stale) 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head w14 had moved."""
+    infos = {"5088": {"headRefOid": "old" * 13 + "o", "title": "t"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
+    views = {"5088": {"headRefOid": "new" * 13 + "n", "title": "t2"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
+    moved = ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number])
+    assert list(moved) == ["5088"] and moved["5088"][1].startswith("newnew")
+    assert infos["5088"]["headRefOid"].startswith("newnew") and infos["5088"]["title"] == "t2", "infos holds the new read"
+    assert ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number]) == {}, "nothing moved the second time"
+
+
 def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
     """docs_in_sync was refused four times on trees the next check reset and nobody could reproduce: no evidence was kept."""
     def run(*args):
