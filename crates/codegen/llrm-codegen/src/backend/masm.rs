@@ -1086,9 +1086,10 @@ fn parts(
     // no return is a sibling call (rcx may carry its argument):
     // X86FrameLowering's emitSPUpdate, with the register
     // findDeadCallerSavedReg gives a `ret`.
-    let one_slot = omit && procedure.body.bits == 64 && reserve == slot && !sibling_calls(&procedure.body);
-    let regs = procedure.body.regs();
-    let (accumulator, dead_at_return) = (regs.named(RegId::EAX, 8), Some(regs.named(RegId::ECX, 8)));
+    let scratch =
+        procedure.registers.slot_scratch.filter(|_| omit && reserve == slot && !sibling_calls(&procedure.body));
+    let one_slot = scratch.is_some();
+    let (accumulator, dead_at_return) = scratch.map_or((STACK, None), |(push, pop)| (push, Some(pop)));
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
         let below = reserve + slot * saved.len() as i64;
@@ -3214,6 +3215,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            slot_scratch: None,
             free: false,
         };
         let procedure = Procedure {
@@ -3264,6 +3266,7 @@ mod tests {
                 optional: false,
                 enter,
                 wrap_split_size: false,
+                slot_scratch: None,
                 free: false,
             };
             let procedure = Procedure {
@@ -3333,6 +3336,7 @@ mod tests {
             optional,
             enter: false,
             wrap_split_size: false,
+            slot_scratch: None,
             free: false,
         };
         let procedure = Procedure {
@@ -3504,6 +3508,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            slot_scratch: None,
             free: false,
         };
         let procedure = Procedure {
