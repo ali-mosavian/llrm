@@ -726,6 +726,38 @@ fn a_round_read_only_as_a_call_argument_is_not_stored_to_a_slot_first() {
     assert_eq!(count(ROUNDED_ARGUMENT), count(PLAIN_ARGUMENT));
 }
 
+const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
+define cc 1005 i32 @f(ptr addrspace(3) %0, ptr addrspace(3) %1) addrspace(1) {
+b1:
+  %2 = tail call i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3) %0, ptr addrspace(3) %1)
+  ret i32 %2
+}
+";
+
+/// A far pointer argument only subtracted loads as words that the `movzx`
+/// folds; it was a `les` whose selector `mov` fed a register `movzx` (a `mov`
+/// and a `movzx` more for each selector in `d7`, 2 B each at m16 -Os).
+#[test]
+fn a_far_pointer_read_as_data_is_loaded_into_movzx() {
+    let module = llrm_mir::parse::module(HUGE_DIFFERENCE).expect("parses");
+    let done = super::dag_function::selected(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let made: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(!made.iter().any(|name| name == "mov"), "{made:?}");
+}
+
 const BITREVERSE_OF_A_HIGH_BYTE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare i32 @llvm.bitreverse.i32(i32)
 define i32 @f(i32 %x) {

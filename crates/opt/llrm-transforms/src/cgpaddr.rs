@@ -128,7 +128,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::tti::Tti;
@@ -184,7 +184,7 @@ impl FunctionPass for CgpAddr {
         };
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
-        let sunk_compares = one_flag && compares_sunk(unit.function);
+        let sunk_compares = one_flag && compares_sunk(unit.context, &analyses.outer().globals, unit.function);
         let compares = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
@@ -867,7 +867,14 @@ fn phis_sunk(function: &mut Function) -> bool {
 /// LLVM's `sinkCmpExpression`: each comparison made again at the top of every
 /// block that reads it and is not its own (a phi's incoming block is not a
 /// read), and erased once nothing reads the original.
-fn compares_sunk(function: &mut Function) -> bool {
+///
+/// DEVIATE: a compare of a runtime call's flags result stays by the call; the
+/// flags do not survive to another block.
+fn compares_sunk(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &mut Function,
+) -> bool {
     let compares: Vec<(BlockId, InstId)> = function
         .walk()
         .filter(|&(_, inst)| matches!(
@@ -878,6 +885,9 @@ fn compares_sunk(function: &mut Function) -> bool {
     let mut changed = false;
     for (home, compare) in compares {
         let Some(result) = function.instruction(compare).result else { continue };
+        if llrm_mir::facts::compares_flags_result(context, globals, function, compare) {
+            continue;
+        }
         let mut made: Vec<(BlockId, Operand)> = Vec::new();
         for one in function.users(result).snapshot() {
             if function.instruction(one.user).opcode == Opcode::Phi {
