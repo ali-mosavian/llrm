@@ -430,6 +430,23 @@ fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
     assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
 }
 
+/// `fcmp` of two doubles at m64 selected the x87 compare (`fcom`), which the
+/// emitter drops: `fcmp olt` was a lone `seta al` on whatever flags were live.
+/// The CPU has CMOV, so the table's `UCOMISD` pattern selects it.
+#[test]
+fn a_double_compare_is_ucomisd() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(double %a, double %b) {\n  %r = fcmp olt double %a, %b\n  ret i1 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("ucomisd")), "{listing}");
+    assert!(
+        !listing.lines().any(|line| line.trim().starts_with("fcom") || line.trim().starts_with("fucom")),
+        "{listing}"
+    );
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]
