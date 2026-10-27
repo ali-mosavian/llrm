@@ -631,3 +631,37 @@ fn a_bitcast_between_a_float_and_an_integer_goes_through_the_stack() {
             .unwrap_or_else(|e| panic!("{name}: {}", e.0));
     }
 }
+
+const ROUNDED_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(double %x, ptr %p) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  %r = fpround double %a to double
+  store double %r, ptr %p
+  ret void
+}
+";
+
+const PLAIN_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(double %x, ptr %p) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  store double %a, ptr %p
+  ret void
+}
+";
+
+/// A double stored is rounded by the store: `fpround` read only by stores of
+/// its type went through a stack slot first (`fstp [slot]; fld [slot]; fstp
+/// [p]`), 112 bytes of frame and 267 bytes of code in nbody.bas under
+/// `--isel=dag` that the old selector's single `fstp` did not have.
+#[test]
+fn a_round_read_only_by_stores_is_not_stored_to_a_slot_first() {
+    let count = |text: &str| {
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().len()
+    };
+    assert_eq!(count(ROUNDED_STORE), count(PLAIN_STORE));
+}

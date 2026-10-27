@@ -1837,7 +1837,9 @@ impl Builder<'_> {
         let result = if self.is_pointer_cast(op, instruction)? {
             self.pointer_cast(op, instruction.operands[0], operand, instruction.ty)?
         } else if op == CastOp::FPRound {
-            self.round_through_memory(operand, dest)
+            // A store of the type rounds it: no slot first (the old selector's
+            // single `fstp`).
+            if self.read_only_by_stores(instruction) { operand } else { self.round_through_memory(operand, dest) }
         } else {
             let converted = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
             // an integer wider than the float's mantissa is rounded to its type
@@ -1855,6 +1857,23 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether every reader of `instruction`'s value is a store of it, as the
+    /// stored operand.
+    fn read_only_by_stores(
+        &self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = instruction.result else { return false };
+        let users = self.function.users(result);
+        !users.is_empty()
+            && users
+                .iter()
+                .all(|one| one.index == 0 && matches!(
+                    self.function.instruction(one.user).opcode,
+                    Opcode::Store { .. }
+                ))
     }
 
     /// `fpround`: the value stored to a stack slot of its own type and loaded
