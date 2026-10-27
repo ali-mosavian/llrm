@@ -9,7 +9,7 @@ LEVEL is O1, O2, O3 or Os. Each `DIR/*.c` goes through the pinned clang with the
 instead gives both llcs the pin-optimised IR, which measures the back ends only if ours does not re-optimise it (it does). `irguard` refuses an IR whose `target-cpu` is not the CPU both llcs run with. Ours is `LLRM_LLC` with
 `--isel=dag` and the pin's default convention (cdecl at m16, sysv at m32), the pin's llc is `LLVM_BIN`'s.
 
-The table has, per program, the instructions of ours and of the pin's asm (directives, labels and comments not counted) and the code bytes of
+The table has, per program, the instructions of ours and of the pin's asm (directives, labels and comments not counted; the pin's include the libgcc i64 divide members its object calls, which ours embeds: rows say `+libgcc[..]`, none at m16) and the code bytes of
 ours (the OMF object's code segments, data left out) against the pin's `.text`; with `--old` also ours under `--isel=old`. A row is flagged
 where ours is larger in instructions or in bytes without nops (`nopad`: alignment padding moves a small row in steps of 16). The first line names the llc (md5 and `--version`) and the pin. At m16 the pin picks 32-bit
 registers and prefixes: its bytes are longer than any 16-bit selection could be, so read that column as a size bar only.
@@ -112,6 +112,59 @@ def pin_padding_free(obj: Path, bits: int) -> int:
     """The pin's `.text` without its nops."""
     listing = subprocess.run(["objdump", "-d", *objdump_mode(bits), str(obj)], capture_output=True, text=True).stdout
     return pin_text_size(obj) - nop_bytes(listing)
+
+
+def archive_members(archive: Path) -> dict[str, str]:
+    """Symbol -> the archive member defining it."""
+    out = subprocess.run(["nm", "-g", "--defined-only", str(archive)], capture_output=True, text=True).stdout
+    owner, defined = "", {}
+    for line in out.splitlines():
+        if line.endswith(":") and ".o" in line:
+            owner = line[:-1]
+        elif len(parts := line.split()) == 3 and owner:
+            defined[parts[2]] = owner
+    return defined
+
+
+def linked_members(wanted: set[str], defined: dict[str, str], undefined_of) -> list[str]:
+    """The archive members a linker pulls for `wanted`: those defining a symbol, and those their own undefined symbols need, each once."""
+    pulled, queue = [], sorted(wanted)
+    while queue:
+        member = defined.get(queue.pop())
+        if member and member not in pulled:
+            pulled.append(member)
+            queue.extend(sorted(undefined_of(member)))
+    return pulled
+
+
+def nm_undefined(obj: Path) -> set[str]:
+    return set(subprocess.run(["nm", "-u", str(obj)], capture_output=True, text=True).stdout.split()[1::2])
+
+
+def libgcc_cost(obj: Path, bits: int, work: Path) -> tuple[int, int, int, list[str]]:
+    """Instructions, bytes and nop-free bytes of the libgcc members the pin's object calls (the i64 divide family): ours embeds those
+    helpers (SD231/232), the pin's object only calls them, so a row that compared the two measured the link, not the compiler.
+    None are counted at m16: there is no 16-bit libgcc, so the pin's calls stay unresolved there."""
+    found = subprocess.run(["gcc", "-m32", "-print-libgcc-file-name"], capture_output=True, text=True).stdout.strip()
+    if bits != 32 or not found or not Path(found).exists():
+        return 0, 0, 0, []
+    archive, defined = Path(found), archive_members(Path(found))
+    extracted: dict[str, Path] = {}
+
+    def member_obj(member: str) -> Path:
+        if member not in extracted:
+            extracted[member] = work / f"libgcc.{member}"
+            extracted[member].write_bytes(subprocess.run(["ar", "p", str(archive), member], capture_output=True).stdout)
+        return extracted[member]
+
+    names = linked_members({s for s in nm_undefined(obj) if s.startswith("__")}, defined, lambda member: nm_undefined(member_obj(member)))
+    ins = total = free = 0
+    for member in names:
+        listing = subprocess.run(["objdump", "-d", "--no-show-raw-insn", *objdump_mode(bits), str(member_obj(member))], capture_output=True, text=True).stdout
+        ins += sum(1 for line in listing.splitlines() if re.match(r"\s+[0-9a-f]+:\t(?!nop|data16|cs nop|xchg\s+ax,ax)\S", line))
+        total += pin_text_size(member_obj(member))
+        free += pin_padding_free(member_obj(member), bits)
+    return ins, total, free, names
 
 
 def corpus_sources(into: Path) -> Path:
@@ -221,14 +274,16 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
 
     ours_bytes = bytes_of("dag")
     old_bytes = bytes_of("old") if old else None
+    lib_ins, lib_bytes, lib_free, lib_names = libgcc_cost(pin_obj, int(cfg["bits"]), work)
     return {
         "name": stem,
         "ins": instructions(asm.read_text()),
-        "pin_ins": instructions(pin_asm.read_text()),
+        "pin_ins": instructions(pin_asm.read_text()) + lib_ins,
+        "lib": lib_names,
         "bytes": ours_bytes and ours_bytes[0],
         "free": ours_bytes and ours_bytes[1],
-        "pin_bytes": pin_text_size(pin_obj),
-        "pin_free": pin_padding_free(pin_obj, int(cfg["bits"])),
+        "pin_bytes": pin_text_size(pin_obj) + lib_bytes,
+        "pin_free": pin_padding_free(pin_obj, int(cfg["bits"])) + lib_free,
         "old_bytes": old_bytes and old_bytes[0],
         "old_free": old_bytes and old_bytes[1],
     }
@@ -250,7 +305,7 @@ def table(rows: list[dict], old: bool) -> list[str]:
         text = f"{row['name']:16} {row['ins']:5} {row['pin_ins']:5} {row['ins'] - row['pin_ins']:+5} | {row['bytes'] or -1:6} {row['pin_bytes']:6} {(row['bytes'] or 0) - row['pin_bytes']:+5} | {row['free'] or -1:6} {row['pin_free']:6} {(row['free'] or 0) - row['pin_free']:+5}"
         if old:
             text += f" | {row['old_free'] or -1:6} {((row['free'] or 0) - row['old_free']) if row['old_free'] else 0:+5}"
-        lines.append(text + "  " + " ".join(flags))
+        lines.append(text + "  " + " ".join(flags) + (f" +libgcc[{','.join(m.removesuffix('.o').strip('_') for m in row['lib'])}]" if row.get("lib") else ""))
     lines.append(
         f"programs {len(rows)} flagged {flagged} | ins {sum(r['ins'] for r in rows)} vs {sum(r['pin_ins'] for r in rows)}"
         f" | bytes {sum(r['bytes'] or 0 for r in rows)} vs {sum(r['pin_bytes'] for r in rows)}"
