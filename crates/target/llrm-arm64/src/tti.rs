@@ -304,7 +304,10 @@ impl Tti for AArch64 {
             Some(Some(cost)) => Cost::of(*cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => Cost::INVALID,
+            // A scalar intrinsic with no case of its own (`stacksave`) is "turned into a library call":
+            // BasicTTIImplBase::getTypeBasedIntrinsicInstrCost's `SingleCallCost`.
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
+            None => Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 }),
         }
     }
 

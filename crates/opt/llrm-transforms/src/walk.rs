@@ -390,8 +390,11 @@ impl ProgramPass for Walk {
                         // A callee the splices or the simplification added, with a body: a parameter
                         // that was a function became the copy's callee, or the call was devirtualized
                         // (a table of functions made a switch of calls by `jumptableswitch`).
-                        let exposed = now.iter().any(|(callee, _)| {
-                            !was.iter().any(|(seen, _)| seen == callee)
+                        // Or more calls of a callee with a body than before the splices: the copies
+                        // brought call sites that `InlineFunction` hands to the inliner's worklist.
+                        let exposed = now.iter().any(|(callee, count)| {
+                            let before = was.iter().find(|(seen, _)| seen == callee).map_or(0, |&(_, count)| count);
+                            (before == 0 || (spliced && *count > before && !recursive.contains(callee)))
                                 && module.global(*callee).function().is_some_and(|one| !one.layout().is_empty())
                         });
                         live.spliced(module, &mut modules[at], was, now.clone());

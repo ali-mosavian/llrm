@@ -178,3 +178,24 @@ fn a_hash_loop_over_constants_is_computed_at_compile_time() {
     let lines = asm.lines().count();
     assert!(lines < 300, "{lines} lines where the pin's is under 100:\n{asm}");
 }
+
+/// A function with a variable-length array was never inlined (`dynamic alloca` refused, the
+/// copy's stack could not be given back), so a VLA helper called with constants stayed a call:
+/// `tests/darwin/vla.ll` came to 488 bytes where the pin's is 204.
+#[test]
+fn a_function_with_a_variable_length_array_is_inlined_with_the_stack_given_back() {
+    let mut program =
+        driver::program(include_str!("data/vla_variable.ll"), Platform::Darwin).expect("the module reads");
+    driver::optimized(&mut program).expect("the pipeline runs");
+    let after = llrm_mir::print::module(&program.modules[0]);
+    assert!(!after.contains("call void @g"), "g was left a call:\n{after}");
+    assert!(after.contains("stacksave") && after.contains("stackrestore"), "the stack is bracketed:\n{after}");
+}
+
+/// The same with constants: the array's count is the argument, so the copy's alloca is static and
+/// no loop or call is left.
+#[test]
+fn a_variable_length_array_of_a_constant_size_is_a_frame_slot() {
+    let asm = driver::assembly(include_str!("darwin/vla.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(!asm.contains("_vla"), "vla was left a function:\n{asm}");
+}

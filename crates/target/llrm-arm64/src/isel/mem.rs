@@ -51,8 +51,18 @@ impl Selector<'_> {
             return refuse("a dynamic alloca aligned past 16");
         }
         // `sp -= (count * size + 15) & -16`, the object at the new `sp`.
-        let count = self.operand_g(instruction.operands[0])?;
-        let count = self.widened(count, 64, false);
+        let count = match instruction.operands.first() {
+            Some(&count) => {
+                let count = self.operand_g(count)?;
+                self.widened(count, 64, false).reg
+            }
+            // `alloca T` outside the entry block has no count operand.
+            None => {
+                let one = self.mf.gpr();
+                self.load_immediate(one, 64, 1);
+                one
+            }
+        };
         let bytes = self.mf.gpr();
         let size = self.mf.gpr();
         self.load_immediate(size, 64, element);
@@ -60,7 +70,7 @@ impl Selector<'_> {
             op: Mul3::Madd,
             width: Width::X,
             rd: bytes,
-            rn: count.reg,
+            rn: count,
             rm: size,
             ra: Gpr::R31,
         });

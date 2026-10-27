@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:ec4b357d0527f6529bb28c943a8229a18e2ccaf6d8bfe7fe1f308ed94631e242 -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:c89f99dda649b08f23613a479de2206138fc2cbb589a01233bf0f892fb2ceb87 -->
 
 # inline
 
@@ -48,6 +48,12 @@ A callee can be cloned (`cloneable`: defined, `splice` carries it, it
 returns, it is not recursive, not `noinline`, and does not call
 `setjmp`-like functions); whether it is copied at a site is
 `inlinecost::decide`'s, the walk's ([`crate::walk`](walk.md)).
+
+A static alloca of the callee goes to the caller's entry; one whose count
+is an argument folds to a constant in the copy, as `CloneAndPruneFunctionInto`
+simplifies it, and is static too. Any other (a variable count) stays where it
+is, and the copy is bracketed by `llvm.stacksave` and, before each return,
+`llvm.stackrestore`.
 
 A copy is allowed (`fits_with`) only where
 
