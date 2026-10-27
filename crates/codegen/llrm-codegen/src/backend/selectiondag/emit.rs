@@ -1273,7 +1273,8 @@ impl Emitter<'_, '_> {
             // unnamed store the stackifier reads as `handleReturn`.
             let node = self.dag.node(SDValue { node: n, res: 0 });
             for &op in &node.ops {
-                if self.dag.value_type(op).is_floating_point() {
+                // At m64 the result is in `xmm0`, put there by its `CopyToReg`.
+                if self.ctx.address_mode != AddrMode::Flat64 && self.dag.value_type(op).is_floating_point() {
                     let Loc::Held(value) = self.operand(op)? else {
                         return Err(EmitError::Unsupported("a floating result that is no register".to_owned()));
                     };

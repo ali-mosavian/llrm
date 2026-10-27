@@ -721,3 +721,47 @@ entry:
         .find(|w| w.op == crate::model::ir::Operation::Return && w.name.as_deref() == Some("jmp"));
     assert!(jump.is_some(), "a jmp that returns");
 }
+
+/// A function returning a `double` at m64 carried the x87 return pseudo (an
+/// unnamed `FloatStore` with no destination) that the stackifier reads at m32;
+/// the listing printer indexed its empty destinations and panicked
+/// (`masm.rs:2361`), and the ELF writer refused it. The result is in `xmm0`.
+#[test]
+fn an_m64_double_result_has_no_x87_return_store() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to double
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    assert!(
+        insns.iter().filter_map(|i| i.what.as_ref()).all(|w| w.op != crate::model::ir::Operation::FloatStore),
+        "{insns:?}"
+    );
+}
+
+/// `fptoui float to i64` at m64 was refused (no SSE form for an unsigned
+/// quadword) or went through the x87 `fist` in memory. It is the signed
+/// `cvttss2si` of the value less 2^63 when it is at least that, with the sign
+/// bit put back.
+#[test]
+fn an_m64_unsigned_quadword_from_a_float_is_cvttss2si() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(float %a) {
+entry:
+  %r = fptoui float %a to i64
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
+    assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
+}
