@@ -284,6 +284,15 @@ pub fn filled_with(
     standing: &mut llrm_analysis::memory::Standing,
     wanted: &dyn Fn(&Loop) -> bool,
 ) -> bool {
+    // `"no-builtins"` turns every library function off in the pin's TLI.
+    if function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::opcode::Attribute::Str(key, _) if key == "no-builtins"
+        )
+    }) {
+        return false;
+    }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;

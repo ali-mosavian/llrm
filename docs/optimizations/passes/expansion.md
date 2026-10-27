@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/expansion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/expansion.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/expansion.rs sha256:e140ae1356fbdc915516bac2458c164d6edc87822b7962c4626af02281b33f30 -->
+> Generated from the `//!` header of [`crates/opt/llrm-transforms/src/expansion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/expansion.rs); edit the header, not this file.
+<!-- src: crates/opt/llrm-transforms/src/expansion.rs sha256:fd845ebaea5376bc1dafb7a3f5c85e535acef3cd790069c4b0ef02a94d74c23c -->
 
 # expansion
 
@@ -18,8 +18,8 @@ the shifts and masks that move each byte, and the call's uses read the
 result.
 
 ## Runs
-Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and
-[`crate::backend::compares`](compares.md), from `driver::optimized`.
+Under codegen's `bitcounts`, `bytes` and `compares`, from
+`driver::optimized`.
 
 ## See also
 LLVM's `TargetLowering::expand*` family, which these follow

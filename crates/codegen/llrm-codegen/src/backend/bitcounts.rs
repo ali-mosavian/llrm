@@ -101,7 +101,30 @@ pub fn expanded(
 }
 
 /// What the bit counts add to an [`Emitter`]: the parallel count and its kin.
-impl Emitter<'_> {
+trait Counts {
+    /// `x` with every byte of the computing width `byte`.
+    fn splat(
+        &self,
+        byte: u128,
+    ) -> u128;
+    /// `TargetLowering::expandCTPOP`, without the multiply.
+    fn population(
+        &mut self,
+        x: Operand,
+    ) -> Result<Operand, String>;
+    /// `TargetLowering::expandCTLZ`.
+    fn leading_zeros(
+        &mut self,
+        x: Operand,
+    ) -> Result<Operand, String>;
+    /// `TargetLowering::expandCTTZ`.
+    fn trailing_zeros(
+        &mut self,
+        x: Operand,
+    ) -> Result<Operand, String>;
+}
+
+impl Counts for Emitter<'_> {
     /// `x` with every byte of the computing width `byte`.
     fn splat(
         &self,

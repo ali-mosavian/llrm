@@ -3,6 +3,8 @@
 //! callee. An explicit `cdecl32` keeps the stack. Each expectation was read
 //! from `wcc386 -3r`'s own output for the same signature.
 
+mod common;
+
 use std::process::Command;
 
 /// The listing of `source` for -m32.
@@ -131,7 +133,7 @@ fn c_listing(
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-S"])
         .arg(&path)
