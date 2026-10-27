@@ -226,6 +226,9 @@ struct Emitter<'a, 'd> {
     /// that reads it, set by the `CopyToReg` the matcher glues to it or by the
     /// instruction before.
     accumulator: HashMap<llrm_lir::registers::RegId, Held>,
+    /// The segments of the last string move: a move glued after it goes on
+    /// through them.
+    string_segments: Option<(Loc, Loc)>,
     /// The arguments passed in registers to the call being built.
     arguments: Vec<(Held, llrm_lir::registers::RegId)>,
     /// The values copied to the return registers, which the `RET` requires.
@@ -367,6 +370,7 @@ pub fn emit_in(
         classes: Vec::new(),
         sp_values: Default::default(),
         accumulator: HashMap::default(),
+        string_segments: None,
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
@@ -2246,6 +2250,35 @@ impl Emitter<'_, '_> {
                 };
                 let (counter, to_offset, from_offset, from_segment) =
                     (strings.count, strings.destination, strings.source, strings.source_segment);
+                // DEVIATE SD224 (real mode): a move glued straight after
+                // another moves one block from where it
+                // stopped, with no count: `movsw` or `movsb`
+                // for the bytes past the last dword.
+                let continued = node
+                    .ops
+                    .last()
+                    .is_some_and(
+                        |&glue| matches!(
+                            self.dag.opcode(glue),
+                            ISD::Machine(op) if self.ctx.names.get(&(op as u16)).is_some_and(|name| name.starts_with("REP_MOVS"))
+                        ),
+                    );
+                if continued {
+                    let Some((from, to)) = self.string_segments.clone() else {
+                        return Err(EmitError::Unsupported("a string move glued to none".to_owned()));
+                    };
+                    let (source, destination) = (self.accumulated(from_offset)?, self.accumulated(to_offset)?);
+                    let (source_after, destination_after) = (self.fresh(2), self.fresh(2));
+                    self.push(
+                        Operation::Copy,
+                        &name[4..9].to_ascii_lowercase(),
+                        vec![Loc::Mem(Mem::new(None, 0)), Loc::Held(source_after), Loc::Held(destination_after)],
+                        vec![Loc::Held(source), Loc::Held(destination), from, to],
+                    );
+                    self.accumulator.insert(from_offset, source_after);
+                    self.accumulator.insert(to_offset, destination_after);
+                    return Ok(Some(()));
+                }
                 let (count, source, destination) = (
                     self.accumulated(counter)?,
                     self.offset_of_pointer(from_offset)?,
@@ -2260,6 +2293,7 @@ impl Emitter<'_, '_> {
                 };
                 let to = self.segment_of_pointer(to_offset)?;
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
+                self.string_segments = Some((from.clone(), Loc::Held(to)));
                 self.push(
                     Operation::Copy,
                     &name[4..9].to_ascii_lowercase(),
