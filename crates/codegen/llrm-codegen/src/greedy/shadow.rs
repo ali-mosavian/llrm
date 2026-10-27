@@ -1100,6 +1100,13 @@ pub fn decide_with_split(
         })
     };
     tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        if let [value] = one.defines.as_slice()
+            && tables.remat.borrow().contains(value)
+        {
+            tables.remat_roots.borrow_mut().entry(*value).or_insert_with(|| Arc::clone(one));
+        }
+    }
     let pins = inputs
         .pins
         .iter()
