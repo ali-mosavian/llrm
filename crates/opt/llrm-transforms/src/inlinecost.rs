@@ -336,6 +336,10 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
     }
+    // Don't inline what can be interposed at link time: the body is not the definition that runs.
+    if site.module.global(site.callee_id).linkage.is_interposable() {
+        return Some(Err("interposable".into()));
+    }
     None
 }
 
