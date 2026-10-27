@@ -902,6 +902,16 @@ fn a_proved_move_at_m16_is_inline_string_code() {
     );
 }
 
+/// A forward string move of 3840 bytes (a multiple of four) was followed by
+/// `xor cx, cx; rep movsb`, a copy of zero bytes (scroll.c m16 -Os, +3 B).
+#[test]
+fn a_forward_string_move_of_whole_dwords_has_no_byte_tail() {
+    let up = move_3840_at_m16(", !llrm.forward !0");
+    let names: Vec<_> =
+        up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "movsb"), "{names:?}");
+}
+
 /// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
 /// at m16) though the callee truncates it; the old selector writes `dl`
 /// (mandel.nib: 4 bytes a call).

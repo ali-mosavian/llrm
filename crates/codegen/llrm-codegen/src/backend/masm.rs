@@ -1406,7 +1406,8 @@ fn built(
                 }
                 Operation::Call => {
                     if what.indirect {
-                        out.push(Item::Semantics(what.clone()));
+                        let pops = procedure.body.call_pops.get(&one.at).copied();
+                        out.push(Item::Semantics(Semantics { pops, ..what.clone() }));
                     } else {
                         let Some(callee) = procedure.callees.get(&one.at) else {
                             return Err(Unprintable(format!(
@@ -1800,6 +1801,11 @@ fn addressed_pass(
                             what.name.as_deref(),
                             Some("fnstcw" | "fldcw" | "fnstsw" | "in" | "out")
                         ) => {}
+                    // An indirect call whose frame named the bytes its callee
+                    // pops (`callframe`).
+                    Operation::Call if what.indirect && what.pops.is_some() => {
+                        depth = Some(here - what.pops.unwrap_or(0));
+                    }
                     Operation::Leave
                     | Operation::Exchange
                     | Operation::Escape
@@ -3204,8 +3210,22 @@ mod tests {
         blocks: Vec<lir::Block>,
         callees: IndexMap<i64, Callee>,
     ) -> Vec<String> {
-        let body =
-            lir::LirBody { bits: 32, ..lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default()) };
+        flat_popping(optional, reserve, blocks, callees, IndexMap::default())
+    }
+
+    /// `flat_blocks`, the bytes each indirect call's callee pops given.
+    fn flat_popping(
+        optional: bool,
+        reserve: i64,
+        blocks: Vec<lir::Block>,
+        callees: IndexMap<i64, Callee>,
+        call_pops: IndexMap<i64, i64>,
+    ) -> Vec<String> {
+        let body = lir::LirBody {
+            bits: 32,
+            call_pops: Arc::new(call_pops),
+            ..lir::LirBody::new("get", 1, blocks, IndexMap::default(), IndexMap::default())
+        };
         let registers = llrm_target::FrameRegisters {
             pointer: RegId::EBP,
             stack: RegId::ESP,
@@ -3340,6 +3360,20 @@ mod tests {
             ret(),
         ];
         assert!(has(&flat(true, 8, indirect, IndexMap::default()), "push ebp"));
+        // The call frame named what the callee pops: the depth after it is
+        // known (tail_calls_edges `through` kept `ebp` for this call).
+        let framed = vec![
+            insn(0, Semantics { indirect: true, ..semantics(Operation::Call, "call", vec![], vec![eax()]) }),
+            ret(),
+        ];
+        let popping = flat_popping(
+            true,
+            8,
+            vec![lir::LirBlock::new(1, framed).into()],
+            IndexMap::default(),
+            IndexMap::from_iter([(0, 0)]),
+        );
+        assert!(!has(&popping, "push ebp"));
         let flags = vec![
             insn(0, semantics(Operation::Nothing, "pushf", vec![], vec![])),
             insn(1, semantics(Operation::Move, "mov", vec![eax()], vec![cell(8)])),
