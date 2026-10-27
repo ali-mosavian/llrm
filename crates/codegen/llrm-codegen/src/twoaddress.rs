@@ -99,8 +99,12 @@ pub struct BodyFacts {
 
 struct State {
     insns: HashMap<InstrKey, Arc<Insn>>,
-    /// The instructions of each block, in order.
-    blocks: Vec<Vec<Arc<Insn>>>,
+    /// The instructions of each block by order stamp: the stamps rise along the
+    /// block, with gaps, so an instruction goes between two others (or moves)
+    /// without renumbering the rest, as the pin's intrusive list does.
+    blocks: Vec<std::collections::BTreeMap<u64, Arc<Insn>>>,
+    /// The stamp of each instruction in its block.
+    stamp_of: HashMap<InstrKey, u64>,
     block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
@@ -131,15 +135,65 @@ impl State {
         REFRESHED.with(|seen| seen.borrow_mut().push(value));
         let live_in = self.lv.is_live_in_block(value, block);
         let live_out = self.lv.is_live_out_block(value, block);
+        // Only the instructions naming the value can end a segment of it: they
+        // are read from its operand list, not found by walking the block.
+        let mut naming: Vec<(u64, &Arc<Insn>)> = self
+            .operands
+            .get(&value)
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| self.block_of.get(key) == Some(&block))
+            .map(|(key, _)| (self.stamp_of[key], &self.insns[key]))
+            .collect();
+        naming.sort_unstable_by_key(|(stamp, _)| *stamp);
+        naming.dedup_by_key(|(stamp, _)| *stamp);
         let sites = crate::liveness::livevariables::segment_kills(
             value,
-            self.blocks[block].iter().map(|one| &**one),
+            naming.into_iter().map(|(_, one)| &**one),
             live_in,
             live_out,
         );
         let info = self.lv.get_var_info(value);
         info.kills.retain(|kill| kill.block != block);
         info.kills.extend(sites.into_iter().map(|site: Site| Kill { site, block }));
+    }
+
+    /// `count` stamps strictly between `lo` and `hi` (the block's ends where
+    /// none), renumbering the block when the gap is too small.
+    fn stamps_between(
+        &mut self,
+        block: usize,
+        lo: Option<u64>,
+        hi: Option<u64>,
+        count: usize,
+    ) -> (Vec<u64>, Option<u64>, Option<u64>) {
+        const GAP: u64 = 1 << 20;
+        let fits = |lo: Option<u64>, hi: Option<u64>| {
+            let (low, high) = (lo.map_or(0, |one| one + 1), hi.unwrap_or(u64::MAX / 2));
+            (high > low && (high - low) as u128 > count as u128).then_some((low, high))
+        };
+        let (mut lo, mut hi) = (lo, hi);
+        let span = match fits(lo, hi) {
+            Some(span) => span,
+            None => {
+                // Renumber the block evenly and look for the neighbours again.
+                let (lo_key, hi_key) = (
+                    lo.map(|one| Arc::clone(&self.blocks[block][&one])),
+                    hi.map(|one| Arc::clone(&self.blocks[block][&one])),
+                );
+                let old = std::mem::take(&mut self.blocks[block]);
+                for (n, (_, one)) in old.into_iter().enumerate() {
+                    let stamp = (n as u64 + 1) * GAP;
+                    self.stamp_of.insert(one.id(), stamp);
+                    self.blocks[block].insert(stamp, one);
+                }
+                lo = lo_key.map(|one| self.stamp_of[&one.id()]);
+                hi = hi_key.map(|one| self.stamp_of[&one.id()]);
+                fits(lo, hi).expect("a renumbered block has room")
+            }
+        };
+        let step = (span.1 - span.0) / (count as u64 + 1);
+        ((1..=count as u64).map(|n| span.0 + n * step).collect(), lo, hi)
     }
 
     /// [`State::refresh_kills`] of every value `one` names.
@@ -212,14 +266,17 @@ impl BodyFacts {
         let mut state = State {
             insns: HashMap::default(),
             blocks: Vec::new(),
+            stamp_of: HashMap::default(),
             block_of: HashMap::default(),
             operands: HashMap::default(),
             lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
         };
         for (at, block) in body.blocks.iter().enumerate() {
-            let mut kept = Vec::with_capacity(block.insns.len());
-            for one in block.insns.iter() {
-                kept.push(Arc::clone(one));
+            let mut kept = std::collections::BTreeMap::new();
+            for (n, one) in block.insns.iter().enumerate() {
+                let stamp = (n as u64 + 1) << 20;
+                kept.insert(stamp, Arc::clone(one));
+                state.stamp_of.insert(one.id(), stamp);
                 state.insns.insert(one.id(), Arc::clone(one));
                 state.block_of.insert(one.id(), at);
                 state.add_operands(one);
@@ -277,8 +334,9 @@ impl BodyFacts {
         state.remove_operands(&before);
         state.insns.remove(&old);
         state.block_of.remove(&old);
-        let at = state.blocks[block].iter().position(|one| one.id() == old).expect("an instruction of the block");
-        state.blocks[block][at] = Arc::clone(&new);
+        let at = state.stamp_of.remove(&old).expect("an instruction of the block");
+        state.blocks[block].insert(at, Arc::clone(&new));
+        state.stamp_of.insert(new.id(), at);
         state.block_of.insert(new.id(), block);
         state.add_operands(&new);
         state.insns.insert(new.id(), Arc::clone(&new));
@@ -296,12 +354,17 @@ impl BodyFacts {
         before: Option<InstrKey>,
     ) {
         let mut state = self.state.borrow_mut();
-        let order = &mut state.blocks[block];
-        let from = order.iter().position(|one| one.id() == key).expect("an instruction of the block");
-        let moved = order.remove(from);
-        let to =
-            before.map_or(order.len(), |one| order.iter().position(|other| other.id() == one).expect("a block mate"));
-        order.insert(to, moved);
+        let from = state.stamp_of.remove(&key).expect("an instruction of the block");
+        let moved = state.blocks[block].remove(&from).expect("an instruction of the block");
+        let after = match before {
+            Some(one) => state.stamp_of[&one],
+            None => u64::MAX,
+        };
+        let lo = state.blocks[block].range(..after).next_back().map(|(stamp, _)| *stamp);
+        let hi = (after != u64::MAX).then_some(after);
+        let (stamps, ..) = state.stamps_between(block, lo, hi, 1);
+        state.blocks[block].insert(stamps[0], Arc::clone(&moved));
+        state.stamp_of.insert(key, stamps[0]);
         let moved = Arc::clone(&state.insns[&key]);
         state.refresh_named(&moved, block);
     }
@@ -323,15 +386,29 @@ impl BodyFacts {
         state.remove_operands(&before);
         state.insns.remove(&one.id());
         state.block_of.remove(&one.id());
-        let at =
-            state.blocks[block].iter().position(|other| other.id() == one.id()).expect("an instruction of the block");
-        for (place, new) in rest.iter().enumerate() {
-            state.blocks[block].insert(at + place, Arc::clone(new));
+        let at = state.stamp_of.remove(&one.id()).expect("an instruction of the block");
+        let lo = state.blocks[block].range(..at).next_back().map(|(stamp, _)| *stamp);
+        let (stamps, ..) = state.stamps_between(block, lo, Some(at), rest.len());
+        // A renumbering moved `one` too: its stamp is read again.
+        let at = if rest.is_empty() {
+            at
+        } else {
+            state.blocks[block]
+                .range(stamps[rest.len() - 1]..)
+                .next()
+                .map(|(stamp, _)| *stamp)
+                .expect("the next of the block")
+        };
+        for (new, stamp) in rest.iter().zip(&stamps) {
+            state.blocks[block].insert(*stamp, Arc::clone(new));
+            state.stamp_of.insert(new.id(), *stamp);
             state.block_of.insert(new.id(), block);
             state.add_operands(new);
             state.insns.insert(new.id(), Arc::clone(new));
         }
-        state.blocks[block][at + rest.len()] = Arc::clone(last);
+        state.stamp_of.remove(&one.id());
+        state.blocks[block].insert(at, Arc::clone(last));
+        state.stamp_of.insert(last.id(), at);
         state.block_of.insert(last.id(), block);
         state.add_operands(last);
         state.insns.insert(last.id(), Arc::clone(last));
@@ -366,8 +443,12 @@ impl BodyFacts {
         body: &LirBody,
     ) -> LirBody {
         let state = self.state.borrow();
-        let blocks =
-            body.blocks.iter().enumerate().map(|(at, block)| block.with_insns(state.blocks[at].clone())).collect();
+        let blocks = body
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(at, block)| block.with_insns(state.blocks[at].values().cloned().collect()))
+            .collect();
         body.with_blocks(blocks)
     }
 }
@@ -1484,5 +1565,45 @@ mod tests {
         let seen = REFRESHED.with(|seen| seen.borrow().clone());
         assert!(!seen.is_empty(), "the premise: the copy's values are remade");
         assert!(!seen.contains(&2), "v2 is read by `one` and by the new add alike: {seen:?}");
+    }
+
+    /// A tied pair replaced in a long block walked the whole block for every
+    /// value it named (quadratic in the block; the pin's lists are O(1)): the
+    /// walk is now the instructions naming the value, whatever the block holds.
+    #[test]
+    fn test_replacing_tied_pairs_walks_the_instructions_naming_the_value_not_the_block() {
+        use crate::liveness::livevariables::WALKED;
+        let held = |value: u32| Held { value, width: 4 };
+        let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: defines.iter().map(|&value| Loc::Held(held(value))).collect(),
+                sources: uses.iter().map(|&value| Loc::Held(held(value))).collect(),
+                ..Semantics::new(op)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+        };
+        let walked_in = |filler: i64| {
+            let mut insns: Vec<Arc<Insn>> =
+                (0..filler).map(|n| make(n, Operation::Move, "mov", vec![100 + n as u32], vec![])).collect();
+            let adds: Vec<Arc<Insn>> =
+                (0..20).map(|n| make(filler + n, Operation::Binary, "add", vec![10 + n as u32], vec![1, 2])).collect();
+            insns.extend(adds.iter().cloned());
+            let body =
+                LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+            let facts = BodyFacts::of(&body);
+            WALKED.with(|walked| walked.set(0));
+            for (n, one) in adds.iter().enumerate() {
+                let n = n as i64;
+                let copy = make(10_000 + 2 * n, Operation::Move, "mov", vec![1000 + n as u32], vec![1]);
+                let last =
+                    make(10_001 + 2 * n, Operation::Binary, "add", vec![10 + n as u32], vec![1000 + n as u32, 2]);
+                facts.replace(0, one, &[copy, last]);
+            }
+            WALKED.with(std::cell::Cell::get)
+        };
+        let (small, large) = (walked_in(250), walked_in(1000));
+        assert!(small > 0, "the premise: the kills are remade");
+        assert!(large <= 2 * small, "4x the block walked {large} against {small}: the whole block is walked");
     }
 }
