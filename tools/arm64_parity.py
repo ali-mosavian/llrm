@@ -7,6 +7,7 @@ A .c is made one unoptimized .ll (scalar: -fno-vectorize -fno-slp-vectorize, unt
 a .ll is used as given. Both sides start from it: `clang -O<n> -x ir` and llrm-arm64-llc.
 Cells are __text bytes/instructions; ours/clang is the headline. Run time is the min of N runs
 and means nothing near the process-start floor. A sibling .out/.status is the expected output.
+A .c also goes through `llrm-cc` (target arm64-macos: the pin's front end, then the backend), a third column: the driver end to end.
 Env: LLRM_PIN_ANY=1 (dry run with a non-pin clang), LLRM_PIN_BUILD (dir with bin/clang, bin/llc), LLRM_BIN (llrm binaries).
 """
 import argparse, hashlib, os, re, subprocess, sys, tempfile, time
@@ -78,6 +79,11 @@ def build_variants(src, lvl, tmp, ver):
     o = tmp / f"{name}.ours.o"
     r = sh([str(BIN / "llrm-arm64-llc"), f"-{lvl}", "-o", str(o), str(ll)])
     v["ours"] = o if r.returncode == 0 else "ours: " + (r.stderr or r.stdout)[:200]
+    if src.suffix == ".c" and (BIN / "llrm-cc").exists():
+        o = tmp / f"{name}.cc.o"
+        env = {**os.environ, "LLRM_CC_TARGET": "arm64-macos", "LLRM_PIN_CLANG": str(PIN / "bin/clang")}
+        r = sh([str(BIN / "llrm-cc"), f"-{lvl}", *FRONT, "-c", str(src), "-o", str(o)], env=env)
+        v["llrm-cc"] = o if r.returncode == 0 else "llrm-cc: " + (r.stderr or r.stdout)[:200]
     return v
 
 
@@ -97,7 +103,7 @@ def main():
     (tmp / "empty.c").write_text("int main(void){return 0;}")
     sh([str(PIN / "bin/clang"), *TARGET, "-isysroot", FRONT[-1], str(tmp / "empty.c"), "-o", str(tmp / "empty")])
     print(f"process-start floor (empty main, min of {a.runs}): {run(tmp / 'empty', a.runs)[0]*1000:.1f} ms; run times near it are noise")
-    cols = ["clang", "ours"]
+    cols = ["clang", "ours", "llrm-cc"]
     print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/clang':>11}  run(ms) clang/ours  result")
     worse = 0
     for f in a.files:
@@ -139,6 +145,8 @@ def main():
                 st = src.with_suffix(".status")
                 ref = (exp.read_bytes(), int(st.read_text()) if st.exists() else 0)
             res = "FAIL" if "ours" not in outs or "clang" not in outs else ("ok" if outs["ours"] == ref else "DIFF")
+            if res == "ok" and "llrm-cc" in v:  # the driver's build must run as the others do
+                res = "ok" if outs.get("llrm-cc") == ref else "CC-FAIL"
             print(f"{src.stem:<14}{lvl:<4}" + "".join(f"{c:>16}" for c in cells) + f"{ratio:>11}  " + "/".join(times) + f"  {res}")
     print(f"rows where ours is bigger than clang (bytes): {worse}; FAIL rows count against the corpus")
 

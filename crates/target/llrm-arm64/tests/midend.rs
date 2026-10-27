@@ -359,3 +359,14 @@ fn a_global_dead_on_entry_to_its_only_function_leaves_memory() {
         .expect("the function lowers");
     assert!(!asm.contains("adrp"), "{asm}");
 }
+
+/// The pin's clang writes `llvm.lifetime.start(ptr)`, without the size; the
+/// passes read `(size, ptr)`, so every marker looked like a call that keeps
+/// its object, and a 64 KB array nothing needed stayed on the stack:
+/// wide_frame was 824 bytes against the pin's 36.
+#[test]
+fn a_lifetime_marker_without_a_size_does_not_keep_its_object() {
+    let asm = driver::assembly(include_str!("data/lifetime_one_argument.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(asm.lines().count() < 40, "{asm}");
+}
