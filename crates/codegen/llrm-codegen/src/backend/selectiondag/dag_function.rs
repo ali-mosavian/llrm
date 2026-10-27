@@ -911,7 +911,7 @@ fn selected_in(
             &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
             &selector,
             &mut hooks,
-            &Info { source_order: bitness == 32 },
+            &Info { source_order: true },
             &ctx,
             &mut state,
             block_at[&block.0],

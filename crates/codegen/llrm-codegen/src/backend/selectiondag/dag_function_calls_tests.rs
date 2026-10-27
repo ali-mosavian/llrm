@@ -50,7 +50,7 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
 
-/// Source order is the m32 default (`SchedInfo::source_order`): it builds
+/// Source order is the default (`SchedInfo::source_order`): it builds
 /// `s = a + 1` before the call, as the IR has it, with or without
 /// `LLRM_SRC_ORDER`. Before it was the default the call sequence opened the
 /// block.
@@ -71,7 +71,7 @@ fn source_order_keeps_the_ir_order_around_a_call() {
             .collect();
         names.iter().position(|n| n == "call_frame_setup").unwrap()
     };
-    assert!(order(false) > 0, "the m32 default is source order");
+    assert!(order(false) > 0, "the default is source order");
     assert!(order(true) > 0);
 }
 
@@ -1007,6 +1007,19 @@ declare void @llrm.qb.B$PER4(float) nocallback
     assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
+const SELECT_BEFORE_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @g(i16)
+declare void @h(i16)
+define void @f(i16 %a) {
+entry:
+  %c = icmp eq i16 %a, 1
+  %s = select i1 %c, i16 99, i16 7
+  call void @g(i16 233)
+  call void @h(i16 %s)
+  ret void
+}
+";
+
 const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 @g = global i16 0
 declare void @h(ptr addrspace(2), ptr)
@@ -1026,6 +1039,25 @@ entry:
   ret void
 }
 ";
+
+/// A select the IR has before a call is made before it at m16, as the pin's
+/// source-order queue has it: the select's branches fell inside the first
+/// call's frame, so its argument store was no longer a push and `jumps` grew
+/// by 28 B.
+#[test]
+fn a_select_before_a_call_stays_above_the_call_frame() {
+    let module = llrm_mir::parse::module(SELECT_BEFORE_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    let call = names.iter().position(|n| n == "call").expect("a call");
+    assert_eq!(names[call - 1], "push", "the argument is pushed: {names:?}");
+}
 
 /// The segment of a global is pushed as an immediate (`push DGROUP`, 3 bytes);
 /// the DAG path moved it to a register and pushed that (4 bytes, 205 times in
