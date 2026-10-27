@@ -24,8 +24,8 @@
 //! DEVIATE 3: `frem` of two constants is folded with the host's `fmod` (exact)
 //! where neither is a NaN: `APFloat` has no `mod` here.
 //!
-//! DEVIATE 4: an `x86_fp80` constant is held as a double: it is matched
-//! (`m_NaN`, `m_AnyZeroFP`...) but never folded.
+//! An `x86_fp80` constant is its 80 bits (`fp80.rs`); `frem` of two is not
+//! folded.
 //!
 //! `simplifyFCmpInst` is translated down to the constant, `x fcmp x`, `nnan`
 //! and NaN-constant folds (DEVIATE 5, on `simplify_fcmp`).
@@ -38,13 +38,16 @@ use crate::valuetracking::fp::compute_known_fp_class;
 
 const NEAREST_EVEN: RoundingMode = RoundingMode::NearestTiesToEven;
 
-/// The constant's value, an `x86_fp80` as the double it is held as.
+/// The constant's value.
 fn value(
     q: &Query,
     operand: Operand,
 ) -> Option<ApFloat> {
     let constant = q.context.get(q.constant(operand)?);
     let Type::Float(kind) = *q.context.types.get(constant.ty) else { return None };
+    if kind == FloatKind::X86Fp80 {
+        return crate::fp80::value(&constant.kind);
+    }
     let (sem, bits): (Sem, u64) = match (kind, &constant.kind) {
         (FloatKind::Float, ConstantKind::Float(bits)) => (IEEE_SINGLE, *bits),
         (_, ConstantKind::Float(bits)) => (IEEE_DOUBLE, *bits),
@@ -61,6 +64,7 @@ fn sem_of(
 ) -> Sem {
     match q.context.types.get(ty) {
         Type::Float(FloatKind::Float) => IEEE_SINGLE,
+        Type::Float(FloatKind::X86Fp80) => crate::apfloat::X87_DOUBLE_EXTENDED,
         _ => IEEE_DOUBLE,
     }
 }
@@ -79,6 +83,9 @@ fn constant_of(
     ty: TypeId,
     value: &ApFloat,
 ) -> Operand {
+    if matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80)) {
+        return Operand::Constant(crate::fp80::constant(q.context, ty, value));
+    }
     Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float(value.to_bits() as u64) }))
 }
 
@@ -198,9 +205,6 @@ fn fold_fneg(
     v: Operand,
 ) -> Option<Operand> {
     let ty = q.ty(v);
-    if matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80)) {
-        return None;
-    }
     if q.is_poison(v) {
         return Some(poison(q, ty));
     }
@@ -242,9 +246,7 @@ fn fold_binary(
     if q.constant(lhs).is_none() || q.constant(rhs).is_none() {
         return None;
     }
-    if matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80)) {
-        return None;
-    }
+    let x87 = matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80));
     if q.is_poison(lhs) || q.is_poison(rhs) {
         return Some(poison(q, ty));
     }
@@ -280,13 +282,15 @@ fn fold_binary(
         BinaryOp::FDiv => a.divide(&b, NEAREST_EVEN),
         _ => crate::apfloat::OP_OK,
     };
-    if extended && status & crate::apfloat::OP_INEXACT != 0 {
+    // An x87 value is the format the hardware computes in: its rounding is the
+    // program's.
+    if extended && !x87 && status & crate::apfloat::OP_INEXACT != 0 {
         return None;
     }
     match op {
         BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv => {}
         BinaryOp::FRem => {
-            if a.is_nan() || b.is_nan() {
+            if a.is_nan() || b.is_nan() || x87 {
                 return None;
             }
             let bits = if a.get_semantics().size_in_bits == 32 {

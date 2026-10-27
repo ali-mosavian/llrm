@@ -42,6 +42,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_and_select::fold_and_select;
+use crate::combine_bitorder::fold_bitwise_logic_with_intrinsics;
 use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_icmp_logic::fold_boolean_and_or;
 use crate::combine_shared::{
@@ -436,7 +437,7 @@ pub fn visit_and(
     if let Some(r) = fold_binop_shift_with_shift(c, inst) {
         return r;
     }
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 7] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 8] = [
         fold_one_shifted_by,
         fold_negated_low_bit,
         fold_power_of_two_sum,
@@ -444,6 +445,7 @@ pub fn visit_and(
         fold_narrowed_binop,
         fold_mask_into_one_arm,
         fold_shifted_power_of_two,
+        fold_bitwise_logic_with_intrinsics,
     ];
     // DEVIATE 3 and 4: the rest of visitAnd.
     if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {

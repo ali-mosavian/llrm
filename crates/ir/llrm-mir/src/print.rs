@@ -783,6 +783,7 @@ impl Printer<'_> {
                 Type::Float(kind) => float(*kind, *bits),
                 _ => unreachable!("a floating constant has a floating type"),
             },
+            ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Undef => "undef".to_owned(),

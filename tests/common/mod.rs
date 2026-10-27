@@ -2,8 +2,12 @@
 //! `object.toml`, the one place that says the object format, the listing's
 //! header and how a C program is linked.
 
+// Each test binary compiles this module whole and uses part of it.
+#![allow(dead_code)]
+
 use std::path::Path;
 
+pub mod cc;
 pub mod dosbox;
 
 fn recipe() -> toml::Table {

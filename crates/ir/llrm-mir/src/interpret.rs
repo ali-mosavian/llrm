@@ -236,6 +236,11 @@ impl<'m> Machine<'m> {
                 Type::Float(kind) => Val::Float(*kind, *bits),
                 _ => unreachable!("a floating constant"),
             },
+            // The interpreter evaluates an x87 value as a double.
+            ConstantKind::Float80(bits) => match types.get(constant.ty) {
+                Type::Float(kind) => Val::Float(*kind, crate::fp80::to_double_bits(*bits)),
+                _ => unreachable!("a floating constant"),
+            },
             ConstantKind::Null => Val::Ptr(0),
             ConstantKind::Poison => Val::Poison,
             // Any value is a legal undef; the interpreter picks zero.
@@ -568,7 +573,11 @@ impl<'m> Machine<'m> {
                 self.poison[to..to + length].copy_from_slice(&poison);
                 void
             }
-            Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => void,
+            Intrinsic::LifetimeStart
+            | Intrinsic::LifetimeEnd
+            | Intrinsic::Assume
+            | Intrinsic::Prefetch
+            | Intrinsic::FakeUse => void,
             Intrinsic::Expect => argument(0),
             // Flat memory: the address difference, wrapped to the result.
             Intrinsic::PtrDiff => match (argument(0), argument(1), self.types().int_bits(returns)) {
