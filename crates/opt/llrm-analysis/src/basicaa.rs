@@ -240,7 +240,12 @@ impl<'a> BasicAA<'a> {
         &self,
         mut operand: Operand,
     ) -> Operand {
-        while let Some(one) = self.defining(operand) {
+        loop {
+            if let Some(source) = self.constant_cast_source(operand) {
+                operand = source;
+                continue;
+            }
+            let Some(one) = self.defining(operand) else { break };
             match one.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
                     operand = one.operands[0]
@@ -277,13 +282,32 @@ impl<'a> BasicAA<'a> {
         }
     }
 
+    /// The operand a `bitcast` or `addrspacecast` constant expression casts,
+    /// where a pointer passes through it unchanged (as for the instruction,
+    /// [`Self::transparent`]): a selector's own space is not.
+    fn constant_cast_source(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Expr(ConstantExpr::Cast { op: op @ (CastOp::BitCast | CastOp::AddrSpaceCast), value }) =
+            &self.unit.context.get(id).kind
+        else {
+            return None;
+        };
+        let source = Operand::Constant(*value);
+        let selector = *op == CastOp::AddrSpaceCast
+            && self.unit.space(source).is_some_and(|space| self.unit.layout.has_unstable_representation(space));
+        (!selector).then_some(source)
+    }
+
     /// `getUnderlyingObject`: through geps and casts, `MAX_LOOKUP` steps.
     fn underlying(
         &self,
         mut operand: Operand,
     ) -> Operand {
         for _ in 0..MAX_LOOKUP {
-            if let Some(base) = self.constant_gep_base(operand) {
+            if let Some(base) = self.constant_gep_base(operand).or_else(|| self.constant_cast_source(operand)) {
                 operand = base;
                 continue;
             }
@@ -344,6 +368,11 @@ impl<'a> BasicAA<'a> {
                     found.base = operand;
                     continue;
                 }
+            }
+            if let Some(source) = self.constant_cast_source(operand) {
+                operand = source;
+                found.base = operand;
+                continue;
             }
             let Some(one) = self.defining(operand) else { break };
             match &one.opcode {
@@ -501,6 +530,18 @@ impl<'a> BasicAA<'a> {
         pointer: Operand,
     ) -> bool {
         self.unit.space(pointer).is_some_and(|space| self.unit.spaces().is_fixed(space))
+    }
+
+    /// Whether `size` bytes at the constant address `pointer` lie wholly in
+    /// memory the target states no program data occupies (video, ROM).
+    fn in_foreign_memory(
+        &self,
+        pointer: Operand,
+        size: LocationSize,
+    ) -> bool {
+        let (Some(program), Some(width)) = (self.unit.program, size.value()) else { return false };
+        crate::memory::flat_constant(self.unit, pointer)
+            .is_some_and(|at| program.target.foreign_span((0, 0), (at, at), width as i64).is_some())
     }
 
     /// A global variable or an alloca outside the fixed-address space.
@@ -691,8 +732,9 @@ impl<'a> BasicAA<'a> {
         if o1 != o2 {
             // A fixed-address pointer is no global or frame object (not LLVM's:
             // it has no such space, #2555).
-            if (self.in_fixed_space(v1) && self.program_object(o2))
-                || (self.in_fixed_space(v2) && self.program_object(o1))
+            // The same of a constant address the target states is foreign.
+            if ((self.in_fixed_space(v1) || self.in_foreign_memory(v1, a.size)) && self.program_object(o2))
+                || ((self.in_fixed_space(v2) || self.in_foreign_memory(v2, b.size)) && self.program_object(o1))
             {
                 return AliasResult::NoAlias;
             }
@@ -2011,6 +2053,74 @@ b0:
             |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(1));
         let answer = BasicAA::new(&unit).alias(&location("a"), &location("b"), &mut AAQueryInfo::default(), None);
         assert_eq!(answer, AliasResult::MayAlias);
+    }
+
+    /// lru.c: `addrspacecast (@c)` is a constant expression, not an
+    /// instruction, and the cast was no base to look through: offset 8 of the
+    /// far alias was may-alias with the near offset 12 (and not must-alias
+    /// with the near offset 8), so a pointer stored at +8 was loaded again.
+    #[test]
+    fn a_far_cast_constant_of_a_global_is_the_global_at_its_offset() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@c = internal global [48 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %far = getelementptr i8, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) addrspacecast (ptr @c to ptr addrspace(1)), i16 8), i16 0
+  %same = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 8), i16 0
+  %next = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 12), i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(4));
+        let alias =
+            |a: &str, b: &str| BasicAA::new(&unit).alias(&location(a), &location(b), &mut AAQueryInfo::default(), None);
+        assert_eq!(alias("far", "same"), AliasResult::MustAlias);
+        assert_eq!(alias("far", "next"), AliasResult::NoAlias);
+    }
+
+    /// `stripPointerCastsForAliasAnalysis` strips a zero-index `getelementptr`
+    /// (instruction or constant expression), a single-arm phi and a far cast
+    /// constant: each pointer is the object it came from.
+    #[test]
+    fn pointers_the_pin_strips_are_must_alias_with_their_source() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@c = internal global [48 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %p = getelementptr i8, ptr @c, i16 %n
+  %zero = getelementptr i8, ptr %p, i16 0
+  %zeroc = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 0), i16 0
+  br label %b1
+b1:
+  %one = phi ptr [ %p, %b0 ]
+  %far = getelementptr i8, ptr addrspace(1) addrspacecast (ptr @c to ptr addrspace(1)), i16 0
+  %base = getelementptr i8, ptr @c, i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(4));
+        let alias =
+            |a: &str, b: &str| BasicAA::new(&unit).alias(&location(a), &location(b), &mut AAQueryInfo::default(), None);
+        assert_eq!(alias("zero", "p"), AliasResult::MustAlias);
+        assert_eq!(alias("one", "p"), AliasResult::MustAlias);
+        assert_eq!(alias("zeroc", "base"), AliasResult::MustAlias);
+        assert_eq!(alias("far", "base"), AliasResult::MustAlias);
     }
 
     /// bintree.bas: an array element's far pointer is a segment word loaded
