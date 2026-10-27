@@ -15,8 +15,9 @@ use crate::module::{
     ValueDef, ValueId,
 };
 use crate::opcode::{
-    Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
-    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TARGET_FLAG_ATTRIBUTES, TYPE_ATTRIBUTES, Tail, spelled,
+    AtomicInfo, AtomicKind, AtomicOrdering, Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause,
+    FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags, INT_ATTRIBUTES, INT_PREDICATE, Opcode, RMW_OPS, TARGET_FLAG_ATTRIBUTES,
+    TYPE_ATTRIBUTES, Tail, spelled,
 };
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
@@ -553,6 +554,15 @@ impl Parser {
         define: bool,
     ) -> Parsed<()> {
         self.next();
+        // `declare !dbg !36 i32 @f(...)`: clang's attachments stand before the
+        // linkage; a `define`'s stand after the attributes.
+        let mut early = Vec::new();
+        while let Token::MetadataName(kind) = self.peek().clone() {
+            let Token::MetadataId(number) = self.peek_at(1).clone() else { break };
+            self.next();
+            self.next();
+            early.push((kind, self.metadata_id(number)));
+        }
         let linkage = self.linkage();
         let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
@@ -626,6 +636,7 @@ impl Parser {
             let node = self.metadata_id(number);
             local.function.metadata.push((kind, node));
         }
+        local.function.metadata.splice(0..0, early);
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
         if let Some(name) = self.module.globals[id.0 as usize].name.as_deref() {
             intrinsics::declare(&mut local.function, &self.module.context.types, name);
@@ -1555,6 +1566,28 @@ impl Parser {
         flags
     }
 
+    /// An atomic ordering word.
+    fn ordering(&mut self) -> Parsed<AtomicOrdering> {
+        match self.next() {
+            Token::Word(word) => match AtomicOrdering::named(&word) {
+                Some(ordering) => Ok(ordering),
+                None => self.fail("an atomic ordering"),
+            },
+            _ => self.fail("an atomic ordering"),
+        }
+    }
+
+    /// `syncscope("singlethread")`, if there, and the ordering after it.
+    fn scope_and_ordering(&mut self) -> Parsed<(bool, AtomicOrdering)> {
+        let mut single_thread = false;
+        if self.eat_word("syncscope") {
+            self.expect_punct('(')?;
+            single_thread = self.string()? == "singlethread";
+            self.expect_punct(')')?;
+        }
+        Ok((single_thread, self.ordering()?))
+    }
+
     fn align(&mut self) -> Parsed<Option<u64>> {
         if self.is_punct(',') && self.peek_at(1) == &Token::Word("align".to_owned()) {
             self.next();
@@ -1851,20 +1884,80 @@ impl Parser {
                     (Opcode::Alloca { allocated, align, address_space }, ty, operands)
                 }
                 "load" => {
+                    let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
                     let ty = self.ty()?;
                     self.expect_punct(',')?;
                     let (_, pointer) = self.typed_value(local)?;
-                    let align = self.align()?;
-                    (Opcode::Load { align, volatile }, ty, vec![pointer])
+                    if atomic {
+                        let (single_thread, ordering) = self.scope_and_ordering()?;
+                        let align = self.align()?;
+                        let info = AtomicInfo { kind: AtomicKind::Load, ordering, single_thread, volatile, align };
+                        (Opcode::Atomic(info), ty, vec![pointer])
+                    } else {
+                        let align = self.align()?;
+                        (Opcode::Load { align, volatile }, ty, vec![pointer])
+                    }
                 }
                 "store" => {
+                    let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
                     let (_, value) = self.typed_value(local)?;
                     self.expect_punct(',')?;
                     let (_, pointer) = self.typed_value(local)?;
+                    if atomic {
+                        let (single_thread, ordering) = self.scope_and_ordering()?;
+                        let align = self.align()?;
+                        let info = AtomicInfo { kind: AtomicKind::Store, ordering, single_thread, volatile, align };
+                        (Opcode::Atomic(info), void, vec![value, pointer])
+                    } else {
+                        let align = self.align()?;
+                        (Opcode::Store { align, volatile }, void, vec![value, pointer])
+                    }
+                }
+                "atomicrmw" => {
+                    let volatile = self.eat_word("volatile");
+                    let op = match self.next() {
+                        Token::Word(word) => RMW_OPS.iter().find(|(_, name)| *name == word).map(|(op, _)| *op),
+                        _ => None,
+                    };
+                    let Some(op) = op else { return self.fail("an atomicrmw operation") };
+                    let (_, pointer) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (ty, value) = self.typed_value(local)?;
+                    let (single_thread, ordering) = self.scope_and_ordering()?;
                     let align = self.align()?;
-                    (Opcode::Store { align, volatile }, void, vec![value, pointer])
+                    let info = AtomicInfo { kind: AtomicKind::Rmw(op), ordering, single_thread, volatile, align };
+                    (Opcode::Atomic(info), ty, vec![pointer, value])
+                }
+                "cmpxchg" => {
+                    let weak = self.eat_word("weak");
+                    let volatile = self.eat_word("volatile");
+                    let (_, pointer) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (ty, expected) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (_, new) = self.typed_value(local)?;
+                    let (single_thread, ordering) = self.scope_and_ordering()?;
+                    let failure = self.ordering()?;
+                    let align = self.align()?;
+                    let flag = self.module.context.types.int(1);
+                    let result =
+                        self.module.context.types.intern(Type::Struct { fields: vec![ty, flag], packed: false });
+                    let info = AtomicInfo {
+                        kind: AtomicKind::CmpXchg { failure, weak },
+                        ordering,
+                        single_thread,
+                        volatile,
+                        align,
+                    };
+                    (Opcode::Atomic(info), result, vec![pointer, expected, new])
+                }
+                "fence" => {
+                    let (single_thread, ordering) = self.scope_and_ordering()?;
+                    let info =
+                        AtomicInfo { kind: AtomicKind::Fence, ordering, single_thread, volatile: false, align: None };
+                    (Opcode::Atomic(info), void, Vec::new())
                 }
                 "getelementptr" => {
                     self.gep_flags(&mut flags);

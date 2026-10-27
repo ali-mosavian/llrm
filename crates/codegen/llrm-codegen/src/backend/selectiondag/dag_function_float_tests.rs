@@ -517,7 +517,7 @@ fn a_rounded_float_has_its_slot_in_the_frame() {
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
-const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define cc 1000 void @h(ptr %0, ptr %1, ptr %2) addrspace(1) {
 b1:
   %3 = load double, ptr %0
@@ -753,7 +753,7 @@ fn a_round_read_only_as_a_call_argument_is_not_stored_to_a_slot_first() {
     assert_eq!(count(ROUNDED_ARGUMENT), count(PLAIN_ARGUMENT));
 }
 
-const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
 define cc 1005 i32 @f(ptr addrspace(3) %0, ptr addrspace(3) %1) addrspace(1) {
 b1:
