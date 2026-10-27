@@ -478,7 +478,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
 
 /// The successors of each block, by position.
 fn successors(body: &LirBody) -> Vec<Vec<usize>> {
-    let position: std::collections::HashMap<i64, usize> =
+    let position: crate::support::hash::HashMap<i64, usize> =
         body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
     body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| position.get(to).copied()).collect()).collect()
 }
