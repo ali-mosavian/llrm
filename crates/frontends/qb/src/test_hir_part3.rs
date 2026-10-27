@@ -3570,15 +3570,24 @@ fn test_a_call_that_never_returns_saves_no_register_under_the_dag_selector() {
     assert!(!fill.contains("push si") && !fill.contains("push di"), "{fill}");
 }
 
-/// CLEAR was parsed as a call of a SUB named CLEAR: "`CLEAR` is not a known
-/// procedure or runtime routine", as if misspelt. A valid statement this
-/// compiler does not lower says so, as CHAIN does (row QB-CLEAR-1).
+/// CLEAR was refused ("cannot generate code for it yet"): it is
+/// B$SCLR(stack, stack given), two zero words for the bare statement.
 #[test]
-fn test_clear_is_refused_as_not_yet_generated() {
-    let directory = tempfile::tempdir().expect("a temporary directory");
-    let source = written(&directory, "T.BAS", b"x% = 1\r\nCLEAR\r\nPRINT x%\r\n");
-    let error = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect_err("refused");
-    assert!(error.to_string().contains("CLEAR is valid, but this compiler cannot generate code for it yet"), "{error}");
+fn test_clear_calls_the_runtime_clear() {
+    let text = listing_in("qb45", &[], "clearcall", "x% = 1\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    assert!(main[..call].trim_end().ends_with("pushd 0"), "two zero words: {main}");
+}
+
+/// A variable set before CLEAR and printed after it was folded to its old
+/// value: the call zeroes BC_DATA behind the optimiser's back.
+#[test]
+fn test_a_variable_is_read_again_after_clear() {
+    let text = listing_in("qb45", &[], "clearreads", "x% = 5\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let after = &main[main.find("call far ptr B$SCLR").expect("the call")..];
+    assert!(after.contains("ptr X%") || after.contains("[X%"), "x% is loaded after the call: {main}");
 }
 
 /// A string compare in one block read by a select in the next (`WHILE a$(j%) <
@@ -3601,4 +3610,127 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
     for text in ["BSAVE \"V.BIN\", 0, 16\r\n", "BLOAD \"V.BIN\", 0\r\n"] {
         records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "vbdos", "vbdos"), "T.BAS");
     }
+}
+
+/// The listing of `source` under one dialect and its runtime.
+fn listing_in(
+    dialect: &str,
+    flags: &[&str],
+    name: &str,
+    source: &str,
+) -> String {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join(format!("{name}.asm"));
+    let input = written(&directory, &format!("{name}.bas"), source.as_bytes());
+    let argv = [
+        input.to_str().unwrap(),
+        "--dialect",
+        dialect,
+        "--runtime",
+        dialect,
+        "-O2",
+        "-march=i486",
+        "-S",
+        "-o",
+        out.to_str().unwrap(),
+    ]
+    .into_iter()
+    .chain(flags.iter().copied())
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
+    assert_eq!(crate::cli::main(&argv), 0);
+    std::fs::read_to_string(&out).expect("the listing")
+}
+
+/// SSEG(a$) was refused ("cannot generate code for it yet"): it is
+/// B$SSEG(descriptor), the string data's segment in AX.
+#[test]
+fn test_sseg_asks_the_runtime_for_a_strings_segment() {
+    let text = listing_in("vbdos", &[], "ssegcall", "DIM t AS STRING\r\nt = \"ABCD\"\r\nPRINT SSEG(t)\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    assert_eq!(main.matches("call far ptr B$SSEG").count(), 1, "{main}");
+}
+
+/// CCUR(x) was refused ("cannot generate code for it yet"): it converts as an
+/// assignment to a CURRENCY does, so both listings hold the same conversion.
+#[test]
+fn test_ccur_converts_as_an_assignment_to_currency_does() {
+    let flags = ["--isel=dag"];
+    let assigned = listing_in(
+        "pds71",
+        &flags,
+        "ccurassign",
+        "DIM c AS CURRENCY, d AS DOUBLE\r\nINPUT d\r\nc = d\r\nPRINT c\r\nEND\r\n",
+    );
+    let converted = listing_in(
+        "pds71",
+        &flags,
+        "ccurcall",
+        "DIM c AS CURRENCY, d AS DOUBLE\r\nINPUT d\r\nc = CCUR(d)\r\nPRINT c\r\nEND\r\n",
+    );
+    let body = |text: &str| {
+        between(text, "$QB$MAIN proc", "$QB$MAIN endp").replace("CCURASSIGN", "X").replace("CCURCALL", "X")
+    };
+    assert_eq!(body(&assigned), body(&converted));
+}
+
+/// `CLEAR ,,n` passes the stack size and says it was given: B$SCLR(n, -1).
+#[test]
+fn test_clear_with_a_stack_size_passes_it_and_the_flag() {
+    let text = listing_in("qb45", &[], "clearstack", "CLEAR , , 4096\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    assert!(main[..call].trim_end().ends_with("pushd 268500991"), "stack 4096, flag -1: {main}");
+}
+
+/// CHAIN was refused ("cannot generate code for it yet"): BC pushes the
+/// file name's descriptor and calls B$SCHN (measured on BC 4.50's object).
+#[test]
+fn test_chain_calls_the_chain_routine_with_the_file_name() {
+    let text = listing_in("qb45", &[], "chaincall", "CHAIN \"NEXT\"\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCHN").expect("the call");
+    assert!(main[..call].trim_end().rsplit('\n').next().unwrap().trim_start().starts_with("push offset"), "{main}");
+}
+
+/// DATESERIAL was refused ("cannot generate code for it yet"): VBDOS BC pushes
+/// year, month and day and calls B$DTSR, which returns the near address of an
+/// R8 (measured on BC's object).
+#[test]
+fn test_dateserial_calls_the_date_routine_with_year_month_day() {
+    let text =
+        listing_in("vbdos", &[], "dateser", "DIM d AS DOUBLE\r\nd = DATESERIAL(1992, 2, 29)\r\nPRINT d\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$DTSR").expect("the call");
+    let before = &main[..call];
+    // Year and month are one pushed dword (1992 << 16 | 2), then the day.
+    assert!(before.trim_end().ends_with("pushd 130547714\n    pushw 29"), "{main}");
+}
+
+/// COMMON variables sat in BC_DATA with the rest, so a CHAINed program found
+/// nothing: BC puts them, in declaration order, in the COMMON segment (10
+/// bytes for an integer, a long and a string; BC 4.50's object).
+#[test]
+fn test_common_variables_go_in_the_common_segment_in_order() {
+    let text = listing_in(
+        "qb45",
+        &[],
+        "commonseg",
+        "COMMON a AS INTEGER, b AS LONG, s AS STRING\r\nDIM z AS INTEGER\r\na = 1\r\nb = 2\r\ns = \"q\"\r\nz = 3\r\nPRINT a; b; s; z\r\nCHAIN \"NEXT\"\r\nEND\r\n",
+    );
+    let common = between(&text, "COMMON segment", "COMMON ends");
+    let names: Vec<&str> = common.lines().filter_map(|line| line.strip_suffix(" label byte")).collect();
+    assert_eq!(names, ["$QB$COMMON", "A%", "B&", "S$"], "{text}");
+    let data = between(&text, "BC_DATA segment", "BC_DATA ends");
+    assert!(!data.contains("A%") && !data.contains("S$"), "COMMON variables leave BC_DATA: {text}");
+}
+
+/// A COMMON variable set before CHAIN was a private cell the optimiser could
+/// drop the store to: the chained program read 0.
+#[test]
+fn test_a_common_variable_is_still_stored_before_a_chain() {
+    let text = listing_in("qb45", &[], "commonchain", "COMMON x AS INTEGER\r\nx = 4\r\nCHAIN \"NEXT\"\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCHN").expect("the call");
+    assert!(main[..call].contains("mov word ptr X%, 4"), "x% is stored: {main}");
 }

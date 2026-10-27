@@ -912,6 +912,10 @@ pub struct DataObject {
     // False when no code takes its address, this module's or another's: only
     // a reference naming it reaches it.
     pub addressed: bool,
+    // True when a routine the program calls reaches the object without its
+    // address being passed (CLEAR zeroes the program's variables): an
+    // internal object is then as visible as an external one.
+    pub exposed: bool,
     // The segment the frontend places it in. Its alignment is a stated fact.
     pub segment: Option<String>,
 }
@@ -931,6 +935,7 @@ impl DataObject {
             linkage: DataLinkage::Internal,
             address: AddressKind::Near,
             addressed: true,
+            exposed: false,
             segment: None,
         }
     }
