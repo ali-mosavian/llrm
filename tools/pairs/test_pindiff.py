@@ -172,3 +172,26 @@ def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
                 bad[source.stem] = shifts[0]
         assert compiled >= 60, f"only {compiled} sources compiled"
         assert not bad
+
+
+def test_compile_failures_are_counted_per_side_so_a_crash_cannot_hide_as_excluded():
+    """crc at m16 -O2 made llrm-llc panic and x_ll_div made it refuse; both were one `# no figures` line among others, then read as
+    'excluded rows' in the report (2026-10-27). A compiler crash is counted apart from the pin's or clang's failures."""
+    pindiff = load("pindiff")
+    row = {"name": "ok", "bytes": 10, "free": 10, "old_bytes": None, "old_free": None}
+    results = {
+        "ok": row,
+        "crc": "ours: thread 'main' panicked at calcspillweights.rs:267:40:",
+        "x_ll_div": "ours: llrm-llc: @f: --isel=dag: Legalize(Unsupported)",
+        "x_strlen": "pin llc: PtrToAddr result must be address width",
+        "lru": "clang: error: expected member name",
+        "x_fir": "undefined shift in the source: lshr i16 %32, 16",
+        "oldfail": {"name": "oldfail", "bytes": 5, "free": 5, "old_bytes": None, "old_free": None},
+        "objfail": {"name": "objfail", "bytes": None, "free": None, "old_bytes": None, "old_free": None},
+    }
+    line = pindiff.failure_summary(results, old=True)
+    assert line.startswith("# FAILED")
+    assert "ours 2 (crc, x_ll_div)" in line and "1 panic" in line
+    assert "ours-old 2 (ok, oldfail)" in line and "ours-obj 1 (objfail)" in line
+    assert "pin 1 (x_strlen)" in line and "clang 1 (lru)" in line and "source 1 (x_fir)" in line
+    assert pindiff.failure_summary({"ok": row}, old=False) == "# FAILED none"

@@ -125,6 +125,24 @@ def corpus_sources(into: Path) -> Path:
     return into
 
 
+def failure_summary(results: dict[str, dict | str], old: bool) -> str:
+    """One line counting the rows that did not compile, per side, so a compiler crash is not one `no figures` line among the pin's and
+    clang's: ours (dag; panics counted), ours-old (the old selector failed where dag did not), ours-obj (dag's object), pin, clang, source."""
+    groups: dict[str, list[str]] = {"ours": [], "ours-old": [], "ours-obj": [], "pin": [], "clang": [], "source": []}
+    panics = 0
+    for name, result in results.items():
+        if isinstance(result, str):
+            side = "ours" if result.startswith("ours") else "clang" if result.startswith("clang") else "source" if result.startswith("undefined shift") else "pin"
+            groups[side].append(name)
+            panics += side == "ours" and "panicked" in result
+        elif result["bytes"] is None:
+            groups["ours-obj"].append(name)
+        elif old and result["old_bytes"] is None:
+            groups["ours-old"].append(name)
+    parts = [f"{side} {len(names)} ({', '.join(sorted(names))})" + (f" [{panics} panic]" if side == "ours" and panics else "") for side, names in groups.items() if names]
+    return "# FAILED " + ("; ".join(parts) if parts else "none")
+
+
 def layout_note(wanted: str, used: str) -> str:
     """A header line when the pin's llc runs with another pointer size than the target's datalayout states."""
 
@@ -286,6 +304,7 @@ def main(argv: list[str]) -> int:
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda source: one(source, args.machine, args.level, args.llc, work, args.old, args.reopt), sources))
     rows = [r for r in results if isinstance(r, dict)]
+    print(failure_summary({source.stem: result for source, result in zip(sources, results)}, args.old))
     for source, result in zip(sources, results):
         if isinstance(result, str):
             print(f"# no figures for {source.stem}: {result}")
