@@ -7590,17 +7590,18 @@ impl Compiler {
         }
         if matches!(
             intrinsic.lowering,
-            Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble
+            Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble | Lowering::ToCurrency
         ) {
             let target = match intrinsic.lowering {
                 Lowering::ToInteger => INTEGER,
                 Lowering::ToLong => LONG,
                 Lowering::ToSingle => SINGLE,
                 Lowering::ToDouble => DOUBLE,
+                Lowering::ToCurrency => CURRENCY,
                 _ => unreachable!(),
             };
             let (operand, source) = self.numeric_argument(&arguments[0])?;
-            if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN) {
+            if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | CURRENCY) {
                 return self.fail(format!(
                     "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
                 ));

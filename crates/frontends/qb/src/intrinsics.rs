@@ -55,6 +55,7 @@ pub enum Lowering {
     VarptrString,
     StringAddress,
     StringSegment,
+    ToCurrency,
     Abs,
     Sqrt,
     Sign,
@@ -261,6 +262,15 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("PEN", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPEN")),
     intrinsic!("$VARPTR", 1..=1, String, Runtime, Lowering::VarptrString),
     intrinsic!("SADD", 1..=1, Integer, Pure, Lowering::StringAddress),
+    Intrinsic {
+        name: "CCUR",
+        min_arity: 1,
+        max_arity: 1,
+        result: ResultClass::Currency,
+        effect: Effect::Pure,
+        lowering: Lowering::ToCurrency,
+        dialects: PDS | VBDOS,
+    },
     Intrinsic {
         name: "SSEG",
         min_arity: 1,

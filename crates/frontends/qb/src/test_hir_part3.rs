@@ -3604,6 +3604,7 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
 /// The listing of `source` under one dialect and its runtime.
 fn listing_in(
     dialect: &str,
+    flags: &[&str],
     name: &str,
     source: &str,
 ) -> String {
@@ -3622,7 +3623,10 @@ fn listing_in(
         "-o",
         out.to_str().unwrap(),
     ]
-    .map(str::to_owned);
+    .into_iter()
+    .chain(flags.iter().copied())
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
     assert_eq!(crate::cli::main(&argv), 0);
     std::fs::read_to_string(&out).expect("the listing")
 }
@@ -3631,7 +3635,30 @@ fn listing_in(
 /// B$SSEG(descriptor), the string data's segment in AX.
 #[test]
 fn test_sseg_asks_the_runtime_for_a_strings_segment() {
-    let text = listing_in("vbdos", "ssegcall", "DIM t AS STRING\r\nt = \"ABCD\"\r\nPRINT SSEG(t)\r\nEND\r\n");
+    let text = listing_in("vbdos", &[], "ssegcall", "DIM t AS STRING\r\nt = \"ABCD\"\r\nPRINT SSEG(t)\r\nEND\r\n");
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     assert_eq!(main.matches("call far ptr B$SSEG").count(), 1, "{main}");
+}
+
+/// CCUR(x) was refused ("cannot generate code for it yet"): it converts as an
+/// assignment to a CURRENCY does, so both listings hold the same conversion.
+#[test]
+fn test_ccur_converts_as_an_assignment_to_currency_does() {
+    let flags = ["--isel=dag"];
+    let assigned = listing_in(
+        "pds71",
+        &flags,
+        "ccurassign",
+        "DIM c AS CURRENCY, d AS DOUBLE\r\nINPUT d\r\nc = d\r\nPRINT c\r\nEND\r\n",
+    );
+    let converted = listing_in(
+        "pds71",
+        &flags,
+        "ccurcall",
+        "DIM c AS CURRENCY, d AS DOUBLE\r\nINPUT d\r\nc = CCUR(d)\r\nPRINT c\r\nEND\r\n",
+    );
+    let body = |text: &str| {
+        between(text, "$QB$MAIN proc", "$QB$MAIN endp").replace("CCURASSIGN", "X").replace("CCURCALL", "X")
+    };
+    assert_eq!(body(&assigned), body(&converted));
 }
