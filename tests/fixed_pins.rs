@@ -65,7 +65,7 @@ fn a_pinned_copy_does_not_push_its_source_out_of_the_register() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/run/c/switch_table_holes.c");
     let copies = |fixed: bool| {
         let scratch = tempfile::tempdir().unwrap();
-        let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-c"));
+        let mut run = common::cc::llrm_c();
         run.current_dir(scratch.path()).args([
             "-m32",
             "-mabi=sysv",
