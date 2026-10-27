@@ -414,11 +414,14 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             return None;
         }
         let what = def.what.clone()?;
-        // A literal or address is rematerializable per definition, as
-        // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
-        // the register's facts say its cell holds (D-I).
+        // `SplitEditor::defFromParent` asks `canRematerializeAt(..,
+        // cheapAsAMove = true)`: a literal or an address is made again,
+        // a load (`MOV32rm` of a stack argument) or an `lea` is not
+        // `isAsCheapAsAMove`, and the split copies the register
+        // instead.
+        let _ = parent;
         let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
-        if load && !self.tables.remat.borrow().contains(&parent) {
+        if load || what.op == Operation::Address {
             return None;
         }
         let Loc::Held(defined) = what.dests[0] else { return None };
