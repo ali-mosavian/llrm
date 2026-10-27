@@ -21,6 +21,15 @@ pub fn verify(module: &Module) -> Vec<String> {
         if declaration && !matches!(global.linkage, Linkage::External | Linkage::ExternWeak) {
             out.push(format!("@{name}: Global is external, but doesn't have external or weak linkage!"));
         }
+        if let GlobalKind::Variable(variable) = &global.kind {
+            let array = matches!(module.context.types.get(variable.ty), Type::Array { .. });
+            if global.linkage == Linkage::Appending && !array {
+                out.push(format!("@{name}: Only global arrays can have appending linkage!"));
+            }
+            if matches!(name, "llvm.global_ctors" | "llvm.global_dtors") && global.linkage != Linkage::Appending {
+                out.push(format!("@{name}: invalid linkage for intrinsic global variable"));
+            }
+        }
         if let GlobalKind::Function(function) = &global.kind {
             if intrinsics::is_reserved(name) {
                 let problem = match Intrinsic::named(name) {
