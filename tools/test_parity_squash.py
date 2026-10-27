@@ -1242,3 +1242,13 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
+    """The 02:34 sub-batch merged #5088's 01:18 head (sinkcast.md stale) 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head w14 had moved."""
+    infos = {"5088": {"headRefOid": "old" * 13 + "o", "title": "t"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
+    views = {"5088": {"headRefOid": "new" * 13 + "n", "title": "t2"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
+    moved = ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number])
+    assert list(moved) == ["5088"] and moved["5088"][1].startswith("newnew")
+    assert infos["5088"]["headRefOid"].startswith("newnew") and infos["5088"]["title"] == "t2", "infos holds the new read"
+    assert ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number]) == {}, "nothing moved the second time"
