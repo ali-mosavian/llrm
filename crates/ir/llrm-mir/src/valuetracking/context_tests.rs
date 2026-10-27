@@ -347,3 +347,28 @@ fn a_module_that_declares_an_assume_still_finds_it() {
     assert_eq!(skipped_walks() - before, 0, "walked");
     assert_eq!(cache.assumptions_for(crate::module::Operand::Value(function.parameters()[0])).len(), 1);
 }
+
+/// `intrinsic_id_of_name` compared the name with every intrinsic's (17,478
+/// calls, 0.4 M Ir of string compare on d_faces). It probes once per `.`
+/// and gives what the scan gave, for every name, with and without a suffix.
+#[test]
+fn test_an_intrinsic_is_found_by_probes_not_a_scan() {
+    use crate::valuetracking::pattern::{INTRINSIC_NAMES, NAME_PROBES, intrinsic_id_of_name};
+    let scan = |name: &str| {
+        let name = name.strip_prefix("llvm.")?;
+        INTRINSIC_NAMES
+            .iter()
+            .filter(|(base, _)| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
+            .max_by_key(|(base, _)| base.len())
+            .map(|(_, id)| *id)
+    };
+    for (base, _) in INTRINSIC_NAMES {
+        for suffix in ["", ".i32", ".p0.i16", ".", "x", ".x.y.z"] {
+            let text = format!("llvm.{base}{suffix}");
+            assert_eq!(intrinsic_id_of_name(&text), scan(&text), "{text}");
+        }
+    }
+    NAME_PROBES.with(|one| one.set(0));
+    assert!(intrinsic_id_of_name("llvm.smax.i32").is_some());
+    assert_eq!(NAME_PROBES.with(std::cell::Cell::get), 2);
+}
