@@ -251,6 +251,63 @@ enum Use {
     Phi { block: usize, from: i64 },
 }
 
+/// Where each value is read, in the body's order: one array cut by value,
+/// found by counting (`MachineRegisterInfo`'s use lists, without a list for
+/// each value).
+struct UseTable {
+    /// `starts[v]..starts[v + 1]` of `items` are the reads of value `v`.
+    starts: Vec<u32>,
+    items: Vec<Use>,
+}
+
+impl UseTable {
+    fn of(body: &LirBody) -> Self {
+        let mut starts: Vec<u32> = Vec::new();
+        let mut count = |value: u32| {
+            if value as usize + 2 > starts.len() {
+                starts.resize(value as usize + 2, 0);
+            }
+            starts[value as usize + 1] += 1;
+        };
+        for block in body.blocks.iter() {
+            for one in block.insns.iter() {
+                one.uses.iter().for_each(|&value| count(value));
+            }
+            for phi in block.phis.iter() {
+                phi.incoming.iter().for_each(|&(_, value)| count(value));
+            }
+        }
+        for at in 1..starts.len() {
+            starts[at] += starts[at - 1];
+        }
+        let mut next = starts.clone();
+        let mut items = vec![Use::Insn(0); starts.last().copied().unwrap_or(0) as usize];
+        let mut put = |value: u32, used: Use| {
+            items[next[value as usize] as usize] = used;
+            next[value as usize] += 1;
+        };
+        for (number, block) in body.blocks.iter().enumerate() {
+            for one in block.insns.iter() {
+                one.uses.iter().for_each(|&value| put(value, Use::Insn(one.id())));
+            }
+            for phi in block.phis.iter() {
+                phi.incoming.iter().for_each(|&(from, value)| put(value, Use::Phi { block: number, from }));
+            }
+        }
+        Self { starts, items }
+    }
+
+    /// The reads of `value`, none when it has none.
+    fn get(
+        &self,
+        value: &u32,
+    ) -> Option<&[Use]> {
+        let at = *value as usize;
+        let (from, to) = (*self.starts.get(at)? as usize, *self.starts.get(at + 1)? as usize);
+        (from < to).then(|| &self.items[from..to])
+    }
+}
+
 /// One walk over the body: the blocks as lists of instructions, and what
 /// `MachineRegisterInfo`, the dominator trees and the cycle info answer.
 struct Sinker {
@@ -271,7 +328,7 @@ struct Sinker {
     owner: HashMap<u64, usize>,
     /// The first identity of an instruction that was moved, by its present one.
     canon: HashMap<u64, u64>,
-    uses: HashMap<u32, Vec<Use>>,
+    uses: UseTable,
     depth: Vec<u32>,
     /// The innermost loop of each block, as its header.
     cycle: Vec<Option<usize>>,
@@ -338,21 +395,16 @@ impl Sinker {
         size: bool,
         before: Option<Sinker>,
     ) -> Self {
-        let mut owner = HashMap::default();
-        let mut uses: HashMap<u32, Vec<Use>> = HashMap::default();
+        let mut owner = HashMap::with_capacity_and_hasher(
+            body.blocks.iter().map(|block| block.insns.len()).sum(),
+            Default::default(),
+        );
         for (number, block) in body.blocks.iter().enumerate() {
             for one in block.insns.iter() {
                 owner.insert(one.id(), number);
-                for value in &one.uses {
-                    uses.entry(*value).or_default().push(Use::Insn(one.id()));
-                }
-            }
-            for phi in block.phis.iter() {
-                for &(from, value) in &phi.incoming {
-                    uses.entry(value).or_default().push(Use::Phi { block: number, from });
-                }
             }
         }
+        let uses = UseTable::of(body);
         let insns = body.blocks.iter().map(|block| block.insns.to_vec()).collect();
         let phi_blocks: HashMap<u32, usize> = body
             .blocks
@@ -851,7 +903,7 @@ impl Sinker {
             .iter()
             .any(
                 |operand| {
-                    let users = self.uses.get(operand).map_or(0, Vec::len);
+                    let users = self.uses.get(operand).map_or(0, <[Use]>::len);
                     users == 1 && self.defined_in(*operand) == Some(self.owner[&self.canonical(one.id())])
                 },
             )
