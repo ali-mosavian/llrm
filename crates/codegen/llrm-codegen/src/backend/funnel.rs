@@ -69,9 +69,9 @@ pub fn expanded(
 /// (`LowerFunnelShift`) are still expanded here.
 pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
-    bits: u32,
+    ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && bits == 32
+    isel == crate::backend::shadow::Selector::Dag && ty == "i32"
 }
 
 /// The integer constant `operand` is.

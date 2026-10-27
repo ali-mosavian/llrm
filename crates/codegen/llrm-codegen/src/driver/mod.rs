@@ -520,7 +520,7 @@ pub fn optimized(
                 |module| crate::backend::funnel::expanded(
                     module,
                     |operation| options.arch.expands(operation),
-                    |bits| crate::backend::funnel::kept_for_isel(options.isel, bits),
+                    |bits| crate::backend::funnel::kept_for_isel(options.isel, &format!("i{bits}")),
                 ),
             )
     })?;

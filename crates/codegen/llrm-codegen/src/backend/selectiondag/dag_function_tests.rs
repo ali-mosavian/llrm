@@ -943,7 +943,7 @@ b0:
     crate::backend::funnel::expanded(
         &mut module,
         |_| true,
-        |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, bits),
+        |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, &format!("i{bits}")),
     )
     .expect("expands");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
