@@ -1,5 +1,5 @@
-//! One source compiled to HIR text, as the `qbfront` program and llrm-qb both
-//! do: the one path from a file and its options to a program or a refusal.
+//! One source compiled to HIR text, as llrm-qb does: the one path from a file
+//! and its options to a program or a refusal.
 
 use std::fs;
 use std::path::{Path, PathBuf};
