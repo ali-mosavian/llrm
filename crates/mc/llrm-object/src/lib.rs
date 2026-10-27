@@ -1,6 +1,7 @@
 //! The object the backend lays out, which one writer per format writes. See
 //! `docs/formats/object-model.md`.
 
+pub mod assembler;
 pub mod debug;
 
 /// Which debug format a [`Role::Debug`] section belongs to, so a writer needs

@@ -2,6 +2,7 @@
 //! (`encode`), its text (`text`) and the immediates the encodings code
 //! (`immediate`). Translated from LLVM's `AArch64` MC layer.
 
+pub mod backend;
 pub mod elf;
 pub mod encode;
 pub mod fixup;
