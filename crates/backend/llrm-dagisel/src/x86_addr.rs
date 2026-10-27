@@ -782,7 +782,9 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::MUL | x86isd::MUL_IMM => {
-                if self.mode != AddrMode::Real16
+                // Real mode has no scaled index; a dword `lea` takes the 386's
+                // 32-bit form.
+                if (self.mode != AddrMode::Real16 || (am.is_for_lea && vt_bits(self.dag.value_type(n)) == 32))
                     && am.base_type == BaseType::Reg
                     && am.base_reg.is_none()
                     && am.index_reg.is_none()

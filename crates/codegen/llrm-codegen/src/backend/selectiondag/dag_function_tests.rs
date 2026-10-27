@@ -925,3 +925,44 @@ define void @f() {
     let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
     assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
 }
+
+/// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
+/// pin reads the byte at `a + 1` with one `movzx`.
+#[test]
+fn a_byte_of_a_loaded_word_is_one_byte_load() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %a, i32 %i) {
+  %p = getelementptr i32, ptr %a, i32 %i
+  %v = load i32, ptr %p
+  %s = lshr i32 %v, 8
+  %m = and i32 %s, 255
+  ret i32 %m
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("sh")), "{seen:?}");
+    assert!(seen.iter().any(|n| n.starts_with("movzx")), "{seen:?}");
+}
+
+/// m16 `a * 10` on `long long` (f_mul_c) multiplied the high word with `imul
+/// ecx, ecx, 5`; the pin's hidden `lea` takes the 386's 32-bit form there
+/// (SD3 keeps scaled indexes out of 16-bit addressing, not out of an `lea`).
+#[test]
+fn at_m16_a_multiply_by_five_is_an_lea() {
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 5
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.iter().any(|n| n.starts_with("lea")) && !seen.iter().any(|n| n.starts_with("imul")), "{seen:?}");
+}

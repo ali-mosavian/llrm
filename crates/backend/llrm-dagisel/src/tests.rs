@@ -802,12 +802,12 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, wrapped.node), "MOV16ri");
     }
 
-    /// Real mode has no scaled index, so `lea` cannot take a multiply by 3, 5
-    /// or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
-    /// functions).
+    /// Real mode has no scaled index, so a word `lea` cannot take a multiply by
+    /// 3, 5 or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
+    /// functions). A dword one is the 386's 32-bit `lea`, as in the pin.
     #[test]
     fn a_multiply_by_a_lea_constant_is_imul_when_lea_cannot_take_it() {
-        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "IMUL32rri")] {
+        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "LEA32r")] {
             let mut dag = TestDag::new();
             let x = dag.input(1, vt);
             let three = dag.make_constant(3, vt);
