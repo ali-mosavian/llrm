@@ -792,6 +792,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
             ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
+            // Narrow a binary operation with a constant operand ahead of the
+            // truncate: `trunc (and y, 31)` is `and (trunc y), 31`, which the
+            // shift patterns then drop as an unneeded mask. Before
+            // legalization only, as the pin does.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor
+                if self.level < CombineLevel::AfterLegalizeVectorOps
+                    && self.dag.use_count(n0.node) == 1
+                    && vt.is_integer()
+                    && {
+                        let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                        l == r || self.dag.constant(l).is_some() || self.dag.constant(r).is_some()
+                    } =>
+            {
+                let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
+                let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
+                Some(self.dag.get_node(self.dag.opcode(n0), vt, &[narrow_l, narrow_r]))
+            }
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
                 let from = self.dag.value_type(x);
