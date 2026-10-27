@@ -1441,3 +1441,11 @@ def test_a_tracked_symlink_out_of_the_tree_or_a_build_dir_is_named(tmp_path, cap
     git("add", "-A")
     assert gate.products_main(tmp_path) == 1
     assert "tracked build dir target/x" in capsys.readouterr().out
+
+
+def test_a_change_to_llrm_cc_runs_the_steps_and_the_language_llrm_c_changes_did():
+    """Only crates/frontends/llrm-c/** owned the C steps: a llrm-cc change gated without qcport, measure and the C programs."""
+    old, new = gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
+    for step in ("qcport", "oracle-qcport", "measure"):
+        assert (step in old.steps) == (step in new.steps), (step, new.steps)
+    assert "c" in new.languages, new.languages
