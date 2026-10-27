@@ -141,11 +141,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
-    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
-    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
-    trivialunswitch, window,
+    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
+    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    loopunrollpass, mem2reg, memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower,
+    tailcallelim, trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -1239,6 +1239,11 @@ pub fn recorded(
             jump_tables: applied.options.jump_tables,
             size: applied.options.prefers_size(),
         });
+    }
+    // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
+    // body is final.
+    if applied.options.llvm_order && applied.options.optimize {
+        manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
     if applied.options.spare_loads {
