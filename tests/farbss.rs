@@ -40,7 +40,7 @@ struct Lab {
 
 impl Lab {
     fn new() -> Self {
-        let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned();
+        let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned();
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).to_owned();
         Self { bin, root, dir: tempfile::tempdir().unwrap() }
     }

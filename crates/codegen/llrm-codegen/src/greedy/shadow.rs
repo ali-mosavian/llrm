@@ -319,6 +319,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         new: u32,
         from: u32,
     ) {
+        self.tables.derive_family(new, from);
         let mut widths = self.tables.widths.borrow_mut();
         let width = widths.get(&from).copied().or_else(|| Self::named_width(lis, from));
         if let Some(width) = width {
@@ -452,6 +453,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         let known = self.tables.widths.borrow().get(&from).copied();
         let width = known.or_else(|| Self::named_width(lis, from)).unwrap_or(4);
         self.tables.widths.borrow_mut().insert(to, width);
+        self.tables.derive_family(to, from);
         let bytes = self.tables.float_bytes.borrow().get(&from).copied();
         if let Some(bytes) = bytes {
             self.tables.float_bytes.borrow_mut().insert(to, bytes);
@@ -471,6 +473,13 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
     }
 }
 
+/// The successors of each block, by position.
+fn successors(body: &LirBody) -> Vec<Vec<usize>> {
+    let position: std::collections::HashMap<i64, usize> =
+        body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
+    body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| position.get(to).copied()).collect()).collect()
+}
+
 /// The calls: where registers are destroyed.
 struct CallMasks {
     /// The reg slot of each instruction that destroys registers, ascending
@@ -486,6 +495,11 @@ struct CallMasks {
     /// The widest each value is named (bytes): a value wider than 2 loses the
     /// high half of the roots in a call's third list.
     widths: Rc<Tables>,
+    /// The blocks' successors (by position), where a call can lose a high half
+    /// only if a wide read can follow it: set by `with_flow`.
+    flow: Option<Vec<Vec<usize>>>,
+    /// Each block's blocks reachable by one edge or more, as bits.
+    reach: std::cell::OnceCell<Vec<Vec<u64>>>,
 }
 
 thread_local! {
@@ -526,7 +540,70 @@ impl CallMasks {
                 (slot, narrow, narrow.union(&high), read)
             })
             .collect();
-        Self { calls, destroying, blocks, widths }
+        Self { calls, destroying, blocks, widths, flow: None, reach: Default::default() }
+    }
+
+    /// The same, told the blocks' successors.
+    fn with_flow(
+        mut self,
+        succ: Vec<Vec<usize>>,
+    ) -> Self {
+        self.flow = Some(succ);
+        self
+    }
+
+    /// Whether block `to` can be reached from block `from` by one edge or more.
+    fn reaches(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        let reach = self
+            .reach
+            .get_or_init(
+                || {
+                    let succ = self.flow.as_deref().unwrap_or_default();
+                    let words = succ.len().div_ceil(64);
+                    (0..succ.len())
+                        .map(|start| {
+                            let mut seen = vec![0u64; words];
+                            let mut work: Vec<usize> = succ[start].clone();
+                            while let Some(block) = work.pop() {
+                                if seen[block / 64] >> (block % 64) & 1 == 0 {
+                                    seen[block / 64] |= 1 << (block % 64);
+                                    work.extend(succ[block].iter().copied());
+                                }
+                            }
+                            seen
+                        })
+                        .collect()
+                },
+            );
+        reach.get(from).is_some_and(|row| row[to / 64] >> (to % 64) & 1 == 1)
+    }
+
+    /// Whether a read of more than 2 bytes of a value of `reg`'s family can
+    /// follow the call at `slot` (a later one in its block, one in a block it
+    /// reaches, or an earlier one round a loop). A value in no family, or a
+    /// body without flow, is wide.
+    fn wide_read_follows(
+        &self,
+        reg: u32,
+        slot: &SlotIndex,
+    ) -> bool {
+        let (Some(_), Some(root)) = (&self.flow, self.widths.family.borrow().get(&reg).copied()) else { return true };
+        let reads = self.widths.wide_reads.borrow();
+        let Some(list) = reads.get(&root) else { return true };
+        let Some(call_block) = self.blocks.partition_point(|(begin, ..)| begin <= slot).checked_sub(1) else {
+            return true;
+        };
+        list.iter().any(|(read, block)| {
+            if *block == call_block {
+                read > slot || self.reaches(call_block, call_block)
+            } else {
+                self.reaches(call_block, *block)
+            }
+        })
     }
 
     /// `LiveIntervals::intervalIsInOneMBB`: the run of calls in the one block
@@ -556,10 +633,10 @@ struct FixedPins {
     pins: Vec<FixedPin>,
     /// The pinned ranges of each register unit, merged (`LIS->getRegUnit`):
     /// what the interference cache and the region splitter see of them.
-    units: std::collections::HashMap<u32, crate::liveness::liverange::LiveRange>,
+    units: crate::support::hash::HashMap<u32, crate::liveness::liverange::LiveRange>,
     /// The copies of the body by the slot they define at: (destination,
     /// source).
-    copies: std::collections::HashMap<SlotIndex, (u32, u32)>,
+    copies: crate::support::hash::HashMap<SlotIndex, (u32, u32)>,
 }
 
 struct FixedPin {
@@ -705,7 +782,11 @@ impl PhysInterference for CallMasks {
                 #[cfg(test)]
                 CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
                 debug_assert!(s.start < *slot);
-                found.get_or_insert_with(RegSet::default).union_with(if wide { wide_lost } else { narrow });
+                // DEVIATE C-LANE: a call destroys the high half of the pin's
+                // whole register; here a value loses it only where a wide
+                // read can follow.
+                let lost = wide && (narrow == wide_lost || self.wide_read_follows(li.reg(), slot));
+                found.get_or_insert_with(RegSet::default).union_with(if lost { wide_lost } else { narrow });
                 at += 1;
             }
             match calls.get(at) {
@@ -933,8 +1014,35 @@ pub fn decide_with_split(
         order.dedup();
         tables.orders.borrow_mut().insert(reg, order);
     }
+    // DEVIATE C-LANE (the pin's regmask is per whole GR32 register): where a
+    // call destroys the high halves of registers (`clobbers_high`), a value no
+    // instruction reads wider than 2 bytes is 2 bytes wide: its high half is
+    // never read, so a call does not lose it and its spill is a word. Sound
+    // because the width is the widest read of the value anywhere in the body,
+    // so a read after the call, around a loop, or through a copy of the value
+    // keeps it wide.
+    let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
+    let read_widths = if lanes { crate::backend::allocate::_widest_read(body) } else { Default::default() };
     for (value, width) in crate::backend::allocate::_widest(body) {
+        let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
+    }
+    if lanes {
+        // Where the wide reads are, for `CallMasks::wide_read_follows`.
+        let mut family = tables.family.borrow_mut();
+        let mut wide_reads = tables.wide_reads.borrow_mut();
+        for (at, block) in body.blocks.iter().enumerate() {
+            for one in &block.insns {
+                let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
+                for (value, _) in crate::backend::allocate::_read_widths(one).into_iter().filter(|(_, w)| *w > 2) {
+                    wide_reads.entry(value).or_default().push((slot.clone(), at));
+                }
+            }
+        }
+        for value in read_widths.keys().chain(lis.virt_regs().iter()) {
+            family.insert(*value, *value);
+            wide_reads.entry(*value).or_default();
+        }
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
     let invariant = if !inputs.stable_loads {
@@ -1015,7 +1123,13 @@ pub fn decide_with_split(
     let pins_cell: Rc<std::cell::OnceCell<FixedPins>> = Rc::default();
     let matrix = LiveRegMatrix::new(
         RegisterInfo::new(inputs.registers),
-        Box::new(Fixed { calls: CallMasks::of(calls, blocks, Rc::clone(&tables)), pins: Rc::clone(&pins_cell) }),
+        Box::new(Fixed {
+            calls: {
+                let masks = CallMasks::of(calls, blocks, Rc::clone(&tables));
+                if lanes { masks.with_flow(successors(body)) } else { masks }
+            },
+            pins: Rc::clone(&pins_cell),
+        }),
     );
     let inline = matches!(mode, Mode::Inline { .. });
     // A split edits the function, and a caller that only records what to spill
@@ -1049,7 +1163,7 @@ pub fn decide_with_split(
     }
     greedy.calculate_spill_weights_and_hints();
     let fixed_regs: Vec<(u32, RegId)> = if fixed_pins {
-        let mut copies = std::collections::HashMap::new();
+        let mut copies = crate::support::hash::HashMap::default();
         for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
             if let Some((d, s)) =
                 one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
@@ -1082,7 +1196,8 @@ pub fn decide_with_split(
             .collect();
         let regs = pins.iter().map(|pin| (pin.reg, pin.root)).collect();
         let tri = RegisterInfo::new(inputs.registers);
-        let mut spans: std::collections::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> = std::collections::HashMap::new();
+        let mut spans: crate::support::hash::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> =
+            crate::support::hash::HashMap::default();
         for pin in &pins {
             for unit in tri.regunits(pin.root) {
                 spans.entry(unit).or_default().extend(pin.segments.iter().cloned());
@@ -1164,7 +1279,7 @@ pub fn decide_with_split(
             placed.push((reg, phys));
         }
     }
-    if llrm_support::env_set("LLRM_PLACED_DEBUG") {
+    if llrm_support::env_flag!("LLRM_PLACED_DEBUG") {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
                 eprintln!(

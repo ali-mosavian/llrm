@@ -43,7 +43,8 @@ fn widened(
     // DEVIATE SW2: the 16-bit target keeps its switch narrow (a 32-bit compare
     // there costs an operand-size prefix per case); m16 has no 32-bit
     // pointer, as `is_desirable_to_promote_op` reads it. Exit: none.
-    if layout.pointer(0).bits < 32 {
+    let pointer_bits = layout.pointer(0).bits;
+    if pointer_bits < 32 {
         return false;
     }
     let condition = function.instruction(switch).operands[0];
