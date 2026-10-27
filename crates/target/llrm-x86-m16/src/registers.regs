@@ -18,6 +18,9 @@
 # register the result is not left in comes last.
 @scratch cx dx bx ax
 #
+# @bytes: the 8-bit allocation order, GR8 of X86RegisterInfo.td: the high bytes come before bl and bh.
+@bytes al cl dl ah ch dh bl bh
+#
 # name  bits root lane classes dwarf codeview [load: the mnemonic that loads a far pointer into a segment register]
 eax     32   eax  0    gpr,byte,int  0  17
 ecx     32   ecx  0    gpr,byte,int  1  18

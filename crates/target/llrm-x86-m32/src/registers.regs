@@ -23,6 +23,9 @@
 # register the result is not left in comes last.
 @scratch cx dx bx ax
 #
+# @bytes: the 8-bit allocation order, GR8 of X86RegisterInfo.td: the high bytes come before bl and bh.
+@bytes al cl dl ah ch dh bl bh
+#
 # name  bits root lane classes dwarf codeview
 eax     32   eax  0    gpr,byte,base,index,int  0  17
 ecx     32   ecx  0    gpr,byte,base,index,int  1  18

@@ -353,5 +353,8 @@ fn _register_of(
     if regs.in_class(*register, llrm_lir::registers::class::RFP) {
         return Ok(Loc::Reg(Reg { register: *register, width: value.width }));
     }
+    if value.width == 1 && register.is_gpr8() {
+        return Ok(Loc::Reg(Reg { register: *register, width: 1 }));
+    }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
 }
