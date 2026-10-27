@@ -69,6 +69,13 @@ fn main() {
         writeln!(out, "    ({name:?}, {at}),").expect("a string takes text");
     }
     out.push_str("];\n");
+    out.push_str("\n/// The cells a program names by EXTDEF and the routines that write each: (cell, family, routines).\npub static WRITERS_ROWS: &[(&str, &str, &[&str])] = &[\n");
+    for one in rows.get("writers").and_then(|one| one.as_array()).expect("[[writers]]") {
+        let one = one.as_table().expect("a writers entry is a table");
+        writeln!(out, "    ({:?}, {:?}, {}),", string(one, "cell"), string(one, "family"), list(one, "routines"))
+            .expect("a string takes text");
+    }
+    out.push_str("];\n");
     writeln!(out, "\n/// Each row's contract once built: a program asks of the same routine at every call.\npub static BUILT: [std::sync::OnceLock<crate::Contract>; {}] = [const {{ std::sync::OnceLock::new() }}; {}];", names.len(), names.len()).expect("a string takes text");
     let dir = std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR");
     std::fs::write(std::path::Path::new(&dir).join("rows.rs"), out).expect("rows.rs writes");

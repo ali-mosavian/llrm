@@ -1418,33 +1418,10 @@ fn _entry(
     );
 }
 
-// Which routines write a runtime cell a program names by EXTDEF, where the
-// runtime source settles it. A call to anything else leaves the cell alone,
-// unless it runs the program's own code -- which `enters_user_code` and an
-// error handler say, and the caller asks.
-//
-// b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
-// does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
-// `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
-// CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
-// B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
-// bload.asm only read it, and no reference takes its address. ABSOLUTE runs
-// machine code of the program's choosing.
+// Which routines write a runtime cell a program names by EXTDEF: runtime.toml's
+// `[[writers]]`, with the source that settles each.
 pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'static str>>> = LazyLock::new(|| {
-    IndexMap::from_iter([(
-        ("b$seg", "qb45"),
-        BTreeSet::from([
-            "B$DSEG",
-            "B$DSG0",
-            "B$SCLR",
-            "B$RUNL",
-            "B$StackReset",
-            "B$Init",
-            "B$IINIT",
-            "B$RUNINI",
-            "ABSOLUTE",
-        ]),
-    )])
+    WRITERS_ROWS.iter().map(|&(cell, family, routines)| ((cell, family), routines.iter().copied().collect())).collect()
 });
 
 /// Whether `name` is a runtime cell only a reference naming it reaches: one
@@ -1960,6 +1937,16 @@ mod tests {
     fn test_the_routines_with_a_flags_result_are_the_rows_that_say_so() {
         assert_eq!(flags_results(), ["B$SCMP"]);
         assert!(flags_result("B$SCMP") && !flags_result("B$SCAT") && !flags_result("not a routine"));
+    }
+
+    /// The table was a literal; `[[writers]]` must give the same one.
+    #[test]
+    fn test_the_cells_with_writers_are_the_toml_s() {
+        assert_eq!(
+            WRITERS[&("b$seg", "qb45")].iter().copied().collect::<Vec<_>>(),
+            ["ABSOLUTE", "B$DSEG", "B$DSG0", "B$IINIT", "B$Init", "B$RUNINI", "B$RUNL", "B$SCLR", "B$StackReset"]
+        );
+        assert_eq!(WRITERS.len(), 1);
     }
 
     /// The set was a literal; the rows' `calls_back` must name the same four.
