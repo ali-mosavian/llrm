@@ -307,7 +307,7 @@ fn the_divides_equal_the_hosts() {
 }
 
 /// The signed divide by a dword divisor fixed the sign of both results for a
-/// caller that reads one (SD315): data_int64 pasted 87 bytes of routine for a
+/// caller that reads one (SD232): data_int64 pasted 87 bytes of routine for a
 /// quotient. A routine for the result read is shorter and gives that result as
 /// the host does.
 #[test]
