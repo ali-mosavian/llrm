@@ -228,6 +228,23 @@ fn test_a_sign_bit_extraction_compared_with_zero_is_a_sign_test() {
     );
 }
 
+/// `foldGEPICmp`: a pointer compared with the GEP off it is the offset
+/// compared with zero (`p != end` loops on `p + n`).
+#[test]
+fn test_a_gep_compared_with_its_base_is_the_offset_against_zero() {
+    let text = "define i1 @f(ptr %p, i32 %n) {
+b0:
+  %g = getelementptr inbounds i32, ptr %p, i32 %n
+  %r = icmp ne ptr %g, %p
+  ret i1 %r
+}
+";
+    let after = combined(text);
+    assert!(!after.contains("getelementptr") && after.contains("icmp ne i32"), "{after}");
+    let signed = combined(&text.replace("icmp ne", "icmp slt"));
+    assert!(signed.contains("getelementptr"), "a signed compare is left alone: {signed}");
+}
+
 /// A compare of a phi of constants against a constant stayed a compare: the
 /// phi's block ended in `br (icmp eq (phi [1, 1, 0]), 0)` that SimplifyCFG
 /// cannot thread (its fold needs the phi itself as the condition), so queens

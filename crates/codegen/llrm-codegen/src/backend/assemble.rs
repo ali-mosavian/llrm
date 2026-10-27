@@ -215,6 +215,20 @@ pub fn assembled_by(
             done.insert(id, made);
         }
     }
+    // DEVIATE SD314: a routine one site calls is pasted there, as the old
+    // selector does: its procedure, call and return cost more than it saves.
+    // The pin has no such routine (a libcall in the library).
+    let mut sites: IndexMap<String, usize> = IndexMap::default();
+    for made in done.values() {
+        for (at, callee) in &made.calls {
+            if callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
+                && made.inline.contains_key(at)
+                && made.inline_symbols.get(at).is_none_or(Vec::is_empty)
+            {
+                *sites.entry(callee.clone()).or_default() += 1;
+            }
+        }
+    }
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -260,6 +274,7 @@ pub fn assembled_by(
                         if !matches!(selector, Selector::Old)
                             && callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
                             && inline_symbols.get(at).is_none_or(Vec::is_empty)
+                            && sites.get(callee).is_some_and(|&count| count > 1)
                         {
                             let routine = format!("${callee}");
                             shared.entry(routine.clone()).or_insert_with(|| code.clone());

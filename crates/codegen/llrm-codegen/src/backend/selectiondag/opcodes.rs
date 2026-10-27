@@ -59,18 +59,34 @@ pub struct OpcodeMap {
     /// The answer for each name asked: every machine node of a function asks,
     /// and a name has one answer.
     asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
+    /// [`memory_bytes`] for each name asked, parsed once.
+    sized: std::sync::Mutex<llrm_support::hash::HashMap<String, Option<u32>>>,
 }
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
         let scalar_sse = forms.iter().any(|form| form.name == "addsd");
-        OpcodeMap { forms, scalar_sse, asked: Default::default() }
+        OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
     }
 
     /// Whether this target does scalar floating point in xmm registers (it has
     /// `addsd`): a floating value is then 4 or 8 bytes, not the x87's 10.
     pub fn scalar_sse(&self) -> bool {
         self.scalar_sse
+    }
+
+    /// [`memory_bytes`] of `name`, memoized: every machine node asks.
+    pub fn memory_bytes(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        let mut sized = self.sized.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(&answer) = sized.get(name) {
+            return answer;
+        }
+        let answer = memory_bytes(name);
+        sized.insert(name.to_owned(), answer);
+        answer
     }
 
     pub fn forms(&self) -> &[Form] {
