@@ -325,13 +325,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FDiv => self.visit_fdiv(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
+            ISD::BSwap => self.visit_bswap(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
-            ISD::BSwap => self.visit_bswap(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             _ => None,
         }
