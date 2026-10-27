@@ -164,7 +164,7 @@ fn compiled_c(
     let directory = tempfile::tempdir().expect("a directory");
     let source = directory.path().join("t.c");
     std::fs::write(&source, "int f(int a) { return a * 3 + 1; }\n").expect("writes the source");
-    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")));
+    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-cc")));
     command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]);
     command.args(flag);
     command.arg(&source);
