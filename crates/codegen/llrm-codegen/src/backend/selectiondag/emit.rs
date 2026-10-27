@@ -2830,7 +2830,7 @@ impl Emitter<'_, '_> {
                 let mnemonic = if rest.starts_with('0') { "fldz" } else { "fld1" };
                 self.lazy.insert(result, (mnemonic, None));
             }
-            "LD" if matches!(self.dag.node(group(0)?[3]).data, NodeData::PoolIndex(_)) => {
+            "LD" if matches!(self.dag.node(group(0)?[3]).data, NodeData::PoolIndex(..)) => {
                 let (first, _) = digits(rest);
                 let cell = self.cell(&group(0)?, first / 8)?;
                 self.lazy.insert(result, ("fld", Some(cell)));
@@ -3051,7 +3051,7 @@ impl Emitter<'_, '_> {
         // constant) reads that entry: as wide as its constant, and no wider.
         if let ISD::Machine(op) = self.dag.opcode(group[0])
             && self.ctx.names.get(&(op as u16)).is_some_and(|name| name.split('|').next() == Some("MOV32ri"))
-            && let NodeData::PoolIndex(entry) = self.dag.node(self.dag.node(group[0]).ops[0]).data
+            && let NodeData::PoolIndex(entry, _) = self.dag.node(self.dag.node(group[0]).ops[0]).data
         {
             let size = self.pool_cell(entry)?.width;
             if cell_width > size {
@@ -3112,7 +3112,7 @@ impl Emitter<'_, '_> {
             address.index = table.id;
             return Ok(Mem { base, index, scale, disp_width: 2, ..Mem::new(Some(address), cell_width) });
         }
-        if let NodeData::PoolIndex(entry) = self.dag.node(group[3]).data {
+        if let NodeData::PoolIndex(entry, shift) = self.dag.node(group[3]).data {
             if self.address_register(group[4], Role::Segment)?.is_some() {
                 return Err(EmitError::Unsupported("a segment override".to_owned()));
             }
@@ -3129,7 +3129,15 @@ impl Emitter<'_, '_> {
                 )));
             }
             // as wide as the read, which may be inside the entry
-            return Ok(Mem { base, index, scale, width: cell_width, ..pooled });
+            let addr = pooled
+                .addr
+                .map(
+                    |mut addr| {
+                        addr.disp += i64::from(shift);
+                        addr
+                    },
+                );
+            return Ok(Mem { base, index, scale, width: cell_width, addr, ..pooled });
         }
         let disp = self.displacement(group[3])?;
         if self.address_register(group[4], Role::Segment)?.is_some() {
@@ -3210,32 +3218,25 @@ impl Emitter<'_, '_> {
             .cell(index_of, cell_width)
             .ok_or_else(|| EmitError::Unsupported(format!("frame index {index_of}")))?;
         // A displacement past the object (an index that makes up the rest,
-        // `[ebp+ecx+126]` for 8192 bytes below) is no frame position: the
-        // layout takes a positive one for the arguments' and does not move
-        // it. The object's address is made, and the cell is based on it.
-        if let Some((start, size)) = self.ctx.frame.extent(index_of)
-            && !(start..=start + size).contains(&(start + disp))
-        {
-            let object = self.fresh(match self.ctx.address_mode {
-                AddrMode::Real16 => 2,
-                AddrMode::Flat64 => 8,
-                _ => 4,
-            });
-            let whole = Mem { index: None, ..cell.clone() };
-            self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
-            let address = Addr::new(crate::model::ir::Space::Literal, disp);
-            return Ok(Mem {
-                base: Some(object),
-                index,
-                scale,
-                offset: disp,
-                disp_width: 2,
-                ..Mem::new(Some(address), cell_width)
-            });
-        }
+        // `[ebp+ecx+126]` for 8192 bytes below) is a position of its own in the
+        // frame, where `home_of` would name the nearest slot: the cell says
+        // which object it was made from, and the layout moves it with that.
+        let outside = self
+            .ctx
+            .frame
+            .extent(index_of)
+            .filter(|&(start, size)| !(start..=start + size).contains(&(start + disp)))
+            .map(|(start, _)| start);
         // The object's place is its `addr`; the displacement moves that, as
         // `offset` of a cell with an `addr` is only how it is encoded.
-        let addr = cell.addr.map(|addr| Addr { disp: addr.disp + disp, ..addr });
+        let addr = cell
+            .addr
+            .map(
+                |addr| {
+                    let moved = Addr { disp: addr.disp + disp, ..addr };
+                    outside.map_or(moved, |home| moved.in_slot(home))
+                },
+            );
         // With an index the frame register is the base of the address and,
         // for a dword index, EBP (the 67h form's base).
         let through = match &index {
@@ -3335,8 +3336,11 @@ impl Emitter<'_, '_> {
             }));
         }
         // The address of a pool constant.
-        if let NodeData::PoolIndex(entry) = self.dag.node(value).data {
-            let addr = self.pool_cell(entry)?.addr;
+        if let NodeData::PoolIndex(entry, shift) = self.dag.node(value).data {
+            let mut addr = self.pool_cell(entry)?.addr;
+            if let Some(addr) = addr.as_mut() {
+                addr.disp += i64::from(shift);
+            }
             return Ok(Loc::Imm(Imm {
                 value: 0,
                 width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
