@@ -556,6 +556,21 @@ mod tests {
         }
     }
 
+    /// `llc -O2 -debug-pass` has X86FixupSetCC before the pre-RA scheduler; ours
+    /// ran after it, so the zero a `setcc` needs was placed once the order was
+    /// fixed (x_rle m32: a `lea` in another place).
+    #[test]
+    fn test_fixupsetcc_runs_before_the_machine_scheduler() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        assert!(at("FixupSetCC") < at("MachineScheduler"), "{names:?}");
+    }
+
     #[test]
     fn test_a_phase_that_loses_source_bytes_is_malformed() {
         let jump = ir::Semantics { name: Some("jmp".into()), target: Some(1), ..ir::Semantics::new(Operation::Jump) };
