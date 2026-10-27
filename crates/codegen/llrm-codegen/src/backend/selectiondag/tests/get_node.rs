@@ -213,3 +213,21 @@ fn users_are_distinct_and_in_creation_order_whatever_the_use_list() {
     dag.delete_dead(third.node);
     assert_eq!(dag.users(a).collect::<Vec<u32>>(), [first.node, second.node]);
 }
+
+/// Where a function evaluates floats at the x87's extended precision, a
+/// quotient the single cannot hold is not folded: `0.5 * (-1 / 7)` stayed
+/// `-0.0714285746` (single bits `bd924925`) where BC prints the double
+/// `bfb2492492492492` (tests/differential/qb-bc/single-constants.bas).
+#[test]
+fn an_inexact_single_quotient_is_not_folded_under_extended_evaluation() {
+    let divide = |fp_extended: bool| {
+        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..DagConfig::default() });
+        let one = dag.get_constant_fp(u128::from(1.0f32.to_bits()), EVT::Simple(MVT::F32));
+        let seven = dag.get_constant_fp(u128::from(7.0f32.to_bits()), EVT::Simple(MVT::F32));
+        let quotient = dag.get_node(ISD::FDiv, EVT::Simple(MVT::F32), &[one, seven]);
+        let exact = dag.get_node(ISD::FDiv, EVT::Simple(MVT::F32), &[one, one]);
+        (dag.opcode(quotient) == ISD::ConstantFP, dag.opcode(exact) == ISD::ConstantFP)
+    };
+    assert_eq!(divide(false), (true, true));
+    assert_eq!(divide(true), (false, true));
+}
