@@ -138,6 +138,10 @@ fn test_an_indirect_call_in_a_call_frame_is_a_depth_the_walk_follows() {
         call.clone(),
         pseudo("call_frame_destroy", vec![imm(4), imm(0)]),
     ]);
-    assert_eq!(pinned_by(&body(vec![call]), &registers, &Default::default()), Some(Pinned::OpaqueSpAdjustment), "premise: no frame");
+    assert_eq!(
+        pinned_by(&body(vec![call]), &registers, &Default::default()),
+        Some(Pinned::OpaqueSpAdjustment),
+        "premise: no frame"
+    );
     assert_eq!(pinned_by(&framed, &registers, &Default::default()), None);
 }
