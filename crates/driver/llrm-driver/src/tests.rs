@@ -666,6 +666,19 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
     assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
 }
 
+/// `floor(x)` of a C program reached the backend as `llvm.floor.f64` and was
+/// refused (`@f_: @llvm.floor.f64`): x87 has no instruction for it, the pin
+/// calls `floor`.
+#[test]
+fn a_floor_intrinsic_is_a_call_of_floor() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                declare double @llvm.floor.f64(double)\n\
+                define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("call ") && line.contains("floor")), "{listing}");
+}
+
 /// `__builtin_prefetch` is `llvm.prefetch`; the 386/486 have no instruction for
 /// it and `llrm-llc` refused the module ("@f_: @llvm.prefetch.p0"), so
 /// `builtins_table.c` never compiled through `llrm-cc`. The hint compiles to
