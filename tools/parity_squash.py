@@ -1246,10 +1246,15 @@ def docs_stale(root: Path) -> set[str]:
     return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
 
 
+def crash_line(number: str, error: BaseException) -> str:
+    """`#N: REFUSED: the batch crashed: <exception>`: a TypeError in docs_gated (05:18) left 13 PRs refused with an empty reason, the traceback on a line no summary carries."""
+    return f"#{number}: REFUSED: the batch crashed (a tool fault, not this PR): {type(error).__name__}: {' '.join(str(error).split())[:200]}"
+
+
 def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, set[str]]:
     """(why, stale now): a refusal naming the pages `root` has out of date that `before` did not. #5031, #5049 and #4988 each changed a `//!` header, passed alone and landed
     with six pages stale: the head's red docs_in_sync was excused, so the batch never saw a new one."""
-    now = docs()
+    now = docs(root)
     new = sorted(now - before)
     return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
 
@@ -1309,13 +1314,42 @@ def _claim_slot(root: Path, count: int):
         time.sleep(2)
 
 
+def keep_refused_evidence(head: str, cwd: Path, why: list[str], directory: Path) -> None:
+    """For a generated-docs refusal, `HEAD`, `git status` and `build.py --check` of the tree that was judged, in `directory/<head>/`: the next PR's check resets the slot, and a refusal
+    that the same tree does not reproduce (docs_in_sync at 01:41, 01:44, 02:08, 02:26) left no evidence of what was stale."""
+    if not any("docs_in_sync" in one or "generated docs" in one for one in why):
+        return
+    out = directory / head[:12]
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "head.txt").write_text(f"tree {git('rev-parse', 'HEAD', cwd=cwd).strip()}\npr head {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}\n")
+    (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
+    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    (out / "check.txt").write_text(check.stdout + check.stderr)
+
+
+def keep_batch_evidence(heads: dict[str, str], cwd: Path, directory: Path, stamp: str) -> None:
+    """The batch tree's HEAD, status and `build.py --check`, and each member's head sha and commit time, in `directory/batch-<stamp>/`: "stale heads or the runner's tree" is answerable
+    from it at the next docs refusal."""
+    out = directory / f"batch-{stamp}"
+    out.mkdir(parents=True, exist_ok=True)
+    lines = [f"tree {git('rev-parse', 'HEAD', cwd=cwd).strip()}"]
+    for number, head in heads.items():
+        lines.append(f"#{number} {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}")
+    (out / "heads.txt").write_text("\n".join(lines) + "\n")
+    (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
+    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    (out / "check.txt").write_text(check.stdout + check.stderr)
+
+
 def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
     root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
     slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
     targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
         _alone_checkout(targets / "w", base)
-        return alone_refusals(head, base, targets / "w", target=targets)
+        why = alone_refusals(head, base, targets / "w", target=targets)
+        keep_refused_evidence(head, targets / "w", why, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused")
+        return why
     finally:
         lock.close()
 
@@ -1376,6 +1410,26 @@ def batch_blame(heads: dict[str, str], base: str, cwd: Path = ROOT) -> list[str]
     return lines
 
 
+PR_FIELDS = "headRefOid,headRefName,title,body,baseRefName,mergeable"
+
+
+def pr_info(number: str) -> dict:
+    return json.loads(subprocess.run(["gh", "pr", "view", number, "--json", PR_FIELDS], capture_output=True, text=True, errors="replace", check=True).stdout)
+
+
+def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> dict[str, tuple[str, str]]:
+    """{number: (old head, new head)} of the PRs whose head moved since `infos` was read, which `infos` now holds. A batch that halves and runs again for an hour kept merging the
+    heads it read at its start: at 02:34 the sub-batch merged #5088's 01:18 head with sinkcast.md stale, 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head
+    its owner had moved."""
+    moved = {}
+    for number in numbers:
+        now = view(number)
+        if now["headRefOid"] != infos[number]["headRefOid"]:
+            moved[number] = (infos[number]["headRefOid"], now["headRefOid"])
+            infos[number] = now
+    return moved
+
+
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
@@ -1434,6 +1488,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return False
         def blame(new: list[str]) -> None:
             if any(name.startswith("integration docs") for name in new):
+                keep_batch_evidence({number: infos[number]["headRefOid"] for number in group}, ROOT, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused", time.strftime("%H%M%S"))
                 for line in batch_blame({number: infos[number]["headRefOid"] for number in group}, BASE):
                     print(line)
 
@@ -1569,6 +1624,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         return culprits
 
     def passes(group: list[str]) -> bool:
+        for number, (old, new) in refresh_heads(infos, group).items():
+            print(f"#{number}: head moved {old[:9]} -> {new[:9]} since the batch began; the new head is used")
         if FAST:
             return passes_fast(group)
         git("fetch", "-q", "origin", "feat/parity")
@@ -2007,7 +2064,12 @@ def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]
-        return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+        try:
+            return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+        except Exception as error:
+            for number in numbers:
+                print(crash_line(number, error))
+            raise
     if len(sys.argv) >= 2 and sys.argv[1] == "audit":
         since = sys.argv[2] if len(sys.argv) > 2 else "96468410e"
         rows = audit(since)
