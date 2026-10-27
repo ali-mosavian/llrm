@@ -936,6 +936,7 @@ define cc1000 void @MAIN() addrspace(1) {
             "",
             "public MAIN",
             ".data",
+            "align 2",
             "count label byte",
             "db 005h,000h",
             "extern B$PEI2:far",
