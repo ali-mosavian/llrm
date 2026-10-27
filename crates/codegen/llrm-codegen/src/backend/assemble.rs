@@ -93,9 +93,11 @@ use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
-/// A far object of more bytes than this is laid down in 64K segments.
-const HUGE_PIECE: i64 = 0xFFFF;
-const HUGE_PIECE_BYTES: i64 = 0x10000;
+/// The bytes of a data segment: a far object of more is laid down in
+/// segments of that size. A target without segments has no far object.
+fn segment_bytes(arch: &dyn llrm_target::Target) -> i64 {
+    arch.layout().segment_bytes().map_or(i64::MAX, |bytes| bytes as i64)
+}
 
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
@@ -229,7 +231,7 @@ pub fn assembled_by(
                     // naming.
                     sectioned.entry(section.clone()).or_default().extend(datums);
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE)
-                    && masm::data_size(&datums, 0) > HUGE_PIECE
+                    && masm::data_size(&datums, 0) >= segment_bytes(arch)
                 {
                     // Past 64K: consecutive segments of 64K, which a huge
                     // pointer steps through.
@@ -478,7 +480,7 @@ pub fn assembled_by(
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     for (name, datums) in huge_objects {
-        let pieces = masm::split_data(datums, HUGE_PIECE_BYTES).map_err(|why| format!("@{name}: {why}"))?;
+        let pieces = masm::split_data(datums, segment_bytes(arch)).map_err(|why| format!("@{name}: {why}"))?;
         for (at, piece) in pieces.into_iter().enumerate() {
             huge_segments.push((format!("{far_segment}_{}${at}", name.trim_start_matches('_')), piece));
         }

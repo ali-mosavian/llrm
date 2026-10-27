@@ -374,10 +374,10 @@ impl Walk<'_> {
 /// instruction names lanes past the six of EFLAGS (its status word, which
 /// `fnstsw; sahf` moves there): it counts as reading and writing all six.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
-    use iced_x86::RflagsBits as F;
-    let six = (F::OF | F::SF | F::ZF | F::CF | F::PF) as u32;
+    use llrm_lir::flag::Flag as F;
+    let six = (F::OF | F::SF | F::ZF | F::CF | F::PF).bits();
     let mask = lanes.mask() as u32;
-    let beyond = mask & !(six | F::AF as u32) != 0;
+    let beyond = mask & !(six | F::AF.bits()) != 0;
     crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
 }
 

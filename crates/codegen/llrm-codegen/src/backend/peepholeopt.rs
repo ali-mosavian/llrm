@@ -60,7 +60,7 @@
 
 use std::sync::Arc;
 
-use iced_x86::RflagsBits;
+use llrm_lir::flag::Flag;
 
 use crate::backend::lanes::Lanes;
 use crate::backend::precse::flag_lanes;
@@ -336,8 +336,7 @@ fn reusable(
     // the scan forward from the compare: the readers of the flags read only
     // what the definition sets, until something writes them again. A write of
     // some flags (`inc` leaves CF) kills only those.
-    let mut pending =
-        Lanes::flags((RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::CF | RflagsBits::PF) as u32);
+    let mut pending = Lanes::flags((Flag::OF | Flag::SF | Flag::ZF | Flag::CF | Flag::PF).bits());
     for one in &insns[at + 1..] {
         if one.is_meta() {
             continue;
