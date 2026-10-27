@@ -185,44 +185,16 @@ fn forwarded(
             continue;
         }
         // Every use a direct, simple load or store (`GlobalStatus`), one store.
-        let mut store: Option<(GlobalId, InstId, llrm_mir::context::ConstantId)> = None;
-        let mut loads: Vec<(GlobalId, InstId)> = Vec::new();
-        let mut plain = true;
-        for (&function_id, table) in reached {
-            let Some(reach) = table.get(&id) else { continue };
-            let Some(reach) = reach else {
-                plain = false;
-                break;
-            };
-            let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
-            if !reach.moved.is_empty() {
-                plain = false;
-                break;
-            }
-            for &(inst, index) in &reach.uses {
-                match function.instruction(inst).opcode {
-                    Opcode::Load { volatile: false, .. } if index == 0 => loads.push((function_id, inst)),
-                    Opcode::Store { volatile: false, .. } if index == 1 => {
-                        let Operand::Constant(value) = function.instruction(inst).operands[0] else {
-                            plain = false;
-                            break;
-                        };
-                        if store.replace((function_id, inst, value)).is_some() {
-                            plain = false;
-                            break;
-                        }
-                    }
-                    _ => plain = false,
-                }
-            }
-            if !plain {
-                break;
-            }
-        }
-        let Some((owner, store, value)) = store.filter(|_| plain && !loads.is_empty()) else { continue };
-        if value == initializer {
+        let Some(direct) = direct_uses(module, id, reached) else { continue };
+        let mut stores = direct.iter().flat_map(|one| one.stores.iter().map(|&store| (one.function, store)));
+        let (Some((owner, store)), None) = (stores.next(), stores.next()) else { continue };
+        let GlobalKind::Function(owning) = &module.globals[owner.0 as usize].kind else { continue };
+        let Operand::Constant(value) = owning.instruction(store).operands[0] else { continue };
+        if value == initializer || direct.iter().all(|one| one.loads.is_empty()) {
             continue;
         }
+        let loads: Vec<(GlobalId, InstId)> =
+            direct.iter().flat_map(|one| one.loads.iter().map(|&load| (one.function, load))).collect();
         let GlobalKind::Function(function) = &module.globals[owner.0 as usize].kind else { continue };
         let value_ty = module.context.get(value).ty;
         let tree = trees.entry(owner).or_insert_with(|| DomTree::of(function));
@@ -252,6 +224,44 @@ fn forwarded(
         trees.remove(&owner);
     }
     changed
+}
+
+/// The loads and stores one function makes of a variable.
+struct Direct {
+    function: GlobalId,
+    loads: Vec<InstId>,
+    stores: Vec<InstId>,
+}
+
+/// The functions that use `id`, or none where a use is not a direct, simple
+/// load or store: a gep on the way is an offset another pass folds.
+fn direct_uses(
+    module: &Module,
+    id: GlobalId,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+) -> Option<Vec<Direct>> {
+    let mut found = Vec::new();
+    for (&function_id, table) in reached {
+        let Some(reach) = table.get(&id) else { continue };
+        let reach = reach.as_ref()?;
+        let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
+        if reach.uses.is_empty() {
+            continue;
+        }
+        if !reach.moved.is_empty() {
+            return None;
+        }
+        let mut direct = Direct { function: function_id, loads: Vec::new(), stores: Vec::new() };
+        for &(inst, index) in &reach.uses {
+            match function.instruction(inst).opcode {
+                Opcode::Load { volatile: false, .. } if index == 0 => direct.loads.push(inst),
+                Opcode::Store { volatile: false, .. } if index == 1 => direct.stores.push(inst),
+                _ => return None,
+            }
+        }
+        found.push(direct);
+    }
+    Some(found)
 }
 
 /// The globals another global's initializer names.
@@ -562,32 +572,7 @@ fn slot_plan(
     trees: &mut BTreeMap<GlobalId, DomTree>,
 ) -> Option<(GlobalId, Vec<InstId>, Vec<InstId>)> {
     let context = &module.context;
-    let mut owner: Option<GlobalId> = None;
-    let mut loads: Vec<InstId> = Vec::new();
-    let mut stores: Vec<InstId> = Vec::new();
-    for (&function_id, table) in reached {
-        let Some(reached) = table.get(&id) else { continue };
-        let reached = reached.as_ref()?;
-        let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
-        if reached.uses.is_empty() {
-            continue;
-        }
-        if owner.replace(function_id).is_some_and(|other| other != function_id) {
-            return None;
-        }
-        // Direct uses only: a gep on the way is an offset another pass folds.
-        if !reached.moved.is_empty() {
-            return None;
-        }
-        for &(inst, index) in &reached.uses {
-            match function.instruction(inst).opcode {
-                Opcode::Load { volatile: false, .. } if index == 0 => loads.push(inst),
-                Opcode::Store { volatile: false, .. } if index == 1 => stores.push(inst),
-                _ => return None,
-            }
-        }
-    }
-    let owner = owner?;
+    let [Direct { function: owner, loads, stores }] = direct_uses(module, id, reached)?.try_into().ok()?;
     if loads.len() * stores.len() > MAX_PAIRS {
         return None;
     }
