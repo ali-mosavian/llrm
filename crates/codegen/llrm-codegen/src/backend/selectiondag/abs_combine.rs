@@ -1,7 +1,7 @@
 //! `visitABS` and `visitABS_MIN_POISON`: the absolute value of an absolute
 //! value, or of a value whose sign bit is clear, is the operand.
 //!
-//! DEVIATE SD324: no `foldABSToABD` (no `ABDS`/`ABDU` node) and no
+//! DEVIATE SD246: no `foldABSToABD` (no `ABDS`/`ABDU` node) and no
 //! `abs (sign_extend_inreg x)` narrowing (no `isTruncateFree`/`isZExtFree`
 //! query). Owner sdag-b.
 //!
