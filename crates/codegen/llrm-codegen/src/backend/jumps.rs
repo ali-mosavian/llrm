@@ -208,7 +208,7 @@ fn tails_merged(
             break;
         };
         any = true;
-        placed = machinedce::eliminated(threaded(&merged));
+        placed = threaded(&merged);
     }
     Ok((placed, any))
 }
