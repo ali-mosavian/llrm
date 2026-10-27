@@ -27,18 +27,25 @@ fn wide_equality_compares_both_halves() {
     assert_eq!((dag.opcode(dag.operand(or, 0)), dag.opcode(dag.operand(or, 1))), (ISD::Xor, ISD::Xor));
 }
 
-/// `a < b` (signed) is the high words' signed compare, except when they are
-/// equal, then the low words' unsigned one; a signed low compare is wrong
-/// for `0 < 0x80000000`-style low halves.
+/// `a < b` (signed) is the high words' signed compare fed the borrow of the low
+/// words' unsigned subtract (`SETCCCARRY`, `cmp; sbb`), where it was a select
+/// between two compares: the low borrow must be unsigned, or `0 < 0x80000000`
+/// style low halves compare wrong.
 #[test]
-fn wide_signed_less_is_unsigned_on_the_low_half() {
+fn wide_signed_less_is_the_high_compare_with_the_low_borrow() {
     let (dag, root) = legalized(|dag, a, b| dag.get_setcc(EVT::I8, a, b, CondCode::SetLt));
-    assert_eq!(dag.opcode(root), ISD::Select);
-    let (same, low, high) = (dag.operand(root, 0), dag.operand(root, 1), dag.operand(root, 2));
-    let code = |n| dag.node(dag.operand(n, 2)).data.clone();
-    assert_eq!(code(same), NodeData::CondCode(CondCode::SetEq));
-    assert_eq!(code(low), NodeData::CondCode(CondCode::SetULt));
-    assert_eq!(code(high), NodeData::CondCode(CondCode::SetLt));
+    assert_eq!(dag.opcode(root), ISD::SetCCCarry);
+    let borrow = dag.operand(root, 2);
+    assert_eq!((dag.opcode(borrow), borrow.res), (ISD::USubO, 1));
+    assert_eq!(dag.node(dag.operand(root, 3)).data, NodeData::CondCode(CondCode::SetLt));
+}
+
+/// `a > b` is `b < a`: the operands swap.
+#[test]
+fn wide_greater_swaps_the_operands_of_the_carry_compare() {
+    let (dag, root) = legalized(|dag, a, b| dag.get_setcc(EVT::I8, a, b, CondCode::SetUGt));
+    assert_eq!(dag.opcode(root), ISD::SetCCCarry);
+    assert_eq!(dag.node(dag.operand(root, 3)).data, NodeData::CondCode(CondCode::SetULt));
 }
 
 /// A select of `i64`s is one select per half with the same condition.

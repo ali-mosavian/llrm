@@ -1283,3 +1283,38 @@ b1:
     );
     assert!(top.contains("call void @accel"), "accel was inlined for 2 bytes more:\n{top}");
 }
+
+/// The pin's `GlobalOpt` runs between IPSCCP and the walk (pass 20 of
+/// `default<O2>` on sum_three): a static a norecurse function writes before it
+/// reads is a register when the loop passes run. Ours split and localized after
+/// the walk, so `indvars` saw the memory (sum_three.bas kept the `sgt` exit
+/// test).
+#[test]
+fn test_module_ipo_makes_a_static_one_function_writes_first_a_stack_slot() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "@n = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %a) norecurse {
+b0:
+  store i16 %a, ptr @n
+  %x = load i16, ptr @n
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let body = text.split("define").nth(1).unwrap_or_default();
+    assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
+}
