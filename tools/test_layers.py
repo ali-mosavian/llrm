@@ -82,3 +82,20 @@ def test_no_new_upward_dependency_and_the_allow_list_only_shrinks():
     found = violations(workspace())
     assert not found - ALLOWED, f"new upward dependencies: {sorted(found - ALLOWED)}"
     assert not ALLOWED - found, f"no longer violations, remove from ALLOWED: {sorted(ALLOWED - found)}"
+
+
+def test_the_default_build_does_not_make_llrm_c():
+    """llrm-llc and llrm-cc are the C compiler; llrm-c builds only with feature c-legacy (and wccq, which brings it)."""
+    import tomllib
+
+    manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    features = manifest["features"]
+    wanted, seen = list(features["default"]), set()
+    while wanted:
+        name = wanted.pop()
+        if name not in seen:
+            seen.add(name)
+            wanted += [f for f in features.get(name, []) if "/" not in f and not f.startswith("dep:")]
+    assert "c-legacy" not in seen and "wccq" not in seen, seen
+    binary = next(b for b in manifest["bin"] if b["name"] == "llrm-c")
+    assert binary["required-features"] == ["c-legacy"]
