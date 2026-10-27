@@ -1,6 +1,6 @@
 //! A loop over arrays: LLVM bounds no trips by the object its accesses walk.
 
-use std::process::Command;
+mod common;
 
 /// `dot` walks `A[i][k]` and `B[k][j]` of two 12 x 12 arrays for a run-time
 /// `n`; `through` walks pointers of unknown extent.
@@ -28,7 +28,7 @@ fn multiplies(level: &str) -> (usize, usize) {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", level, "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

@@ -3,7 +3,7 @@
 //! bench/nbody_single.bas m16 -Os 4 -> 72 bytes. They are spill slots now,
 //! shared by `slots_colored` where their live ranges do not overlap.
 
-use std::process::Command;
+mod common;
 
 const ROUNDINGS: &str = "float g(double a, double b, double c) {
   float s = (float)(a * b);
@@ -18,7 +18,7 @@ const ROUNDINGS: &str = "float g(double a, double b, double c) {
 fn test_roundings_through_memory_share_one_slot() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("g.c"), ROUNDINGS).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i486", "-Os", "--isel=dag", "-S", "-o", "g.s", "g.c"])
         .output()

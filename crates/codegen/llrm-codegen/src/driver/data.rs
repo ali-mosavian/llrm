@@ -207,6 +207,52 @@ impl Placed {
     }
 }
 
+/// A module read from LLVM IR names no segments, so its data is all `_DATA`:
+/// the variables of zeros that `getKindForGlobal` makes BSS move to `_BSS` (the
+/// rest of `built` stays as assembled), with `BSSB` ahead of it where
+/// `bss_begin`. A constant of zeros stays where it is.
+pub fn zero_to_bss(
+    built: &mut masm::Module,
+    module: &Module,
+    data_space: u32,
+    bss_begin: bool,
+) {
+    let mut bss: Vec<masm::Datum> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Variable(variable) = &global.kind else { continue };
+        let id = GlobalId(at as u32);
+        if variable.initializer.is_none()
+            || variable.constant
+            || global.address_space != data_space
+            || !stored_zero(module, id, &built.names)
+        {
+            continue;
+        }
+        let Some(label) = built.names.get(&(Space::Segment, at as i64)).cloned() else { continue };
+        let items = &mut built.data[0].1;
+        let Some(first) = items.iter().position(|one| matches!(one, masm::Datum::Label(l) if l.name == label)) else {
+            continue;
+        };
+        let start = if first > 0 && matches!(items[first - 1], masm::Datum::Align(_)) { first - 1 } else { first };
+        let mut end = first + 1;
+        let mut size = 0;
+        while let Some(masm::Datum::Bytes(bytes)) = items.get(end) {
+            size += bytes.len();
+            end += 1;
+        }
+        let object: Vec<masm::Datum> = items.drain(start..end).collect();
+        bss.extend(object.into_iter().filter(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Label(_))));
+        bss.push(masm::Datum::Fill(masm::Fill { size: size as i64, byte: None }));
+    }
+    if bss.is_empty() {
+        return;
+    }
+    if bss_begin {
+        built.data.push(("BSSB".to_owned(), Vec::new()));
+    }
+    built.data.push(("_BSS".to_owned(), bss));
+}
+
 /// The alignment a variable is emitted at: `AsmPrinter::getGVAlignment` on the
 /// module's data layout, none where that is a byte. DEVIATE E1: MIR has no
 /// section attribute; a global the frontend placed in a named segment counts
