@@ -1,6 +1,7 @@
 """The per-merge tests of feat/parity: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -710,3 +711,24 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
     cause = ps.causes_of(failed)
     assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
+
+def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
+    """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
+    if shutil.which("perf") is None:
+        pytest.skip("no perf")
+    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
+    with ps.Meter() as counted:
+        code, _ = ps.run_cut([sys.executable, "-c", "while True: pass"], 1.0, tmp_path)
+    assert code is None
+    assert counted.value is not None and counted.value > 100_000_000, counted.value
+
+
+def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
+    """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
+    seen = []
+    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: seen.append(env) or (0, ""))
+    monkeypatch.setattr(ps, "selection", lambda: {"units": {"ranked": {"tests": [["t_a", 0.1]]}}})
+    monkeypatch.setattr(ps.xfail, "load_for", lambda root: {})
+    ps.unit_step("unranked", 5.0)(Path("."))
+    ps.unit_step("ranked", 5.0)(Path("."))
+    assert seen[0]["RUST_TEST_THREADS"] == "1" and seen[1] is None, seen

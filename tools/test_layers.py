@@ -91,6 +91,12 @@ def test_codegen_names_only_the_format_crates_that_are_not_a_targets():
     assert formats <= {"llrm-omf", "llrm-dwarf"}, sorted(formats)
 
 
+def test_a_frontend_crate_has_no_binary_of_its_own():
+    """qbfront was a second QB binary beside llrm-qb; frontends are libraries the root binaries link."""
+    for manifest in sorted((ROOT / "crates" / "frontends").glob("*/Cargo.toml")):
+        assert "[[bin]]" not in manifest.read_text(), manifest.relative_to(ROOT)
+
+
 def test_the_workspace_members_follow_the_layer_glob():
     """Members were `crates/*/llrm-*` plus three frontends and a runtime crate named one by one; a crate in a layer directory that matched none was silently outside the workspace."""
     import tomllib

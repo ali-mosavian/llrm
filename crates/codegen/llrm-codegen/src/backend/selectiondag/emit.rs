@@ -1596,8 +1596,15 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> bool {
         let ISD::Machine(op) = self.dag.opcode(value) else { return false };
-        instr::desc(op as u16)
-            .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
+        // The implicit results follow the explicit ones, in the order the
+        // description lists them: `MUL8r` has AX before EFLAGS, and AX is not
+        // flags.
+        instr::desc(op as u16).is_some_and(|d| {
+            usize::from(value.res)
+                .checked_sub(usize::from(d.num_defs))
+                .and_then(|implicit| d.implicit_defs.get(implicit))
+                .is_some_and(|def| *def == 28)
+        })
     }
 
     /// A word argument is required in the word register: the DAG names the
