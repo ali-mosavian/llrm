@@ -148,3 +148,66 @@ fn a_compare_of_a_value_with_itself_or_a_nan_folds() {
     check("  %r = fcmp ult float 0x7FF8000000000000, %x\n", Some("Int(1)"));
     check("  %r = fcmp olt float 1.0, %x\n", None);
 }
+
+/// What InstSimplify makes of `%r` in an `x86_fp80` function: the constant's
+/// kind, or none.
+fn extended(body: &str) -> Option<ConstantKind> {
+    let text = format!("define x86_fp80 @f(x86_fp80 %x) {{\nb0:\n{body}  ret x86_fp80 %x\n}}\n");
+    let mut module: Module = parse::module(&text).unwrap_or_else(|why| panic!("{why:?}\n{text}"));
+    let id = module.named("f").expect("@f");
+    let crate::module::GlobalKind::Function(function) = &module.globals[id.0 as usize].kind else {
+        panic!("a function")
+    };
+    let function = function.clone();
+    let inst = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| function.instruction(inst).result.is_some_and(|r| function.value(r).name.as_deref() == Some("r")))
+        .expect("%r");
+    let found = crate::simplify::simplify_instruction_in(
+        &mut module.context,
+        &module.globals,
+        &crate::datalayout::DataLayout::default(),
+        None,
+        &function,
+        inst,
+    )?;
+    match found {
+        Operand::Constant(id) => Some(module.context.get(id).kind.clone()),
+        _ => None,
+    }
+}
+
+/// 0.00005 times 10000 is 0.5 + 2.4e-17: 442 steps of 2^-64 above the tie
+/// with a 64-bit significand, exactly 0.5 with a double's. An `x86_fp80`
+/// product was left to run, and `fist` of the double product is 0 where BC
+/// prints .0001 (`currency_tie_pds71`). The fold keeps the 64 bits, and a
+/// value no double holds is a `Float80`.
+#[test]
+fn an_x87_product_keeps_its_64_bit_significand() {
+    let Some(ConstantKind::Float80(bits)) = extended("  %r = fmul x86_fp80 5.0e-05, 1.0e+04\n") else {
+        panic!("a value no double holds")
+    };
+    let half = 0x3ffe_8000_0000_0000_0000_u128;
+    assert!(bits > half && bits < half + 1000, "{bits:#x}");
+}
+
+/// A sum a double holds is the double: one value, one constant.
+#[test]
+fn an_x87_sum_a_double_holds_is_that_double() {
+    assert_eq!(extended("  %r = fadd x86_fp80 1.5, 2.5\n"), Some(ConstantKind::Float(4.0f64.to_bits())));
+}
+
+/// `0xK` text parses to the 80 bits it prints from, and to the double's kind
+/// when a double holds the value: printing a `Float80` gave text the parser
+/// refused.
+#[test]
+fn an_x87_literal_round_trips() {
+    let half_plus = "0xK3FFE8000000000000010";
+    let text = format!(
+        "define x86_fp80 @f(x86_fp80 %x) {{\nb0:\n  %r = fadd x86_fp80 {half_plus}, 0.0\n  ret x86_fp80 %x\n}}\n"
+    );
+    let module: Module = parse::module(&text).unwrap_or_else(|why| panic!("{why:?}"));
+    assert!(crate::print::module(&module).contains(half_plus));
+    assert!(parse::module(&text.replace(half_plus, "0xK3FFF8000000000000000")).is_ok());
+}

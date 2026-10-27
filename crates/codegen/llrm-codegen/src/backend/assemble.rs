@@ -999,8 +999,20 @@ fn staged(
             )
         })
     };
-    let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing } =
-        selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected {
+        body,
+        convention,
+        calls,
+        inline,
+        inline_places,
+        inline_symbols,
+        far,
+        pops,
+        depth,
+        extents,
+        temporaries,
+        landing,
+    } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     registers.align = target.facts.stack_alignment(target.arch, name);
@@ -1059,6 +1071,18 @@ fn staged(
     frame.hole = hole;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
+    // DEVIATE D14: the pin gives each rounding store and reload its own
+    // `CreateStackTemporary` and no lifetime marker, so neither StackColoring
+    // nor StackSlotColoring shares them; here they are spill slots, which
+    // `slots_colored` shares.
+    if temporaries > 0 && frame.native.is_none() {
+        frame.floor = -depth;
+    }
+    for (at, (disp, size)) in frame.extents.split_off(frame.extents.len() - temporaries).into_iter().enumerate() {
+        frame.slots.insert(frame::SlotKey::Named("temporary".to_owned(), at as i64), disp);
+        frame.scratch.insert(disp);
+        frame.capacities.insert(disp, size.max(frame::WORD));
+    }
     Ok(Staged {
         body,
         frame,
