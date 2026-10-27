@@ -33,3 +33,14 @@ def test_a_row_with_no_rule_is_open_and_rests_on_no_oracle():
     rules = [{"match": "lru/*", "status": "cause known", "oracle": "m32 llc"}]
     assert burndown.status_of("lru/lru.c", rules) == ("cause known", "m32 llc")
     assert burndown.status_of("sieve/sieve.c", rules) == ("open", "none")
+
+
+def test_the_mode_defaults_to_fast_and_the_board_refuses_another_spelling():
+    """SIZES_EXCESS unset gave main SINGLE as fast and the tip as standard: fpbench read 126 B of growth, 74 B of it the deliberate rounding."""
+    import pytest
+
+    burndown = load()
+    assert burndown.excess_mode({}) == "fast"
+    assert burndown.excess_mode({"SIZES_EXCESS": "standard"}) == "standard"
+    with pytest.raises(SystemExit):
+        burndown.excess_mode({"SIZES_EXCESS": "strict"})

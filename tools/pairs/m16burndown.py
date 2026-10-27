@@ -42,6 +42,15 @@ def tag_of(name: str, rules: list[dict]) -> tuple[str, str]:
     return "untriaged", "unassigned"
 
 
+def excess_mode(environ: dict) -> str:
+    """The `-fexcess-precision=` both dists build BASIC SINGLE with: $SIZES_EXCESS, else fast (main's own), and nothing else. sizes.py gives the one value to
+    both sides; main compiled SINGLE as fast and the tip as standard when it was unset, so the board read the deliberate rounding as growth."""
+    mode = environ.get("SIZES_EXCESS") or "fast"
+    if mode not in ("fast", "standard"):
+        raise SystemExit(f"SIZES_EXCESS={mode!r}: the board compares both sides in one mode, fast or standard")
+    return mode
+
+
 def status_of(name: str, rules: list[dict]) -> tuple[str, str]:
     """(status, oracle) of the first rule matching `name`: status is open, cause known, pin-faithful or DEVIATE; oracle is what the verdict rests on
     (m32 llc, pin opt, or none). The pin's llc at code16 takes 32-bit pointers, so it is no 16-bit oracle: a verdict from it says `none`."""
@@ -140,8 +149,13 @@ def main() -> None:
     parser.add_argument("--clocks", action="store_true")
     parser.add_argument("--bench", nargs=2, type=Path, metavar=("BASE_JSON", "NEW_JSON"))
     args = parser.parse_args()
+    os.environ["SIZES_EXCESS"] = mode = excess_mode(os.environ)
     sizes = m16os.sizes_module()
     base, new = sizes.table(args.base, args.level, demos=False), sizes.table(args.new, args.level, demos=False)
+    # The deliberate rounding: the new dist's BASIC programs at the other mode, a column of its own.
+    os.environ["SIZES_EXCESS"] = "standard" if mode == "fast" else "fast"
+    other = {n: v for n, v in sizes.table(args.new, args.level, demos=False).items() if n.endswith(".bas")}
+    os.environ["SIZES_EXCESS"] = mode
     both = [n for n in base if base[n] and new.get(n)]
     before = after = {}
     if args.bench:
@@ -177,7 +191,7 @@ def main() -> None:
         return cause, owner
 
     rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *classified(n), *status_of(n, rules)) for n in grew]
-    excess = os.environ.get("SIZES_EXCESS") or "unset: main compiles SINGLE as fast and the tip as standard, so the BASIC SINGLE rows read the deliberate rounding as growth (fpbench 126 B -> 74 B set to fast)"
+    excess = f"{mode} on both sides (the rounding column is the new dist at {'standard' if mode == 'fast' else 'fast'}, BASIC only)"
     out = [f"# m16 {args.level} burn-down", "", f"base {m16os.identify(args.base)}", f"new  {m16os.identify(args.new)}", f"SIZES_EXCESS {excess}", f"sources: this checkout at {source_state()}; the set is tools/sizes.py's programs, demos left out, {len(base)} programs",
            f"compared {len(both)}; base cannot compile {len(base) - sum(map(bool, base.values()))}, new cannot compile {len(new) - sum(map(bool, new.values()))}",
            f"TOTAL {sum(base[n] for n in both)} -> {sum(new[n] for n in both)} B ({sum(new[n] - base[n] for n in both):+}); {len(grew)} programs grew, {sum(new[n] < base[n] for n in both)} shrank, {sum(new[n] == base[n] for n in both)} same",
@@ -206,8 +220,9 @@ def main() -> None:
         grown = [n for n in names if new[n] > base[n]]
         out.append(f"| {language} | {len(names)} | {sum(base[n] for n in names)} | {sum(new[n] for n in names)} | {sum(new[n] - base[n] for n in names):+} | {len(grown)} | {sum(new[n] - base[n] for n in grown)} |")
     out.append("")
-    out += ["## growers", "", "| program | main | tip | delta | clocks tip/main | cause | owner | status | oracle |", "|---|--:|--:|--:|--:|---|---|---|---|"]
-    out += [f"| {n} | {a} | {b} | {d:+} | {c} | {cause} | {owner} | {status} | {oracle} |" for n, a, b, d, c, cause, owner, status, oracle in rows]
+    out += ["## growers", "", "| program | main | tip | delta | rounding | clocks tip/main | cause | owner | status | oracle |", "|---|--:|--:|--:|--:|--:|---|---|---|---|"]
+    rounding = lambda n, b: f"{other[n] - b:+}" if other.get(n) else "-"
+    out += [f"| {n} | {a} | {b} | {d:+} | {rounding(n, b)} | {c} | {cause} | {owner} | {status} | {oracle} |" for n, a, b, d, c, cause, owner, status, oracle in rows]
     out += ["", f"## ten biggest growers", ""] + [f"- {n} {d:+} B, {owner}, {status}" for n, _, _, d, _, _, owner, status, _ in sorted(rows, key=lambda r: -r[3])[:10]]
     args.out.write_text("\n".join(out) + "\n")
     print("\n".join(out[:12]))
