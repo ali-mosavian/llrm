@@ -481,3 +481,35 @@ fn a_doubling_and_a_masked_value_are_compared_by_sign_and_zero() {
         "  %0 = icmp ne i32 %l, 0\n  ret i1 %0\n",
     );
 }
+
+/// `foldICmpAndXX`: `x & y` against `x` is an equality, or an unsigned compare
+/// when the signs are known (`opt`: `icmp ne i32 %a, %x`, `icmp slt i32 %x,
+/// 0`).
+#[test]
+fn an_and_compared_with_its_operand_is_an_equality_or_a_sign_test() {
+    check(
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
+        "  %a = and i32 %x, %y\n  %0 = icmp ne i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y",
+        "  %a = and i32 %y, %x\n  %r = icmp ule i32 %x, %a\n  ret i1 %r\n",
+        "  %a = and i32 %y, %x\n  %0 = icmp eq i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = or i32 %y0, -2147483648\n  %a = and i32 %x, %y\n  %r = icmp slt i32 %a, %x\n  ret i1 %r\n",
+        "  %y = or i32 %y0, -2147483648\n  %a = and i32 %x, %y\n  %0 = icmp ne i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = and i32 %y0, 2147483647\n  %a = and i32 %x, %y\n  %r = icmp sgt i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x0, i32 %y",
+        "  %x = or i32 %x0, -2147483648\n  %a = and i32 %x, %y\n  %r = icmp sle i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %y, 0\n  ret i1 %0\n",
+    );
+}

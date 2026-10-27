@@ -413,9 +413,64 @@ pub fn fold_icmp_bin_op(
     if let Some(r) = fold_doubling(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: foldMultiplicationOverflowCheck, foldICmpAndXX,
-    // foldICmpWithTruncSignExtendedVal and
+    // OWED: foldMultiplicationOverflowCheck.
+    if let Some(r) = fold_icmp_and_xx(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    // OWED: foldICmpWithTruncSignExtendedVal and
     // foldShiftIntoShiftInAnotherHandOfAndInICmp.
+    None
+}
+
+/// `foldICmpAndXX`: a compare of `X & A` with `X`. OWED: its two equality
+/// forms, which need `getFreelyInverted`.
+fn fold_icmp_and_xx(
+    c: &mut Combiner,
+    inst: InstId,
+    mut pred: IntPredicate,
+    mut op0: Operand,
+    mut op1: Operand,
+) -> Option<Visit> {
+    // Normalize and operand as operand 0.
+    if commutative_with_specific(c, inst, op1, BinaryOp::And, op0).is_some() {
+        std::mem::swap(&mut op0, &mut op1);
+        pred = swapped(pred);
+    }
+    let a = commutative_with_specific(c, inst, op0, BinaryOp::And, op1)?;
+
+    // (icmp (X & Y) u< X --> (X & Y) != X
+    if pred == IntPredicate::Ult {
+        return Some(new_icmp(c, inst, IntPredicate::Ne, op0, op1));
+    }
+    // (icmp (X & Y) u>= X --> (X & Y) == X
+    if pred == IntPredicate::Uge {
+        return Some(new_icmp(c, inst, IntPredicate::Eq, op0, op1));
+    }
+    if !is_signed(pred) {
+        return None;
+    }
+    let q = query(c, Some(inst));
+    let known_y = known::compute_known_bits(&q, a, 0);
+    // (X & NegY) spred X --> (X & NegY) upred X
+    if known_y.is_negative() {
+        return Some(new_icmp(c, inst, flipped_signedness(pred), op0, op1));
+    }
+    if pred != IntPredicate::Sle && pred != IntPredicate::Sgt {
+        return None;
+    }
+    let ty = c.type_of(op1);
+    if known_y.is_non_negative() {
+        // (X & PosY) s<= X --> X s>= 0
+        // (X & PosY) s> X --> X s< 0
+        let zero = c.int(ty, 0);
+        return Some(new_icmp(c, inst, swapped(pred), op1, zero));
+    }
+    if known::is_known_negative(&q, op1, 0) {
+        // (NegX & Y) s<= NegX --> Y s< 0
+        // (NegX & Y) s> NegX --> Y s>= 0
+        let zero = c.int(c.type_of(a), 0);
+        return Some(new_icmp(c, inst, flipped_strictness(pred), a, zero));
+    }
     None
 }
 
