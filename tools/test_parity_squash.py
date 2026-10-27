@@ -1330,3 +1330,11 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def test_a_rate_limited_squash_does_not_hold_the_pr_at_its_head(tmp_path):
+    """A 403 'API rate limit exceeded' at the squash read as the PR's own refusal and held it until its head changed: GitHub's quota, not the PR, cost the landing."""
+    state = tmp_path / "held.state"
+    reason = "the squash was refused by GitHub: GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)"
+    assert ps.hold_own_refusals(["5290"], {"5290": reason}, {"5290": "abc123"}, state) == []
+    assert not state.exists()

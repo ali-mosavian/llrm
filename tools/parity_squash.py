@@ -650,14 +650,14 @@ def refusal_line(number: str, named: dict[str, str], failed_build: list[str], fa
 HELD_STATE = Path(os.environ.get("LAND_TMP") or "/tmp/landing") / "held.state"  # `<PR> <head sha>` per line: the queue skips a PR at a head that was refused for itself
 
 
-GITHUB_TRANSIENT = ("Something went wrong", "502 Bad Gateway", "503 Service", "504 Gateway", "timed out")  # GitHub's side, not the PR's: #5039, 2026-10-27 00:14
+GITHUB_TRANSIENT = ("Something went wrong", "502 Bad Gateway", "API rate limit exceeded", "503 Service", "504 Gateway", "timed out")  # GitHub's side, not the PR's: #5039, 2026-10-27 00:14
 
 
 def own_refusal(reason: str) -> bool:
     """Whether a refusal is the PR's own (its build, a test it fails alone on the head, its docs or format), which the same head will meet again, and not the batch's or the
     head's (a conflict, a stale merge base, GitHub's "head modified", a rescan after another PR was dropped), which a retry may clear."""
     return bool(reason) and not any(
-        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "Something went wrong", "the batch dropped", "waits.txt")
+        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "Something went wrong", "API rate limit exceeded", "the batch dropped", "waits.txt")
     )
 
 
