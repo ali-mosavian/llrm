@@ -2,6 +2,8 @@
 //! program's, and gdb, driven by a script, stops where it is told in a linked
 //! and running program and reads its values.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,10 +38,6 @@ fn wdump() -> Option<PathBuf> {
         .filter(|path| path.exists())
 }
 
-fn llrm_c() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
-}
-
 fn tool(name: &str) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> =
         std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
@@ -56,7 +54,7 @@ fn compile(
     arguments: &[&str],
     out: &Path,
 ) -> std::process::Output {
-    Command::new(llrm_c()).args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
+    common::cc::llrm_c().args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
 }
 
 fn bench_programs() -> Vec<PathBuf> {
@@ -962,7 +960,16 @@ fn a_value_in_two_registers_is_said_as_two_pieces() {
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
     let wide = text.split("DW_AT_name\t(\"wide\")").nth(1).expect("wide is described");
     let wide = wide.split("DW_TAG_").next().unwrap();
-    assert!(wide.contains("DW_OP_piece 0x4") && wide.matches("DW_OP_piece").count() == 2, "{wide}");
+    // The pair may move registers, so there can be several ranges: each is two
+    // pieces of four bytes.
+    let ranges: Vec<&str> = wide.lines().filter(|line| line.contains("DW_OP_")).collect();
+    assert!(
+        !ranges.is_empty()
+            && ranges
+                .iter()
+                .all(|line| line.matches("DW_OP_piece 0x4").count() == 2 && line.matches("DW_OP_piece").count() == 2),
+        "{wide}"
+    );
 }
 
 /// Nib's DWARF in OMF, linked by jwlink, read back: the 32-bit LE image's DWARF

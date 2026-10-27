@@ -286,3 +286,29 @@ fn test_a_constant_gep_is_an_offset_of_its_base() {
     let line = printed.lines().find(|l| l.starts_with("%p")).expect("%p is printed");
     assert!(line.contains("6 + %x + @g"), "{printed}");
 }
+
+/// A pointer IV cast to an address was an unknown, so LSR of x_strlen kept the
+/// pointer recurrence (`mov edx,eax; lea eax,[edx+1]`) where the pin reduced
+/// the address to an index.
+#[test]
+fn test_the_address_of_a_pointer_recurrence_is_a_recurrence() {
+    let text = "target datalayout = \"e-p:32:32-i32:32\"\n\
+        @buf = global [16 x i8] zeroinitializer\n\
+        define i32 @f() {\n\
+        entry:\n\
+          br label %loop\n\
+        loop:\n\
+          %p = phi ptr [ @buf, %entry ], [ %n, %loop ]\n\
+          %a = ptrtoint ptr %p to i32\n\
+          %n = getelementptr inbounds i8, ptr %p, i32 1\n\
+          %c = load i8, ptr %p\n\
+          %z = icmp eq i8 %c, 0\n\
+          br i1 %z, label %out, label %loop\n\
+        out:\n\
+          ret i32 %a\n\
+        }\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let line = printed.lines().find(|l| l.contains("%a")).expect("%a is printed");
+    assert!(line.contains(",+,"), "{printed}");
+}

@@ -38,7 +38,7 @@ pub(super) fn names(text: &str) -> Result<Vec<String>, String> {
         .collect())
 }
 
-pub(super) const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+pub(super) const M16_STACK_ARGS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare i16 @g(i16, i16)
 define i16 @f(i16 %a) {
 entry:
@@ -47,7 +47,7 @@ entry:
 }
 ";
 
-pub(super) const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+pub(super) const FAR_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @far() addrspace(1)
 declare void @near()
 define void @f() {
@@ -58,7 +58,8 @@ entry:
 }
 ";
 
-pub(super) const QB_STRING_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+pub(super) const QB_STRING_COMPARE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 i16 @f(ptr %a, ptr %b) addrspace(1) {
 entry:
   %r = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
@@ -114,6 +115,7 @@ pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
+        frame_zeroed: false,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     super::dag_function::selected_in_pool(
@@ -387,7 +389,7 @@ fn a_load_read_by_a_compare_is_folded_into_it() {
     assert!(compare.sources.iter().any(|l| matches!(l, Loc::Mem(_))), "{compare:?}");
 }
 
-const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_MINUS_ONE_TWICE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global i16 0
 @b = global i16 0
 define void @f() {
@@ -451,7 +453,7 @@ fn the_low_bit_of_an_argument_is_tested_in_memory() {
     assert_eq!(reads, [1], "one byte read of the argument, no dword: {reads:?}");
 }
 
-const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @slot = global i16 0
 declare cc 1005 i16 @c(i16)
 declare cc 1005 void @u(i16)
@@ -484,7 +486,8 @@ fn a_word_zero_extended_from_a_byte_is_a_word_value() {
     assert!(matches!(extend.dests.as_slice(), [Loc::Held(h)] if h.width == 2), "{extend:?}");
 }
 
-const DWORD_AND_WORD_FROM_COMPARE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const DWORD_AND_WORD_FROM_COMPARE: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @word = global i16 0
 @dword = global i32 0
 declare cc 1005 i16 @c(i16)
@@ -768,7 +771,7 @@ define i8 @f(i8 %a) {
     selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const COPY_4000_BYTES: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const COPY_4000_BYTES: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [2000 x i16] zeroinitializer, align 2
 @b = global [2000 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
@@ -795,7 +798,7 @@ fn a_big_copy_without_a_memcpy_routine_moves_dwords() {
 #[test]
 fn a_big_copy_to_a_far_pointer_still_selects() {
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
 define void @f(ptr addrspace(1) %d) {
@@ -815,7 +818,7 @@ define void @f(ptr addrspace(1) %d) {
 #[test]
 fn a_copy_of_a_variable_size_moves_dwords_and_then_bytes() {
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [100 x i16] zeroinitializer, align 2
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
@@ -841,7 +844,7 @@ define void @f(i16 %n) {
 fn a_copy_out_of_a_global_reads_through_ds() {
     use crate::model::ir::Loc;
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @a = global [100 x i16] zeroinitializer, align 2
 @b = global [100 x i16] zeroinitializer, align 2
 declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
