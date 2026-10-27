@@ -1756,6 +1756,19 @@ pub fn audited_pop(
     pops.iter().find(|(one, _)| *one == name).map(|&(_, bytes)| bytes)
 }
 
+/// The evidence for a call of `name` that pushes `pushed` bytes, where
+/// runtime.toml's `[[pop]]` states that block: the routine's text, `{name}`
+/// filled in.
+pub fn audited_pop_note(
+    name: &str,
+    pushed: i64,
+) -> Option<String> {
+    POP_NOTES
+        .iter()
+        .find(|(names, bytes, _)| *bytes == pushed && names.contains(&name))
+        .map(|(_, _, text)| text.replace("{name}", name))
+}
+
 /// The runtime entries whose row says `captures = "NONE"`: they keep no
 /// pointer argument past their return.
 /// The routines whose result is the flags.
@@ -1981,6 +1994,16 @@ mod tests {
         assert_eq!(audited_pop("statement", "B$OPEN"), Some(8));
         assert_eq!(audited_pop("statement", "B$BEEP"), Some(0));
         assert_eq!(audited_pop("nothing", "B$ASSN"), None);
+    }
+
+    /// The blocks were `if` arms in abi/qb.rs; the texts and `{name}` must
+    /// survive.
+    #[test]
+    fn test_the_fixed_stack_blocks_come_from_the_toml() {
+        assert!(audited_pop_note("B$SMID", 12).expect("a block").starts_with("QB45 rt/mid.asm declares one dword"));
+        assert!(audited_pop_note("B$STRS", 4).expect("a block").contains("B$STRS"));
+        assert_eq!(audited_pop_note("B$SMID", 10), None);
+        assert_eq!(audited_pop_note("B$NOPE", 4), None);
     }
 
     #[test]
