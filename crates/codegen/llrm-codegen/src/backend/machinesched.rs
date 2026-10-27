@@ -616,8 +616,7 @@ fn constrain_local_copy(
 /// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
 /// a line-by-line reading against `llc -debug-only=machine-scheduler`.
 fn trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_MS_TRACE").is_some())
+    llrm_support::env_flag!("LLRM_MS_TRACE")
 }
 
 /// What the tracker needs to follow a region's pressure bottom-up.
@@ -938,12 +937,8 @@ pub fn scheduled(
                     copy_constrain(slice, &mut deps, &|value| now.contains(&value));
                     let order = bottom_up(slice, &deps, tracking.as_ref());
                     if order.iter().enumerate().any(|(place, &node)| place != node) {
-                        let mut ats: Vec<i64> = slice.iter().map(|one| one.at).collect();
-                        ats.sort_unstable();
                         for (place, &node) in order.iter().enumerate() {
-                            let mut moved = (*slice[node]).clone();
-                            moved.at = ats[place];
-                            out[region.start + place] = Arc::new(moved);
+                            out[region.start + place] = Arc::clone(&slice[node]);
                         }
                         changed = true;
                     }
@@ -1147,6 +1142,41 @@ mod tests {
             .flat_map(|one| one.defines.clone())
             .collect();
         assert_eq!(kept, [1, 2, 3, 4, 5, 6]);
+    }
+
+    /// A scheduled instruction took the `at` of the place it moved to, but an
+    /// `at` names the instruction: the optimizer's `spares` pairs, and the
+    /// compare a branch reads, find theirs by it. After a region is ordered
+    /// each instruction still has its own.
+    #[test]
+    fn test_a_moved_instruction_keeps_its_at() {
+        use super::scheduled;
+        use crate::model::lir::{LirBlock, LirBody};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(1)], vec![imm(11)]), vec![1], vec![]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(2)], vec![imm(12)]), vec![2], vec![]),
+            insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![imm(13)]), vec![3], vec![]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(4)], vec![held(1), held(2)]), vec![4], vec![1, 2]),
+            insn(4, semantics(Operation::Binary, "add", vec![held(5)], vec![held(4), held(3)]), vec![5], vec![4, 3]),
+            insn(5, semantics(Operation::Binary, "add", vec![held(6)], vec![held(5), imm(1)]), vec![6], vec![5]),
+        ];
+        insns.push(insn(6, semantics(Operation::Return, "ret", vec![], vec![held(6)]), vec![], vec![6]));
+        let mut body = LirBody::new(
+            "kept",
+            0,
+            vec![LirBlock::new(0, insns).into()],
+            crate::support::hash::IndexMap::default(),
+            crate::support::hash::IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let after = scheduled(&body, 2, |_, _| one_set(2));
+        let order: Vec<u32> = after.blocks[0].insns.iter().flat_map(|one| one.defines.clone()).collect();
+        assert_ne!(order, [1, 2, 3, 4, 5, 6], "the load of 3 moved");
+        for one in after.blocks[0].insns.iter() {
+            let first = one.defines.first().copied().unwrap_or(7);
+            assert_eq!(one.at, i64::from(first) - 1, "the instruction defining {first} kept its at");
+        }
     }
 
     /// A load was held back four cycles above its reader (the unbuffered

@@ -2,7 +2,7 @@
 """One-off differential fuzzing of the arm64 backend (not part of any suite): random C
 programs over the integer and floating types, built by this compiler (from the pinned
 clang's un-optimized IR) and by the pinned `clang -O2`, run under qemu-aarch64, and
-compared. Usage: tools/arm64_fuzz.py [programs] [seed]. A difference leaves the program
+compared. Usage: tools/targets/arm64_fuzz.py [programs] [seed]. A difference leaves the program
 in the scratch directory it prints, to be reduced into a test."""
 import os
 import random
@@ -11,7 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "crates/target/llrm-arm64"
 BUILD = Path(os.environ.get("LLVM_BUILD", Path.home() / "scratch/llvm-build-aarch64"))
 CLANG, LLD = BUILD / "bin/clang", BUILD / "bin/ld.lld"

@@ -100,6 +100,7 @@ fn context_in(
         block_at: &no_blocks,
         frame: &NoFrame,
         address_mode: mode,
+        opt_size: false,
         call_alignment: 1,
         map: &map,
         names: &names,
