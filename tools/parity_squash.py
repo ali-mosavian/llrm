@@ -1246,6 +1246,37 @@ def docs_stale(root: Path) -> set[str]:
     return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
 
 
+def crash_line(number: str, error: BaseException) -> str:
+    """`#N: REFUSED: the batch crashed: <exception>`: a TypeError in docs_gated (05:18) left 13 PRs refused with an empty reason, the traceback on a line no summary carries."""
+    return f"#{number}: REFUSED: the batch crashed (a tool fault, not this PR): {type(error).__name__}: {' '.join(str(error).split())[:200]}"
+
+
+def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, set[str]]:
+    """(why, stale now): a refusal naming the pages `root` has out of date that `before` did not. #5031, #5049 and #4988 each changed a `//!` header, passed alone and landed
+    with six pages stale: the head's red docs_in_sync was excused, so the batch never saw a new one."""
+    now = docs(root)
+    new = sorted(now - before)
+    return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
+
+
+def docs_gated(merge_one, docs_before: set[str], root: Path = ROOT, docs=docs_stale):
+    """`merge_one` that also refuses, and resets `root` to where it was, a merge that leaves a generated page stale that was not stale before it."""
+    state = [docs_before]
+
+    def gated(number: str) -> str:
+        before = git("rev-parse", "HEAD", cwd=root).strip()
+        if why := merge_one(number):
+            return why
+        why, now = docs_refusal(state[0], root, docs)
+        if why:
+            git("reset", "-q", "--hard", before, cwd=root)
+            return why
+        state[0] = now
+        return ""
+
+    return gated
+
+
 def _alone_base_docs(base: str, target: Path | None) -> set[str]:
     work = (target or Path(tempfile.mkdtemp(prefix="alone-base-"))) / "base"
     _alone_checkout(work, base)
@@ -1424,7 +1455,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
-        kept, out = fast_merge(group, merge_one)
+        kept, out = fast_merge(group, docs_gated(merge_one, docs_stale(ROOT)))
         left_out.update(out)
         for number, why in out.items():
             print(f"#{number}: left out: {why}")
@@ -2011,7 +2042,12 @@ def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]
-        return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+        try:
+            return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+        except Exception as error:
+            for number in numbers:
+                print(crash_line(number, error))
+            raise
     if len(sys.argv) >= 2 and sys.argv[1] == "audit":
         since = sys.argv[2] if len(sys.argv) > 2 else "96468410e"
         rows = audit(since)

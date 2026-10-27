@@ -638,6 +638,11 @@ impl Function {
         self.instructions.len()
     }
 
+    /// How many instructions the function holds room for before it grows.
+    pub fn instruction_capacity(&self) -> usize {
+        self.instructions.capacity()
+    }
+
     /// The instructions in the layout (`Function::getInstructionCount`): the
     /// erased and unplaced are not counted.
     pub fn live_instructions(&self) -> usize {
