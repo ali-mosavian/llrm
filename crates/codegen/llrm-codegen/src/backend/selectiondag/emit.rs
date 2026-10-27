@@ -440,11 +440,68 @@ pub fn emit_in(
     if ctx.address_mode == AddrMode::Real16 {
         sunk_areas(&mut blocks, ctx.stack_pointer);
         based_areas(&mut blocks, ctx.stack_pointer, emitter.state, &mut emitter.classes);
+        let mut reads: HashMap<u32, usize> = HashMap::default();
+        for insn in blocks.iter().flat_map(|block| &block.insns) {
+            for value in &insn.uses {
+                *reads.entry(*value).or_default() += 1;
+            }
+        }
         for block in &mut blocks {
-            pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
+            pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes, &reads)?;
         }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
+}
+
+/// A push of a register whose only use it is, and which a `mov` of an
+/// immediate made (a constant, or the segment of a global), pushes the
+/// immediate: `X86CallFrameOptimization::canFoldIntoRegPush`'s
+/// `MOV32ri` with one use. `reads` counts the uses of each value over the
+/// whole DAG; a virtual register of the function is read by other DAGs too.
+fn fold_immediate_pushes(
+    insns: &mut Vec<Arc<Insn>>,
+    reads: &HashMap<u32, usize>,
+    state: &EmitState,
+) {
+    let mut at = 0;
+    while at < insns.len() {
+        let pushed = insns[at]
+            .what
+            .as_ref()
+            .filter(|what| what.op == Operation::Push)
+            .and_then(
+                |what| match what.sources.first() {
+                    Some(Loc::Held(held)) => Some(held.value),
+                    _ => None,
+                },
+            );
+        let Some(value) = pushed else {
+            at += 1;
+            continue;
+        };
+        let reads = if state.vregs.values().any(|v| *v == value) { 0 } else { reads.get(&value).copied().unwrap_or(0) };
+        let made = insns.iter().position(|insn| insn.defines == [value]);
+        let immediate = made.and_then(|place| {
+            let what = insns[place].what.as_ref()?;
+            match (&what.op, &what.dests[..], &what.sources[..]) {
+                (Operation::Move, [Loc::Held(_)], [Loc::Imm(imm)]) => Some(imm.clone()),
+                _ => None,
+            }
+        });
+        let (Some(place), Some(imm), 1) = (made, immediate, reads) else {
+            at += 1;
+            continue;
+        };
+        let old = insns[at].clone();
+        let mut what = old.what.clone().expect("a push");
+        what.sources[0] = Loc::Imm(imm);
+        insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()));
+        insns.remove(place);
+        if place < at {
+            at -= 1;
+        }
+        at += 1;
+    }
 }
 
 /// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
@@ -463,6 +520,7 @@ fn pushed_arguments(
     sp: llrm_lir::registers::RegId,
     state: &mut EmitState,
     classes: &mut Vec<(u32, &'static str)>,
+    reads: &HashMap<u32, usize>,
 ) -> Result<(), EmitError> {
     let through_sp =
         |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
@@ -585,6 +643,7 @@ fn pushed_arguments(
             }
         }
         *insns = rebuilt;
+        fold_immediate_pushes(insns, reads, state);
         // Back to the start: indices moved.
         at = 0;
         while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
