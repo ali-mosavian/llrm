@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peepholeopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peepholeopt.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/peepholeopt.rs sha256:a09eec762e61c4698170c71e3fde192f098a35f8ff98d709d1d4a24932ed268f -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/peepholeopt.rs sha256:b66f20e8eb3a741e01b4b30c7e18a45a0a3a14445c918e54cc6417e3cb7ce690 -->
 
 # peepholeopt
 
@@ -40,11 +40,13 @@ the instruction sets as a compare of zero does: ZF always, SF unless
 `NoSignFlag`, OF only where the instruction clears it (`and`, `or`, `xor`);
 never CF. The flags must not live out of the block.
 
-Not translated: a compare redundant with another compare or subtract
-(`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`), `isUseDefConvertible`
+The scan back for that instruction continues in a block's only predecessor.
+
+Not translated: a compare redundant with another compare or subtract of
+other operands (`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`; the same
+operands are `MachineCSE`'s), `isUseDefConvertible`
 (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
-the flag source, the backward scan into a single predecessor, `MOV32r0`
-motion and the NF variants (APX).
+the flag source, `MOV32r0` motion and the NF variants (APX).
 
 ## Example
 A subtract whose result nothing reads, ahead of a branch on the flags:
