@@ -822,7 +822,7 @@ fn stdcall_is_refused_by_name() {
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
 fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 define i16 @f(i16 %x) {\n  %d = sdiv i16 %x, 7\n  ret i16 %d\n}\n\
                 define i16 @main() {\n  ret i16 0\n}\n";
@@ -839,7 +839,7 @@ fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
 /// whose address is taken stays far.
 #[test]
 fn a_static_function_is_entered_by_a_near_call() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @keep = global ptr addrspace(1) @taken\n\
                 define internal i16 @h(i16 %x) addrspace(1) {\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n\
