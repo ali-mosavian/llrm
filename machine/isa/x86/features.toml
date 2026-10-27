@@ -1,0 +1,55 @@
+# The x86 feature catalog. A bundle (`i486.toml`, ...) names features from here.
+#
+# `enables`: instructions the feature makes legal. `requires`: features that must be on too.
+# `selects`: a strategy it switches on. `os_enables`: usable only if the platform allows it.
+
+[x87]
+enables = ["fld", "fst", "fadd", "fmul", "fdiv"]
+
+[bswap]
+enables = ["bswap"]
+
+[cmpxchg]
+enables = ["cmpxchg"]
+
+[xadd]
+enables = ["xadd"]
+
+[cx8]
+enables = ["cmpxchg8b"]
+requires = ["cmpxchg"]
+
+[tsc]
+enables = ["rdtsc"]
+
+[cmov]
+enables = ["cmov"]
+
+[fcmov]
+enables = ["fcmov"]
+requires = ["x87", "cmov"]
+
+[fcomi]
+enables = ["fcomi"]
+requires = ["x87"]
+
+[nopl]
+enables = ["nopl"]
+
+[mmx]
+enables = ["mmx"]
+
+[fxsr]
+enables = ["fxsave", "fxrstor"]
+
+[sse]
+enables = ["sse"]
+requires = ["fxsr"]
+selects = ["float_in_xmm"]
+os_enables = true
+
+[sse2]
+enables = ["sse2"]
+requires = ["sse"]
+selects = ["double_in_xmm"]
+os_enables = true

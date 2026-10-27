@@ -15,6 +15,8 @@
 //!   member may be a declaration or inexact; no instruction may throw (a call
 //!   without `nounwind`, an `invoke`, `resume`) except a `call` to another
 //!   member.
+//! - `nofree` and `nosync` (`InstrBreaksNoFree`, `InstrBreaksNoSync`): every
+//!   call states it or reaches an SCC member; all or none of the SCC.
 //! - `willreturn` (`addWillReturn`): `mustprogress` and no writes, or no back
 //!   edge and every call states `willreturn`.
 //! - `noreturn` (`addNoReturnAttrs`): no path from the entry reaches a `ret`
@@ -53,6 +55,8 @@
 //! DEVIATE F1: `willreturn` also where a loop's trip count is proved or the
 //! language promises each loop ends, in a function that does nothing
 //! observable (`will_return_by_loops`).
+//! Exit: once llrm-cc over clang is the only C frontend its IR carries
+//! `mustprogress`, and LLVM's rule gives the same answer; F1 goes then.
 //!
 //! # See also
 //! LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,
@@ -81,6 +85,8 @@ pub struct Inferred {
     pub no_unwind: bool,
     pub will_return: bool,
     pub no_return: bool,
+    pub no_free: bool,
+    pub no_sync: bool,
 }
 
 /// `hasExactDefinition`: the body here is the one that runs.
@@ -155,6 +161,45 @@ fn breaks_non_throwing(
         }
         _ => false,
     }
+}
+
+/// `InstrBreaksNoFree` (FunctionAttrs.cpp:1889): a call that does not state
+/// `nofree`, and is not a call to a member. MIR has no atomics, so no other
+/// instruction `maySynchronize`.
+fn breaks_no_free(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+    members: &BTreeSet<GlobalId>,
+) -> bool {
+    if !matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    ) {
+        return false;
+    }
+    !effects::states(context, declarations, function, inst, Fact::NoFree)
+        && !memory::callee(context, function, inst).is_some_and(|callee| members.contains(&callee))
+}
+
+/// `InstrBreaksNoSync` (FunctionAttrs.cpp:1908): a call that does not state
+/// `nosync` (`maySynchronize`), and is not a call to a member.
+fn breaks_no_sync(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+    members: &BTreeSet<GlobalId>,
+) -> bool {
+    if !matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    ) {
+        return false;
+    }
+    !effects::states(context, declarations, function, inst, Fact::NoSync)
+        && !memory::callee(context, function, inst).is_some_and(|callee| members.contains(&callee))
 }
 
 /// `FindFunctionBackedges` is empty: a depth-first walk from the entry meets no
@@ -245,18 +290,29 @@ pub fn infer(
         let global = module.global(id);
         global.function().filter(|one| !one.is_declaration()).map(|one| (global.linkage, one))
     };
-    // All or none: one member that cannot be scanned, or one throwing
-    // instruction, takes it from the SCC.
-    let unwinds = members.iter().all(|&id| {
-        let Some((linkage, function)) = body(id) else {
-            return module.global(id).function().is_some_and(|one| Facts::of(&one.attrs).no_unwind());
-        };
-        if Facts::of(&function.attrs).no_unwind() {
-            return true;
-        }
-        exact(linkage)
-            && function.walk().all(|(_, inst)| !breaks_non_throwing(context, declarations, function, inst, &set))
-    });
+    // All or none, per attribute (`AttributeInferer`): one member that cannot
+    // be scanned, or one instruction that breaks it, takes it from the SCC.
+    let scc_states = |fact: Fact, breaks: &dyn Fn(&Function, InstId) -> bool| {
+        members
+            .iter()
+            .all(
+                |&id| {
+                    let Some((linkage, function)) = body(id) else {
+                        return module.global(id).function().is_some_and(|one| Facts::of(&one.attrs).contains(fact));
+                    };
+                    if Facts::of(&function.attrs).contains(fact) {
+                        return true;
+                    }
+                    exact(linkage) && function.walk().all(|(_, inst)| !breaks(function, inst))
+                },
+            )
+    };
+    let unwinds =
+        scc_states(Fact::NoUnwind, &|function, inst| breaks_non_throwing(context, declarations, function, inst, &set));
+    let frees_nothing =
+        scc_states(Fact::NoFree, &|function, inst| breaks_no_free(context, declarations, function, inst, &set));
+    let syncs_nothing =
+        scc_states(Fact::NoSync, &|function, inst| breaks_no_sync(context, declarations, function, inst, &set));
     let no_recurse_scc = members.len() == 1;
     members
         .iter()
@@ -272,6 +328,8 @@ pub fn infer(
                 no_unwind: !stamped.no_unwind() && unwinds,
                 will_return: !stamped.will_return() && function_will_return(context, declarations, linkage, function),
                 no_return: !stamped.no_return() && exact && !can_return(context, declarations, function),
+                no_free: !stamped.contains(Fact::NoFree) && frees_nothing,
+                no_sync: !stamped.contains(Fact::NoSync) && syncs_nothing,
             };
             (id, inferred)
         })
@@ -586,6 +644,8 @@ fn stamp_flags(
             (one.no_return, Fact::NoReturn),
             (one.will_return, Fact::WillReturn),
             (one.no_unwind, Fact::NoUnwind),
+            (one.no_free, Fact::NoFree),
+            (one.no_sync, Fact::NoSync),
             (one.no_recurse, Fact::NoRecurse),
         ] {
             if stated && !Facts::of(&function.attrs).contains(fact) {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:7d6d83cef9f1d4d692cd939d3b7b397bf22f3631b3a4ef241e43ec3f6eff4b3d -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:5cfcebf49514935c3a368fa4ae2d2c7d97a481c820b8415d0e240eee49380813 -->
 
 # combine_loadstore
 
@@ -53,6 +53,17 @@ DEVIATE 6: an alloca only copied from constant memory
 (`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) is not translated
 here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
 scalar alloca has no count operand, so a count of 1 is dropping the operand.
+
+`visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
+instructions before it in its block stored (`FindAvailableLoadedValue`) is
+that value, cast to the load's type.
+
+DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
+of `FindAvailableLoadedValue` (an earlier load of the address) is left to
+GVN: the combine holds no metadata to merge (`combineMetadataForCSE`).
+The alias analysis is BasicAA with its dominator tree off, not the
+pipeline's chain; the stores skipped are those it proves disjoint. Exit:
+the rest of `visitLoadInst`.
 
 ## Used by
 `combine` (its `visit`).

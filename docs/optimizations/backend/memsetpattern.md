@@ -1,33 +1,20 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/memsetpattern.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/memsetpattern.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/memsetpattern.rs sha256:4cd35c9ea6f87136997f10537202f11b06e1260e5c28d17e7a823914a7721778 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/memsetpattern.rs sha256:614d711e29d6f2fc6b7ac3c32c3ca9fbe58634559f952454c0397489d6e48028 -->
 
 # memsetpattern
 
-Expands `llvm.experimental.memset.pattern` into a store loop in MIR before
-instruction selection, as the pin's `PreISelIntrinsicLowering` does (the
-DAG never sees the intrinsic).
+Which selectors take `memset.pattern` as a loop. The expansion itself is
+[`llrm_transforms::memsetpattern`](memsetpattern.md).
 
 ## How it works
-The block is split after the call. A constant length of zero makes
-nothing; a constant one jumps to the loop, a variable one first tests
-`len != 0`. The loop body stores the pattern at `dst[i]`, steps `i` and
-repeats while `i + 1 < len`. One element per iteration: x86 asks for no
-wider loop type (`getMemcpyLoopLoweringType` is `i8`).
+The DAG path has no node for the intrinsic, so a selector that is not the
+old one gets its input expanded into a loop by the transform; the old
+selector lowers the intrinsic itself.
+
+## Used by
+The compile driver (`driver/mod.rs`), which asks `expands_for` of its
+selector and expands each module with `expanded`.
 
 ## Example
-`call @llvm.experimental.memset.pattern(ptr %p, i16 1824, i32 %n, i1 false)`
-
-```text
-  %c = icmp ne i32 %n, 0 ; br %c, main-body, post-expansion
-main-body:  %i = phi [0, pre], [%j, main-body]
-            %a = getelementptr inbounds i16, ptr %p, %i ; store i16 1824, %a
-            %j = add %i, 1 ; %k = icmp ult %j, %n ; br %k, main-body, post
-```
-
-## Runs
-Once per module in `driver::optimized`, for `--isel=dag`: the old selector
-lowers the intrinsic itself.
-
-## See also
-LLVM's `createMemSetPatternLoop`
-([LowerMemIntrinsics.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/LowerMemIntrinsics.cpp#L1304)).
+`memset.pattern(p, pat, n)` reaches the DAG selector as the loop `for i in
+0..n { p[i] = pat }`.

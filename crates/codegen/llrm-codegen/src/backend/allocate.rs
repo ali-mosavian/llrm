@@ -1653,6 +1653,42 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     out
 }
 
+/// The (value, width) each place an instruction reads is: what its definition
+/// writes does not count. A destination in memory reads its address; a
+/// destination the instruction also uses (a partial write) is read at its own
+/// width.
+pub(crate) fn _read_widths(one: &Insn) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    if let Some(what) = &one.what {
+        for place in what.sources.iter().flat_map(ir::values) {
+            out.push((place.value, place.width));
+        }
+        for dest in &what.dests {
+            for place in ir::values(dest) {
+                if !matches!(dest, Loc::Held(_)) || one.uses.contains(&place.value) {
+                    out.push((place.value, place.width));
+                }
+            }
+        }
+    }
+    out.extend(one.requires.iter().map(|(place, _)| (place.value, place.width)));
+    out.extend(one.widths.iter().copied());
+    out
+}
+
+/// The widest each value is read (bytes): a value no instruction reads wider
+/// than 2 bytes never needs its high half, however wide its definition is.
+pub fn _widest_read(body: &LirBody) -> IndexMap<u32, u32> {
+    let mut out: IndexMap<u32, u32> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for (value, width) in _read_widths(one) {
+            let widest = out.entry(value).or_insert(0);
+            *widest = (*widest).max(width);
+        }
+    }
+    out
+}
+
 /// Each (value, width) an instruction names.
 pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
     one.what
@@ -3335,6 +3371,26 @@ mod tests {
         assert!(matches!(&sources[0], Loc::Reg(_)), "{sources:?}");
     }
 
+    /// A byte read as undef beside a def in `si`, which has no byte form: the
+    /// rewrite named `si` for the byte and the instruction printed
+    /// `movzx si, si`. The byte takes a register that has one.
+    #[test]
+    fn test_a_byte_read_as_undef_does_not_take_a_register_without_a_byte() {
+        let what = Semantics {
+            name: Some("movzx".into()),
+            dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 9, width: 1 })],
+            ..Semantics::new(Operation::Extend)
+        };
+        let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
+        one.undefs = vec![9];
+        let held: IndexMap<u32, RegId> = IndexMap::from_iter([(2, RegId::SI)]);
+        let placed = _placed(&Arc::new(one), &held, &RegisterClasses::m16()).expect("placed");
+        let sources = &placed.what.as_ref().expect("semantics").sources;
+        let Loc::Reg(read) = &sources[0] else { panic!("{sources:?}") };
+        assert!(!matches!(read.register, RegId::SI | RegId::ESI), "{sources:?}");
+    }
+
     #[test]
     fn test_a_value_required_in_two_registers_gets_one_fresh_value_per_site() {
         let cwd = Insn::new(
@@ -3715,7 +3771,12 @@ mod tests {
             }
             let got = allocated(&body, Some(&pinned)).expect("allocates");
             assert!(got.spilled.is_empty(), "{barrier}");
-            assert_ne!(got.r#where[&1], RegId::EDI, "{barrier}");
+            // A value that overlaps the pinned copy of itself may share its
+            // register: the overlap starts at the copy
+            // (`LiveRange::overlaps(Other, CP, Indexes)`), both hold one value.
+            if barrier != "overlap" {
+                assert_ne!(got.r#where[&1], RegId::EDI, "{barrier}");
+            }
             assert_eq!(got.r#where[&2], RegId::EDI, "{barrier}");
         }
     }

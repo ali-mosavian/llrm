@@ -38,6 +38,8 @@ Clocks / bytes of the kernel, i486 model, `tools/rows/row.sh`; main is `854bb7ef
 | recpow | -O3 | 430457 / 888 | 434368 / 315 > | 424974 / 427 |
 | recsum | -O3 | 77291 / 83 | 79296 / 91 > | 79296 / 91 > |
 
+ipa-cp clones are off at -O3 (on at -Omax and under `-fipa-cp-clone`): the pin makes none. recchop -O3 is 101 lines of assembly with three procs where the clones made 1378 and eleven; the recchop -O3 row above predates this and its clocks and bytes are not re-measured.
+
 No row is above base in clocks at any level (34 below, 10 equal of the 44 rows of the recursion programs at -O1/-O2/-O3/-Os); recchop -O3 is under main (5932 against 5946). Clocks go down and bytes go up on the rows that gain: fib 537 to 392 bytes is both, x_hanoi2 and recchop trade 4-7x bytes for clocks, and the three loop-bearing rows (bintree, quicksort, x_mergesort) pay 3-5x main's bytes for 0-8% clocks against base.
 
 Limits, depth 3 (before the move above): budget 60 / 100 / 150 / 450 `gcc_insns` give fib 207179 / 132006 / 132006 / 132006 and rectwo 1489763 / 876030 / 530081 / 530081, so 150 is the smallest that keeps both under main. gcc's depth 8 and 450 give fib 227940 / 1736 B and bintree 2876 B. Differences from gcc: the copies are made depth first, gcc's by a heap of edges ordered by badness; gcc's `peeling` and cold-edge checks are not translated.

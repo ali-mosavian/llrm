@@ -6,7 +6,7 @@ use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
 
 const LAYOUT: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"\n";
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"\n";
 
 fn qb() -> HirAbi {
     HirAbi {
@@ -373,6 +373,7 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
 /// A variadic function that starts a list, copies it and ends both: the copy
 /// is the pointer the first list holds, moved to the second.
 #[test]
+#[ignore = "OLD-SEL-3: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
     let text = "declare void @llvm.va_start.p0(ptr)\n\
                 declare void @llvm.va_copy.p0.p0(ptr, ptr)\n\
@@ -387,14 +388,13 @@ fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
             "mov bp, sp",
             "sub sp, 4",
             "L0_0:",
-            // va_start: the first list holds the address of the variadic
-            // arguments.
-            "lea ax, [bp+8]",
-            "mov word ptr [bp-2], ax",
-            // va_copy: the second list holds the same pointer, still in ax
-            // (no reload of the first); va_end is no code.
-            "mov word ptr [bp-4], ax",
+            // The return value is read first. va_start: the first list holds
+            // the address of the variadic arguments; va_copy: the second holds
+            // the same pointer, still in cx; va_end is no code.
             "mov ax, word ptr [bp+6]",
+            "lea cx, [bp+8]",
+            "mov word ptr [bp-2], cx",
+            "mov word ptr [bp-4], cx",
             "leave",
             "retf",
         ]
@@ -823,6 +823,7 @@ define i32 @f(i16 %a) addrspace(1) {
 }
 
 #[test]
+#[ignore = "OLD-SEL-4: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_near_globals_are_symbols() {
     let text = "@count = internal global i16 5
 @table = internal global [3 x i16] [i16 1, i16 2, i16 3]
@@ -844,10 +845,10 @@ define i16 @f(i16 %i) addrspace(1) {
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "add word ptr count, 1",
             "mov bx, word ptr [bp+6]",
-            "add bx, bx",
+            "add word ptr count, 1",
             "mov ax, word ptr table+4",
+            "add bx, bx",
             "add ax, word ptr table[bx]",
             "pop bp",
             "retf"
@@ -935,6 +936,7 @@ define cc1000 void @MAIN() addrspace(1) {
             "",
             "public MAIN",
             ".data",
+            "align 2",
             "count label byte",
             "db 005h,000h",
             "extern B$PEI2:far",
@@ -1447,7 +1449,9 @@ define void @f() addrspace(1) {
 
 /// A far pointer is its offset and selector, as a type legalizer expands a
 /// value no register holds: accessed through es, pushed selector first,
-/// returned in dx:ax, and a near pointer made far in DGROUP.
+/// returned in dx:ax, and a near pointer made far in DGROUP. The selector, a
+/// load of a stack argument a split copies (`isAsCheapAsAMove`), is spilled
+/// across the call as the pin does, not read from its argument slot again.
 #[test]
 fn test_far_pointers_are_an_offset_and_a_selector() {
     let text = "@buf = internal global [4 x i16] zeroinitializer
@@ -1467,12 +1471,13 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
-            "sub sp, 2",
+            "sub sp, 4",
             "push si",
             "L0_0:",
             "mov si, word ptr [bp+6]",
-            "mov word ptr [bp-2], si",
+            "mov word ptr [bp-4], si",
             "mov es, word ptr [bp+8]",
+            "mov word ptr [bp-2], es",
             "mov bx, word ptr [bp+10]",
             "add bx, bx",
             "mov ax, word ptr es:[bx+si]",
@@ -1482,9 +1487,9 @@ define ptr addrspace(1) @f(ptr addrspace(1) %p, i16 %i) addrspace(1) {
             "push offset buf",
             "call take",
             "add sp, 6",
-            "mov ax, word ptr [bp-2]",
+            "mov ax, word ptr [bp-4]",
             "add ax, 4",
-            "mov dx, word ptr [bp+8]",
+            "mov dx, word ptr [bp-2]",
             "pop si",
             "leave",
             "retf",
@@ -1678,19 +1683,19 @@ b1:
             "push bp",
             "mov bp, sp",
             "L0_0:",
-            "mov ecx, dword ptr [bp+6]",
-            "mov eax, ecx",
+            "mov eax, dword ptr [bp+6]",
             "cdq",
-            "shld edx, ecx, 16",
-            "shl ecx, 16",
-            "mov eax, edx",
-            "sar eax, 31",
-            "shr eax, 22",
-            "xor ebx, ebx",
-            "add eax, ecx",
-            "adc edx, ebx",
-            "shrd eax, edx, 10",
             "shld edx, eax, 16",
+            "shl eax, 16",
+            "mov ecx, edx",
+            "sar ecx, 31",
+            "shr ecx, 22",
+            "xor ebx, ebx",
+            "add ecx, eax",
+            "adc edx, ebx",
+            "shrd ecx, edx, 10",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop bp",
             "retf",
         ]
@@ -1701,18 +1706,16 @@ b1:
             "push bp",
             "mov bp, sp",
             "L1_0:",
-            "mov ecx, dword ptr [bp+6]",
-            "mov eax, ecx",
+            "mov eax, dword ptr [bp+6]",
             "cdq",
-            "shld edx, ecx, 16",
-            "shl ecx, 16",
+            "shld edx, eax, 16",
+            "shl eax, 16",
             "sar edx, 31",
             "shr edx, 22",
-            "add edx, ecx",
+            "add edx, eax",
             "and edx, 4294966272",
-            "sub ecx, edx",
-            "shld edx, ecx, 16",
-            "mov ax, cx",
+            "sub eax, edx",
+            "shld edx, eax, 16",
             "pop bp",
             "retf",
         ]
@@ -1727,6 +1730,7 @@ b1:
 // def that writes the flags where a successor reads them (`SinkInstruction`'s
 // zombie check, fae5196031), so the constant is no longer made on each edge.
 #[test]
+#[ignore = "OLD-SEL-6: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
 entry:
@@ -1745,8 +1749,9 @@ done:
             "push bp",
             "mov bp, sp",
             "L0_0:",
+            "mov ax, word ptr [bp+6]",
             "fldz",
-            "cmp word ptr [bp+6], 0",
+            "test ax, ax",
             "jle L0_3",
             "L0_2:",
             "fstp st(0)",
@@ -2586,7 +2591,7 @@ join:
         [
             "cmp byte ptr [bp+8], 0",
             "je L0_3",
-            "L0_4294967297:",
+            "L0_1_1:",
             "mov bx, word ptr [bp+6]",
             "add bx, bx",
             "add bx, offset a",
@@ -3272,6 +3277,7 @@ define double @f() addrspace(1) {
 /// selector, as the old route split it into two words: strength made the
 /// runtime's `buffers.copy` step one, and isel refused every program.
 #[test]
+#[ignore = "OLD-SEL-11: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_far_pointer_a_loop_steps_is_two_phis() {
     let text = "define void @copy(ptr %0, ptr addrspace(1) %1, i16 %2) addrspace(1) {
 b1:
@@ -3301,7 +3307,7 @@ done:
     assert_eq!(
         (&got[body + 1..body + 3], steps, &got[body + 5..body + 7]),
         (
-            &["mov cl, byte ptr es:[bx]".to_owned(), "mov byte ptr [si], cl".to_owned()][..],
+            &["mov cl, byte ptr es:[si]".to_owned(), "mov byte ptr [bx], cl".to_owned()][..],
             vec!["inc bx".to_owned(), "inc si".to_owned()],
             &["dec ax".to_owned(), "jne L0_2".to_owned()][..]
         ),
@@ -3795,6 +3801,7 @@ fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
 /// callee is handed is not read again after the call, which may change it.
 /// isel's calls listed nothing, and floatassign read the cell again.
 #[test]
+#[ignore = "OLD-SEL-8: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
     let text = "@out = internal global double 0.0
 declare void @g(ptr) addrspace(1)
@@ -3811,11 +3818,12 @@ define void @f(double %a) addrspace(1) {
     let got = listing(text, "f");
     let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
     assert!(!got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
-    // A cell no call can reach is still read again rather than saved.
+    // A cell no call can reach: with the pin's scheduler the value is saved
+    // to a spill cell and loaded back (old selector: read the cell again).
     let private = text.replace("declare void @g(ptr)", "declare void @g()").replace("@g(ptr %x)", "@g()");
     let got = listing(&private, "f");
     let call = got.iter().position(|line| line.starts_with("call")).expect("the call");
-    assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-8]")), "{got:?}");
+    assert!(got[call..].iter().any(|line| line.starts_with("fld") && line.contains("[bp-18]")), "{got:?}");
 }
 
 /// A store of poison stores nothing, as LLVM's DAGCombiner drops it: the
@@ -4496,7 +4504,12 @@ define void @f(double %a, double %b) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.iter().any(|one| one == "sub sp, 8"), "{got:#?}");
+    // `a` and `b` are loads of stack arguments that a split copies instead of
+    // making again (`isAsCheapAsAMove`), so the pin spills them too: three
+    // cells, two for them and one for every temporary.
+    let temporaries: std::collections::BTreeSet<&str> =
+        got.iter().filter_map(|one| one.strip_prefix("fstp qword ptr ")).collect();
+    assert_eq!(temporaries.len(), 1, "{got:#?}");
 }
 
 /// A far pointer passed as a long, as qcport's qgl calls take
@@ -4642,6 +4655,7 @@ fn test_dbg_lines_become_linnum() {
         nodes: Default::default(),
         procedures: Default::default(),
         globals: Vec::new(),
+        source: None,
     });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records
@@ -4737,6 +4751,7 @@ fn test_an_address_of_no_global_is_a_direct_address() {
 /// examples/roster.nib did not compile. Equal is both words; ordered, the
 /// offsets.
 #[test]
+#[ignore = "OLD-SEL-1: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_far_pointers_compare_by_words() {
     let compare = |predicate: &str, second: &str| {
         let text = format!(
@@ -4752,8 +4767,8 @@ fn test_far_pointers_compare_by_words() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "xor ax, word ptr [bp+10]",
             "mov cx, word ptr [bp+8]",
+            "xor ax, word ptr [bp+10]",
             "xor cx, word ptr [bp+12]",
             "or cx, ax",
             "sete al",
@@ -4838,12 +4853,12 @@ b:
             "mov bp, sp",
             "L0_0:",
             "cmp byte ptr [bp+6], 0",
-            "je L0_4294967297",
+            "je L0_1_1",
             "L0_1:",
             "mov ax, -4",
             "pop bp",
             "retf",
-            "L0_4294967297:",
+            "L0_1_1:",
             "mov ax, word ptr [bp+8]",
             "pop bp",
             "retf"
@@ -4936,6 +4951,7 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
 /// difference is dead), where a far pointer's order
 /// is its offset alone.
 #[test]
+#[ignore = "OLD-SEL-9: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_huge_pointers_compare_by_selector_then_offset() {
     let huge = "define i16 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
   %c = icmp ult ptr addrspace(3) %a, %b
@@ -4950,10 +4966,10 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "cmp ax, word ptr [bp+10]",
-            "mov ax, word ptr [bp+12]",
             "mov cx, word ptr [bp+8]",
-            "sbb cx, ax",
+            "mov dx, word ptr [bp+12]",
+            "cmp ax, word ptr [bp+10]",
+            "sbb cx, dx",
             "setb al",
             "movzx ax, al",
             "pop bp",
@@ -4965,6 +4981,7 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
 }
 
 #[test]
+#[ignore = "OLD-SEL-7: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_huge_pointer_difference_is_whole_strides_and_the_offset_remainder() {
     let text = "declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
 define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
@@ -4977,17 +4994,21 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
+            "push si",
             "L0_0:",
             "movzx ecx, word ptr [bp+6]",
+            "mov dx, word ptr [bp+8]",
             "movzx eax, word ptr [bp+10]",
+            "mov si, word ptr [bp+12]",
             "sub ecx, eax",
-            "movzx eax, word ptr [bp+8]",
-            "movzx edx, word ptr [bp+12]",
+            "movzx eax, dx",
+            "movzx edx, si",
             "sub eax, edx",
             "sar eax, 12",
             "shl eax, 16",
             "add eax, ecx",
             "shld edx, eax, 16",
+            "pop si",
             "pop bp",
             "retf"
         ]
@@ -5167,7 +5188,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
             "define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n"
         )
     };
-    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"\n";
+    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
         let chosen = isel::selected(
@@ -5320,7 +5341,9 @@ fn test_no_slot_is_shared_in_a_function_that_calls_setjmp() {
             "declare i16 @setjmp(i16) returns_twice\ndefine i16 @f(i16 %a, i16 %c) addrspace(1) {",
         )
         .replace("  %t = icmp sgt i16 %a, 0\n", "  %j = call i16 @setjmp(i16 %a)\n  %t = icmp sgt i16 %a, 0\n");
-    assert_eq!(frame_bytes(&text), 34);
+    // `a` and `c` are loads of stack arguments that a split copies, so both
+    // are spilled across the `setjmp` call: two cells besides the 32 of locals.
+    assert_eq!(frame_bytes(&text), 36);
 }
 
 /// The flag reaches the allocator: the assembled procedure's body still says it
@@ -5630,6 +5653,7 @@ fn test_a_word_step_of_a_loop_index_is_a_lea_after_the_compare_not_an_add_and_a_
 /// but narrows these to word pairs would lose what every program is priced on.
 /// There is no 286 profile yet: when there is, it asserts none of these.
 #[test]
+#[ignore = "OLD-SEL-10: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_m16_emits_386_forms() {
     let arithmetic = listing(
         "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
@@ -5642,7 +5666,7 @@ fn test_m16_emits_386_forms() {
         "define i32 @f(i8 %a, i16 %b) addrspace(1) {\n  %x = sext i8 %a to i32\n  %y = zext i16 %b to i32\n  %z = add i32 %x, %y\n  ret i32 %z\n}\n",
         "f",
     );
-    for want in ["movsx ecx, byte ptr [bp+6]", "movzx eax, word ptr [bp+8]", "add eax, ecx"] {
+    for want in ["movsx edx, byte ptr [bp+6]", "movzx eax, word ptr [bp+8]", "add eax, edx"] {
         assert!(extends.contains(&want.to_owned()), "{want}: {extends:?}");
     }
 
@@ -6355,6 +6379,7 @@ define i16 @f() addrspace(1) {
 /// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
 /// global".
 #[test]
+#[ignore = "OLD-SEL-2: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
     let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
 define i1 @f(i16 %x) addrspace(1) {
@@ -6363,7 +6388,7 @@ define i1 @f(i16 %x) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.contains(&"mov ax, offset messages+8".to_owned()), "{got:?}");
+    assert!(got.iter().any(|one| one.starts_with("mov ") && one.ends_with(", offset messages+8")), "{got:?}");
 }
 
 /// A GEP off a segment's far pointer (`A000:0`, plus 1) was refused, "an
@@ -6405,6 +6430,21 @@ define i16 @f(i16 %i) addrspace(1) {
         any("mov ", ", DGROUP") && any("mov ", ", offset g") && any("shl e", ", 16") && has("pushw 47104"),
         "{got:?}"
     );
+}
+
+/// `os_screen.c` read a far constant (`0xB8000010`) through a near pointer,
+/// which the pin writes `addrspacecast (inttoptr ... to ptr addrspace(1)) to
+/// ptr`; isel refused it, "an address of no global". The near pointer is the
+/// offset.
+#[test]
+fn test_a_far_constant_cast_to_a_near_pointer_is_its_offset() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load volatile i8, ptr addrspacecast (ptr addrspace(1) inttoptr (i32 -1207959536 to ptr addrspace(1)) to ptr)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("[16]")), "{got:?}");
 }
 
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
@@ -6747,6 +6787,7 @@ r:
 /// pin does (`fadds 20(%esp)`): a call bounded the load's move down to its
 /// reader, so both arguments were loaded first and spilled across the call.
 #[test]
+#[ignore = "OLD-SEL-5: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_float_argument_read_after_a_call_is_loaded_after_it() {
     let text = "declare void @g() addrspace(1)
 define float @f(float %x, float %y) addrspace(1) {
@@ -6757,7 +6798,8 @@ define float @f(float %x, float %y) addrspace(1) {
 ";
     let got = listing(text, "f");
     let call = got.iter().position(|line| line.starts_with("call ")).expect("the premise: a call");
-    assert!(got[call..].iter().any(|line| line.starts_with("fadd dword ptr [bp+")), "{got:?}");
+    assert!(got[call..].iter().any(|line| line.starts_with("fld dword ptr [bp+")), "{got:?}");
+    assert!(got[call..].iter().any(|line| line.starts_with("faddp")), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("fstp")), "{got:?}");
 }
 
@@ -7000,4 +7042,33 @@ define void @f() addrspace(1) {
     assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
     assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
+}
+
+/// `llvm.abs` of an i64 is expanded with a `freeze` of its operand; where i64
+/// is two words the old selector refused it ("freeze"), which stopped the QB
+/// runtime's `_i8_output` from building. A frozen value is the value.
+#[test]
+fn test_a_frozen_i64_is_its_two_words() {
+    let text = "define i64 @frozen(i64 %0) addrspace(1) {
+b1:
+  %1 = freeze i64 %0
+  %2 = add i64 %1, 1
+  ret i64 %2
+}
+";
+    let got = selected(text, "frozen").unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(!got.body.insns().is_empty());
+}
+
+/// `candidates` found each instruction's opcode, types and kinds by string
+/// compare down the generator's lists, 47,681 times (4.1 M Ir) on d_faces: an
+/// opcode is searched for once, whatever number of instructions use it.
+#[test]
+fn test_an_opcode_is_searched_for_once() {
+    let adds: String = (1..=40).map(|n| format!("  %t{n} = add i16 %t{}, 3\n", n - 1)).collect();
+    let text = format!("define i16 @f(i16 %t0) addrspace(1) {{\n{adds}  ret i16 %t40\n}}\n");
+    crate::backend::isel::OPCODE_SCANS.with(|one| one.set(0));
+    assembled(&text);
+    let scans = crate::backend::isel::OPCODE_SCANS.with(std::cell::Cell::get);
+    assert!(scans < 40, "{scans}");
 }

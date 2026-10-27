@@ -152,10 +152,11 @@
 //!   would send two or more edges to a loop header, or leave one. Here a jump
 //!   alone in a block that holds a loop's simple form up (its preheader, its
 //!   one latch, a dedicated exit: `decide::loop_form_blocks`) is also kept
-//!   while the option is on, because rounds repeat until nothing changes and
-//!   `loopsimplify` runs in them: LLVM's passes run once, and without this the
-//!   two undid each other each round ("cycle after 3 rounds" on the `deedlines`
-//!   demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
+//!   while `Options::loop_form_kept` is on, because rounds repeat until nothing
+//!   changes and `loopsimplify` runs in them: LLVM's passes run once, and
+//!   without this the two undid each other each round ("cycle after 3 rounds"
+//!   on the `deedlines` demo). The LLVM-order pipeline (the default) turns it
+//!   off at every slot; exit: the rounds pipeline (`LLRM_NO_LLVM_ORDER`) goes.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
@@ -242,6 +243,12 @@ pub struct Options {
     /// `needCanonicalLoops`: true by default and at the early slot, false at
     /// the one after vectorization.
     pub need_canonical_loop: bool,
+    /// D7: keep the jump alone in a block that holds a loop's simple form up,
+    /// which the pin removes (`TryToSimplifyUncondBranchFromEmptyBlock` at
+    /// L8820 asks only the loop headers). On for the rounds that repeat
+    /// with `loopsimplify`; off in the LLVM-order pipeline, whose passes run
+    /// once.
+    pub loop_form_kept: bool,
     /// `SpeculateBlocks`: true by default and at every slot.
     pub speculate_blocks: bool,
     /// `HoistCommonInsts`: hoist the code the arms of a branch share even
@@ -269,6 +276,7 @@ impl Options {
     /// canonical.
     pub const L1438: Options = Options {
         need_canonical_loop: false,
+        loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
@@ -286,6 +294,7 @@ impl Options {
     /// last two are not translated.
     pub const L1682: Options = Options {
         need_canonical_loop: true,
+        loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: false,
         sink_common_insts: false,
@@ -301,6 +310,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             need_canonical_loop: true,
+            loop_form_kept: true,
             speculate_blocks: true,
             hoist_common_insts: false,
             sink_common_insts: false,
@@ -387,13 +397,12 @@ fn iteratively_simplified(
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     let headers = loop_headers(function);
-    // D7: with the option, a function with a loop only.
-    let form = if headers.is_empty() || !options.need_canonical_loop {
-        Default::default()
-    } else {
-        // The manager's loops, where the CFG is as they were found.
-        let held = known.filter(|one| one.cfg_epoch == function.epochs().cfg);
-        crate::decide::loop_form_blocks(function, held.map(|one| llrm_analysis::cfg::natural(function, &one.info)))
+    // D7: with the option, a function with a loop only; found at the first
+    // jump alone in a block, which most functions never have.
+    let form = LoopForm {
+        wanted: !headers.is_empty() && options.need_canonical_loop && options.loop_form_kept,
+        known,
+        cell: std::cell::OnceCell::new(),
     };
     let headers = if options.need_canonical_loop { headers } else { Default::default() };
     while local {
@@ -410,6 +419,43 @@ fn iteratively_simplified(
     changed
 }
 
+/// The blocks that hold a loop's simple form up (D7), found when first asked.
+struct LoopForm<'a> {
+    wanted: bool,
+    known: Option<&'a KnownLoops>,
+    cell: std::cell::OnceCell<std::collections::BTreeSet<i64>>,
+}
+
+impl LoopForm<'_> {
+    fn contains(
+        &self,
+        function: &Function,
+        block: i64,
+    ) -> bool {
+        self.wanted
+            && self
+                .cell
+                .get_or_init(|| {
+                    // The manager's loops, where the CFG is as they were found.
+                    let held = self.known.filter(|one| one.cfg_epoch == function.epochs().cfg);
+                    crate::decide::loop_form_blocks(
+                        function,
+                        held.map(|one| llrm_analysis::cfg::natural(function, &one.info)),
+                    )
+                })
+                .contains(&block)
+    }
+}
+
+/// `block` holds phis and a jump only, and is not the entry: the blocks
+/// `jump_simplified` can remove.
+fn only_phis_and_jump(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function.entry() != Some(block) && function.block(block).len() == edges::phis(function, block).len() + 1
+}
+
 /// One visit of `block`: LLVM's `SimplifyCFGOpt::simplifyOnce`, as far as it
 /// is ported (D2).
 fn block_simplified(
@@ -421,7 +467,7 @@ fn block_simplified(
     block: BlockId,
     folded: &mut bool,
     headers: &IdSet<BlockId>,
-    form: &std::collections::BTreeSet<i64>,
+    form: &LoopForm,
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
@@ -464,7 +510,8 @@ fn block_simplified(
         // did not go.
         Terminator::Jump => {
             function.is_placed(block)
-                && ((!form.contains(&llrm_analysis::cfg::id(block))
+                && ((only_phis_and_jump(function, block)
+                    && !form.contains(function, llrm_analysis::cfg::id(block))
                     && jump_simplified(context, function, block, headers))
                     || (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block)))
         }
@@ -475,6 +522,8 @@ fn block_simplified(
 
 #[cfg(test)]
 thread_local! {
+    /// The predecessor lists `predecessor_list` built.
+    pub(crate) static PREDECESSOR_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The blocks `cond_branch_simplified` visited.
     pub(crate) static CONDITIONAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -632,14 +681,28 @@ fn reached_from(
     }
 }
 
+/// `predecessors(block)`, counted in tests.
+fn predecessor_list(
+    function: &Function,
+    block: BlockId,
+) -> llrm_mir::blocklist::BlockList {
+    #[cfg(test)]
+    PREDECESSOR_LISTS.with(|count| count.set(count.get() + 1));
+    function.predecessors(block)
+}
+
 /// The block `block`'s predecessors all have as their only predecessor:
 /// `allPredecessorsComeFromSameSource`.
 fn all_predecessors_come_from_same_source(
     function: &Function,
     block: BlockId,
 ) -> Option<BlockId> {
+    // One predecessor, the common case: no list.
+    if let Some(only) = function.sole_predecessor(block) {
+        return function.sole_predecessor(only);
+    }
     let mut source = None;
-    for &pred in function.predecessors(block).iter() {
+    for &pred in predecessor_list(function, block).iter() {
         let only = function.sole_predecessor(pred)?;
         if source.is_some_and(|one| one != only) {
             return None;
@@ -695,7 +758,7 @@ fn cond_to_cond_simplified(
     }) else {
         return false;
     };
-    for pred in function.predecessors(block).iter().copied().collect::<Vec<_>>() {
+    for pred in predecessor_list(function, block) {
         if let Some(pbi) = function.terminator(pred).filter(|&last| {
             last != bi
                 && function.instruction(last).opcode == Opcode::Br
@@ -742,7 +805,7 @@ pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     // 0 unseen, 1 on the walk's path, 2 done.
     let mut state: IdMap<BlockId, u8> = IdMap::new();
     state.insert(entry, 1);
-    let mut path = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];
+    let mut path = vec![(entry, function.successors(entry), 0usize)];
     while let Some((block, successors, next)) = path.last_mut() {
         let Some(&successor) = successors.get(*next) else {
             state.insert(*block, 2);
@@ -757,7 +820,7 @@ pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
             Some(_) => {}
             None => {
                 state.insert(successor, 1);
-                path.push((successor, function.successors(successor).into_iter().collect(), 0));
+                path.push((successor, function.successors(successor), 0));
             }
         }
     }

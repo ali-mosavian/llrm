@@ -19,7 +19,7 @@ use super::super::function_lowering::FunctionLoweringInfo;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n";
+const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n";
 
 /// Builds, legalizes and selects each block of the first function; the error
 /// names the stage.
@@ -45,7 +45,7 @@ fn selects(body: &str) -> Result<(), String> {
         let mut built =
             build_block(&module, function, &layout, &BuilderTarget::m16(), &machine, &convention, &mut info, block)
                 .map_err(|r| format!("builder: {}", r.0))?;
-        legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
+        legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, &machine)
             .map_err(|r| format!("{r:?}"))?;
         do_instruction_selection(&mut built.dag, &selector, &mut hooks).map_err(|r| format!("{r:?}"))?;
     }

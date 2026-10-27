@@ -12,11 +12,10 @@
 //! DEVIATE 1: no vectors, and only integer constants.
 //!
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
-//! each named where it stood: `SimplifyDemandedInstructionBits`
-//! (`combine_demanded`), `foldOrToXor`, `foldComplexAndOrPatterns`,
+//! each named where it stood: `foldOrToXor`, `foldComplexAndOrPatterns`,
 //! `foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 //! (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-//! `matchBSwapOrBitReverse`, `matchOrConcat`,
+//! `matchOrConcat`,
 //! `tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
 //! mask fold, `matchSelectFromAndOr` and everything after it.
 //!
@@ -36,6 +35,7 @@ use llrm_mir::opcode::{BinaryOp, Flags};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_bitorder::{fold_bitwise_logic_with_intrinsics, match_bswap_or_bitreverse};
 use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_funnel::match_funnel_shift;
 use crate::combine_icmp_logic::fold_boolean_and_or;
@@ -50,13 +50,25 @@ type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
 const FOLDS: &[Fold] = &[
     into_select_or_phi,
     select_binop_select,
+    bswap_or_bitreverse,
     match_funnel_shift,
     shift_with_shift,
     xor_constant,
     disjoint_mul,
     not_or_decrement,
     mask_merge,
+    fold_bitwise_logic_with_intrinsics,
 ];
+
+/// `matchBSwapOrBitReverse`.
+fn bswap_or_bitreverse(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    match_bswap_or_bitreverse(c, inst, true, true)
+}
 
 fn into_select_or_phi(
     c: &mut Combiner,
@@ -263,9 +275,14 @@ pub fn visit_or(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: SimplifyDemandedInstructionBits, foldOrToXor,
-    // foldComplexAndOrPatterns, foldIntegerPackFromVector, foldOrOfInversions,
-    // and the i1 select folds.
+    // See if we can simplify any instructions used by the instruction whose
+    // sole purpose is to compute bits we don't care about.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
+    // DEVIATE 2: foldOrToXor, foldComplexAndOrPatterns,
+    // foldIntegerPackFromVector, foldOrOfInversions, and the i1 select folds.
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
     }

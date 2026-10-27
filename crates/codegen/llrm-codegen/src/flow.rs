@@ -164,7 +164,7 @@ pub fn machine_with<'a>(
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
-        Box::new(crate::processimpdefs::ProcessImplicitDefs),
+        Box::new(crate::processimpdefs::ProcessImplicitDefs { ignored_inputs: target.in_order }),
         // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
         // addILPOpts): a chain of one integer operation rebuilt so its late
         // operand joins last.
@@ -231,8 +231,8 @@ pub fn machine_with<'a>(
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
-        // After the coalescer, before allocation, as the pin orders them: the
-        // pre-RA scheduler, bottom-up by pressure.
+        // After TwoAddress and the coalescer, before any value is placed: the
+        // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
             classes: Rc::clone(classes),
             segments: segments.clone(),
