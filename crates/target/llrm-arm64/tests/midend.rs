@@ -252,3 +252,20 @@ fn a_frame_of_saved_registers_moves_the_stack_pointer_in_the_pair_access() {
     assert!(fib.contains("[sp, #-32]!") && fib.contains("[sp], #32"), "{fib}");
     assert!(!fib.contains("sub sp") && !fib.contains("add sp"), "{fib}");
 }
+
+/// `return g(x + 1)` marked `tail` was `bl _g` between a frame made and taken down, where the pin
+/// jumps (`b _g`) and needs no frame (`recchop`: 85 instructions against 73). A call marked `notail`,
+/// or whose result is changed before the return, stays a call.
+#[test]
+fn a_tail_call_whose_result_is_returned_is_a_jump() {
+    let asm = driver::assembly(include_str!("data/tail_call.ll"), Platform::Darwin, true).expect("lowers");
+    let of = |name: &str| {
+        let from = asm.find(&format!("{name}:")).expect(name);
+        let rest = &asm[from + name.len()..];
+        rest.split("\n_").next().expect("body").to_owned()
+    };
+    let jump = of("_jump");
+    assert!(jump.contains("b _g") && !jump.contains("bl _g") && !jump.contains("stp"), "{jump}");
+    assert!(of("_plain").contains("bl _g"), "{asm}");
+    assert!(of("_changed").contains("bl _g"), "{asm}");
+}

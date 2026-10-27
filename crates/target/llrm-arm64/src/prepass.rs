@@ -417,7 +417,7 @@ mod tests {
                     branch_to("exit"),
                 ],
             },
-            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![] }] },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }] },
         ];
         function
     }

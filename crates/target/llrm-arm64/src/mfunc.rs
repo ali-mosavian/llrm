@@ -33,10 +33,15 @@ pub enum Op {
         callee: Callee,
         uses: Vec<Reg>,
         defs: Vec<Reg>,
+        /// The IR call is marked `tail` and takes no stack arguments: a
+        /// candidate for [`crate::sibcall`].
+        tail: bool,
     },
-    /// A return reading the result registers.
+    /// A return reading the result registers; or, with `tail`, the jump to
+    /// that callee, reading the argument registers (`uses`).
     Return {
         uses: Vec<Reg>,
+        tail: Option<Callee>,
     },
     /// `dst` = the address of a frame object plus `offset`, once the frame is
     /// laid out (`ADDXri` on a frame index).
@@ -66,7 +71,7 @@ impl Op {
                 visit_reg(src, Role::Use, f);
             }
             Op::Imm { dst, .. } | Op::FrameAddress { dst, .. } => f(RegRef::Gpr(dst), Role::Def),
-            Op::Call { callee, uses, defs } => {
+            Op::Call { callee, uses, defs, .. } => {
                 if let Callee::Register(register) = callee {
                     f(RegRef::Gpr(register), Role::Use);
                 }
@@ -77,7 +82,10 @@ impl Op {
                     visit_reg(register, Role::Def, f);
                 }
             }
-            Op::Return { uses } => {
+            Op::Return { uses, tail } => {
+                if let Some(Callee::Register(register)) = tail {
+                    f(RegRef::Gpr(register), Role::Use);
+                }
                 for register in uses {
                     visit_reg(register, Role::Use, f);
                 }

@@ -239,7 +239,7 @@ impl Selector<'_> {
                 Callee::Register(g.reg)
             }
         };
-        let result = self.emit_call(callee, passed, assigner.stack_bytes(), returns)?;
+        let result = self.emit_call(callee, passed, assigner.stack_bytes(), returns, matches!(info.tail, llrm_mir::opcode::Tail::Tail | llrm_mir::opcode::Tail::MustTail))?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }
@@ -310,6 +310,7 @@ impl Selector<'_> {
         passed: Vec<(Val, Vec<Place>)>,
         stack: u64,
         returns: llrm_mir::TypeId,
+        tail: bool,
     ) -> Selected<Option<Val>> {
         let mut uses = Vec::new();
         // With a moving stack pointer the room for the stack arguments is made
@@ -357,7 +358,7 @@ impl Selector<'_> {
                 .collect::<Selected<Vec<_>>>()?;
             (places, defs)
         };
-        self.emit(Op::Call { callee, uses, defs: defs.clone() });
+        self.emit(Op::Call { callee, uses, defs: defs.clone(), tail: tail && room == 0 && !self.mf.dynamic });
         adjust(self, false);
         if result_places.is_empty() {
             return Ok(None);
@@ -396,7 +397,7 @@ impl Selector<'_> {
                 self.copy_out(*place, leaf, &mut uses)?;
             }
         }
-        self.emit(Op::Return { uses });
+        self.emit(Op::Return { uses, tail: None });
         Ok(())
     }
 
@@ -511,7 +512,7 @@ impl Selector<'_> {
                 }
                 let void = self.types().void();
                 let callee = Callee::Symbol(crate::data::symbol_name(self.platform, base));
-                self.emit_call(callee, passed, assigner.stack_bytes(), void)?;
+                self.emit_call(callee, passed, assigner.stack_bytes(), void, false)?;
                 Ok(())
             }
             "stacksave" => {
@@ -568,7 +569,7 @@ impl Selector<'_> {
         );
         let name = format!("{base}{}", if single { "f" } else { "" });
         let callee = Callee::Symbol(crate::data::symbol_name(self.platform, &name));
-        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty)?;
+        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty, false)?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }

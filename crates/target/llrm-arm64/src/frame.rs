@@ -6,6 +6,10 @@
 //! record (`x29`, `x30`) at the top. Offsets are from the stack pointer, which
 //! does not move in the body.
 //!
+//! A frame of only saved registers moves the stack pointer in the first pair's
+//! store and last load (`stp [sp, #-N]!`, `ldp [sp], #N`). A `Return` that
+//! carries a callee is a sibling call ([`crate::sibcall`]): the epilogue, then `b`.
+//!
 //! Shrink wrapping: where the prologue and epilogue go is [`crate::shrinkwrap`]'s.
 
 use crate::mc::inst::*;
@@ -210,11 +214,17 @@ pub fn lower(
                     }
                     Callee::Register(register) => Inst::BranchReg { link: true, rn: *register },
                 }),
-                Op::Return { .. } => {
+                Op::Return { tail, .. } => {
                     if framed {
                         epilogue(&frame, &mut emitter);
                     }
-                    emitter.insts.push(Inst::Ret { rn: Gpr::LR });
+                    emitter.insts.push(match tail {
+                        None => Inst::Ret { rn: Gpr::LR },
+                        Some(Callee::Symbol(name)) => {
+                            Inst::Branch { link: false, target: Target::Symbol { name: name.clone(), addend: 0 } }
+                        }
+                        Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
+                    });
                 }
                 Op::FrameAddress { dst, slot, offset } => {
                     let (base, total) = frame.place(*slot, *offset);
