@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopunrollanalyzer.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopunrollanalyzer.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopunrollanalyzer.rs sha256:54177cd6f3410d17f1d91a853d133817dbb82ba895bb24b284d94b6e0d86b60a -->
+<!-- src: crates/opt/llrm-analysis/src/loopunrollanalyzer.rs sha256:e4a99a9c4fdbb0a972a60ba6992fe7eb91bd6deb7b131e4ad2b752fdde4725df -->
 
 # loopunrollanalyzer
 
@@ -31,3 +31,6 @@ to `true`, and neither is charged to the unrolled loop.
 
 ## See also
 [`UnrolledInstAnalyzer`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopUnrollAnalyzer.cpp).
+
+## Used by
+Named by `loopunrollpass`.
