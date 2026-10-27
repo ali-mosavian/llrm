@@ -3529,3 +3529,15 @@ fn a_dividend_of_long_min_keeps_the_minus_one_guard() {
         listing_of("min_dividend", "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT (-2147483647& - 1&) \\ d\r\n");
     assert!(tests_against_minus_one(&text), "{text}");
 }
+
+/// A string compare in one block read by a select in the next (`WHILE a$(j%) <
+/// "C" AND j% < 3`) had its compare sunk away from B$SCMP's flags: the
+/// program was refused at -O2 (`string_compare_shapes.bas`).
+#[test]
+fn test_a_string_compare_and_an_integer_compare_joined_by_and_compiles() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let text = "DIM a$(3), b$(3)\r\nIF a$ < b$ THEN\r\nk% = 2\r\nELSE\r\nk% = 3\r\nEND IF\r\n\
+SELECT CASE a$\r\nEND SELECT\r\nFOR i% = 1 TO 3\r\nNEXT\r\n\
+WHILE a$(j%) < \"C\" AND j% < 3: j% = j% + 1: WEND\r\nPRINT k%; j%\r\n";
+    records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "qb45", "qb45"), "T.BAS");
+}
