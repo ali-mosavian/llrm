@@ -902,6 +902,16 @@ fn a_proved_move_at_m16_is_inline_string_code() {
     );
 }
 
+/// A forward string move of 3840 bytes (a multiple of four) was followed by
+/// `xor cx, cx; rep movsb`, a copy of zero bytes (scroll.c m16 -Os, +3 B).
+#[test]
+fn a_forward_string_move_of_whole_dwords_has_no_byte_tail() {
+    let up = move_3840_at_m16(", !llrm.forward !0");
+    let names: Vec<_> =
+        up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "movsb"), "{names:?}");
+}
+
 /// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
 /// at m16) though the callee truncates it; the old selector writes `dl`
 /// (mandel.nib: 4 bytes a call).
@@ -946,4 +956,30 @@ define i32 @f(ptr %a, i32 %i) {
     let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
     assert!(!seen.iter().any(|n| n.starts_with("sh")), "{seen:?}");
     assert!(seen.iter().any(|n| n.starts_with("movzx")), "{seen:?}");
+}
+
+/// `llvm.fshl.i32` by a variable was expanded in MIR to `shl`, `shr 1`, `not`,
+/// `and` and `shr` before selection (8 instructions); the pin selects one
+/// `shld`.
+#[test]
+fn a_dword_funnel_shift_is_one_shld() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+declare i32 @llvm.fshl.i32(i32, i32, i32)
+define i32 @f(i32 %a, i32 %b, i32 %y) {
+b0:
+  %r = call i32 @llvm.fshl.i32(i32 %a, i32 %b, i32 %y)
+  ret i32 %r
+}
+";
+    let mut module = llrm_mir::parse::module(ir).expect("parses");
+    crate::backend::funnel::expanded(
+        &mut module,
+        |_| true,
+        |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, &format!("i{bits}")),
+    )
+    .expect("expands");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert_eq!(names.iter().filter(|n| &***n == "shld").count(), 1, "{names:?}");
 }
