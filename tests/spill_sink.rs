@@ -1,5 +1,7 @@
 //! Where the spill stores of the allocator land.
 
+mod common;
+
 use std::process::Command;
 
 /// The copy that defined a spilled value, folded into a store, was not known as
@@ -10,7 +12,7 @@ use std::process::Command;
 fn test_a_folded_copy_that_stores_a_spill_moves_to_the_block_that_reads_it() {
     let source = format!("{}/bench/lru/lru.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-Os", "-m16", "-S", "-o", "a.s", &source])
         .output()

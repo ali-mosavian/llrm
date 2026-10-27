@@ -48,9 +48,9 @@ pub enum Token {
     /// float: a float constant is the nearest float to the decimal, not to the
     /// double nearest to it.
     Float(f64, f32),
-    /// `f0x` and the digits of a float or double: that type's bits.
+    /// `f0x` and the digits of a float, double or x86_fp80: that type's bits.
     FloatBits {
-        bits: u64,
+        bits: u128,
         digits: usize,
     },
     /// `0x` and 16 hex digits: a double's bits.
@@ -163,7 +163,7 @@ pub fn lex(text: &str) -> Result<Vec<(Token, usize)>, ParseError> {
                     token => out.push((token, line)),
                 }
             }
-            b'=' | b',' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>' | b'*' | b':' => {
+            b'=' | b',' | b'(' | b')' | b'[' | b']' | b'{' | b'}' | b'<' | b'>' | b'*' | b':' | b'|' => {
                 out.push((Token::Punct(c as char), line));
                 at += 1;
             }
@@ -296,7 +296,7 @@ fn special_float_at(
     }
 }
 
-/// `f0x` and 1 to 16 hex digits, not the start of a longer name.
+/// `f0x` and 1 to 20 hex digits, not the start of a longer name.
 fn float_bits_at(
     text: &str,
     at: usize,
@@ -305,10 +305,10 @@ fn float_bits_at(
     text[at..].strip_prefix("f0x")?;
     let end = scan(bytes, at + 3, |b| b.is_ascii_hexdigit());
     let digits = &text[at + 3..end];
-    if digits.is_empty() || digits.len() > 16 || bytes.get(end).is_some_and(|b| is_name(*b)) {
+    if digits.is_empty() || digits.len() > 20 || bytes.get(end).is_some_and(|b| is_name(*b)) {
         return None;
     }
-    Some((Token::FloatBits { bits: u64::from_str_radix(digits, 16).ok()?, digits: digits.len() }, end))
+    Some((Token::FloatBits { bits: u128::from_str_radix(digits, 16).ok()?, digits: digits.len() }, end))
 }
 
 fn number_at(

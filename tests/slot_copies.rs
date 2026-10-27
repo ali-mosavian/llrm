@@ -1,7 +1,7 @@
 //! A spill copied from a frame cell reads that cell, and the frame has no cell
 //! more for it (`slotcopies`).
 
-use std::process::Command;
+mod common;
 
 /// x87 `lrint` stores through a stack temporary; the result lives across a
 /// call.
@@ -13,7 +13,7 @@ void g(double x) { long v = (long)x; p(v); q(v); }
 fn listing() -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", "-Os", "-S", "-o", "a.s", "a.c"])
         .output()
