@@ -304,6 +304,7 @@ impl llrm_target::Target for M16 {
             source: RegId::SI,
             destination: RegId::DI,
             source_segment: RegId::DS,
+            destination_segment: RegId::ES,
             tail: RegId::DX,
         })
     }

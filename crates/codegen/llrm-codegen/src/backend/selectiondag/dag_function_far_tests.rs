@@ -898,6 +898,27 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
     assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
 }
 
+/// `smin`, `smax`, `umin` and `umax` of an `i64` stopped the legalizer with
+/// `Unsupported { op: SMin, ty: I64, what: "expand result" }`.
+#[test]
+fn an_i64_min_or_max_expands_to_its_halves() {
+    for op in ["smin", "smax", "umin", "umax"] {
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare i64 @llvm.{op}.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {{
+entry:
+  %r = call i64 @llvm.{op}.i64(i64 %a, i64 %b)
+  ret i64 %r
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{op}: {}", e.0));
+    }
+}
+
 const SELECT_IN_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 @s = internal global [2 x i8] zeroinitializer
 declare cc 1000 void @g(i32) addrspace(1)
