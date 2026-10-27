@@ -581,6 +581,14 @@ fn collect_deps(
             return false;
         }
     }
+    // An `alloca` of one element keeps no count operand here; the pin's has
+    // one (`i32 1`), which one level down is the depth that ends the count.
+    if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
+        && function.instruction(inst).operands.is_empty()
+        && depth + 1 >= 6
+    {
+        return false;
+    }
     true
 }
 
@@ -689,6 +697,38 @@ mod tests {
         for costly in [DEEP, LOAD, MUL] {
             assert_eq!(split_blocks(costly, true), 1, "{costly}");
         }
+    }
+
+    /// A right side whose dependencies reach an `alloca` five levels down is an
+    /// incomplete count (the `alloca`'s array-size operand is the sixth level),
+    /// so the pin splits it however cheap it is. Nib's `main` kept a nine-term
+    /// `||` as `setcc`/`or` (+13 `test`/`or` in jpeg_fixed) because the count
+    /// stopped short of the `alloca` behind a phi.
+    #[test]
+    fn a_right_side_five_levels_above_an_alloca_is_incomplete_and_splits() {
+        let chain = |gep: usize| {
+            let mut text = String::from(
+                "  %a0 = alloca i32
+  store i32 0, ptr %a0
+",
+            );
+            let mut last = "%a0".to_owned();
+            for at in 1..=gep {
+                text += &format!(
+                    "  %g{at} = getelementptr i8, ptr {last}, i32 0
+  store i32 0, ptr %g{at}
+"
+                );
+                last = format!("%g{at}");
+            }
+            text + &format!(
+                "  %pi = ptrtoint ptr {last} to i32
+  %y = icmp sgt i32 %pi, 7
+  %o = or i1 %x, %y"
+            )
+        };
+        assert_eq!(split_blocks(&chain(3), true), 1, "alloca at the sixth level");
+        assert_eq!(split_blocks(&chain(2), true), 0, "alloca one level up");
     }
 
     /// Without a cost model the conditions stay together, as before.

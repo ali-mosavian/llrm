@@ -13,7 +13,7 @@
 //!   `isSExtAbsoluteSymbolRef` are `false`: tail calls, 64-bit zero-extension
 //!   and absolute symbols are not translated yet, and `false` only declines a
 //!   pattern. Owner sdag-c. Exit: C3. Review 2026-12-10.
-//! - **SD212** (m16) `shouldAvoidImmediateInstFormsForSize` does not count a
+//! - **SD221** (m16) `shouldAvoidImmediateInstFormsForSize` does not count a
 //!   call argument's store as a use: it is a `push imm` at real mode, smaller
 //!   than the register that would hold the constant. The pin has no 16-bit
 //!   target to answer for. Owner w12. Exit: a 16-bit size model in the hook.
@@ -552,7 +552,7 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             if use_count >= 2 {
                 break;
             }
-            // DEVIATE SD212 (m16): the pin has no 16-bit target. A call
+            // DEVIATE SD221 (m16): the pin has no 16-bit target. A call
             // argument stored at real mode becomes `push imm`, 2 to 3 bytes
             // against the register's `push r` (1 or 2) and the `mov` that
             // makes it, held across the calls in a register the function

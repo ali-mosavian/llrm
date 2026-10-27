@@ -1,7 +1,7 @@
 //! The frame laid again for a spill hole (`relayout`) is the frame the backend
 //! makes with that hole (`LLRM_CHECK_FRAME=1`).
 
-use std::process::Command;
+mod common;
 
 /// Nine shared spill slots end on a word (30 bytes): the hole was not a
 /// multiple of the 4-byte frame alignment, so the frame moved by it put the
@@ -24,7 +24,7 @@ const SOURCE: &str = "long f(short *a, short *b)
 fn a_frame_laid_again_equals_the_backend_run_again() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
         .env("LLRM_CHECK_FRAME", "1")
