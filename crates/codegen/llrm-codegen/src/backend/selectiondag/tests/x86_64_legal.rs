@@ -306,3 +306,25 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
     assert_eq!(dag.opcode(root), ISD::CopyToReg);
     assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::CopyFromReg);
 }
+
+/// `f32`/`f64` `FADD` and `FSUB` are Custom at SSE2 (the pin's horizontal-op
+/// hook, `lowerFaddFsub`), which returns the node itself when no horizontal
+/// form applies. The hook declined, the node was expanded and the function was
+/// refused: every scalar float add and subtract at m64.
+#[test]
+fn a_scalar_float_add_and_sub_survive_legalization() {
+    let tli = TargetLowering::x86_64(Features { sse2: true, cmov: true, ..Features::default() }, MVT::I64);
+    for (op, vt) in [(ISD::FAdd, MVT::F32), (ISD::FSub, MVT::F32), (ISD::FAdd, MVT::F64), (ISD::FSub, MVT::F64)] {
+        let mut dag = SelectionDAG::new(DagConfig { pointer: EVT::I64, ..DagConfig::default() });
+        let vt = EVT::Simple(vt);
+        let (a, b) = (dag.get_register(vt, 1), dag.get_register(vt, 2));
+        let node = dag.get_node(op, vt, &[a, b]);
+        dag.set_root(node);
+        TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+            .run()
+            .expect("legalizes");
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), op, "{vt:?}");
+    }
+}
