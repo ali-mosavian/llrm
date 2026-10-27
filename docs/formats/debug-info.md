@@ -108,7 +108,7 @@ The MIR parser and printer carry what clang writes for `-g`, unchanged: speciali
 `DIExpression`...; `Module.special` names each node's kind and fields, its operands are the values in order, flag sets such as `A | B` are
 words), `#dbg_declare(ptr %x, !var, !DIExpression(), !loc)` records (`DebugRecord.expression`, `.location`), and `!dbg !N` on a `define` or a
 variable (`Function.metadata`, `Module.global_metadata`). Nothing reads them yet: turning them into the model above is the next step
-(`~/scratch/handoff/mir-debug-info.md`, PR 2 and 3). Test: `crates/ir/llrm-mir/tests/di_roundtrip.rs`.
+(the import and the writer are the following steps). Test: `crates/ir/llrm-mir/tests/di_roundtrip.rs`.
 
 ## Flags
 
