@@ -2,10 +2,10 @@
 //! shift to the mirror byte, and a `bswap` of a byte-multiple shift is the
 //! opposite shift of the `bswap`.
 //!
-//! DEVIATE SD207: the half-width form of `bswap (shl x, c)` (needs a legal
+//! DEVIATE SD219: the half-width form of `bswap (shl x, c)` (needs a legal
 //! half type and a free truncate) and the `bswap (bitreverse x)`
 //! canonicalisation are not ported. Exit: both, when a target needs them.
-//! Owner sdag-c.
+//! Owner sdag-b.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::visitBSWAP`
