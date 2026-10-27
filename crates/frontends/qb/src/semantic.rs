@@ -7655,6 +7655,13 @@ impl Compiler {
             self.emit_runtime_call("B$SADD", vec![result], vec![descriptor]);
             return Ok(Some((Operand::Value(result), word)));
         }
+        if intrinsic.lowering == Lowering::StringSegment {
+            // B$SSEG(descriptor): the segment of the characters.
+            let descriptor = self.string_descriptor(&arguments[0])?;
+            let result = self.value(INTEGER);
+            self.emit_runtime_call("B$SSEG", vec![result], vec![descriptor]);
+            return Ok(Some((Operand::Value(result), INTEGER)));
+        }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
             if intrinsic.lowering == Lowering::Abs && matches!(type_id, INTEGER | LONG | BOOLEAN) {
