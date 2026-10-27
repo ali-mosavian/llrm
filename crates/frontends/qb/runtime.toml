@@ -1119,6 +1119,51 @@ parameters = ["int"]
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 
+# Normal-return stack cleanup read directly from the matching entry in all
+# three shipped Microsoft runtimes.  This is deliberately only a stack ABI
+# table: memory, clobber, allocation, error and alias effects remain those of
+# the conservative runtime contract.  BCOM45/BCL71ENR/VBDCL10E hashes are
+# 5b1c7a6f..., 873fde67..., and 59ad49b0...; tools/libdump.py records the
+# member, entry offset and RETF for every row.  SCAT is family-specific (the
+# VBDOS far-string entry consumes an extra word), so it is not generalized.
+[pops.string]
+"B$ASSN" = 12
+"B$FASC" = 2
+"B$FCHR" = 2
+"B$FCVC" = 2
+"B$FCVD" = 2
+"B$FCVI" = 2
+"B$FCVL" = 2
+"B$FCVS" = 2
+"B$FHEX" = 4
+"B$FLEN" = 2
+"B$FMID" = 6
+"B$FMKC" = 8
+"B$FMKD" = 8
+"B$FMKI" = 2
+"B$FMKL" = 4
+"B$FMKS" = 4
+"B$FMDF" = 8
+"B$FMSF" = 4
+"B$FOCT" = 4
+"B$INS2" = 4
+"B$INS3" = 6
+"B$LCAS" = 2
+"B$LDFS" = 6
+"B$LEFT" = 4
+"B$LTRM" = 2
+"B$MCVD" = 2
+"B$MCVS" = 2
+"B$RGHT" = 4
+"B$RTRM" = 2
+"B$SASS" = 4
+"B$SCMP" = 4
+"B$SCPY" = 2
+"B$SPAC" = 2
+"B$STRI" = 4
+"B$STRS" = 4
+"B$UCAS" = 2
+
 # llrm's runtime takes its calls as the target's own convention states them, except these routines, whose
 # stack block is the call site's own length (the bounds of every dimension, the channels closed): a register
 # convention cannot name that, so they keep BASIC's pushes and are popped by the callee.

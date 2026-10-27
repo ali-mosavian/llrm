@@ -67,6 +67,18 @@ fn main() {
         writeln!(out, "    ({name:?}, {at}),").expect("a string takes text");
     }
     out.push_str("];\n");
+    out.push_str("\n/// The audited stack cleanup per routine, by group: (group, [(routine, bytes)]).\npub static POPS: &[(&str, &[(&str, i64)])] = &[\n");
+    if let Some(groups) = rows.get("pops").and_then(|one| one.as_table()) {
+        for (group, pops) in groups {
+            let pops = pops.as_table().expect("a pops group is a table");
+            let all: Vec<String> = pops
+                .iter()
+                .map(|(name, bytes)| format!("({name:?}, {})", bytes.as_integer().expect("bytes is an int")))
+                .collect();
+            writeln!(out, "    ({group:?}, &[{}]),", all.join(", ")).expect("a string takes text");
+        }
+    }
+    out.push_str("];\n");
     writeln!(out, "\n/// Each row's contract once built: a program asks of the same routine at every call.\npub static BUILT: [std::sync::OnceLock<crate::Contract>; {}] = [const {{ std::sync::OnceLock::new() }}; {}];", names.len(), names.len()).expect("a string takes text");
     let dir = std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR");
     std::fs::write(std::path::Path::new(&dir).join("rows.rs"), out).expect("rows.rs writes");

@@ -1746,6 +1746,16 @@ pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
 
+/// The bytes a call of `name` pops, where runtime.toml's `[pops.<group>]`
+/// audits them.
+pub fn audited_pop(
+    group: &str,
+    name: &str,
+) -> Option<i64> {
+    let (_, pops) = POPS.iter().find(|(one, _)| *one == group)?;
+    pops.iter().find(|(one, _)| *one == name).map(|&(_, bytes)| bytes)
+}
+
 /// The runtime entries whose row says `captures = "NONE"`: they keep no
 /// pointer argument past their return.
 /// The routines whose result is the flags.
@@ -1958,6 +1968,15 @@ mod tests {
     #[test]
     fn test_erase_keeps_no_pointer_it_is_handed() {
         assert_eq!(captures_nothing(), ["B$ERAS"]);
+    }
+
+    /// The pop tables were literals in abi/qb.rs; spot values must survive.
+    #[test]
+    fn test_the_audited_pops_come_from_the_toml() {
+        assert_eq!(audited_pop("string", "B$ASSN"), Some(12));
+        assert_eq!(audited_pop("string", "B$SCMP"), Some(4));
+        assert_eq!(audited_pop("string", "B$SCAT"), None);
+        assert_eq!(audited_pop("nothing", "B$ASSN"), None);
     }
 
     #[test]
