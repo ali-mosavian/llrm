@@ -940,7 +940,7 @@ def new_scanner_failures(
     return (failed - head) | stale
 
 
-HEAD_RED_HOURS = 2
+HEAD_RED_HOURS = float(os.environ.get("HEAD_RED_HOURS") or 2)  # runner.env / the runner's environment: a red head older than this refuses every batch
 
 
 def excused_head_failures(excused: set[str], path: Path, now: float) -> set[str]:
