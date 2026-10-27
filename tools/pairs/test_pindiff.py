@@ -107,3 +107,17 @@ def test_a_binary_behind_the_integration_branch_is_reported():
         assert pindiff.commits_behind("llrm-llc unknown", "main", tmp) == (None, None)
         assert "WARNING" in pindiff.staleness(f"llrm-llc {shas[0]}", "main", tmp, limit=2)
         assert pindiff.staleness(f"llrm-llc {shas[2]}", "main", tmp, limit=2) == ""
+
+
+def test_two_objects_differing_only_in_alignment_have_no_padding_free_delta():
+    """Function alignment moved a small row's bytes in steps of 16: six m32 rows read +12 B (16 B more padding before `main`, 4 B less in it)
+    and were chased as a per-module cost (2026-10-27)."""
+    pindiff = load("pindiff")
+    omf = load("omfcode")
+    body = bytes.fromhex("b890000000" "b090" "c3")  # mov eax,0x90; mov al,0x90; ret: 0x90 inside an immediate is code
+    one = lnames("", "X_TEXT", "CODE") + segdef(2, 3) + ledata(1, body + b"\x90" * 5 + body)
+    other = lnames("", "X_TEXT", "CODE") + segdef(2, 3) + ledata(1, body + b"\x66\x90" + bytes.fromhex("0f1f440000") + body)
+    sizes = [omf.code_bytes_of(obj)[0] for obj in (one, other)]
+    assert sizes[0] != sizes[1]
+    free = [pindiff.padding_free(omf.code_blob_of(obj), 32) for obj in (one, other)]
+    assert free[0] == free[1] == 2 * len(body)

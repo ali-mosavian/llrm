@@ -14,11 +14,11 @@ def _index(body: bytes, at: int) -> tuple[int, int]:
     return (first, 1) if first < 0x80 else (((first & 0x7F) << 8) | body[at + 1], 2)
 
 
-def code_bytes_of(data: bytes) -> tuple[int, int]:
-    """`(code, data)` bytes of the LEDATA records of an OMF object (16- and 32-bit records, a segment of class CODE or named *TEXT is code)."""
+def _ledata(data: bytes):
+    """`(is_code, offset, payload)` of each LEDATA record (16- and 32-bit; a segment of class CODE or named *TEXT is code)."""
     names: list[str] = []
     segments: list[tuple[str, str]] = []
-    code = other = at = 0
+    at = 0
     while at < len(data):
         kind, size = data[at], data[at + 1] | data[at + 2] << 8
         body = data[at + 3 : at + 3 + size - 1]
@@ -36,14 +36,26 @@ def code_bytes_of(data: bytes) -> tuple[int, int]:
             segments.append((names[name - 1], names[klass - 1] if klass else ""))
         elif kind in (0xA0, 0xA1):
             segment, step = _index(body, 0)
-            count = len(body) - step - (4 if kind == 0xA1 else 2)
+            width = 4 if kind == 0xA1 else 2
             name, klass = segments[segment - 1]
-            if "CODE" in klass.upper() or name.upper().endswith("TEXT"):
-                code += count
-            else:
-                other += count
+            yield "CODE" in klass.upper() or name.upper().endswith("TEXT"), int.from_bytes(body[step : step + width], "little"), body[step + width :]
         at += 3 + size
+
+
+def code_bytes_of(data: bytes) -> tuple[int, int]:
+    """`(code, data)` bytes of the LEDATA records of an OMF object."""
+    code = other = 0
+    for is_code, _, payload in _ledata(data):
+        if is_code:
+            code += len(payload)
+        else:
+            other += len(payload)
     return code, other
+
+
+def code_blob_of(data: bytes) -> bytes:
+    """The code segments' bytes, in offset order."""
+    return b"".join(payload for _, _, payload in sorted((r for r in _ledata(data) if r[0]), key=lambda r: r[1]))
 
 
 def code_bytes(path: str) -> tuple[int, int]:

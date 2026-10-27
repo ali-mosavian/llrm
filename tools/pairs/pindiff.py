@@ -11,7 +11,7 @@ instead gives both llcs the pin-optimised IR, which measures the back ends only 
 
 The table has, per program, the instructions of ours and of the pin's asm (directives, labels and comments not counted) and the code bytes of
 ours (the OMF object's code segments, data left out) against the pin's `.text`; with `--old` also ours under `--isel=old`. A row is flagged
-where ours is larger in instructions or in bytes. The first line names the llc (md5 and `--version`) and the pin. At m16 the pin picks 32-bit
+where ours is larger in instructions or in bytes without nops (`nopad`: alignment padding moves a small row in steps of 16). The first line names the llc (md5 and `--version`) and the pin. At m16 the pin picks 32-bit
 registers and prefixes: its bytes are longer than any 16-bit selection could be, so read that column as a size bar only.
 """
 from __future__ import annotations
@@ -77,6 +77,43 @@ def pin_text_size(obj: Path) -> int:
     return sum(int(line.split()[1]) for line in out.splitlines() if line.startswith(".text"))
 
 
+NOP = re.compile(r"^(nop\w*|data16|cs nop\w*|xchg\s+ax,ax|xchg\s+eax,eax)\b")
+
+
+def nop_bytes(listing: str) -> int:
+    """Bytes of the nops in an `objdump -d` listing, continuation lines of a long nop included: alignment padding, never code the compilers chose."""
+    total, inside = 0, False
+    for line in listing.splitlines():
+        found = re.match(r"\s*[0-9a-f]+:\t((?:[0-9a-f]{2} )+)\s*(.*)", line)
+        if not found:
+            continue
+        text = found.group(2).strip()
+        if text:
+            inside = bool(NOP.match(text))
+        if inside:
+            total += len(found.group(1).split())
+    return total
+
+
+def objdump_mode(bits: int) -> list[str]:
+    return ["-M", "intel,i8086" if bits == 16 else "intel"]
+
+
+def padding_free(blob: bytes, bits: int) -> int:
+    """Code bytes of a raw blob without its nops. Decoded, since 0x90 is also a displacement or immediate byte."""
+    with tempfile.NamedTemporaryFile(suffix=".bin") as handle:
+        handle.write(blob)
+        handle.flush()
+        listing = subprocess.run(["objdump", "-D", "-b", "binary", "-m", "i386", *objdump_mode(bits), handle.name], capture_output=True, text=True).stdout
+    return len(blob) - nop_bytes(listing)
+
+
+def pin_padding_free(obj: Path, bits: int) -> int:
+    """The pin's `.text` without its nops."""
+    listing = subprocess.run(["objdump", "-d", *objdump_mode(bits), str(obj)], capture_output=True, text=True).stdout
+    return pin_text_size(obj) - nop_bytes(listing)
+
+
 def front_end_flags(level: str, reopt: bool) -> list[str]:
     """What clang is told besides the machine's flags. Raw (default): the front end's IR with no pass run, as llrm-cc writes it, so each
     side runs its whole pipeline once. `reopt`: clang's own `-O` IR, then the pin's opt, then both llcs; ours re-optimises that IR, so it
@@ -123,41 +160,51 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     if made.returncode:
         return "ours: " + (made.stderr.strip().splitlines() or ["failed"])[0]
 
-    def bytes_of(isel: str) -> int | None:
+    def bytes_of(isel: str) -> tuple[int, int] | None:
+        """Code bytes of the object, and the same without its nops."""
         obj = Path(tempfile.mktemp(suffix=".obj", dir=work))
         ran = ours(isel, "-o", str(obj))
-        return omfcode.code_bytes(str(obj))[0] if ran.returncode == 0 and obj.exists() else None
+        if ran.returncode or not obj.exists():
+            return None
+        data = obj.read_bytes()
+        return omfcode.code_bytes_of(data)[0], padding_free(omfcode.code_blob_of(data), int(cfg["bits"]))
 
+    ours_bytes = bytes_of("dag")
+    old_bytes = bytes_of("old") if old else None
     return {
         "name": stem,
         "ins": instructions(asm.read_text()),
         "pin_ins": instructions(pin_asm.read_text()),
-        "bytes": bytes_of("dag"),
+        "bytes": ours_bytes and ours_bytes[0],
+        "free": ours_bytes and ours_bytes[1],
         "pin_bytes": pin_text_size(pin_obj),
-        "old_bytes": bytes_of("old") if old else None,
+        "pin_free": pin_padding_free(pin_obj, int(cfg["bits"])),
+        "old_bytes": old_bytes and old_bytes[0],
+        "old_free": old_bytes and old_bytes[1],
     }
 
 
 def table(rows: list[dict], old: bool) -> list[str]:
-    head = f"{'program':16} {'ins':>5} {'pin':>5} {'d':>5} | {'bytes':>6} {'pin':>6} {'d':>5}" + (f" | {'old':>6} {'d':>5}" if old else "") + "  flag"
+    head = f"{'program':16} {'ins':>5} {'pin':>5} {'d':>5} | {'bytes':>6} {'pin':>6} {'d':>5} | {'nopad':>6} {'pin':>6} {'d':>5}" + (f" | {'old':>6} {'d':>5}" if old else "") + "  flag"
     lines = [head]
     flagged = 0
     for row in sorted(rows, key=lambda one: one["name"]):
         flags = []
         if row["ins"] > row["pin_ins"]:
             flags.append("INS>pin")
-        if row["bytes"] and row["pin_bytes"] and row["bytes"] > row["pin_bytes"]:
+        if row["free"] and row["pin_free"] and row["free"] > row["pin_free"]:
             flags.append("BYTES>pin")
-        if old and row["bytes"] and row["old_bytes"] and row["bytes"] > row["old_bytes"]:
+        if old and row["free"] and row["old_free"] and row["free"] > row["old_free"]:
             flags.append("BYTES>old")
         flagged += bool(flags)
-        text = f"{row['name']:16} {row['ins']:5} {row['pin_ins']:5} {row['ins'] - row['pin_ins']:+5} | {row['bytes'] or -1:6} {row['pin_bytes']:6} {(row['bytes'] or 0) - row['pin_bytes']:+5}"
+        text = f"{row['name']:16} {row['ins']:5} {row['pin_ins']:5} {row['ins'] - row['pin_ins']:+5} | {row['bytes'] or -1:6} {row['pin_bytes']:6} {(row['bytes'] or 0) - row['pin_bytes']:+5} | {row['free'] or -1:6} {row['pin_free']:6} {(row['free'] or 0) - row['pin_free']:+5}"
         if old:
-            text += f" | {row['old_bytes'] or -1:6} {((row['bytes'] or 0) - row['old_bytes']) if row['old_bytes'] else 0:+5}"
+            text += f" | {row['old_free'] or -1:6} {((row['free'] or 0) - row['old_free']) if row['old_free'] else 0:+5}"
         lines.append(text + "  " + " ".join(flags))
     lines.append(
         f"programs {len(rows)} flagged {flagged} | ins {sum(r['ins'] for r in rows)} vs {sum(r['pin_ins'] for r in rows)}"
         f" | bytes {sum(r['bytes'] or 0 for r in rows)} vs {sum(r['pin_bytes'] for r in rows)}"
+        f" | nopad {sum(r['free'] or 0 for r in rows)} vs {sum(r['pin_free'] for r in rows)}"
     )
     return lines
 
