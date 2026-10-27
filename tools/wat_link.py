@@ -29,7 +29,7 @@ else:
     sys.exit(__doc__)
 ROOT = Path(__file__).resolve().parent.parent
 floatm = Path(tempfile.mkdtemp()) / "floatm.obj"
-compiled = subprocess.run([os.environ.get("LLRM_CC_BIN") or str(ROOT / "target/release/llrm-cc"), "-O1", "-c", str(ROOT / "toolchain/clang/floatm.c"), "-o", str(floatm)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": f"x86_{'16' if model == 'm16' else '32'}-wat"})
+compiled = subprocess.run([os.environ.get("LLRM_CC_BIN") or os.environ.get("LLRM_CC") or str(ROOT / "target/release/llrm-cc"), "-O1", "-c", str(ROOT / "toolchain/clang/floatm.c"), "-o", str(floatm)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": f"x86_{'16' if model == 'm16' else '32'}-wat"})
 if compiled.returncode:
     sys.exit(compiled.stderr)
 objects.append(floatm)

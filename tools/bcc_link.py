@@ -16,7 +16,7 @@ lib, exe, objects = Path(sys.argv[1]), Path(sys.argv[2]).resolve(), [Path(one).r
 lines = ["format dos", "option quiet", f"name {exe}", f"file '{lib / 'C0M.OBJ'}'"]
 lines += [f"file '{one}'" for one in objects]
 floatm = Path(tempfile.mkdtemp()) / "floatm.obj"
-compiled = subprocess.run([os.environ.get("LLRM_CC_BIN") or str(ROOT / "target/release/llrm-cc"), "-O1", "-c", str(ROOT / "toolchain/clang/floatm.c"), "-o", str(floatm)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": "x86_16-bcc"})
+compiled = subprocess.run([os.environ.get("LLRM_CC_BIN") or os.environ.get("LLRM_CC") or str(ROOT / "target/release/llrm-cc"), "-O1", "-c", str(ROOT / "toolchain/clang/floatm.c"), "-o", str(floatm)], capture_output=True, text=True, env={**os.environ, "LLRM_CC_TARGET": "x86_16-bcc"})
 if compiled.returncode:
     sys.exit(compiled.stderr)
 lines.append(f"file '{floatm}'")
