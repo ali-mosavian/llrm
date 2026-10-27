@@ -482,6 +482,26 @@ fn test_a_funnel_shift_emits_the_form_its_count_asks_for() {
     }
 }
 
+/// A 16-bit `shrd`/`shld` (the `i16` funnel shift, `SHRD16rri8`) had no
+/// encoding, only the 32-bit forms: the object builder stopped with
+/// "Semantics(op=FUNNEL, name='shrd' ...)" on `_Sat _Fract` multiplies.
+#[test]
+fn test_a_word_funnel_shift_emits_the_16_bit_form() {
+    let word = |count: Loc, name: &str| {
+        let low = rg(RegId::AX, 2);
+        sem(Operation::Funnel, Some(name), vec![low.clone()], vec![low, rg(RegId::DX, 2), count], None, false)
+    };
+    for (bits, count, name, want) in [
+        (16, imm(15, 1), "shrd", "0facd00f"),
+        (16, rg(RegId::CL, 1), "shrd", "0fadd0"),
+        (16, imm(15, 1), "shld", "0fa4d00f"),
+        (32, imm(15, 1), "shrd", "660facd00f"),
+    ] {
+        let code = emit_in(bits, &word(count, name), 0, None, false, false, None).expect("a 16-bit funnel shift");
+        assert_eq!(hex(&code.code), want, "{name} at {bits} bits");
+    }
+}
+
 #[test]
 fn test_a_left_funnel_shift_emits_shld() {
     assert_eq!(hex(&made(emitted(&funnel_of(imm(16, 1), "shld"))).code), "660fa4d010");

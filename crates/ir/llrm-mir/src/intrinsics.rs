@@ -41,6 +41,17 @@ pub enum Intrinsic {
     Fixed {
         divide: bool,
     },
+    /// `llvm.umul.fix` and `llvm.{s,u}mul.fix.sat`: as `smul.fix`, unsigned
+    /// or clamped to the range rather than wrapped.
+    FixedMul {
+        signed: bool,
+        saturating: bool,
+    },
+    /// `llvm.{s,u}shl.sat`: the first argument shifted left by the second,
+    /// clamped to the range rather than wrapped.
+    ShiftSat {
+        signed: bool,
+    },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
     /// `llvm.bswap`: the bytes of its argument in the opposite order.
@@ -401,6 +412,21 @@ const fn overflow(
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
+const fn fixed_mul(
+    name: &'static str,
+    signed: bool,
+    saturating: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::FixedMul { signed, saturating }, Slot::Any(0), FIXED, Kind::Int)
+}
+
+const fn shift_sat(
+    name: &'static str,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::ShiftSat { signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
 const FLOAT: &[Slot] = &[Slot::Any(0)];
 
 const fn unary(
@@ -451,7 +477,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 61] = [
+const TABLE: [Spec; 66] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -473,6 +499,11 @@ const TABLE: [Spec; 61] = [
     compare("llvm.scmp", true),
     compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
+    fixed_mul("llvm.umul.fix", false, false),
+    fixed_mul("llvm.smul.fix.sat", true, true),
+    fixed_mul("llvm.umul.fix.sat", false, true),
+    shift_sat("llvm.sshl.sat", true),
+    shift_sat("llvm.ushl.sat", false),
     Spec {
         name: "llvm.sdiv.fix",
         intrinsic: Intrinsic::Fixed { divide: true },

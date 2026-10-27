@@ -140,6 +140,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SCmp => pin::SCMP,
         UCmp => pin::UCMP,
         SMulFix => pin::SMULFIX,
+        // Expanded before selection, so no pattern names them.
+        UMulFix | SMulFixSat | UMulFixSat | SShlSat | UShlSat => u16::MAX,
         SDivFix => pin::SDIVFIX,
         StackSave => pin::STACKSAVE,
         StackRestore => pin::STACKRESTORE,

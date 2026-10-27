@@ -447,7 +447,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 };
                 Some(vec![self.dag.get_node(ISD::Truncate, vt, &[low])])
             }
-            ISD::SMulFix => self.expand_fixed_multiply(node).map(|result| vec![result]),
+            ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => {
+                super::expand_fixed::expand_fixed_point_mul(self.dag, self.tli, node).map(|result| vec![result])
+            }
+            ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
+            ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
@@ -472,35 +476,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             _ => None,
         }
-    }
-
-    /// `expandFixedPointMul` for a signed multiply that does not saturate: the
-    /// two halves of the product (`SMUL_LOHI`, else `MULHS` and `MUL`), then a
-    /// funnel shift right by the scale; no shift at scale 0, the high half
-    /// alone at the full width.
-    fn expand_fixed_multiply(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let vt = self.dag.value_type(node);
-        let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
-        let scale = self.dag.constant(self.dag.operand(node, 2))?;
-        if scale == 0 {
-            return Some(self.dag.get_node(ISD::Mul, vt, &[lhs, rhs]));
-        }
-        let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::SMulLoHi, vt) {
-            let both = self.dag.get_node_multi(ISD::SMulLoHi, &[vt, vt], &[lhs, rhs]);
-            (both, SDValue { node: both.node, res: 1 })
-        } else if self.tli.is_operation_legal_or_custom(ISD::MulHS, vt) {
-            (self.dag.get_node(ISD::Mul, vt, &[lhs, rhs]), self.dag.get_node(ISD::MulHS, vt, &[lhs, rhs]))
-        } else {
-            return None;
-        };
-        if scale == u128::from(vt.size_in_bits()) {
-            return Some(hi);
-        }
-        let amount = self.dag.get_constant(scale, EVT::I8);
-        Some(self.dag.get_node(ISD::FShr, vt, &[hi, lo, amount]))
     }
 
     /// `TargetLowering::expandABS` ([L11308][pin]) for scalars: `smax(x, 0 -
