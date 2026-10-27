@@ -10,7 +10,7 @@ pub const DIVIDE_PREFIX: &str = "div64_";
 pub const HUGE_PREFIX: &str = "huge_";
 
 /// What a caller reads of a divide's results; a routine may leave the other
-/// one unfixed (SD315).
+/// one unfixed (SD232).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Used {
     Both,

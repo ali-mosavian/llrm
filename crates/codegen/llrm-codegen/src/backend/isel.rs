@@ -3807,7 +3807,11 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: self.arch.frame_register(),
+                    // `FRAME` names the frame in every
+                    // width: `bodyfacts`, `remat` and `floatassign` find a
+                    // frame cell by it, and the prologue resolves it to the
+                    // target's frame register.
+                    through: llrm_lir::registers::FRAME,
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -6060,6 +6064,9 @@ impl Selector<'_, '_, '_> {
         };
         let Some(global) = global else { return self.indirect(inst, convention, *callee, arguments, at, out) };
         let name = global.name.owned().unwrap_or_default();
+        if let Some(info) = llrm_mir::atomic::decode(&name) {
+            return self.atomic_exchange(inst, info, arguments, at, out);
+        }
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
@@ -7831,6 +7838,50 @@ impl Selector<'_, '_, '_> {
         let Some(block) = function.parent(call) else { return false };
         function.next_in_block(call) == Some(inst)
             && (!self.fused.contains(&inst) || function.next_in_block(inst) == function.terminator(block))
+    }
+
+    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
+    /// `seq_cst` store, as `xchg` with the cell. The machine locks it without
+    /// asking, so every ordering is met.
+    fn atomic_exchange(
+        &mut self,
+        inst: InstId,
+        info: llrm_mir::opcode::AtomicInfo,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        use llrm_mir::opcode::{AtomicKind, RmwOp};
+        let function = self.function;
+        let (pointer, value) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Store => (arguments[1], arguments[0]),
+            _ => return refuse(format!("an atomic {:?}", info.kind)),
+        };
+        let ty = function.operand_type(&self.module.context, value).expect("a typed value");
+        let width = self.width(ty)?;
+        let regs = self.regs();
+        let cell = match self.pointer(pointer)? {
+            Pointer::Far { .. } => return refuse("an atomic access through a far pointer"),
+            pointer => Self::memory(regs, pointer, width),
+        };
+        let from = self.held(value, ty, at, out)?;
+        // The old value lands where the new one was read: the instruction is
+        // tied, as an `add` is.
+        let old = match function.instruction(inst).result {
+            Some(result) => Held { value: self.value(result), width },
+            None => Held { value: self.fresh(), width },
+        };
+        let what = semantics(
+            Operation::Exchange,
+            "xchg",
+            vec![Loc::Held(old), Loc::Mem(cell.clone())],
+            vec![Loc::Held(from), Loc::Mem(cell)],
+        );
+        let mut one = insn_of(at, what);
+        one.volatile = true;
+        out.push(Arc::new(one));
+        Ok(())
     }
 
     /// A port read or written: `in` or `out`, a port below 256 immediate,

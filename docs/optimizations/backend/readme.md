@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -89,7 +89,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
 | memcpycall | Turns an `llvm.memcpy` the target should not copy inline into a call of `memcpy`, as the pin's `EmitTargetCodeForMemcpy` leaves it: a call for a length the target cannot move in a few loads and stores. | Once per module in `driver::optimized`, when the target names `memcpy` | [memcpycall](memcpycall.md) |
-| memsetpattern | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/memsetpattern.rs) |
+| memsetpattern | Which selectors take `memset.pattern` as a loop. | The compile driver (`driver/mod.rs`), which asks `expands_for` of its | [memsetpattern](memsetpattern.md) |
 | mirprint | Pre-allocation LIR as LLVM MIR, so the pin's `llc -run-pass=greedy` allocates the same function (a like-for-like check of quality and cost). | `LLRM_MIR_PRINT=<function>` in the greedy shadow run; | [mirprint](mirprint.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
 | nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
@@ -112,14 +112,14 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |
 | regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at | [regclass](regclass.md) |
 | registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
-| regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. |  | [regpressure](regpressure.md) |
+| regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. | Named by `machinesched`. | [regpressure](regpressure.md) |
 | regthrash | Renames a definition's register so that a copy after it is a copy of a register to itself. | First sub-pass of [`crate::backend::peephole`](peephole.md), gated on a register copy | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
-| repbsf | `bsf` gets the `rep` prefix (the TZCNT encoding, which processors without `tzcnt` run as the same `bsf`) unless the function is optimised for size or the instruction's flags are read. |  | [repbsf](repbsf.md) |
+| repbsf | `bsf` gets the `rep` prefix (the TZCNT encoding, which processors without `tzcnt` run as the same `bsf`) unless the function is optimised for size or the instruction's flags are read. | Named by `peephole`. | [repbsf](repbsf.md) |
 | returnsplit | Gives a return that reloads a spilled constant its own block on the edges that stored the constant, where that lets the frame be set up later. | In `assemble`, ahead of `jumps::duplicated_returns`, at -O1 and above. | [returnsplit](returnsplit.md) |
 | rewriter | `VirtRegRewriter`: the allocation put into the function. | `allocate::RegAlloc`. | [rewriter](rewriter.md) |
 | rmw | Selects a private load, update and store of one cell as a single memory-destination instruction, before register allocation. | During instruction selection, in the combining step of `isel/combined.rs`, | [rmw](rmw.md) |
-| saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. |  | [saverestore](saverestore.md) |
+| saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. | Named by `shrinkwrap`. | [saverestore](saverestore.md) |
 | schedule | Reorders independent register-and-immediate instructions after allocation so a consumer does not wait on its producer's latency. | Once per body, the machine phase after `loopslots` and before `jumps` | [schedule](schedule.md) |
 | selectconstants | A select between two constants made arithmetic on its condition. | Once per program in `driver::optimized`, in front of `selects::lowered` | [selectconstants](selectconstants.md) |
 | selectiondag | SelectionDAG: value types, opcodes, the node arena, `getNode` with CSE and constant folding (pin `SelectionDAG.cpp`), and the builder that makes one DAG per block of MIR (pin `SelectionDAGBuilder.cpp`, scalar subset). | Nothing runs it yet but the tests and the shadow harness (sdag-d). The | [selectiondag](selectiondag.md) |

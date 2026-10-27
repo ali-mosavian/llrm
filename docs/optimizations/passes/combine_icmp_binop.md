@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_binop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_binop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:842313408eb1852f292522bd35fd067b3645b0afa5b2c4be724a17b0719f3601 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:914f1fa737e3a7c5b2e281ebbcfc05952608c04a04e4084641afcb8065dfdf8f -->
 
 # combine_icmp_binop
 
@@ -10,15 +10,18 @@ at d1106deb71cc).
 MIRROR: the order of the steps and each condition, up to the `Xor`/`Or`
 folds.
 
-OWED, in place as `// OWED:` comments: `foldICmpXNegX`, the sign-mask and
-low-bit-mask forms, `foldICmpXorXX`, `foldICmpOrXX`, the shared multiplier,
-`srem`, and every arm after them (`udiv`, `shl`, `lshr`, `and`...).
+OWED, in place as `// OWED:` comments: `foldICmpXNegX`, the equality forms
+of `foldICmpOrXX`, and every arm after `srem` (the shared second operand,
+`udiv`, `shl`, `lshr`, `and`...).
 
 DEVIATE 1: `ShareCommonDivisor` takes only its fast path (the offset is 1,
 or -1 for the negative forms); the general case needs `isMultipleOf`, which
 MIR's value tracking does not have. Exit: `isMultipleOf`.
 
 DEVIATE 2: no vectors; the constants of the equality fold are integers.
+
+DEVIATE 3: the shared multiplier asks `simplifyICmpInst` without the
+instruction as its context.
 
 ## How it works
 With `Op0 = A + B` and `Op1 = C + D` (an `or disjoint` is an add), a
@@ -33,3 +36,6 @@ The sift loop of x_heapsort kept `or disjoint %x, 1` live for its guard:
 %l = or disjoint i32 %x, 1   ; %c = icmp sge i32 %x, %n
 %c = icmp sgt i32 %l, %n
 ```
+
+## Used by
+Named by `combine_compares`.

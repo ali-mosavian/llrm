@@ -1,6 +1,7 @@
 """The per-merge tests of feat/parity: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -330,7 +331,7 @@ def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
         def __init__(self, out, code):
             self.stdout, self.stderr, self.returncode = out, "", code
 
-    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
+    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
     failed = ps.docs_failures(run=lambda command: Done(stale, 1))
     assert any("docs/optimizations/backend/jumps.md" in name for name in failed) and all("--sync" in why for why in failed.values()), failed
     assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
@@ -557,6 +558,18 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
 
 
+def test_a_target_reaches_the_crates_and_compilers_of_the_helpers_it_uses(tmp_path):
+    """95 targets, after C1 moved them to `common::cc::llrm_c()`, imported no crate in their own text and were all unmapped: the helper's imports are the target's."""
+    (tmp_path / "tests" / "common").mkdir(parents=True)
+    (tmp_path / "tests" / "common" / "mod.rs").write_text("use llrm_driver::all;")
+    (tmp_path / "tests" / "common" / "cc.rs").write_text('env!("CARGO_BIN_EXE_llrm-cc")')
+    (tmp_path / "tests" / "common" / "other.rs").write_text("use llrm_nib::x;")
+    text = ps.with_common("mod common;\nfn t() { common::cc::llrm_c(); }", tmp_path)
+    assert "llrm_driver" in text and "CARGO_BIN_EXE_llrm-cc" in text and "llrm_nib" not in text
+    assert "llrm_driver" in ps.with_common("pub mod common;", tmp_path)
+    assert ps.with_common("fn t() {}", tmp_path) == "fn t() {}"
+
+
 def test_a_runtime_change_runs_the_targets_that_build_the_runtime_with_cc_and_a_docs_change_does_not():
     """posix_os, qb_dev_interface, qb_sdl and qb_dirty import no crate: unmapped, they ran for no change at all."""
     mapping = ps.integration_map()
@@ -684,7 +697,7 @@ failures:
 ---- test_no_generated_page_is_stale stdout ----
 
 thread 'test_no_generated_page_is_stale' (123) panicked at tests/docs_in_sync.rs:24:5:
-run python3 tools/docsbuild/build.py --sync:
+run python3 tools/docs/docsbuild/build.py --sync:
   docs/optimizations/passes/lsr_solve.md
   docs/optimizations/passes/sinkcast.md
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
@@ -698,3 +711,24 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
     cause = ps.causes_of(failed)
     assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
+
+def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
+    """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
+    if shutil.which("perf") is None:
+        pytest.skip("no perf")
+    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
+    with ps.Meter() as counted:
+        code, _ = ps.run_cut([sys.executable, "-c", "while True: pass"], 1.0, tmp_path)
+    assert code is None
+    assert counted.value is not None and counted.value > 100_000_000, counted.value
+
+
+def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
+    """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
+    seen = []
+    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: seen.append(env) or (0, ""))
+    monkeypatch.setattr(ps, "selection", lambda: {"units": {"ranked": {"tests": [["t_a", 0.1]]}}})
+    monkeypatch.setattr(ps.xfail, "load_for", lambda root: {})
+    ps.unit_step("unranked", 5.0)(Path("."))
+    ps.unit_step("ranked", 5.0)(Path("."))
+    assert seen[0]["RUST_TEST_THREADS"] == "1" and seen[1] is None, seen
