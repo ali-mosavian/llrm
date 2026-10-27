@@ -1148,11 +1148,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// query: a constant moves right, `x + ~x` is -1, constants merge through
     /// a `sub` or an `add`, and an `add` of a negation or of a `sub` of the
     /// other operand is a `sub` or the operand itself.
-    ///
-    /// DEVIATE SD210: an `add` of constants is not reassociated when it feeds
-    /// a memory access (`reassociationCanBreakAddressingModePattern` is not
-    /// translated; the matcher folds the displacement there). Exit: that
-    /// query. Owner sdag-b. Review 2026-12-10.
     fn visit_add(
         &mut self,
         node: SDValue,
@@ -1184,19 +1179,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(self.dag.get_node(ISD::Sub, vt, &[sum, n01]));
                 }
             }
-            // `(add (add x, c0), c1)` is `(add x, c0 + c1)`.
-            if self.dag.opcode(n0) == ISD::Add && plain(self.dag, self.dag.operand(n0, 1)) {
-                let feeds_memory = self
-                    .dag
-                    .users(node)
-                    .any(|user| matches!(
-                        self.dag.opcode(SDValue { node: user, res: 0 }),
-                        ISD::Load | ISD::Store
-                    ));
-                if !feeds_memory {
-                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
-                    return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
-                }
+            // `(add (add x, c0), c1)` is `(add x, c0 + c1)` (`reassociateOps`).
+            if self.dag.opcode(n0) == ISD::Add
+                && plain(self.dag, self.dag.operand(n0, 1))
+                && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+            {
+                let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
             }
         }
         let is_neg =
@@ -1226,14 +1215,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
-        let feeds_memory = self
-            .dag
-            .users(node)
-            .any(|user| matches!(
-                self.dag.opcode(SDValue { node: user, res: 0 }),
-                ISD::Load | ISD::Store
-            ));
-        if !feeds_memory {
+        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
             return self.reassociate_ops(ISD::Add, n0, n1);
         }
         None
