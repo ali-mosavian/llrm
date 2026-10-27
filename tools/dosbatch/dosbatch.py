@@ -180,7 +180,7 @@ def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, a
         if target_bits(target) not in WATCOM_ROWS:
             raise BuildError(f"llrm-cc has no row for {target}")
         row = {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
-        return [str(BIN / "llrm-cc"), level, "-c", "-I", str(include), *abi, str(source), "-o", str(obj)], row
+        return [str(BIN / "llrm-cc"), level, "-c", *abi, str(source), "-o", str(obj)], row  # the row's -isystem has llrm_os.h; `include` is llrm-c's
     return [str(BIN / "llrm-c"), str(source), "-I", str(include), m_flag(target), *abi, level, "-o", str(obj)], {}
 
 
