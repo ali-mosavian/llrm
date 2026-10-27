@@ -208,6 +208,10 @@ pub struct RuntimeContracts<'a> {
     /// (QB's); a call of any other routine reads the ABI's for what it
     /// destroys.
     pub runtime: bool,
+    /// Whether the function's frame is zero-filled by the runtime that builds
+    /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
+    /// then dropped.
+    pub frame_zeroed: bool,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -662,6 +666,9 @@ fn selected_in(
     let layout = DataLayout::parse(text).map_err(Unselected)?;
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
+    if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
+        info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
+    }
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
@@ -692,6 +699,9 @@ fn selected_in(
         64 => (BuilderTarget::m64(), AddrMode::Flat64),
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
+    let mut builder_target = builder_target;
+    // The frontends compile static code: every symbol is `dso_local`.
+    builder_target.dag.dso_local_symbols = true;
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)

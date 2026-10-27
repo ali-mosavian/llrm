@@ -492,6 +492,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if cond_vt != EVT::I1 {
             return None;
         }
+        // The pin reaches the sign mask through `or (sext (setle x, -1)), 1`:
+        // `SimplifySetCC` makes the compare `x < 0` and `visitSIGN_EXTEND`
+        // folds `sext (setlt x, 0)` to `sra`. Neither is translated, so the
+        // sign folds run first, with the same result.
+        if let Some(mask) = self.select_sign_folds(n0, n1, n2) {
+            return Some(mask);
+        }
         if let Some(math) = self.fold_select_of_constants(n0, n1, n2, vt) {
             return Some(math);
         }
@@ -718,11 +725,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        let not_cc = if self.dag.value_type(lhs).is_integer() { cc.inverse_integer() } else { cc.inverse_float() };
+        // A far pointer is an integer to the pin (`i32`), not a float.
+        let is_float = self.dag.value_type(lhs).is_floating_point();
+        let not_cc = if is_float { cc.inverse_float() } else { cc.inverse_integer() };
         // `isCondCodeLegal`: x86 expands `oeq` and `une` (two flags), so once
         // operations are legal the fold must not make one.
         if self.level >= CombineLevel::AfterLegalizeVectorOps
-            && !self.dag.value_type(lhs).is_integer()
+            && is_float
             && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe)
         {
             return None;

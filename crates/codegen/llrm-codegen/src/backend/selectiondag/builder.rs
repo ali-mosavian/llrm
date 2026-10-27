@@ -413,13 +413,17 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
-                // globals the IR marks local, an ELF target's only ones
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
+                // every symbol under the static relocation
+                // model, which these targets (DOS objects, no
+                // PIC) always use.
                 super::function_lowering::Tables {
                     global_names: std::rc::Rc::new(
                         module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
                     ),
-                    local_symbols: std::rc::Rc::new(
+                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
+                        vec![true; module.globals.len()]
+                    } else {
                         module
                             .globals
                             .iter()
@@ -429,8 +433,8 @@ impl<'a> Builder<'a> {
                                     llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
                                 )
                             })
-                            .collect(),
-                    ),
+                            .collect()
+                    }),
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -1576,11 +1580,12 @@ impl Builder<'_> {
                 Ok(self.dag.get_node(ISD::BuildPair, vt, &[zero, zero]))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
-            // MIR holds an `x86_fp80` constant as the double nearest its value;
-            // the DAG's is the 80-bit encoding.
+            // MIR holds an `x86_fp80` constant a double holds exactly as that
+            // double; the DAG's is the 80-bit encoding.
             ConstantKind::Float(bits) if vt == EVT::Simple(MVT::F80) => {
                 Ok(self.dag.get_constant_fp(f80_from_double_bits(*bits), vt))
             }
+            ConstantKind::Float80(bits) => Ok(self.dag.get_constant_fp(*bits, vt)),
             ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
             ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
@@ -1736,7 +1741,7 @@ impl Builder<'_> {
         self.current = Some(inst);
         // `++SDNodeOrder`: what the nodes built for this instruction carry.
         self.dag.cur_order += 1;
-        if self.prelowered.contains(&inst) {
+        if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();
@@ -1842,7 +1847,9 @@ impl Builder<'_> {
         let result = if self.is_pointer_cast(op, instruction)? {
             self.pointer_cast(op, instruction.operands[0], operand, instruction.ty)?
         } else if op == CastOp::FPRound {
-            self.round_through_memory(operand, dest)
+            // A store of the type rounds it: no slot first (the old selector's
+            // single `fstp`).
+            if self.read_only_by_stores(instruction) { operand } else { self.round_through_memory(operand, dest) }
         } else {
             let converted = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
             // an integer wider than the float's mantissa is rounded to its type
@@ -1860,6 +1867,26 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether every reader of `instruction`'s value stores it: a store's
+    /// value, or a call's argument (passed on the stack, so stored, at the
+    /// argument's own type).
+    fn read_only_by_stores(
+        &self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = instruction.result else { return false };
+        let users = self.function.users(result);
+        !users.is_empty()
+            && users.iter().all(|one| {
+                let user = self.function.instruction(one.user);
+                match user.opcode {
+                    Opcode::Store { .. } => one.index == 0,
+                    Opcode::Call(_) => (one.index as usize) + 1 < user.operands.len(),
+                    _ => false,
+                }
+            })
     }
 
     /// `fpround`: the value stored to a stack slot of its own type and loaded
