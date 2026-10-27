@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/repbsf.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/repbsf.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/repbsf.rs sha256:ce5b4a57f87fcd411962d4735bd6e3c0fbaea0b2ec9ed17597013620092bcdca -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/repbsf.rs sha256:60785564e75e6a40578dd92b39693c00780495fb83cb41e45363ecff758d8835 -->
 
 # repbsf
 
@@ -25,3 +25,6 @@ Built for size, or with the flags read (`adc` next), the `bsf` is left as it
 is. From unit test
 `test_bsf_gets_the_rep_prefix_only_where_the_pin_gives_it`
 in `peephole_tests.rs`, which runs the three cases.
+
+## Used by
+Named by `peephole`.

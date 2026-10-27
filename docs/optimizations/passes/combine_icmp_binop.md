@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_binop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_binop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:8fab1d8632384961445ae523b2f64199a0c03b5dbdfbdd60b4c5faa9bd3c17c2 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:55de772938bfa0c71da92f842adb5be47a5f48cac760389a0b249c7317a610bf -->
 
 # combine_icmp_binop
 
@@ -36,3 +36,6 @@ The sift loop of x_heapsort kept `or disjoint %x, 1` live for its guard:
 %l = or disjoint i32 %x, 1   ; %c = icmp sge i32 %x, %n
 %c = icmp sgt i32 %l, %n
 ```
+
+## Used by
+Named by `combine_compares`.

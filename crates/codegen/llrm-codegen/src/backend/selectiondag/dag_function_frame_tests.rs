@@ -1144,3 +1144,31 @@ b10:
     let lowest = done.extents.iter().map(|(start, _)| *start).min();
     assert_eq!(home, lowest, "the cell belongs to %p, the lower object: {cell:?} in {:?}", done.extents);
 }
+
+/// `select (a < b), 1, 2` was `setl; mov 2; sub` (a load of the constant and a
+/// subtract from it: bintree m32 -O2 +3.8% clocks against the pin); the
+/// pin's `combineSubSetcc` makes it `setge; inc`, the inverted condition plus
+/// `C - 1`.
+#[test]
+fn a_select_of_one_and_two_is_the_inverted_setcc_plus_one() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %c = icmp slt i32 %a, %b
+  %s = select i1 %c, i32 1, i32 2
+  ret i32 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
+    assert!(names.iter().any(|n| n == "setge"), "{names:?}");
+    assert!(names.iter().any(|n| n == "inc"), "{names:?}");
+}

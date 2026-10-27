@@ -99,9 +99,12 @@ pub fn object(
         symbols.defined(&function.symbol, function.public, text_index, *offset, size);
     }
     // Data sections: constants, writable data, zero-filled.
-    let roles = [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss")];
+    let roles =
+        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")];
     let role_of = |one: &data::Placed| {
-        if one.zero && !one.constant {
+        if one.init_functions {
+            Role::InitFunctions
+        } else if one.zero && !one.constant {
             Role::Bss
         } else if one.constant {
             Role::ROData
@@ -125,7 +128,7 @@ pub fn object(
         }
     }
     for (offset_of_section, (_, _, _, members, _)) in data_sections.iter().enumerate() {
-        for (offset, one) in members {
+        for (offset, one) in members.iter().filter(|(_, one)| !one.init_functions) {
             symbols.defined(&one.name, one.public, 1 + offset_of_section, *offset, one.bytes.len());
         }
     }
