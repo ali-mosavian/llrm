@@ -678,3 +678,46 @@ entry:
     let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
     assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
 }
+
+/// `sitofp i32 to double` at m64 stopped at `CannotSelect("Target(586)")`:
+/// the conversion took the x87 `fild` because the lowering was told there is
+/// no SSE2. x86-64 has it, and the conversion is `cvtsi2sd`.
+#[test]
+fn an_m64_integer_to_double_conversion_is_cvtsi2sd() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to double
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "cvtsi2sd"), "{names:?}");
+}
+
+/// A call in tail position at m64 stopped at `Unmapped("TCRETURNdi64")`
+/// (`gfx_set_background`, `B_SPLY` of the QB runtime): the sibling call of the
+/// 64-bit target is the 32-bit target's, a `jmp` to the callee.
+#[test]
+fn an_m64_sibling_call_is_a_jump_to_the_callee() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i64 @g(i64)
+define i64 @f(i64 %a) {
+entry:
+  %r = tail call i64 @g(i64 %a)
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Return && w.name.as_deref() == Some("jmp"));
+    assert!(jump.is_some(), "a jmp that returns");
+}

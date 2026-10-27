@@ -2117,7 +2117,7 @@ impl Emitter<'_, '_> {
             }
             // A sibling call: the frame pass puts the epilogue before this
             // return, which is a jump to the callee (`masm`).
-            "TCRETURNdi" | "TCRETURN_16" => {
+            "TCRETURNdi" | "TCRETURNdi64" | "TCRETURN_16" => {
                 // the pseudo keeps the node's operands: the chain, then the
                 // callee
                 let target = if name == "TCRETURN_16" { node.ops[1] } else { node.ops[0] };
