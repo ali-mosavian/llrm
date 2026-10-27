@@ -390,6 +390,19 @@ fn a_store_of_the_high_byte_is_a_byte_store() {
     crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
 }
 
+/// Clearing a bit of an `i64` by a variable index was `mov rax,-1; btc rax,n;
+/// and`: the pin folds `xor (shl 1, n), -1` to `rotl -2, n` (DAGCombiner),
+/// which the table selects with the `and` as `btr`.
+#[test]
+fn a_variable_bit_clear_of_a_quadword_is_btr() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @clear(i64 %x, i64 %n) {\n  %b = shl i64 1, %n\n  %m = xor i64 %b, -1\n  %r = and i64 %x, %m\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "clear").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]

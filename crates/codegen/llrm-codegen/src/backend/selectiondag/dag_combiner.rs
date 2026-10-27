@@ -722,6 +722,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
             }
         }
+        // fold (xor (shl 1, x), -1) -> (rotl ~1, x): a zero placed in a value
+        // of all ones, which the target clears a bit with (`btr`) when it
+        // meets an `and` (DAGCombiner::visitXOR).
+        let ones = match vt.size_in_bits() {
+            128.. => u128::MAX,
+            bits => (1u128 << bits) - 1,
+        };
+        if vt.is_integer()
+            && self.dag.opcode(n0) == ISD::Shl
+            && self.dag.constant(self.dag.operand(n0, 0)) == Some(1)
+            && self.dag.constant(n1) == Some(ones)
+            && self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::Rotl, vt))
+        {
+            let amount = self.dag.operand(n0, 1);
+            let not_one = self.dag.get_constant(ones - 1, vt);
+            return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1);
         }
