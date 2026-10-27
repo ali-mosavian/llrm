@@ -194,7 +194,8 @@ fn test_a_body_s_attributes_are_stated_on_its_declarations() {
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     stamped_all(&mut program, &mut modules).unwrap();
     assert!(
-        printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind nofree nosync norecurse\n"),
+        printed(&program.modules[1])
+            .contains("declare i16 @double(i16) memory(none) willreturn nounwind nofree nosync norecurse\n"),
         "{}",
         printed(&program.modules[1])
     );
