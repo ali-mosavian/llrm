@@ -270,8 +270,9 @@ fn direct_uses(
         }
         let mut direct = Direct { function: function_id, loads: Vec::new(), stores: Vec::new() };
         for &(inst, index) in &reach.uses {
-            // `GlobalStatus` sees through `stripPointerCasts`, not through a gep: a constant gep
-            // names a byte of the variable, whatever its value, not the variable.
+            // `GlobalStatus` sees through `stripPointerCasts`, not through a
+            // gep: a constant gep names a byte of the variable,
+            // whatever its value, not the variable.
             let Operand::Constant(operand) = function.instruction(inst).operands[index] else { return None };
             if !is_the_variable(&module.context, operand, id) {
                 return None;
