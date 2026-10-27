@@ -918,11 +918,6 @@ const MEMCPY_MOVES: i64 = 8;
 /// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
 const MEMCPY_MOVES_SIZE: i64 = 4;
 
-/// The bytes of a constant memset's `rep stosb` through es:di, as
-/// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
-/// the count, the fill, and DI's save in the frame.
-const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
-
 /// The bytes a value of `ty` takes in memory or on the stack: a far
 /// pointer is its offset and selector, in two registers.
 pub(super) fn size_of(
@@ -3785,7 +3780,7 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: RegId::BP,
+                    through: self.arch.frame_register(),
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -6499,10 +6494,10 @@ impl Selector<'_, '_, '_> {
                     // callee reads the next argument 12 bytes on.
                     let slot = (i64::from(size) + self.arch.stack_slot_bytes() - 1) / self.arch.stack_slot_bytes()
                         * self.arch.stack_slot_bytes();
-                    let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+                    let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
                     let count = Loc::Imm(Imm { value: slot, width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
-                    let top = Mem { through: RegId::SP, disp_width: 0, ..Mem::new(None, size) };
+                    let top = Mem { through: self.arch.stack_pointer(), disp_width: 0, ..Mem::new(None, size) };
                     out.push(insn(
                         at,
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)]),
@@ -6850,7 +6845,7 @@ impl Selector<'_, '_, '_> {
             Callee::Indirect(_) => {}
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
@@ -6897,7 +6892,7 @@ impl Selector<'_, '_, '_> {
         let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
         let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
         let from = self.pointer(source)?;
-        let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+        let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
         let count = Loc::Imm(Imm { value: bytes, width: if bytes > 0x7FFF { 4 } else { 2 }, address: None });
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
@@ -6906,15 +6901,6 @@ impl Selector<'_, '_, '_> {
             Pointer::Based { base, index: None, scale: 1, offset: 0, segment: Some(regs.stack_segment_register()) };
         self.copied(to, from, Some(copy), None, false, false, at, out)?;
         Ok(bytes)
-    }
-
-    /// The bytes of the stores `memset` expands a constant `length` to,
-    /// each at a one-byte displacement: two or more dwords store a register.
-    fn stored_bytes(length: i64) -> i64 {
-        let dwords = length / 4;
-        let each = if dwords > 1 { 4 } else { 8 };
-        let setup = if dwords > 1 { 6 } else { 0 };
-        setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
     }
 
     /// Whether a constant memset of `length` bytes is stores rather than a
@@ -6933,7 +6919,11 @@ impl Selector<'_, '_, '_> {
         let stores = length / 4 + (length % 4).count_ones() as i64;
         let ratio = self.cpu.operations.pieces(self.cpu.size, zero);
         match ratio {
-            0 => stores <= MEMSET_STORES && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES),
+            0 => {
+                stores <= MEMSET_STORES
+                    && !(self.cpu.size
+                        && crate::backend::memcpycall::stored_bytes(length) > crate::backend::memcpycall::FILL_BYTES)
+            }
             ratio => stores < ratio,
         }
     }

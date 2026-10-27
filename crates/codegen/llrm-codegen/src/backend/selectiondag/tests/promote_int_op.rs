@@ -83,11 +83,11 @@ fn a_word_operation_is_done_in_a_dword() {
 /// A right shift needs the high bits right: `srl` zero-extends the operand
 /// (the pin's `srl (zero_extend x), 3`: X86 keeps the `and 0xFFFF` a `movzx`
 /// matches instead of trimming it to the bits the shift reads, 0xFFF8, which
-/// #4399's demanded bits did), `sra` sign-extends it in register; a left shift
-/// needs neither.
+/// #4399's demanded bits did), `sra` sign-extends it (`sext_in_reg (aext x)`
+/// folds to `sext x`, `visitSIGN_EXTEND_INREG`); a left shift needs neither.
 #[test]
 fn a_word_shift_extends_its_operand_by_its_kind() {
-    for (op, extend) in [(ISD::Srl, ISD::ZeroExtend), (ISD::Sra, ISD::SignExtendInReg), (ISD::Shl, ISD::AnyExtend)] {
+    for (op, extend) in [(ISD::Srl, ISD::ZeroExtend), (ISD::Sra, ISD::SignExtend), (ISD::Shl, ISD::AnyExtend)] {
         let (dag, root) = promoted(false, |dag, x, _| {
             let by = dag.get_constant(3, EVT::I8);
             dag.get_node(op, EVT::I16, &[x, by])
