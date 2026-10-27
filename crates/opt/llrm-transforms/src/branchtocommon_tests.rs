@@ -137,3 +137,39 @@ e:
     let text_in = text.replace("common.ret:\n  ret void\n\n", "").replace("br label %common.ret", "ret void");
     assert_eq!(simplify(&text_in), text);
 }
+
+/// A predecessor whose branch shares no successor with `bb`'s was asked
+/// `safeToMergeTerminators` (a successor-set intersection) before the recipe
+/// refused it: the recipe is asked first and no pair is checked.
+#[test]
+fn test_a_predecessor_sharing_no_successor_is_not_checked_for_merging() {
+    let mut module = parsed(
+        "define i16 @f(i16 %a, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %k = icmp eq i16 %a, 0
+  br i1 %k, label %b3, label %b4
+
+b2:
+  ret i16 1
+
+b3:
+  ret i16 2
+
+b4:
+  ret i16 3
+}
+",
+    );
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let (context, function) = module.function_mut("f").expect("@f");
+    let entry = function.entry().expect("an entry");
+    let bb = function.successors(entry)[0];
+    let before = crate::branchtocommon::SAFE_TO_MERGE_ASKS.with(|count| count.get());
+    assert!(!crate::branchtocommon::folded(context, &spec, function, bb));
+    assert_eq!(crate::branchtocommon::SAFE_TO_MERGE_ASKS.with(|count| count.get()), before);
+}

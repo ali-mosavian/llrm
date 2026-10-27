@@ -81,6 +81,7 @@ rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exception
 ["B$CENP"]
 cleanup = 0
 control = "never"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = false
@@ -204,6 +205,7 @@ rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descrip
 ["B$EVCK"]
 cleanup = 0
 control = "unknown"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = false
@@ -518,6 +520,7 @@ rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`,
 ["B$OEGA"]
 cleanup = 4
 control = "unknown"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = true
@@ -751,6 +754,7 @@ Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack pa
 ["B$RESN"]
 cleanup = 0
 control = "never"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = true
@@ -1148,6 +1152,108 @@ parameters = ["int"]
 view = { length = "1", data = "slot($0)" }
 check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 
+# Normal-return stack cleanup read directly from the matching entry in all
+# three shipped Microsoft runtimes.  This is deliberately only a stack ABI
+# table: memory, clobber, allocation, error and alias effects remain those of
+# the conservative runtime contract.  BCOM45/BCL71ENR/VBDCL10E hashes are
+# 5b1c7a6f..., 873fde67..., and 59ad49b0...; tools/libdump.py records the
+# member, entry offset and RETF for every row.  SCAT is family-specific (the
+# VBDOS far-string entry consumes an extra word), so it is not generalized.
+[pops.string]
+"B$ASSN" = 12
+"B$FASC" = 2
+"B$FCHR" = 2
+"B$FCVC" = 2
+"B$FCVD" = 2
+"B$FCVI" = 2
+"B$FCVL" = 2
+"B$FCVS" = 2
+"B$FHEX" = 4
+"B$FLEN" = 2
+"B$FMID" = 6
+"B$FMKC" = 8
+"B$FMKD" = 8
+"B$FMKI" = 2
+"B$FMKL" = 4
+"B$FMKS" = 4
+"B$FMDF" = 8
+"B$FMSF" = 4
+"B$FOCT" = 4
+"B$INS2" = 4
+"B$INS3" = 6
+"B$LCAS" = 2
+"B$LDFS" = 6
+"B$LEFT" = 4
+"B$LTRM" = 2
+"B$MCVD" = 2
+"B$MCVS" = 2
+"B$RGHT" = 4
+"B$RTRM" = 2
+"B$SASS" = 4
+"B$SCMP" = 4
+"B$SCPY" = 2
+"B$SPAC" = 2
+"B$STRI" = 4
+"B$STRS" = 4
+"B$UCAS" = 2
+
+# Stack widths read from actual QB 4.5 /A listings for the graphics forms,
+# then checked against their runtime RETF cleanup. Coordinate state is latched
+# by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
+[pops.graphics]
+"B$PAL2" = 6
+# gwpal.asm: parmD fpData, parmW pAd.
+"B$PALU" = 6
+"B$N1I2" = 4
+"B$N2I2" = 4
+"B$N1R4" = 8
+"B$N2R4" = 8
+"B$S1I2" = 4
+"B$S2I2" = 4
+"B$S1R4" = 8
+"B$S2R4" = 8
+"B$CSTT" = 4
+"B$CSTO" = 4
+"B$CASP" = 4
+# circle.asm: parmD Radius, parmW Color.
+"B$CIRC" = 6
+"B$LINE" = 6
+"B$PAIN" = 4
+# paint.asm: parmSD sdTile, parmW Border, parmSD sdBkgd (-1 for none).
+"B$PNTC" = 6
+"B$PSTC" = 2
+# grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
+"B$PSET" = 0
+"B$PRST" = 0
+"B$PNI2" = 4
+"B$PNR4" = 8
+"B$GGET" = 6
+"B$GPUT" = 8
+# grview.asm: seven Pascal words; `void pascal B$VEW0()`.
+"B$VIEW" = 14
+"B$VEW0" = 0
+# grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
+"B$WIND" = 18
+"B$WIN0" = 0
+"B$FTAB" = 2
+
+# Which routines write a runtime cell a program names by EXTDEF, where the
+# runtime source settles it. A call to anything else leaves the cell alone,
+# unless it runs the program's own code -- which `enters_user_code` and an
+# error handler say, and the caller asks.
+#
+# b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
+# does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
+# `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
+# CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
+# B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
+# bload.asm only read it, and no reference takes its address. ABSOLUTE runs
+# machine code of the program's choosing.
+[[writers]]
+cell = "b$seg"
+family = "qb45"
+routines = ["B$DSEG", "B$DSG0", "B$SCLR", "B$RUNL", "B$StackReset", "B$Init", "B$IINIT", "B$RUNINI", "ABSOLUTE"]
+
 # llrm's runtime takes its calls as the target's own convention states them, except these routines, whose
 # stack block is the call site's own length (the bounds of every dimension, the channels closed): a register
 # convention cannot name that, so they keep BASIC's pushes and are popped by the callee.
@@ -1277,6 +1383,7 @@ evidence = "runtime/qb/events.c: PEN(n) of a machine with no joystick or light p
 ["B$SCMP"]
 cleanup = 4
 control = "returns"
+flags_result = true
 enters_user_code = false
 raises_error = false
 error_handling = false

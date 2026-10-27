@@ -97,14 +97,24 @@ pub struct Solution<P: Problem> {
 struct Seen<P: Problem> {
     insns: Insns,
     /// Where the block says it goes.
-    raw: Vec<i64>,
+    raw: Rc<Vec<i64>>,
     summary: Rc<P::Summary>,
+}
+
+/// The edges of a body and the components in the order the facts flow, kept
+/// while no block's successors change.
+struct Graph {
+    ats: Vec<i64>,
+    successors: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+    components: Vec<Vec<usize>>,
 }
 
 struct Held<P: Problem> {
     key: (u32, i64),
     blocks: IndexMap<i64, Seen<P>>,
     solution: Rc<Solution<P>>,
+    graph: Rc<Graph>,
 }
 
 /// The last answer, per thread, and how it was made.
@@ -112,6 +122,7 @@ pub struct Kept<P: Problem> {
     held: RefCell<Option<Held<P>>>,
     asks: Cell<[usize; 3]>,
     visits: Cell<usize>,
+    graphs: Cell<usize>,
 }
 
 impl<P: Problem> Default for Kept<P> {
@@ -122,7 +133,7 @@ impl<P: Problem> Default for Kept<P> {
 
 impl<P: Problem> Kept<P> {
     pub const fn new() -> Self {
-        Self { held: RefCell::new(None), asks: Cell::new([0; 3]), visits: Cell::new(0) }
+        Self { held: RefCell::new(None), asks: Cell::new([0; 3]), visits: Cell::new(0), graphs: Cell::new(0) }
     }
 
     /// Answers made from scratch (no block left as the last answer had it),
@@ -134,6 +145,12 @@ impl<P: Problem> Kept<P> {
     /// Blocks worked out so far, whole or in part.
     pub fn visits(&self) -> usize {
         self.visits.get()
+    }
+
+    /// Graphs made so far: one for each answer whose blocks or successors
+    /// were not the last answer's.
+    pub fn graphs(&self) -> usize {
+        self.graphs.get()
     }
 
     fn counted(
@@ -166,26 +183,49 @@ impl<P: Problem> Kept<P> {
             *self.held.borrow_mut() = held;
             return solution;
         }
-        let mut now: IndexMap<i64, Seen<P>> = IndexMap::default();
+        let mut held = held;
+        // The same blocks in the same order: the last answer's table is
+        // updated in place where a block changed, not written again.
+        let mut now: IndexMap<i64, Seen<P>> = match held.as_mut() {
+            Some(held)
+                if held.blocks.len() == body.blocks.len()
+                    && body.blocks.iter().zip(held.blocks.keys()).all(|(block, at)| block.at == *at) =>
+            {
+                std::mem::take(&mut held.blocks)
+            }
+            _ => IndexMap::default(),
+        };
+        let reused = !now.is_empty();
         let mut dirty: HashSet<i64> = HashSet::default();
-        for block in &body.blocks {
+        // Whether any block goes somewhere else than the last answer had it.
+        let mut rerouted = false;
+        let seen = |block: &Block| Seen {
+            insns: block.insns.clone(),
+            raw: Rc::new(block.succ.to_vec()),
+            summary: Rc::new(problem.summarize(body, block)),
+        };
+        for (slot, block) in body.blocks.iter().enumerate() {
+            if reused {
+                let old = &mut now[slot];
+                if old.insns.same_insns(&block.insns) && *old.raw == *block.succ {
+                    continue;
+                }
+                rerouted |= *old.raw != *block.succ;
+                dirty.insert(block.at);
+                *old = seen(block);
+                continue;
+            }
             match held.as_ref().and_then(|held| held.blocks.get(&block.at)) {
                 Some(old) if old.insns.same_insns(&block.insns) && *old.raw == *block.succ => {
                     now.insert(
                         block.at,
-                        Seen { insns: block.insns.clone(), raw: old.raw.clone(), summary: Rc::clone(&old.summary) },
+                        Seen { insns: block.insns.clone(), raw: Rc::clone(&old.raw), summary: Rc::clone(&old.summary) },
                     );
                 }
-                _ => {
+                other => {
+                    rerouted |= other.is_none_or(|old| *old.raw != *block.succ);
                     dirty.insert(block.at);
-                    now.insert(
-                        block.at,
-                        Seen {
-                            insns: block.insns.clone(),
-                            raw: block.succ.to_vec(),
-                            summary: Rc::new(problem.summarize(body, block)),
-                        },
-                    );
+                    now.insert(block.at, seen(block));
                 }
             }
         }
@@ -200,40 +240,56 @@ impl<P: Problem> Kept<P> {
         let mut leaving: Vec<P::Value> = ats.iter().map(|at| was(at, |s| &s.leaving)).collect();
         let mut entering: Vec<P::Value> = ats.iter().map(|at| was(at, |s| &s.entering)).collect();
         let dirty: Vec<bool> = ats.iter().map(|at| dirty.contains(at)).collect();
-        // Who feeds each block, and whom it feeds.
-        let mut successors: Vec<Vec<usize>> = Vec::with_capacity(ats.len());
-        let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); ats.len()];
-        for (from, seen) in now.values().enumerate() {
-            successors.push(seen.raw.iter().filter_map(|next| now.get_index_of(next)).collect());
-            for next in &successors[from] {
-                predecessors[*next].push(from);
+        // Who feeds each block, and whom it feeds: as the last answer had it
+        // while no block was rerouted and the blocks are the same in the same
+        // order.
+        let graph = match held.as_ref().map(|held| &held.graph) {
+            Some(graph) if !rerouted && graph.ats == ats => Rc::clone(graph),
+            _ => {
+                self.graphs.set(self.graphs.get() + 1);
+                let mut successors: Vec<Vec<usize>> = Vec::with_capacity(ats.len());
+                let mut predecessors: Vec<Vec<usize>> = vec![Vec::new(); ats.len()];
+                for (from, seen) in now.values().enumerate() {
+                    successors.push(seen.raw.iter().filter_map(|next| now.get_index_of(next)).collect());
+                    for next in &successors[from] {
+                        predecessors[*next].push(from);
+                    }
+                }
+                let mut components = llrm_support::graph::components(&body.blocks);
+                if P::FORWARD {
+                    components.reverse();
+                }
+                let components = components
+                    .into_iter()
+                    .map(|component| component.iter().filter_map(|at| now.get_index_of(at)).collect())
+                    .collect();
+                Rc::new(Graph { ats: ats.clone(), successors, predecessors, components })
             }
-        }
-        let (fed_by, feeds) = if P::FORWARD { (&predecessors, &successors) } else { (&successors, &predecessors) };
-        let mut components = llrm_support::graph::components(&body.blocks);
-        if P::FORWARD {
-            components.reverse();
-        }
+        };
+        let (fed_by, feeds) = if P::FORWARD {
+            (&graph.predecessors, &graph.successors)
+        } else {
+            (&graph.successors, &graph.predecessors)
+        };
         let mut gathered: Vec<P::Value> = Vec::new();
         let mut moved = vec![false; ats.len()];
         let mut inside = vec![false; ats.len()];
         let mut queued = vec![false; ats.len()];
-        for component in components {
-            let component: Vec<usize> = component.iter().filter_map(|at| now.get_index_of(at)).collect();
-            for at in &component {
+        for component in &graph.components {
+            for at in component {
                 inside[*at] = true;
             }
             let reached = |at: &usize| fed_by[*at].iter().any(|from| moved[*from] && !inside[*from]);
             if component.iter().any(|at| dirty[*at] || reached(at)) {
                 let before: Vec<P::Value> = component.iter().map(|at| leaving[*at]).collect();
-                for at in &component {
+                for at in component {
                     leaving[*at] = start;
                 }
                 // The deepest block first for a fact that flows back, the first
                 // reached for one that flows on.
                 let mut pending: Vec<usize> =
-                    if P::FORWARD { component.clone() } else { component.iter().rev().copied().collect() };
-                for at in &component {
+                    if P::FORWARD { component.to_vec() } else { component.iter().rev().copied().collect() };
+                for at in component {
                     queued[*at] = true;
                 }
                 while let Some(at) = pending.pop() {
@@ -261,7 +317,7 @@ impl<P: Problem> Kept<P> {
                     }
                 }
             }
-            for at in &component {
+            for at in component {
                 inside[*at] = false;
             }
         }
@@ -274,11 +330,23 @@ impl<P: Problem> Kept<P> {
             })
             .map(|(_, address)| *address)
             .collect();
-        let entering: IndexMap<i64, P::Value> = ats.iter().copied().zip(entering).collect();
-        let leaving: IndexMap<i64, P::Value> = ats.iter().copied().zip(leaving).collect();
+        // Over the last answer's maps when the blocks are the same, which
+        // hashes none of them again.
+        let patched = |was: Option<&IndexMap<i64, P::Value>>, values: Vec<P::Value>| match was {
+            Some(was) if reused => {
+                let mut made = was.clone();
+                for (slot, value) in values.into_iter().enumerate() {
+                    *made.get_index_mut(slot).expect("a block of the last answer").1 = value;
+                }
+                made
+            }
+            _ => ats.iter().copied().zip(values).collect(),
+        };
+        let entering = patched(held.as_ref().map(|held| &held.solution.entering), entering);
+        let leaving = patched(held.as_ref().map(|held| &held.solution.leaving), leaving);
         let summaries = now.iter().map(|(at, seen)| (*at, Rc::clone(&seen.summary))).collect();
         let solution = Rc::new(Solution { entering, leaving, summaries, refreshed });
-        *self.held.borrow_mut() = Some(Held { key, blocks: now, solution: Rc::clone(&solution) });
+        *self.held.borrow_mut() = Some(Held { key, blocks: now, solution: Rc::clone(&solution), graph });
         solution
     }
 }

@@ -739,7 +739,7 @@ b0:
 #[test]
 fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     let mut module = parsed(CHOP);
-    let options = crate::pipeline::Options::speed();
+    let options = crate::pipeline::Options::aggressive();
     let applied = crate::pipeline::Applied { options, ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
@@ -1282,6 +1282,101 @@ b1:
         "@bench(",
     );
     assert!(top.contains("call void @accel"), "accel was inlined for 2 bytes more:\n{top}");
+}
+
+/// `@top` after the -O2 pipeline over `text`.
+fn at_o2(
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// A private callee that is one 16-case switch over values 2..21 (a jump
+/// table on x86) was priced as a compare tree, 3n/2-1 compares, because the
+/// walk never gave the cost model the target's switch answer: cost 290 against
+/// 225, so it stayed a call that the pin inlines (QCport `item_mdl_id` in
+/// `mdl_rebind_items`; the pin prices the table, 20 entries, about 175).
+#[test]
+fn test_an_o2_call_to_a_dense_switch_callee_is_inlined_as_the_pin_does() {
+    let cases: Vec<i16> = vec![2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 18, 20, 21];
+    let labels: String = cases.iter().map(|c| format!(" i16 {c}, label %c{c}\n")).collect();
+    let arms: String =
+        cases.iter().map(|c| format!("c{c}:\n  %v{c} = mul i16 %w, {}\n  br label %out\n\n", c * 3 + 1)).collect();
+    let incoming: String = cases.iter().map(|c| format!(", [ %v{c}, %c{c} ]")).collect();
+    let top = at_o2(
+        &format!(
+            "define internal i16 @pick(ptr %it, i16 %w) {{
+b0:
+  %k = load i16, ptr %it
+  switch i16 %k, label %out [
+{labels}  ]
+
+{arms}out:
+  %r = phi i16 [ -1, %b0 ]{incoming}
+  ret i16 %r
+}}
+
+define i16 @top(ptr %p, ptr %q, i16 %w) {{
+b0:
+  %a = call i16 @pick(ptr %p, i16 %w)
+  %b = call i16 @pick(ptr %q, i16 %a)
+  ret i16 %b
+}}
+"
+        ),
+        "@top(",
+    );
+    assert!(!top.contains("@pick"), "the dense switch callee stayed a call:\n{top}");
+}
+
+/// A private callee with a stack frame, called once from a recursive function,
+/// stayed a call because `fits_with` never copies a body that allocates into a
+/// recursive caller; its only call goes with it, so the copy shrinks the code
+/// and the recursive path is no deeper than before (QCport
+/// `ent_lightning_` into `ent_use_targets_`: the pin inlines it).
+#[test]
+fn test_an_o2_last_call_to_a_private_callee_with_a_frame_is_inlined_into_a_recursive_caller() {
+    let top = at_o2(
+        "declare void @sink(ptr)
+
+define internal void @leaf(i16 %v) {
+b0:
+  %buf = alloca [16 x i8]
+  store i16 %v, ptr %buf
+  call void @sink(ptr %buf)
+  ret void
+}
+
+define i16 @rec(i16 %n) {
+b0:
+  %c = icmp sgt i16 %n, 0
+  br i1 %c, label %go, label %out
+
+go:
+  call void @leaf(i16 %n)
+  %m = sub i16 %n, 1
+  %r = call i16 @rec(i16 %m)
+  %s = add i16 %r, %n
+  ret i16 %s
+
+out:
+  ret i16 0
+}
+",
+        "@rec(",
+    );
+    assert!(!top.contains("@leaf"), "the last call stayed a call:\n{top}");
 }
 
 /// The pin's `GlobalOpt` runs between IPSCCP and the walk (pass 20 of
