@@ -73,6 +73,26 @@ pub struct Tables {
     /// The registers whose one definition can be made again where they are
     /// read (`isTriviallyReMaterializable`).
     pub remat: RefCell<crate::support::hash::HashSet<u32>>,
+    /// The family each value of the body belongs to (a clone of a value is of
+    /// its family) and the wide reads (more than 2 bytes) of each family, by
+    /// (slot, block): a call loses a family member's high half only where a
+    /// wide read can follow (`CallMasks`). A value in no family is wide.
+    pub family: RefCell<HashMap<u32, u32>>,
+    pub wide_reads: RefCell<HashMap<u32, Vec<(crate::liveness::slotindex::SlotIndex, usize)>>>,
+}
+
+impl Tables {
+    /// `new` is a clone of `from`: of its family, if it has one.
+    pub fn derive_family(
+        &self,
+        new: u32,
+        from: u32,
+    ) {
+        let root = self.family.borrow().get(&from).copied();
+        if let Some(root) = root {
+            self.family.borrow_mut().insert(new, root);
+        }
+    }
 }
 
 // DEVIATE D-I: `isTriviallyReMaterializable` is answered by the spiller's own
@@ -415,6 +435,7 @@ impl<'a> InlineSpiller<'a> {
             self.tables.orders.borrow_mut().insert(value, order);
             let width = self.tables.widths.borrow().get(&reg).copied().unwrap_or(0);
             self.tables.widths.borrow_mut().insert(value, width);
+            self.tables.derive_family(value, reg);
             let bytes = self.tables.float_bytes.borrow().get(&reg).copied();
             if let Some(bytes) = bytes {
                 self.tables.float_bytes.borrow_mut().insert(value, bytes);
@@ -575,6 +596,7 @@ impl<'a> InlineSpiller<'a> {
         }
         self.tables.orders.borrow_mut().insert(new, order);
         self.tables.widths.borrow_mut().insert(new, width);
+        self.tables.derive_family(new, reg);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));
         Some(vec![new])
     }

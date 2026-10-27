@@ -1282,6 +1282,23 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
+def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
+    """#5092 was refused alone at 02:31 for two scanners the head already had red, and the cached refusal (keyed by the PR head only) was replayed at 02:53 and 03:03 while parity moved."""
+    ran = []
+
+    def refusals(head, base):
+        ran.append(base)
+        return ["scanner red alone: x"] if base == "old" else []
+
+    heads = {"5092": "h" * 40}
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)
+    assert dropped == {"5092": "scanner red alone: x"} and ran == ["old"]
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)[1] and ran == ["old"], "the same base replays the refusal"
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="b" * 40)
+    assert kept == ["5092"] and not dropped and ran == ["old", "new"], "a moved base checks the PR again"
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="c" * 40)[0] == ["5092"] and ran == ["old", "new"], "a pass is kept per head"
+
+
 def test_a_cached_pass_is_rechecked_for_stale_pages_against_the_base_as_it_is_now(tmp_path):
     """#5062, #5085 and #5088 passed alone against an older parity, the verdict was reused per head sha, and each made a generated page fail once merged with what landed since."""
     cache = tmp_path / "cache"
@@ -1446,3 +1463,24 @@ def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
     whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
     assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
     assert len(groups) == 1 and ones == ["b", "c", "d"]
+
+
+def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
+    """11:04: the culprit probe ran `git diff origin/feat/parity...<head of #5183>`, a head pushed after the batch's fetch: 'Invalid symmetric difference', the merge-batch process died with no LANDED line."""
+    def sh(cwd, *a):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    origin, clone = tmp_path / "origin", tmp_path / "clone"
+    origin.mkdir()
+    sh(origin, "init", "-q", "-b", "main")
+    (origin / "a.txt").write_text("a\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "a")
+    sh(tmp_path, "clone", "-q", str(origin), str(clone))
+    (origin / "b.txt").write_text("b\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "b")
+    head = sh(origin, "rev-parse", "HEAD")
+    sh(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+    base = sh(clone, "rev-parse", "origin/main")
+    assert ps.head_files(head, base=base, cwd=clone) == ["b.txt"]

@@ -237,6 +237,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD313 | sdag-b | `visitSIGN_EXTEND_INREG` has no vector in-reg forms and no `reduceLoadWidth` narrowing of the load | `selectiondag/dag_combiner.rs` |
 | SD316 | sdag-b | tuned for size, a constant memset whose stores take more bytes than the `rep stosb` setup (`FILL_BYTES`, the old selector's rule) is a fill; the pin counts stores | `selectiondag/builder/memops.rs` |
 | SD312 | sdag-b | `visitBSWAP` has no half-width `shl` fold (no truncate-free query) and no `foldBitOrderCrossLogicOp` | `selectiondag/dag_combiner.rs` |
+| DIV-OPTSIZE-1 | sdag-b | deliberate, size-driven: at `-Os` a constant divide stays a `div` (`isIntDivCheap` is true for `optsize` as well as `minsize`; the pin: `minsize` only). Flipping it: m32 -Os +250 B, m16 -Os +301 B, only matmul -3 and x_life -18/-13 gain. Exit: keep the divide unless the expansion forces spills (matmul's `urem i16 %x,3` +59 B, 4 spill slots) | `selectiondag/dag_function.rs` |
 | SD222 | sdag-b | w12, QB: the entry block's `store 0` / `memset 0` to a local nothing has touched yet are not lowered when the runtime builds and zero-fills the frame (`B$ENRA`); the pin has no such runtime | `backend/prezeroed.rs` |
 | SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
 
