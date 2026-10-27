@@ -912,7 +912,11 @@ fn selected_in(
             // `combineMul` asks `hasMinSize` (-Oz) only. DEVIATE SD248: at
             // m16 -Os also keeps the `imul` (a 66-prefixed `lea` chain costs
             // more bytes).
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.min_size || (cpu.size && m16) },
+            &mut X86Lowering {
+                cmov: false,
+                sse2: false,
+                min_size: cpu.min_size || (cpu.size && tli.types.has_far_pointer()),
+            },
             &selector,
             &mut hooks,
             &Info { source_order: true },
