@@ -1320,3 +1320,29 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def _repo_with_commit(path):
+    path.mkdir(parents=True)
+    for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(["git", *cmd], cwd=path, check=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_the_scanner_line_names_the_tree_it_scanned_not_the_runners_checkout(tmp_path, capsys):
+    """alone.log said `tree 09f5219f1` for 16 minutes after parity moved on: the line printed the tooling checkout's HEAD, not the scratch tree the scanners ran in."""
+    scratch = _repo_with_commit(tmp_path / "scratch")
+    ps.new_scanner_failures([], on_merged=lambda targets: set(), only=("docs_links",), root=tmp_path / "scratch")
+    assert f"(tree {scratch[:9]})" in capsys.readouterr().out
+
+
+def test_an_alone_slot_logs_the_base_it_checked_out(tmp_path, monkeypatch, capsys):
+    """The coordinator could not tell which parity an alone slot judged a PR against: the log named no base."""
+    monkeypatch.setenv("ALONE_TARGETS", str(tmp_path))
+    monkeypatch.setenv("ALONE_SLOTS", "1")
+    base = []
+    monkeypatch.setattr(ps, "_alone_checkout", lambda work, ref, repo=None: base.append(_repo_with_commit(work)))
+    monkeypatch.setattr(ps, "alone_refusals", lambda *a, **k: [])
+    monkeypatch.setattr(ps, "keep_refused_evidence", lambda *a, **k: None)
+    ps._alone_in_scratch("deadbeef", "origin/feat/parity")
+    assert f"alone: slot 0 base {base[0][:9]}" in capsys.readouterr().err

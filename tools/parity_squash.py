@@ -878,6 +878,7 @@ def new_scanner_failures(
     only: tuple[str, ...] | None = None,
     seen: Path | None = None,
     now=time.time,
+    root: Path = ROOT,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
@@ -886,7 +887,7 @@ def new_scanner_failures(
     own = own_test_targets(files, ROOT)
     targets = sorted((set(only) if only else set(smoke.SCANNERS) | own) - set(smoke.NIGHTLY_ONLY))
     failed = (on_merged or smoke.integration_failures)(targets)
-    print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
+    print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD", cwd=root).strip()[:9]))
     if not failed:
         return set()
     head = (on_head or _scanners_failing_on_head)(targets)
@@ -1136,7 +1137,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
             return merged
 
         # an xpass is not the head's to excuse: the entry goes
-        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only))) | {name for name in merged if name.startswith("xpass ")}
+        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only)), root=cwd) | {name for name in merged if name.startswith("xpass ")}
 
     red = sorted((scanners or default_scanners)(files))
     if red:
@@ -1347,6 +1348,7 @@ def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
     targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
         _alone_checkout(targets / "w", base)
+        print(f"alone: slot {slot} base {git('rev-parse', '--short=9', 'HEAD', cwd=targets / 'w').strip()}", file=sys.stderr)
         why = alone_refusals(head, base, targets / "w", target=targets)
         keep_refused_evidence(head, targets / "w", why, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused")
         return why
