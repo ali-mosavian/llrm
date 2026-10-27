@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Keep the generated documentation current, and the mermaid figures well formed.
 
-    python3 tools/docsbuild/build.py --sync            write the pass, analysis and backend pages
-    python3 tools/docsbuild/build.py --sync --force    ... ignoring the digests that say what is up to date
-    python3 tools/docsbuild/build.py --check           exit 1 if --sync would change a file, a figure is malformed or a header has no `# Example`
-    python3 tools/docsbuild/build.py --fix-style       give the figures of docs/ (not the generated pages) the shared init line
-    python3 tools/docsbuild/build.py --check --render  also draw each figure with mmdc ($MMDC or PATH; skipped if absent)
+    python3 tools/docs/docsbuild/build.py --sync            write the pass, analysis and backend pages
+    python3 tools/docs/docsbuild/build.py --sync --force    ... ignoring the digests that say what is up to date
+    python3 tools/docs/docsbuild/build.py --check           exit 1 if --sync would change a file, a figure is malformed or a header has no `# Example`
+    python3 tools/docs/docsbuild/build.py --fix-style       give the figures of docs/ (not the generated pages) the shared init line
+    python3 tools/docs/docsbuild/build.py --check --render  also draw each figure with mmdc ($MMDC or PATH; skipped if absent)
 
 --sync also rewrites the Contents list of docs/architecture/readme.md from the pages' front matter (archindex.py).
 --sync writes one page per documented source file under docs/optimizations/{passes,analyses,backend}/ from its
@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
+ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 
 from docsbuild import archindex, lint, sync  # noqa: E402
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
             errors.append(sync.drift_message(p))
         errors += sync.missing_example(ROOT)
         if archindex.drift(ROOT):
-            errors.append("docs/architecture/readme.md: the Contents list is stale; run python3 tools/docsbuild/build.py --sync")
+            errors.append("docs/architecture/readme.md: the Contents list is stale; run python3 tools/docs/docsbuild/build.py --sync")
         errors += lint.check_tree(ROOT)
         if args.render:
             errors += lint.render_errors(ROOT)

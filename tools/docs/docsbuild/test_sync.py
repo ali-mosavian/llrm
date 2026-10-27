@@ -326,3 +326,14 @@ def test_docs_name_a_pass_through_its_page_not_its_source_file():
             if any(s.endswith("/" + m.group(1)) for s in stems):
                 bad.append(f"{md}: {m.group(0)}")
     assert bad == []
+
+
+def test_the_page_format_is_pinned():
+    """The key of a page holds `sync.FORMAT`, not the bytes of the tool, so moving or editing the tool rewrites no page (it once rewrote 417). A change to the layout
+    below fails here until `FORMAT` is bumped."""
+    text = sync.page_text("c/x/src/ab.rs", ["Sum.", "", "# How it works", "Body."], "passes", sync.Names({}, {}), "KEY")
+    assert text == (
+        f"> Generated from the `//!` header of [`c/x/src/ab.rs`]({sync.URL}/c/x/src/ab.rs); edit the header, not this file.\n"
+        "<!-- src: c/x/src/ab.rs sha256:KEY -->\n\n# ab\n\nSum.\n\n## How it works\nBody.\n"
+    )
+    assert sync.tool_digest() == sync.FORMAT
