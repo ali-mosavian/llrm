@@ -205,8 +205,9 @@ pub struct Flags {
     /// rounded to its type, as the language says; off (gcc's `fast`), x87 keeps
     /// the wider value in its register.
     pub float_store: bool,
-    /// `-mregcall-default`: the front end marked each unmarked function `x86_regcallcc` (clang's
-    /// `-fdefault-calling-conv=regcall`), so `ccc` is an explicit `__cdecl`.
+    /// `-mregcall-default`: the front end marked each unmarked function
+    /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
+    /// is an explicit `__cdecl`.
     pub regcall_default: bool,
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.

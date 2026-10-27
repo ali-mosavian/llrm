@@ -216,18 +216,20 @@ fn with_default_convention(
     else {
         return;
     };
-    let takes = |convention: u32, variadic: bool| {
-        match (regcall_default, convention) {
-            (false, 0) => true,
-            (true, llrm_mir::opcode::REGCALL) => true,
-            (true, 0) => variadic,
-            _ => false,
-        }
+    let takes = |convention: u32, variadic: bool| match (regcall_default, convention) {
+        (false, 0) => true,
+        (true, llrm_mir::opcode::REGCALL) => true,
+        (true, 0) => variadic,
+        _ => false,
     };
-    // Under the register-size convention `main` is C's: the start-up calls `_main`.
+    // Under the register-size convention `main` is C's: the start-up calls
+    // `_main`.
     let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
     let types = &module.context.types;
-    let is_variadic = |ty| matches!(types.get(ty), llrm_mir::types::Type::Function { variadic: true, .. });
+    let is_variadic = |ty| matches!(
+        types.get(ty),
+        llrm_mir::types::Type::Function { variadic: true, .. }
+    );
     for global in &mut module.globals {
         if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
             continue;
@@ -324,10 +326,9 @@ fn allow_near_calls(module: &mut llrm_mir::module::Module) {
 fn refuse_foreign_conventions(module: &llrm_mir::module::Module) -> Result<(), String> {
     for global in &module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { continue };
-        let Some((name, _)) = llrm_mir::opcode::CONVENTIONS
-            .iter()
-            .find(|(name, number)| *number == function.calling_convention && matches!(*name, "x86_stdcallcc" | "x86_fastcallcc"))
-        else {
+        let Some((name, _)) = llrm_mir::opcode::CONVENTIONS.iter().find(|(name, number)| {
+            *number == function.calling_convention && matches!(*name, "x86_stdcallcc" | "x86_fastcallcc")
+        }) else {
             continue;
         };
         let function_name = global.name.as_deref().unwrap_or("?");

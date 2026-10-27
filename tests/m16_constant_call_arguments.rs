@@ -2,7 +2,6 @@
 
 mod common;
 
-
 const KERNEL: &str = "
 extern void f(int a, int b, long c);
 void g(int x) { f(257, 8, 3); f(x, 8, 3); }
