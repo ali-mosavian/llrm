@@ -31,7 +31,7 @@ Across `backend/` and `greedy/`: 296 mnemonic strings, 29 `llrm_x86` uses, 26 ic
 
 ## What this spike did instead, and what it cost
 
-The spike's own selector, allocator (ranges with holes, coalescing; DEVIATE 1), CSE/hoisting (DEVIATE 3) and pairing run on arm64 instructions in `llrm-arm64`. Against `llc -O2` on the same IR it is 1.07x the code and 1.14x the instructions executed (geomeans, `tools/arm64_compare.py backend`). The gap is the passes this page lists: machine CSE/LICM over a real loop nest, post-RA copy propagation, `ldp`/`stp` formation with LLVM's window, post-index addressing (LSR plus the load/store optimizer).
+The spike's own selector, allocator (ranges with holes, coalescing; DEVIATE 1), CSE/hoisting (DEVIATE 3) and pairing run on arm64 instructions in `llrm-arm64`. Against `llc -O2` on the same IR it is 1.07x the code and 1.14x the instructions executed (geomeans, `tools/targets/arm64_compare.py backend`). The gap is the passes this page lists: machine CSE/LICM over a real loop nest, post-RA copy propagation, `ldp`/`stp` formation with LLVM's window, post-index addressing (LSR plus the load/store optimizer).
 
 ## The experiment, once the hooks exist
 

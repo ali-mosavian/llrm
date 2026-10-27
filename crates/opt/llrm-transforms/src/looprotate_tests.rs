@@ -334,3 +334,15 @@ b3:
     let text = printed(&module);
     assert!(text.contains("#dbg_value(i16 %n"), "{text}");
 }
+
+/// -Os cut the header limit to 4 on every target; the byte sweep that showed it
+/// to be smaller was m16 only. m32 keeps the pin's 16 (`hasMinSize` alone
+/// lowers it), so a five-instruction header is copied there at -Os.
+#[test]
+fn test_the_size_header_limit_is_m16_only() {
+    use llrm_mir::target::Neutral;
+    assert_eq!(super::header_limit(true, true, &Neutral), 16);
+    assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default()), 4);
+    assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default()), 16);
+    assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default()), 0);
+}
