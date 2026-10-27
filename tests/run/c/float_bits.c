@@ -1,16 +1,17 @@
 // flags: -O2 -march=i486 | -O0 -march=i486 | -O2 -march=i486 -m32
 /* A float read as an integer's bits and the other way round, whole and by halves: the bits go through memory because
    the x87 stack cannot hand them out. */
+#include <stdint.h>
 extern void report(long value);
 
-union D { double d; unsigned long w[2]; };
-union F { float f; unsigned long x; };
+union D { double d; uint32_t w[2]; };
+union F { float f; uint32_t x; };
 
-static unsigned long hi(double d) { union D u; u.d = d; return u.w[1]; }
-static unsigned long lo(double d) { union D u; u.d = d; return u.w[0]; }
-static double join(unsigned long high, unsigned long low) { union D u; u.w[1] = high; u.w[0] = low; return u.d; }
-static unsigned long fbits(float f) { union F u; u.f = f; return u.x; }
-static float ffrom(unsigned long x) { union F u; u.x = x; return u.f; }
+static uint32_t hi(double d) { union D u; u.d = d; return u.w[1]; }
+static uint32_t lo(double d) { union D u; u.d = d; return u.w[0]; }
+static double join(uint32_t high, uint32_t low) { union D u; u.w[1] = high; u.w[0] = low; return u.d; }
+static uint32_t fbits(float f) { union F u; u.f = f; return u.x; }
+static float ffrom(uint32_t x) { union F u; u.x = x; return u.f; }
 
 int main(void)
 {

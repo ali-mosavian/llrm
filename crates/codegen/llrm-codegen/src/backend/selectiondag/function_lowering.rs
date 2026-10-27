@@ -2,7 +2,7 @@
 //! blocks, and which allocas are frame indices.
 
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::module::{BlockId, Function, Operand, ValueDef, ValueId};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
 
 /// Virtual registers number from here: below it the numbers are the pin's
@@ -21,6 +21,9 @@ pub struct FunctionLoweringInfo {
     /// The frame object of the SysV x86-64 register save area a variadic
     /// function has (`RegSaveFrameIndex`), made with the allocas' objects.
     pub variadic_save: Option<i32>,
+    /// The entry block's writes of zero the runtime's zero-filled frame
+    /// already holds (`prezeroed`): not lowered.
+    pub prezeroed: llrm_mir::dense::IdSet<InstId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.
@@ -77,6 +80,7 @@ impl FunctionLoweringInfo {
             value_regs: IdMap::new(),
             static_allocas: IdMap::new(),
             variadic_save: None,
+            prezeroed: Default::default(),
             sret_reg: None,
             bpi: None,
             edge_probs: Vec::new(),

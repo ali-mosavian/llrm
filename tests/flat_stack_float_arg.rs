@@ -1,6 +1,6 @@
 //! A double passed on the stack in flat code is stored through `[esp]`.
 
-use std::process::Command;
+mod common;
 
 /// Under `LLRM_VERIFY` (the gate's) `fstp qword [esp]` had no byte price: the
 /// stack token is `sp`, which has no 32-bit-mode encoding, and the compile
@@ -56,10 +56,35 @@ void fout_digits(double v, int is_double, Decimal *d, int *exponent)\n\
 }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(["-m32", "-Os", "-o", "a.obj", "a.c"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+/// #5210 named the stack pointer at width 2 whatever the target: at m32 it is
+/// `esp`, and `LLRM_VERIFY` refused ("names 41 at width 2") a `long double`
+/// argument, a call's cleanup and a by-value aggregate: 13 behavioural
+/// programs failed to compile.
+#[test]
+fn a_flat_call_with_a_long_double_and_cleanup_names_esp_at_its_width() {
+    let scratch = tempfile::tempdir().unwrap();
+    let directory = scratch.path();
+    std::fs::write(
+        directory.join("a.c"),
+        "struct S { int a, b, c; };\n\
+extern void use(long double a, int b);\n\
+extern void take(struct S s, int n);\n\
+void f(long double x, struct S s) { use(x, 3); take(s, 4); }\n",
+    )
+    .unwrap();
+    let output = common::cc::llrm_c()
+        .current_dir(directory)
+        .env("LLRM_VERIFY", "1")
+        .args(["-m32", "-mabi=sysv", "-O1", "-o", "a.obj", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));

@@ -1,7 +1,7 @@
 //! A comparison used as a value is `xor r,r; cmp; setcc r8`, as `X86FixupSetCC`
 //! makes it, not `cmp; setcc r8; movzx r,r8`.
 
-use std::process::Command;
+mod common;
 
 fn asm(
     source: &str,
@@ -9,7 +9,7 @@ fn asm(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args([level, "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()

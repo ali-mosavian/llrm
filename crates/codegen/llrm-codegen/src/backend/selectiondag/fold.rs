@@ -638,7 +638,12 @@ impl SelectionDAG {
         }
         if let (NodeData::ConstFp { bits: a }, NodeData::ConstFp { bits: b }) = (self.node(n1).data, self.node(n2).data)
         {
-            return super::fp_value::fold(opcode, vt, a, b).map(|bits| self.get_constant_fp(bits, vt));
+            let folded = if self.config.fp_extended {
+                super::fp_value::fold_exact(opcode, vt, a, b)
+            } else {
+                super::fp_value::fold(opcode, vt, a, b)
+            };
+            return folded.map(|bits| self.get_constant_fp(bits, vt));
         }
         let (undef1, undef2) = (self.is_undef(n1), self.is_undef(n2));
         // -0.0 - undef --> undef (consistent with "fneg undef")
