@@ -579,7 +579,7 @@ fn pushed_arguments(
     Ok(())
 }
 
-/// DEVIATE SD224: an outgoing argument area whose call is in a later block (a
+/// DEVIATE SD228: an outgoing argument area whose call is in a later block (a
 /// select split the block between the area and the call) is made again at the call, when what
 /// lies between neither calls nor moves the stack pointer: the pushes
 /// `pushed_arguments` makes stay pushes, where `based_areas` would store each
