@@ -262,6 +262,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 /// `MOVSX32rm16`) the size after the letters, the source's. `None` if the
 /// name has no width.
 pub fn memory_bytes(name: &str) -> Option<u32> {
+    // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
+    let name = name.strip_suffix("_NOREX").unwrap_or(name);
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the
