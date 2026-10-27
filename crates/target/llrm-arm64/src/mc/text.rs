@@ -327,6 +327,7 @@ impl fmt::Display for Inst {
                 };
                 write!(out, "{name} {}, {}", fpr(*rd, *size), fpr(*rn, *size))
             }
+            Inst::VectorMov { rd, rn } => write!(out, "mov v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::FpBinary { op, size, rd, rn, rm } => {
                 let name = ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul"][*op as usize];
                 write!(out, "{name} {}, {}, {}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))

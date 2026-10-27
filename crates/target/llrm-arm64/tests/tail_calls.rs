@@ -25,11 +25,11 @@ fn a_tail_call_is_a_branch() {
     }
 }
 
-/// An indirect callee is not yet a branch (`sibcall.rs`, DEVIATE 1).
+/// An indirect callee is a branch through a register too (`sibcall.rs`).
 #[test]
-fn a_tail_call_through_a_pointer_stays_a_call() {
+fn a_tail_call_through_a_pointer_is_a_register_branch() {
     let asm = body("through_a_pointer");
-    assert!(asm.contains("blr"), "{asm}");
+    assert!(asm.contains("\tbr x") && !asm.contains("blr"), "{asm}");
 }
 
 #[test]

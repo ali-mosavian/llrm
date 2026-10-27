@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifylibcalls.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifylibcalls.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:a4516b8b1d66d4d4a3740155e4754b2f21500f125cf44830ac92e5a9637b1008 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:a7eaf1b4bcafe519b78ec48ce005e1c96011e0c8776a752ca846abfb14dfecab -->
 
 # simplifylibcalls
 
@@ -7,22 +7,29 @@
 does as well becomes that one, as `printf("hi\n")` becomes `puts("hi")`.
 
 ## How it works
-A translation of the `printf` and `puts` arms of LLVM's
+A translation of the `printf`, `fprintf`, `puts`, `fputs` and `fwrite` arms
+of LLVM's
 [`SimplifyLibCalls.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/SimplifyLibCalls.cpp)
-at d1106deb71cc: `optimizePrintFString` (:3466) and `optimizePuts` (:3978).
+at d1106deb71cc: `optimizePrintFString` (:3466), `optimizeFPrintFString`
+(:3887), `optimizeFWrite` (:3923), `optimizeFPuts` (:3950) and
+`optimizePuts` (:3978).
 A direct call whose callee is a library function by name and prototype
 (`TargetLibraryInfo::get_lib_func_of`) is rewritten when its format is a
 constant string: an empty format is dropped, a one-character one becomes
 `putchar`, `"%s"` of a constant, `"%c"`, `"%s\n"` and a format ending in
 `\n` without `%` become `putchar` or `puts` (the new string goes in a
-private `str.N` table). All but the empty format need the result unused.
+private `str.N` table). `fprintf` of a format without `%` is `fwrite`,
+of `"%c"` `fputc`, of `"%s"` `fputs`; `fputs` of a constant string is
+`fwrite` (not at `optsize`); `fwrite` of one byte is `fputc`, of none is
+0. All but the empty format and the empty `fwrite` need the result unused.
 
 ## Deviations
-- D1: `puts` and `putchar` are formed only where the compile states them
+- D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where the compile states them
   in `Options::library`, as `strlen` is (loopidiom D11); the pin reads the
   triple. Exit: `Target::library` naming them.
-- D2: the other arms (`fprintf`, `fputs`, `fwrite`, `sprintf`, `str*`,
-  `mem*`, math) are untranslated, and so are `iprintf`/`__small_printf`.
+- D2: the other arms (`sprintf`, `snprintf`, `str*`, `mem*`, math) are
+  untranslated, and so are `iprintf`/`__small_printf`, `optimizeErrorReporting`
+  and the argument annotations.
 
 ## Keeps
 Blocks and edges are unchanged: dominators and loops are preserved.

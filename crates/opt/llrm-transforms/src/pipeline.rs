@@ -1120,6 +1120,9 @@ pub fn recorded(
     // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
     // only written; the dead-code pass then finds nothing names it.
     manager.add_module(globalopt::WriteOnly);
+    // What only fed those stores (their loads, arithmetic) is dead with them;
+    // LLVM's GlobalOpt runs before the late function passes that sweep it.
+    manager.add(dead::Dead);
     // A loop whose only effect was those stores is dead now: LLVM's second
     // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
     // GlobalOpt.

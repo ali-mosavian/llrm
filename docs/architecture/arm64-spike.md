@@ -37,6 +37,10 @@ Measured with `tools/arm64_compare.py` (modes `whole`, `backend`, `compile`; the
 3. `prepass.rs`: CSE and loop hoisting of constants and addresses, a small version of `MachineCSE`/`MachineLICM`.
 4. `driver.rs`: newer clang's `ptrtoaddr` is read as `ptrtoint`; MIR refuses it by design.
 
+## Numbered gaps
+
+- ARM64-EIC-1: no `MachineEarlyIfConversion`/`MachineTraceMetrics` (pin: `aarch64-enable-early-ifcvt` on). `div_constants_long`: pin IR has 28 selects, the asm 121 `csel`/`cset`/`cinc`-family instructions, ours 35 and 35; the extra ones are made by the machine pass from `br` chains the pin IR still has. Programs with more in the pin than ours: 9 of 159 built (7 FAIL rows excluded); `div_constants_{long,short,ulong}` hold 284 of the 298 pin instructions, the other six 14. Exit: step 6 (~3,000 pin lines, not worth writing twice).
+
 ## Order of work
 
 1. Pin build with AArch64. Done.

@@ -44,10 +44,11 @@
 //! a resume: MIR has no other instruction that reads memory, writes it or
 //! throws.
 //!
-//! DEVIATE 6: an alloca only copied from constant memory
-//! (`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) is not translated
-//! here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
-//! scalar alloca has no count operand, so a count of 1 is dropping the operand.
+//! DEVIATE 6 is on `replace_alloca_copied_from_constant`
+//! (`isOnlyCopiedFromConstantMemory`; `PointerReplacer` is not needed, there
+//! is one address space); `visitAllocSite` has DEVIATE 7 on
+//! `alloc_site_removable`. MIR's scalar alloca has no count operand, so a
+//! count of 1 is dropping the operand.
 //!
 //! `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
 //! instructions before it in its block stored (`FindAvailableLoadedValue`) is
@@ -84,6 +85,9 @@ use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 
 use crate::combine::{Combiner, Visit, defining};
 use crate::combine_shared::{has_one_use, replace_operand};
+
+/// `MaxCopiedFromConstantUsers`.
+const MAX_COPIED_FROM_CONSTANT_USERS: usize = 300;
 
 /// `MaxAllocSiteRemovableUsers`.
 const MAX_ALLOC_SITE_REMOVABLE_USERS: usize = 128;
@@ -388,8 +392,145 @@ impl Combiner<'_> {
             }
         }
 
-        // DEVIATE 6 is here: isOnlyCopiedFromConstantMemory.
+        if let Some(visit) = self.replace_alloca_copied_from_constant(inst) {
+            return visit;
+        }
         self.visit_alloc_site(inst)
+    }
+
+    /// `visitAllocaInst`'s `isOnlyCopiedFromConstantMemory` block
+    /// ([InstCombineLoadStoreAlloca.cpp:556](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L556)):
+    /// an alloca only read after one `memcpy` from a constant global is that
+    /// global, and the copy and the lifetime markers go.
+    ///
+    /// DEVIATE 6: the source is a constant global itself (not a constant
+    /// expression of one); its alignment is not raised
+    /// (`getOrEnforceKnownAlignment`); a call that takes the alloca as an
+    /// argument keeps the alloca. Exit: constant-GEP sources, then the
+    /// `nocapture readonly` arguments of `isOnlyCopiedFromConstantMemory`.
+    fn replace_alloca_copied_from_constant(
+        &mut self,
+        alloca: InstId,
+    ) -> Option<Visit> {
+        let (copy, markers) = self.only_copied_from_constant_memory(alloca)?;
+        let source = self.function.instruction(copy).operands[1];
+        let Opcode::Alloca { allocated, align, .. } = self.function.instruction(alloca).opcode else { return None };
+        let layout = self.env.layout;
+        let alloca_align = align.unwrap_or_else(|| layout.align(&self.context.types, allocated));
+        let Operand::Constant(id) = source else { return None };
+        let llrm_mir::context::ConstantKind::Global(global) = self.context.get(id).kind else { return None };
+        let llrm_mir::module::GlobalKind::Variable(variable) = &self.env.globals[global.0 as usize].kind else {
+            return None;
+        };
+        let source_align = variable.align.unwrap_or_else(|| layout.align(&self.context.types, variable.ty));
+        if alloca_align > source_align
+            || layout.alloc_size(&self.context.types, variable.ty) < self.allocation_size(alloca)?
+        {
+            return None;
+        }
+        for marker in markers {
+            self.erase(marker);
+        }
+        self.erase(copy);
+        Some(Visit::Replace(source))
+    }
+
+    /// `isOnlyCopiedFromConstantMemory`
+    /// ([:46](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L46)):
+    /// the one `memcpy`/`memmove` that writes the alloca, whose source is
+    /// constant memory, and the lifetime markers, when nothing else writes
+    /// it or lets it escape: only loads, `memcpy` sources, and pointer
+    /// arithmetic and phis and selects of it. A copy through an offset
+    /// pointer, or after a phi or select, is rejected.
+    fn only_copied_from_constant_memory(
+        &self,
+        alloca: InstId,
+    ) -> Option<(InstId, Vec<InstId>)> {
+        use llrm_mir::intrinsics::Intrinsic;
+        let (mut copy, mut markers) = (None, Vec::new());
+        let mut visited: Vec<(llrm_mir::module::ValueId, bool)> = Vec::new();
+        let mut work = vec![(self.function.instruction(alloca).result?, false)];
+        while let Some((value, is_offset)) = work.pop() {
+            if visited.contains(&(value, is_offset)) {
+                continue;
+            }
+            visited.push((value, is_offset));
+            if visited.len() > MAX_COPIED_FROM_CONSTANT_USERS {
+                return None;
+            }
+            for one in self.function.users(value).iter() {
+                let instruction = self.function.instruction(one.user);
+                let result = instruction.result;
+                match instruction.opcode {
+                    Opcode::Load { volatile: false, .. } => {}
+                    Opcode::Phi | Opcode::Select => work.push((result?, true)),
+                    Opcode::Cast(CastOp::AddrSpaceCast) => work.push((result?, is_offset)),
+                    Opcode::GetElementPtr { .. } => {
+                        let zero = instruction.operands[1..]
+                            .iter()
+                            .all(|&index| {
+                                matches!(
+                                    index,
+                                    Operand::Constant(id)
+                                        if matches!(self.context.get(id).kind, ConstantKind::Int(0) | ConstantKind::Zero)
+                                )
+                            });
+                        work.push((result?, is_offset || !zero));
+                    }
+                    Opcode::Call(_) => match self.intrinsic_of(one.user)? {
+                        Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => markers.push(one.user),
+                        Intrinsic::MemCpy | Intrinsic::MemMove => {
+                            let volatile = match instruction.operands.get(3) {
+                                Some(Operand::Constant(id)) => !matches!(
+                                    self.context.get(*id).kind,
+                                    ConstantKind::Int(0) | ConstantKind::Zero
+                                ),
+                                _ => true,
+                            };
+                            if volatile {
+                                return None;
+                            }
+                            // The alloca as the source is a load.
+                            if one.index == 1 {
+                                continue;
+                            }
+                            if copy.is_some() || is_offset || one.index != 0 {
+                                return None;
+                            }
+                            if !self.is_constant_global(instruction.operands[1]) {
+                                return None;
+                            }
+                            copy = Some(one.user);
+                        }
+                        _ => return None,
+                    },
+                    _ => return None,
+                }
+            }
+        }
+        Some((copy?, markers))
+    }
+
+    /// `pointsToConstantMemory` of a plain global: a constant that the linker
+    /// cannot replace and nothing initializes later.
+    fn is_constant_global(
+        &self,
+        pointer: Operand,
+    ) -> bool {
+        let Operand::Constant(id) = pointer else { return false };
+        let ConstantKind::Global(global) = self.context.get(id).kind else { return false };
+        let value = &self.env.globals[global.0 as usize];
+        let llrm_mir::module::GlobalKind::Variable(variable) = &value.kind else { return false };
+        variable.constant
+            && variable.initializer.is_some()
+            && !variable.externally_initialized
+            && !matches!(
+                value.linkage,
+                llrm_mir::module::Linkage::Weak
+                    | llrm_mir::module::Linkage::LinkOnce
+                    | llrm_mir::module::Linkage::Common
+                    | llrm_mir::module::Linkage::ExternWeak
+            )
     }
 
     /// `InstCombinerImpl::visitAllocSite` of an alloca

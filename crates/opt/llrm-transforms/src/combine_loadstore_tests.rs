@@ -453,3 +453,45 @@ b0:
     );
     assert!(out.contains("load volatile"), "{out}");
 }
+
+/// `int a[] = {1, 2, 3}; return a[i]` copied the constant into the frame and read the copy, so
+/// no loop over it folded (`numeric`'s CRC: 504 bytes against 420): an alloca only read after
+/// one `memcpy` from a constant global is that global.
+#[test]
+fn an_alloca_only_copied_from_a_constant_global_is_the_global() {
+    let text = combined(
+        "@g = private unnamed_addr constant [3 x i32] [i32 1, i32 2, i32 3], align 4
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+define i32 @f(i64 %i) {
+b0:
+  %a = alloca [3 x i32], align 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %a, ptr @g, i64 12, i1 0)
+  %p = getelementptr inbounds i32, ptr %a, i64 %i
+  %v = load i32, ptr %p, align 4
+  ret i32 %v
+}
+",
+    );
+    assert!(!text.contains("alloca") && !text.contains("memcpy.p0.p0.i64(ptr %a"), "{text}");
+    assert!(text.contains("getelementptr inbounds i32, ptr @g, i64 %i"), "{text}");
+}
+
+/// A second write to the alloca, or the alloca passed on as a stored value, keeps the copy.
+#[test]
+fn an_alloca_written_besides_the_copy_stays() {
+    let text = combined(
+        "@g = private unnamed_addr constant [3 x i32] [i32 1, i32 2, i32 3], align 4
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+define i32 @f(i64 %i) {
+b0:
+  %a = alloca [3 x i32], align 4
+  call void @llvm.memcpy.p0.p0.i64(ptr %a, ptr @g, i64 12, i1 0)
+  store i32 9, ptr %a, align 4
+  %p = getelementptr inbounds i32, ptr %a, i64 %i
+  %v = load i32, ptr %p, align 4
+  ret i32 %v
+}
+",
+    );
+    assert!(text.contains("alloca"), "{text}");
+}

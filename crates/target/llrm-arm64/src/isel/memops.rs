@@ -46,6 +46,20 @@ fn wide_pieces(total: u64) -> Vec<(u8, u64)> {
 }
 
 impl Selector<'_> {
+    /// The pointer `operand`, a global's address made in a register: a page-offset relocation of an access
+    /// wider than a byte needs an offset that is a multiple of its size, and these start anywhere.
+    fn in_register(
+        &mut self,
+        operand: Operand,
+    ) -> Selected<super::val::AddrExpr> {
+        let address = self.pointer_operand(operand)?;
+        if matches!(address.base, super::val::Base::Global { .. }) {
+            let reg = self.pointer_register(&address)?;
+            return Ok(super::val::AddrExpr::of(super::val::Base::Reg(reg)));
+        }
+        Ok(address)
+    }
+
     fn minsize(&self) -> bool {
         self.function.attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(name) if name == "minsize"))
     }
@@ -79,8 +93,8 @@ impl Selector<'_> {
         if ops.len() > COPY_OPS / divisor {
             return Ok(false);
         }
-        let destination = self.pointer_operand(arguments[0])?;
-        let source = self.pointer_operand(arguments[1])?;
+        let destination = self.in_register(arguments[0])?;
+        let source = self.in_register(arguments[1])?;
         let batch = if base == "memmove" { ops.len() } else { BATCH };
         for chunk in ops.chunks(batch) {
             let mut loaded = Vec::new();
@@ -122,7 +136,7 @@ impl Selector<'_> {
         if ops.len() > budget {
             return Ok(false);
         }
-        let destination = self.pointer_operand(arguments[0])?;
+        let destination = self.in_register(arguments[0])?;
         let wide = ops.iter().any(|&(bytes, _)| bytes == 16);
         let vector = if wide {
             let rd = self.mf.fpr();

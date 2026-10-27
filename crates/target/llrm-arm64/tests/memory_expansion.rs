@@ -37,6 +37,18 @@ fn a_constant_fill_stores_a_vector() {
     let asm = driver::assembly(include_str!("data/memory_expansion.ll"), Platform::Darwin, true).expect("lowers");
     let zero = function(&asm, "zero_300");
     assert!(zero.contains("movi.2d") && !zero.contains("_memset"), "{zero}");
+    // Stores of the one register pair: nine `stp q, q` and the overlapping `str q`, not 19 `str q`.
+    assert_eq!(zero.matches("stp q").count(), 9, "{zero}");
     let fill = function(&asm, "fill_20");
     assert!(fill.contains("dup.16b") && !fill.contains("_memset"), "{fill}");
+}
+
+/// A halfword load of `@g + 1` was `ldrh w0, [x8, _g@PAGEOFF+1]`: the relocation scales the offset by two, so the
+/// linker kept `(1 >> 1) = 0` and the load read `@g`.
+#[test]
+fn an_odd_offset_in_a_global_is_not_a_scaled_page_offset() {
+    let asm = driver::assembly(include_str!("data/memory_expansion.ll"), Platform::Darwin, true).expect("lowers");
+    let odd = function(&asm, "odd_global");
+    let scaled = odd.lines().any(|line| line.trim_start().starts_with("ld") && line.contains("PAGEOFF+1"));
+    assert!(!scaled, "{odd}");
 }

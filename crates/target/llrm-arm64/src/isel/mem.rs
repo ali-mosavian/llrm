@@ -313,7 +313,9 @@ impl Selector<'_> {
                 let base = self.pointer_register(&AddrExpr { index: None, ..address.clone() })?;
                 Ok(Addr::Register { base, index: index.reg, extend: index.extend, shifted: index.shift != 0 })
             }
-            (Base::Global { name, got: false }, None) => {
+            // A page-offset relocation scales its offset by the access size: an offset that is not a multiple
+            // of it (`load i16, ptr getelementptr (@g, 1), align 1`) would lose its low bits.
+            (Base::Global { name, got: false }, None) if address.offset % scale == 0 => {
                 let page = self.mf.gpr();
                 self.inst(Inst::Adr {
                     page: true,
