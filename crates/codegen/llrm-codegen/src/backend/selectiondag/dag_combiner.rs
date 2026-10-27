@@ -326,6 +326,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::BSwap => self.visit_bswap(node),
+            ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
@@ -794,24 +795,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
             ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
-            // Narrow a suitable binary operation with a constant operand by
-            // moving it ahead of the truncate (`visitTRUNCATE`,
-            // DAGCombiner.cpp#L18075-L18107), before operations are legal:
-            // `trunc (and x, 31)` is `and (trunc x), 31`, which a shift's
-            // `shiftMask` pattern then drops. The `nuw` the pin gives a
-            // narrowed `sub` is not set: the node carries no flags here.
+            // Narrow a binary operation with a constant operand ahead of the
+            // truncate: `trunc (and y, 31)` is `and (trunc y), 31`, which the
+            // shift patterns then drop as an unneeded mask. Before
+            // legalization only, as the pin does.
             ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor
-                if self.level < CombineLevel::AfterLegalizeDag
+                if self.level < CombineLevel::AfterLegalizeVectorOps
                     && self.dag.use_count(n0.node) == 1
                     && vt.is_integer()
-                    && (self.dag.operand(n0, 0) == self.dag.operand(n0, 1)
-                        || self.dag.constant(self.dag.operand(n0, 0)).is_some()
-                        || self.dag.constant(self.dag.operand(n0, 1)).is_some()) =>
+                    && {
+                        let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                        l == r || self.dag.constant(l).is_some() || self.dag.constant(r).is_some()
+                    } =>
             {
-                let (op, l, r) = (self.dag.opcode(n0), self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
                 let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
                 let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
-                Some(self.dag.get_node(op, vt, &[narrow_l, narrow_r]))
+                Some(self.dag.get_node(self.dag.opcode(n0), vt, &[narrow_l, narrow_r]))
             }
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
@@ -1747,7 +1747,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `visitSIGN_EXTEND_INREG` ([pin][pin]): an operand that is already
     /// sign-extended, nested in-regs, a `sext`/`aext`/`zext` of a value no
     /// wider than the type, a clear sign bit; then the demanded bits.
-    /// SD313: not the vector in-reg forms, nor `reduceLoadWidth`.
+    /// SD230: not the vector in-reg forms, nor `reduceLoadWidth`.
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17400
