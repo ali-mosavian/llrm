@@ -40,7 +40,7 @@ fn preprocess_and_dependency_jobs_pass_through_without_the_target_flag() {
 
 #[test]
 fn untranslated_features_are_refused_not_dropped() {
-    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto", "-g", "-gdwarf-4"] {
+    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto"] {
         assert!(parse(&words(&format!("{flag} x.c"))).is_err(), "{flag}");
     }
     assert!(parse(&words("-g0 x.c")).is_ok());
@@ -54,6 +54,18 @@ fn the_stack_and_bounds_checks_reach_the_backend() {
     let one = built("-fsanitize=stack -fsanitize=bounds -c x.c");
     assert_eq!(one.llc, words("-fsanitize=stack -fsanitize=bounds"));
     assert!(parse(&words("-fsanitize=signed-integer-overflow x.c")).is_err());
+}
+
+/// `-g` was refused ("debug info is not carried yet"), so no program could
+/// carry debug info: clang gets `-g`, the backend the flag that names the
+/// format.
+#[test]
+fn debug_flags_reach_clang_and_the_backend() {
+    let one = built("-gcodeview -c x.c");
+    assert!(one.clang.iter().any(|flag| flag == "-g"), "{:?}", one.clang);
+    assert!(one.clang.iter().any(|flag| flag == "-fexperimental-assignment-tracking=disabled"), "{:?}", one.clang);
+    assert_eq!(one.llc, words("-gcodeview"));
+    assert!(built("-g0 -c x.c").clang.iter().all(|flag| flag != "-g"));
 }
 
 #[test]
