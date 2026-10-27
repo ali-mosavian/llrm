@@ -647,11 +647,12 @@ fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let tti = X86::of_cpu("i486").unwrap();
-    let (_, kept) = crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, None);
+    let (_, kept) =
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, None);
     let kept = kept.expect("no edge was split");
     let mut nodes = |held| {
         let before = get(Event::ScevNodes);
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, held);
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, held);
         get(Event::ScevNodes) - before
     };
     let (cold, warm) = (nodes(None), nodes(Some(kept)));
@@ -774,6 +775,69 @@ b4:
     let exit = after.split("exit:").nth(1).unwrap().split("b3:").next().unwrap();
     let (stored, defined) = (exit.find("store").unwrap(), exit.find("urem").or(exit.find("udiv")).unwrap());
     assert!(defined < stored, "{after}");
+}
+
+/// Two sums of a loop-invariant step over a loop of seven trips were left as
+/// two phis and two adds in the loop (udtacc.bas, udtrng.bas m16 -Os); the pin
+/// reads the exit values as `step * 7` and leaves only the counter.
+#[test]
+fn a_sum_of_an_invariant_step_read_after_a_counted_loop_is_a_product() {
+    let text = "define i32 @f(i32 %x, i32 %y) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 1, %entry ], [ %next, %loop ]
+  %a = phi i32 [ 0, %entry ], [ %a2, %loop ]
+  %b = phi i32 [ 0, %entry ], [ %b2, %loop ]
+  %a2 = add i32 %x, %a
+  %b2 = add i32 %y, %b
+  %next = add nuw nsw i16 %i, 1
+  %c = icmp samesign ugt i16 %i, 6
+  br i1 %c, label %exit, label %loop
+exit:
+  %ra = phi i32 [ %a2, %loop ]
+  %rb = phi i32 [ %b2, %loop ]
+  %r = xor i32 %ra, %rb
+  ret i32 %r
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[3, 4], &[0, 9], &[-5, 6]]);
+    let body = after.split("loop:").nth(1).unwrap().split("exit:").next().unwrap();
+    assert_eq!(body.matches("phi").count(), 1, "{after}");
+}
+
+/// x_base64 m16 -Os grew 352 -> 397 B: the exit value of a counter in a loop
+/// that only counts, `4 * ((smax(n, 5) - 5) / 3 + ...)`, was written out
+/// after LSR under `-Os`, where the loop is kept (`exitvalues` DEVIATE 15).
+#[test]
+fn at_size_the_exit_value_of_a_counting_loop_is_not_written_out_by_lsr() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 2, %entry ], [ %i2, %loop ]
+  %q = phi i16 [ -4, %entry ], [ %q2, %loop ]
+  %i2 = add nuw nsw i16 %i, 3
+  %q2 = add i16 %q, 4
+  %c = icmp slt i16 %i2, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %last = phi i16 [ %q2, %loop ]
+  ret i16 %last
+}
+";
+    let phis = |size: bool| {
+        let mut module = parsed(&format!("{DOS}{text}"));
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let tti = X86::of_cpu("i486").unwrap();
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, None);
+        declared.place(&mut module).expect("the declarations");
+        printed(&module).split("loop:").nth(1).unwrap().split("exit:").next().unwrap().matches("phi").count()
+    };
+    assert_eq!(phis(false), 1, "for speed the counter is written out after the loop");
+    assert_eq!(phis(true), 2, "the loop at size lost its second counter");
 }
 
 /// The inner loop of an insertion sort, `for (j = i - 1; j >= 0 && a[j] > v;

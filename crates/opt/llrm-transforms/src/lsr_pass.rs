@@ -49,8 +49,11 @@ thread_local! {
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
 
-/// LLVM's loop strength reduction.
-pub struct LoopStrengthReduce;
+/// LLVM's loop strength reduction. `size`: the compile is for size, which the
+/// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
+pub struct LoopStrengthReduce {
+    pub size: bool,
+}
 
 impl FunctionPass for LoopStrengthReduce {
     fn name(&self) -> &'static str {
@@ -83,6 +86,7 @@ impl FunctionPass for LoopStrengthReduce {
             &outer,
             &*tti,
             false,
+            self.size,
             Some(held.take()),
         );
         let kept = scev.is_some();
@@ -272,7 +276,7 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
-    reduced_held(context, layout, function, declared, outer, tti, stress_chains, None).0
+    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, None).0
 }
 
 /// [`reduced_with`], continuing the expressions `held` of the passes before;
@@ -286,6 +290,7 @@ pub fn reduced_held(
     outer: &Outer,
     tti: &dyn Tti,
     stress_chains: bool,
+    size: bool,
     held: Option<ScalarEvolution>,
 ) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
@@ -452,6 +457,45 @@ pub fn reduced_held(
                 let seeds: Vec<_> =
                     folded_away.into_iter().filter_map(|inst| function.instruction(inst).result).collect();
                 crate::dead::dead_from(context, outer.callees(), function, seeds);
+            }
+        }
+        // `rewriteLoopExitValues(..., UnusedIndVarInLoop, ...)`: LSR may have
+        // removed every use of an induction variable from the loop; the exit
+        // phi is the only one left, and the final value replaces it.
+        let lcssa_exit = {
+            let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
+            env.loops
+                .get_loop_for(header)
+                .is_some_and(
+                    |found| found.get_exit_block(function).is_some()
+                        && crate::loopversioning::is_recursively_lcssa_form(function, env.loops, env.tree, found),
+                )
+        };
+        if lcssa_exit && crate::exitvalues::enabled() {
+            let mut rewriter = Expander::new("lsr");
+            rewriter.set_canonical_mode(true);
+            if crate::exitvalues::rewritten_unused_ivs(
+                context,
+                layout,
+                function,
+                declared,
+                outer,
+                &mut session,
+                &mut rewriter,
+                header,
+                size,
+            ) > 0
+            {
+                changed = true;
+                session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+                mark = function.mark();
+                // `DeleteDeadPHIs`.
+                let phis: Vec<_> = function
+                    .iter_block(header)
+                    .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                    .filter_map(|inst| function.instruction(inst).result)
+                    .collect();
+                crate::dead::dead_from(context, outer.callees(), function, phis);
             }
         }
     }

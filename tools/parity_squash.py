@@ -807,7 +807,7 @@ def beside(background, foreground):
         return front, future.result()
 
 
-MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
 def batch(prs: list, passes, land, refuse, offenders=None) -> None:
@@ -955,6 +955,9 @@ def new_link_failures(
 ) -> list[str]:
     """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
     and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
+    if os.environ.get("LAND_SKIP_LINK") == "1":  # the user's call while a break already on feat/parity is fixed forward: it refused every batch that touched the runtime
+        print("link: skipped (LAND_SKIP_LINK=1)")
+        return []
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import link_check  # noqa: PLC0415
 
@@ -971,6 +974,25 @@ def new_link_failures(
 
 
 _BUILT: set[str] = set()
+
+
+def alone_link_failures(files: list[str], cwd: Path, target: Path | None, run=subprocess.run) -> list[str]:
+    """`tools/link_check.py` of the scratch tree `cwd` (its own release bins, built under `target/link`), when the PR touches the runtime or a frontend; the failing `qb <name>: why` / `c <name>: why` lines."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import link_check  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    if not (link_check.touches_runtime(files) or any(one.startswith("crates/frontends/") for one in files)):
+        return []
+    out = (target or cwd / "target") / "link"
+    env = {**os.environ, "CARGO_TARGET_DIR": str(out)}
+    built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    if built.returncode:
+        return [f"release: {(built.stdout + built.stderr).strip().splitlines()[-1:] or ['the bins do not build']}"]
+    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+        (out / "release" / name).touch()  # the runners refuse a binary older than its sources
+    done = run([sys.executable, "tools/link_check.py", str(out / "link-check")], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release")}, capture_output=True, text=True, errors="replace")
+    return [line for line in done.stdout.splitlines() if line.startswith(("qb ", "c "))]
 
 
 def _build_release() -> None:
@@ -1139,7 +1161,7 @@ def own_test_targets(files: list[str], root: Path) -> set[str]:
     return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None) -> list[str]:
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None, links=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1176,6 +1198,9 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
         if new:
             return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
+    # the QB and C programs, built and linked: #4822 and #4839 (frontend changes) reached three batches and cost 19 refusals because only a batch member touching the runtime made the batch link
+    if broken := (links or alone_link_failures)(files, cwd, target):
+        return [f"programs do not link: {', '.join('link ' + line.split(':')[0] for line in broken[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)
@@ -1216,16 +1241,21 @@ def _current_head(number: str) -> str:
     return git("rev-parse", "FETCH_HEAD").strip()
 
 
-def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None) -> tuple[list[str], dict[str, str]]:
+def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None, recheck=None) -> tuple[list[str], dict[str, str]]:
     """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
-    checked again. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
+    checked again, except for `recheck(head, base)` (seconds: the head merged with the base as it is now, the generated pages): a cached pass was made against an older base, and a page
+    a landing since made stale only shows on the merge. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
     verdicts: dict[str, str] = {}
     waiting: queue.Queue[str] = queue.Queue()
+    rechecked: set[str] = set()
     for number in numbers:
         stored = cache / heads[number] if cache else None
         if stored and stored.exists():
             HITS[0] += 1
             verdicts[number] = stored.read_text()
+            if recheck and not verdicts[number]:
+                rechecked.add(number)
+                waiting.put(number)
         else:
             waiting.put(number)
     slots: queue.Queue[int] = queue.Queue()
@@ -1240,12 +1270,15 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
                 return
             slot = slots.get()
             try:
-                why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
+                if number in rechecked:
+                    why = recheck(heads[number], base)
+                else:
+                    why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
             except BaseException as error:  # a thread drops SystemExit silently: #5008 was kept with no verdict, unchecked and counted as checked, and broke the 21:53 batch
                 why = f"alone check crashed: {type(error).__name__}: {str(error)[-200:]}"
             finally:
                 slots.put(slot)
-            if cache:
+            if cache and number not in rechecked:
                 cache.mkdir(parents=True, exist_ok=True)
                 (cache / heads[number]).write_text(why)
             verdicts[number] = why
@@ -1273,6 +1306,27 @@ def docs_stale(root: Path) -> set[str]:
     if not done.returncode:
         return set()
     return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+
+
+def docs_recheck(head: str, base: str, cwd: Path, base_docs: set[str]) -> str:
+    """"" or why: the pages stale once `head` is merged into the checkout of `base` in `cwd`, less `base_docs`. The merge and `build.py --check` take seconds; a verdict cached against
+    an older base missed #5062, #5085 and #5088, which passed alone and made lsr_solve.md, divrempairs.rs and sinkcast.md fail once merged with what landed after."""
+    sha, why = merged_result(head, base, cwd)
+    if sha is None:
+        return why
+    new = sorted(docs_stale(cwd) - base_docs)
+    return f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""
+
+
+def _alone_docs_recheck(head: str, base: str) -> str:
+    root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
+    slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
+    targets = root / f"alone-{slot}"
+    try:
+        _alone_checkout(targets / "w", base)
+        return docs_recheck(head, base, targets / "w", _alone_base_docs(base, targets))
+    finally:
+        lock.close()
 
 
 def crash_line(number: str, error: BaseException) -> str:
@@ -1459,7 +1513,7 @@ def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> d
     return moved
 
 
-BATCH_MAX_SECONDS = 1200  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
+BATCH_MAX_SECONDS = int(os.environ.get("BATCH_MAX_SECONDS", "1200"))  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
 
 
 class BatchTooOld(Exception):
@@ -2102,7 +2156,7 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head, recheck=_alone_docs_recheck)
         for number, why in dropped.items():
             print(alone_refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0] - len(UNCHECKED)} checked, {len(UNCHECKED)} UNCHECKED at the cap{' (' + ' '.join(UNCHECKED) + ')' if UNCHECKED else ''}, {len(dropped)} dropped", file=sys.stderr)
