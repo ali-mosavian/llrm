@@ -14,6 +14,12 @@
 # pointer argument past its return; it needs the source to show it.
 #
 # `cleanup = -1` is "not known", which is not the same as zero.
+#
+# For `llrm-qb` a row changes a listing only through `captures = "NONE"` (a
+# pointer argument the routine keeps no copy of) or `raises_error = false`
+# (the call is nounwind): any routine without a row already writes only
+# runtime cells when the program handles no errors. Rows for B$PECY, B$PSR8,
+# B$PCR8, B$PSR4 and B$PEOS were measured to leave the listing identical.
 
 ["B$HARY"]
 cleanup = -1
@@ -683,10 +689,12 @@ error_handling = false
 writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
 '''
 
 ["B$RDI4"]
@@ -698,10 +706,12 @@ error_handling = false
 writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
 '''
 
 ["B$RDR4"]
@@ -713,10 +723,29 @@ error_handling = false
 writes = "OWN"
 reads = "OWN"
 clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
 established = true
 inputs = []
 evidence = '''
 rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
+'''
+
+["B$RDR8"]
+cleanup = 4
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+captures = "NONE"
+established = true
+inputs = []
+evidence = '''
+rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination for the data`, `cbDest = for SD and FS only`; `B$RD<type> only sets the type, [b$VTYP], and then jump to a common routine, CommRead`. CommRead reaches B$ReadVal through the [b$GetOneVal] vector, so what it writes is not bounded by pDest. `Uses: per convention` names no preserved register. Exceptions: out of DATA, syntax error, overflow.
+Audit of what it keeps (`captures = "NONE"`): CommRead takes pDest as a stack parameter and uses it once, in the REP MOVSW that stores the value (GETPTR ,ES,DI,pDest); it is stored nowhere else. The numeric routines only set b$VTYP and jump in.
 '''
 
 ["B$RESN"]
