@@ -15,7 +15,7 @@ use super::super::mvt::EVT;
 use super::super::x86isd;
 use super::{Builder, Refused, convention_for};
 use crate::backend::isel::Convention;
-use crate::backend::memcpycall::inline_widths;
+use crate::backend::memcpycall::{FILL_BYTES, inline_widths, stored_bytes};
 
 /// `X86Subtarget::getMaxInlineSizeThreshold`.
 const MAX_INLINE_SIZE: u64 = 128;
@@ -188,6 +188,22 @@ impl Builder<'_> {
     /// it.
     pub(super) fn has_opt_size(&self) -> bool {
         self.target.opt_size || self.function_has("optsize") || self.function_has("minsize")
+    }
+
+    /// Whether a fill at `dst` is priced in bytes: tuned for size in 16-bit
+    /// code, where an operand-size prefix is a byte on every dword, and the
+    /// stores are at a one-byte displacement from BP (the model of
+    /// `stored_bytes`; an absolute address costs more per store, and the
+    /// fill's registers then cost more than the model says).
+    pub(super) fn priced_by_bytes(
+        &self,
+        dst: SDValue,
+    ) -> bool {
+        let frame = |value: SDValue| matches!(self.dag.opcode(value), ISD::FrameIndex);
+        let on_frame = frame(dst)
+            || (matches!(self.dag.opcode(dst), ISD::Add)
+                && (frame(self.dag.operand(dst, 0)) || frame(self.dag.operand(dst, 1))));
+        self.has_opt_size() && self.target.dag.pointer.size_in_bits() == 16 && on_frame
     }
 
     /// The pin's `hasMinSize` (`-Oz`), as [`Self::has_opt_size`].
@@ -720,13 +736,22 @@ impl Builder<'_> {
             }
             _ => {
                 let limit = if opt_size { 8 } else { 16 };
+                let priced = self.priced_by_bytes(dst);
                 let inline = match constant {
-                    Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
-                    None => None,
+                    // DEVIATE: in 16-bit code stores are longer than the fill
+                    // past a few bytes (a dword store is four bytes and a
+                    // prefix), so tuned for size they are taken only where no
+                    // longer than it; the pin counts stores
+                    Some(bytes) if !(priced && stored_bytes(bytes as i64) > FILL_BYTES) => {
+                        self.inline_memset(root, dst, other, bytes, limit, alignment)?
+                    }
+                    _ => None,
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
-                    (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
+                    (None, Some(bytes))
+                        if self.has_min_size() || priced || (bytes <= MAX_INLINE_SIZE && alignment >= 4) =>
+                    {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
@@ -1088,7 +1113,7 @@ impl Builder<'_> {
         alignment: u64,
     ) -> Result<SDValue, Refused> {
         let pointer = self.target.dag.pointer;
-        let minsize = self.has_min_size();
+        let minsize = self.has_min_size() || self.priced_by_bytes(dst);
         let word = u64::from(pointer.size_in_bits() / 8);
         let chain_in = chain;
         let (block, count, mut val) = if minsize {

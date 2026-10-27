@@ -902,11 +902,6 @@ const MEMCPY_MOVES: i64 = 8;
 /// copy tuned for size is inline moves up to this many pairs, else `rep movs`.
 const MEMCPY_MOVES_SIZE: i64 = 4;
 
-/// The bytes of a constant memset's `rep stosb` through es:di, as
-/// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
-/// the count, the fill, and DI's save in the frame.
-const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
-
 /// The bytes a value of `ty` takes in memory or on the stack: a far
 /// pointer is its offset and selector, in two registers.
 pub(super) fn size_of(
@@ -6936,15 +6931,6 @@ impl Selector<'_, '_, '_> {
         Ok(bytes)
     }
 
-    /// The bytes of the stores `memset` expands a constant `length` to,
-    /// each at a one-byte displacement: two or more dwords store a register.
-    fn stored_bytes(length: i64) -> i64 {
-        let dwords = length / 4;
-        let each = if dwords > 1 { 4 } else { 8 };
-        let setup = if dwords > 1 { 6 } else { 0 };
-        setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
-    }
-
     /// Whether a constant memset of `length` bytes is stores rather than a
     /// fill: gcc's by-pieces rule (`default_use_by_pieces_infrastructure_p`,
     /// targhooks.cc:1983): the stores are as many as the dwords and the pieces
@@ -6961,7 +6947,11 @@ impl Selector<'_, '_, '_> {
         let stores = length / 4 + (length % 4).count_ones() as i64;
         let ratio = self.cpu.operations.pieces(self.cpu.size, zero);
         match ratio {
-            0 => stores <= MEMSET_STORES && !(self.cpu.size && Self::stored_bytes(length) > FILL_BYTES),
+            0 => {
+                stores <= MEMSET_STORES
+                    && !(self.cpu.size
+                        && crate::backend::memcpycall::stored_bytes(length) > crate::backend::memcpycall::FILL_BYTES)
+            }
             ratio => stores < ratio,
         }
     }
