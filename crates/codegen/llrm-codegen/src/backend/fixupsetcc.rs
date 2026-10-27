@@ -48,7 +48,6 @@
 
 use std::sync::Arc;
 
-use llrm_lir::flag::Flag;
 
 use crate::backend::liveness;
 use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
@@ -128,7 +127,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
         lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
     };
 
-    let every_flag = crate::backend::lanes::Lanes::flags((Flag::OF | Flag::SF | Flag::ZF | Flag::CF | Flag::PF).bits());
+    let every_flag = crate::backend::lanes::Lanes::read_flags();
 
     let mut out = body.clone();
     for block in &mut out.blocks {

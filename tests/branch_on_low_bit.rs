@@ -1,7 +1,7 @@
 //! `br (trunc x to i1)` is `test x, 1` (X86TargetLowering::LowerBRCOND, TEST8ri
 //! X86InstrArithmetic.td#L1330).
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -10,12 +10,8 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }

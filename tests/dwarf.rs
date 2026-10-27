@@ -2,6 +2,8 @@
 //! program's, and gdb, driven by a script, stops where it is told in a linked
 //! and running program and reads its values.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -36,10 +38,6 @@ fn wdump() -> Option<PathBuf> {
         .filter(|path| path.exists())
 }
 
-fn llrm_c() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
-}
-
 fn tool(name: &str) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> =
         std::env::var_os("PATH").map(|path| std::env::split_paths(&path).collect()).unwrap_or_default();
@@ -56,7 +54,7 @@ fn compile(
     arguments: &[&str],
     out: &Path,
 ) -> std::process::Output {
-    Command::new(llrm_c()).args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
+    common::cc::llrm_c().args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
 }
 
 fn bench_programs() -> Vec<PathBuf> {
