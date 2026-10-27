@@ -940,7 +940,7 @@ def new_scanner_failures(
     return (failed - head) | stale
 
 
-HEAD_RED_HOURS = 2
+HEAD_RED_HOURS = float(os.environ.get("HEAD_RED_HOURS") or 2)  # runner.env / the runner's environment: a red head older than this refuses every batch
 
 
 def excused_head_failures(excused: set[str], path: Path, now: float) -> set[str]:
@@ -1852,7 +1852,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print("\n".join(f"REFUSED: {w}" for w in why))
         return not why
 
-    rescan_check = make_rescan_check()
+    rescan_check = (lambda *_: "") if os.environ.get("LAND_SKIP_RESCAN") == "1" else make_rescan_check()  # the user's bulk order: the batch scan stands, no rescan after a drop
 
     def land(number: str) -> None:
         if number in left_out:
