@@ -360,3 +360,25 @@ b0:
 ");
     assert_eq!(after.matches("load i16").count(), 1, "{after}");
 }
+
+/// EarlyCSE cloned the whole context to give MemorySSA a view the walk's
+/// interned constants did not reach (`Context::int` interns through `&self`, so
+/// the copy bought nothing): 0.7 M Ir over 22 runs of d_faces, plus its drop.
+#[test]
+fn test_a_run_clones_no_context() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::ContextClones);
+    let after = run("define i32 @f(i1 %c, i32 %x) {
+b0:
+  br i1 %c, label %a, label %b
+a:
+  %p = add i32 %x, 1
+  ret i32 %p
+b:
+  %q = add i32 %x, 1
+  ret i32 %q
+}
+");
+    assert!(after.contains("define i32 @f"), "{after}");
+    assert_eq!(get(Event::ContextClones), before, "earlycse cloned the context");
+}

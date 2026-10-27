@@ -4957,10 +4957,10 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "cmp ax, word ptr [bp+10]",
-            "mov ax, word ptr [bp+12]",
             "mov cx, word ptr [bp+8]",
-            "sbb cx, ax",
+            "mov dx, word ptr [bp+12]",
+            "cmp ax, word ptr [bp+10]",
+            "sbb cx, dx",
             "setb al",
             "movzx ax, al",
             "pop bp",
@@ -4985,17 +4985,21 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
+            "push si",
             "L0_0:",
             "movzx ecx, word ptr [bp+6]",
+            "mov dx, word ptr [bp+8]",
             "movzx eax, word ptr [bp+10]",
+            "mov si, word ptr [bp+12]",
             "sub ecx, eax",
-            "movzx eax, word ptr [bp+8]",
-            "movzx edx, word ptr [bp+12]",
+            "movzx eax, dx",
+            "movzx edx, si",
             "sub eax, edx",
             "sar eax, 12",
             "shl eax, 16",
             "add eax, ecx",
             "shld edx, eax, 16",
+            "pop si",
             "pop bp",
             "retf"
         ]
@@ -6415,6 +6419,21 @@ define i16 @f(i16 %i) addrspace(1) {
         any("mov ", ", DGROUP") && any("mov ", ", offset g") && any("shl e", ", 16") && has("pushw 47104"),
         "{got:?}"
     );
+}
+
+/// `os_screen.c` read a far constant (`0xB8000010`) through a near pointer,
+/// which the pin writes `addrspacecast (inttoptr ... to ptr addrspace(1)) to
+/// ptr`; isel refused it, "an address of no global". The near pointer is the
+/// offset.
+#[test]
+fn test_a_far_constant_cast_to_a_near_pointer_is_its_offset() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load volatile i8, ptr addrspacecast (ptr addrspace(1) inttoptr (i32 -1207959536 to ptr addrspace(1)) to ptr)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("[16]")), "{got:?}");
 }
 
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
