@@ -1051,3 +1051,46 @@ fn a_volatile_load_folded_into_an_add_is_a_volatile_instruction() {
     assert_eq!(folded.len(), 1, "premise: the load is folded into the add");
     assert!(folded[0].volatile, "the folded add is volatile");
 }
+
+const M16_CLEAR_FRAME_18: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = global [18 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {
+entry:
+  %a = alloca [18 x i8], align 2
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 18, i1 false)
+  call void @use(ptr %a)
+  ret void
+}
+define void @h() {
+entry:
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 18, i1 false)
+  ret void
+}
+";
+
+/// Counts of the fills and of the stores a function selects to at -Os, m16.
+fn fills_and_stores(name: &str) -> (usize, usize) {
+    let module = llrm_mir::parse::module(M16_CLEAR_FRAME_18).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, name, &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = whats()
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    (fills, stores)
+}
+
+/// An 18-byte clear at m16 -Os was five stores through BP (`sieve.bas` +44 B
+/// over the old selector, bench `sieve` 893 -> 937): the pin counts stores, but
+/// in 16-bit code they are longer than the fill. `memset_stores_size` makes it
+/// a fill, for a local and for a global.
+#[test]
+fn at_os_an_18_byte_clear_is_a_fill() {
+    assert_eq!(fills_and_stores("f").0, 1, "a fill for the local");
+    assert_eq!(fills_and_stores("h").0, 1, "a fill for the global");
+}
