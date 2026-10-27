@@ -128,13 +128,6 @@ status = "cause known"
 oracle = "none"
 
 [[program]]
-match = "examples/planets.nib"
-cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 126 vs 121, asm +4)"
-owner = "w-13"
-status = "cause known"
-oracle = "none"
-
-[[program]]
 match = "shellsort/shellsort.bas"
 cause = "CGP address sinking: +4 inttoptr and +4 addrspacecast at cgpaddr (IR 66 -> 75), re-made in the using blocks as the pin's optimizeMemoryInst does; the asm reloads the segment"
 owner = "w-10"
@@ -212,22 +205,8 @@ status = "cause known"
 oracle = "none"
 
 [[program]]
-match = "qb/far_poke_scanned_variable.bas"
-cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 53 -> 43, asm +9: far-pointer selector reloads)"
-owner = "w-13"
-status = "cause known"
-oracle = "none"
-
-[[program]]
 match = "tile/tile.*"
 cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 38 -> 40 and 33 -> 36, asm +7 and +10)"
-owner = "w-13"
-status = "cause known"
-oracle = "none"
-
-[[program]]
-match = "qmove/qmove.c"
-cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 54 vs 54, asm +4)"
 owner = "w-13"
 status = "cause known"
 oracle = "none"
