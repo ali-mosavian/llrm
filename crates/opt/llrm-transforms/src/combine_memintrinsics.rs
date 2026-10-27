@@ -80,7 +80,7 @@ impl Combiner<'_> {
                 })
                 .unwrap_or(1);
             if known > current {
-                self.function.set_call_argument_align(call, index, known);
+                self.function.set_argument_align(call, index, known);
                 changed = true;
             }
         }

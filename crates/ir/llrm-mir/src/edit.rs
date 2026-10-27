@@ -969,9 +969,9 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
-    /// Sets the `align` of the call `inst`'s argument `index` to `align`, as
-    /// LLVM's `MemIntrinsic::setDestAlignment` and `setSourceAlignment` do.
-    pub fn set_call_argument_align(
+    /// `CallBase::addParamAttr(index, Attribute::getWithAlignment(align))`: the
+    /// argument's `align` is `align`, an earlier one replaced.
+    pub fn set_argument_align(
         &mut self,
         inst: InstId,
         index: usize,
@@ -981,13 +981,8 @@ impl Function {
             panic!("a call")
         };
         let attrs = &mut info.argument_attrs[index];
-        attrs.retain(|attr| {
-            !matches!(
-                attr,
-                crate::opcode::Attribute::Int(name, _) if name == "align"
-            )
-        });
-        attrs.push(crate::opcode::Attribute::Int("align".to_string(), align));
+        attrs.retain(|one| !matches!(one, crate::opcode::Attribute::Int(name, _) if name == "align"));
+        attrs.push(crate::opcode::Attribute::Int("align".to_owned(), align));
         self.log(Change::Rewritten(inst));
     }
 
