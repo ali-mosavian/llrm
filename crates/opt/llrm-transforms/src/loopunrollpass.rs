@@ -1637,9 +1637,8 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         changed = true;
         run.scev = ScalarEvolution::new();
         if peeled {
-            // `PartiallyUnrolled`: the loop is looked at again, as
-            // `revisitCurrentLoop` does; its analyses and its nest are made
-            // again (the cloned iterations are loops' blocks of its parent).
+            // `PartiallyUnrolled`: its analyses and its nest are made again
+            // (the cloned iterations are loops' blocks of its parent).
             // `peelLoop` ends in `simplifyLoop`: the exits the copies share
             // are dedicated again (here for the whole function, U6).
             crate::loopsimplify::simplified(run.function);
@@ -1658,7 +1657,15 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            work.push_front(header);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
+            // `LoopUnrollPass` does); the loops the peeled copy holds are
+            // new siblings, visited next.
+            let mut fresh: Vec<BlockId> =
+                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+            fresh.reverse();
+            for one in fresh {
+                work.push_front(one);
+            }
             continue;
         }
         // A top-level loop with no loops inside leaves the analyses of the

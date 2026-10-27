@@ -415,3 +415,57 @@ done:
     let after = printed(&module);
     assert!(!after.contains("fadd"), "the float chain folded into constants: {after}");
 }
+
+/// A nest whose inner loop compares with the outer counter was peeled four
+/// times in one run and then unrolled completely (nbody_single -O3: 114 -> 826
+/// IR insns, the pin's 424): `LoopFullUnrollPass` does not revisit a loop it
+/// peeled, so one iteration comes off and the outer loop stays.
+#[test]
+fn a_peeled_loop_is_not_visited_again_by_the_full_unroll() {
+    let mut text = String::from(
+        "define i32 @f(i32 %x) {
+b0:
+  br label %outer
+outer:
+  %b = phi i32 [ 0, %b0 ], [ %b2, %latch ]
+  %acc = phi i32 [ %x, %b0 ], [ %s, %latch ]
+  br label %inner
+inner:
+  %o = phi i32 [ 0, %outer ], [ %o2, %inner ]
+  %a = phi i32 [ %acc, %outer ], [ %a2, %inner ]
+  %ne = icmp ne i32 %o, %b
+",
+    );
+    for k in 0..14 {
+        let previous = if k == 0 { "%a".to_owned() } else { format!("%t{}", k - 1) };
+        text += &format!("  %t{k} = mul i32 {previous}, {}\n", k + 3);
+    }
+    text += "  %pick = select i1 %ne, i32 %t12, i32 %t13
+  %a2 = add i32 %a, %pick
+  %o2 = add i32 %o, 1
+  %done = icmp eq i32 %o2, 6
+  br i1 %done, label %latch, label %inner
+latch:
+  %s = phi i32 [ %a2, %inner ]
+  %b2 = add i32 %b, 1
+  %end = icmp eq i32 %b2, 6
+  br i1 %end, label %exit, label %outer
+exit:
+  %r = phi i32 [ %s, %latch ]
+  ret i32 %r
+}
+";
+    let mut module = parsed(&text);
+    let inputs: &[&[i128]] = &[&[1], &[0], &[-7], &[1000]];
+    let before = results(&module, inputs);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options =
+        Options { opt_level: 3, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
+    let after = printed(&module);
+    assert_eq!(results(&module, inputs), before, "{after}");
+    assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
+}
