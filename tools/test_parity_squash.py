@@ -1242,3 +1242,20 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
+    """#5092 was refused alone at 02:31 for two scanners the head already had red, and the cached refusal (keyed by the PR head only) was replayed at 02:53 and 03:03 while parity moved."""
+    ran = []
+
+    def refusals(head, base):
+        ran.append(base)
+        return ["scanner red alone: x"] if base == "old" else []
+
+    heads = {"5092": "h" * 40}
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)
+    assert dropped == {"5092": "scanner red alone: x"} and ran == ["old"]
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)[1] and ran == ["old"], "the same base replays the refusal"
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="b" * 40)
+    assert kept == ["5092"] and not dropped and ran == ["old", "new"], "a moved base checks the PR again"
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="c" * 40)[0] == ["5092"] and ran == ["old", "new"], "a pass is kept per head"
