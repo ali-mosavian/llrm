@@ -499,6 +499,10 @@ struct CallMasks {
     flow: Option<Vec<Vec<usize>>>,
     /// Each block's blocks reachable by one edge or more, as bits.
     reach: std::cell::OnceCell<Vec<Vec<u64>>>,
+    /// The value a split is tried for (`PhysInterference::set_lane`).
+    lane: std::cell::Cell<Option<u32>>,
+    /// The registers some call keeps the low half of only.
+    lane_registers: RegSet,
 }
 
 thread_local! {
@@ -532,14 +536,29 @@ impl CallMasks {
     ) -> Self {
         let destroying =
             calls.iter().map(|(_, destroyed, high, _)| !destroyed.is_empty() || !high.is_empty()).collect();
-        let calls = calls
+        let calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)> = calls
             .into_iter()
             .map(|(slot, destroyed, high, read)| {
                 let narrow = destroyed.union(&read);
                 (slot, narrow, narrow.union(&high), read)
             })
             .collect();
-        Self { calls, destroying, blocks, widths, flow: None, reach: Default::default() }
+        let mut lane_registers = RegSet::default();
+        for (_, narrow, wide_lost, _) in &calls {
+            for root in wide_lost.iter().filter(|root| !narrow.contains(root)) {
+                lane_registers.insert(root);
+            }
+        }
+        Self {
+            calls,
+            destroying,
+            blocks,
+            widths,
+            flow: None,
+            reach: Default::default(),
+            lane: Default::default(),
+            lane_registers,
+        }
     }
 
     /// The same, told the blocks' successors.
@@ -743,6 +762,20 @@ impl PhysInterference for Fixed {
     ) -> bool {
         self.calls.reg_mask_clobbers(i, phys)
     }
+
+    fn lane_of(
+        &self,
+        phys: RegId,
+    ) -> Option<u32> {
+        self.calls.lane_of(phys)
+    }
+
+    fn set_lane(
+        &self,
+        virt: Option<u32>,
+    ) {
+        self.calls.set_lane(virt);
+    }
 }
 
 impl PhysInterference for CallMasks {
@@ -858,8 +891,29 @@ impl PhysInterference for CallMasks {
         phys: RegId,
     ) -> bool {
         let root = crate::model::ir::root(phys);
-        let (_, destroyed, high, _) = &self.calls[i];
-        destroyed.contains(&root) || high.contains(&root)
+        let (slot, destroyed, high, _) = &self.calls[i];
+        if destroyed.contains(&root) {
+            return true;
+        }
+        // DEVIATE C-LANE: the high half of a register a call keeps the low
+        // half of is lost to a value only where a wide read can follow.
+        high.contains(&root) && self.lane.get().is_none_or(|virt| self.wide_read_follows(virt, slot))
+    }
+
+    fn lane_of(
+        &self,
+        phys: RegId,
+    ) -> Option<u32> {
+        let root = crate::model::ir::root(phys);
+        self.flow.as_ref()?;
+        if self.lane_registers.contains(&root) { self.lane.get() } else { None }
+    }
+
+    fn set_lane(
+        &self,
+        virt: Option<u32>,
+    ) {
+        self.lane.set(virt);
     }
 }
 
