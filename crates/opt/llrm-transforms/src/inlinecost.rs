@@ -1577,14 +1577,12 @@ impl<'a> Analyzer<'a> {
                 _ => None,
             })
             .collect();
-        let (clusters, table) = if self.params.tti == Tti::Generic {
-            (cases.len() as u64, 0)
-        } else {
-            llrm_mir::tti::basic_case_clusters(
-                &cases,
-                self.site.layout.pointer(0).bits,
-                self.site.caller_size != CallerSize::Speed,
-            )
+        let for_size = self.site.caller_size != CallerSize::Speed;
+        let index_bits = self.site.layout.pointer(0).bits;
+        let (clusters, table) = match self.site.tti {
+            Some(tti) => tti.estimated_number_of_case_clusters(&cases, index_bits, for_size),
+            None if self.params.tti == Tti::Generic => (cases.len() as u64, 0),
+            None => llrm_mir::tti::basic_case_clusters(&cases, index_bits, for_size),
         };
         let default_unreachable = match operation.operands[1] {
             Operand::Block(default) => self
