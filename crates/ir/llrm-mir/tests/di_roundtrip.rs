@@ -77,3 +77,17 @@ fn test_enumerators_subranges_and_file_scope_variables_parse_and_read_back() {
     let once = print::module(&module);
     assert_eq!(print::module(&parse::module(&once).expect("what is printed parses")), once);
 }
+
+/// clang puts a declaration's attachment before its linkage and type
+/// (`declare !dbg !1 dso_local i32 @sink(...)`): the parser stopped there with
+/// `expected a type, found !dbg`, so no `-O2 -g` C program that calls an
+/// external function reached the backend.
+#[test]
+fn a_declaration_keeps_the_dbg_attachment_clang_puts_after_declare() {
+    let text = "declare !dbg !1 i32 @sink(i64, i32)\n\n!1 = !{}\n";
+    let module = parse::module(text).expect("parses");
+    let once = print::module(&module);
+    assert!(once.contains("declare !dbg !"), "{once}");
+    let again = parse::module(&once).expect("what is printed parses");
+    assert_eq!(print::module(&again), once);
+}
