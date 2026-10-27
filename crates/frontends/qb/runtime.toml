@@ -1276,6 +1276,9 @@ check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 "B$DRAW" = 2
 "B$VARP" = 4
 "B$SADD" = 2
+# PDS 7.1 BCL71ENR.LIB stcommon.asm at 0035: `push bp / mov bp,sp / mov bx,[bp+6] / mov ax,ds`, one near
+# descriptor word, the tail `pop bp / retf 2`; the segment comes back in ax.
+"B$SSEG" = 2
 "B$SDAT" = 2
 "B$STIM" = 2
 "B$FDAT" = 0

@@ -7598,17 +7598,18 @@ impl Compiler {
         }
         if matches!(
             intrinsic.lowering,
-            Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble
+            Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble | Lowering::ToCurrency
         ) {
             let target = match intrinsic.lowering {
                 Lowering::ToInteger => INTEGER,
                 Lowering::ToLong => LONG,
                 Lowering::ToSingle => SINGLE,
                 Lowering::ToDouble => DOUBLE,
+                Lowering::ToCurrency => CURRENCY,
                 _ => unreachable!(),
             };
             let (operand, source) = self.numeric_argument(&arguments[0])?;
-            if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN) {
+            if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | CURRENCY) {
                 return self.fail(format!(
                     "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
                 ));
@@ -7662,6 +7663,13 @@ impl Compiler {
             let result = self.value(word);
             self.emit_runtime_call("B$SADD", vec![result], vec![descriptor]);
             return Ok(Some((Operand::Value(result), word)));
+        }
+        if intrinsic.lowering == Lowering::StringSegment {
+            // B$SSEG(descriptor): the segment of the characters.
+            let descriptor = self.string_descriptor(&arguments[0])?;
+            let result = self.value(INTEGER);
+            self.emit_runtime_call("B$SSEG", vec![result], vec![descriptor]);
+            return Ok(Some((Operand::Value(result), INTEGER)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
