@@ -8,7 +8,8 @@ nums() { sed 's/#.*//' "$1" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$'; }
 ready=$(gh pr list --repo "$R" --state open --base feat/parity --limit 1000 --json number,isDraft,mergeable,body,headRefOid -q '.[]|select(.isDraft==false)|"\(.number) \(.mergeable) \((.body // "")|capture("(^|\n)Owner: *(?<o>[A-Za-z0-9_.-]+)")?.o // "-") \(.headRefOid // "-")"') || exit 1
 # a PR the last landing refused is not tried again until its head or feat/parity moves (refused.state, written by land.sh): the runner re-queued it every second
 STATE=${REFUSED_STATE:-${LAND_TMP:-/tmp/landing}/refused.state}
-parity=$(gh api "repos/$R/git/ref/heads/feat/parity" -q .object.sha 2>/dev/null)
+# an If-None-Match request (pr_state.py parity): an unchanged ref answers 304, which costs no quota
+parity=$(python3 "$HERE/pr_state.py" parity 2>/dev/null); [ -n "$parity" ] || parity=$(gh api "repos/$R/git/ref/heads/feat/parity" -q .object.sha 2>/dev/null)
 # an unreadable parity (a 403) would match no refused.state line and re-queue every refused PR: keep the old queue
 [ -n "$parity" ] || { echo "gh could not read feat/parity (rate limit?); keeping the old queue" >&2; exit 1; }
 ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h $parity" "$STATE" 2>/dev/null || echo "$n $m $o $h"; done)

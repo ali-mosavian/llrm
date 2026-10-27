@@ -1456,6 +1456,27 @@ def batch_blame(heads: dict[str, str], base: str, cwd: Path = ROOT) -> list[str]
     return lines
 
 
+GQL_PR = "state isDraft headRefOid headRefName title body baseRefName mergeable commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } }"
+
+
+def graphql_prs(numbers: list[str], run=None) -> dict[str, dict]:
+    """{number: state, isDraft, headRefOid, headRefName, title, body, baseRefName, mergeable, committedDate, checks} for every PR GitHub knows in `numbers`, from one `gh api graphql` call
+    per 40 PRs. A `gh pr view` each cost a REST call per PR per stage: about 100 a cycle, and the quota ran out at 09:2x."""
+    owner, name = os.environ.get("R", "ali-mosavian/llrm").split("/")
+    found: dict[str, dict] = {}
+    for start in range(0, len(numbers), 40):
+        chunk = numbers[start : start + 40]
+        body = " ".join(f"p{n}: pullRequest(number: {n}) {{ {GQL_PR} }}" for n in chunk)
+        query = f'query {{ repository(owner: "{owner}", name: "{name}") {{ {body} }} }}'
+        done = (run or gh_run)(["gh", "api", "graphql", "-f", f"query={query}"], capture_output=True, text=True, errors="replace", check=True)
+        repository = json.loads(done.stdout)["data"]["repository"]
+        for number in chunk:
+            if pr := repository.get(f"p{number}"):
+                commit = (pr.pop("commits")["nodes"] or [{"commit": {}}])[0]["commit"]
+                found[number] = {**pr, "committedDate": commit.get("committedDate", ""), "checks": (commit.get("statusCheckRollup") or {}).get("state", "")}
+    return found
+
+
 PR_FIELDS = "headRefOid,headRefName,title,body,baseRefName,mergeable"
 
 
@@ -1463,13 +1484,16 @@ def pr_info(number: str) -> dict:
     return json.loads(gh_run(["gh", "pr", "view", number, "--json", PR_FIELDS], capture_output=True, text=True, errors="replace", check=True).stdout)
 
 
-def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> dict[str, tuple[str, str]]:
+def refresh_heads(infos: dict[str, dict], numbers: list[str], view=None) -> dict[str, tuple[str, str]]:
     """{number: (old head, new head)} of the PRs whose head moved since `infos` was read, which `infos` now holds. A batch that halves and runs again for an hour kept merging the
     heads it read at its start: at 02:34 the sub-batch merged #5088's 01:18 head with sinkcast.md stale, 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head
     its owner had moved."""
     moved = {}
+    fetched = graphql_prs(numbers) if view is None else {}
     for number in numbers:
-        now = view(number)
+        if view is None and number not in fetched:
+            continue
+        now = fetched[number] if view is None else view(number)
         if now["headRefOid"] != infos[number]["headRefOid"]:
             moved[number] = (infos[number]["headRefOid"], now["headRefOid"])
             infos[number] = now
@@ -1482,8 +1506,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     if len(numbers) > MAX_BATCH:
         raise SystemExit(f"merge-batch takes at most {MAX_BATCH} PRs per smoke, got {len(numbers)}: split the queue")
     infos = {}
+    known_prs = graphql_prs(numbers)
     for number in numbers:
-        info = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid,headRefName,title,body,baseRefName,mergeable"], capture_output=True, text=True, errors="replace", check=True).stdout)
+        if number not in known_prs:
+            raise SystemExit(f"#{number} is not a PR GitHub knows")
+        info = known_prs[number]
         if info["baseRefName"] != "feat/parity":
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
