@@ -1747,12 +1747,19 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
         git("worktree", "add", "-q", "--detach", str(work), base, cwd=cwd)
         try:
             claimed: dict[str, str] = {}  # a name a kept PR adds -> that PR
+            started = time.monotonic()
+
+            def progress(number: str, outcome: str) -> None:
+                """One line per candidate on stderr (the runner's assemble.log): a 13-minute assembly printed nothing and nobody knew how far it was."""
+                print(f"assemble: #{number} {outcome} ({len(kept)}/{limit} kept, {time.monotonic() - started:.0f} s)", file=sys.stderr, flush=True)
+
             for number in numbers:
                 if len(kept) >= limit:
                     break
                 names = added_names(heads[number], base, cwd)
                 if clash := sorted(name for name in names if name in claimed):
                     waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
+                    progress(number, "waits (same name)")
                     continue
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
                 if merge.returncode:
@@ -1760,12 +1767,15 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                     if conflicts and not regenerate(conflicts, work):
                         kept.append(number)
                         claimed.update(dict.fromkeys(names, number))
+                        progress(number, "kept (regenerated)")
                         continue
                     subprocess.run(["git", "merge", "--abort"], cwd=work, capture_output=True)
                     waits[number] = "conflicts with an earlier PR of the batch: " + ", ".join(conflicts or ["the tree"])
+                    progress(number, "waits (conflict)")
                 else:
                     kept.append(number)
                     claimed.update(dict.fromkeys(names, number))
+                    progress(number, "kept")
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
     return kept, waits

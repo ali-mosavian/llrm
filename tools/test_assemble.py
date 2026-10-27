@@ -583,3 +583,22 @@ def test_a_pr_that_does_not_link_alone_is_refused_and_only_a_runtime_or_frontend
 
     got = ps.alone_link_failures(["crates/frontends/llrm-qb/src/x.rs"], tmp_path, tmp_path, run=run)
     assert got == ["qb arena_type: boom"] and len(ran) == 2, (got, ran)
+
+
+def test_assemble_prints_one_progress_line_per_candidate(tmp_path, capsys):
+    """The 23:03 assembly ran 13 minutes with no output: nobody could say how many of the 40 heads were merged."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "shared.txt").write_text("one\ntwo\nthree\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    heads = {
+        "1": branch(repo, "a", "shared.txt", "one\nTWO\nthree\n"),
+        "2": branch(repo, "b", "shared.txt", "one\n2\nthree\n"),
+        "3": branch(repo, "c", "other.txt", "y\n"),
+    }
+    sh(repo, "checkout", "-q", "main")
+    ps.assemble(["1", "2", "3"], heads, base="main", cwd=repo, limit=16)
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith("assemble:")]
+    assert [line.split(" (")[0] for line in lines] == ["assemble: #1 kept", "assemble: #2 waits (conflict)", "assemble: #3 kept"], lines
+    assert "(2/16 kept," in lines[-1], lines
