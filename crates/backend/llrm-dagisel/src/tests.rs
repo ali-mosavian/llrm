@@ -33,6 +33,21 @@ fn add_of_two_registers_is_add32rr() {
     assert_eq!(dag.nodes[add as usize].ops, [a, b]);
 }
 
+/// Each selection built its own node stack and match scopes (five allocations
+/// and their growth a node, 5,336 nodes in d_faces -O2); the buffers are kept
+/// for the next selection now.
+#[test]
+fn the_buffers_of_a_selection_are_kept_for_the_next() {
+    let mut dag = TestDag::new();
+    let a = dag.input(1, mvt::i32);
+    let b = dag.input(2, mvt::i32);
+    let add = dag.node(isd::ADD, &[mvt::i32], &[a, b]);
+    let selector = Selector::new(table::TABLE);
+    let mut hooks = TestHooks { address: None };
+    assert_eq!(selector.select(&mut dag, &mut hooks, add), Outcome::Selected);
+    assert!(crate::interp::kept_capacity() > 0, "nothing was kept");
+}
+
 #[test]
 fn a_load_through_an_address_pattern_is_mov32rm_with_five_address_operands() {
     let mut dag = TestDag::new();

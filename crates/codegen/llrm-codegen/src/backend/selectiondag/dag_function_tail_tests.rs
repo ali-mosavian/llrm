@@ -43,7 +43,7 @@ fn the_off_switch_keeps_a_call_and_a_return() {
     assert!(ops.contains(&Operation::Call), "{ops:?}");
 }
 
-const M16_TAIL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_TAIL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16) addrspace(1)
 define cc 1005 i16 @f(i16 %a) addrspace(1) {
 entry:
@@ -67,7 +67,7 @@ fn an_m16_tail_call_jumps_to_the_callee() {
     assert!(whats.iter().all(|w| w.op != Operation::Call), "no call remains");
 }
 
-const M16_FORWARD_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FORWARD_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i32 @g(i32, i32, i32, i32, i32) addrspace(1)
 define cc 1005 i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e) addrspace(1) {
 entry:
