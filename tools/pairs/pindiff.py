@@ -162,6 +162,22 @@ def table(rows: list[dict], old: bool) -> list[str]:
     return lines
 
 
+def commits_behind(version: str, ref: str, repo: str) -> tuple[str | None, int | None]:
+    """The sha `--version` names and how many commits `ref` has beyond it; (None, None) when it names none or the repo lacks it."""
+    found = re.search(r"\b[0-9a-f]{40}\b", version)
+    if not found:
+        return None, None
+    counted = subprocess.run(["git", "-C", repo, "rev-list", "--count", f"{found.group(0)}..{ref}"], capture_output=True, text=True)
+    return (found.group(0), int(counted.stdout)) if counted.returncode == 0 else (None, None)
+
+
+def staleness(version: str, ref: str, repo: str, limit: int) -> str:
+    sha, behind = commits_behind(version, ref, repo)
+    if sha is None:
+        return f"# WARNING: the llc's build sha is unknown to {repo}; its distance from {ref} is not known"
+    return f"# WARNING: the llc is built on {sha[:9]}, {behind} commits behind {ref} (limit {limit})" if behind > limit else ""
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("machine", choices=sorted(MACHINES))
@@ -171,6 +187,8 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--work", required=True)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--old", action="store_true")
+    parser.add_argument("--ref", default="origin/feat/parity", help="the branch the llc should be built on")
+    parser.add_argument("--max-behind", type=int, default=20, help="commits behind --ref before the header warns")
     parser.add_argument("--reopt", action="store_true", help="clang's -O IR re-run through the pin's opt, then both llcs (not the default: see front_end_flags)")
     args = parser.parse_args(argv)
     work = Path(args.work)
@@ -179,6 +197,9 @@ def main(argv: list[str]) -> int:
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
     print(f"# pindiff {args.machine} -{args.level}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
+    stale = staleness(version, args.ref, str(Path(__file__).resolve().parents[2]), args.max_behind)
+    if stale:
+        print(stale)
     sources = sorted(Path(args.src).glob("*.c"))
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda source: one(source, args.machine, args.level, args.llc, work, args.old, args.reopt), sources))

@@ -87,3 +87,23 @@ def test_the_default_gives_clang_no_passes_and_reopt_gives_it_the_level():
     raw = pindiff.front_end_flags("O2", reopt=False)
     assert "-disable-llvm-passes" in raw and "-O2" in raw
     assert "-disable-llvm-passes" not in pindiff.front_end_flags("O2", reopt=True)
+
+
+def test_a_binary_behind_the_integration_branch_is_reported():
+    """An llrm-llc built on an older parity reported dag-vs-old m16 gaps that the DAG fixes since had closed (2026-10-27): the header named
+    only md5 and the build's sha, so nothing said the binary was 40 commits stale."""
+    import subprocess
+    import tempfile
+
+    pindiff = load("pindiff")
+    with tempfile.TemporaryDirectory() as tmp:
+        git = lambda *a: subprocess.run(["git", "-C", tmp, "-c", "user.name=t", "-c", "user.email=t@t", *a], capture_output=True, text=True, check=True).stdout.strip()
+        git("init", "-q", "-b", "main")
+        shas = []
+        for i in range(4):
+            git("commit", "-q", "--allow-empty", "-m", str(i))
+            shas.append(git("rev-parse", "HEAD"))
+        assert pindiff.commits_behind(f"llrm-llc {shas[1]}", "main", tmp) == (shas[1], 2)
+        assert pindiff.commits_behind("llrm-llc unknown", "main", tmp) == (None, None)
+        assert "WARNING" in pindiff.staleness(f"llrm-llc {shas[0]}", "main", tmp, limit=2)
+        assert pindiff.staleness(f"llrm-llc {shas[2]}", "main", tmp, limit=2) == ""
