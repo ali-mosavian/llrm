@@ -197,6 +197,7 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, true) => "BSS",
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
+        (Role::InitFunctions, _) => "DATA",
         (Role::Debug, _) if section.name == crate::codeview::SYMBOLS => "DEBSYM",
         (Role::Debug, _) if section.name.starts_with(".debug_") => "DWARF",
         (Role::Debug, _) => "DEBTYP",
