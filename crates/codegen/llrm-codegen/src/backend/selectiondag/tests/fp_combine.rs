@@ -176,3 +176,25 @@ fn a_negated_constant_or_negation_and_an_abs_of_a_constant_fold() {
     let root = combined(&mut dag, abs);
     assert_eq!(bits(&dag, root), Some(2.0f64.to_bits().into()));
 }
+
+/// `visitFDIV` did not exist: `x / 2.0` stayed a divide (x87 `fdiv`) instead of
+/// `x * 0.5`; `x / 3.0` is inexact and only folds with `arcp`.
+#[test]
+fn a_divide_by_a_constant_is_a_multiply_when_the_reciprocal_is_exact_or_arcp() {
+    let mut dag = dag();
+    let x = load(&mut dag, F64, 1);
+    let two = double(&mut dag, 2.0);
+    let div = dag.get_node(ISD::FDiv, F64, &[x, two]);
+    let root = combined(&mut dag, div);
+    assert_eq!((dag.opcode(root), dag.operand(root, 0)), (ISD::FMul, x));
+    assert_eq!(bits(&dag, dag.operand(root, 1)), Some(0.5f64.to_bits().into()));
+    let three = double(&mut dag, 3.0);
+    let div = dag.get_node(ISD::FDiv, F64, &[x, three]);
+    let root = combined(&mut dag, div);
+    assert_eq!(dag.opcode(root), ISD::FDiv);
+    let y = load(&mut dag, F64, 2);
+    let div = dag.get_node_flags(ISD::FDiv, F64, &[y, three], SDNodeFlags::ALLOW_RECIPROCAL);
+    let root = combined(&mut dag, div);
+    assert_eq!(dag.opcode(root), ISD::FMul);
+    assert_eq!(bits(&dag, dag.operand(root, 1)), Some((1.0f64 / 3.0).to_bits().into()));
+}

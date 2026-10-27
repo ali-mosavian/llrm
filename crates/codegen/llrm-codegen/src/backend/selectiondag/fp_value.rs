@@ -134,6 +134,29 @@ pub fn fold(
     }
 }
 
+/// `1.0 / x` when it is a normal finite value; `exact` is `opOK` (a power of
+/// two), otherwise `opInexact`. `None` where `APFloat` reports overflow,
+/// underflow or a denormal, or the type does not fold.
+pub fn reciprocal(
+    vt: EVT,
+    bits: u128,
+) -> Option<(u128, bool)> {
+    let (r, exact_input) = match vt {
+        EVT::Simple(MVT::F32) => {
+            let x = f32::from_bits(bits as u32);
+            let r = 1.0f32 / x;
+            (r.is_normal().then(|| u128::from(r.to_bits()))?, x.is_normal() && bits & 0x7F_FFFF == 0)
+        }
+        EVT::Simple(MVT::F64) => {
+            let x = f64::from_bits(bits as u64);
+            let r = 1.0f64 / x;
+            (r.is_normal().then(|| u128::from(r.to_bits()))?, x.is_normal() && bits & ((1 << 52) - 1) == 0)
+        }
+        _ => return None,
+    };
+    Some((r, exact_input))
+}
+
 /// The quiet NaN `getConstantFP(APFloat::getNaN(..))` makes.
 pub fn quiet_nan(vt: EVT) -> Option<u128> {
     match vt {

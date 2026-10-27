@@ -322,6 +322,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
             ISD::FAbs => self.visit_fabs(node),
+            ISD::FDiv => self.visit_fdiv(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::SDiv => self.visit_sdiv(node),
