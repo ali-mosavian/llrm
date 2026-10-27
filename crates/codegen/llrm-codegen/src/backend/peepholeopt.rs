@@ -35,11 +35,13 @@
 //! `NoSignFlag`, OF only where the instruction clears it (`and`, `or`, `xor`);
 //! never CF. The flags must not live out of the block.
 //!
-//! Not translated: a compare redundant with another compare or subtract
-//! (`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`), `isUseDefConvertible`
+//! The scan back for that instruction continues in a block's only predecessor.
+//!
+//! Not translated: a compare redundant with another compare or subtract of
+//! other operands (`isRedundantFlagInstr`, `IsSwapped`, `ImmDelta`; the same
+//! operands are `MachineCSE`'s), `isUseDefConvertible`
 //! (`popcnt`), `adc`/`sbb`/`shld`/`shrd`/`lzcnt`/`tzcnt` and the BMI group as
-//! the flag source, the backward scan into a single predecessor, `MOV32r0`
-//! motion and the NF variants (APX).
+//! the flag source, `MOV32r0` motion and the NF variants (APX).
 //!
 //! # Example
 //! A subtract whose result nothing reads, ahead of a branch on the flags:
@@ -240,9 +242,22 @@ fn flags_reused(body: &LirBody) -> LirBody {
             }
         }
     }
+    // The block each block with exactly one predecessor has it as.
+    let mut preds: HashMap<i64, Vec<i64>> = HashMap::default();
+    for block in &body.blocks {
+        for &next in block.succ.iter() {
+            preds.entry(next).or_default().push(block.at);
+        }
+    }
+    let sole_pred: HashMap<i64, i64> =
+        preds.into_iter().filter_map(|(at, from)| (from.len() == 1).then(|| (at, from[0]))).collect();
     // The flag lanes `one` reads and writes.
     let flags = |one: &Insn| -> Option<(Lanes, Lanes)> {
         let Some(effect) = crate::backend::liveness::effect(body.regs(), body.bits, one) else {
+            // a jump touches no flags
+            if one.what.as_ref().is_some_and(|what| what.op == Operation::Jump && !what.indirect) {
+                return Some((Lanes::new(), Lanes::new()));
+            }
             // a conditional branch reads the flags and writes nothing
             let branch = one.what.as_ref().filter(|what| what.op == Operation::Branch && !what.indirect);
             return branch
@@ -260,7 +275,7 @@ fn flags_reused(body: &LirBody) -> LirBody {
             let mut gone: Vec<usize> = Vec::new();
             for at in 0..insns.len() {
                 if let Some(value) = compared_with_zero(&insns[at])
-                    && reusable(body, block, &insns, at, value, &reads, &flags)
+                    && reusable(body, block, &insns, at, value, &reads, &flags, &sole_pred)
                 {
                     gone.push(at);
                 }
@@ -305,32 +320,46 @@ fn reusable(
     value: u32,
     reads: &HashMap<u32, usize>,
     flags: &dyn Fn(&Insn) -> Option<(Lanes, Lanes)>,
+    sole_pred: &HashMap<i64, i64>,
 ) -> bool {
     // the scan back from the compare: no other writer of the flags before the
-    // definition of the value
+    // definition of the value, through a block's only predecessor when the
+    // block start is reached
     let mut defined = None;
-    for back in (0..at).rev() {
-        let one = &insns[back];
-        if one.defines.contains(&value) {
-            defined = Some(back);
+    let mut scanning: (i64, Vec<Arc<Insn>>) = (block.at, insns[..at].to_vec());
+    let mut seen: HashSet<i64> = HashSet::from_iter([block.at]);
+    loop {
+        for one in scanning.1.iter().rev() {
+            if one.defines.contains(&value) {
+                defined = Some(Arc::clone(one));
+                break;
+            }
+            if one.is_meta() {
+                continue;
+            }
+            match flags(one) {
+                Some((_, writes)) if writes.is_empty() => {}
+                _ => return false,
+            }
+        }
+        if defined.is_some() {
             break;
         }
-        if one.is_meta() {
-            continue;
+        let Some(&from) = sole_pred.get(&scanning.0) else { return false };
+        let Some(before) = body.blocks.iter().find(|one| one.at == from) else { return false };
+        if !seen.insert(from) {
+            return false;
         }
-        match flags(one) {
-            Some((_, writes)) if writes.is_empty() => {}
-            _ => return false,
-        }
+        scanning = (from, before.insns.iter().cloned().collect());
     }
     let Some(def) = defined else { return false };
-    let Some((_, sets)) = defines_flags(&insns[def], reads) else { return false };
+    let Some((_, sets)) = defines_flags(&def, reads) else { return false };
     let width = |loc: &Loc| match loc {
         Loc::Held(held) => Some(held.width),
         _ => None,
     };
     let compared = insns[at].what.as_ref().and_then(|what| what.sources.first()).and_then(width);
-    if compared != insns[def].what.as_ref().and_then(|what| what.dests.first()).and_then(width) {
+    if compared != def.what.as_ref().and_then(|what| what.dests.first()).and_then(width) {
         return false;
     }
     // the scan forward from the compare: the readers of the flags read only
@@ -750,6 +779,59 @@ mod tests {
             insn(2, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(names(&compared(&body), true), ["shr", "test", "jne"], "a count of 32 is zero");
+    }
+
+    /// `v2 := shr v1, 2; jmp` in one block, `test v2, v2; jne` in the block
+    /// after it: the scan stopped at the block start and kept the test, where
+    /// the pin continues in the only predecessor (a flag writer in the second
+    /// block, ahead of the definition, keeps it).
+    #[test]
+    fn test_a_test_in_the_next_block_is_the_shifts_flags() {
+        let build = |between: bool| {
+            let head = LirBlock {
+                succ: vec![1].into(),
+                ..LirBlock::new(
+                    0,
+                    vec![
+                        insn(0, Operation::Binary, "shr", vec![held(2)], vec![held(1), imm(2)], vec![2], vec![1]),
+                        insn(1, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+            };
+            let mut tail = vec![
+                insn(2, Operation::Compare, "test", vec![], vec![held(2), held(2)], vec![], vec![2, 2]),
+                insn(3, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+            ];
+            if between {
+                tail.insert(
+                    0,
+                    insn(4, Operation::Binary, "add", vec![held(4)], vec![held(3), held(3)], vec![4], vec![3, 3]),
+                );
+            }
+            let next = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, tail) };
+            let exit = LirBlock::new(
+                2,
+                vec![insn(5, Operation::Compare, "cmp", vec![], vec![held(9), held(9)], vec![], vec![9, 9])],
+            );
+            let mut body = LirBody::new(
+                "f",
+                0,
+                vec![head.into(), next.into(), exit.into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            body
+        };
+        let second = |body: &LirBody| -> Vec<String> {
+            body.blocks[1]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(second(&compared(&build(false))), ["jne"]);
+        assert_eq!(second(&compared(&build(true))), ["add", "test", "jne"]);
     }
 
     fn narrow(
