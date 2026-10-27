@@ -10,6 +10,8 @@
 use llrm_macho::{Described, MachTargetWriter};
 use llrm_object::{Fix, FixupKind, Reloc, Unsupported};
 
+use super::fixup;
+
 const CPU_TYPE_ARM64: u32 = 0x0100_000C;
 const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
 const ARM64_RELOC_UNSIGNED: u32 = 0;
@@ -38,11 +40,11 @@ impl MachTargetWriter for Arm64MachO {
         let (kind, length, pcrel, addend_in_field) = match (reloc.kind, reloc.pc_rel, got) {
             (FixupKind::DATA_8, false, _) => (ARM64_RELOC_UNSIGNED, 3, false, true),
             (FixupKind::DATA_4, false, _) => (ARM64_RELOC_UNSIGNED, 2, false, true),
-            (FixupKind::BRANCH26, _, _) => (ARM64_RELOC_BRANCH26, 2, true, false),
-            (FixupKind::PAGE21, _, false) => (ARM64_RELOC_PAGE21, 2, true, false),
-            (kind, _, false) if kind.is_page_offset12() => (ARM64_RELOC_PAGEOFF12, 2, false, false),
-            (FixupKind::PAGE21, _, true) => (ARM64_RELOC_GOT_LOAD_PAGE21, 2, true, false),
-            (FixupKind::LDST_IMM12_SCALE8, _, true) => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
+            (fixup::BRANCH26, _, _) => (ARM64_RELOC_BRANCH26, 2, true, false),
+            (fixup::PAGE21, _, false) => (ARM64_RELOC_PAGE21, 2, true, false),
+            (kind, _, false) if fixup::is_page_offset12(kind) => (ARM64_RELOC_PAGEOFF12, 2, false, false),
+            (fixup::PAGE21, _, true) => (ARM64_RELOC_GOT_LOAD_PAGE21, 2, true, false),
+            (fixup::LDST_IMM12_SCALE8, _, true) => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
             other => return Err(Unsupported(format!("Mach-O arm64 has no relocation for {other:?}"))),
         };
         Ok(Described { kind, length, pcrel, beyond: 0, addend_in_field })

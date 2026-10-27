@@ -749,7 +749,7 @@ mod tests {
 
     /// The (class, data) of each COMENT of an object, in order.
     fn comments(object: &Object) -> Vec<(u8, Vec<u8>)> {
-        omf::parse(&write::write(object).expect("writes"))
+        omf::parse(&write::write_generic(object).expect("writes"))
             .expect("parses")
             .iter()
             .filter(|one| one.r#type == omf::COMENT)
@@ -803,7 +803,7 @@ mod tests {
     fn a_public_symbol_is_followed_by_its_type() {
         let global = variable("g", 0, Kind::Local, Location::Static { symbol: 1, disp: 0 });
         let made = object(vec![int()], Vec::new(), |info| info.globals.push(global));
-        let records = omf::parse(&write::write(&made).unwrap()).unwrap();
+        let records = omf::parse(&write::write_generic(&made).unwrap()).unwrap();
         let after = |name: &[u8]| {
             let at = records
                 .iter()
@@ -833,7 +833,7 @@ mod tests {
         object: &Object,
         name: &[u8],
     ) -> Vec<(u8, Vec<u8>)> {
-        let records = omf::parse(&write::write(object).unwrap()).unwrap();
+        let records = omf::parse(&write::write_generic(object).unwrap()).unwrap();
         let at = records
             .iter()
             .position(|one| one.r#type == omf::PUBDEF && one.body.windows(name.len()).any(|window| window == name))
@@ -919,7 +919,7 @@ mod tests {
         assert!(!all(&basic, LOCALS).is_empty(), "another language's information is written");
         let mut wide = object(vec![int()], Vec::new(), |_| {});
         wide.arch = Arch::I386;
-        assert!(write::write(&wide).unwrap_err().to_string().contains("16-bit"));
+        assert!(write::write_generic(&wide).unwrap_err().to_string().contains("16-bit"));
     }
 
     /// A block is a scope of its own inside the body's, ending where it does.

@@ -48,8 +48,8 @@ pub enum Role {
 
 /// What a fixup patches (LLVM's `MCFixupKind`): an open number. The generic
 /// kinds are below `FIRST_TARGET`; a target's own are above it. The kinds from
-/// `BRANCH_2` on are the targets' and sit here until each target crate owns its
-/// own.
+/// `FIRST_TARGET` are the targets'; only the segmented-addressing pair stays
+/// here, which OMF and the debug writers share.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct FixupKind(pub u16);
 
@@ -73,44 +73,13 @@ impl FixupKind {
     pub const SECREL_2: Self = Self(4005);
     /// COFF: the target's offset within its section (`FK_SecRel_4`).
     pub const SECREL_4: Self = Self(4006);
-    pub const FIRST_TARGET: Self = Self(4010);
-    /// x86: a call or jump's target, relative to the field's end, which the
-    /// formats that tell a branch from a data reference (Mach-O's `BRANCH`)
-    /// read.
-    pub const BRANCH_2: Self = Self(4011);
-    pub const BRANCH_4: Self = Self(4012);
     /// OMF: the selector of the target's segment.
-    pub const SEGMENT_BASE: Self = Self(4013);
+    pub const SEGMENT_BASE: Self = Self(4007);
     /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
-    pub const FAR_POINTER: Self = Self(4014);
-    /// x86-64: the place's offset from the target's global offset table entry
-    /// (`R_X86_64_REX_GOTPCRELX`).
-    pub const GOT_PCREL_4: Self = Self(4015);
-    /// arm64: the word offset in the low 26 bits of a `b` or `bl`.
-    pub const BRANCH26: Self = Self(4020);
-    /// arm64: the 4 KiB page of the target, relative to the place's page, in an
-    /// `adrp`.
-    pub const PAGE21: Self = Self(4021);
-    /// Whether `kind` is `page_offset12`'s.
-    pub fn is_page_offset12(self) -> bool {
-        self == Self::ADD_IMM12 || (Self::LDST_IMM12_SCALE1.0..=Self::LDST_IMM12_SCALE16.0).contains(&self.0)
-    }
-
-    /// arm64: the target's offset in its page, in the 12-bit immediate of an
-    /// `add`.
-    pub const ADD_IMM12: Self = Self(4022);
-    /// arm64: the same in a load or store of `1 << n` bytes
-    /// (`LdstImm12Scale1..16`).
-    pub const LDST_IMM12_SCALE1: Self = Self(4023);
-    pub const LDST_IMM12_SCALE2: Self = Self(4024);
-    pub const LDST_IMM12_SCALE4: Self = Self(4025);
-    pub const LDST_IMM12_SCALE8: Self = Self(4026);
-    pub const LDST_IMM12_SCALE16: Self = Self(4027);
-
-    /// The load or store kind for an access of `1 << log` bytes.
-    pub fn ldst_imm12(log: u8) -> Self {
-        Self(Self::LDST_IMM12_SCALE1.0 + u16::from(log))
-    }
+    pub const FAR_POINTER: Self = Self(4008);
+    /// A target's kinds start here and are its own (`FIRST_TARGET + n`), so two
+    /// targets reuse the numbers.
+    pub const FIRST_TARGET: Self = Self(4010);
 
     /// The kinds' table; a target's replace it (each target crate states its
     /// own `INFOS`).
@@ -122,15 +91,8 @@ impl FixupKind {
             Self::DATA_8 => ("FK_Data_8", 64),
             Self::SECREL_2 => ("FK_SecRel_2", 16),
             Self::SECREL_4 => ("FK_SecRel_4", 32),
-            Self::BRANCH_2 => ("branch_2byte_pcrel", 16),
-            Self::BRANCH_4 => ("branch_4byte_pcrel", 32),
             Self::SEGMENT_BASE => ("segment_base", 16),
             Self::FAR_POINTER => ("far_pointer", 32),
-            Self::GOT_PCREL_4 => ("riprel_4byte_gotpcrelx", 32),
-            Self::BRANCH26 | Self::PAGE21 | Self::ADD_IMM12 => ("arm64", 32),
-            kind if (Self::LDST_IMM12_SCALE1.0..=Self::LDST_IMM12_SCALE16.0).contains(&kind.0) => {
-                ("arm64_ldst_imm12", 32)
-            }
             _ => ("none", 0),
         };
         FixupKindInfo { name, offset: 0, bits }
@@ -169,18 +131,15 @@ impl Fix {
     pub const SEGMENT_BASE: Fix = Fix::plain(FixupKind::SEGMENT_BASE);
     pub const FAR_POINTER: Fix = Fix::plain(FixupKind::FAR_POINTER);
     pub const SECTION_INDEX: Fix = Fix::plain(FixupKind::SECREL_2);
-    pub const BRANCH26: Fix = Fix::relative(FixupKind::BRANCH26, 0);
-    pub const PAGE21: Fix = Fix::relative(FixupKind::PAGE21, 0);
-    /// `Page21` of the target's GOT entry.
-    pub const GOT_PAGE21: Fix = Fix { spec: Fix::S_GOT, ..Fix::relative(FixupKind::PAGE21, 0) };
-    /// The offset of the target's GOT entry in its page, in an 8-byte load.
-    pub const GOT_PAGE_OFFSET12: Fix = Fix { spec: Fix::S_GOT, ..Fix::plain(FixupKind::LDST_IMM12_SCALE8) };
 
-    const fn plain(kind: FixupKind) -> Fix {
+    /// An absolute fixup of `kind`.
+    pub const fn plain(kind: FixupKind) -> Fix {
         Fix { kind, pc_rel: false, pc_bias: 0, spec: Fix::S_ABS }
     }
 
-    const fn relative(
+    /// A fixup of `kind` relative to the place `pc_bias` bytes past the field's
+    /// start.
+    pub const fn relative(
         kind: FixupKind,
         pc_bias: usize,
     ) -> Fix {
@@ -207,37 +166,12 @@ impl Fix {
         Fix::relative(Fix::abs(width).kind, from)
     }
 
-    /// A call or jump's target, `width` bytes relative to the field's end.
-    pub const fn branch(width: usize) -> Fix {
-        Fix::relative(
-            match width {
-                2 => FixupKind::BRANCH_2,
-                4 => FixupKind::BRANCH_4,
-                _ => FixupKind::NONE,
-            },
-            width,
-        )
-    }
-
     /// COFF: the target's offset within its section, `width` bytes.
     pub const fn section_offset(width: usize) -> Fix {
         Fix::plain(match width {
             4 => FixupKind::SECREL_4,
             _ => FixupKind::NONE,
         })
-    }
-
-    /// x86-64: the place's offset from the target's GOT entry, relative to the
-    /// place `from` bytes past the field's start.
-    pub const fn got_pc_rel(from: usize) -> Fix {
-        Fix::relative(FixupKind::GOT_PCREL_4, from)
-    }
-
-    /// arm64: the target's offset in its page, in the 12-bit immediate of an
-    /// `add` (`access` is `None`) or of a load or store of `1 << access`
-    /// bytes.
-    pub fn page_offset12(access: Option<u8>) -> Fix {
-        Fix::plain(access.map_or(FixupKind::ADD_IMM12, FixupKind::ldst_imm12))
     }
 }
 
@@ -423,23 +357,15 @@ mod tests {
             (Fix::abs(2), 2),
             (Fix::abs(4), 4),
             (Fix::abs(8), 8),
-            (Fix::branch(2), 2),
-            (Fix::branch(4), 4),
             (Fix::pc_rel(4, 5), 4),
             (Fix::SEGMENT_BASE, 2),
             (Fix::FAR_POINTER, 4),
             (Fix::section_offset(4), 4),
-            (Fix::got_pc_rel(4), 4),
-            (Fix::BRANCH26, 4),
-            (Fix::GOT_PAGE_OFFSET12, 4),
-            (Fix::page_offset12(None), 4),
-            (Fix::page_offset12(Some(3)), 4),
         ];
         for (fix, width) in widths {
             assert_eq!(fix.kind.width(), width, "{fix:?}");
             assert_eq!(Reloc::new(0, fix, Target::Symbol(0), 0).fix(), fix);
         }
-        assert!(Fix::page_offset12(Some(0)).kind.is_page_offset12() && !Fix::PAGE21.kind.is_page_offset12());
     }
 
     /// `Fix::abs` of an unsupported width has no kind, never a wrong one.

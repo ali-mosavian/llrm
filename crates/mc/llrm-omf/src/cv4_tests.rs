@@ -446,7 +446,7 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
             variable("q", 1, Kind::Local, Location::Frame { disp: -6 }),
         ],
     );
-    let ours = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap());
+    let ours = cv4info::shape(&omf::parse(&write::write_generic(&made).unwrap()).unwrap());
     assert_eq!(ours, ml);
 }
 
@@ -484,7 +484,7 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
             variable("q", 1, Kind::Local, Location::Frame { disp: -12 }),
         ],
     );
-    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap())
+    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write_generic(&made).unwrap()).unwrap())
         .into_iter()
         .map(|one| one.replace("UINT4", "UNSIGNED LONG"))
         .collect();

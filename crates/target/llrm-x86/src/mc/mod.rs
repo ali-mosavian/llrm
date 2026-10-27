@@ -5,7 +5,9 @@ pub mod coff32;
 pub mod coff64;
 pub mod elf32;
 pub mod elf64;
+pub mod fixup;
 pub mod macho;
+pub mod omf;
 
 use llrm_object::{Arch, AsmInfo, Object, ObjectTarget, Unsupported};
 

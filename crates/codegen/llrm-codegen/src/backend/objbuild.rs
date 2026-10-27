@@ -84,7 +84,7 @@ pub const OFFSET64: Fix = Fix::abs(8);
 
 /// A call's field: relative to its own end.
 fn relative(width: usize) -> Fix {
-    Fix::branch(width)
+    llrm_x86::mc::fixup::branch(width)
 }
 
 /// The role of a data segment `name` that the object's classes name, and that
@@ -545,7 +545,7 @@ pub fn serialized(
     format: Format,
 ) -> Result<Vec<u8>, Error> {
     match format {
-        Format::Omf => Ok(llrm_omf::write::write(object)?),
+        Format::Omf => Ok(llrm_omf::write::write(object, &llrm_x86::mc::omf::X86Omf)?),
         other => Ok(llrm_x86::mc::X86Objects.write_object(other.name(), object)?),
     }
 }
@@ -917,7 +917,7 @@ pub fn _encoded(
         let loc = if model == CodeModel::Flat64 {
             let from = code.len() - at;
             if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
-                Fix::got_pc_rel(from)
+                llrm_x86::mc::fixup::got_pc_rel(from)
             } else {
                 Fix::pc_rel(4, from)
             }

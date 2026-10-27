@@ -5,6 +5,8 @@
 use llrm_elf::{Machine, Relocation};
 use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
+use super::fixup;
+
 const R_X86_64_64: u32 = 1;
 const R_X86_64_PC32: u32 = 2;
 const R_X86_64_PLT32: u32 = 4;
@@ -35,8 +37,8 @@ impl Machine for X8664 {
             (FixupKind::DATA_1, false) => (R_X86_64_8, 1, 0),
             (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8, from),
             (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4, from),
-            (FixupKind::BRANCH_4, true) => (R_X86_64_PLT32, 4, 4),
-            (FixupKind::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4, from),
+            (fixup::BRANCH_4, true) => (R_X86_64_PLT32, 4, 4),
+            (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4, from),
             (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2, from),
             (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1, from),
             (FixupKind::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
@@ -206,7 +208,7 @@ mod tests {
         .concat();
         let relocs = vec![
             Reloc::new(7, Fix::pc_rel(4, 4), Target::Symbol(1), 0),
-            Reloc::new(12, Fix::branch(4), Target::Symbol(2), 0),
+            Reloc::new(12, fixup::branch(4), Target::Symbol(2), 0),
         ];
         let object = Object {
             name: "puts.s".into(),

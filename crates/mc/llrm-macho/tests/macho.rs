@@ -106,7 +106,7 @@ fn program() -> Object {
         0xC3,
     ];
     let relocs = vec![
-        reloc(1, Fix::branch(4), 3, 0),
+        reloc(1, llrm_x86::mc::fixup::branch(4), 3, 0),
         reloc(8, Fix::pc_rel(4, 4), 1, 0),
         reloc(14, Fix::pc_rel(4, 5), 4, 0),
         reloc(22, Fix::pc_rel(4, 4), 2, 0),
@@ -264,15 +264,15 @@ fn arm64_program() -> Object {
     ];
     let text: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
     let relocs = vec![
-        reloc(0, Fix::BRANCH26, 2, 0),
-        reloc(4, Fix::PAGE21, 1, 0),
-        reloc(8, Fix::page_offset12(None), 1, 0),
-        reloc(12, Fix::PAGE21, 3, 0),
-        reloc(16, Fix::page_offset12(Some(2)), 3, 0),
-        reloc(20, Fix::GOT_PAGE21, 4, 0),
-        reloc(24, Fix::GOT_PAGE_OFFSET12, 4, 0),
-        reloc(28, Fix::BRANCH26, 2, 8),
-        reloc(32, Fix::PAGE21, 3, 16),
+        reloc(0, llrm_arm64::mc::fixup::BRANCH26_FIX, 2, 0),
+        reloc(4, llrm_arm64::mc::fixup::PAGE21_FIX, 1, 0),
+        reloc(8, llrm_arm64::mc::fixup::page_offset12(None), 1, 0),
+        reloc(12, llrm_arm64::mc::fixup::PAGE21_FIX, 3, 0),
+        reloc(16, llrm_arm64::mc::fixup::page_offset12(Some(2)), 3, 0),
+        reloc(20, llrm_arm64::mc::fixup::GOT_PAGE21, 4, 0),
+        reloc(24, llrm_arm64::mc::fixup::GOT_PAGE_OFFSET12, 4, 0),
+        reloc(28, llrm_arm64::mc::fixup::BRANCH26_FIX, 2, 8),
+        reloc(32, llrm_arm64::mc::fixup::PAGE21_FIX, 3, 16),
     ];
     let mut data = vec![7, 0, 0, 0];
     data.extend([0; 8]);
@@ -367,7 +367,12 @@ fn ld64_links_it_with_a_clang_object() {
         name: "m.s".into(),
         arch: Arch::X8664,
         sections: vec![
-            section("text", Role::Text, text, vec![reloc(1, Fix::branch(4), 1, 0), reloc(8, Fix::pc_rel(4, 4), 2, 0)]),
+            section(
+                "text",
+                Role::Text,
+                text,
+                vec![reloc(1, llrm_x86::mc::fixup::branch(4), 1, 0), reloc(8, Fix::pc_rel(4, 4), 2, 0)],
+            ),
             section("data", Role::Data, vec![7, 0, 0, 0], vec![]),
         ],
         symbols: vec![

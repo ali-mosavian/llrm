@@ -7,6 +7,8 @@
 use llrm_elf::{Machine, Relocation};
 use llrm_object::{Arch, Fix, FixupKind, Object, Reloc, Unsupported};
 
+use super::fixup;
+
 const EM_AARCH64: u16 = 183;
 const R_AARCH64_ABS64: u32 = 257;
 const R_AARCH64_ABS32: u32 = 258;
@@ -37,16 +39,16 @@ impl Machine for Arm64 {
         let (kind, width) = match (reloc.kind, reloc.pc_rel, got) {
             (FixupKind::DATA_8, false, _) => (R_AARCH64_ABS64, 8),
             (FixupKind::DATA_4, false, _) => (R_AARCH64_ABS32, 4),
-            (FixupKind::BRANCH26, _, _) => (R_AARCH64_CALL26, 4),
-            (FixupKind::PAGE21, _, false) => (R_AARCH64_ADR_PREL_PG_HI21, 4),
-            (FixupKind::ADD_IMM12, _, _) => (R_AARCH64_ADD_ABS_LO12_NC, 4),
-            (FixupKind::LDST_IMM12_SCALE1, _, _) => (R_AARCH64_LDST8_ABS_LO12_NC, 4),
-            (FixupKind::LDST_IMM12_SCALE2, _, _) => (R_AARCH64_LDST16_ABS_LO12_NC, 4),
-            (FixupKind::LDST_IMM12_SCALE4, _, _) => (R_AARCH64_LDST32_ABS_LO12_NC, 4),
-            (FixupKind::LDST_IMM12_SCALE8, _, false) => (R_AARCH64_LDST64_ABS_LO12_NC, 4),
-            (FixupKind::LDST_IMM12_SCALE16, _, _) => (R_AARCH64_LDST128_ABS_LO12_NC, 4),
-            (FixupKind::PAGE21, _, true) => (R_AARCH64_ADR_GOT_PAGE, 4),
-            (FixupKind::LDST_IMM12_SCALE8, _, true) => (R_AARCH64_LD64_GOT_LO12_NC, 4),
+            (fixup::BRANCH26, _, _) => (R_AARCH64_CALL26, 4),
+            (fixup::PAGE21, _, false) => (R_AARCH64_ADR_PREL_PG_HI21, 4),
+            (fixup::ADD_IMM12, _, _) => (R_AARCH64_ADD_ABS_LO12_NC, 4),
+            (fixup::LDST_IMM12_SCALE1, _, _) => (R_AARCH64_LDST8_ABS_LO12_NC, 4),
+            (fixup::LDST_IMM12_SCALE2, _, _) => (R_AARCH64_LDST16_ABS_LO12_NC, 4),
+            (fixup::LDST_IMM12_SCALE4, _, _) => (R_AARCH64_LDST32_ABS_LO12_NC, 4),
+            (fixup::LDST_IMM12_SCALE8, _, false) => (R_AARCH64_LDST64_ABS_LO12_NC, 4),
+            (fixup::LDST_IMM12_SCALE16, _, _) => (R_AARCH64_LDST128_ABS_LO12_NC, 4),
+            (fixup::PAGE21, _, true) => (R_AARCH64_ADR_GOT_PAGE, 4),
+            (fixup::LDST_IMM12_SCALE8, _, true) => (R_AARCH64_LD64_GOT_LO12_NC, 4),
             other => return Err(Unsupported(format!("ELF arm64 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from: 0 })
@@ -128,7 +130,7 @@ mod tests {
             0xD400_0001,    // svc #0
         ];
         let text: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
-        let relocs = vec![reloc(0, Fix::PAGE21, 2, 0), reloc(4, Fix::page_offset12(Some(3)), 2, 0)];
+        let relocs = vec![reloc(0, fixup::PAGE21_FIX, 2, 0), reloc(4, fixup::page_offset12(Some(3)), 2, 0)];
         Object {
             name: "hello.s".into(),
             arch: Arch::Arm64,

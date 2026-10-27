@@ -5,6 +5,8 @@
 use llrm_elf::{Machine, Relocation};
 use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
+use super::fixup;
+
 const R_386_32: u32 = 1;
 const R_386_PC32: u32 = 2;
 const R_386_PLT32: u32 = 4;
@@ -28,8 +30,8 @@ impl Machine for I386 {
             (FixupKind::DATA_2, false) => (R_386_16, 2, 0),
             (FixupKind::DATA_1, false) => (R_386_8, 1, 0),
             (FixupKind::DATA_4, true) => (R_386_PC32, 4, from),
-            (FixupKind::BRANCH_4, true) => (R_386_PLT32, 4, 4),
-            (FixupKind::BRANCH_2, true) => (R_386_PC16, 2, 2),
+            (fixup::BRANCH_4, true) => (R_386_PLT32, 4, 4),
+            (fixup::BRANCH_2, true) => (R_386_PC16, 2, 2),
             (FixupKind::DATA_2, true) => (R_386_PC16, 2, from),
             (FixupKind::DATA_1, true) => (R_386_PC8, 1, from),
             (FixupKind::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),

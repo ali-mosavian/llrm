@@ -226,7 +226,11 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     let scratch = tempfile::tempdir().unwrap();
     let (object, source) = synthetic();
     std::fs::write(scratch.path().join("syn.c"), source).unwrap();
-    std::fs::write(scratch.path().join("syn.obj"), llrm_codegen::objectfile::write::write(&object).unwrap()).unwrap();
+    std::fs::write(
+        scratch.path().join("syn.obj"),
+        llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf).unwrap(),
+    )
+    .unwrap();
     dosbox::run(
         &[('c', &borland), ('v', &microsoft), ('w', scratch.path())],
         "v:\\bin",

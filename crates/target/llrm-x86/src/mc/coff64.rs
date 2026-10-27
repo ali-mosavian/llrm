@@ -4,6 +4,8 @@
 use llrm_coff::{Machine, Relocation};
 use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
+use super::fixup;
+
 const ADDR64: u16 = 1;
 const ADDR32: u16 = 2;
 const REL32: u16 = 4;
@@ -25,7 +27,7 @@ impl Machine for X8664 {
             // field's end.
             (FixupKind::DATA_4, true) if (4..=9).contains(&from) => (REL32 + (from - 4) as u16, 4, from, from),
             (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
-            (FixupKind::BRANCH_4, true) => (REL32, 4, 4, 4),
+            (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
             (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
             (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
             (FixupKind::SEGMENT_BASE, _) => {
@@ -126,7 +128,7 @@ mod tests {
             eprintln!("skipped: needs lld-link and llvm-objdump");
             return;
         };
-        let call = Reloc::new(1, Fix::branch(4), Target::Symbol(1), 0);
+        let call = Reloc::new(1, fixup::branch(4), Target::Symbol(1), 0);
         let made = object(
             vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3, 0x90, 0x90, 0xC3], vec![call])],
             vec![defined("start", 0), defined("f", 8)],

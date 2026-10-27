@@ -629,6 +629,7 @@ dependencies = [
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
+ "llrm-omf",
  "llrm-support",
  "llrm-target",
  "tempfile",

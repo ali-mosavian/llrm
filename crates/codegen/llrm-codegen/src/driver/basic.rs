@@ -618,7 +618,7 @@ fn written_basic_inner(
             );
         return objbuild::serialized(&object, format).map_err(|error| error.to_string());
     }
-    let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object, &llrm_x86::mc::omf::X86Omf).map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
     if module.object.bitness != 16 {

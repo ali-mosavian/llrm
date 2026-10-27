@@ -359,7 +359,7 @@ mod tests {
             vec![local("x", model::Kind::Parameter, 4), local("y", model::Kind::Local, -2)],
             vec![int(), procedure()],
         );
-        let records = omf::parse(&write::write(&made).unwrap()).unwrap();
+        let records = omf::parse(&write::write_generic(&made).unwrap()).unwrap();
         let shape = cvinfo::parse(&records).shape();
         assert_eq!(
             shape,
@@ -382,7 +382,7 @@ mod tests {
             kind: model::Kind::Parameter,
             location: Location::Register("ax".into()),
         };
-        let why = write::write(&object(vec![in_register], vec![int(), procedure()])).unwrap_err().to_string();
+        let why = write::write_generic(&object(vec![in_register], vec![int(), procedure()])).unwrap_err().to_string();
         assert!(why.contains("x is in register ax"), "{why}");
     }
 
@@ -400,7 +400,7 @@ mod tests {
         let mut made = made;
         made.debug.as_mut().unwrap().functions[0].variables[1].r#type = 1;
         made.debug.as_mut().unwrap().functions[0].r#type = 2;
-        let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
+        let shape = cvinfo::parse(&omf::parse(&write::write_generic(&made).unwrap()).unwrap()).shape();
         // `void` reads as STRING in CodeView's raw return code, as it does for
         // any void function.
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 () -> STRING"], "{shape:#?}");
@@ -425,7 +425,7 @@ mod tests {
             location: Location::List(Vec::new()),
         };
         let made = object(vec![local("x", model::Kind::Parameter, 4), in_register, removed], vec![int(), procedure()]);
-        let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
+        let shape = cvinfo::parse(&omf::parse(&write::write_generic(&made).unwrap()).unwrap()).shape();
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"], "{shape:#?}");
     }
 }

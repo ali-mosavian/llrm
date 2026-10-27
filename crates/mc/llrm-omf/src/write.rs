@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_object::{Definition, Fix, FixupKind, Object, Role, Section, Target};
+use llrm_object::{Definition, Fix, FixupKind, FixupKindInfo, Object, Role, Section, Target};
 
 use crate::omf;
 
@@ -207,27 +207,76 @@ fn class(section: &Section) -> &'static str {
     }
 }
 
+/// What a target tells the OMF writer of its fixup kinds (LLVM's
+/// `MCObjectTargetWriter`): the generic kinds and the segmented pair are the
+/// writer's own.
+pub trait OmfTargetWriter {
+    /// What `kind` says of its field.
+    fn kind_info(
+        &self,
+        kind: FixupKind,
+    ) -> FixupKindInfo;
+    /// Whether `kind` is a call or jump's displacement.
+    fn is_branch(
+        &self,
+        kind: FixupKind,
+    ) -> bool;
+}
+
+/// The generic kinds alone: what the tests write without a target.
+#[cfg(test)]
+pub(crate) struct GenericOmf;
+
+#[cfg(test)]
+impl OmfTargetWriter for GenericOmf {
+    fn kind_info(
+        &self,
+        kind: FixupKind,
+    ) -> FixupKindInfo {
+        kind.info()
+    }
+
+    fn is_branch(
+        &self,
+        _: FixupKind,
+    ) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn write_generic(object: &Object) -> Result<Vec<u8>, Error> {
+    write(object, &GenericOmf)
+}
+
 /// The location code of a field, and whether it is self-relative.
-fn location(fix: Fix) -> Result<(u8, bool), Error> {
-    let width = fix.kind.width();
+fn location(
+    writer: &dyn OmfTargetWriter,
+    fix: Fix,
+) -> Result<(u8, bool), Error> {
+    let width = writer.kind_info(fix.kind).bits / 8;
     Ok(match (fix.kind, fix.pc_rel) {
         (FixupKind::DATA_2, false) => (OFFSET, false),
         (FixupKind::DATA_4, false) => (OFFSET32, false),
         (FixupKind::SEGMENT_BASE, false) => (BASE, false),
         (FixupKind::FAR_POINTER, false) => (POINTER, false),
-        (FixupKind::DATA_2 | FixupKind::DATA_4, true) if fix.pc_bias == width => {
+        (FixupKind::DATA_2 | FixupKind::DATA_4, true) if fix.pc_bias == usize::from(width) => {
             (if width == 2 { OFFSET } else { OFFSET32 }, true)
         }
-        (FixupKind::BRANCH_2, true) => (OFFSET, true),
-        (FixupKind::BRANCH_4, true) => (OFFSET32, true),
+        (kind, true) if writer.is_branch(kind) && width == 2 => (OFFSET, true),
+        (kind, true) if writer.is_branch(kind) && width == 4 => (OFFSET32, true),
         _ => return Err(unencodable(format!("OMF has no fixup for {fix:?}"))),
     })
 }
 
 /// Bytes of a field that hold a value: a far pointer's offset is its first two.
-fn packed(fix: Fix) -> usize {
+fn packed(
+    writer: &dyn OmfTargetWriter,
+    fix: Fix,
+) -> usize {
     match fix.kind {
-        FixupKind::DATA_4 | FixupKind::BRANCH_4 => 4,
+        FixupKind::FAR_POINTER | FixupKind::SEGMENT_BASE => 2,
+        kind if writer.kind_info(kind).bits == 32 => 4,
         _ => 2,
     }
 }
@@ -255,6 +304,7 @@ struct Resolved {
 }
 
 fn resolved(
+    writer: &dyn OmfTargetWriter,
     object: &Object,
     extern_index: &[usize],
     comdats: &Comdats,
@@ -262,7 +312,7 @@ fn resolved(
     at: usize,
 ) -> Result<Resolved, Error> {
     let reloc = section.relocs.iter().find(|one| one.at == at).expect("the caller names a fixup");
-    let (loc, relative) = location(reloc.fix())?;
+    let (loc, relative) = location(writer, reloc.fix())?;
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
     let (method, datum, group) = match reloc.target {
         Target::OmfGroup(group) => (GROUP_TARGET, group as i64 + 1, Some(group)),
@@ -408,6 +458,7 @@ fn linsym(
 /// Section `index`'s LEDATA and FIXUPP records, or its COMDAT and FIXUPP
 /// records where `named`.
 fn ledata(
+    writer: &dyn OmfTargetWriter,
     object: &Object,
     extern_index: &[usize],
     comdats: &Comdats,
@@ -421,12 +472,12 @@ fn ledata(
     let mut image = section.image.clone();
     let mut subrecords = std::collections::BTreeMap::new();
     for &at in &at_sorted {
-        let made = resolved(object, extern_index, comdats, section, at)?;
+        let made = resolved(writer, object, extern_index, comdats, section, at)?;
         let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").fix();
         if kind.kind == FixupKind::SEGMENT_BASE && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
         }
-        pack_field(&mut image, at, packed(kind), made.value);
+        pack_field(&mut image, at, packed(writer, kind), made.value);
         subrecords.insert(at, (made.subrecord, kind));
     }
     let (mut out, mut placed) = (Vec::new(), 0);
@@ -436,7 +487,7 @@ fn ledata(
         while start < end {
             let mut stop = end.min(start + CHUNK);
             for &at in &at_sorted {
-                if at < stop && stop < at + subrecords[&at].1.kind.width() {
+                if at < stop && stop < at + usize::from(writer.kind_info(subrecords[&at].1.kind).bits / 8) {
                     stop = at;
                 }
             }
@@ -454,7 +505,7 @@ fn ledata(
                 .filter(|&&at| start <= at && at < stop)
                 .map(|&at| {
                     let (subrecord, kind) = &subrecords[&at];
-                    let (loc, relative) = location(*kind).expect("resolved above");
+                    let (loc, relative) = location(writer, *kind).expect("resolved above");
                     let offset = at - start;
                     let lead = 0x80 | if relative { 0 } else { 0x40 } | (loc as usize) << 2 | offset >> 8;
                     [&[lead as u8, (offset & 0xFF) as u8][..], subrecord].concat()
@@ -529,7 +580,10 @@ fn debug_definition(
 }
 
 /// `object` as an OMF object file.
-pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
+pub fn write(
+    object: &Object,
+    writer: &dyn OmfTargetWriter,
+) -> Result<Vec<u8>, Error> {
     let turbo = matches!(
         &object.debug,
         Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
@@ -646,7 +700,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     }
     let mut data = Vec::new();
     for index in 0..object.sections.len() {
-        data.extend(ledata(object, &extern_index, &comdats, named_comdats.get(&index), index)?);
+        data.extend(ledata(writer, object, &extern_index, &comdats, named_comdats.get(&index), index)?);
     }
 
     let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name)))];
@@ -788,6 +842,10 @@ mod tests {
     use llrm_object::{Arch, Binding, Reloc, Symbol};
 
     use super::*;
+
+    fn write(object: &Object) -> Result<Vec<u8>, Error> {
+        write_generic(object)
+    }
 
     fn symbol(
         name: &str,

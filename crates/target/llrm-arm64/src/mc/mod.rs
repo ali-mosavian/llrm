@@ -4,6 +4,7 @@
 
 pub mod elf;
 pub mod encode;
+pub mod fixup;
 pub mod immediate;
 pub mod inst;
 pub mod macho;
