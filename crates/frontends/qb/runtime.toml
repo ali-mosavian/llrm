@@ -1747,3 +1747,42 @@ established = false
 evidence = '''
 VBDCL10E.LIB evalfn.asm defines B$DTSR. VBDOS BC on `d = DATESERIAL(1992, 2, 29)`: three `mov ax,<word> / push ax`, `call far B$DTSR`, then `mov si,ax` and four MOVSW copy the R8 AX points to into the variable, with nothing popped after the call, so the callee pops its three words (ret 6). Only the cleanup is claimed: the body was not read, so every register and every byte of memory is conceded.
 '''
+
+["B$CHKEXP"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["flags"]
+established = true
+inputs = []
+evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
+
+["B$CHKEX2"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["flags"]
+established = true
+inputs = []
+evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
+
+["B$CHKLOG"]
+cleanup = 8
+control = "returns"
+enters_user_code = false
+raises_error = true
+error_handling = false
+writes = "NONE"
+reads = "NONE"
+clobbers = ["flags"]
+established = true
+inputs = []
+evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
