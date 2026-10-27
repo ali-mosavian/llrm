@@ -11,7 +11,7 @@ fn inferred(body: &str) -> (String, bool) {
     let mut module = parsed(&format!("{DATA}define i32 @f(i32 %n, ptr %p) {{\nb0:\n{body}}}\n"));
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
-    let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-n8:16:32-S32").unwrap();
+    let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
     let (context, function) = module.function_mut("f").expect("@f");
     let changed = infer_alignment(context, &globals, &metadata, &layout, function);
     (printed(&module), changed)

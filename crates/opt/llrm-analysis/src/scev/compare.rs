@@ -20,6 +20,7 @@ fn linkage_rank(linkage: Linkage) -> i32 {
         Linkage::LinkOnceOdr => 3,
         Linkage::Weak => 4,
         Linkage::WeakOdr => 5,
+        Linkage::Appending => 6,
         Linkage::Internal => 7,
         Linkage::Private => 8,
         Linkage::ExternWeak => 9,
