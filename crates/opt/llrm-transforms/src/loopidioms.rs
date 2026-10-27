@@ -522,6 +522,25 @@ fn _fill(
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
     }
+    // DEVIATE, for `loopidiom`: a fill through a huge pointer is a routine
+    // laid down at the fill (`isel/huge.rs`), which a one-store loop under
+    // -Os undercuts (fillw -Os 86 -> 176 bytes against main).
+    if size
+        && matches!(stored, Stored::Fill(_))
+        && unit.layout.carries(unit.space(pointer)?)
+        && bytes_costs.huge_fill > 0
+        && trip_cost(
+            unit.context,
+            unit.layout,
+            unit.function,
+            callees,
+            std::iter::once(&header).chain(&chain),
+            bytes_costs,
+            true,
+        ) <= bytes_costs.huge_fill
+    {
+        return None;
+    }
     // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its
     // setup.
     let moved = match &stored {

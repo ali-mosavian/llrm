@@ -265,6 +265,9 @@ pub struct OperationCosts {
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// The code bytes of the routine a fill through a huge pointer is laid
+    /// down as, in a table priced by bytes; 0 where there is none.
+    pub huge_fill: i64,
     /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
     /// what each cell costs it; `direction` is `std` and `cld` around a
     /// backward one.
@@ -386,6 +389,7 @@ impl Default for OperationCosts {
             set: 1,
             fill: 1,
             fill_cell: 1,
+            huge_fill: 0,
             copy: 1,
             copy_cell: 1,
             copy_variable: 0,
