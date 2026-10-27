@@ -166,8 +166,8 @@ pub fn check_enabled() -> bool {
 }
 
 impl IvUsers {
-    /// Under `LLRM_CHECK_IVUSERS`: panics unless `self`, carried to the function
-    /// as it is now, is what [`Self::of`] makes of it.
+    /// Under `LLRM_CHECK_IVUSERS`: panics unless `self`, carried to the
+    /// function as it is now, is what [`Self::of`] makes of it.
     pub fn assert_current(
         &self,
         se: &mut ScalarEvolution,
