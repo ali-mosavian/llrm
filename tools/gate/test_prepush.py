@@ -144,4 +144,3 @@ def test_the_diff_check_looks_at_the_prs_own_delta_not_at_what_parity_has_over_m
     git("rm", "-q", "-f", "--cached", "marker.txt")
     (repo / "marker.txt").unlink()
     assert run().returncode == 0
-
