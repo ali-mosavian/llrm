@@ -330,7 +330,7 @@ def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
         def __init__(self, out, code):
             self.stdout, self.stderr, self.returncode = out, "", code
 
-    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
+    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
     failed = ps.docs_failures(run=lambda command: Done(stale, 1))
     assert any("docs/optimizations/backend/jumps.md" in name for name in failed) and all("--sync" in why for why in failed.values()), failed
     assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
@@ -696,7 +696,7 @@ failures:
 ---- test_no_generated_page_is_stale stdout ----
 
 thread 'test_no_generated_page_is_stale' (123) panicked at tests/docs_in_sync.rs:24:5:
-run python3 tools/docsbuild/build.py --sync:
+run python3 tools/docs/docsbuild/build.py --sync:
   docs/optimizations/passes/lsr_solve.md
   docs/optimizations/passes/sinkcast.md
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
