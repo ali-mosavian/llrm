@@ -1304,6 +1304,18 @@ def added_names(head: str, base: str, cwd: Path) -> set[str]:
     return set(ADDED_ITEM.findall(diff))
 
 
+BATCH_SIZE = 5  # PRs per batch when neither LAND_BATCH_SIZE nor $LAND_TMP/batch-size.txt says: a batch over the 20-minute cap is stale before it ends
+
+
+def batch_limit(cap: int, environ=os.environ) -> int:
+    """The PRs `assemble` may keep: `cap` (the runner's argument) at most, else LAND_BATCH_SIZE, else the first number of `$LAND_TMP/batch-size.txt`, else BATCH_SIZE. `assemble` is launched per cycle,
+    so a changed file or default is read by the next batch, with no runner restart."""
+    path = Path(environ.get("LAND_TMP", "/tmp")) / "batch-size.txt"
+    text = environ.get("LAND_BATCH_SIZE") or (path.read_text() if path.exists() else "")
+    found = re.search(r"\d+", text)
+    return max(1, min(cap, int(found.group()) if found else BATCH_SIZE))
+
+
 def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: Path = ROOT, limit: int = 16) -> tuple[list[str], dict[str, str]]:
     """The first `limit` of `numbers`, in order, that merge into `base` one after another without a conflict (`fast_merge`'s own merge, in a scratch worktree), and why
     each other waits. A batch of these loses no PR to a conflict with an earlier member: 63 of 93 conflict refusals in a week were with a member that landed, and the run
@@ -1972,7 +1984,7 @@ def dispatch() -> int:
             git("fetch", "-q", "origin", f"refs/pull/{number}/head")
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         started = time.monotonic()
-        kept, waits = assemble(numbers, heads, limit=int(sys.argv[2]))
+        kept, waits = assemble(numbers, heads, limit=batch_limit(int(sys.argv[2])))
         print(f"{time.strftime('%H:%M:%S')} {PREFIX} assemble {time.monotonic() - started:.0f}s: {len(kept)} kept, {len(waits)} wait", file=sys.stderr)
         for number, why in waits.items():
             print(f"#{number}: waits a round: {why}", file=sys.stderr)

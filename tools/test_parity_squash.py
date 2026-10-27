@@ -1242,3 +1242,14 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_assemble_keeps_five_unless_the_environment_or_the_file_says_otherwise(tmp_path):
+    """Batches of 16 outlived the 20-minute cap and ended on heads their owners had replaced; the size is a value read per batch, not the literal 16 in the runner."""
+    assert ps.batch_limit(16, {"LAND_TMP": str(tmp_path)}) == 5
+    assert ps.batch_limit(3, {"LAND_TMP": str(tmp_path)}) == 3, "the runner's argument is a cap"
+    (tmp_path / "batch-size.txt").write_text("8  # more while the queue is short\n")
+    assert ps.batch_limit(16, {"LAND_TMP": str(tmp_path)}) == 8
+    assert ps.batch_limit(16, {"LAND_TMP": str(tmp_path), "LAND_BATCH_SIZE": "2"}) == 2
+    assert ps.batch_limit(16, {"LAND_TMP": str(tmp_path), "LAND_BATCH_SIZE": "0"}) == 1
+    assert "limit=batch_limit(int(sys.argv[2]))" in Path(ps.__file__).read_text(), "the assemble command applies it"
