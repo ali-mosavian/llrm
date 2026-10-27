@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/uncondicmp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/uncondicmp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/uncondicmp.rs sha256:dd51cf7f30861b45d61cc804ebd9898ccb22681a371dc0ae65b9a8540d874d1f -->
+<!-- src: crates/opt/llrm-transforms/src/uncondicmp.rs sha256:4969ae1da431fee311437278073c8f812ff291f9b112d3527639c3d6f066925d -->
 
 # uncondicmp
 
@@ -30,3 +30,6 @@ the value the compare chose:
 |---|---|
 | D1 | No branch weights: the new case carries none. |
 | D2 | A block reached by two cases of the switch is left (LLVM asserts a unique case value). |
+
+## Used by
+Named by `simplifycfg`.
