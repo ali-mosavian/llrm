@@ -199,3 +199,14 @@ fn a_variable_length_array_of_a_constant_size_is_a_frame_slot() {
     let asm = driver::assembly(include_str!("darwin/vla.ll"), Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("_vla"), "vla was left a function:\n{asm}");
 }
+
+/// The frame was made at entry and the return block shared, so a path that never calls paid for
+/// the frame too: `if (x == 0) return 1; return g(x) + 1;` pushed `x29`/`x30` before testing `x`
+/// where the pin tests first (shrink wrapping).
+#[test]
+fn a_path_that_needs_no_frame_returns_before_the_frame_is_made() {
+    let asm = driver::assembly(include_str!("data/early_return.ll"), Platform::Darwin, true).expect("lowers");
+    let lines: Vec<&str> = asm.lines().map(str::trim).filter(|l| !l.ends_with(':')).collect();
+    let first_branch = lines.iter().position(|l| l.starts_with("cbz") || l.starts_with("cbnz")).expect("a test of x");
+    assert!(lines[..first_branch].iter().all(|l| !l.starts_with("sub sp") && !l.starts_with("stp")), "{asm}");
+}
