@@ -616,8 +616,7 @@ fn constrain_local_copy(
 /// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
 /// a line-by-line reading against `llc -debug-only=machine-scheduler`.
 fn trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_MS_TRACE").is_some())
+    llrm_support::env_flag!("LLRM_MS_TRACE")
 }
 
 /// What the tracker needs to follow a region's pressure bottom-up.

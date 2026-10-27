@@ -251,12 +251,14 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD240 | sdag-b | `isMultiStoresCheaperThanBitsMerge` is true for two integer halves at m16 (the pin: a float and an integer half only): a far pointer or `long` is two word stores, not `shl; movzx; add`. Exit: none while the DAG keeps `BUILD_PAIR` | `x86/dag/actions.rs` |
 | SD241 | sdag-b | `ExpandShiftWithKnownAmountBit`: a clear amount bit without a legal or custom funnel shift stays a parts node (the pin shifts, subtracts and ors) | `selectiondag/legalize_types.rs` |
 | SD242 | sdag-b | `combineCarryThroughADD`: the `COND_A` form (a swapped `sub`) is not translated; nothing produces it at 32 bits yet. Exit: with `combineSBB`'s remaining folds | `selectiondag/x86_lowering.rs` |
+| SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD107 | sdag-a | `lowerFaddFsub` never forms a horizontal add (SSE3 `haddps` is not described); scalar `FADD`/`FSUB` stay as they are | `selectiondag/x86_lowering.rs` |
 | SD108 | sdag-a | `FAND`/`FOR`/`FXOR` of a scalar float against its pool mask select `andps`/`orps`/`xorps` directly (no `SCALAR_TO_VECTOR` node); `double` takes the `ps` rows `x86.instr` has | `crates/backend/llrm-dagisel/src/x86_fplogic.rs` |
+| SD106 | sdag-a | `expandDIVREMByConstant` ports the unsigned forms; the sign-extended `MUL` shortcut of `expandMUL_LOHI` and the UDIVREM-decomposition of a missing UREM libcall are not ported | `selectiondag/expand_divrem_const.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | the i8 DIVREM remainder is `shr ax, 8` then `movzx` of the byte, not `movzx` of AH (the LIR has no AH) | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |

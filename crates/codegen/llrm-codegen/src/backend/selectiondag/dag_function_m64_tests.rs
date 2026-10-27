@@ -744,3 +744,26 @@ entry:
         assert_eq!((count("andps"), count("orps")), (2, 1), "{ty}: {names:?}");
     }
 }
+
+/// `umul.with.overflow.i64` at m64 stopped at `CannotSelect("Target(776)")`:
+/// `X86ISD::UMUL` had the one-operand `mul` at 8, 16 and 32 bits only. It is
+/// `mul` with the operand in `rax`.
+#[test]
+fn an_m64_unsigned_multiply_with_overflow_is_a_quadword_mul() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %r = call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %a, i64 %b)
+  %v = extractvalue { i64, i1 } %r, 0
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = select i1 %o, i64 0, i64 %v
+  ret i64 %z
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
+}

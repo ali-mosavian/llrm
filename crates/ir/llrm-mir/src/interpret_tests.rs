@@ -526,3 +526,30 @@ fn a_value_outside_its_stated_range_is_reported() {
 fn undef_reads_as_a_value_not_poison() {
     assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
 }
+
+/// `atomicrmw`, `cmpxchg` and the atomic loads and stores had no parser and no
+/// interpreter: one thread runs, so each is the plain access with LLVM's result
+/// (the old value; `{ old, hit }`).
+#[test]
+fn an_atomic_access_is_the_plain_one_on_one_thread() {
+    let text = "define i32 @f() {
+entry:
+  %p = alloca i32, align 4
+  store atomic i32 7, ptr %p seq_cst, align 4
+  %old = atomicrmw add ptr %p, i32 5 acq_rel
+  %miss = cmpxchg ptr %p, i32 1, i32 100 seq_cst seq_cst
+  %hit = cmpxchg ptr %p, i32 12, i32 40 seq_cst seq_cst
+  %flag = extractvalue { i32, i1 } %hit, 1
+  %f = zext i1 %flag to i32
+  %now = load atomic i32, ptr %p acquire, align 4
+  fence seq_cst
+  %a = mul i32 %old, 1000
+  %b = mul i32 %now, 10
+  %c = add i32 %a, %b
+  %d = add i32 %c, %f
+  ret i32 %d
+}
+";
+    // old 7, then 12 -> 40 on the hit: 7000 + 400 + 1.
+    assert_eq!(result(text), int(7401, 32));
+}

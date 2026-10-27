@@ -232,3 +232,18 @@ fn a_flag_definition_wanted_across_a_flag_writer_is_cloned() {
     assert!(last_add < at_adc, "{order:?}");
     assert!(!(last_add < at_test && at_test < at_adc), "a flag writer between the add and the adc: {order:?}");
 }
+
+/// A load addressed by a target constant pool entry or frame slot got a unit
+/// for the address, as `isPassiveNode` leaves none: the extra unit shifted the
+/// queue order, so `recfloat` stacked its two FP constants the other way round.
+#[test]
+fn target_address_leaves_are_not_scheduled() {
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let pool = dag.get_constant_pool(EVT::I32, 0, EVT::I64, true);
+    let slot = dag.get_target_frame_index(EVT::I32, 0);
+    let a = machine(&mut dag, LOAD, &[EVT::I32, EVT::OTHER], &[pool, entry]);
+    let b = machine(&mut dag, LOAD, &[EVT::I32, EVT::OTHER], &[slot, chain_of(a)]);
+    let order = schedule(&dag, b, &Info);
+    assert_eq!(order.len(), 2, "{order:?}");
+}
