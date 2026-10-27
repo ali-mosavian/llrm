@@ -218,3 +218,26 @@ fn a_path_that_needs_no_frame_returns_before_the_frame_is_made() {
     let first_branch = lines.iter().position(|l| l.starts_with("cbz") || l.starts_with("cbnz")).expect("a test of x");
     assert!(lines[..first_branch].iter().all(|l| !l.starts_with("sub sp") && !l.starts_with("stp")), "{asm}");
 }
+
+/// `printf("hi\n")`, `printf("%c", x)` and `printf("\n")` with the result unused stayed calls of
+/// `printf` where the pin calls `puts` and `putchar` (`LibCallSimplifier`), each a variadic call
+/// with its stack argument setup.
+#[test]
+fn an_unused_printf_of_a_constant_format_is_puts_or_putchar() {
+    let asm = driver::assembly(include_str!("data/printf_puts.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(!asm.contains("_printf"), "{asm}");
+    assert_eq!(asm.matches("_puts").count(), 1, "{asm}");
+    assert_eq!(asm.matches("_putchar").count(), 2, "{asm}");
+}
+
+/// A `printf` whose result is read is not `puts` (the count differs), and an empty format is no call.
+#[test]
+fn a_printf_whose_result_is_read_stays_and_an_empty_format_goes() {
+    let text = include_str!("data/printf_puts.ll").replace(
+        "define void @f(i32 %x) {",
+        "@.e = private unnamed_addr constant [1 x i8] zeroinitializer\ndefine i32 @f(i32 %x) {\n  call i32 (ptr, ...) @printf(ptr @.e)",
+    );
+    let text = text.replace("ret void", "%r = call i32 (ptr, ...) @printf(ptr @.hi)\n  ret i32 %r");
+    let asm = driver::assembly(&text, Platform::Darwin, true).expect("lowers");
+    assert_eq!(asm.matches("_printf").count(), 1, "{asm}");
+}

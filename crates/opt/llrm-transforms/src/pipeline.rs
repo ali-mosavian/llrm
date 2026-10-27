@@ -678,7 +678,20 @@ pub(crate) fn llvm_order(
     let simplify_cfg_with = |name, options: simplifycfg::Options| {
         slot(name, Box::new(simplifycfg::SimplifyCfg { options: simplifycfg::Options { no_jump_tables, ..options } }))
     };
-    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
+    // `visitCallInst`'s `LibCallSimplifier` runs with every InstCombine, so it
+    // is a part of the slot.
+    let combine = |name| {
+        slot(
+            name,
+            Box::new(Together {
+                name,
+                parts: vec![
+                    Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }),
+                    Box::new(crate::simplifylibcalls::SimplifyLibCalls::with_routines(applied.options.library.clone())),
+                ],
+            }),
+        )
+    };
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).

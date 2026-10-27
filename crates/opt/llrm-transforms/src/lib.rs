@@ -210,6 +210,7 @@ pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
 pub mod instsimplify;
+pub mod simplifylibcalls;
 pub mod instworklist;
 #[cfg(test)]
 mod instworklist_tests;
