@@ -43,8 +43,16 @@ Ours from the `ISEL_DUMP=1` stage names on render/dl: FarIndirectCalls, Optimize
 | MachineLoopInfo, PHIElimination | MachineLoopInfo as an analysis, PhiElimination | same order |
 | TwoAddressInstruction, RegisterCoalescer | TwoAddress, Coalescer | same order |
 | RenameIndependentSubregs | none | n/a (no lanes) |
-| MachineScheduler (pre-RA) | none before RegAlloc; `Scheduler` runs after | missing |
+| MachineScheduler (pre-RA) | `MachineScheduler` (machinesched@5), right after PhiElimination, so before TwoAddress and Coalescer; `Scheduler` is the post-RA one | DEVIATE PASS-ORDER-1 |
 | greedy + VirtRegRewriter, StackSlotColoring | RegAlloc (the slot table groups them) | same order, as one pass |
 | PostRewrite, MachineCopyPropagation, MachineLICM | `Peephole`, `LoopSlots`: not compared | not checked |
-| none between PHIElimination and TwoAddress | PressureSink, FloatFold, FloatPrep | ours only |
+| none between PHIElimination and TwoAddress | MachineScheduler, FixupSetCC, FloatFold, FloatPrep | ours only |
 | none between TwoAddress/coalescing and greedy | none | same |
+
+## DEVIATE PASS-ORDER-1: the scheduler runs before TwoAddress and the coalescer
+
+Pin: PHIElimination, TwoAddressInstruction, RegisterCoalescer, MachineScheduler, greedy (`llc -O2 -debug-pass=Structure`, positions 14, 15, 16 of the machine passes). Ours: MachineScheduler (19), TwoAddress (24), Coalescer (25), RegAlloc (26) in `flow.rs`. Measured 2026-10-27, every machine pass, pin index against ours: FixupSetCC also follows the scheduler here and precedes PHI elimination in the pin; ProcessImplicitDefs runs early; no PostRA sink.
+
+Evidence of cost: the branch `w2-poc-sched-order` (env `LLRM_POC_ORDER`, the scheduler after the coalescer, unmerged) changes 27 of 284 vsgcc objects, -735 B net; the m16 -Os program table (309) goes 144300 -> 144326 B, 8 grew, 8 shrank. The pin's three-address conversion (DEC32r to LEA32r, no flags) before the scheduler lets it move a test above the lea; ours schedules the flag-writing add.
+
+Exit: the reorder lands when the growers are classified against the pin.

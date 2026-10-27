@@ -89,7 +89,9 @@ pub enum NodeData {
     Symbol(u32),
     /// A constant pool node's entry, an index into
     /// [`SelectionDAG::constant_pool`].
-    PoolIndex(u32),
+    /// A constant pool entry and the displacement added to its address
+    /// (`ConstantPoolSDNode::getOffset`).
+    PoolIndex(u32, i32),
     Mem(MemInfo),
     JumpTable(u32),
     /// `SrcValueSDNode`: which IR value, by a key the builder makes.
@@ -155,6 +157,10 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// Every symbol is `dso_local`, as clang marks them under `-fno-pic`: an
+    /// `extern` symbol's offset then folds too. The pin takes the flag from
+    /// the IR; its absence there is this field's default.
+    pub dso_local_symbols: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
@@ -168,6 +174,7 @@ impl Default for DagConfig {
         DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
+            dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
         }
@@ -1158,7 +1165,7 @@ impl SelectionDAG {
             }
         } as u32;
         let opcode = if target { ISD::TargetConstantPool } else { ISD::ConstantPool };
-        self.intern(opcode, &[ptr], &[], SDNodeFlags::default(), NodeData::PoolIndex(index))
+        self.intern(opcode, &[ptr], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, 0))
     }
 
     /// `CreateStackObject`: a frame object for a lowering's scratch value; its

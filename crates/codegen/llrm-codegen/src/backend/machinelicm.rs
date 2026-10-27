@@ -90,7 +90,7 @@ fn loaded(one: &Insn) -> Option<&Mem> {
 
 /// `isLoadFoldBarrier() || mayStore() || isCall() || hasOrderedMemoryRef()`:
 /// what keeps every load of the loop in it (`InitializeLoadsHoistableLoops`).
-fn keeps_loads(one: &Insn) -> bool {
+pub(crate) fn keeps_loads(one: &Insn) -> bool {
     if one.is_meta() && one.what.as_ref().is_some_and(|what| what.op != Operation::Barrier) {
         return false;
     }

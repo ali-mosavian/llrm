@@ -95,6 +95,12 @@ fn facts() -> Regex {
 /// (docs/machine/targets.md, the first principle).
 const REGISTRY: &str = "crates/driver/llrm-driver/src/lib.rs";
 
+/// The BC object frontend decodes and lifts x86 machine code: the x86 ISA is
+/// its input format, not a copy of a target's description. It moved from
+/// `crates/target/` (outside this scan) in the layout step B2; its 300-odd
+/// matches are the input's, so it is not scanned.
+const X86_INPUT: &str = "crates/frontends/bcobj/";
+
 fn is_test_file(path: &Path) -> bool {
     // `path` is relative to the root: the root itself may sit under a
     // `target/`.
@@ -136,6 +142,7 @@ fn files(
         )
             && !is_test_file(path.strip_prefix(root).unwrap())
             && line != REGISTRY
+            && !line.starts_with(X86_INPUT)
         {
             into.push(path);
         }
@@ -239,9 +246,19 @@ fn counts(root: &Path) -> BTreeMap<String, usize> {
         files(root, directory, &mut all);
     }
     let in_tests = test_modules(&all);
+    // `LLRM_SHOW_FACTS=a,b` prints the matching lines of the files whose path
+    // holds a or b.
+    let show = std::env::var("LLRM_SHOW_FACTS").ok();
     let mut found = BTreeMap::new();
     for path in all.into_iter().filter(|path| !in_tests.contains(path)) {
         let n = code(&path).iter().map(|line| facts.find_iter(line).count()).sum();
+        if n > 0
+            && show.as_deref().is_some_and(|only| only.split(',').any(|part| path.to_string_lossy().contains(part)))
+        {
+            for line in code(&path).iter().filter(|line| facts.is_match(line)) {
+                eprintln!("{}: {}", path.display(), line.trim());
+            }
+        }
         if n > 0 {
             found.insert(path.strip_prefix(root).unwrap().to_string_lossy().into_owned(), n);
         }

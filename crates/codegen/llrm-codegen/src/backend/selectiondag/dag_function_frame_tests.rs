@@ -216,11 +216,14 @@ fn an_indexed_cell_carries_a_literal_address() {
 }
 
 /// An index that makes up the rest of a displacement past the object
-/// (`[ebp+ecx+126]` for 8192 bytes below BP) is no frame position: the layout
-/// takes a positive one for the arguments' and left it unmoved, so fill_nest
-/// read 12 bytes off. The object's address is made and the cell based on it.
+/// (`[ebp+ecx+126]` for 8192 bytes below BP) is a frame position the layout
+/// took for the arguments' and left unmoved, so fill_nest read 12 bytes off;
+/// the cell now names the object it was made from, and the layout moves it with
+/// the object. It was a `lea` of the object and a cell based on it (shellsort
+/// m32 -O2: 14 `lea reg,[esp]` per iteration in matmul -O3, +25.7% executed
+/// against the pin, which addresses `[esp+ecx*2-32]`).
 #[test]
-fn a_displacement_past_a_frame_object_is_based_on_its_address() {
+fn a_displacement_past_a_frame_object_names_the_object_it_was_made_from() {
     let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f() {
 b1:
@@ -251,16 +254,28 @@ b10:
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
     let whats: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).collect();
-    assert!(whats.iter().any(|w| w.op == crate::model::ir::Operation::Address), "the object's address is made");
+    assert!(!whats.iter().any(|w| w.op == crate::model::ir::Operation::Address), "no address of the object is made");
     let past = whats
         .iter()
         .flat_map(|w| w.sources.iter())
         .find_map(|l| match l {
-            crate::model::ir::Loc::Mem(m) if m.offset == 8318 => Some(m.clone()),
+            crate::model::ir::Loc::Mem(m) if m.index.is_some() && m.addr.is_some_and(|addr| addr.disp == 126) => {
+                Some(m.clone())
+            }
             _ => None,
         })
-        .expect("the cell past the object");
-    assert!(past.base.is_some() && past.index.is_some(), "{past:?}");
+        .unwrap_or_else(|| {
+            panic!(
+                "the cell past the object: {:#?}",
+                whats
+                    .iter()
+                    .flat_map(|w| w.sources.iter())
+                    .filter(|l| matches!(l, crate::model::ir::Loc::Mem(m) if m.index.is_some()))
+                    .collect::<Vec<_>>()
+            )
+        });
+    let addr = past.addr.expect("a frame address");
+    assert_eq!(addr.slot_home(), Some(-8192), "{past:?}");
 }
 
 const INT_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -828,6 +843,76 @@ fn at_os_a_54_byte_clear_is_a_rep_string_operation() {
         .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
     assert_eq!((fills, stores), (1, 0), "a fill and no store");
+}
+
+const M16_CLEAR_24: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global [24 x i8] zeroinitializer
+
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+
+define void @f() {
+entry:
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 24, i1 false)
+  ret void
+}
+";
+
+/// A 24-byte local array cleared by six dword stores at -Os (24 B of code)
+/// where the old selector's `rep stos` is 12: the inline limit was the pin's
+/// 8 stores, not the target's size-tuned ratio (nbody_single.nib: 96 B of
+/// `mov [bp-N],esi` for four arrays, and 610 more `mov` stores over the
+/// corpus under dag). Real mode takes four stores inline at -Os.
+#[test]
+fn at_os_a_24_byte_clear_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_CLEAR_24).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let fills =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((fills, stores), (1, 0), "a fill and no store");
+}
+
+const M16_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@a = global [12 x i8] zeroinitializer
+@b = global [12 x i8] zeroinitializer
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i16(ptr @a, ptr @b, i16 12, i1 false)
+  ret void
+}
+";
+
+/// A 12-byte struct copy (a `vec3` of floats) was three dword load and store
+/// pairs at -Os, 24 bytes of code where `rep movs` is about 16 (QCport
+/// `_ent_mover_push`: 21 stores and 15 loads). Real mode takes two pairs
+/// inline at size.
+#[test]
+fn at_os_a_12_byte_copy_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Copy).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((copies, stores), (1, 0), "a copy and no store");
 }
 
 /// A 16-byte clear at m16 was eight word stores: the widest store was the
