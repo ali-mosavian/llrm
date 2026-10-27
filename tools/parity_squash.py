@@ -570,17 +570,27 @@ def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> t
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
-def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None) -> list[str]:
+def error_files(text: str) -> set[str]:
+    """The `.rs` paths a build error names (`crates/x/src/y.rs:816:16`)."""
+    return set(re.findall(r"[\w./-]+\.rs(?=:\d)", text))
+
+
+def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None, suspects=None) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
     fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR.
-    `errors` receives each culprit's own build error: the 16:56 batch printed the batch's error for #4743, which built clean when asked alone."""
+    `errors` receives each culprit's own build error: the 16:56 batch printed the batch's error for #4743, which built clean when asked alone.
+    `suspects` are the PRs whose diff touches a file the batch's error names: only they are built alone first, and when one is at fault the rest are not (8 alone-builds of 50 s
+    each for the 00:49 batch's one culprit); none at fault, every other PR is built alone as before."""
     found = []
-    for number in group:
+    first = [number for number in group if number in (suspects or ())]
+    for number in first + [number for number in group if number not in first]:
+        if number not in first and any(one in found for one in first):
+            break
         if merge_alone(number) and (error := check()):
             found.append(number)
             if errors is not None:
                 errors[number] = error
-    return found
+    return [number for number in group if number in found]
 
 
 def needs(package: str, graph: dict[str, set[str]]) -> set[str]:
@@ -1501,7 +1511,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
             own = {}
-            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own)
+            named_files = error_files(failed_build[-1])
+            suspects = [number for number in group if named_files & set(git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split())]
+            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own, suspects)
             named.update({number: f"alone on the head it does not build: {own[number][:160]}" for number in culprits})
             return culprits
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))

@@ -258,6 +258,14 @@ rule fused_immediate_push
             encodable($1)
     rewrite anchor @0 ; @1: push lit
 
+// The same when the constant is made wide and pushed narrow: `mov eax, 0`
+// then `push ax`.
+rule fused_immediate_push_narrow
+    match   mov r:reg, lit:imm ; ... delays(@0, *) ; push p:reg
+    when    free(@0, dropped), free(@1, settled), same_root(r, p), narrower(p, r), width_in(p, [16]),
+            dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: push low_word(lit)
+
 rule fused_unary
     match   mov r:reg, c:mem ; ... delays(@0, *) ; op=unary_rmw r, r ; mov c2:mem, r
     when    free(@0, dropped), free(@1, settled), free(@2, dropped), same_width(r, c),
