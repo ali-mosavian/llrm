@@ -291,6 +291,7 @@ pub fn compiled_dumping(
     let default = flags.convention(&*bound.target)?;
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
+    allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let mut options = options_for(&bound, flags, machine, format.name(), default);
@@ -299,6 +300,22 @@ pub fn compiled_dumping(
         options.dump = Some(dump.to_path_buf());
     }
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+}
+
+/// A C `static` function may be entered by a near call wherever only its own
+/// module calls it, as the other frontends allow (`nearcode`); the pass
+/// that moves it checks the calls.
+fn allow_near_calls(module: &mut llrm_mir::module::Module) {
+    use llrm_mir::module::{GlobalKind, Linkage};
+    for global in &mut module.globals {
+        if !matches!(global.linkage, Linkage::Internal | Linkage::Private) {
+            continue;
+        }
+        let GlobalKind::Function(function) = &mut global.kind else { continue };
+        if !function.is_declaration() {
+            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+        }
+    }
 }
 
 /// Refuses `__stdcall` and `__fastcall` (clang's `x86_stdcallcc`,
