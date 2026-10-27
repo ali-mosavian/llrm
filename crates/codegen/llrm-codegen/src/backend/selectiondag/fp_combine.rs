@@ -452,6 +452,44 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `visitFMUL`.
+    /// `visitFNEG`: a constant, an expression that negates for free, and
+    /// `-(x - y)` as `y - x` where signed zeros do not matter.
+    pub(super) fn visit_fneg(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        let flags = self.dag.node(node).flags;
+        if !vt.is_floating_point() {
+            return None;
+        }
+        if let Some(bits) = self.fp_bits(n0) {
+            return Some(self.dag.get_constant_fp(fp_value::negate(vt, bits)?, vt));
+        }
+        if let Some((negated, _)) = self.negated_expression(n0, 0) {
+            return Some(negated);
+        }
+        (self.dag.opcode(n0) == ISD::FSub
+            && flags.has(SDNodeFlags::NO_SIGNED_ZEROS)
+            && self.dag.use_count(n0.node) == 1)
+            .then(|| {
+                let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                self.dag.get_node_flags(ISD::FSub, vt, &[y, x], flags)
+            })
+    }
+
+    /// `visitFABS`: a constant.
+    pub(super) fn visit_fabs(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        let bits = self.fp_bits(n0).filter(|_| vt.is_floating_point())?;
+        Some(self.dag.get_constant_fp(fp_value::abs(vt, bits)?, vt))
+    }
+
     pub(super) fn visit_fmul(
         &mut self,
         node: SDValue,

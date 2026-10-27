@@ -157,3 +157,22 @@ fn a_reassociable_add_of_a_multiple_and_its_base_is_one_multiply() {
     let add = dag.get_node(ISD::FAdd, F64, &[mul, x]);
     assert_eq!(combined(&mut dag, add), add);
 }
+
+/// `visitFNEG` and `visitFABS` did not exist: `-(2.0)`, `-(-x)` and `abs(-2.0)`
+/// stayed as nodes (an x87 `fchs`/`fabs` of a constant load).
+#[test]
+fn a_negated_constant_or_negation_and_an_abs_of_a_constant_fold() {
+    let mut dag = dag();
+    let two = double(&mut dag, 2.0);
+    let neg = dag.get_node(ISD::FNeg, F64, &[two]);
+    let root = combined(&mut dag, neg);
+    assert_eq!(bits(&dag, root), Some((-2.0f64).to_bits().into()));
+    let x = load(&mut dag, F64, 1);
+    let inner = dag.get_node(ISD::FNeg, F64, &[x]);
+    let outer = dag.get_node(ISD::FNeg, F64, &[inner]);
+    assert_eq!(combined(&mut dag, outer), x);
+    let minus_two = double(&mut dag, -2.0);
+    let abs = dag.get_node(ISD::FAbs, F64, &[minus_two]);
+    let root = combined(&mut dag, abs);
+    assert_eq!(bits(&dag, root), Some(2.0f64.to_bits().into()));
+}
