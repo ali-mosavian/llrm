@@ -202,6 +202,9 @@ pub struct Flags {
     /// rounded to its type, as the language says; off (gcc's `fast`), x87 keeps
     /// the wider value in its register.
     pub float_store: bool,
+    /// `-mregcall-default`: the front end marked each unmarked function `x86_regcallcc` (clang's
+    /// `-fdefault-calling-conv=regcall`), so `ccc` is an explicit `__cdecl`.
+    pub regcall_default: bool,
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
@@ -229,6 +232,7 @@ impl Default for Flags {
         Self {
             wrapv: false,
             float_store: false,
+            regcall_default: false,
             level: Level::O2,
             passes: Vec::new(),
             march: None,
@@ -309,6 +313,7 @@ impl Flags {
             "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
+            "-mregcall-default" => self.regcall_default = true,
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
             _ if flag.starts_with("-mcode-segment=") => {

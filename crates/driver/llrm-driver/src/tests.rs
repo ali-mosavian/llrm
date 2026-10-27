@@ -748,3 +748,42 @@ fn a_store_to_video_memory_leaves_a_global_forwarded_in_llvm_ir() {
     let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), &ordinary, "f").unwrap();
     assert!(llrm_codegen::backend::masm::text(&built).unwrap().contains("mov eax, dword ptr _g"));
 }
+
+const REGCALL_DATALAYOUT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                                  target triple = \"i486-unknown-linux-gnu\"\n";
+
+/// `__cdecl` on a Watcom target was the register convention: clang's `ccc`
+/// took the ABI's default, so `int __cdecl a(int, int)` read EAX/EDX and was
+/// named `a_`. With `-mregcall-default` an unmarked (regcall) function and
+/// `main` take the ABI's, a variadic one too, and `ccc` stays C's: `_a`, on the
+/// stack.
+#[test]
+fn an_explicit_cdecl_stays_cdecl_when_regcall_is_the_default() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}\
+         define i32 @a(i32 %x, i32 %y) {{\n  %s = add i32 %x, %y\n  ret i32 %s\n}}\n\
+         define x86_regcallcc i32 @__regcall3__b(i32 %x, i32 %y) {{\n  %s = sub i32 %x, %y\n  ret i32 %s\n}}\n\
+         define i32 @main() {{\n  ret i32 0\n}}\n\
+         declare i32 @pr(ptr, ...)\n\
+         define x86_regcallcc i32 @__regcall3__use() {{\n  %p = call i32 (ptr, ...) @pr(ptr null, i32 1)\n  ret i32 %p\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom", "-mregcall-default"]), &text, "c").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let body = |name: &str| listing.split(&format!("{name} proc")).nth(1).unwrap_or_default().split("endp").next().unwrap();
+    assert!(body("_a").contains("[esp+4]") || body("_a").contains("[ebp+8]"), "{listing}");
+    for name in ["b_", "use_", "main_"] {
+        assert!(listing.contains(&format!("{name} proc")), "{name}: {listing}");
+    }
+    assert!(listing.contains("call pr_"), "{listing}");
+    assert!(!listing.contains("__regcall3__"), "{listing}");
+}
+
+/// `__stdcall` and `__fastcall` reached the backend as "calling convention
+/// 64": no target here has them, and the message did not say which function or
+/// what to write instead.
+#[test]
+fn stdcall_is_refused_by_name() {
+    let text = format!("{REGCALL_DATALAYOUT}define x86_stdcallcc i32 @c(i32 %x) {{\n  ret i32 %x\n}}\n");
+    let refused = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom"]), &text, "c").map(|_| ()).unwrap_err();
+    assert!(refused.contains("@c") && refused.contains("stdcall") && refused.contains("__cdecl"), "{refused}");
+}
