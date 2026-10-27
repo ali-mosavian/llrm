@@ -3529,3 +3529,14 @@ fn a_dividend_of_long_min_keeps_the_minus_one_guard() {
         listing_of("min_dividend", "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT (-2147483647& - 1&) \\ d\r\n");
     assert!(tests_against_minus_one(&text), "{text}");
 }
+
+/// CLEAR was parsed as a call of a SUB named CLEAR: "`CLEAR` is not a known
+/// procedure or runtime routine", as if misspelt. A valid statement this
+/// compiler does not lower says so, as CHAIN does (row QB-CLEAR-1).
+#[test]
+fn test_clear_is_refused_as_not_yet_generated() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    let source = written(&directory, "T.BAS", b"x% = 1\r\nCLEAR\r\nPRINT x%\r\n");
+    let error = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect_err("refused");
+    assert!(error.to_string().contains("CLEAR is valid, but this compiler cannot generate code for it yet"), "{error}");
+}
