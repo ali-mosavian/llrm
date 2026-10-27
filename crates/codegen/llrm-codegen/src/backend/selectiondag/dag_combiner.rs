@@ -1178,6 +1178,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(folded);
             }
         }
+        // `shl (sra x, c), c` is `and x, (-1 << c)` ([L11245][pin]).
+        //
+        // [pin]:
+        // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11245
+        if op == ISD::Shl && self.dag.opcode(n0) == ISD::Sra && self.dag.operand(n0, 1) == n1 {
+            if let Some(c) = self.dag.constant(n1).filter(|&c| c < width) {
+                let mask = self
+                    .dag
+                    .get_constant(
+                        (super::fold::mask(vt.size_in_bits()) << c) & super::fold::mask(vt.size_in_bits()),
+                        vt,
+                    );
+                return Some(self.dag.get_node(ISD::And, vt, &[self.dag.operand(n0, 0), mask]));
+            }
+        }
         if self.dag.opcode(n0) != op {
             return None;
         }
