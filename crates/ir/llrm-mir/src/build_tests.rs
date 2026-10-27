@@ -300,7 +300,7 @@ fn test_attributes_stamp_is_fx_and_moves_with_an_attribute() {
 /// d_faces): five parameters left room for eight.
 #[test]
 fn test_a_declaration_holds_room_for_its_parameters_only() {
-    let mut module = Module::default();
+    let module = Module::default();
     let i16 = module.context.types.int(16);
     let void = module.context.types.void();
     let ty = module.context.types.intern(Type::Function { returns: void, parameters: vec![i16; 5], variadic: false });
