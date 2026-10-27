@@ -235,3 +235,28 @@ fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
+
+/// Plain `char` is unsigned on the DOS rows, as the Open Watcom front end of the
+/// programs they were written for: `*p` of a stored 251 read -5 (clang's
+/// default), and watcom_far_sum.c printed 1229 for 1485.
+#[test]
+fn plain_char_is_unsigned_on_the_dos_rows() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-char-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.c"), "int f(char *p) { return *p; }\n").unwrap();
+    for row in ["x86_16-dos", "x86_32-dos"] {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", row)
+            .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+            .args(["-O1", "-w", "-S", "-o"])
+            .arg(dir.join("a.s"))
+            .arg(dir.join("a.c"))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{row}: {}", String::from_utf8_lossy(&run.stderr));
+        let listing = std::fs::read_to_string(dir.join("a.s")).unwrap();
+        assert!(listing.contains("movzx") && !listing.contains("movsx"), "{row}: {listing}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
