@@ -258,6 +258,12 @@ impl Dag for TestDag {
     ) -> Option<u16> {
         self.nodes[node as usize].register
     }
+    fn is_call_argument_store(
+        &self,
+        _: u32,
+    ) -> bool {
+        false
+    }
     fn value_type_node(
         &self,
         value: SDValue,

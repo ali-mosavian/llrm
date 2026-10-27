@@ -688,16 +688,16 @@ impl Builder<'_> {
                     _ if matches!(which, Intrinsic::MemCpy) && !self.runtime_has("memcpy") => {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
-                    // a move a pass proved forward, past the inline limit, with
-                    // no
-                    // `memmove` in the runtime: `rep movs` ascends, as the move
-                    // needs
-                    _ if forward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
+                    // a move a pass proved forward, past the inline limit: `rep
+                    // movs` ascends, as the move needs (DEVIATE: the pin calls
+                    // `memmove`; at m16 the old selector inlines it, 2.2x on
+                    // scroll.c)
+                    _ if forward && matches!(which, Intrinsic::MemMove) && self.inline_string_move(dst, other) => {
                         self.rep_movs_dwords(root, dst, other, size)
                     }
-                    // proved backward, no `memmove`: from the last byte down
-                    _ if backward && matches!(which, Intrinsic::MemMove) && !self.runtime_has("memmove") => {
-                        self.backward_rep_movsb(root, dst, other, size)
+                    // proved backward: from the last dword down
+                    _ if backward && matches!(which, Intrinsic::MemMove) && self.inline_string_move(dst, other) => {
+                        self.backward_rep_movs_dwords(root, dst, other, size)
                     }
                     _ if !self.runtime_has(if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" }) => {
                         // the old selector refuses it too: no instruction moves
@@ -826,6 +826,76 @@ impl Builder<'_> {
         let byte = self.dag.get_value_type_node(EVT::I8);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, byte, glue]);
         SDValue { node: rep.node, res: 0 }
+    }
+
+    /// Whether a move of proven direction is a string move here: near pointers
+    /// at 16 bits (the old selector's inline copy), or any when the runtime has
+    /// no `memmove` to call.
+    fn inline_string_move(
+        &self,
+        dst: SDValue,
+        src: SDValue,
+    ) -> bool {
+        let near_16 = self.target.dag.pointer == EVT::I16 && !self.is_far(dst) && !self.is_far(src);
+        near_16 || !self.runtime_has("memmove")
+    }
+
+    /// `std; rep movsd; cld` from the last dword down, then the `size % 4` low
+    /// bytes (`add si, 3; add di, 3; mov cx, dx; rep movsb`): a move a pass
+    /// proved backward, as the old selector writes it (`LLRM_ASM`, SD305, with
+    /// `cx`, `si`, `di`, `dx` as operands). 16-bit addressing; a size that is
+    /// a multiple of four has no tail.
+    fn backward_rep_movs_dwords(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+    ) -> SDValue {
+        use super::super::inline_asm::lower_asm;
+        let pointer = self.target.dag.pointer;
+        if pointer != EVT::I16 {
+            return self.backward_rep_movsb(chain, dst, src, size);
+        }
+        let count = self.dag.get_zext_or_trunc(size, pointer);
+        let two = self.dag.get_constant(2, EVT::I8);
+        let dwords = self.dag.get_node(ISD::Srl, pointer, &[count, two]);
+        let three = self.dag.get_constant(3, pointer);
+        let rest = self.dag.get_node(ISD::And, pointer, &[count, three]);
+        let minus_four = self.dag.get_constant(mask_of(pointer) - 3, pointer);
+        let last = |this: &mut Self, base: SDValue| {
+            let end = this.dag.get_node(ISD::Add, pointer, &[base, count]);
+            this.dag.get_node(ISD::Add, pointer, &[end, minus_four])
+        };
+        let (from, to) = (last(self, src), last(self, dst));
+        let tail = self.constant_size(count).is_none_or(|bytes| bytes % 4 != 0);
+        let mut code = vec![0xFD, 0xF3, 0x66, 0xA5];
+        if tail {
+            code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
+        }
+        code.push(0xFC);
+        let mut names = vec!["cx", "si", "di"];
+        let mut values = vec![dwords, from, to];
+        if tail {
+            names.push("dx");
+            values.push(rest);
+        }
+        let block = llrm_mir::intrinsics::AsmBlock {
+            code,
+            inputs: names.iter().map(|name| (*name).into()).collect(),
+            outputs: Vec::new(),
+            clobbers: names.iter().map(|name| (*name).into()).collect(),
+            memory: true,
+            fixups: Vec::new(),
+        };
+        let name = llrm_mir::intrinsics::asm_name(&block);
+        let registers: Vec<_> = names
+            .iter()
+            .zip(values)
+            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value))
+            .collect();
+        let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
+        chain
     }
 
     /// `std; rep movsb; cld` from the last byte of each side: a move a pass
