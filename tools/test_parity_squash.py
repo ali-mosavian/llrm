@@ -1330,3 +1330,11 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
+    """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
+    tool = tmp_path / "tools/docsbuild/build.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
+    assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
