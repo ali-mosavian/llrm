@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib.util
 import struct
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,7 @@ HERE = Path(__file__).resolve().parent
 def load(name: str):
     spec = importlib.util.spec_from_file_location(name, HERE / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # a dataclass looks its module up here
     spec.loader.exec_module(module)
     return module
 
@@ -195,3 +197,19 @@ def test_compile_failures_are_counted_per_side_so_a_crash_cannot_hide_as_exclude
     assert "ours-old 2 (ok, oldfail)" in line and "ours-obj 1 (objfail)" in line
     assert "pin 1 (x_strlen)" in line and "clang 1 (lru)" in line and "source 1 (x_fir)" in line
     assert pindiff.failure_summary({"ok": row}, old=False) == "# FAILED none"
+
+
+def test_a_new_compile_failure_outside_the_known_list_is_unexpected():
+    """The 2026-10-27 sweep found three failures in 1420 configs (crc spill-weight panic, x_ll_div freeze, lru far); a fourth must not hide in
+    their noise, and a fixed one must leave the list."""
+    sweep = load("crashsweep")
+    seen = [
+        ("m16", "O2", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40: | Copy from non-existing value"),
+        ("m32", "O1", "x_ll_div", "dag", 'llrm-llc: @f: --isel=dag: Legalize("Unsupported { op: Freeze }")'),
+        ("m16", "O0", "lru", "-", "clang: lru.c:5:22: error: expected member name"),
+    ]
+    assert sweep.unexpected(seen) == []
+    new = ("m16", "O2", "fib", "dag", "thread 'main' panicked at x.rs:1:1")
+    other_level = ("m16", "O1", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40:")
+    assert sweep.unexpected([*seen, new, other_level]) == [new, other_level]
+    assert [entry.name for entry in sweep.fixed(seen[:1])] == ["x_ll_div", "x_ll_div", "lru"]
