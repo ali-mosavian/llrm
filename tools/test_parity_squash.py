@@ -1389,3 +1389,29 @@ def test_an_alone_slot_logs_the_base_it_checked_out(tmp_path, monkeypatch, capsy
     monkeypatch.setattr(ps, "keep_refused_evidence", lambda *a, **k: None)
     ps._alone_in_scratch("deadbeef", "origin/feat/parity")
     assert f"alone: slot 0 base {base[0][:9]}" in capsys.readouterr().err
+
+
+def test_land_skip_link_skips_the_link_stage_for_a_runtime_change(monkeypatch, capsys):
+    """The freeze break on feat/parity refused every batch that touched the runtime (09:42, 09:46, 09:48, 09:49); LAND_SKIP_LINK=1 is the user's way past it."""
+    monkeypatch.setenv("LAND_SKIP_LINK", "1")
+
+    def build():
+        raise AssertionError("the link stage built the release bins")
+
+    assert ps.new_link_failures(["runtime/qb/src/lib.rs"], build=build, check=lambda: ["qb x: freeze"], inputs=lambda: []) == []
+    assert "link: skipped (LAND_SKIP_LINK=1)" in capsys.readouterr().out
+    monkeypatch.delenv("LAND_SKIP_LINK")
+    assert ps.new_link_failures(["runtime/qb/src/lib.rs"], build=lambda: None, check=lambda: ["qb x: freeze"], inputs=lambda: []) == ["qb x: freeze"]
+
+
+def test_the_batch_age_limit_is_read_from_the_environment():
+    """The 20-minute cap ended the 48-PR batches the user asked for; BATCH_MAX_SECONDS sets it per batch (the runner's env), 1200 by default."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.BATCH_MAX_SECONDS)"], cwd=Path(__file__).parent, env={**os.environ, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"BATCH_MAX_SECONDS": "2400"}) == "2400"
+
+
+def test_merge_batch_takes_as_many_prs_as_batch_cap_says():
+    """10:24: the runner assembled 100 PRs (BATCH_CAP=100) and merge-batch died at once with 'takes at most 16 PRs per smoke': MAX_BATCH was a literal."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.MAX_BATCH)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "BATCH_CAP"}, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"LAND_FAST": "1", "BATCH_CAP": "100"}) == "100"
+    assert read({"LAND_FAST": "1"}) == "16" and read({}) == "8"

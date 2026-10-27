@@ -794,7 +794,7 @@ def beside(background, foreground):
         return front, future.result()
 
 
-MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
 def batch(prs: list, passes, land, refuse, offenders=None) -> None:
@@ -943,6 +943,9 @@ def new_link_failures(
 ) -> list[str]:
     """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
     and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
+    if os.environ.get("LAND_SKIP_LINK") == "1":  # the user's call while a break already on feat/parity is fixed forward: it refused every batch that touched the runtime
+        print("link: skipped (LAND_SKIP_LINK=1)")
+        return []
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import link_check  # noqa: PLC0415
 
@@ -1470,7 +1473,7 @@ def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> d
     return moved
 
 
-BATCH_MAX_SECONDS = 1200  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
+BATCH_MAX_SECONDS = int(os.environ.get("BATCH_MAX_SECONDS", "1200"))  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
 
 
 class BatchTooOld(Exception):
