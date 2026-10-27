@@ -481,6 +481,24 @@ fn erasing_branches_to_one_block_reads_none_of_its_other_uses() {
     assert!(walked <= 2 * 200, "{walked} list entries read erasing 200 of 400 branches to one block");
 }
 
+/// A branch's targets were read by the scan that serves a switch (a match, a
+/// scan for a repeat and a push for each operand: 101 Ir a call, 64 K calls in
+/// d_faces -O2). They are read straight into the list, a conditional branch to
+/// one block twice naming it once.
+#[test]
+fn successors_of_a_branch_take_no_scan() {
+    let mut module = module(
+        "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br i1 %c, label %b, label %b\nb:\n  br label %entry\n}\n",
+    );
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    crate::module::GENERIC_SUCCESSOR_SCANS.with(|scans| scans.set(0));
+    let found: Vec<Vec<_>> = layout.iter().map(|&at| f.successors(at).into_iter().collect()).collect();
+    let scans = crate::module::GENERIC_SUCCESSOR_SCANS.with(std::cell::Cell::get);
+    assert_eq!(found, [vec![layout[1], layout[2]], vec![layout[2]], vec![layout[0]]]);
+    assert_eq!(scans, 0, "branches read the long way");
+}
+
 /// A block is a `Value` in LLVM and its predecessors are its use list, the
 /// newest use first: `predecessors` ran oldest first.
 #[test]
