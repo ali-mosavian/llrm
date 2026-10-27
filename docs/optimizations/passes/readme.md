@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 200 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 201 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -29,6 +29,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_addsub | InstCombine's `visitAdd` and the helpers it calls, from [`InstCombineAddSub.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp) at d1106deb71cc. | `combine::visit`, once the add family's slot is flipped. | [combine_addsub](combine_addsub.md) |
 | combine_and | `InstCombinerImpl::visitAnd`: the integer `and` folds. | `combine::visit` (the `And` arm, once wired). | [combine_and](combine_and.md) |
 | combine_and_select | `visitAnd` after the constant-mask folds: the xor/not identities and the folds of an `and` with a boolean extension, which become selects. | `combine_and::visit_and`. | [combine_and_select](combine_and_select.md) |
+| combine_bitorder | A byte or bit reversal written as shifts, masks and `or`s is the `bswap` or `bitreverse` intrinsic, and a bitwise operation on a reversed value is the reversal of the operation: LLVM's `matchBSwapOrBitReverse` (with `recognizeBSwapOrBitReverseIdiom` and `collectBitParts` of `Local.cpp`) and `foldBitwiseLogicWithIntrinsics` of InstCombine. |  | [combine_bitorder](combine_bitorder.md) |
 | combine_branch | `visitCondBrInst`: the canonical forms of a conditional branch. |  | [combine_branch](combine_branch.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
 | combine_casts | InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they call, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine::visit`, once the casts family's slot is flipped. | [combine_casts](combine_casts.md) |
