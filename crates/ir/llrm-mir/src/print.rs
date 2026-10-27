@@ -535,8 +535,15 @@ impl Printer<'_> {
         if let Some(personality) = function.personality {
             words.push(format!("personality {}", self.typed_constant(personality)));
         }
-        for (kind, node) in &function.metadata {
-            words.push(format!("!{kind} !{}", node.0));
+        if declaration {
+            // Clang's spelling: the attachments follow `declare`.
+            for (at, (kind, node)) in function.metadata.iter().enumerate() {
+                words.insert(1 + at, format!("!{kind} !{}", node.0));
+            }
+        } else {
+            for (kind, node) in &function.metadata {
+                words.push(format!("!{kind} !{}", node.0));
+            }
         }
         let mut out = words.join(" ");
         if declaration {

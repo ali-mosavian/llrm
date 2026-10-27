@@ -960,7 +960,7 @@ impl<'a> TypeLegalizer<'a> {
 
     /// `ExpandShiftWithKnownAmountBit`: bit `log2(half)` of the amount is
     /// known, so the shift is one half-width shift (set) or a shift and a
-    /// funnel shift (clear). DEVIATE SD314: a clear bit without a legal or
+    /// funnel shift (clear). DEVIATE SD241: a clear bit without a legal or
     /// custom funnel shift stays a parts node (the pin shifts, subtracts and
     /// selects). Exit: with the generic `Amt == 0` expansion. Owner sdag-b.
     /// Review 2026-12-10.

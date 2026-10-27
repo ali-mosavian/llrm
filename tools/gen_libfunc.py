@@ -7,6 +7,7 @@ The pin is LLVM_SRC (default ~/scratch/llvm-src) at the commit PIN. With --check
 """
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -60,11 +61,19 @@ def render() -> str:
     return "\n".join(lines) + "\n"
 
 
+def formatted(text: str, out: Path) -> str:
+    """`text` as tools/fmt.sh lays out `out`: the checked-in file is formatted, so the generator's raw output is never what --check finds."""
+    done = subprocess.run([str(ROOT / "tools/fmt.sh"), "--stdin", str(out)], input=text, capture_output=True, text=True)
+    if done.returncode != 0:
+        raise SystemExit(f"tools/fmt.sh --stdin {out.name}: {done.stderr.strip()}")
+    return done.stdout
+
+
 def main() -> int:
     if not SRC.is_file():
         print(f"gen_libfunc: no {SRC}: skipped", file=sys.stderr)
         return 0 if "--check" in sys.argv else 1
-    text = render()
+    text = formatted(render(), OUT)
     if "--check" in sys.argv:
         if OUT.read_text() != text:
             print("gen_libfunc: crates/ir/llrm-mir/src/libfunc/table.rs is stale: run tools/gen_libfunc.py", file=sys.stderr)
