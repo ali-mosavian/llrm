@@ -1122,7 +1122,7 @@ pub fn recorded(
                 rerun(module, analyses, id, &mut simplify, true).unwrap_or_else(|error| panic!("pipeline: {error}"));
                 TRIGGER.with(|trigger| trigger.borrow_mut().clear());
             }),
-            no_copies: applied.options.prefers_size() || applied.options.inline.limit == 0,
+            for_size: applied.options.prefers_size(),
         }
     });
     manager.add_program(Interprocedural {

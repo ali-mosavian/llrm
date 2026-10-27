@@ -190,10 +190,6 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        // DEVIATE (recursion) copies a recursive function's calls of itself
-        // (gcc's `recursive_inlining`): not where the bytes matter, and not
-        // under `-fno-inline-functions` (the pin's OnlyAlwaysInlining).
-        let copies = !self.inline.single && self.inline.limit > 0;
         let size = if self.inline.single {
             crate::inlinecost::CallerSize::OptSize
         } else {
@@ -267,14 +263,14 @@ impl ProgramPass for Walk {
                         // at -Os).
                         let peeled: llrm_support::hash::IndexMap<GlobalId, crate::inline::Candidate> = constant
                             .values()
-                            .filter(|one| one.self_calls.is_some() && copies && self.inline.recursive)
+                            .filter(|one| one.self_calls.is_some() && !self.inline.single && self.inline.recursive)
                             .filter_map(|one| Some((one.callee?, one.clone())))
                             .collect();
                         let by = crate::inline::Caller {
                             layout: &program.layout,
                             recursive: recursive.contains(&id),
                             self_inlining: None,
-                            peeling: copies && self.inline.recursive,
+                            peeling: !self.inline.single && self.inline.recursive,
                         };
                         let spliced = crate::inline::expanded_all(
                             context,
@@ -289,7 +285,7 @@ impl ProgramPass for Walk {
                         // until its copies are made
                         // (`SelfInline`, after ipa-cp has seen it whole).
                         if self.inline.recursive
-                            && self_calls(module, &program.layout, id, !copies).is_some()
+                            && self_calls(module, &program.layout, id, self.inline.single).is_some()
                         {
                             function_mut(module, id)
                                 .1
@@ -468,13 +464,12 @@ impl ProgramPass for Walk {
 /// call: `hanoi(n-1, a, c, b) + hanoi(n-1, a, c, b)` is a loop once the
 /// simplifier has merged them, 188 clocks, and 185482 copied before), the
 /// calls it makes of itself are fewer than one per call (below), or the body
-/// is sized for bytes (gcc does not inline recursively at -Os) or inlining is
-/// off (`-fno-inline-functions`).
+/// is sized for bytes (gcc does not inline recursively at -Os).
 fn self_calls(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
     id: GlobalId,
-    no_copies: bool,
+    for_size: bool,
 ) -> Option<llrm_support::hash::SparseIdMap<llrm_mir::module::InstId, f64>> {
     let function = module.global(id).function()?;
     let pure = {
@@ -491,7 +486,7 @@ fn self_calls(
             distinct.push((operands, inst));
         }
     }
-    if no_copies || distinct.len() < 2 {
+    if for_size || distinct.len() < 2 {
         return None;
     }
     let frequencies = crate::inlinecost::call_frequencies(module, layout, function);
@@ -526,9 +521,8 @@ fn self_calls(
 pub struct SelfInline {
     /// The Simplify list over one body.
     pub simplify: Box<dyn FnMut(&mut Module, &mut ModuleAnalyses, GlobalId, &str)>,
-    /// No copies wanted: sized for bytes (gcc does not inline recursively
-    /// there) or `-fno-inline-functions`.
-    pub no_copies: bool,
+    /// Sized for bytes: gcc does not inline recursively there.
+    pub for_size: bool,
 }
 
 impl SelfInline {
@@ -555,7 +549,7 @@ impl SelfInline {
                 module.functions().filter(|(_, _, function)| waiting(function)).map(|(id, _, _)| id).collect();
             for id in marked {
                 let mut copies = 0;
-                let frequencies = self_calls(module, &program.layout, id, self.no_copies);
+                let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let mut declared = declared(&mut modules[at], module);
                     let (context, function) = function_mut(module, id);
