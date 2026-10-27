@@ -730,3 +730,21 @@ fn a_weak_symbol_is_refused_where_the_object_format_cannot_say_so() {
     let strong = text.replace("define weak", "define").replace("declare extern_weak", "declare");
     assert!(crate::llc::compiled(&flags(&["-m32"]), &strong, "w").is_ok());
 }
+
+/// A store into the video buffer (`*(char *)0xB8000 = 1`) was taken for a
+/// write that may reach the program's own `g`, so `g` was read back after it
+/// instead of forwarded: the target's foreign ranges reached only the other
+/// frontends, not LLVM IR.
+#[test]
+fn a_store_to_video_memory_leaves_a_global_forwarded_in_llvm_ir() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @g = global i32 0, align 4\n\
+                define i32 @f() {\n  store i32 5, ptr @g, align 4\n  store i8 1, ptr inttoptr (i32 753664 to ptr), align 1\n  %a = load i32, ptr @g, align 4\n  ret i32 %a\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("mov eax, dword ptr _g"), "{listing}");
+    let ordinary = text.replace("753664", "4096");
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), &ordinary, "f").unwrap();
+    assert!(llrm_codegen::backend::masm::text(&built).unwrap().contains("mov eax, dword ptr _g"));
+}
