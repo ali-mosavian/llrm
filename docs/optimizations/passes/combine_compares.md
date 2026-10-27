@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:217661a771647b01a4e27cd8da1307e1bdf222533e763271a3d1514b96f046ac -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:a6eedbf7e67a64de0cd93cc4940ca85bc943a7dab6a5bb1120732a32d6b637a8 -->
 
 # combine_compares
 
