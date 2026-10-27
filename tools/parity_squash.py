@@ -1436,13 +1436,18 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
 
 
 def docs_stale(root: Path) -> set[str]:
-    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check failed` when it fails without naming one)."""
+    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check: <its problem line>` when it fails without naming one)."""
     if not (root / "tools/docsbuild/build.py").is_file():
         return set()
     done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
     if not done.returncode:
         return set()
-    return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+    lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
+    if pages := {line for line in lines if line.startswith("docs/")}:
+        return pages
+    # a failure that names no page (a header with no `# Example`) is named by its own line, not by "failed": the sync cannot fix it
+    problems = [line for line in lines if not re.match(r"\d+ problem|generated docs are out of date", line)]
+    return {f"docsbuild --check: {'; '.join(problems[:2])}" if problems else "docsbuild --check failed"}
 
 
 def docs_recheck(head: str, base: str, cwd: Path, base_docs: set[str]) -> str:

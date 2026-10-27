@@ -1490,6 +1490,14 @@ def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
     assert ps.pr_info("5290") == {"headRefOid": "abc"} and waits == [1]
 
 
+def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
+    """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
+    tool = tmp_path / "tools/docsbuild/build.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
+    assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
+
+
 def _fake_docs_repo(tmp_path):
     """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
     def git(*args, cwd=tmp_path):

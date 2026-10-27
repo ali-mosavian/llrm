@@ -95,6 +95,14 @@ def sweep(llc: str, work: Path, jobs: int = 8) -> tuple[int, list[tuple]]:
     return len(todo) * 2, failures
 
 
+def verdict(failures: list) -> tuple[int, list[str]]:
+    """Exit code and report lines: only a crash outside KNOWN fails; a KNOWN entry that stopped crashing is reported."""
+    bad = unexpected(failures)
+    lines = ["UNEXPECTED " + " ".join(map(str, failure)) for failure in bad]
+    lines += [f"FIXED? {e.name} {e.isel} no longer fails; remove it from KNOWN ({e.owner})" for e in fixed(failures)]
+    return (1 if bad else 0), lines
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("llc")
@@ -106,13 +114,9 @@ def main(argv: list[str]) -> int:
     counts = collections.Counter((machine, level, isel) for machine, level, _, isel, _ in failures)
     for key, count in sorted(counts.items()):
         print(" ", *key, count)
-    bad = unexpected(failures)
-    for failure in bad:
-        print("UNEXPECTED", *failure)
-    stale = fixed(failures)
-    for entry in stale:
-        print(f"FIXED? {entry.name} {entry.isel} no longer fails; remove it from KNOWN ({entry.owner})")
-    return 1 if bad or stale else 0
+    code, lines = verdict(failures)
+    print(*lines, sep="\n")
+    return code
 
 
 if __name__ == "__main__":
