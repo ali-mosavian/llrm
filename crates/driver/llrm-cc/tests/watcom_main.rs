@@ -96,3 +96,66 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
     assert!(listing.matches("fstp dword").count() >= 10, "{listing}");
     assert_eq!(listing.matches("fstp qword").count(), 0, "{listing}");
 }
+
+/// `wat_link.py` built the float support with `target/release/llrm-cc`: from
+/// any other target directory a link failed with "No such file" (18 of the
+/// debug-info tests, built in a private target dir).
+#[test]
+fn a_program_links_whichever_target_directory_the_driver_is_in() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-link-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("m.c"), "int main(void) { return 0; }\n").unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env_remove("LLRM_CC_BIN")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O2", "-w", "-o"])
+        .arg(dir.join("m.exe"))
+        .arg(dir.join("m.c"))
+        .output()
+        .unwrap();
+    let linked = dir.join("m.exe").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success() && linked, "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// The Watcom library is the register convention: `strlen_`, `atan2_`,
+/// `printf_`. clang left the functions it knows in C's convention, so a
+/// program linked against `_strlen` (m32) or `_atan2@3` (m16), and none of the
+/// 29 debug-info tests could link (the float support calls `atan2`).
+#[test]
+fn library_calls_are_the_watcom_names_at_both_models() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-lib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("l.c"),
+        "#include <string.h>\n#include <math.h>\n#include <stdio.h>\ndouble g(const char *s, double x) { printf(\"%d\", 1); return strlen(s) + atan2(x, x); }\n",
+    )
+    .unwrap();
+    for target in ["x86_16-wat", "x86_32-wat"] {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+            .args(["-O1", "-w", "-S", "-o"])
+            .arg(dir.join("l.s"))
+            .arg(dir.join("l.c"))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{target}: {}", String::from_utf8_lossy(&run.stderr));
+        let listing = std::fs::read_to_string(dir.join("l.s")).unwrap();
+        for name in ["strlen_", "atan2_", "printf_"] {
+            assert!(listing.contains(&format!("extern {name}:")), "{target} {name}: {listing}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -225,19 +225,48 @@ fn with_default_convention(
     // Under the register-size convention `main` is C's: the start-up calls
     // `_main`.
     let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // clang gives the library functions it knows (`strlen`, `atan`) their C
+    // convention whatever the default is, so `_strlen` was called where the
+    // library has `strlen_`: a declaration of one takes the default too.
+    let library: std::collections::HashSet<llrm_mir::context::GlobalId> = {
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, global)| matches!(&global.kind, llrm_mir::module::GlobalKind::Function(function)
+                if function.is_declaration() && function.calling_convention == 0))
+            .filter(|(_, global)| {
+                global.name.as_deref().is_some_and(|name| {
+                    llrm_mir::libfunc::TargetLibraryInfo::get_lib_func_by_name(name).is_some()
+                })
+            })
+            .map(|(at, _)| llrm_mir::context::GlobalId(at as u32))
+            .collect()
+    };
     let types = &module.context.types;
     let is_variadic = |ty| matches!(
         types.get(ty),
         llrm_mir::types::Type::Function { variadic: true, .. }
     );
-    for global in &mut module.globals {
+    for (at, global) in module.globals.iter_mut().enumerate() {
         if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
             continue;
         }
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
         let entry = global.name.as_deref() == Some("main");
-        if !(entry && keeps_main) && takes(function.calling_convention, is_variadic(function.ty) || entry) {
+        // A function the front end marked `regcall` where the default is not
+        // is the Watcom register convention (`__watcall` of its headers).
+        let watcom = !regcall_default
+            && (function.calling_convention == llrm_mir::opcode::REGCALL
+                || library.contains(&llrm_mir::context::GlobalId(at as u32)));
+        if watcom
+            || (!(entry && keeps_main)
+                && takes(
+                    function.calling_convention,
+                    is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
+                ))
+        {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
                 if let Some(plain) = global.name.as_deref().and_then(|name| name.strip_prefix("__regcall3__")) {
@@ -248,13 +277,38 @@ fn with_default_convention(
                     global.name = Some(plain).into();
                 }
             }
-            function.calling_convention = number;
+            function.calling_convention = if watcom { llrm_mir::opcode::WATCALL } else { number };
+        }
+        if !regcall_default {
+            let watcom: Vec<_> = function
+                .walk()
+                .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
+                    llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
+                        if info.calling_convention == llrm_mir::opcode::REGCALL
+                            || (info.calling_convention == 0
+                                && llrm_mir::memory::callee(&module.context, function, inst)
+                                    .is_some_and(|one| library.contains(&one))) =>
+                    {
+                        Some(inst)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for inst in watcom {
+                function.set_call_convention(inst, llrm_mir::opcode::WATCALL);
+            }
         }
         let calls: Vec<_> = function
             .walk()
             .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                 llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                    if takes(info.calling_convention, is_variadic(info.function_type)) =>
+                    if takes(
+                        info.calling_convention,
+                        is_variadic(info.function_type)
+                            || (regcall_default
+                                && llrm_mir::memory::callee(&module.context, function, inst)
+                                    .is_some_and(|one| library.contains(&one))),
+                    ) =>
                 {
                     Some(inst)
                 }
@@ -302,7 +356,14 @@ pub fn compiled_dumping(
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
         options.dump = Some(dump.to_path_buf());
     }
-    options.libcalls.extend(libm_calls(default, format.name()));
+    // The Watcom library is the register convention where the default is regparm3.
+    let library = default
+        .cc
+        .as_deref()
+        .filter(|cc| *cc == "regparm3")
+        .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
+        .unwrap_or(default);
+    options.libcalls.extend(libm_calls(library, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
