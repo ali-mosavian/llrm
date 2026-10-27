@@ -42,6 +42,8 @@ const NAMED: &[(&str, &str)] = &[
     // A dialect's flags are a table the instruction reader and the rule
     // generator map over by the names rows and rules give.
     ("dialect.toml", "flags.*"),
+    // An instruction-set catalog is a table keyed by feature name.
+    ("features.toml", "*"),
 ];
 
 /// The files git tracks under `directories` of `root`: what the repository
