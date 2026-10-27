@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def llrm_cc(env, root):
-    """The llrm-cc that builds the runtime's floatm: LLRM_CC, else LLRM_BIN, else the newest of the tree's release and debug."""
-    if env.get("LLRM_CC"):
-        return Path(env["LLRM_CC"])
+    """The llrm-cc that builds the runtime's floatm: LLRM_CC_BIN or LLRM_CC, else LLRM_BIN, else the newest of the tree's release and debug."""
+    if env.get("LLRM_CC_BIN") or env.get("LLRM_CC"):
+        return Path(env.get("LLRM_CC_BIN") or env["LLRM_CC"])
     if env.get("LLRM_BIN"):
         return Path(env["LLRM_BIN"]) / "llrm-cc"
     built = [root / "target" / kind / "llrm-cc" for kind in ("release", "debug")]

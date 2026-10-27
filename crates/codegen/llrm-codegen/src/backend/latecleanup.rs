@@ -27,6 +27,14 @@
 //! After `prologue`, before `peephole`: where rematerialization and the
 //! allocator's splitting have left the same constant loaded again.
 //!
+//! # Segment registers
+//! DEVIATE LC2 (real mode): the pin has no segment registers to load. A load of
+//! a segment constant (`mov es, DGROUP`) into `ES`, `FS` or `GS` is a candidate
+//! too, and the entries of the segment registers are taken to a fixed point
+//! over the whole graph, so a load a loop's back edge repeats goes as well
+//! (scroll.c: a `pushw DGROUP; pop es` before every string move). Owner w12.
+//! Exit: none, the pin has no far loads.
+//!
 //! # Limits
 //! DEVIATE LC1: the pin also takes a load-address instruction using the frame
 //! register (frame-index anchor points made by frame elimination); here the
@@ -35,7 +43,7 @@
 
 use std::sync::Arc;
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 
 use crate::backend::lanes::Lanes;
 use crate::backend::liveness;
@@ -94,6 +102,60 @@ fn candidate(
     machinedce::pure(regs, one).then(|| dest.clone())
 }
 
+fn index_is_entry(
+    body: &LirBody,
+    index: usize,
+) -> bool {
+    body.blocks[index].at == body.entry
+}
+
+/// A segment register a program reloads: not the code, data and stack segments
+/// the target fixes.
+fn is_segment(
+    regs: Regs,
+    register: RegId,
+) -> bool {
+    regs.is_segment(register)
+        && !regs.is_data_segment(register)
+        && !regs.is_stack_segment(register)
+        && !regs.is_code_segment(register)
+}
+
+/// A load of a segment constant into a segment register (LC2).
+fn segment_candidate(
+    regs: Regs,
+    one: &Insn,
+) -> Option<Loc> {
+    let what: &Semantics = one.what.as_ref()?;
+    let ([dest @ Loc::Reg(reg)], [Loc::Imm(imm)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    (what.op == Operation::Move
+        && what.name.as_deref() == Some("mov")
+        && imm.address.is_some()
+        && is_segment(regs, reg.register)
+        && what.target.is_none()
+        && !what.indirect
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.group.is_none()
+        && one.symbol != Some(true)
+        && !one.barrier())
+    .then(|| dest.clone())
+}
+
+fn writes_a_segment(
+    regs: Regs,
+    one: &Insn,
+) -> bool {
+    one.call.is_some() || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(regs, *register))
+}
+
+fn is_segment_loc(
+    regs: Regs,
+    loc: &Loc,
+) -> bool {
+    matches!(loc, Loc::Reg(reg) if is_segment(regs, reg.register))
+}
+
 /// `MachineInstr::isIdenticalTo`.
 fn identical(
     held: &Held,
@@ -138,53 +200,92 @@ pub fn cleaned(body: LirBody) -> LirBody {
     }
     order.reverse();
 
-    // `RegDefs`, by block, by the register an entry loads.
-    let mut defs: Vec<HashMap<Loc, Held>> = vec![HashMap::default(); body.blocks.len()];
-    let mut redundant: HashSet<usize> = HashSet::default();
-    for &index in &order {
-        let mut mine: HashMap<Loc, Held> = HashMap::default();
-        if let Some((&first, rest)) = preds[index].split_first() {
-            for (register, held) in &defs[first] {
-                let everywhere = rest
-                    .iter()
-                    .all(
-                        |&pred| defs[pred]
-                            .get(register)
-                            .is_some_and(
-                                |other| Arc::ptr_eq(&other.insn, &held.insn) || {
-                                    other
-                                        .insn
-                                        .what
-                                        .as_ref()
-                                        .zip(held.insn.what.as_ref())
-                                        .is_some_and(|(a, b)| a.same_meaning(b))
-                                },
-                            ),
-                    );
-                if everywhere {
-                    mine.insert(register.clone(), held.clone());
-                }
-            }
-        }
-        for one in &body.blocks[index].insns {
-            let found = candidate(regs, one);
-            if let Some(register) = &found
-                && mine.get(register).is_some_and(|held| identical(held, one))
-            {
-                redundant.insert(id(one));
-                continue;
-            }
-            match liveness::effect(regs, bits, one) {
-                None => mine.clear(),
-                Some(effect) => {
-                    mine.retain(|_, held| held.lanes.is_disjoint(&effect.writes));
-                    if let Some(register) = found {
-                        mine.insert(register, Held { insn: Arc::clone(one), lanes: effect.writes });
+    // `RegDefs`, by block, by the register an entry loads. The segment
+    // entries are walked again until they stop changing (LC2): `assume` is the
+    // last walk's, and a block not yet walked holds all of them (`None`).
+    let walk = |assume: &[Option<HashMap<Loc, Held>>]| {
+        let mut defs: Vec<Option<HashMap<Loc, Held>>> = vec![None; body.blocks.len()];
+        let mut redundant: HashSet<usize> = HashSet::default();
+        for &index in &order {
+            let mut mine: HashMap<Loc, Held> = HashMap::default();
+            let same = |other: &Held, held: &Held| {
+                Arc::ptr_eq(&other.insn, &held.insn)
+                    || other.insn.what.as_ref().zip(held.insn.what.as_ref()).is_some_and(|(a, b)| a.same_meaning(b))
+            };
+            let all_walked = preds[index].iter().all(|&pred| defs[pred].is_some());
+            if all_walked && let Some((&first, rest)) = preds[index].split_first() {
+                for (register, held) in defs[first].iter().flatten() {
+                    if is_segment_loc(regs, register) {
+                        continue;
+                    }
+                    let everywhere = rest.iter().all(|&pred| {
+                        defs[pred].as_ref().and_then(|d| d.get(register)).is_some_and(|other| same(other, held))
+                    });
+                    if everywhere {
+                        mine.insert(register.clone(), held.clone());
                     }
                 }
             }
+            // a predecessor not walked yet is what the last walk found there
+            let views: Vec<Option<&HashMap<Loc, Held>>> =
+                preds[index].iter().map(|&pred| defs[pred].as_ref().or(assume[pred].as_ref())).collect();
+            if !index_is_entry(&body, index)
+                && let Some(first) = views.iter().flatten().next()
+            {
+                for (register, held) in first.iter().filter(|(register, _)| is_segment_loc(regs, register)) {
+                    let everywhere =
+                        views.iter().flatten().all(|view| view.get(register).is_some_and(|other| same(other, held)));
+                    if everywhere {
+                        mine.insert(register.clone(), held.clone());
+                    }
+                }
+            }
+            for one in &body.blocks[index].insns {
+                let found = candidate(regs, one).or_else(|| segment_candidate(regs, one));
+                if let Some(register) = &found
+                    && mine.get(register).is_some_and(|held| identical(held, one))
+                {
+                    redundant.insert(id(one));
+                    continue;
+                }
+                match liveness::effect(regs, bits, one) {
+                    None => mine.clear(),
+                    Some(effect) => {
+                        mine.retain(|_, held| held.lanes.is_disjoint(&effect.writes));
+                        if writes_a_segment(regs, one) {
+                            mine.retain(|register, _| !is_segment_loc(regs, register));
+                        }
+                        if let Some(register) = found {
+                            mine.insert(register, Held { insn: Arc::clone(one), lanes: effect.writes });
+                        }
+                    }
+                }
+            }
+            defs[index] = Some(mine);
         }
-        defs[index] = mine;
+        (defs, redundant)
+    };
+    let mut assume: Vec<Option<HashMap<Loc, Held>>> = vec![None; body.blocks.len()];
+    let mut redundant;
+    loop {
+        let (defs, found) = walk(&assume);
+        redundant = found;
+        let keys = |maps: &[Option<HashMap<Loc, Held>>]| {
+            maps.iter()
+                .map(|map| {
+                    map.iter()
+                        .flatten()
+                        .filter(|(register, _)| is_segment_loc(regs, register))
+                        .map(|(r, _)| r.clone())
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let stable = assume.iter().all(Option::is_some) && keys(&defs) == keys(&assume);
+        assume = defs;
+        if stable {
+            break;
+        }
     }
     if redundant.is_empty() {
         return body;
@@ -245,6 +346,28 @@ mod tests {
         ))
     }
 
+    fn load_segment(
+        at: i64,
+        register: RegId,
+    ) -> Arc<Insn> {
+        Arc::new(Insn::new(
+            at,
+            Some((at, at + 3)),
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Reg(Reg { register, width: 2 })],
+                sources: vec![Loc::Imm(Imm {
+                    value: 0,
+                    width: 2,
+                    address: Some(crate::model::ir::Addr::new(crate::model::ir::Space::Segment, 0)),
+                })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![],
+            vec![],
+        ))
+    }
+
     fn block(
         at: i64,
         insns: Vec<Arc<Insn>>,
@@ -299,5 +422,40 @@ mod tests {
     fn a_load_of_another_constant_stays() {
         let result = cleaned(body(vec![block(0, vec![mov(0, 5, RegId::AX), mov(3, 6, RegId::AX)], vec![])]));
         assert!(!gone(&result, 0, 1));
+    }
+
+    /// `mov es, DGROUP` at the top of a loop and again after the loop's body
+    /// left ES alone: the second load goes (scroll.c m16 -Os: a `pushw DGROUP;
+    /// pop es` before each string move, 3 B each).
+    #[test]
+    fn a_segment_load_the_loop_already_made_goes() {
+        let result = cleaned(body(vec![
+            block(0, vec![mov(0, 1, RegId::AX)], vec![10]),
+            block(10, vec![load_segment(10, RegId::ES)], vec![20]),
+            block(20, vec![load_segment(20, RegId::ES), mov(23, 2, RegId::BX)], vec![10, 30]),
+            block(30, vec![], vec![]),
+        ]));
+        assert!(!gone(&result, 10, 0) && gone(&result, 20, 0));
+    }
+
+    /// A call leaves ES unknown: the load after it stays. A load on one
+    /// path only does not make the join's load go.
+    #[test]
+    fn a_segment_load_after_a_clobber_or_on_one_path_stays() {
+        let mut call = Insn::new(15, Some((15, 15)), None, vec![], vec![]);
+        call.clobbers = std::collections::BTreeSet::from([RegId::ES]);
+        let after_call = cleaned(body(vec![block(
+            0,
+            vec![load_segment(0, RegId::ES), Arc::new(call), load_segment(20, RegId::ES)],
+            vec![],
+        )]));
+        assert!(!gone(&after_call, 0, 2), "a call changed ES");
+        let one_path = cleaned(body(vec![
+            block(0, vec![], vec![10, 20]),
+            block(10, vec![load_segment(10, RegId::ES)], vec![30]),
+            block(20, vec![], vec![30]),
+            block(30, vec![load_segment(30, RegId::ES)], vec![]),
+        ]));
+        assert!(!gone(&one_path, 30, 0), "ES is DGROUP on one path only");
     }
 }
