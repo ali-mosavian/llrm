@@ -326,6 +326,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
             ISD::BSwap => self.visit_bswap(node),
+            ISD::CtLz | ISD::CtTz => self.visit_ctlz_cttz(node),
+            ISD::CtPop => self.visit_ctpop(node),
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),

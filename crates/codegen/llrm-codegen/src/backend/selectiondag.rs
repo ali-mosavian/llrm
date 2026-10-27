@@ -111,6 +111,7 @@ mod chain_combine;
 pub mod combine_load;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
+pub mod ctcount_combine;
 mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
