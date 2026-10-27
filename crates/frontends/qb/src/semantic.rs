@@ -7584,6 +7584,25 @@ impl Compiler {
             );
             return Ok(Some((Operand::Value(result), SINGLE)));
         }
+        if intrinsic.lowering == Lowering::DateSerial {
+            // B$DTSR(year, month, day) returns AX = near address of an R8,
+            // the serial date.
+            let mut operands = Vec::new();
+            for argument in &arguments[..3] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let pointer_type = self.pointer_type(DOUBLE);
+            let pointer = self.value(pointer_type);
+            self.emit_runtime_call("B$DTSR", vec![pointer], operands);
+            let result = self.value(DOUBLE);
+            self.emit(
+                "load",
+                vec![result],
+                vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
+            );
+            return Ok(Some((Operand::Value(result), DOUBLE)));
+        }
         if intrinsic.lowering == Lowering::Random {
             // VBDOS random.asm returns AX = near address of its current R4
             // value. RND1 consumes one SINGLE selector; RND0 consumes none.

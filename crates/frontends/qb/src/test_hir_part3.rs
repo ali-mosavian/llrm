@@ -3690,3 +3690,17 @@ fn test_chain_calls_the_chain_routine_with_the_file_name() {
     let call = main.find("call far ptr B$SCHN").expect("the call");
     assert!(main[..call].trim_end().rsplit('\n').next().unwrap().trim_start().starts_with("push offset"), "{main}");
 }
+
+/// DATESERIAL was refused ("cannot generate code for it yet"): VBDOS BC pushes
+/// year, month and day and calls B$DTSR, which returns the near address of an
+/// R8 (measured on BC's object).
+#[test]
+fn test_dateserial_calls_the_date_routine_with_year_month_day() {
+    let text =
+        listing_in("vbdos", &[], "dateser", "DIM d AS DOUBLE\r\nd = DATESERIAL(1992, 2, 29)\r\nPRINT d\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$DTSR").expect("the call");
+    let before = &main[..call];
+    // Year and month are one pushed dword (1992 << 16 | 2), then the day.
+    assert!(before.trim_end().ends_with("pushd 130547714\n    pushw 29"), "{main}");
+}
