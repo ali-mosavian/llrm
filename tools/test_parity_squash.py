@@ -1293,6 +1293,42 @@ def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs_and_
     assert ps.docs_detail({"integration docs_links::t"}, tmp_path, "main", stale=lambda root: pytest.fail("not a docs refusal")) == ""
 
 
+def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
+    """docs_in_sync was refused four times on trees the next check reset and nobody could reproduce: no evidence was kept."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "x")
+    (tmp_path / "stray.txt").write_text("left over")
+    kept = tmp_path.parent / (tmp_path.name + "-refused")
+    ps.keep_refused_evidence("abcdef0123456789", tmp_path, ["scanner red alone: integration docs_in_sync::test_no_generated_page_is_stale"], kept)
+    out = kept / "abcdef012345"
+    assert f"tree {run('rev-parse', 'HEAD')}" in (out / "head.txt").read_text() and "pr head abcdef0123456789" in (out / "head.txt").read_text() and "stray.txt" in (out / "status.txt").read_text() and "docs/a.md" in (out / "check.txt").read_text()
+    ps.keep_refused_evidence("1111111111111111", tmp_path, ["unit tests fail alone"], kept)
+    assert not (kept / "111111111111").exists(), "only a docs refusal keeps its tree's evidence"
+
+
+def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
+    """"Stale heads or the runner's tree" could not be answered at the 02:26 refusal: the batch kept no list of the heads it judged."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "x")
+    head = run("rev-parse", "HEAD")
+    kept = tmp_path.parent / (tmp_path.name + "-batch")
+    ps.keep_batch_evidence({"5085": head}, tmp_path, kept, "022633")
+    heads = (kept / "batch-022633" / "heads.txt").read_text()
+    assert f"#5085 {head} committed 20" in heads and "docs/a.md" in (kept / "batch-022633" / "check.txt").read_text()
+
+
 def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names_the_exception(tmp_path):
     """05:18: `docs_refusal` called `docs()` while the default `docs_stale` needs the root: every batch died with a TypeError and all 13 PRs were refused with an empty reason; #5073's tests mocked `docs`."""
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
