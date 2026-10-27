@@ -34,7 +34,7 @@ fn main_that_falls_off_its_end_returns_zero() {
             "extern void abort(void);\nint v;\nint main(void)\n{\n    v = 2;\n    if (v == 3) abort();\n}\n",
             &[level],
         );
-        let body = text.split("main_ proc").nth(1).and_then(|rest| rest.split("endp").next()).unwrap_or_default();
-        assert!(["xor eax, eax", "mov eax, 0", "mov al, 0"].iter().any(|zero| body.contains(zero)), "{level}: {body}");
+        let body = text.split(if text.contains("main_ proc") { "main_ proc" } else { "_main proc" }).nth(1).and_then(|rest| rest.split("endp").next()).unwrap_or_default();
+        assert!(["xor eax, eax", "mov eax, 0", "mov al, 0", "xor ax, ax", "mov ax, 0"].iter().any(|zero| body.contains(zero)), "{level}: {body}");
     }
 }

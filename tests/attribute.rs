@@ -26,9 +26,9 @@ fn compiled(
     (output, listing)
 }
 
-/// The text of `main_`, the one routine that calls.
+/// The text of `main_` (`_main` at m16, whose default is C's for `main`), the one routine that calls.
 fn main_of(listing: &str) -> &str {
-    let from = listing.find("main_ proc").expect("main");
+    let from = listing.find("main_ proc").or_else(|| listing.find("_main proc")).expect("main");
     &listing[from..listing[from..].find("endp").map_or(listing.len(), |at| from + at)]
 }
 
@@ -89,7 +89,7 @@ fn test_always_inline_replaces_every_call_of_a_big_routine() {
         "{{ long s = 0; int i; for (i = 0; i < x; i++) s += i * x + (s >> 3); if (s > 100) s ^= x; {}return s * 3 + x; }}\n",
         "for (i = 0; i < x; i++) s += i * s - (s >> 2); if (s > 100) s ^= x; ".repeat(4)
     );
-    let main = "long main(long a) { return f(a) + f(a + 1) + f(a + 2) + f(a + 3) + f(a + 4) + f(a + 5) + f(a + 6) + f(a + 7); }\n";
+    let main = "volatile long a = 3;\nint main(void) { return (int)(f(a) + f(a + 1) + f(a + 2) + f(a + 3) + f(a + 4) + f(a + 5) + f(a + 6) + f(a + 7)); }\n";
     let (_, plain) = compiled("-m32", &format!("static long f(long x) {body}{main}"));
     let (_, forced) = compiled("-m32", &format!("static __attribute__((always_inline)) long f(long x) {body}{main}"));
     assert!(calls(&plain) > 0, "{}", main_of(&plain));
