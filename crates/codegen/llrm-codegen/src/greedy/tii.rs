@@ -112,6 +112,7 @@ pub fn fold_memory_operand(
     out.what = Some(made);
     out.defines.retain(|value| *value != reg);
     out.uses.retain(|value| *value != reg);
+    out.undefs.retain(|value| *value != reg);
     Some(Arc::new(out))
 }
 
