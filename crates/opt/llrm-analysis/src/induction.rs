@@ -330,6 +330,21 @@ fn _descending(test: IntPredicate) -> bool {
     )
 }
 
+/// The test of the stepped counter that holds where the unstepped counter
+/// passes `test` against the same bound, for a step of one.
+fn _after_step(
+    test: IntPredicate,
+    step: &BigInt,
+) -> Option<IntPredicate> {
+    match (test, step > &BigInt::from(0)) {
+        (IntPredicate::Slt, true) => Some(IntPredicate::Sle),
+        (IntPredicate::Ult, true) => Some(IntPredicate::Ule),
+        (IntPredicate::Sgt, false) => Some(IntPredicate::Sge),
+        (IntPredicate::Ugt, false) => Some(IntPredicate::Uge),
+        _ => None,
+    }
+}
+
 fn _inclusive(test: IntPredicate) -> bool {
     matches!(
         test,
@@ -919,7 +934,7 @@ fn _proven(
             tested.insert(update, true);
         }
         let Some((width, bound, mirrored, stepped)) = _compared(unit, icmp, &tested) else { continue };
-        let test = if mirrored { continuing.swapped() } else { continuing };
+        let mut test = if mirrored { continuing.swapped() } else { continuing };
         let Some(step) = _signed(&counter.step, facts, counter.start.width()) else { continue };
         if step == BigInt::from(0) || width != counter.start.width() {
             continue;
@@ -966,6 +981,17 @@ fn _proven(
                 bound = AffineOperand::constant(masked(&moved, width), width);
                 (stepped, shifted) = (true, true);
             }
+        } else if shape.posttested
+            && !stepped
+            && function.parent(branch) == Some(cfg::block(latch))
+            && abs(&step) == BigInt::from(1)
+            && let Some(inclusive) = _after_step(test, &step)
+            && _promised(function, update, &step, _unsigned(test), _signed(&counter.start, facts, width).as_ref())
+        {
+            // A bound that is no constant stays: `i < b` before the step is
+            // `i + 1 <= b` after it, when the step does not wrap.
+            test = inclusive;
+            (stepped, shifted) = (true, true);
         }
         let start = counter.start.clone();
         let limit = _constant(&bound, facts, width);
