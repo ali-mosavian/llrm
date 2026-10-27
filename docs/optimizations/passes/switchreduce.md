@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchreduce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchreduce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchreduce.rs sha256:888cd9ddd805a19f15996972f7772071bac64ae1f123cef3b1ba9afb4d6e87d5 -->
+<!-- src: crates/opt/llrm-transforms/src/switchreduce.rs sha256:549f15c66b8a0c7a9252a28bd48b3a32ca56a448fc69e5112f9a1e7977ac59df -->
 
 # switchreduce
 

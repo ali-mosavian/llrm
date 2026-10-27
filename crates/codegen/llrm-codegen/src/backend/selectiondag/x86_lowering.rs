@@ -1189,13 +1189,43 @@ fn combine_uint_to_fp(
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
 }
 
-/// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]). (The
-/// `SUB(…, SBB)` and `~A - ~B` folds are not translated, SD219.)
+/// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then
+/// `combineSubSetcc`. (The `SUB(…, SBB)` and `~A - ~B` folds are not
+/// translated, SD219.)
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node).or_else(|| combine_sub_setcc(dag, node))
+}
+
+/// `combineSubSetcc` ([L60838][pin]): `sub C, zext(setcc)` is
+/// `zext(setcc inverted) + (C - 1)` for a nonzero `C` (`2 - (a < b)` is
+/// `(a >= b) + 1`: a `setge` and an `inc`, not a load of the constant and a
+/// `sub`).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60838
+fn combine_sub_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    let constant = dag.constant(op0).filter(|c| *c != 0)?;
+    if dag.opcode(op1) != ISD::ZeroExtend || dag.use_count(op1.node) != 1 {
+        return None;
+    }
+    let setcc = dag.operand(op1, 0);
+    if dag.opcode(setcc) != x86isd::SETCC || dag.use_count(setcc.node) != 1 {
+        return None;
+    }
+    let code = dag.constant(dag.operand(setcc, 0))?;
+    let opposite = cond_code(dag, code ^ 1);
+    let inverted = dag.get_node(x86isd::SETCC, EVT::I8, &[opposite, dag.operand(setcc, 1)]);
+    let widened = dag.get_node(ISD::ZeroExtend, vt, &[inverted]);
+    let adjusted = dag.get_constant(constant.wrapping_sub(1), vt);
+    Some(dag.get_node(ISD::Add, vt, &[widened, adjusted]))
 }
 
 /// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select

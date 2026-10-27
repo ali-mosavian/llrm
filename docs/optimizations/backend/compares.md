@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/compares.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/compares.rs sha256:68dd3997e260fceba30272e42787ce23b4f495f80f8febda0b9c554f3d12106d -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/compares.rs sha256:a54ebf2f3f7857011f83de42613b968146ea49ee98e4fdd5be3e03893057843a -->
 
 # compares
 

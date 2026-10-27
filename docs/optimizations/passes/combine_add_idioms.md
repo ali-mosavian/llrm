@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_add_idioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_add_idioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_add_idioms.rs sha256:d2be1dbcb5d6ecf8ea2f90df1a0ecee4199401b9fd36e9767c4df93996935eed -->
+<!-- src: crates/opt/llrm-transforms/src/combine_add_idioms.rs sha256:d95c9867a55a6a8bcea92898de46003661255922841502025a180363433ec1f5 -->
 
 # combine_add_idioms
 

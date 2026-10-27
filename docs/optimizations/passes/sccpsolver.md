@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sccpsolver.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sccpsolver.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sccpsolver.rs sha256:a70f746894debe951423b6f0ce87a49a47de9fdb9f643c2e1ec7d29ff49f9271 -->
+<!-- src: crates/opt/llrm-transforms/src/sccpsolver.rs sha256:2917c3b5bbb0158074ccdb00a28663adc1201412ea2f12649c5140be67ccde5a -->
 
 # sccpsolver
 
@@ -91,3 +91,6 @@ is `true`, and the branch on it goes to one successor.
 - Uses: [`llrm_mir::valuelattice`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/valuelattice.rs), [`llrm_mir::constantrange`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/constantrange.rs),
   [`llrm_mir::constantfolding`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/constantfolding.rs), [`llrm_mir::simplify`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-mir/src/simplify.rs)
 - Used by: [`crate::sccp`](sccp.md)
+
+## Used by
+Named by `ipsccp`, `sccp`.

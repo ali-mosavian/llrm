@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looppeel.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looppeel.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looppeel.rs sha256:58ea5a939b3fad28579716cfc86f2e4ed306503ec8116f031e91680deeaf9530 -->
+<!-- src: crates/opt/llrm-transforms/src/looppeel.rs sha256:1b4dfe736b9d35fafed9f4f85aa16a07c22bf6ac2e04c4500ff5ed9ded3ca237 -->
 
 # looppeel
 

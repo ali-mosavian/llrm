@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdeletion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdeletion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdeletion.rs sha256:98763c344e915d2312be292c84547a61904947ef480223794dcfadae2c91a528 -->
+<!-- src: crates/opt/llrm-transforms/src/loopdeletion.rs sha256:75662ef99a01cb508008ecff76125ab7901da5b2955823cb6f0f2d31424ac10e -->
 
 # loopdeletion
 
@@ -57,3 +57,6 @@ becomes a jump from `b0` to `b2`.
 [`deleteLoopIfDead`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopDeletion.cpp#L436),
 [`deleteDeadLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L521),
 [`breakLoopBackedge`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L746).
+
+## Used by
+Named by `loopinstsimplify`, `loopsimplifycfg`, `nontrivial`, `pipeline`.

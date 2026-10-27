@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_gep_index.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_gep_index.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_gep_index.rs sha256:b612e15e739c7df739a05e9f2e064669e3dd60c3b3109f6080317fb411b47a79 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_gep_index.rs sha256:5b006a91c514ff0d577eadc08c6e59b65b540f7381b794ff6ad703a10ba3dca8 -->
 
 # combine_gep_index
 
@@ -22,3 +22,6 @@ compares take the pointer a difference of pointers rebuilds.
 %p = getelementptr i32, ptr %b, i64 %i         %q = getelementptr [4 x i8], ptr %b, i64 %x
                                          ==>   %p = getelementptr [4 x i8], ptr %q, i64 %y
 ```
+
+## Used by
+Named by `combine_gep`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpmemalign.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpmemalign.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpmemalign.rs sha256:b8262555cfdf1469f6c90cd251b2a4a4816b2ca52a00e864343688a37575818d -->
+<!-- src: crates/opt/llrm-transforms/src/cgpmemalign.rs sha256:9cb3cc547add4b39782a3c06eb780f6b2034f611eb9225a8ffb27ead0d497cf1 -->
 
 # cgpmemalign
 

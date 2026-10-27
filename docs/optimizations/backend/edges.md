@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/edges.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/edges.rs sha256:28759ba721f8697e310ce79ffa586ca4c5fd220997093b65a7fe7a9f814521b0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/edges.rs sha256:d5db32b3e12ecd2c7551d942f94817e75b3beaee3fce4b6736a8912352833a95 -->
 
 # edges
 

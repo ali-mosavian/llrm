@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_and.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_and.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_and.rs sha256:4e2e0366bfe0360499588721cbb37e8d8bcfc1104bef8b2250a6841b348a3183 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_and.rs sha256:ccfe0966e92f24cd85a7caacd4006eb2eca23e5daec7757dbae4f2861a0c8d68 -->
 
 # combine_and
 

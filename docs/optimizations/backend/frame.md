@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/frame.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/frame.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/frame.rs sha256:ab4f4b29306228f52487df8bc1f65afee18fe2401e3c3f3022a8fa4d3607959c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/frame.rs sha256:8a29d4270ed748cba494a9e8f93e82d9bc377344faa9f1b07f9d9dc2bcda5524 -->
 
 # frame
 

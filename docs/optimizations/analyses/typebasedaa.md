@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/typebasedaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/typebasedaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/typebasedaa.rs sha256:c1d1bacd35011d78095807700eef3f2b37622f1a3fefb8a85f3afc8a67315609 -->
+<!-- src: crates/opt/llrm-analysis/src/typebasedaa.rs sha256:bdeac6596845d0ad5e12c468ba8dba6eb853f1cd078d2ec8ee05cce0668382db -->
 
 # typebasedaa
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:dce3754e2dc4c1b0c21b715ff2eff13b4ce06245a37154b6cdf721c1710b468e -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:222ddf8e2c3e85876a51cdeb0baf97eaeb0073f91cd73e2915130463079a3ce0 -->
 
 # combine_xor
 
@@ -33,3 +33,6 @@ each named where it stood: `foldXorToXor`, `foldNot`,
 %o = or i32 %x, %y
 %r = xor i32 %y, %o   ==>   %n = xor i32 %y, -1 ; %r = and i32 %x, %n
 ```
+
+## Used by
+Named by `combine`.

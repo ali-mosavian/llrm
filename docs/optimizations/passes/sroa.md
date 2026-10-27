@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sroa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sroa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:e43aa917292e1f31661c2a46c32702c0362b7d7ffc200cec4283597f60c94149 -->
+<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:c37d459391f37782bed0195ba77ecd04405ed51c9b5b239b285a2bb2a612f360 -->
 
 # sroa
 
@@ -66,3 +66,6 @@ allocas and then registers:
 store i32 1, ptr %s          ; field 0
 %v = load i32, ptr %s        ; becomes the constant 1, the alloca is gone
 ```
+
+## Used by
+Named by `main`, `pipeline`.

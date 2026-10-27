@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/speculate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/speculate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:18025b842037ddab5d88298d806ff1ef19d07596013aa069811ee6b657624b94 -->
+<!-- src: crates/opt/llrm-transforms/src/speculate.rs sha256:9510ba3ec5e2d29af3a15bad5f6ec2b46c730d924fcd28f43d44b34313b4c2d1 -->
 
 # speculate
 
@@ -47,3 +47,6 @@ then:  %t = add i32 %x, 1 ; br label %end
 end:   %p = phi i32 [ %t, %then ], [ %x, %entry ]
 ; becomes, in entry: %t = add i32 %x, 1 ; %p = select i1 %c, i32 %t, i32 %x
 ```
+
+## Used by
+Named by `simplifycfg`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_memintrinsics.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_memintrinsics.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_memintrinsics.rs sha256:392a9e43cf79a7ab182237a391be779a3fe55198e69210280c717338dda8e4aa -->
+<!-- src: crates/opt/llrm-transforms/src/combine_memintrinsics.rs sha256:967cbfdbce220979bbc0ab1c1e1d3226784c332ca4808f959f3769559f1adfec -->
 
 # combine_memintrinsics
 

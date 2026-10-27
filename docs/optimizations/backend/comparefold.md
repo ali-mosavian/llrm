@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/comparefold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/comparefold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/comparefold.rs sha256:e9414ea5108f5814de858bc215a4694e6298fdb33e3970635996b8d1c0feb6fb -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/comparefold.rs sha256:ab78f22c3a638f58a1b11c76dddf891128d7361038a20afe213f13fdc611632f -->
 
 # comparefold
 

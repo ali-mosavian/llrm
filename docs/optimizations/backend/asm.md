@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/asm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/asm.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/asm.rs sha256:c49aaa5533b09e576c45f35e0266ca5b7eec1a595990dc509826d19fe15eda18 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/asm.rs sha256:217908c83117fc514ee988d4645d870b23ed914ef4f7a4f3315ce558432d4c62 -->
 
 # asm
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopinterchange_transform.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopinterchange_transform.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopinterchange_transform.rs sha256:75203ee969f7a93d5aa574abcf6da12099c53e4c5ac6ed074b87a3bec1193deb -->
+<!-- src: crates/opt/llrm-transforms/src/loopinterchange_transform.rs sha256:e0458dc05889bb93cafbe0233adbd46f05947e7181179e1cf89aa3c30b368d7d -->
 
 # loopinterchange_transform
 
@@ -27,3 +27,6 @@ Before, `i` outer and `j` inner: `i.header -> j.preheader -> j.header ->
 j.body -> j.latch -> i.latch`. After, `j.preheader -> j.header ->
 i.preheader -> i.header -> j.body -> i.latch -> j.latch`: the old inner
 header and latch bound the new outer loop.
+
+## Used by
+Named by `loopinterchange`.

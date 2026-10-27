@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlookup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlookup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:04c8daff79f549292e8eb6cbc0143638e93ee2b8f2b9610ed62927d0f51872f9 -->
+<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:1d3abae12377e6125f95836f7ed57708a2e3eb197078b980c71a6079fe8cc046 -->
 
 # switchlookup
 

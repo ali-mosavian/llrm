@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailcallelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailcallelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:3475bc1ecab005a34e8d24f94238f7f7c4a044be7919801f2fa71f487231844d -->
+<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:0f253a8db4cf50c691240055aab452ec4407a76fc547bd04a24179df5fd70ff5 -->
 
 # tailcallelim
 

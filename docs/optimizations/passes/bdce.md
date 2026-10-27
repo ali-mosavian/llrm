@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/bdce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/bdce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/bdce.rs sha256:5058b50cf2e8d1f85fbfb9405ea2065d6ca3dbf6d423adff484cd418449330cb -->
+<!-- src: crates/opt/llrm-transforms/src/bdce.rs sha256:068bcf86ea84d48509e801be0f0b24a273d005c2a9c22ad758ef388ed720da0d -->
 
 # bdce
 

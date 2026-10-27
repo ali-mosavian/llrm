@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trunc_inst_combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trunc_inst_combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trunc_inst_combine.rs sha256:905b1756a06510fd4a1babd0d8888c2d212b149de66386e5115c42cd8e93884e -->
+<!-- src: crates/opt/llrm-transforms/src/trunc_inst_combine.rs sha256:6368792b95049e84cf8e1d2f60b75ac525aafa4ca314b3b1094d527aace58176 -->
 
 # trunc_inst_combine
 

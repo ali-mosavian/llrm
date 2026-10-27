@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/intbits.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/intbits.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/intbits.rs sha256:d453c51b69cd93acee4803fb1cd5d3f1dba93d528e38f51e2757b26fa02bfcc5 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/intbits.rs sha256:aa66e230ea88e3e00c4a8631e95d05fd1c782cc6cd8be154af162c0e95f67640 -->
 
 # intbits
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/icmpchain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/icmpchain.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/icmpchain.rs sha256:1d23e8d64207688689caafb8a896128956d88e3bb202543d524c3f292e20b37d -->
+<!-- src: crates/opt/llrm-transforms/src/icmpchain.rs sha256:f317a9bae66be2ba5d74b0cf6dddfefa58727e9859cbfb5be7f111f2a573f579 -->
 
 # icmpchain
 
@@ -26,3 +26,6 @@ not to be undef or poison.
 | D1 | A pointer constant (`null`, `inttoptr`) is not a compared integer (`getConstantInt`'s pointer arm), so no value is a pointer and `ptrtoint` is never made. |
 | D2 | No branch weights; `!unpredictable` is kept. |
 | D3 | `!llvm.loop` of the old branch is not copied, as `IRBuilder::CreateCondBr` does not. |
+
+## Used by
+Named by `simplifycfg`.

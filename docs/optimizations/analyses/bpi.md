@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/bpi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/bpi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/bpi.rs sha256:dfa5749c4605d9d10b362f5d2c690b34c81f0bdc75f85983f7ea3f301f12c80d -->
+<!-- src: crates/opt/llrm-analysis/src/bpi.rs sha256:ff233bbff2caffdf5d1c31f20f4bb5c91f344e6574c406da9e9545831d4b122b -->
 
 # bpi
 

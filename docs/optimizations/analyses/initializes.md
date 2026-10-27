@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/initializes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/initializes.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/initializes.rs sha256:4847af6756f961409c04af2460252a79ab648114d34dd3c47c4f5a20fa8d3c7a -->
+<!-- src: crates/opt/llrm-analysis/src/initializes.rs sha256:00029411431198465830693c9439a1c4513d9ab995dab7ea27893ff32be27e57 -->
 
 # initializes
 
@@ -38,3 +38,6 @@ b0:
 `%p` gets `initializes((0, 2))`. From unit test
 `a_store_through_the_parameter_initializes_its_bytes` in
 `initializes_tests.rs`.
+
+## Used by
+Named by `functionattrs`.

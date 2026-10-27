@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/classes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/classes.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/classes.rs sha256:ba5768e35b41b64a70a6e62db075fc22ed60919a2870b557715e57db8998cd6e -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/classes.rs sha256:8eb5d263b4de91f613d79e70b5d42d357062779f4c73cb0284215ff920a20268 -->
 
 # classes
 

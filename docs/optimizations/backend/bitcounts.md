@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bitcounts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bitcounts.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/bitcounts.rs sha256:981060633afdf75f788c0f25b4645258c4686cd6963910c717c6b98acb44aaee -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/bitcounts.rs sha256:50eda30b2186cdd553bfe67514d712b1c5d33e6a00e5f0804e5e57e9620aa802 -->
 
 # bitcounts
 

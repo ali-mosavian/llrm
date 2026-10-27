@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/undefpred.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/undefpred.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:5c00567c812c0787a14ebc8bd42978e8d9ab53089d8ccd20b447e324ebb71478 -->
+<!-- src: crates/opt/llrm-transforms/src/undefpred.rs sha256:6899096828822a8983a73eebff8873f591c0713266de065f9b501a05bc0edc6d -->
 
 # undefpred
 
@@ -34,3 +34,6 @@ The way in that gives the null is cut:
   a function pass cannot declare `llvm.assume`, a global of the module.
   Exit: the pass given the module's declarations (issue to file with the
   first user of an intrinsic created by a function pass).
+
+## Used by
+Named by `simplifycfg`.

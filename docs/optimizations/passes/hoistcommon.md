@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoistcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoistcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:2fbf25119a5c90e096df3d972fb02a9efc039646164e868c93364d55227d3b29 -->
+<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:dd6b02fb7089bdc9027cfbaabee20752ea6dc5daddbda7cf0631c6490f3371ba -->
 
 # hoistcommon
 
@@ -59,3 +59,6 @@ The instructions both arms open with run once, before the branch:
   flags are `and`ed.
 - D4. No `invoke` and no `callbr` in the MIR; no
   `llvm.experimental.deoptimize`.
+
+## Used by
+Named by `simplifycfg`, `sinkcommon`.

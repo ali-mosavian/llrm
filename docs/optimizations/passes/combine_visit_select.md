@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:0c8a2d8ca5643e315e153a4ddd1f7d0a907a71d51af2e345cf8954d7d54e90fb -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:1c5936de54c3ecfed1f7e4ba13d32aae4b94b19bd8183ea2ced58bea65cc0908 -->
 
 # combine_visit_select
 
@@ -41,3 +41,6 @@ are dropped, not swapped.
 ```text
 %r = select i1 %c, i16 1, i16 0        %r = zext i1 %c to i16
 ```
+
+## Used by
+Named by `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`.

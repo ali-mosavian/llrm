@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_shifts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_shifts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_shifts.rs sha256:45a193f6af216e926eb8cc222d38278a75a7e2093f4eef56bf8f5e64a862780e -->
+<!-- src: crates/opt/llrm-transforms/src/combine_shifts.rs sha256:a661c8f9e5e49bbf15263bdee52ed15dcd203b1b4dc6ce986b5dd1b35afde035 -->
 
 # combine_shifts
 

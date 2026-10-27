@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifycfg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifycfg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:ce0537d117b5394b4811aed24972aaebfcd9b6222e67cca1377e94b1d27283a5 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifycfg.rs sha256:866f64105a5a2d38b4fb12ffdaffba6bd3a974ea23d12f2b5ff1688c237bbb45 -->
 
 # simplifycfg
 
@@ -161,6 +161,10 @@ the defaults). `MIRROR` unless a line below says `DEVIATE`.
   `loopsimplify` runs in them: LLVM's passes run once, and without this the
   two undid each other each round ("cycle after 3 rounds" on the `deedlines`
   demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
+  Cost, d_faces -O2 (78 runs): 2.9 M Ir of 747 M (0.4%), the set built once
+  in each of 21 runs: `Loop::exits` 1.5 M, `preheader` 0.3 M, `natural` 0.5 M.
+  Not worth a change: a per-block ask is not output-identical (the set is a
+  snapshot taken at the first ask, the pass edits the CFG after it).
 
 ## Runs
 Once per round of the function fixed point, before `decide`: the branches

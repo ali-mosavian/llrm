@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopinstsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopinstsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopinstsimplify.rs sha256:f80157c195d35eb4768601e8fb1054d2346be9aaa234ee7f49afd311c0d4a61d -->
+<!-- src: crates/opt/llrm-transforms/src/loopinstsimplify.rs sha256:70527c24437365fd47b38308e27f42b97d906908982d3e1c4d7f0ba82fd89781 -->
 
 # loopinstsimplify
 
@@ -34,3 +34,6 @@ Blocks and edges are unchanged: dominators and loops are preserved.
 ## Example
 An `add %x, 0` in a loop body is replaced by `%x`; a phi that merges the
 same value from both sides is replaced by it.
+
+## Used by
+Named by `pipeline`.

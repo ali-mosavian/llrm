@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/assemble.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/assemble.rs sha256:13bce12bbe70632bba2a7b8486afe8bb8567f4574bd44900d5cc4b5a2fcbe47a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/assemble.rs sha256:b86558cd3f1666a001cae8afa450bbc2a6017d21928a9c84a7c0d1fb1a55d2ef -->
 
 # assemble
 

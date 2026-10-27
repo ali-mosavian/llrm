@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/combiner.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/combiner.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/combiner.rs sha256:1e42173a234d875eac5e2653d50d8bdd79895201f15e11d7554f419cb84814a1 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/combiner.rs sha256:8a24528e8df9d31229b70628b12de8947446e08877ee045065d80d33907461ae -->
 
 # combiner
 

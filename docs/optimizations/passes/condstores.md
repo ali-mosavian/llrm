@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/condstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/condstores.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/condstores.rs sha256:d3734328dd3bcfeeb62abba2d9d07d8772e2fea847f7ee64300304d9fe08c1b1 -->
+<!-- src: crates/opt/llrm-transforms/src/condstores.rs sha256:0386937bb4ba877f472df85ff7e9625b5ace28a2797dcd5bbb849a46be2b638c -->
 
 # condstores
 
@@ -40,3 +40,6 @@ Two stores of `%g` become one after both conditions:
   volatile store is not merged, the weights of the new branch are not set.
 - D2. The store's alignment is the smaller of the two, as in LLVM; the new
   block has no name.
+
+## Used by
+Named by `condtocond`, `simplifycfg`.

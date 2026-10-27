@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollruntime.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollruntime.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollruntime.rs sha256:ffae9efb4cfbd1c0944193719b36e0d08f2cbe92b40c6c553d7578c40662c8ca -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollruntime.rs sha256:dc75d61864ca3900a3358d314b0ad4bf7029b23f0ec7f1de35c08192b3e818b9 -->
 
 # loopunrollruntime
 
@@ -43,3 +43,6 @@ iterations; the epilog `body.epil` runs `xtraiter` times.
 ## See also
 `UnrollRuntimeLoopRemainder` (L672), `ConnectEpilog` (L255),
 `CloneLoopBlocks` (L404), `CreateTripRemainder` (L607).
+
+## Used by
+Named by `loopunrollandjam`.

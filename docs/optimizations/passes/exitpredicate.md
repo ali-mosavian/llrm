@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitpredicate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitpredicate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitpredicate.rs sha256:9aa4748ea8cc071b833d87cd9a7164b3be2511c6956b6a2a38366bbab5e9bf5b -->
+<!-- src: crates/opt/llrm-transforms/src/exitpredicate.rs sha256:70357d823013f8fc40a87d30f943fa365c47890d3b2b939d5fd4c5b55d7c74b7 -->
 
 # exitpredicate
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_ext_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_ext_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_ext_const.rs sha256:031d709ed64412e1fd11c207481eee5836e52893445922e9bf82a890903e264c -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_ext_const.rs sha256:e882deeefa0ca17650457779528ba471a22d288d051505eb29b8f65e558144d9 -->
 
 # combine_select_ext_const
 
@@ -22,3 +22,6 @@ never reaches here: `simplifySelectInst` takes it first).
 %e = zext i1 %x to i16                    %n = select i1 %c, i1 %x, i1 true
 %r = select i1 %c, i16 %e, i16 1    ==>   %r = zext i1 %n to i16
 ```
+
+## Used by
+Named by `combine_visit_select`.

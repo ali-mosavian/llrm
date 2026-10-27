@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ivdescriptors.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ivdescriptors.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ivdescriptors.rs sha256:864a968a27e4265f4970c964c09faba502cef999958eca7005446e46adb37f1b -->
+<!-- src: crates/opt/llrm-analysis/src/ivdescriptors.rs sha256:a1b5c98349593cf1cbd3d61a5bbf04b659a34bd3d30a049cfb2b6c292b4eb803 -->
 
 # ivdescriptors
 
@@ -38,3 +38,6 @@ invariant.
 use of `%s.next` after the loop is an `Add` reduction starting at 0;
 `%i = phi [0, %pre], [%i.next, %latch]` with `%i.next = add nuw %i, 1` is an
 integer induction of step 1.
+
+## Used by
+Named by `canonfreeze`, `exitvalues`, `loopinterchange`.

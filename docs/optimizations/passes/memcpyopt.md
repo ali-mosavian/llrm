@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:abcc2098ac957655909d523d995f4bc9e44253c4f43f029abc0264444cfa4ed0 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyopt.rs sha256:c639c4af202bd3b61a6a36b0310660befdd12b92c1ed20a6d75ccaf3645a7fa4 -->
 
 # memcpyopt
 

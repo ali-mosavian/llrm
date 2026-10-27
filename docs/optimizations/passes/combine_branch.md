@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_branch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_branch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:8819f73cbf9866db0184c3d6b7d82289d485b7b30aad77f97c2ee196c3322f1f -->
+<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:fd376cdc7027df83a8e71651158a0f6e1125ab0ac1e608dc7b7de1254b461ce6 -->
 
 # combine_branch
 
@@ -34,3 +34,7 @@ DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
 %n = xor i1 %c, true                  br i1 %c, label %f, label %t
 br i1 %n, label %t, label %f
 ```
+
+## Used by
+`visit` in [`combine`](combine.md), which dispatches a `br` here
+(`visit_cond_br`).

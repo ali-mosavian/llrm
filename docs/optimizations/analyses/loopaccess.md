@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopaccess.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopaccess.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopaccess.rs sha256:01fdbd81e8f204085786d9a3cb92b0b780cbc4a8c3c5ee51fabd9a88a9d7e708 -->
+<!-- src: crates/opt/llrm-analysis/src/loopaccess.rs sha256:4e728bf1adc26dfa66d79f012ce50ecc280a48cc5086ab69cee7ae1c3b2309d0 -->
 
 # loopaccess
 
@@ -24,3 +24,6 @@ overflow they would have assumed is a pointer that cannot be checked. No
 
 ## Example
 `getelementptr i32, ptr %p, i64 1` is consecutive after `%p`.
+
+## Used by
+Named by `accessanalysis`, `driver`, `loopaccessinfo`, `looploadelim`, `memdepchecker`, `runtimecheck`.

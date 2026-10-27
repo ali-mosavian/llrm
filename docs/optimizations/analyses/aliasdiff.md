@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/aliasdiff.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/aliasdiff.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/aliasdiff.rs sha256:1542872e5a15942f199bd7cb9d5be13337109fe178b46f74af7d63b428e5180c -->
+<!-- src: crates/opt/llrm-analysis/src/aliasdiff.rs sha256:53dcf8c74f408bec844535f08a67329b009017a5e9c50fdf7abacdbf5c0731c5 -->
 
 # aliasdiff
 
@@ -28,3 +28,6 @@ invent them. A forged segment pointer answered `N` by the new stack is the
 
 ## See also
 the alias-stack plan (stage S0.5).
+
+## Used by
+Named by `alias_pairs`.

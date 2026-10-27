@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ssaupdaterbulk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ssaupdaterbulk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ssaupdaterbulk.rs sha256:4b2c3a3ab50092068473bc2099466d5c6c1bfc166701afc7ea29a39582894527 -->
+<!-- src: crates/opt/llrm-analysis/src/ssaupdaterbulk.rs sha256:c568694376cb9dfeaf9de6e773613057ad73e6a95073fa947fc01b25c9396631 -->
 
 # ssaupdaterbulk
 
@@ -43,3 +43,6 @@ in `b4` and read it.
 
 ## See also
 [`SSAUpdaterBulk::RewriteAllUses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SSAUpdaterBulk.cpp#L111).
+
+## Used by
+Named by `transform`.

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/floatalloc.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/floatalloc.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/floatalloc.rs sha256:1d20b6437885173f81003f30e71553d19dfa27a1ce7a930a09f09c2fbbd1f476 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/floatalloc.rs sha256:636adb18c1d8b0a08114bab5e930e8a191c4c86722251edd011ce091a5b7a7cd -->
 
 # floatalloc
 

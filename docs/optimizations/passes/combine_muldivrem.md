@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_muldivrem.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_muldivrem.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:2bcec628b2025d6da672a18ee945a5beb3e7695ca6ca40d4573e5048309d093f -->
+<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:1b4da7ddd6bb64cf4bfbd8e8ddc7069278cc043e861be18c66ff2531f15f934e -->
 
 # combine_muldivrem
 

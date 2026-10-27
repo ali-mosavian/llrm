@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/pushfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/pushfold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:8f4efd581f71ae332f70586b9b6fc804717ad6e056c4f601410cab713c9ae25b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/pushfold.rs sha256:fb059df107adca9f408255196168228bfd1e9a4343539be85dde14eec7ba98ea -->
 
 # pushfold
 

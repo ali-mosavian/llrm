@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/remidiom.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/remidiom.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:3f9af523ca2346e0990b1e1892d3ad63da5e7e435061d1e84d6c0660a432707a -->
+<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:cb7fa1cd0b3d79d4d179e999eb4259defe7666869380cddfa7e0dce2b5c03144 -->
 
 # remidiom
 

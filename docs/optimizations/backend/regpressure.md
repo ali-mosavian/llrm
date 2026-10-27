@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regpressure.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regpressure.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regpressure.rs sha256:d62a2ecbc26609d4103d62d3e02f3c4c276805e0594b6860c52886d22cc39987 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regpressure.rs sha256:3ce590ea74b7b62b84f646f61d6b4819000ba635a30583c1ca2082043c011864 -->
 
 # regpressure
 
@@ -30,3 +30,6 @@ a value's class here is the one its allowed registers pick out. DEVIATE RP2:
 the dead defs and lane masks the pin tracks (x86 values have one lane; a
 dead def does not change `getUpwardPressureDelta`, only the max `recede`
 keeps). The downward direction (`TopRPTracker`) waits for a top-down pass.
+
+## Used by
+Named by `machinesched`.

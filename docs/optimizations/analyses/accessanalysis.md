@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/accessanalysis.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/accessanalysis.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/accessanalysis.rs sha256:2e2818a0cb690e95bd9e70464ebbda2319ecbe329f4756f0eadae20138c242a0 -->
+<!-- src: crates/opt/llrm-analysis/src/accessanalysis.rs sha256:990d5d65a1b20d684b46909d0f43eec9f97ead9e5cf10182fe4beff789b2ac99 -->
 
 # accessanalysis
 
@@ -30,3 +30,6 @@ MIR's `AAInfo` has the TBAA tag and one `noalias` scope but no
 `alias.scope` list and no `llvm.experimental.noalias.scope.decl` scopes
 declared in a loop (`adjustAliasScopeList`): the locations are added as
 they are.
+
+## Used by
+Named by `loopaccessinfo`.
