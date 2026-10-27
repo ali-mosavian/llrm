@@ -2,9 +2,9 @@
 # Regenerates crates/target/llrm-arm64/tests/darwin from tests/programs: each
 # program's IR for arm64-apple-macos (the pinned clang's front end alone) and
 # the output the pinned `clang -O2` build prints under qemu-aarch64 on Linux,
-# which the Mac checks its run against (tools/arm64_mac_check.sh).
+# which the Mac checks its run against (tools/targets/arm64-mac-check.sh).
 set -euo pipefail
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 crate=$root/crates/target/llrm-arm64
 build=${LLVM_BUILD:-$HOME/scratch/llvm-build-aarch64}
 tmp=$(mktemp -d)
