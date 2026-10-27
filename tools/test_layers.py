@@ -117,3 +117,9 @@ def test_the_workspace_members_follow_the_layer_glob():
     inside = {Path(p["manifest_path"]).parent.relative_to(ROOT).as_posix() for p in metadata["packages"]}
     layers = {p.parent.relative_to(ROOT).as_posix() for p in (ROOT / "crates").glob("*/*/Cargo.toml")}
     assert layers <= inside, sorted(layers - inside)
+
+
+def test_llrm_c_lib_tests_build_without_the_root_enabling_its_feature():
+    """llrm-c became optional in the root: `--workspace --all-targets` then compiled its lib tests without `toolchain` and stopped at the compile_error (#5586 refused 00:51)."""
+    done = subprocess.run(["cargo", "check", "-p", "llrm-c", "--lib", "--tests"], cwd=ROOT, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr[-600:]
