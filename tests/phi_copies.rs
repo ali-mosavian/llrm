@@ -73,7 +73,11 @@ fn test_a_variable_a_subtraction_reads_as_its_second_operand_is_not_defined_by_i
 fn test_a_crc_step_keeps_the_accumulator_in_one_register() {
     // The bit loop is unrolled by 8 at -O2 as the pin's is (a fourth saved
     // register, ESI, then): the rolled loop is the premise.
-    let text = listing("bench/crc/crc.c", &["-fno-unroll-loops"]);
+    // llrm-cc: the clang IR selects a constant (`select ... 0xEDB88320`): the
+    // old selector branches on it and needs a fourth register. The pin and the
+    // DAG selector are branchless, so this runs `--isel=dag` until it is the
+    // default (#4512).
+    let text = listing("bench/crc/crc.c", &["--isel=dag", "-fno-unroll-loops"]);
     let body = text.split("_bench_crc proc").nth(1).unwrap().split("_bench_crc endp").next().unwrap();
     assert!(!body.contains("esi") && !body.contains("mov eax, ebx"), "{body}");
 }
