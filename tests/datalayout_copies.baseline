@@ -5,7 +5,6 @@
 6 crates/driver/llrm-cc/targets.toml
 1 crates/driver/llrm-driver/src/llc.rs
 29 crates/driver/llrm-driver/src/tests.rs
-1 crates/ir/llrm-mir/src/datalayout.rs
 1 crates/opt/llrm-analysis/src/basicaa.rs
 1 crates/opt/llrm-analysis/src/testing.rs
 1 crates/opt/llrm-transforms/src/inferalignment_tests.rs
