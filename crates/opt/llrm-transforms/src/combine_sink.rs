@@ -30,11 +30,13 @@
 //!
 //! MIRROR: every check and its order; the user scan; the position.
 //!
-//! DEVIATE, with the reason: an instruction that writes memory is never sunk
-//! (`SoleWriteToDeadLocal` needs a capture analysis llrm has not translated);
-//! `isDroppable` is the `llvm.assume` call (MIR has no operand bundles, so no
-//! `dereferenceable` bundle keeps a sink away); `isEHPad` is `landingpad` (MIR
-//! has no funclet pads); debug records are not moved (MIR has none).
+//! DEVIATE, with the reason: a compare of a runtime call's flags result is
+//! never sunk (the flags do not survive to another block); an instruction that
+//! writes memory is never sunk (`SoleWriteToDeadLocal` needs a capture analysis
+//! llrm has not translated); `isDroppable` is the `llvm.assume` call (MIR has
+//! no operand bundles, so no `dereferenceable` bundle keeps a sink away);
+//! `isEHPad` is `landingpad` (MIR has no funclet pads); debug records are not
+//! moved (MIR has none).
 //!
 //! # Example
 //! `%x` is read only in `b1`, whose only predecessor is `b0`:
@@ -138,6 +140,11 @@ pub fn sinkable(
 ) -> bool {
     let function = q.function;
     let instruction = function.instruction(inst);
+    // DEVIATE: a call's flags live only until the next flag-setting
+    // instruction, so their compare stays beside the call.
+    if llrm_mir::facts::compares_flags_result(q.context, q.globals, function, inst) {
+        return false;
+    }
     if matches!(
         instruction.opcode,
         Opcode::Phi | Opcode::LandingPad { .. } | Opcode::Alloca { .. }
