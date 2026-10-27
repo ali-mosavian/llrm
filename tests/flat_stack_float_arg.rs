@@ -81,7 +81,7 @@ extern void take(struct S s, int n);\n\
 void f(long double x, struct S s) { use(x, 3); take(s, 4); }\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(["-m32", "-mabi=sysv", "-O1", "-o", "a.obj", "a.c"])
