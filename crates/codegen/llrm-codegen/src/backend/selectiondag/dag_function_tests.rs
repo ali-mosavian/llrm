@@ -925,3 +925,25 @@ define void @f() {
     let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
     assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
 }
+
+/// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
+/// pin reads the byte at `a + 1` with one `movzx`.
+#[test]
+fn a_byte_of_a_loaded_word_is_one_byte_load() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %a, i32 %i) {
+  %p = getelementptr i32, ptr %a, i32 %i
+  %v = load i32, ptr %p
+  %s = lshr i32 %v, 8
+  %m = and i32 %s, 255
+  ret i32 %m
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("sh")), "{seen:?}");
+    assert!(seen.iter().any(|n| n.starts_with("movzx")), "{seen:?}");
+}
