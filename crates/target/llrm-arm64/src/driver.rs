@@ -199,10 +199,7 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         let blocks = crate::pairs::fold(blocks);
         out.push(crate::emit::Function {
             symbol: crate::data::symbol_name(platform, &name),
-            public: !matches!(
-                global.linkage,
-                llrm_mir::Linkage::Internal | llrm_mir::Linkage::Private
-            ),
+            binding: crate::data::binding_of(global.linkage),
             blocks,
         });
     }

@@ -109,7 +109,12 @@ pub(crate) fn is_memory(inst: &Inst) -> bool {
     matches!(
         inst,
         Inst::Load { .. } | Inst::Store { .. } | Inst::LoadPair { .. } | Inst::StorePair { .. }
-    )
+    ) || ordered(inst)
+}
+
+/// An atomic access or a barrier: no access moves across it, whatever it reaches.
+pub(crate) fn ordered(inst: &Inst) -> bool {
+    matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
 }
 
 fn is_store(inst: &Inst) -> bool {
@@ -151,7 +156,9 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
                     let register_free = !defines_or_uses(between, float, number, !first.load);
                     // It also passes their memory accesses: they must commute with it.
                     let second_touch = touch_of(&second);
-                    register_free && touch(between).is_none_or(|other| commutes(&second_touch, &other))
+                    register_free
+                        && !ordered(between)
+                        && touch(between).is_none_or(|other| commutes(&second_touch, &other))
                 })
             {
                 insts[i] = Some(pair.inst);

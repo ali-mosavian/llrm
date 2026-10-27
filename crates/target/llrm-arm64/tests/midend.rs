@@ -402,3 +402,47 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
     }
     assert!(object.symbols.iter().all(|symbol| !symbol.name.contains("llvm.global_ctors")));
 }
+
+/// A `weak` or `linkonce_odr` definition was exported as a strong one: the QB runtime's weak no-op
+/// hooks (`__attribute__((weak))`) were "duplicate symbols" against the real ones at link time.
+#[test]
+fn a_weak_definition_is_exported_weak() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+target triple = \"arm64-apple-macosx27.2.0\"\n\
+define weak void @hook() {\n  ret void\n}\n\
+define void @strong() {\n  ret void\n}\n";
+    let object = driver::object(text, Platform::Darwin, "weak.o", true).expect("lowers");
+    let binding = |name: &str| object.symbols.iter().find(|symbol| symbol.name == name).unwrap().binding;
+    assert_eq!(binding("_hook"), llrm_object::Binding::Weak);
+    assert_eq!(binding("_strong"), llrm_object::Binding::Public);
+}
+
+/// Atomics were refused in the parser, and then no pass may treat one as a plain access. Selected as
+/// the pin selects them (`apple-m1`: LSE and RCPC): `ldar`/`ldapr`, `stlr`, one LSE instruction,
+/// `casal`, `dmb`.
+#[test]
+fn atomics_are_kept_and_selected_as_the_pin_does() {
+    let asm = driver::assembly(include_str!("data/atomics.ll"), Platform::Darwin, true).expect("lowers");
+    let function = |name: &str| -> Vec<String> {
+        let start = asm.lines().position(|line| line == format!("{name}:")).expect(name) + 1;
+        asm.lines()
+            .skip(start)
+            .take_while(|line| line.starts_with('\t') || line.starts_with(".L"))
+            .filter(|line| line.starts_with('\t'))
+            .map(|line| line.trim().to_owned())
+            .collect()
+    };
+    let count = |name: &str, mnemonic: &str| function(name).iter().filter(|line| line.starts_with(mnemonic)).count();
+    // Two atomic loads are two instructions; an unused one is not removed.
+    assert_eq!(count("_twice_seq_cst", "ldar"), 2, "{asm}");
+    assert_eq!(count("_unused_load", "ldar"), 1, "{asm}");
+    assert_eq!(count("_publish", "stlr"), 1, "{asm}");
+    assert_eq!(count("_acquire", "ldapr"), 1, "{asm}");
+    assert_eq!(count("_fetch_add", "ldaddal"), 1, "{asm}");
+    assert_eq!(count("_exchange", "swpab"), 1, "{asm}");
+    assert!(function("_fetch_sub").iter().any(|line| line.starts_with("ldadd w")), "{asm}");
+    assert!(function("_fetch_sub").iter().any(|line| line.starts_with("neg") || line.starts_with("sub")), "{asm}");
+    assert!(function("_fetch_and").iter().any(|line| line.starts_with("ldclrl")), "{asm}");
+    assert_eq!(count("_compare_exchange", "casal"), 1, "{asm}");
+    assert_eq!(function("_fences").iter().filter(|line| line.starts_with("dmb")).count(), 2, "{asm}");
+}
