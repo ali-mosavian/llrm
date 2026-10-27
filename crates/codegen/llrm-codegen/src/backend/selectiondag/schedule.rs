@@ -1275,7 +1275,7 @@ thread_local! {
 /// queue without it: -O2 +58 (pin +18 over the queue without it), -Os +17 (pin
 /// 57 fewer).
 fn src_order(info: &dyn SchedInfo) -> bool {
-    info.source_order() || SRC_ORDER.get() || llrm_support::env_set("LLRM_SRC_ORDER")
+    info.source_order() || SRC_ORDER.get() || llrm_support::env_flag!("LLRM_SRC_ORDER")
 }
 
 /// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman

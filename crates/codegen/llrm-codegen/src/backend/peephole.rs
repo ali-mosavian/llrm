@@ -491,6 +491,12 @@ pub fn extensions(
 
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
+///
+/// DEVIATE ZL1 (owner w1, exit: the pin-faithful switch-over turns the gate
+/// off): the pin keeps `movzx` on the i486 as on every x86; this pair is two
+/// clocks against three there. Gated on `Profile::clears_before_byte_load`, so
+/// off for size and where the extension is no slower or the partial register
+/// stalls. x_life -O2 m32 has 12 more `xor` than the pin from it.
 pub fn zeroed_loads(
     rules: &peep::Rules,
     body: &LirBody,
