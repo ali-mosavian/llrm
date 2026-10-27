@@ -3,12 +3,9 @@
 //! the variable was set to (`#dbg_value`). What the optimiser leaves is read in
 //! the last stage the pipeline dumps.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+mod common;
 
-fn llrm_c() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
-}
+use std::path::{Path, PathBuf};
 
 /// The pipeline's last dumped MIR of `source` compiled with `arguments`.
 fn final_mir(
@@ -16,7 +13,7 @@ fn final_mir(
     arguments: &[&str],
     dump: &Path,
 ) -> String {
-    let made = Command::new(llrm_c())
+    let made = common::cc::llrm_c()
         .args(arguments)
         .arg("--dump")
         .arg(dump)
