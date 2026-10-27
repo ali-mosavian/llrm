@@ -311,3 +311,77 @@ fn test_children_find_the_terminator_once_and_are_the_edges_of_child() {
     assert_eq!(f.children(entry).count(), 4, "default and three cases, repeats kept");
     assert_eq!(TERMINATOR_LOOKUPS.with(std::cell::Cell::get) - before, 1, "one lookup for four edges");
 }
+
+/// Swapping a branch's arms (what InstCombine does to invert a condition)
+/// leaves the CFG as it was but walks it in another order, so the loop's blocks
+/// are listed in another order. `LLRM_CHECK_PRESERVED` called the held
+/// `LoopInfo` of 57 runs stale after InstCombine for it (x_collatz -O2); LLVM's
+/// `verify` compares the sets.
+#[test]
+fn test_loopinfo_after_a_branch_swaps_its_arms_equals_the_fresh_one() {
+    let mut module = parse::module(
+        "define void @f(i16 %n, i1 %c) {
+entry:
+  br label %h
+
+h:
+  %i = phi i16 [ 0, %entry ], [ %j, %m ]
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %j = add i16 %i, 1
+  %t = icmp ult i16 %j, %n
+  br i1 %t, label %h, label %exit
+
+exit:
+  ret void
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let held = LoopInfo::analyze(&*function, || DomTree::of(function));
+    let (a, b, h) = (block(function, "a"), block(function, "b"), block(function, "h"));
+    let branch = function.terminator(h).expect("a branch");
+    function.set_operand(branch, 1, crate::module::Operand::Block(b));
+    function.set_operand(branch, 2, crate::module::Operand::Block(a));
+    let fresh = LoopInfo::analyze(&*function, || DomTree::of(function));
+    assert_eq!(held, fresh);
+}
+
+/// The same swap numbers two sibling loops in the other order: `shellsort` and
+/// `fpbench` -O2 were reported stale after InstCombine for it.
+#[test]
+fn test_loopinfo_after_a_branch_swaps_two_loops_equals_the_fresh_one() {
+    let mut module = parse::module(
+        "define void @f(i1 %c, i1 %d) {
+entry:
+  br i1 %c, label %x, label %y
+
+x:
+  br i1 %d, label %x, label %end
+
+y:
+  br i1 %d, label %y, label %end
+
+end:
+  ret void
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let held = LoopInfo::analyze(&*function, || DomTree::of(function));
+    let (x, y, entry) = (block(function, "x"), block(function, "y"), block(function, "entry"));
+    let branch = function.terminator(entry).expect("a branch");
+    function.set_operand(branch, 1, crate::module::Operand::Block(y));
+    function.set_operand(branch, 2, crate::module::Operand::Block(x));
+    let fresh = LoopInfo::analyze(&*function, || DomTree::of(function));
+    assert_eq!(held, fresh);
+}
