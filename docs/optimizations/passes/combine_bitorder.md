@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_bitorder.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_bitorder.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_bitorder.rs sha256:158df2f9dc905add18437365740948aa245a1e448cfc6fd63a1b7bd05ada7151 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_bitorder.rs sha256:d1fde6711e5474c9b3c6eda0aaa2f34aec3e9ff29f18a8d4852df163b7609a57 -->
 
 # combine_bitorder
 
@@ -17,6 +17,7 @@ provider value it is (or that it is zero). If the map is a byte reversal or
 a bit reversal of the low `n` bits, the expression is that intrinsic of the
 provider, truncated to `n` bits and masked where bits are zero.
 
+## Example
 ```text
   (x << 24) | ((x & 0xff00) << 8) | ((x >> 8) & 0xff00) | (x >> 24)
                       ==>  call i32 @llvm.bswap.i32(i32 %x)

@@ -12,6 +12,7 @@
 //! a bit reversal of the low `n` bits, the expression is that intrinsic of the
 //! provider, truncated to `n` bits and masked where bits are zero.
 //!
+//! # Example
 //! ```text
 //!   (x << 24) | ((x & 0xff00) << 8) | ((x >> 8) & 0xff00) | (x >> 24)
 //!                       ==>  call i32 @llvm.bswap.i32(i32 %x)
