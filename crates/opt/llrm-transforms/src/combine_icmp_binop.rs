@@ -5,9 +5,9 @@
 //! MIRROR: the order of the steps and each condition, up to the `Xor`/`Or`
 //! folds.
 //!
-//! OWED, in place as `// OWED:` comments: the sign-mask and low-bit-mask forms,
-//! the equality forms of `foldICmpOrXX`, and every arm after `srem` (the shared
-//! second operand, `udiv`, `shl`, `lshr`, `and`...).
+//! OWED, in place as `// OWED:` comments: the equality forms of
+//! `foldICmpOrXX`, and every arm after `srem` (the shared second operand,
+//! `udiv`, `shl`, `lshr`, `and`...).
 //!
 //! DEVIATE 1: `ShareCommonDivisor` takes only its fast path (the offset is 1,
 //! or -1 for the negative forms); the general case needs `isMultipleOf`, which
@@ -213,7 +213,15 @@ pub fn fold_icmp_bin_op(
     if let Some(r) = fold_add_add_constant(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: the sign-mask equality and the low-bit-mask overflow forms.
+    // (icmp eq/ne (X & -P2), INT_MIN) -> (icmp slt/sge X, INT_MIN + P2)
+    if let Some(r) = bo0.and_then(|(op, x, mask_op, _)| fold_sign_mask_equality(c, inst, pred, op, x, mask_op, op1, ty))
+    {
+        return Some(r);
+    }
+    // ((Op1 + C) & C) u< Op1 --> Op1 != 0 and the three like it.
+    if let Some(r) = fold_low_bit_mask_overflow(c, inst, pred, op0, op1, ty) {
+        return Some(r);
+    }
 
     let side0 = analyse(c, inst, pred, op0);
     let side1 = analyse(c, inst, pred, op1);
@@ -1059,6 +1067,64 @@ fn one_use_commutative_add_free(
     } else {
         None
     }
+}
+
+/// `(X & -P2) == INT_MIN` is `X s< INT_MIN + P2`, and `!=` is `s>=`. The pin's
+/// first InstCombine run takes it for any `and` with a negated power of two or
+/// zero.
+#[allow(clippy::too_many_arguments)]
+fn fold_sign_mask_equality(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op: BinaryOp,
+    x: Operand,
+    mask_op: Operand,
+    op1: Operand,
+    ty: llrm_mir::types::TypeId,
+) -> Option<Visit> {
+    if op != BinaryOp::And || !is_equality(pred) {
+        return None;
+    }
+    let (sign, width) = query(c, None).int_constant(op1)?;
+    let (negated, _) = query(c, None).int_constant(mask_op)?;
+    let positive = negated.wrapping_neg() & mask(width);
+    if sign != 1u128 << (width - 1) || !(positive == 0 || positive.is_power_of_two()) {
+        return None;
+    }
+    let bound = c.int(ty, sign.wrapping_add(positive) & mask(width));
+    let new = if pred == IntPredicate::Eq { IntPredicate::Slt } else { IntPredicate::Sge };
+    Some(new_icmp(c, inst, new, x, bound))
+}
+
+/// `((Op1 + M) & M) u< Op1` is `Op1 != 0` for a low-bit mask `M`, `u>=` is
+/// `== 0`; `Op0 u> ((Op0 + M) & M)` is `Op0 != 0`, `u<=` is `== 0`.
+fn fold_low_bit_mask_overflow(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+    ty: llrm_mir::types::TypeId,
+) -> Option<Visit> {
+    let (masked, other, new) = match pred {
+        IntPredicate::Ult => (op0, op1, IntPredicate::Ne),
+        IntPredicate::Uge => (op0, op1, IntPredicate::Eq),
+        IntPredicate::Ugt => (op1, op0, IntPredicate::Ne),
+        IntPredicate::Ule => (op1, op0, IntPredicate::Eq),
+        _ => return None,
+    };
+    let (BinaryOp::And, summed, low, _) = binary_operator(c, masked)? else { return None };
+    let (bits, width) = query(c, None).int_constant(low)?;
+    if bits == 0 || bits & bits.wrapping_add(1) & mask(width) != 0 {
+        return None;
+    }
+    let (BinaryOp::Add, base, added, _) = binary_operator(c, summed)? else { return None };
+    if base != other || query(c, None).int_constant(added)?.0 != bits {
+        return None;
+    }
+    let zero = c.int(ty, 0);
+    Some(new_icmp(c, inst, new, other, zero))
 }
 
 fn const_bits(
