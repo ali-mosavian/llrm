@@ -22,7 +22,7 @@
 //! ([L988](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L988)),
 //! its `FP_ROUND`/`FP_EXTEND` case at L1454.
 
-use super::dag::{MemBase, MemInfo, SDValue, SelectionDAG};
+use super::dag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
 use super::mvt::{EVT, MVT};
 
@@ -52,6 +52,44 @@ fn in_sse(
     sse2 && matches!(vt, EVT::Simple(MVT::F32 | MVT::F64))
 }
 
+/// DEVIATE D15: a store of an x87 `fp_round` that nothing else reads is one
+/// truncating store (`fst`) of the rounded value. The pin's `visitSTORE` makes
+/// the same fold but only where the truncating store is legal, and X86 marks
+/// `f64 -> f32` Expand, so it keeps the round trip through a stack temporary
+/// (`fstps (%esp); flds (%esp); fstps (%eax)`); the old selector stores once.
+/// Returns the `fp_round`s it folded.
+fn truncating_stores(
+    dag: &mut SelectionDAG,
+    sse2: bool,
+) -> Vec<u32> {
+    let mut folded = Vec::new();
+    for node in dag.node_ids().collect::<Vec<_>>() {
+        let value = SDValue { node, res: 0 };
+        if dag.opcode(value) != ISD::FpRound || dag.node(value).ops.len() != 2 || dag.use_count(node) != 1 {
+            continue;
+        }
+        let source = dag.operand(value, 0);
+        let (from, to) = (dag.value_type(source), dag.value_type(value));
+        if !is_x87(from) || !is_x87(to) || in_sse(from, sse2) || in_sse(to, sse2) {
+            continue;
+        }
+        let Some(user) = dag.users(value).next() else { continue };
+        let store = SDValue { node: user, res: 0 };
+        if dag.opcode(store) != ISD::Store || dag.operand(store, 1) != value {
+            continue;
+        }
+        let NodeData::Mem(info) = dag.node(store).data else { continue };
+        if info.volatile || info.mem_vt != to {
+            continue;
+        }
+        let (chain, ptr) = (dag.operand(store, 0), dag.operand(store, 2));
+        let truncating = dag.get_store(chain, source, ptr, info);
+        dag.replace_all_uses_with(store, truncating);
+        folded.push(node);
+    }
+    folded
+}
+
 /// Rewrite the `fp_round`s and `fp_extend`s that cross between the x87 stack
 /// and the SSE registers, or round on the stack, through memory; returns how
 /// many. The x87 has an extending load and a truncating store; SSE folds a
@@ -61,11 +99,15 @@ pub fn preprocess(
     frame: &mut dyn FrameObjects,
     sse2: bool,
 ) -> usize {
-    let mut rewritten = 0;
+    let folded = truncating_stores(dag, sse2);
+    let mut rewritten = folded.len();
     // The pin walks the nodes from the last made; a node made on the way
     // (the store and load below) is neither.
     for node in dag.node_ids().rev() {
         let value = SDValue { node, res: 0 };
+        if folded.contains(&node) {
+            continue;
+        }
         let round = match dag.opcode(value) {
             ISD::FpRound if dag.node(value).ops.len() == 2 => true,
             ISD::FpExtend => false,
