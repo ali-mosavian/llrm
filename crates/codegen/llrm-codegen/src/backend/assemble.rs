@@ -707,6 +707,19 @@ fn machined_once(
     MACHINED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Machinings);
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
+    // `PrologEpilogInserter` orders the frame objects by use density
+    // (`X86FrameLowering::orderFrameObjects`); taken over the layouts below
+    // where it brings fewer operands past a one-byte displacement than they do.
+    let far = far_frame(&first.body);
+    let ordered = if far > 0 {
+        crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
+    } else {
+        None
+    };
+    let best = |chosen: Machined| match ordered {
+        Some(ordered) if far_frame(&ordered.body) < far_frame(&chosen.body) => ordered,
+        _ => chosen,
+    };
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
     // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands). Shared
@@ -715,9 +728,8 @@ fn machined_once(
     // did not (reserve 286 against 288).
     let spilled =
         if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
-    let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
-        return Ok(first);
+        return Ok(best(first));
     }
     // The second layout is made from the first run's frame, not by running the
     // backend again; `LLRM_CHECK_FRAME=1` runs it again beside, and the two
@@ -737,10 +749,10 @@ fn machined_once(
             None => panic!("@{name} (hole {spilled}): the frame could not be laid again"),
         }
     }
-    Ok(match laid {
+    Ok(best(match laid {
         Some((second, _)) if far_frame(&second.body) < far => second,
         _ => first,
-    })
+    }))
 }
 
 /// `phased`, with the spiller; and, where the spiller changed the body, without
@@ -927,6 +939,7 @@ fn staged(
         abi,
         segments: target.segments,
         runtime: abi.runtime_contracts(),
+        frame_zeroed: zeroed,
     });
     let dag = match target.selector {
         Selector::Old => None,
