@@ -103,6 +103,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let mut op_work: Vec<usize> = vec![1; kept.len()];
         let mut seen_chains: HashSet<u32> = HashSet::default();
         let mut pruned = false;
+        // NumLeftToConsider is unsigned in the pin and wraps below zero.
         let mut left = kept.len();
         let mut i = 0;
         while i < work.len() && i < WALK_LIMIT {
@@ -113,7 +114,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let at_node = SDValue { node: current, res: 0 };
             let next: Option<u32> = match self.dag.opcode(at_node) {
                 ISD::EntryToken => {
-                    left += 1;
+                    left = left.wrapping_add(1);
                     None
                 }
                 ISD::TokenFactor => {
@@ -159,7 +160,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             op_work[number] -= 1;
             if op_work[number] == 0 {
-                left -= 1;
+                left = left.wrapping_sub(1);
             }
             i += 1;
         }
@@ -204,7 +205,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             op_work[number] += op_work[original];
             op_work[original] = 0;
-            *left -= 1;
+            *left = left.wrapping_sub(1);
         }
         if seen_chains.insert(op) {
             op_work[number] += 1;
