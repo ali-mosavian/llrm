@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 200 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 201 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -94,6 +94,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | fold | Replaces every integer value [`llrm_analysis::consts`] knows by its constant, folds a pure operation on each edge of a join, and puts compares and identities in canonical form. | Second in the per-body pipeline, after `sroa`, and again after the header | [fold](fold.md) |
 | gepoffset | Moves the constant an index adds into a `gep` of its own, where address modes take it as a displacement: `a[i + 8]` then needs no add, and no register for the sum, to reach its element. | Once, after the body fixed point and after `hoist`: a hoisted constant `gep` | [gepoffset](gepoffset.md) |
 | globaldce | Delete the module's own bodies and variables that nothing live names. | Once, as a program pass after the interprocedural step, so the bodies that | [globaldce](globaldce.md) |
+| globalforward | Loads of an internal variable that its only store dominates read the stored constant: LLVM GlobalOpt's `forwardStoredOnceStore` (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1448>). | After `globalsra`, which localizes a variable one non-recursive body uses | [globalforward](globalforward.md) |
 | globalopt | Mark internal globals that are only ever loaded from as `constant`, and drop the stores of those only ever stored to. | Once, as a module pass before the per-body pipeline and before the | [globalopt](globalopt.md) |
 | globalsra | Split an internal variable into the pieces its loads read, then give a piece one function writes before it reads to that function as a stack slot: LLVM's `SRAGlobal` and the localizing branch of `processInternalGlobal` (GlobalOpt.cpp, d1106deb71cc). | A stage of the interprocedural step, `globalsra.`, after the bodies are | [globalsra](globalsra.md) |
 | gvn | Reuses a value the function already has, so the same operation is not computed twice and the same bytes are not read again: LLVM's GVN and gcc's FRE/PRE. | `EqualCalls` runs early in the body pipeline, before `tailrec`; `Gvn` after | [gvn](gvn.md) |
