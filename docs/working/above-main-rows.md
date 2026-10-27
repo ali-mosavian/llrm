@@ -87,7 +87,23 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 | AM-OB-1 | x_popcount m32 | O1,O2,O3 | bytes | 1754 | 1799 | +45 B each; 3 of 568 objects (objsweep; d_faces identical, -0.02 M Ir) | `optimizeBranch` (x86 `preferZeroCompareBranch`) compares the add `x + c` with zero beside the branch: `lea esi,[eax+eax*4+C]; test; je` becomes `lea esi,[eax+eax*4]; add esi,C; je`, the constant no longer folded into the lea. The pin makes the same IR; its isel keeps the flags of the add | funcattrs-port | 2026-11-06: read the pin's llc on this function, then the X86 lea/flags fold | |
 | AM-GA-1 | qbq-llrm r_portal.c (`@_dg_push`, `@_dg_pop`, `@_dg_proj` in a SimplifyCFG lookup table) | O2,Os | precision | GlobalsAA kept past the table (the pin: its result goes stale, the table holds their addresses) | GlobalsAA and GlobalsModRef abandoned until the recompute slot | 0 of 568 objects (objsweep), 0 of 104 qbq-llrm/QCport objects, d_faces identical | DEVIATE: a pass that adds a table abandons the cached results (`ModuleAnalyses::abandon_stateless`); held, `LLRM_CHECK_STALE` still fails on r_portal.c m32/m16 O2/Os (4 of 44 qbq compiles): the walk's memset of `@_used` leaves the held GlobalsAA at Mod, the fresh scan says ModRef, as the pin's `AnalyzeUsesOfPointer` does (L356-388 reads no per-operand attribute); the held result is the true effect, so the oracle's limit is the pin's imprecision, accepted | funcattrs-port | 2026-11-13, re-measure with the qbq rows | |
 | AM-QB-1 | queens bas, nib, bq32, bq16, c | O2 | clocks | 504857 / 260135 / 616832 / 447900 / 166766 | 682981 / 320567 / 808335 / 626013 / 181952 | +35% / +23% (bytes +31%) / +31% / +40% / +9% | Nib/BASIC bounds checks: constant slice length through recursive place/safe (llrm-only ipa-cp of a promoted field, removed with Bounded in a0ed5eb43); the pin keeps the checks. Base a0ed5eb43^. Fix after parity: IPSCCP-style propagation of descriptor fields (the pin has none for this shape) | w4 | the tuning phase, after the switch-over | #4750 |
+| AM-DBG-1 | observed.c m32 (gdb vs -O0) | O2,O3 | debug values compared | 18 (pin clang-20) | 2 | -16 | debug records carry no expression: a folded value is lost, so a, b, c, i read `<optimized out>`; design below | reorg | design note now; code after the coordinator's go | #5282 |
 
 ## To add by their owners
 
 Named by the coordinator and not yet filled: QO-SIZE-1, r_bsp, x_bubble, lru m32, #3582 rows. A row goes in the table with its numbers, cause, owner and exit; nothing is estimated here.
+
+## D-row: expression-carrying debug records and `salvageDebugInfo` (AM-DBG-1)
+
+Design only; no code before the coordinator's go.
+
+**What the pin keeps.** `observed.c` at -O2 -g through clang-20 leaves `#dbg_value` records among the code, each with a `DIExpression`: `plus_uconst`, `constu N; mul|shl; stack_value`, `LLVM_fragment` for the pieces of `v`, `p`, `q`, and `DIArgList` for a value of several operands. When a pass deletes or folds an instruction, `salvageDebugInfo` (Utils/Local.cpp, `salvageDebugInfoImpl`) rewrites the records that used it as an expression over its operands (an add of a constant becomes `plus_uconst`, a shl `constu; shl`, a cast `convert`) instead of killing them. Result on this fixture: 18 values read like -O0, none wrong.
+
+**Ours.** `DebugWhat` (llrm-mir `module.rs`) is `Value(operand)`, `Piece`, `GonePiece`, `Gone`, `Declare`: a bare value, no expression. `Function::erase` of a value's last definition ends in `Gone`. So `c = n * 6` folded into `mul %0, 6` is lost with its variable. The output side already writes constants and pieces (`NoteValue`, `DW_OP_piece`).
+
+**Minimal slice that revives a, b, c, i** (three PRs):
+1. MIR: `DebugWhat::Value` gains `expr: Vec<ExprOp>` (`PlusUconst`, `Constu`, `Mul`, `Shl`, `Plus`, `StackValue`); printer, parser and verifier read it. Pieces unchanged.
+2. Salvage: a `Function::salvage(inst)` for single-operand cases (add/sub/mul/shl by constant, zext/sext/trunc), called where InstCombine, IndVars, LoopDeletion and SimplifyCFG erase or replace a value (the pin's call sites); everything else stays `Gone`. No `DIArgList` in this slice.
+3. Backend: `NoteValue::Expr(vreg, ops)` in isel `noted`, and the DWARF writer emits `DW_OP_bregN 0; ops; DW_OP_stack_value` (CodeView keeps the plain value).
+
+**Cost** (estimate, not measured): about 700 lines and 3 PRs; compile time unchanged without `-g` (records exist only then); objects identical with and without `-g` (the `g_leaves_*` tests guard it). Done when `a_variable_reads_the_same_at_o2_as_at_o0...` passes at floor 18 and loses its `ignore`.
