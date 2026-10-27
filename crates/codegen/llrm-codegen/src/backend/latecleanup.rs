@@ -102,22 +102,36 @@ fn candidate(
     machinedce::pure(regs, one).then(|| dest.clone())
 }
 
-fn index_is_entry(body: &LirBody, index: usize) -> bool {
+fn index_is_entry(
+    body: &LirBody,
+    index: usize,
+) -> bool {
     body.blocks[index].at == body.entry
 }
 
-fn is_segment(register: RegId) -> bool {
-    [RegId::ES, RegId::FS, RegId::GS].contains(&register)
+/// A segment register a program reloads: not the code, data and stack segments
+/// the target fixes.
+fn is_segment(
+    regs: Regs,
+    register: RegId,
+) -> bool {
+    regs.is_segment(register)
+        && !regs.is_data_segment(register)
+        && !regs.is_stack_segment(register)
+        && !regs.is_code_segment(register)
 }
 
 /// A load of a segment constant into a segment register (LC2).
-fn segment_candidate(one: &Insn) -> Option<Loc> {
+fn segment_candidate(
+    regs: Regs,
+    one: &Insn,
+) -> Option<Loc> {
     let what: &Semantics = one.what.as_ref()?;
     let ([dest @ Loc::Reg(reg)], [Loc::Imm(imm)]) = (&what.dests[..], &what.sources[..]) else { return None };
     (what.op == Operation::Move
         && what.name.as_deref() == Some("mov")
         && imm.address.is_some()
-        && is_segment(reg.register)
+        && is_segment(regs, reg.register)
         && what.target.is_none()
         && !what.indirect
         && one.requires.is_empty()
@@ -128,12 +142,18 @@ fn segment_candidate(one: &Insn) -> Option<Loc> {
     .then(|| dest.clone())
 }
 
-fn writes_a_segment(one: &Insn) -> bool {
-    one.call.is_some() || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(*register))
+fn writes_a_segment(
+    regs: Regs,
+    one: &Insn,
+) -> bool {
+    one.call.is_some() || one.clobbers.iter().chain(&one.clobbers_high).any(|register| is_segment(regs, *register))
 }
 
-fn is_segment_loc(loc: &Loc) -> bool {
-    matches!(loc, Loc::Reg(reg) if is_segment(reg.register))
+fn is_segment_loc(
+    regs: Regs,
+    loc: &Loc,
+) -> bool {
+    matches!(loc, Loc::Reg(reg) if is_segment(regs, reg.register))
 }
 
 /// `MachineInstr::isIdenticalTo`.
@@ -195,12 +215,12 @@ pub fn cleaned(body: LirBody) -> LirBody {
             let all_walked = preds[index].iter().all(|&pred| defs[pred].is_some());
             if all_walked && let Some((&first, rest)) = preds[index].split_first() {
                 for (register, held) in defs[first].iter().flatten() {
-                    if is_segment_loc(register) {
+                    if is_segment_loc(regs, register) {
                         continue;
                     }
-                    let everywhere = rest.iter().all(
-                        |&pred| defs[pred].as_ref().and_then(|d| d.get(register)).is_some_and(|other| same(other, held)),
-                    );
+                    let everywhere = rest.iter().all(|&pred| {
+                        defs[pred].as_ref().and_then(|d| d.get(register)).is_some_and(|other| same(other, held))
+                    });
                     if everywhere {
                         mine.insert(register.clone(), held.clone());
                     }
@@ -209,19 +229,19 @@ pub fn cleaned(body: LirBody) -> LirBody {
             // a predecessor not walked yet is what the last walk found there
             let views: Vec<Option<&HashMap<Loc, Held>>> =
                 preds[index].iter().map(|&pred| defs[pred].as_ref().or(assume[pred].as_ref())).collect();
-            if !index_is_entry(&body, index) && let Some(first) = views.iter().flatten().next() {
-                for (register, held) in first.iter().filter(|(register, _)| is_segment_loc(register)) {
-                    let everywhere = views
-                        .iter()
-                        .flatten()
-                        .all(|view| view.get(register).is_some_and(|other| same(other, held)));
+            if !index_is_entry(&body, index)
+                && let Some(first) = views.iter().flatten().next()
+            {
+                for (register, held) in first.iter().filter(|(register, _)| is_segment_loc(regs, register)) {
+                    let everywhere =
+                        views.iter().flatten().all(|view| view.get(register).is_some_and(|other| same(other, held)));
                     if everywhere {
                         mine.insert(register.clone(), held.clone());
                     }
                 }
             }
             for one in &body.blocks[index].insns {
-                let found = candidate(regs, one).or_else(|| segment_candidate(one));
+                let found = candidate(regs, one).or_else(|| segment_candidate(regs, one));
                 if let Some(register) = &found
                     && mine.get(register).is_some_and(|held| identical(held, one))
                 {
@@ -232,8 +252,8 @@ pub fn cleaned(body: LirBody) -> LirBody {
                     None => mine.clear(),
                     Some(effect) => {
                         mine.retain(|_, held| held.lanes.is_disjoint(&effect.writes));
-                        if writes_a_segment(one) {
-                            mine.retain(|register, _| !is_segment_loc(register));
+                        if writes_a_segment(regs, one) {
+                            mine.retain(|register, _| !is_segment_loc(regs, register));
                         }
                         if let Some(register) = found {
                             mine.insert(register, Held { insn: Arc::clone(one), lanes: effect.writes });
@@ -252,7 +272,13 @@ pub fn cleaned(body: LirBody) -> LirBody {
         redundant = found;
         let keys = |maps: &[Option<HashMap<Loc, Held>>]| {
             maps.iter()
-                .map(|map| map.iter().flatten().filter(|(register, _)| is_segment_loc(register)).map(|(r, _)| r.clone()).collect::<Vec<_>>())
+                .map(|map| {
+                    map.iter()
+                        .flatten()
+                        .filter(|(register, _)| is_segment_loc(regs, register))
+                        .map(|(r, _)| r.clone())
+                        .collect::<Vec<_>>()
+                })
                 .collect::<Vec<_>>()
         };
         let stable = assume.iter().all(Option::is_some) && keys(&defs) == keys(&assume);
