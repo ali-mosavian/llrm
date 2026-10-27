@@ -392,6 +392,28 @@ fn a_double_argument_stays_in_its_xmm_register() {
     assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
 }
 
+/// A `double` returned by a call was popped from `st(0)`, which the SysV
+/// convention does not use: the compile stopped "a floating value used as an
+/// integer". It is read from `xmm0`, and a `double` returned from another
+/// register is copied into `xmm0` first.
+#[test]
+fn a_double_result_travels_in_xmm0() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare double @g(double)\n\
+                define double @f(double %a, double %b) {\n  %r = call double @g(double %b)\n  %s = fadd double %r, %a\n  ret double %s\n}\n\
+                define double @second(double %a, double %b) {\n  ret double %b\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(
+        !listing.lines().any(|line| ["fld", "fst", "fxch"].iter().any(|op| line.trim().starts_with(op))),
+        "no x87 instruction\n{listing}"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "second").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().ends_with("xmm0, xmm1")), "the result is copied to xmm0\n{listing}");
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]

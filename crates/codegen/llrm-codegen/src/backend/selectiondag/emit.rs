@@ -1274,10 +1274,12 @@ impl Emitter<'_, '_> {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             for &op in &node.ops {
                 if self.dag.value_type(op).is_floating_point() {
-                    let Loc::Held(value) = self.operand(op)? else {
-                        return Err(EmitError::Unsupported("a floating result that is no register".to_owned()));
-                    };
-                    self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]);
+                    match self.operand(op)? {
+                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
+                        // An xmm result: its `CopyToReg` already put it there.
+                        Loc::Reg(_) => {}
+                        _ => return Err(EmitError::Unsupported("a floating result that is no register".to_owned())),
+                    }
                 }
             }
             // The value is already in its register (`CopyToReg`); the frame
