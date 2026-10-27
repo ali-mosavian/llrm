@@ -480,7 +480,8 @@ const LIVE_IN_SLOT: i64 = -1;
 const LIVE_OUT_SLOT: i64 = i64::MAX;
 
 /// The segments of `value` in `insns` and the positions of its defs. A def
-/// that reads the value (two-address) continues the segment.
+/// that reads the value (two-address) ends one segment and starts the next at
+/// the same instruction, as the pin's live intervals do.
 fn segments_of(
     insns: &[Arc<Insn>],
     value: u32,
@@ -499,9 +500,8 @@ fn segments_of(
         }
         if defines {
             defs.push(at);
-            if !reads {
-                segments.push(Segment { start: slot, end: slot + 1 });
-            }
+            // A two-address def starts a segment where the one it reads ends.
+            segments.push(Segment { start: slot, end: slot + 1 });
         }
     }
     if live_out && let Some(last) = segments.last_mut() {
@@ -1043,6 +1043,26 @@ mod tests {
         copy_constrain(&insns, &mut found, &|value| value == 1);
         assert_eq!(found.weak_preds[1], [2]);
         assert_eq!(bottom_up(&insns, &found, None), [0, 2, 1, 3]);
+    }
+
+    /// `l = g; g = g + 1; t = l * 3; out = t + g`: the pin returns at "two
+    /// address defs have no hole" when the next def of the copied value reads
+    /// it, so it adds no edge. Merging the two segments added one: x_ll_arith
+    /// (`%15 = COPY %13` ... `%13 = SHLD %13`) got a schedule 16 bytes larger.
+    #[test]
+    fn test_no_edge_is_added_before_a_two_address_def_of_the_copied_value() {
+        use super::copy_constrain;
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
+            insn(1, semantics(Operation::Binary, "add", vec![held(1)], vec![held(1), imm(1)]), vec![1], vec![1]),
+            insn(2, semantics(Operation::Binary, "imul", vec![held(3)], vec![held(2), imm(3)]), vec![3], vec![2]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16);
+        copy_constrain(&insns, &mut found, &|value| value == 1);
+        assert!(found.weak_preds.iter().all(Vec::is_empty), "{:?}", found.weak_preds);
     }
 
     /// `x = load [m]; y = x + 1; z = load [n]; store [m], y`: a load feeds the
