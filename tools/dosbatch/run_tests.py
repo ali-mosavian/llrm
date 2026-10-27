@@ -157,13 +157,37 @@ def first_difference(want: list[str], got: list[str]) -> str:
     return ""
 
 
+CC_ROWS = {"x86-m16": "x86_16-dos", "x86-m32": "x86_32-dos"}
+
+
+def c_frontend() -> str:
+    """`$LLRM_C_FRONTEND`: the compiler of the C programs, `llrm-c` (the oracle leg) or `llrm-cc`."""
+    return os.environ.get("LLRM_C_FRONTEND", "llrm-c")
+
+
+def c_command(source: Path, obj: Path, target: str, include: Path, flags: list[str], isel: bool = True) -> list[str]:
+    """The command that compiles C `source` for `target` with the frontend `c_frontend()` names. llrm-cc takes its target from a row of
+    targets.toml, so the `-m` flag is dropped and the row set in the command's environment; the rest of `flags` is the same."""
+    if c_frontend() == "llrm-c":
+        command = [str(BIN / "llrm-c"), str(source), "-I", str(include), *flags, "-o", str(obj)]
+        return dosbatch.with_isel(command) if isel else command
+    kept = [one for one in flags if one not in {f"-m{mode}" for mode in dosbatch.target_modes().values()}]
+    env = [f"LLRM_CC_TARGET={CC_ROWS[target]}", f"LLRM_CC_BIN={BIN / 'llrm-cc'}", f"LLRM_LLC={BIN / 'llrm-llc'}"]
+    isel_flag = [f"--isel={os.environ['LLRM_ISEL']}"] if os.environ.get("LLRM_ISEL") and isel else []
+    return ["env", *env, str(BIN / "llrm-cc"), "-w", "-c", str(source), "-I", str(include), *kept, *isel_flag, "-o", str(obj)]
+
+
 def compile_command(program: Program, obj: Path) -> list[str]:
     """The compiler's command for `program`; a C program goes through $LLRM_ISEL (see dosbatch.with_isel)."""
     tool, *rest = COMPILERS[program.source.suffix]
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
-        dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
+        extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
+        include = dosbatch.c_include(target, obj.parent)
+        # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
+        real = target == dosbatch.REAL_MODE and not os.environ.get("LLRM_ISEL_REAL")
+        return c_command(program.source, obj, target, include, [*program.flags, *extra], isel=not real)
     # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
     excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
     extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
@@ -222,7 +246,7 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
-            dosbatch._host(dosbatch.with_isel([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), *abi, level, "-o", str(obj)]))
+            dosbatch._host(c_command(source, obj, target, include, [dosbatch.m_flag(target), *abi, level]))
         objects.append(obj)
     return tuple(objects)
 
@@ -275,7 +299,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 elif source.suffix == ".asm":
                     dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
                 else:
-                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
+                    dosbatch._host(c_command(source, extra, target, dosbatch.c_include(target, work), [dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level], isel=False))
                 others.append(extra)
             loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
             dosbatch.check_loads(exe)

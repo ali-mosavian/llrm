@@ -144,3 +144,18 @@ def test_jobs_are_dealt_round_robin_over_the_launches_with_none_lost_or_empty():
     shares = run_tests.dealt(jobs, 8)
     assert sorted(sum(shares, [])) == jobs and all(shares) and len(shares) == 8
     assert run_tests.dealt([1, 2], 8) == [[1], [2]] and run_tests.dealt([], 8) == [[]]
+
+
+def test_a_c_program_is_compiled_by_the_frontend_the_environment_names(tmp_path, monkeypatch):
+    """The C path knew only llrm-c; `$LLRM_C_FRONTEND=llrm-cc` compiles the same program, flags and include directory through the clang driver, whose
+    target is a targets.toml row and not a `-m` flag."""
+    source, obj = tmp_path / "p.c", tmp_path / "p.obj"
+    flags = ["-O2", "-march=i486", "-m32"]
+    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
+    monkeypatch.delenv("LLRM_ISEL", raising=False)
+    old = run_tests.c_command(source, obj, "x86-m32", tmp_path, flags)
+    assert Path(old[0]).name == "llrm-c" and old[1:] == [str(source), "-I", str(tmp_path), *flags, "-o", str(obj)]
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
+    new = run_tests.c_command(source, obj, "x86-m32", tmp_path, flags)
+    assert "LLRM_CC_TARGET=x86_32-dos" in new and "-m32" not in new
+    assert new[new.index(str(source)) - 2 :][:2] == ["-w", "-c"] and ["-O2", "-march=i486"] == new[new.index("-O2") : new.index("-O2") + 2]
