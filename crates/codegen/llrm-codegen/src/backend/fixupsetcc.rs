@@ -126,7 +126,7 @@ pub fn fixed(body: &LirBody) -> LirBody {
         lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
     };
 
-    let every_flag = crate::backend::lanes::Lanes::flags(crate::backend::lanes::Lanes::STATUS);
+    let every_flag = crate::backend::lanes::Lanes::read_flags();
 
     let mut out = body.clone();
     for block in &mut out.blocks {

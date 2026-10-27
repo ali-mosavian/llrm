@@ -25,8 +25,10 @@
 //! (`PerformTrivialCopyPropagation`); a commutative operation is then asked
 //! with its sources swapped if the first form is still not there.
 //!
-//! An operation that sets flags is shared only where nothing after it in its
-//! block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
+//! An operation that sets flags is shared where nothing after it in its block
+//! reads them, or where the flags it would set are the shared one's still
+//! (`PhysRegDefsReach`: the same block or the sole predecessor, no flag write
+//! or call between, five instructions at most).
 //!
 //! An invariant load (a load of a constant global the module defines,
 //! `isDereferenceableInvariantLoad`; selection marks it `Insn::invariant`) is
@@ -227,6 +229,8 @@ struct Walk<'a> {
     /// `expression -> (value, block, instruction)`.
     table: HashMap<Semantics, (u32, usize)>,
     regs: llrm_lir::registers::Regs,
+    /// Each block's predecessors, as block numbers.
+    preds: Vec<Vec<usize>>,
 }
 
 impl Walk<'_> {
@@ -359,6 +363,44 @@ impl Walk<'_> {
             .is_some_and(|what| what.op == Operation::Move)
     }
 
+    /// `PhysRegDefsReach`: the flags the instruction that defines `value` in
+    /// `shared` set are still there at the instruction `index` of `block`,
+    /// which is in `shared` or has it as its only predecessor, within
+    /// `LookAheadLimit` instructions that neither write the flags nor call.
+    fn flags_reach(
+        &self,
+        value: u32,
+        shared: usize,
+        block: usize,
+        index: usize,
+    ) -> bool {
+        const LOOK_AHEAD_LIMIT: usize = 5;
+        let first = &self.body.blocks[shared].insns;
+        let Some(def) = first.iter().position(|one| one.defines.first() == Some(&value)) else { return false };
+        let (rest, until) = if shared == block {
+            (&first[def + 1..index], None)
+        } else if self.preds[block] == [shared] {
+            (&first[def + 1..], Some(&self.body.blocks[block].insns[..index]))
+        } else {
+            return false;
+        };
+        let mut left = LOOK_AHEAD_LIMIT;
+        for one in rest.iter().chain(until.into_iter().flatten()) {
+            if self.removed.contains(&one.id()) || one.is_meta() {
+                continue;
+            }
+            if left == 0 {
+                return false;
+            }
+            let calls = one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+            if calls || sets_flags(self.regs, self.body.bits, one) {
+                return false;
+            }
+            left -= 1;
+        }
+        true
+    }
+
     /// Whether the flags `one` sets are read before anything sets them again,
     /// in its block.
     fn flags_read_after(
@@ -374,10 +416,10 @@ impl Walk<'_> {
 /// instruction names lanes past the six of EFLAGS (its status word, which
 /// `fnstsw; sahf` moves there): it counts as reading and writing all six.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
-    use crate::backend::lanes::Lanes;
-    let six = Lanes::STATUS;
+    use llrm_lir::flag::Flag;
+    let six = Flag::READ.bits();
     let mask = lanes.mask() as u32;
-    let beyond = mask & !(six | Lanes::AUXILIARY) != 0;
+    let beyond = mask & !(six | Flag::AF.bits()) != 0;
     crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
 }
 
@@ -695,7 +737,14 @@ pub fn shared(
             }
         }
     }
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); body.blocks.len()];
+    for (from, block) in body.blocks.iter().enumerate() {
+        for to in block.succ.iter().filter_map(|at| by_at.get(at)) {
+            preds[*to].push(from);
+        }
+    }
     let mut walk = Walk {
+        preds,
         body,
         block_of,
         readers,
@@ -750,7 +799,10 @@ pub fn shared(
             };
             // An operation that sets flags is shared where nothing reads them.
             let sets_flags = sets_flags(regs, body.bits, one);
-            if sets_flags && walk.flags_read_after(number, index) {
+            if sets_flags
+                && walk.flags_read_after(number, index)
+                && !walk.flags_reach(shared_value, shared_block, number, index)
+            {
                 walk.table.insert(key.clone(), (one.defines[0], number));
                 mine.push(key);
                 continue;
