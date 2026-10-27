@@ -59,6 +59,15 @@ fn order(
         .collect()
 }
 
+/// The registers an `@asm ax bx ..` line names: the ones inline asm may name in
+/// a register constraint (`{ax}`), the 16-bit convention's.
+pub fn asm_names(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|raw| raw.split('#').next().unwrap_or("").trim().strip_prefix("@asm"))
+        .flat_map(|names| names.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
 pub fn parse(text: &str) -> Result<Vec<Register>, String> {
     let mut registers = Vec::new();
     for (index, raw) in text.lines().enumerate() {
