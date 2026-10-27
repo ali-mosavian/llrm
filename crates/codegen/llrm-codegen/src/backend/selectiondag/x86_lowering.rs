@@ -343,7 +343,7 @@ impl Hooks for X86Lowering {
     }
 }
 
-fn cond_code(
+pub(super) fn cond_code(
     dag: &mut SelectionDAG,
     code: u128,
 ) -> SDValue {
@@ -575,7 +575,7 @@ fn get_bt(
 /// of `x`; the carry flag is the bit, so `!= 0` is `B` and `== 0` is `AE`.
 /// (The reassociated three-way `and` and the immediate forms are not taken,
 /// SD200.)
-fn lower_and_to_bt(
+pub(super) fn lower_and_to_bt(
     dag: &mut SelectionDAG,
     and: SDValue,
     cc: CondCode,
@@ -1013,15 +1013,49 @@ fn carry_through_add(
 
 /// `combineADC` and `combineSBB`, the carry-through-add part: the carry in
 /// comes from the flags the `setb` read, so `setb; add al, -1; adc` is `adc`.
-/// (The `ADC 0, 0` and `SBB` constant folds are not translated.)
+/// (The `ADC 0, 0` strength reduction is not translated: it replaces both
+/// results.)
 fn combine_adc_sbb(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let flags = carry_through_add(dag, dag.operand(node, 2))?;
     let (opcode, vt) = (dag.opcode(node), dag.node(node).values.clone());
-    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
-    Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]))
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let flags_used = dag.has_users(SDValue { node: node.node, res: 1 });
+    if opcode == x86isd::ADC {
+        let (lhs_c, rhs_c) = (dag.constant(lhs), dag.constant(rhs));
+        // Canonicalize constant to RHS.
+        if lhs_c.is_some() && rhs_c.is_none() {
+            return Some(dag.get_node_multi(opcode, &vt, &[rhs, lhs, carry]));
+        }
+        // Fold ADC(C1,C2,Carry) -> ADC(0,C1+C2,Carry) iff the flag result is
+        // dead or C1+C2 doesn't signed/unsigned overflow.
+        if let (Some(c1), Some(c2)) = (lhs_c, rhs_c)
+            && c1 != 0
+        {
+            let ty = dag.value_type(lhs);
+            let width = ty.size_in_bits();
+            let mask = super::fold::mask(width);
+            let sum = (c1 + c2) & mask;
+            let signed = |v: u128| ((v << (128 - width)) as i128) >> (128 - width);
+            let unsigned_overflow = c1 + c2 > mask;
+            let signed_overflow = signed(c1).checked_add(signed(c2)).is_none_or(|s| s != signed(sum));
+            if !flags_used || (!unsigned_overflow && !signed_overflow) {
+                let zero = dag.get_constant(0, ty);
+                let sum = dag.get_constant(sum, ty);
+                return Some(dag.get_node_multi(opcode, &vt, &[zero, sum, carry]));
+            }
+        }
+    }
+    if let Some(flags) = carry_through_add(dag, carry) {
+        return Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]));
+    }
+    // Fold SBB(SUB(X,Y),0,Carry) -> SBB(X,Y,Carry) iff the flag result is dead.
+    if opcode == x86isd::SBB && dag.opcode(lhs) == ISD::Sub && dag.constant(rhs) == Some(0) && !flags_used {
+        let (x, y) = (dag.operand(lhs, 0), dag.operand(lhs, 1));
+        return Some(dag.get_node_multi(opcode, &vt, &[x, y, carry]));
+    }
+    None
 }
 
 /// `combineBrCond`: the same for a branch.
@@ -1046,7 +1080,7 @@ fn combine_add(
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 {
-        return None;
+        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
@@ -1060,7 +1094,9 @@ fn combine_add(
         Some((shift, y, z))
     };
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
+    let Some((shift, y, z)) = hidden_lea(a, b).or_else(|| hidden_lea(b, a)) else {
+        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
+    };
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
@@ -1135,11 +1171,6 @@ fn combine_x86_add_sub(
     None
 }
 
-/// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and
-/// (srl x, n), 1)` is `-1` when bit `n` of `x` is set: `bt x, n; sbb r, r`
-/// (`SETCC_CARRY`), where `and; neg` took two instructions and a mask. (The
-/// `adc`/`sbb` forms with a variable first operand, the `cmp`/`neg` carry
-/// forms and `-1 + setae` are not translated.)
 /// `combineUIntToFP`: `UINT_TO_FP` is custom, so the generic combine never
 /// makes it a `SINT_TO_FP` when the sign bit is clear; here a `nneg` flag or a
 /// known clear sign bit does, which is one `fild` of the value itself and not
@@ -1156,27 +1187,13 @@ fn combine_uint_to_fp(
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
 }
 
+/// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]). (The
+/// `SUB(…, SBB)` and `~A - ~B` folds are not translated, SD219.)
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let vt = dag.value_type(node);
-    if vt != EVT::I32 || !dag.is_null_constant(dag.operand(node, 0)) {
-        return None;
-    }
-    let mut y = dag.operand(node, 1);
-    if dag.opcode(y) == ISD::ZeroExtend && dag.use_count(y.node) == 1 {
-        y = dag.operand(y, 0);
-    }
-    if dag.opcode(y) != ISD::And || dag.use_count(y.node) != 1 || dag.constant(dag.operand(y, 1)) != Some(1) {
-        return None;
-    }
-    let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe)?;
-    if code != cond::B {
-        return None;
-    }
-    let code = cond_code(dag, cond::B);
-    Some(dag.get_node(x86isd::SETCC_CARRY, vt, &[code, flags]))
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node)
 }
 
 /// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select

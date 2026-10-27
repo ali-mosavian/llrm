@@ -332,6 +332,17 @@ impl Function {
         self.debug_records = kept;
     }
 
+    /// What stood before `from` now stands before `to`, ahead of what stood
+    /// there (`BasicBlock::flushTerminatorDbgRecords`): a pass that replaces a
+    /// terminator keeps what was said before the old one.
+    pub fn move_records_before(
+        &mut self,
+        from: InstId,
+        to: InstId,
+    ) {
+        self.reanchor_records(from, to);
+    }
+
     /// The first instruction after the phis of the block that the unconditional
     /// branch `inst` alone enters.
     fn sole_successor_start(
@@ -955,6 +966,23 @@ impl Function {
             panic!("a call")
         };
         info.argument_attrs[index].push(attr);
+        self.log(Change::Rewritten(inst));
+    }
+
+    /// `CallBase::addParamAttr(index, Attribute::getWithAlignment(align))`: the
+    /// argument's `align` is `align`, an earlier one replaced.
+    pub fn set_argument_align(
+        &mut self,
+        inst: InstId,
+        index: usize,
+        align: u64,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        let attrs = &mut info.argument_attrs[index];
+        attrs.retain(|one| !matches!(one, crate::opcode::Attribute::Int(name, _) if name == "align"));
+        attrs.push(crate::opcode::Attribute::Int("align".to_owned(), align));
         self.log(Change::Rewritten(inst));
     }
 

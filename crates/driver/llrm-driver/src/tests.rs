@@ -167,7 +167,8 @@ fn a_targets_pins_come_from_its_own_forms() {
     assert!(flat.is_empty(), "{flat:?}");
 }
 
-/// A flat target's registers are its own, not real mode's: six values, ebp the
+/// A flat target's registers are its own, not real mode's: six values in the
+/// pin's allocation order (`GR32`: ebx last, as the callee-saved one), ebp the
 /// frame.
 #[test]
 fn a_targets_registers_come_from_its_description() {
@@ -175,7 +176,7 @@ fn a_targets_registers_come_from_its_description() {
     use llrm_lir::registers::RegId;
 
     let flat = RegisterClasses::of(&llrm_x86_m32::M32);
-    assert_eq!(flat.available, [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI]);
+    assert_eq!(flat.available, [RegId::EAX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBX]);
     assert_eq!(flat.frame, RegId::EBP);
 }
 

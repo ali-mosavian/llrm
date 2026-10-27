@@ -934,6 +934,7 @@ def new_scanner_failures(
     only: tuple[str, ...] | None = None,
     seen: Path | None = None,
     now=time.time,
+    root: Path = ROOT,
 ) -> set[str]:
     """The failing `integration <target>::<test>` of the root scanners (tests that read sources and docs, SCANNERS) and of a test file the batch changes, on the merged tree, that the head
     passes. #3899 landed with `tests/selectiondag_registry.rs` red (SD403 had no row): the layer ran lib tests only, and the target was in no map. `on_merged(targets)` and
@@ -944,7 +945,7 @@ def new_scanner_failures(
     failed = (on_merged or smoke.integration_failures)(targets)
     warn_xpass(failed)
     failed = {name for name in failed if not name.startswith("xpass ")}
-    print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD").strip()[:9]))
+    print(scanner_tests_line(targets, failed, git("rev-parse", "HEAD", cwd=root).strip()[:9]))
     if not failed:
         return set()
     head = (on_head or _scanners_failing_on_head)(targets)
@@ -1275,7 +1276,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
             merged.update(smoke.integration_failures(targets, root=cwd, run=_in_target(target)))
             return merged
 
-        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only)))
+        return new_scanner_failures(changed, on_merged, only=tuple(sorted(only)), root=cwd)
 
     red = sorted((scanners or default_scanners)(files))
     if red:
@@ -1389,13 +1390,18 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
 
 
 def docs_stale(root: Path) -> set[str]:
-    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check failed` when it fails without naming one)."""
+    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check: <its problem line>` when it fails without naming one)."""
     if not (root / "tools/docsbuild/build.py").is_file():
         return set()
     done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
     if not done.returncode:
         return set()
-    return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+    lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
+    if pages := {line for line in lines if line.startswith("docs/")}:
+        return pages
+    # a failure that names no page (a header with no `# Example`) is named by its own line, not by "failed": the sync cannot fix it
+    problems = [line for line in lines if not re.match(r"\d+ problem|generated docs are out of date", line)]
+    return {f"docsbuild --check: {'; '.join(problems[:2])}" if problems else "docsbuild --check failed"}
 
 
 def docs_recheck(head: str, base: str, cwd: Path, base_docs: set[str]) -> str:
@@ -1432,22 +1438,66 @@ def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, se
     return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
 
 
-def docs_gated(merge_one, docs_before: set[str], root: Path = ROOT, docs=docs_stale):
-    """`merge_one` that also refuses, and resets `root` to where it was, a merge that leaves a generated page stale that was not stale before it."""
+def docs_sync_commit(root: Path = ROOT) -> str:
+    """"" when `tools/docsbuild/build.py --sync` in `root` ran and its pages are committed on top (nothing to commit is fine); else why. Generated docs out of date refused #5129, #5131 and #5119 for a
+    page the landing could have written, as it formats an unformatted head."""
+    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync"], cwd=root, capture_output=True, text=True, errors="replace")
+    if done.returncode:
+        return f"docsbuild --sync failed: {' '.join((done.stdout + done.stderr).split()[-12:])}"
+    git("add", "-A", "docs", cwd=root)
+    if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=root).returncode == 0:
+        return ""
+    made = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "-m", "docs: tools/docsbuild/build.py --sync"], cwd=root, capture_output=True, text=True, errors="replace")
+    return "" if made.returncode == 0 else f"committing the synced pages failed: {made.stderr.strip()[:200]}"
+
+
+def docs_gated(merge_one, docs_before: set[str], root: Path = ROOT, docs=docs_stale, sync=docs_sync_commit):
+    """`merge_one` that, when the merge leaves a generated page stale that was not stale before it, syncs the pages and commits them on top (`.synced` names those PRs: the landing pushes the same
+    sync to their branch); it refuses, and resets `root` to where it was, only when the sync fails or leaves a page stale."""
     state = [docs_before]
+    synced: set[str] = set()
 
     def gated(number: str) -> str:
         before = git("rev-parse", "HEAD", cwd=root).strip()
         if why := merge_one(number):
             return why
         why, now = docs_refusal(state[0], root, docs)
+        if why and not sync(root):
+            why, now = docs_refusal(state[0], root, docs)
+            if not why:
+                synced.add(number)
         if why:
             git("reset", "-q", "--hard", before, cwd=root)
             return why
         state[0] = now
         return ""
 
+    gated.synced = synced
     return gated
+
+
+def sync_docs_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> tuple[str, str]:
+    """(sha, ""): `head` with `base` merged in, `build.py --sync` applied and committed, pushed to `branch` as a fast-forward, so the squash lands current pages; `head` itself when its pages are
+    current after the merge. (\"\", why) when the merge conflicts outside generated pages, the sync fails or leaves a page stale, or the push fails."""
+    git("fetch", "-q", "origin", "feat/parity", cwd=cwd)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp) / "w"
+        git("worktree", "add", "-q", "--detach", str(work), head, cwd=cwd)
+        try:
+            merged = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", base], cwd=work, capture_output=True, text=True, errors="replace")
+            if merged.returncode and (why := regenerate(git("diff", "--name-only", "--diff-filter=U", cwd=work).split(), work)):
+                return "", why
+            if not docs_stale(work):
+                return head, ""
+            if why := docs_sync_commit(work):
+                return "", why
+            if still := docs_stale(work):
+                return "", f"pages still stale after build.py --sync: {', '.join(sorted(still)[:3])}"
+            sha = git("rev-parse", "HEAD", cwd=work).strip()
+            pushed = subprocess.run(["git", "push", "-q", "origin", f"{sha}:refs/heads/{branch}"], cwd=work, capture_output=True, text=True, errors="replace")
+            return (sha, "") if pushed.returncode == 0 else ("", f"pushing the synced head to {branch} failed: {pushed.stderr.strip()[-160:]}")
+        finally:
+            subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
 def _alone_base_docs(base: str, target: Path | None) -> set[str]:
@@ -1529,6 +1579,7 @@ def _alone_in_scratch(head: str, base: str, slot: int = 0, urgent: bool = False)
     targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
         _alone_checkout(targets / "w", base)
+        print(f"alone: slot {slot} base {git('rev-parse', '--short=9', 'HEAD', cwd=targets / 'w').strip()}", file=sys.stderr)
         why = alone_refusals(head, base, targets / "w", target=targets)
         keep_refused_evidence(head, targets / "w", why, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused")
         return why
@@ -1643,6 +1694,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             raise SystemExit(f"#{number} targets {info['baseRefName']}, not feat/parity")
         infos[number] = info
     landed, refused, held, late_drops, moved = [], [], [], [], []
+    docs_synced: set[str] = set()  # PRs whose merge staled a generated page: synced in the batch tree, and on their branch before the squash
     started = time.monotonic()
 
     left_out: dict[str, str] = {}
@@ -1682,7 +1734,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
-        kept, out = fast_merge(group, docs_gated(merge_one, docs_stale(ROOT)))
+        gate = docs_gated(merge_one, docs_stale(ROOT))
+        kept, out = fast_merge(group, gate)
+        docs_synced.update(gate.synced & set(kept))
         left_out.update(out)
         for number, why in out.items():
             print(f"#{number}: left out: {why}")
@@ -1901,6 +1955,21 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 if seen == sha:
                     break
                 time.sleep(5)
+        if number in docs_synced:
+            synced_sha, why = sync_docs_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+            if not synced_sha:
+                print(f"#{number}: REFUSED: {why}")
+                refused.append(number)
+                late_drops.append(number)
+                return
+            if synced_sha != infos[number]["headRefOid"]:
+                print(f"#{number}: generated docs synced with tools/docsbuild/build.py --sync ({synced_sha[:9]})")
+                infos[number] = {**infos[number], "headRefOid": synced_sha}
+                for _ in range(12):
+                    seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
+                    if seen == synced_sha:
+                        break
+                    time.sleep(5)
         landed_ok = squash(number, infos[number], known_red_line(known))
         if landed_ok is None:
             held.append(number)

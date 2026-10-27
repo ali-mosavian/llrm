@@ -898,6 +898,27 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
     assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
 }
 
+/// `smin`, `smax`, `umin` and `umax` of an `i64` stopped the legalizer with
+/// `Unsupported { op: SMin, ty: I64, what: "expand result" }`.
+#[test]
+fn an_i64_min_or_max_expands_to_its_halves() {
+    for op in ["smin", "smax", "umin", "umax"] {
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare i64 @llvm.{op}.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {{
+entry:
+  %r = call i64 @llvm.{op}.i64(i64 %a, i64 %b)
+  ret i64 %r
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{op}: {}", e.0));
+    }
+}
+
 const SELECT_IN_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 @s = internal global [2 x i8] zeroinitializer
 declare cc 1000 void @g(i32) addrspace(1)
@@ -986,4 +1007,38 @@ fn a_load_through_a_stepped_huge_pointer_reads_the_carried_selector() {
     let named = |what: &str| insns.iter().rposition(|i| i.what.as_ref().and_then(|w| w.name.as_deref()) == Some(what));
     let (load, carried) = (named("mov").expect("the load"), named("add").expect("the selector sum"));
     assert!(insns[load].uses.iter().any(|v| insns[carried].defines.contains(v)), "the load reads the old selector");
+}
+
+/// `uadd.with.overflow` and `usub.with.overflow` returning the `i1` flag
+/// stopped the legalizer with `Unsupported { op: UAddO, ty: I1, what: "promote
+/// result" }` (any width), and at `i64` with `"expand result"`. An `i64` one is
+/// `add; adc` (`sub; sbb`) and the carry out.
+#[test]
+fn an_unsigned_overflow_flag_is_the_carry_of_the_whole_sum() {
+    for (op, width, carry) in [
+        ("uadd", 16, None),
+        ("usub", 16, None),
+        ("uadd", 32, None),
+        ("uadd", 64, Some("adc")),
+        ("usub", 64, Some("sbb")),
+    ] {
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare {{i{width}, i1}} @llvm.{op}.with.overflow.i{width}(i{width}, i{width})
+define i1 @f(i{width} %a, i{width} %b) {{
+entry:
+  %r = call {{i{width}, i1}} @llvm.{op}.with.overflow.i{width}(i{width} %a, i{width} %b)
+  %o = extractvalue {{i{width}, i1}} %r, 1
+  ret i1 %o
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{op} i{width}: {}", e.0));
+        let names = mnemonics(&done);
+        if let Some(carry) = carry {
+            assert!(names.iter().any(|m| m == carry), "{op} i{width}: {names:?}");
+        }
+    }
 }
