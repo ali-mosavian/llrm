@@ -330,6 +330,42 @@ fn instruction(
             }
             writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
         }
+        // A read-modify-write of a cell.
+        (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
+            let (form, right) = match rhs {
+                Loc::Held(b) => ("mr", vreg(b)?),
+                Loc::Imm(i) => ("mi", immediate(i)?.to_string()),
+                _ => return Err(format!("{op} to a cell from that source")),
+            };
+            writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
+                .unwrap()
+        }
+        // A call through a register.
+        ("call", None, [Loc::Held(target)]) if what.indirect => {
+            let used: String =
+                one.requires.iter().map(|(_, r)| format!(", implicit ${}", format!("{r:?}").to_lowercase())).collect();
+            let made: String = one
+                .delivers
+                .iter()
+                .map(|(_, r)| format!(", implicit-def ${}", format!("{r:?}").to_lowercase()))
+                .collect();
+            writeln!(
+                out,
+                "    CALL32r {}, csr_32, implicit $esp, implicit $ssp, implicit-def $esp, implicit-def $ssp{used}{made}",
+                vreg(target)?
+            )
+            .unwrap();
+            for (held, register) in &one.delivers {
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+            }
+        }
+        // Sign-extends ax into dx.
+        ("cwd", Some(Loc::Held(d)), [Loc::Held(s)]) => {
+            if one.requires.is_empty() && !in_register.contains(&s.value) {
+                writeln!(out, "    $ax = COPY {}", vreg(s)?).unwrap();
+            }
+            writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
+        }
         // Sign-extends eax into edx.
         ("cdq", Some(Loc::Held(d)), [Loc::Held(s)]) => {
             if one.requires.is_empty() && !in_register.contains(&s.value) {
@@ -1053,6 +1089,28 @@ mod tests {
         let body = LirBody::new("unset", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("  bb.0:\n    %2 = IMPLICIT_DEF\n    %1 = MOV32ri 0"), "{text}");
+    }
+
+    #[test]
+    fn test_a_cell_update_a_register_call_and_a_word_sign_extend_print() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 2);
+        let update = insn("add", Operation::Binary, vec![Loc::Mem(cell.clone())], vec![Loc::Mem(cell), held(2)]);
+        let through = Semantics {
+            name: Some("call".into()),
+            sources: vec![held(3)],
+            indirect: true,
+            ..Semantics::new(Operation::Call)
+        };
+        let call = Arc::new(Insn::new(0, None, Some(through), vec![], vec![3]));
+        let sign = insn("cwd", Operation::Unary, vec![held(5)], vec![held(4)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![update, call, sign, ret]))];
+        let body = LirBody::new("more", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("ADD16mr %fixed-stack.0, 1, $noreg, 0, $noreg, %2, implicit-def dead $eflags"), "{text}");
+        assert!(text.contains("CALL32r %3, csr_32"), "{text}");
+        assert!(text.contains("CWD implicit-def $ax, implicit-def $dx, implicit $ax"), "{text}");
     }
 
     #[test]
