@@ -885,7 +885,7 @@ define void @f() {{
 /// A memmove a pass proved forward or backward was a call of the runtime's
 /// `memmove` at m16 (scroll.c: 2.2x the old selector's clocks, a frame for the
 /// value kept across the call); the old selector moves it inline, `rep movsd`
-/// up or `std; rep movsd; cld` down.
+/// up or `push ds; pop es; std; rep movsd; cld` down.
 #[test]
 fn a_proved_move_at_m16_is_inline_string_code() {
     let up = move_3840_at_m16(", !llrm.forward !0");
@@ -893,7 +893,11 @@ fn a_proved_move_at_m16_is_inline_string_code() {
         up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "call"), "{names:?}");
     let down = move_3840_at_m16(", !llrm.backward !0");
-    assert!(down.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0x66, 0xA5, 0xFC]), "{:?}", down.inline);
+    assert!(
+        down.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5, 0xFC]),
+        "{:?}",
+        down.inline
+    );
 }
 
 /// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
