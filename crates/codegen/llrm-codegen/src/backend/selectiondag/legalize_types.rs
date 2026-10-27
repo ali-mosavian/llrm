@@ -839,6 +839,11 @@ impl<'a> TypeLegalizer<'a> {
                 let high = self.dag.get_node(ISD::Srl, EVT::I32, &[dword, shift]);
                 (self.dag.get_node(ISD::Truncate, half, &[dword]), self.dag.get_node(ISD::Truncate, half, &[high]))
             }
+            ISD::Freeze => {
+                // `SplitRes_FREEZE`: each half frozen.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+                (self.dag.get_node(ISD::Freeze, half, &[lo]), self.dag.get_node(ISD::Freeze, half, &[hi]))
+            }
             ISD::CtPop => self.expand_ctpop(value, half),
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
             ISD::BitReverse => {
