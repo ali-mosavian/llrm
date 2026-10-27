@@ -44,24 +44,7 @@ use super::expansion::{self, Emitter};
 pub fn expanded(
     module: &mut Module,
     expands: impl Fn(&str) -> bool,
-) -> Result<(), String> {
-    expanded_with(module, expands, false)
-}
-
-/// [`expanded`], but a dword funnel shift stays a call: the DAG selector has
-/// the node (`FSHL` legal at i32, `X86ISelLowering.cpp#L230`) and selects
-/// `shld`/`shrd` with the count's `and` dropped.
-pub fn expanded_for_dag(
-    module: &mut Module,
-    expands: impl Fn(&str) -> bool,
-) -> Result<(), String> {
-    expanded_with(module, expands, true)
-}
-
-fn expanded_with(
-    module: &mut Module,
-    expands: impl Fn(&str) -> bool,
-    keep_dwords: bool,
+    kept: impl Fn(u32) -> bool,
 ) -> Result<(), String> {
     let (left, right) = (expands("fshl"), expands("fshr"));
     expansion::expand_calls(
@@ -72,12 +55,23 @@ fn expanded_with(
             _ => None,
         },
         |context, function, inst, left| {
-            if keep_dwords && context.types.int_bits(function.instruction(inst).ty) == Some(32) {
+            let bits = context.types.int_bits(function.instruction(inst).ty);
+            if bits.is_some_and(&kept) {
                 return Ok(());
             }
             expand(context, function, inst, left)
         },
     )
+}
+
+/// Whether the selector takes a funnel shift of `bits` as it is: the DAG
+/// selects a dword one as `SHLD`/`SHRD`, as the pin does; the narrower ones
+/// (`LowerFunnelShift`) are still expanded here.
+pub fn kept_for_isel(
+    isel: crate::backend::shadow::Selector,
+    ty: &str,
+) -> bool {
+    isel == crate::backend::shadow::Selector::Dag && ty == "i32"
 }
 
 /// The integer constant `operand` is.

@@ -11,10 +11,9 @@
 //! A type the model cannot spell (a size it has no scalar for) is left out,
 //! and so is whatever names it.
 
-use std::collections::HashMap;
-
 use crate::context::ConstantKind;
 use crate::debuginfo::{self, Dialect, Function, Global, Kind, Language, Member, Reach, Scalar, Type, Variable};
+use crate::hash::HashMap;
 use crate::module::{DebugWhat, GlobalKind, MetadataId, MetadataOperand, Module};
 
 /// What `module`'s specialized nodes describe, added to the model; the
@@ -23,7 +22,7 @@ pub fn types_and_globals(module: &mut Module) {
     if module.special.is_empty() {
         return;
     }
-    let mut import = Import { made: HashMap::new(), void: None, near: near_pointers(module) };
+    let mut import = Import { made: HashMap::default(), void: None, near: near_pointers(module) };
     for (at, attached) in module.global_metadata.clone() {
         let Some(name) = module.globals.get(at as usize).and_then(|one| one.name.as_deref()).map(str::to_owned) else {
             continue;
@@ -68,7 +67,7 @@ impl Import {
             let Some(name) = module.globals[at].name.as_deref().map(str::to_owned) else { continue };
             let mut records = function.debug_records.clone();
             let mut parameters: Vec<(i64, String, MetadataId)> = Vec::new();
-            let mut made: HashMap<MetadataId, MetadataId> = HashMap::new();
+            let mut made: HashMap<MetadataId, MetadataId> = HashMap::default();
             for record in &mut records {
                 if !matches!(record.what, DebugWhat::Declare(_) | DebugWhat::Value(_)) {
                     continue;
