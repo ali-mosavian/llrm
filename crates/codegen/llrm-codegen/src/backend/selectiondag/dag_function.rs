@@ -865,6 +865,8 @@ fn selected_in(
         conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
+        strings: arch.string_registers(),
+        registers: arch.registers(),
         globals: &globals,
         block_at: &block_at,
         frame: &frame,
