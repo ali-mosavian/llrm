@@ -96,6 +96,12 @@ fn facts() -> Regex {
 /// (docs/machine/targets.md, the first principle).
 const REGISTRY: &str = "crates/driver/llrm-driver/src/lib.rs";
 
+/// The BC object frontend decodes and lifts x86 machine code: the x86 ISA is
+/// its input format, not a copy of a target's description. It moved from
+/// `crates/target/` (outside this scan) in the layout step B2; its 300-odd
+/// matches are the input's, so it is not scanned.
+const X86_INPUT: &str = "crates/frontends/bcobj/";
+
 fn is_test_file(path: &Path) -> bool {
     // `path` is relative to the root: the root itself may sit under a
     // `target/`.
@@ -137,6 +143,7 @@ fn files(
         )
             && !is_test_file(path.strip_prefix(root).unwrap())
             && line != REGISTRY
+            && !line.starts_with(X86_INPUT)
         {
             into.push(path);
         }
