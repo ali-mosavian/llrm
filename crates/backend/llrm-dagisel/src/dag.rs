@@ -144,6 +144,12 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> Option<Vec<MemRef>>;
+    /// Whether `node` stores an outgoing call argument
+    /// (`MachinePointerInfo::getStack` of `LowerCall`).
+    fn is_call_argument_store(
+        &self,
+        node: u32,
+    ) -> bool;
     /// The extension of a `LoadSDNode` or a load `AtomicSDNode`; `None` for
     /// other nodes.
     fn load_ext_type(

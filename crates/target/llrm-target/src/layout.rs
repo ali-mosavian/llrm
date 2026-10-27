@@ -163,14 +163,16 @@ impl Layout {
             }
         };
         let required = |name: &str| number(name)?.ok_or(format!("spaces.{name} is missing"));
-        // A selector alone is no address: casts through its space do not
-        // compose (`ni:` marks it non-integral for every pass that asks
-        // the layout).
-        let datalayout = match number("segment")? {
-            Some(segment) if !datalayout.split('-').any(|spec| spec.starts_with("ni:")) => {
-                format!("{datalayout}-ni:{segment}")
-            }
-            _ => datalayout,
+        // A selector alone is no address, and a huge pointer's packed bits are
+        // not one either (a displacement past 64K carries into its selector):
+        // casts through their spaces do not compose (`ni:` marks them
+        // non-integral for every pass that asks the layout).
+        let non_integral: Vec<String> =
+            [number("segment")?, number("huge")?].into_iter().flatten().map(|space| space.to_string()).collect();
+        let datalayout = if non_integral.is_empty() || datalayout.split('-').any(|spec| spec.starts_with("ni:")) {
+            datalayout
+        } else {
+            format!("{datalayout}-ni:{}", non_integral.join(":"))
         };
         let mut unmarked = BTreeMap::new();
         for (width, kind) in value.get("pointers").and_then(|one| one.as_table()).ok_or("[pointers] is missing")? {

@@ -5,8 +5,11 @@ d=$(mktemp -d)
 printf '#!/bin/sh\nshift\nfor n; do [ "$n" = 2 ] && echo "$n: REFUSED: alone: does not build" >&2 || echo $n; done\n' > $d/drop; printf '#!/bin/sh\nexit 3\n' > $d/broken; chmod +x $d/*
 ALONE_CMD="$d/drop x" ; got=$(alone_filter 1 2 3 2>/dev/null)
 [ "$got" = "1 3" ] || { echo "FAIL: build-failing PR not dropped: '$got'"; exit 1; }
-ALONE_CMD="$d/broken x"; got=$(alone_filter 1 2 3 2>/dev/null)
-[ "$got" = "1 2 3" ] || { echo "FAIL: broken check stalled or filtered the queue: '$got'"; exit 1; }
+# Regression (reversed ruling): a check that cannot run let every PR into the batch unfiltered, 55 times; it is retried once and the cycle held.
+export ALONE_RETRY_WAIT=0; printf '#!/bin/sh\necho x >> %s/runs\nexit 3\n' "$d" > $d/broken; ALONE_CMD="$d/broken x"; rm -f $d/runs; got=$(alone_filter 1 2 3 2>/dev/null)
+[ -z "$got" ] && [ "$(wc -l < $d/runs)" = 2 ] || { echo "FAIL: broken check was not retried once and held: '$got' runs=$(wc -l < $d/runs)"; exit 1; }
+# no PR to filter: the check is not run at all (it exits 2 on no PR)
+rm -f $d/runs; got=$(alone_filter 2>&1); [ -z "$got" ] && [ ! -e $d/runs ] || { echo "FAIL: an empty candidate list ran the check or printed: '$got'"; exit 1; }
 echo PASS
 
 # Regression: the cache warm launched parity_squash.py beside the batch whatever ALONE_CMD said, and competed with the squash for slots (batch 19:45).

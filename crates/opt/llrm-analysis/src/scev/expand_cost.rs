@@ -274,22 +274,25 @@ impl Expander {
         // ExprValueMap. Note that we don't currently model the cost of
         // needing to drop poison generating flags on the instruction if we
         // want to reuse it. We effectively assume that has zero cost.
-        self.find_value_in_expr_value_map(cx, se, s, at).is_some()
+        self.find_value_in_expr_value_map(cx, se, s, at, &mut Vec::new()).is_some()
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1637
-    /// `FindValueInExprValueMap(S, InsertPt, DropPoisonGeneratingInsts)`,
-    /// without the poison check (DEVIATE D12: `canReuseInstruction` is not
-    /// translated; its only effect here is to answer `false` for a value
-    /// whose poison-generating flags cannot be dropped, which costs the
-    /// caller a reuse it would otherwise price at zero).
+    /// `FindValueInExprValueMap(S, InsertPt, DropPoisonGeneratingInsts)`.
     pub fn find_value_in_expr_value_map(
         &self,
         cx: &Cx,
         se: &mut ScalarEvolution,
         s: Scev,
         insert_point: InstId,
+        drop: &mut Vec<InstId>,
     ) -> Option<Operand> {
+        // If the expansion is not in CanonicalMode, and the SCEV contains any
+        // sub scAddRecExpr type SCEV, it is required to expand the SCEV
+        // literally.
+        if !self.canonical_mode && super::guards::contains_add_recurrence(se, s) {
+            return None;
+        }
         // If S is a constant or unknown, it may be worse to reuse an existing
         // Value.
         if matches!(se.node(s).kind, Kind::Constant(_) | Kind::Unknown(_)) {
@@ -316,9 +319,14 @@ impl Expander {
                 None => true,
                 Some(found) => found.contains(insert_block),
             };
-            if inside {
+            if !inside {
+                continue;
+            }
+            // Make sure reusing the instruction is poison-safe.
+            if se.can_reuse_instruction(cx, s, def, drop) {
                 return Some(v);
             }
+            drop.clear();
         }
         None
     }

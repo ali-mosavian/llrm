@@ -87,6 +87,8 @@ pub struct BuilderTarget {
     /// The function is tuned for size (`-Os`, `optsize`, `minsize`: the pin's
     /// `hasOptSize`): a jump table needs 40% density.
     pub opt_size: bool,
+    /// The build is for the least size (`-Oz`, the pin's `minsize`).
+    pub min_size: bool,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -148,6 +150,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target tuned for the least size or not.
+    pub fn with_min_size(
+        mut self,
+        on: bool,
+    ) -> BuilderTarget {
+        self.min_size = on;
+        self
+    }
+
     /// This target with a stack alignment, whatever the target's is.
     pub fn with_stack_alignment(
         mut self,
@@ -196,6 +207,7 @@ impl BuilderTarget {
             float_store: false,
             jump_tables: true,
             opt_size: false,
+            min_size: false,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -223,6 +235,7 @@ impl BuilderTarget {
             float_store: false,
             jump_tables: true,
             opt_size: false,
+            min_size: false,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -1230,7 +1243,7 @@ impl Builder<'_> {
                             mem_vt: vt,
                             align: 1,
                             volatile: false,
-                            base: MemBase::Unknown,
+                            base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
                         };

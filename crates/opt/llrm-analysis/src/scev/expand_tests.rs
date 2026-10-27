@@ -182,6 +182,35 @@ entry:
     assert_eq!(lines(&text).len(), 1, "{text}");
 }
 
+/// `FindValueInExprValueMap`: a zero-extend an earlier value already is reads
+/// that value. The expander built a second `zext` beside it; indvars then
+/// built the duplicate formulas COPPER's loop is left with.
+#[test]
+fn test_a_sum_an_earlier_value_computes_is_that_value() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %z = zext i32 %a to i64
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| se.get_scev(cx, args[3]));
+    assert_eq!(lines(&text), ["%z = zext i32 %a to i64"], "{text}");
+}
+
+/// The reused value may be more poisonous than the sum: the flag that makes
+/// it so goes (`canReuseInstruction`'s drop list).
+#[test]
+fn test_a_reused_value_loses_the_flags_that_made_it_more_poisonous() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %z = zext nneg i32 %a to i64
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| se.get_scev(cx, args[3]));
+    assert_eq!(lines(&text), ["%z = zext i32 %a to i64"], "{text}");
+}
+
 /// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by
 /// zero, so it is not safe; by a nonzero constant it is.
 #[test]

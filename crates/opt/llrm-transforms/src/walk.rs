@@ -372,7 +372,7 @@ impl ProgramPass for Walk {
                                         credit
                                     );
                                 }
-                                if tried < best + credit {
+                                if tried <= best + credit {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -600,10 +600,12 @@ fn body_size(
     id: GlobalId,
 ) -> i64 {
     let function = module.global(id).function().expect("a body");
+    let float =
+        |ty: llrm_mir::types::TypeId| llrm_mir::tti::Ty::of(&module.context.types, ty).is_some_and(|ty| ty.is_float());
     function
         .walk()
         .map(|(_, inst)| {
-            llrm_mir::instructioncost::instruction_cost(
+            let units = llrm_mir::instructioncost::instruction_cost(
                 tti,
                 &module.context,
                 layout,
@@ -612,7 +614,21 @@ fn body_size(
                 inst,
                 llrm_mir::tti::CostKind::CodeSize,
             )
-            .value
+            .value;
+            let operation = function.instruction(inst);
+            let moves = matches!(
+                operation.opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+                    | llrm_mir::opcode::Opcode::Store { .. }
+                    | llrm_mir::opcode::Opcode::Call(_)
+            );
+            let touches = !moves
+                && (float(operation.ty)
+                    || operation
+                        .operands
+                        .iter()
+                        .any(|&operand| function.operand_type(&module.context, operand).is_some_and(|ty| float(ty))));
+            if touches { units * tti.float_code_size_percent() / 100 } else { units }
         })
         .sum()
 }

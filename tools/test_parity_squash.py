@@ -1033,7 +1033,7 @@ def test_the_scanner_layer_refuses_a_red_scanner_the_head_passes_and_runs_the_re
     files = ["crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs", "tests/new_scan.rs"]
     assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set()) == red
     assert "selectiondag_registry" in asked[0] and "new_scan" in asked[0] and "turbo" not in asked[0]
-    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red)) == set()
+    assert ps.new_scanner_failures(files, on_merged=merged, on_head=lambda targets: set(red), seen=tmp_path / "seen.json") == set()
     assert "scanners: " in capsys.readouterr().out
 
 
@@ -1219,3 +1219,15 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert 0 <= early < lib, (early, lib)
     assert "landing_scanner_failures(changed, False)" in source[early:lib]
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
+
+
+def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_refused(capsys):
+    """#5039 was REFUSED with `GraphQL: Something went wrong` (00:14, request A186:1A8971): GitHub's own error, the PR open, mergeable and unchanged; it cost a batch cycle."""
+    run, calls = _gh(["GraphQL: Something went wrong while executing your query.", ""])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("5039", info, "body", run=run, settle=0, retry_wait=0) is True
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2
+    run, calls = _gh(["GraphQL: Something went wrong.", "GraphQL: Something went wrong."])
+    assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
+    assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")

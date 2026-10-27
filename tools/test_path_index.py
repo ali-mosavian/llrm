@@ -31,15 +31,7 @@ NOT_PATHS = {
 MACHINE_DOC = "docs/architecture/machine-description.md"
 MACHINE_NAMED = re.compile(r"(?<![A-Za-z0-9_./-])(machine/[A-Za-z0-9_./-]*[A-Za-z0-9_])")
 MACHINE_NOT_YET = {
-    "machine/isa": "instruction-set files arrive in M3",
-    "machine/isa/x86/features.toml": "M3",
-    "machine/isa/x86/i386.toml": "M3",
-    "machine/isa/x86/i486.toml": "M3",
-    "machine/isa/x86/pentium.toml": "M3",
-    "machine/isa/x86/i686.toml": "M3",
-    "machine/isa/x86/pentium3.toml": "M3",
     "machine/tune": "tuning files arrive in M3",
-    "machine/platform/darwin/flat64.toml": "the arm64 darwin files are datalayout and object, not a platform file: not moved yet",
 }
 
 

@@ -320,6 +320,82 @@ pub enum Datum {
     SegmentWord(String),
 }
 
+/// The bytes `items` occupy from segment offset `from` (an `Align` pads to a
+/// multiple of its `to`).
+pub fn data_size(
+    items: &[Datum],
+    from: i64,
+) -> i64 {
+    items.iter().fold(from, |at, item| match item {
+        Datum::Label(_) | Datum::Object(_) => at,
+        Datum::Fill(fill) => at + fill.size,
+        Datum::Pointer(pointer) => at + i64::from(pointer.bytes) + if pointer.far { 2 } else { 0 },
+        Datum::Align(align) if align.to > 1 => at + (align.to - at % align.to) % align.to,
+        Datum::Align(_) => at,
+        Datum::Bytes(bytes) => at + bytes.len() as i64,
+        Datum::SegmentWord(_) => at + 2,
+    }) - from
+}
+
+/// `items` cut into segments of at most `limit` bytes, each cut a byte count in
+/// a `Fill` or `Bytes`: a huge object past 64K is laid down as consecutive 64K
+/// segments, whose selectors the linker places `limit >> 4` apart, as a huge
+/// pointer steps them. A pointer, a label or an alignment is never cut.
+pub fn split_data(
+    items: Vec<Datum>,
+    limit: i64,
+) -> Result<Vec<Vec<Datum>>, String> {
+    let mut pieces: Vec<Vec<Datum>> = vec![Vec::new()];
+    let mut used = 0_i64;
+    for item in items {
+        let room = limit - used;
+        match item {
+            Datum::Fill(Fill { size, byte }) => {
+                let (mut left, mut room) = (size, room);
+                while left > 0 {
+                    if room == 0 {
+                        pieces.push(Vec::new());
+                        used = 0;
+                        room = limit;
+                    }
+                    let here = left.min(room);
+                    pieces.last_mut().expect("a piece").push(Datum::Fill(Fill { size: here, byte }));
+                    used += here;
+                    room -= here;
+                    left -= here;
+                }
+            }
+            Datum::Bytes(bytes) => {
+                let mut rest = &bytes[..];
+                while !rest.is_empty() {
+                    if used == limit {
+                        pieces.push(Vec::new());
+                        used = 0;
+                    }
+                    let here = rest.len().min((limit - used) as usize);
+                    pieces.last_mut().expect("a piece").push(Datum::Bytes(rest[..here].to_vec()));
+                    used += here as i64;
+                    rest = &rest[here..];
+                }
+            }
+            other => {
+                let size = data_size(std::slice::from_ref(&other), used);
+                if used + size > limit {
+                    if size > 0 && size < limit && used == limit {
+                        pieces.push(Vec::new());
+                        used = 0;
+                    } else if size > 0 {
+                        return Err("an item of a huge object crosses a 64K boundary".to_owned());
+                    }
+                }
+                used += size;
+                pieces.last_mut().expect("a piece").push(other);
+            }
+        }
+    }
+    Ok(pieces)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Module {
     /// The register file of the target the module is for.
@@ -338,6 +414,9 @@ pub struct Module {
     /// Of those, the segments of uninitialised data: class FAR_BSS, which an
     /// image does not store.
     pub far_bss: BTreeSet<String>,
+    /// The code segment of a procedure that is not in `code` (`#pragma
+    /// code_seg`), by its name.
+    pub code_segments: std::collections::BTreeMap<String, String>,
     /// Externs nothing references, declared so LINK pulls in their module.
     pub requests: BTreeSet<String>,
     /// `-g`'s debug information.
@@ -1945,10 +2024,16 @@ pub fn line_starts(
         .collect())
 }
 
+/// A block's label: its offset, or for a block made after layout (an edge's
+/// landing, `(entry + 1) << 32` and up) the two halves of its id, which stays
+/// readable instead of ten digits (`L0_1_1`, not `L0_4294967297`).
 pub fn label(
     number: usize,
     at: i64,
 ) -> String {
+    if at >= 1 << 32 {
+        return format!("L{number}_{}_{}", at >> 32, at & 0xffff_ffff);
+    }
     format!("L{number}_{at}")
 }
 
@@ -2980,6 +3065,7 @@ mod tests {
             procedures: Vec::new(),
             private: BTreeSet::new(),
             far_bss: BTreeSet::new(),
+            code_segments: Default::default(),
             padding: Default::default(),
             requests: BTreeSet::new(),
             debug: None,
@@ -3411,5 +3497,31 @@ mod tests {
         let r#where =
             ir::AddressRef { through: RegId::None, index_through: RegId::EAX, ..ir::AddressRef::new(Some(address)) };
         assert_eq!(_operand(regs, &Loc::Address(r#where), &names).unwrap(), "L_b1+12[eax]");
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::*;
+
+    fn fill(size: i64) -> Datum {
+        Datum::Fill(Fill { size, byte: Some(0) })
+    }
+
+    /// A 100000-byte object was one 100000-byte segment, which OMF cannot hold;
+    /// cut at 64K the first piece is full.
+    #[test]
+    fn an_object_past_64k_is_cut_into_full_pieces_and_a_rest() {
+        let label = Datum::Label(Label { name: "big".to_owned() });
+        let pieces = split_data(vec![label.clone(), Datum::Bytes(vec![1; 70000]), fill(30000)], 0x10000).unwrap();
+        let sizes: Vec<i64> = pieces.iter().map(|piece| data_size(piece, 0)).collect();
+        assert_eq!(sizes, [0x10000, 100000 - 0x10000]);
+        assert_eq!(pieces[0][0], label);
+    }
+
+    #[test]
+    fn a_pointer_across_a_boundary_is_refused() {
+        let pointer = Datum::Pointer(Pointer { name: "x".to_owned(), offset: 0, far: false, bytes: 2 });
+        assert!(split_data(vec![fill(0xFFFF), pointer], 0x10000).is_err());
     }
 }

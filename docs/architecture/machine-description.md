@@ -71,9 +71,8 @@ Files shared by all models of one OS sit in `machine/platform/<os>/` (`dos/ports
 | `llrm-x86-m32/src/machines/dos32.toml` | `machine/platform/dos/flat32.toml` |
 | `llrm-x86-m64/src/machines/linux64.toml` | `machine/platform/linux/flat64.toml` |
 | `llrm-target/src/machines/pc-ports.toml` | `machine/platform/dos/ports.toml` |
-| `-darwin` files in `llrm-arm64/src/machines/` | `machine/platform/darwin/flat64.toml` |
 
-New: `machine/isa/` and `machine/tune/` (instruction costs live in code today) and `platform/linux/flat32.toml`. Calling, data layout and object files stay in the target crate.
+New: `machine/isa/x86/` (read by `llrm-target`'s `isa`), `machine/tune/` (instruction costs live in `timings.times` today), `platform/linux/flat32.toml`, and `platform/darwin/flat64.toml`, written with the Mach-O platform work. Calling, data layout and object files stay in the target crate: the `-darwin` files in `llrm-arm64/src/machines/` are data layout and object content, not a platform file, and stay there.
 
 ## Adding to it
 

@@ -211,7 +211,7 @@ fn instruction(
     let eflags = "implicit-def dead $eflags";
     let dest = what.dests.first();
     match (name, dest, what.sources.as_slice()) {
-        ("", None, []) => {
+        ("", None, []) if what.op == llrm_lir::Operation::Return => {
             let used: Vec<String> =
                 one.requires.iter().map(|(_, r)| format!("implicit ${}", format!("{r:?}").to_lowercase())).collect();
             writeln!(out, "    RET 0{}", used.iter().map(|u| format!(", {u}")).collect::<String>()).unwrap();
@@ -312,12 +312,30 @@ fn instruction(
             writeln!(out, "    {} = {}{}{}{from} {}", vreg(d)?, op.to_uppercase(), bits(d.width)?, operand.0, operand.1)
                 .unwrap()
         }
+        (set, Some(Loc::Held(d)), []) if set.starts_with("set") && condition(&format!("j{}", &set[3..])).is_some() => {
+            let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
+            writeln!(out, "    {} = SETCCr {code}, implicit $eflags", vreg(d)?).unwrap()
+        }
+        ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
+            writeln!(out, "    CMP{}mi {}, {}, implicit-def $eflags", bits(m.width)?, cell(m, symbols)?, immediate(i)?).unwrap()
+        }
+        ("cmp", None, [Loc::Held(a), Loc::Mem(m)]) => {
+            writeln!(out, "    CMP{}rm {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, cell(m, symbols)?).unwrap()
+        }
         ("cmp" | "test", None, [Loc::Held(a), Loc::Held(b)]) => {
             let op = if name == "cmp" { "CMP" } else { "TEST" };
             writeln!(out, "    {op}{}rr {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
-        ("cmp", None, [Loc::Held(a), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP{}ri {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, immediate(i)?).unwrap()
+        (op @ ("cmp" | "test"), None, [Loc::Held(a), Loc::Imm(i)]) => {
+            writeln!(
+                out,
+                "    {}{}ri {}, {}, implicit-def $eflags",
+                op.to_uppercase(),
+                bits(a.width)?,
+                vreg(a)?,
+                immediate(i)?
+            )
+            .unwrap()
         }
         (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Held(d)), [Loc::Held(a), rhs]) => {
             let upper = op.to_uppercase();
@@ -735,6 +753,51 @@ mod tests {
         let body = LirBody::new("addr", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("LEA32r %stack.0, 1, $noreg, 0, $noreg"), "{text}");
+    }
+
+    /// `setge` (a flags read into a byte) and `cmp` against a cell were
+    /// refused, so a function with either never reached the pin.
+    #[test]
+    fn test_a_set_on_flags_and_a_compare_with_a_cell_print() {
+        let cell = Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, 8)), 4));
+        let cmp = insn("cmp", Operation::Compare, vec![], vec![held(1), cell]);
+        let set = insn("setge", Operation::Unary, vec![held(2)], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![cmp, set, ret]))];
+        let body = LirBody::new("set", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("CMP32rm %1, %fixed-stack.0"), "{text}");
+        assert!(text.contains("%2 = SETCCr 13, implicit $eflags"), "{text}");
+    }
+
+    /// A nameless instruction that is not a return (a marker) printed as
+    /// `RET 0`, which ended the block early for the pin.
+    #[test]
+    fn test_a_nameless_marker_is_not_printed_as_a_return() {
+        let marker = insn("", Operation::Nothing, vec![], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![marker, ret]))];
+        let body = LirBody::new("marker", 0, blocks, IndexMap::default(), IndexMap::default());
+        let shown = mir(&body, &IndexMap::default());
+        let text = shown.unwrap_or_default();
+        assert!(text.matches("RET 0").count() <= 1, "{text}");
+    }
+
+    /// `test r, imm` was refused ("`test` with 0 destinations and 2
+    /// sources"), so x_switch's function could not be allocated by the pin.
+    #[test]
+    fn test_a_test_against_an_immediate_prints() {
+        let imm = Loc::Imm(Imm { value: 4096, width: 4, address: None });
+        let test = insn("test", Operation::Compare, vec![], vec![held(1), imm]);
+        let jne = insn("jne", Operation::Branch, vec![], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![
+            Block::from(LirBlock { succ: vec![1, 0].into(), ..LirBlock::new(0, vec![test, jne]) }),
+            Block::from(LirBlock::new(1, vec![ret])),
+        ];
+        let body = LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("TEST32ri %1, 4096, implicit-def $eflags"), "{text}");
     }
 
     #[test]
