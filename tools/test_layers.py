@@ -99,3 +99,21 @@ def test_the_default_build_does_not_make_llrm_c():
     assert "c-legacy" not in seen and "wccq" not in seen, seen
     binary = next(b for b in manifest["bin"] if b["name"] == "llrm-c")
     assert binary["required-features"] == ["c-legacy"]
+
+
+def test_a_frontend_crate_has_no_binary_of_its_own():
+    """qbfront was a second QB binary beside llrm-qb; frontends are libraries the root binaries link."""
+    for manifest in sorted((ROOT / "crates" / "frontends").glob("*/Cargo.toml")):
+        assert "[[bin]]" not in manifest.read_text(), manifest.relative_to(ROOT)
+
+
+def test_the_workspace_members_follow_the_layer_glob():
+    """Members were `crates/*/llrm-*` plus three frontends and a runtime crate named one by one; a crate in a layer directory that matched none was silently outside the workspace."""
+    import tomllib
+
+    members = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["members"]
+    assert members == [".", "crates/*/*", "runtime/qb"]
+    metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+    inside = {Path(p["manifest_path"]).parent.relative_to(ROOT).as_posix() for p in metadata["packages"]}
+    layers = {p.parent.relative_to(ROOT).as_posix() for p in (ROOT / "crates").glob("*/*/Cargo.toml")}
+    assert layers <= inside, sorted(layers - inside)

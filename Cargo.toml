@@ -1,6 +1,6 @@
 [workspace]
-members = [".", "crates/*/llrm-*", "crates/frontends/bcobj", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
-default-members = [".", "crates/*/llrm-*", "crates/frontends/bcobj", "crates/frontends/nib", "crates/frontends/qb", "runtime/qb"]
+members = [".", "crates/*/*", "runtime/qb"]
+default-members = [".", "crates/*/*", "runtime/qb"]
 resolver = "3"
 
 [workspace.package]
