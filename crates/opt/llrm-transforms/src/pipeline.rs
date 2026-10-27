@@ -142,9 +142,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
-    promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
+    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
+    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -1029,7 +1030,9 @@ pub fn recorded(
     }
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
-    // As LLVM's O2 runs GlobalOpt before the function pipeline.
+    // As LLVM's module pipeline starts with InferFunctionAttrs
+    // (PassBuilderPipelines.cpp#L1169), then GlobalOpt.
+    manager.add_module(inferfunctionattrs::InferFunctionAttrs);
     manager.add_module(globalopt::GlobalOpt);
     // Over every body first, so a caller's pipeline sees each callee's
     // port calls narrowed.
@@ -1237,7 +1240,9 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
     if applied.options.wanted("lsr") {
         passes.push(Box::new(loopsimplify::LoopSimplify));
-        passes.push(Box::new(lcssa::LoopClosedSSA));
+        // The pin's llc takes the IR after opt's closing InstSimplify (l.1662,
+        // "clean up LCSSA form before generating code").
+        passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
@@ -1961,6 +1966,8 @@ impl Run {
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),
+            special: Default::default(),
+            global_metadata: Default::default(),
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))

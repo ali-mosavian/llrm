@@ -209,6 +209,15 @@ pub fn hoisted(
             }
         }
     }
+    // The values one instruction defines: a constant made twice is not hoisted.
+    let mut defs: HashMap<u32, usize> = HashMap::default();
+    for block in &blocks {
+        for one in block.insns.iter() {
+            for &value in &one.defines {
+                *defs.entry(value).or_default() += 1;
+            }
+        }
+    }
     let mut order: Vec<&loopy::Loop> = found.iter().collect();
     order.sort_by_key(|one| one.body.to_set().len());
     let mut changed = false;
@@ -239,6 +248,24 @@ pub fn hoisted(
                     .collect::<Vec<_>>()
             })
             .filter(|value| !floating.contains(value))
+            .collect();
+        // `HasLoopPHIUse`: the values a copy in the loop reads; a cheap
+        // instruction whose value a copy takes would make one more copy.
+        let copied: HashSet<u32> = inside
+            .iter()
+            .flat_map(|at| blocks[place[at]].insns.iter())
+            .filter(|one| {
+                one.what
+                    .as_ref()
+                    .is_some_and(
+                        |what| what.op == Operation::Move
+                            && matches!(
+                                (what.dests.as_slice(), what.sources.as_slice()),
+                                ([Loc::Held(_)], [Loc::Held(_)])
+                            ),
+                    )
+            })
+            .flat_map(|one| one.uses.iter().copied())
             .collect();
         let limit = classes.available.len();
         // An x87 value cannot be live across a call (`floatassign` does not
@@ -291,16 +318,46 @@ pub fn hoisted(
                     let flags = |lanes: &crate::backend::lanes::Lanes| {
                         lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
                     };
-                    let constant = constant_load(one);
-                    let mut movable = if constant {
-                        !control_word_written && !calls && floats_named < body.float_stack
-                    } else {
-                        candidate(one, classes, loads_here)
-                            && invariant
-                            && value.is_some_and(|value| !floating.contains(&value))
-                            && named.len() < limit
-                    };
-                    if movable && !constant {
+                    // An x87 constant is hoisted where the control word is
+                    // constant and the stack has room (`constant_load`).
+                    if constant_load(one) {
+                        if !control_word_written && !calls && floats_named < body.float_stack {
+                            hoisted_values.extend(value);
+                            moved.push(Arc::clone(one));
+                            any = true;
+                        } else {
+                            keep.push(Arc::clone(one));
+                        }
+                        continue;
+                    }
+                    let mut movable = candidate(one, classes, loads_here)
+                        && invariant
+                        && value.is_some_and(|value| !floating.contains(&value))
+                        && named.len() < limit;
+                    // `IsProfitableToHoist`: "Trivially rematerializable
+                    // instructions should always be hoisted providing the
+                    // register allocator can just pull them down again", unless
+                    // a copy in the loop takes the value.
+                    let constant = value.is_some_and(|value| {
+                        one.uses.is_empty()
+                            && defs.get(&value) == Some(&1)
+                            && !copied.contains(&value)
+                            && !floating.contains(&value)
+                            && one.defines.len() == 1
+                            && one.call.is_none()
+                            && one.group.is_none()
+                            && one.clobbers.is_empty()
+                            && one.requires.is_empty()
+                            && one.delivers.is_empty()
+                            && crate::greedy::remat::is_trivially_re_materializable(one, false)
+                    });
+                    if constant && !movable {
+                        hoisted_values.extend(value);
+                        moved.push(Arc::clone(one));
+                        any = true;
+                        continue;
+                    }
+                    if movable {
                         let effect = liveness::effect(regs, body.bits, one);
                         let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
                         let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")

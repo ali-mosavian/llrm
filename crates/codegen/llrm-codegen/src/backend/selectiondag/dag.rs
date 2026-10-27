@@ -165,6 +165,10 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// The function evaluates floats at the x87's extended precision
+    /// (`FP_EVAL`): a constant operation folds only where its result is exact,
+    /// as the IR's folder does.
+    pub fp_extended: bool,
 }
 
 impl Default for DagConfig {
@@ -177,6 +181,7 @@ impl Default for DagConfig {
             dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            fp_extended: false,
         }
     }
 }

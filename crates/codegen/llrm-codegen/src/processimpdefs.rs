@@ -119,7 +119,14 @@ pub struct ProcessImplicitDefs {
 /// it reads.
 fn ignores_its_input(one: &Insn) -> Option<u32> {
     let value = *one.uses.first()?;
-    (one.what.as_ref()?.name.as_deref() == Some("sbb") && one.uses.iter().all(|used| *used == value)).then_some(value)
+    let what = one.what.as_ref()?;
+    // Both sources the register: `sbb r, 0` reads it, and its immediate is
+    // not among `uses`.
+    (what.name.as_deref() == Some("sbb")
+        && one.uses.iter().all(|used| *used == value)
+        && what.sources.len() == 2
+        && what.sources.iter().all(|source| matches!(source, Loc::Held(held) if held.value == value)))
+    .then_some(value)
 }
 
 /// `body` with each constant that only `sbb r, r` reads an `implicit_def`.
@@ -385,6 +392,20 @@ mod tests {
         Arc::new(Insn::new(0, None, Some(what), vec![into], vec![from, from]))
     }
 
+    /// `sbb r, 0`: the borrow from the register it reads, not the borrow alone.
+    fn sbb_zero(
+        into: u32,
+        from: u32,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("sbb".into()),
+            dests: vec![held(into)],
+            sources: vec![held(from), Loc::Imm(crate::model::ir::Imm { value: 0, width: 4, address: None })],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![into], vec![from]))
+    }
+
     fn pass_over(
         ignored_inputs: bool,
         insns: Vec<Arc<Insn>>,
@@ -402,6 +423,15 @@ mod tests {
         assert_eq!(names(&got), ["sbb"]);
         let sbb = &got.insns()[0];
         assert!(sbb.uses.is_empty() && !sbb.undefs.is_empty() && sbb.undefs.iter().all(|value| *value == 1), "{sbb:?}");
+    }
+
+    /// `(long long) a - (long long) b` at m16 was `sub eax, edx; sbb edx, 0`:
+    /// the zero `sbb v1, 0` reads as the high word was dropped as one `sbb
+    /// r, r` ignores, and `edx` (b) took its place: the result's high word
+    /// was `b - borrow`.
+    #[test]
+    fn test_the_zero_an_sbb_with_an_immediate_reads_is_kept() {
+        assert_eq!(names(&pass_over(true, vec![zero(1), sbb_zero(2, 1)])), ["mov", "sbb"]);
     }
 
     /// A core that waits for the old register keeps the zero that breaks the
