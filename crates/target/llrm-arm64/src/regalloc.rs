@@ -471,6 +471,10 @@ fn rewrite(
                 }
                 continue;
             }
+            // A copy of a register to itself (a coalesced phi) is nothing, spilled or not.
+            if matches!(&op, Op::Copy { dst, src } if dst == src) {
+                continue;
+            }
             // A copy between a spill slot and a register is a load or store.
             if let Op::Copy { dst, src } = &op
                 && let Some(done) = spilled_copy(*dst, *src, assigned, spilled, wide.contains(dst))
@@ -690,6 +694,17 @@ mod tests {
             .flat_map(|block| &block.ops)
             .filter(|op| matches!(op, Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, .. }, .. } | Inst::Store { mem: Memory::Fp { bytes: 8, .. }, .. })))
             .count()
+    }
+
+    /// A coalesced phi copy of a spilled double to itself was `ldr d29, [slot]`
+    /// then `str d29, [slot]`: two instructions for nothing (`fnbody`, three times).
+    #[test]
+    fn a_spilled_register_copied_to_itself_costs_nothing() {
+        let value = Reg::Fpr(Vreg(100));
+        let spilled = HashMap::from([(value, 1)]);
+        let mut function = function(vec![Op::Copy { dst: value, src: value }]);
+        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new());
+        assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 
     /// A 128-bit value live across a call took `d8`, whose upper half the callee
