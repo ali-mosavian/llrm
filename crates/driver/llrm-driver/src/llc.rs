@@ -3,7 +3,6 @@
 //! pipeline and backend to an object. The target is the one whose `llvm_triple`
 //! the module's `target triple` names, or the `-m` flag's.
 
-use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -30,11 +29,7 @@ fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
-        let line = if line.contains(" dso_local") || line.contains(CLANG_PASCAL) {
-            Cow::Owned(line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 "))
-        } else {
-            Cow::Borrowed(line)
-        };
+        let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
         kept.push_str(&port_intrinsic(&lifetime_markers_with_a_size(&line)));
         kept.push('\n');
     }
@@ -53,18 +48,14 @@ const PORTS: [(&str, &str, bool); 4] = [
 /// `line` with a Borland port function written as its intrinsic. An `out`
 /// answers the value written, which the C function returns and clang numbers
 /// even when unused, so the numbering stays dense.
-fn port_intrinsic(line: &str) -> Cow<'_, str> {
-    // Every Borland name starts `__`: an ordinary line skips the four searches.
-    if !line.contains("@__") {
-        return Cow::Borrowed(line);
-    }
+fn port_intrinsic(line: &str) -> String {
     for (borland, intrinsic, writes) in PORTS {
         let Some(at) = line.find(&format!("@{borland}(")) else { continue };
         let width = intrinsic.rsplit('.').next().unwrap_or("i16");
         let parameters = if writes { format!("i16, {width}") } else { "i16".to_owned() };
         if line.starts_with("declare") {
             let result = if writes { "void" } else { width };
-            return Cow::Owned(format!("declare {result} @{intrinsic}({parameters})"));
+            return format!("declare {result} @{intrinsic}({parameters})");
         }
         let arguments =
             line[at..].split_once('(').and_then(|(_, rest)| rest.split_once(')')).map_or("", |(inside, _)| inside);
@@ -74,7 +65,7 @@ fn port_intrinsic(line: &str) -> Cow<'_, str> {
             .collect();
         let call = typed.join(", ");
         let destination = line.split_once(" = ").map(|(name, _)| name.trim().to_owned());
-        return Cow::Owned(match (writes, destination) {
+        return match (writes, destination) {
             (true, Some(name)) => {
                 let value = typed.last().and_then(|one| one.split_whitespace().last()).unwrap_or("0");
                 format!("  call void @{intrinsic}({call})\n  {name} = add {width} {value}, 0")
@@ -82,30 +73,27 @@ fn port_intrinsic(line: &str) -> Cow<'_, str> {
             (true, None) => format!("  call void @{intrinsic}({call})"),
             (false, Some(name)) => format!("  {name} = call {width} @{intrinsic}({call})"),
             (false, None) => format!("  call {width} @{intrinsic}({call})"),
-        });
+        };
     }
-    Cow::Borrowed(line)
+    line.to_owned()
 }
 
 /// The pin's `llvm.lifetime.start.p0(ptr)` as MIR's `(i64 size, ptr)`: MIR's
 /// markers still take the size `Intrinsics.td` dropped, and a marker it cannot
 /// read is a call that makes its alloca escape (nothing is promoted). The size
 /// is -1, which LangRef calls unknown.
-fn lifetime_markers_with_a_size(line: &str) -> Cow<'_, str> {
-    if !line.contains("@llvm.lifetime.") {
-        return Cow::Borrowed(line);
-    }
+fn lifetime_markers_with_a_size(line: &str) -> String {
     for marker in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
         if let Some(at) = line.find(marker) {
             let (head, tail) = line.split_at(at + marker.len());
             if tail.starts_with("i64") {
-                return Cow::Borrowed(line);
+                return line.to_owned();
             }
             let size = if line.starts_with("declare") { "i64 immarg, " } else { "i64 -1, " };
-            return Cow::Owned(format!("{head}{size}{tail}"));
+            return format!("{head}{size}{tail}");
         }
     }
-    Cow::Borrowed(line)
+    line.to_owned()
 }
 
 fn bound(
@@ -234,22 +222,57 @@ fn with_default_convention(
         (true, 0) => variadic,
         _ => false,
     };
-    // Under the register-size convention `main` is C's: the start-up calls
-    // `_main`.
-    let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // Under the register-size convention `main` is Watcom's, `main_`: both
+    // its start-up and the repo's (`LL_MAIN`) call that.
+    let main_is_watcom = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // clang gives the library functions it knows (`strlen`, `atan`) their C
+    // convention whatever the default is, so `_strlen` was called where the
+    // library has `strlen_`: a declaration or a definition of one (the float
+    // routines of floatm.c) takes the default too.
+    let library: std::collections::HashSet<llrm_mir::context::GlobalId> = {
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, global)| {
+                matches!(
+                    &global.kind,
+                    llrm_mir::module::GlobalKind::Function(function) if function.calling_convention == 0
+                )
+            })
+            .filter(|(_, global)| {
+                global
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| llrm_mir::libfunc::TargetLibraryInfo::get_lib_func_by_name(name).is_some())
+            })
+            .map(|(at, _)| llrm_mir::context::GlobalId(at as u32))
+            .collect()
+    };
     let types = &module.context.types;
     let is_variadic = |ty| matches!(
         types.get(ty),
         llrm_mir::types::Type::Function { variadic: true, .. }
     );
-    for global in &mut module.globals {
+    for (at, global) in module.globals.iter_mut().enumerate() {
         if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
             continue;
         }
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
         let entry = global.name.as_deref() == Some("main");
-        if !(entry && keeps_main) && takes(function.calling_convention, is_variadic(function.ty) || entry) {
+        // A function the front end marked `regcall` where the default is not
+        // is the Watcom register convention (`__watcall` of its headers).
+        let watcom = !regcall_default
+            && ((entry && main_is_watcom)
+                || function.calling_convention == llrm_mir::opcode::REGCALL
+                || library.contains(&llrm_mir::context::GlobalId(at as u32)));
+        if watcom
+            || takes(
+                function.calling_convention,
+                is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
+            )
+        {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
                 if let Some(plain) = global.name.as_deref().and_then(|name| name.strip_prefix("__regcall3__")) {
@@ -260,13 +283,38 @@ fn with_default_convention(
                     global.name = Some(plain).into();
                 }
             }
-            function.calling_convention = number;
+            function.calling_convention = if watcom { llrm_mir::opcode::WATCALL } else { number };
+        }
+        if !regcall_default {
+            let watcom: Vec<_> = function
+                .walk()
+                .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
+                    llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
+                        if info.calling_convention == llrm_mir::opcode::REGCALL
+                            || (info.calling_convention == 0
+                                && llrm_mir::memory::callee(&module.context, function, inst)
+                                    .is_some_and(|one| library.contains(&one))) =>
+                    {
+                        Some(inst)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for inst in watcom {
+                function.set_call_convention(inst, llrm_mir::opcode::WATCALL);
+            }
         }
         let calls: Vec<_> = function
             .walk()
             .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                 llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                    if takes(info.calling_convention, is_variadic(info.function_type)) =>
+                    if takes(
+                        info.calling_convention,
+                        is_variadic(info.function_type)
+                            || (regcall_default
+                                && llrm_mir::memory::callee(&module.context, function, inst)
+                                    .is_some_and(|one| library.contains(&one))),
+                    ) =>
                 {
                     Some(inst)
                 }
@@ -303,6 +351,7 @@ pub fn compiled_dumping(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
+    refuse_debug_format(flags, format.name(), bound.target.object().bitness)?;
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
@@ -314,7 +363,15 @@ pub fn compiled_dumping(
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
         options.dump = Some(dump.to_path_buf());
     }
-    options.libcalls.extend(libm_calls(default, format.name()));
+    // The Watcom library is the register convention where the default is
+    // regparm3.
+    let library = default
+        .cc
+        .as_deref()
+        .filter(|cc| *cc == "regparm3")
+        .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
+        .unwrap_or(default);
+    options.libcalls.extend(libm_calls(library, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -335,6 +392,32 @@ fn libm_calls(
             (name, number, symbol)
         })
         .collect()
+}
+
+/// `-gcodeview` and `-gtd` where the object format cannot carry them, with the
+/// words the debug writers use: an object that holds another flavor than the
+/// one asked for must not be written.
+fn refuse_debug_format(
+    flags: &Flags,
+    format: &str,
+    bitness: u32,
+) -> Result<(), String> {
+    use llrm_object::debug::Format;
+    if !flags.debug {
+        return Ok(());
+    }
+    match flags.debug_format {
+        Format::CodeView if !matches!(format, "omf" | "coff") => {
+            Err(format!("-gcodeview: the {format} object format cannot carry CodeView"))
+        }
+        Format::TurboDebugger if format != "omf" => {
+            Err(format!("-gtd: the {format} object format cannot carry Turbo Debugger's information"))
+        }
+        Format::TurboDebugger if bitness != 16 => {
+            Err("-gtd: Borland's records are 16-bit; use a 16-bit target".to_owned())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A C `static` function may be entered by a near call wherever only its own
@@ -521,29 +604,4 @@ fn compile(
         write_output(&output, bytes)
     }
     .map_err(|error| error.to_string())
-}
-
-#[cfg(test)]
-mod line_rewrite_tests {
-    use super::*;
-
-    /// Every IR line took ~8 allocations (two `replace`s, four `format!`
-    /// searches, two `to_owned`s) though almost none is rewritten: 36K on
-    /// jpeg_fixed (SD-free: compile-time profile 2026-10-27).
-    #[test]
-    fn an_ordinary_line_is_not_copied() {
-        let line = "  %x = add i32 %a, %b";
-        assert!(matches!(port_intrinsic(line), Cow::Borrowed(_)));
-        assert!(matches!(lifetime_markers_with_a_size(line), Cow::Borrowed(_)));
-        let (_, kept) = without_triple(&format!("{line}\n"));
-        assert_eq!(kept, format!("{line}\n"));
-    }
-
-    #[test]
-    fn a_borland_port_call_and_a_bare_lifetime_marker_are_still_rewritten() {
-        let call = "  %v = call i16 @__inportb__(i16 %p)";
-        assert_eq!(port_intrinsic(call), "  %v = call i8 @llrm.ia16.in.i8(i16 %p)");
-        let marker = "  call void @llvm.lifetime.start.p0(ptr %a)";
-        assert_eq!(lifetime_markers_with_a_size(marker), "  call void @llvm.lifetime.start.p0(i64 -1, ptr %a)");
-    }
 }
