@@ -1235,7 +1235,7 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
 fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
     let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
     let text = format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @p = global [100 x i16] [{}]
 @v = global [100 x i16] [{}]
 
@@ -1902,7 +1902,7 @@ impl llrm_mir::passes::FunctionPass for Agree {
 /// panicked at ranger.rs:925, #2369).
 #[test]
 fn test_the_ranger_and_the_table_agree_between_the_stages_of_the_llvm_order() {
-    let mut module = crate::testing::parsed("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    let mut module = crate::testing::parsed("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 define internal cc 1005 void @insert(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, i16 %1, i16 %2) addrspace(1) nearcode memory(readwrite, argmem: read) {
 b1:
@@ -2624,7 +2624,7 @@ fn a_slot_names_the_member_that_left_a_phi_short() {
 #[test]
 fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
     let mut module = llrm_analysis::testing::parsed(
-        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
 define internal cc 1005 void @"_frame@3"(ptr addrspace(1) nocapture %0, i16 %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
 b1:

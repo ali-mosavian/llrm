@@ -431,7 +431,7 @@ entry:
     assert_eq!(flags(", !invariant.load !0"), [true]);
 }
 
-const M16_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_STACK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define void @f(i32 %a, i64 %b, i32 %c) addrspace(1) {
 entry:
   ret void
@@ -488,7 +488,7 @@ fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(refused.contains("memmove"), "{refused}");
 }
 
-const SCALED_INDEX_AT_M16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const SCALED_INDEX_AT_M16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare cc 1006 void @\"_far_get@3\"(ptr, ptr addrspace(1))
 declare cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1))
 declare cc 1006 i16 @\"_con_back_load@3\"(ptr addrspace(1), ptr)
@@ -709,7 +709,7 @@ fn a_scaled_lea_at_m16_has_no_literal_place() {
 fn a_lea_at_m16_does_not_scale_a_word_index() {
     use crate::model::ir::{Loc, Operation};
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define ptr @f(ptr %p, i16 %i, i1 %c) {
   %w = lshr i16 %i, 4
   br i1 %c, label %a, label %b
@@ -744,7 +744,7 @@ b:
 fn a_negative_displacement_at_m16_is_negative() {
     use crate::model::ir::Loc;
     let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+        "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define i16 @f(ptr %p, i16 %i) {
   %q = getelementptr i8, ptr %p, i16 %i
   %r = getelementptr i8, ptr %q, i16 -4
@@ -804,7 +804,7 @@ define double @f(double %x) {
     assert_eq!(clobbers("flog2"), [RegId::MM6]);
 }
 
-const M16_CLEAR_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_CLEAR_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @g = global [16 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define void @f() {
@@ -814,7 +814,7 @@ entry:
 }
 ";
 
-const M16_CLEAR_54: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_CLEAR_54: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @g = global [54 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define void @f() {

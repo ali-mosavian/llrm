@@ -3,7 +3,7 @@
 use super::CgpAddr;
 use crate::testing::{parsed, printed};
 
-const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
 
 /// `text` through the pass on the real-mode target: the text after.
 fn sunk(text: &str) -> String {
