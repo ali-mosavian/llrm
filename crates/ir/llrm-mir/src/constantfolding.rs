@@ -256,7 +256,7 @@ fn canonical(
 }
 
 /// `Constant::isManifestConstant`.
-fn is_manifest_constant(
+pub fn is_manifest_constant(
     context: &Context,
     c: ConstantId,
 ) -> bool {
