@@ -828,7 +828,30 @@ impl Function {
         &self,
         block: BlockId,
     ) -> crate::blocklist::BlockList {
-        let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
+        let Some(last) = self.terminator(block) else { return crate::blocklist::BlockList::new() };
+        let instruction = self.instruction(last);
+        // The branches are nearly every terminator: their targets go straight
+        // into the list, with no scan for a repeat.
+        if instruction.opcode == Opcode::Br {
+            let mut out = crate::blocklist::BlockList::new();
+            match instruction.operands[..] {
+                [Operand::Block(only)] => {
+                    out.push(only);
+                    return out;
+                }
+                [_, Operand::Block(taken), Operand::Block(other)] => {
+                    out.push(taken);
+                    if other != taken {
+                        out.push(other);
+                    }
+                    return out;
+                }
+                _ => {}
+            }
+        }
+        #[cfg(test)]
+        GENERIC_SUCCESSOR_SCANS.with(|count| count.set(count.get() + 1));
+        let operands = instruction.operands.as_slice();
         if operands.len() > SCAN {
             return Self::listed_once(operands);
         }
@@ -1323,4 +1346,7 @@ const SCAN: usize = 16;
 thread_local! {
     /// `Function::terminator` calls, for the tests that count them.
     pub(crate) static TERMINATOR_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `Function::successors` calls that read a terminator's operands the long
+    /// way.
+    pub(crate) static GENERIC_SUCCESSOR_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
