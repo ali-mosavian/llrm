@@ -370,6 +370,15 @@ pub fn contribution(
     one: &crate::model::lir::Insn,
     items: &mut Vec<Item>,
 ) {
+    // A value an instruction takes from or leaves in an xmm register is held
+    // in one: LLVM gives the vreg copied from a physical register that
+    // register's class. Its only reads may be copies, which name no class.
+    for (held, register) in one.requires.iter().chain(&one.delivers) {
+        if regs.in_class(*register, llrm_lir::registers::class::XMM) {
+            let defining = one.delivers.iter().any(|(other, _)| other.value == held.value);
+            items.push(Item::Restrict { value: held.value, kind: Kind::Xmm, role: Role::Xmm, defining });
+        }
+    }
     let Some(what) = &one.what else {
         return;
     };
