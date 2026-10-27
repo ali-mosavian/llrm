@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -76,10 +76,9 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
-| live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |
+| live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit` and `regclass` | [live](live.md) |
 | liveness | Which physical register and flag lanes are live into and dead out of each block, and what one instruction reads and writes. | `peephole` and the sub-passes it runs (`regthrash`, `copysink`, | [liveness](liveness.md) |
 | liverangeshrink | Moves an instruction up to just after the last definition of its operands, so the operands' live ranges end sooner. | A machine phase after `machinesink` and before `phielim` | [liverangeshrink](liverangeshrink.md) |
-| liveunion | Answers which values already hold a register where an interval lies, so the allocator can test an assignment without visiting every holder. | `allocate` and `splitkit`. | [liveunion](liveunion.md) |
 | loopslots | Moves a loop's invariant loads, of a spill slot or of a constant, out of the loop to its entry edges. | After `peephole` (spill traffic is final), before `schedule`. Always on; | [loopslots](loopslots.md) |
 | lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. | `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`. | [lower_int64](lower_int64.md) |
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |

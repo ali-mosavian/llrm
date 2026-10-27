@@ -83,8 +83,8 @@
 //! groups of `peep`.
 //!
 //! The analyses the phases share: `liveness` and `lanes` (register and flag
-//! lanes), `live`, `liveunion` and `neighbours` (intervals, per-register
-//! holders and interference for the allocator), `overlap` (memory operands),
+//! lanes), `live` and `neighbours` (intervals and interference for
+//! the allocator), `overlap` (memory operands),
 //! `lifetimes` and `slots` (frame-slot sharing), `executed` and `timing`
 //! (what a candidate costs) and `effects` (what an instruction reads and
 //! writes). `needs` lets the peephole skip a sub-pass with nothing to act on.
@@ -213,7 +213,6 @@ pub mod lirtext;
 pub mod live;
 pub mod liveness;
 pub mod liverangeshrink;
-pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
