@@ -1767,7 +1767,7 @@ impl Builder<'_> {
         self.current = Some(inst);
         // `++SDNodeOrder`: what the nodes built for this instruction carry.
         self.dag.cur_order += 1;
-        if self.prelowered.contains(&inst) {
+        if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();
