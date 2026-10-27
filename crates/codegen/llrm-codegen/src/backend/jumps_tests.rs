@@ -26,6 +26,10 @@ fn cx() -> Loc {
     Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
+fn dx() -> Loc {
+    Loc::Reg(Reg { register: RegId::DX, width: 2 })
+}
+
 fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
@@ -2130,6 +2134,45 @@ fn test_the_instruction_both_ways_begin_with_is_hoisted_above_the_compare() {
     let at = lines.iter().position(|line| line.as_str() == "mov cx, 5").unwrap();
     let compare = lines.iter().position(|line| line.starts_with("cmp")).unwrap();
     assert!(at < compare, "{lines:?}");
+}
+
+fn arms_after(
+    head: Vec<Arc<Insn>>,
+    set: impl Fn(i64) -> Vec<Arc<Insn>>,
+) -> Vec<String> {
+    let arm = |at: i64, tail: Arc<Insn>| {
+        let mut insns = set(at);
+        insns.extend([tail, _return(at + 90)]);
+        insns
+    };
+    _printed(vec![
+        block(1, head, vec![9, 4]).into(),
+        block(4, arm(4, _move(5, bx())), vec![]).into(),
+        block(9, arm(9, _move(10, bx())), vec![]).into(),
+    ])
+}
+
+/// The zero both arms return is `xor ax, ax` by the time arms are folded: it
+/// sets flags, which the compare in front of the branch sets again, so it runs
+/// above the compare (x_prefix, x_life, recgcd: +2..3 instructions each).
+#[test]
+fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
+    let lines = arms_after(vec![_compare(1), _branch(2, "je", 9)], |at| {
+        vec![_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None))]
+    });
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// A branch whose flags come from an earlier instruction, not a compare in
+/// front of it, reads what a hoisted `xor` would clobber.
+#[test]
+fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare() {
+    let lines = arms_after(vec![_move(1, bx()), _branch(2, "je", 9)], |at| {
+        vec![_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None))]
+    });
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 2, "{lines:?}");
 }
 
 /// The pin copies propagation twice, again after tail duplication and block
