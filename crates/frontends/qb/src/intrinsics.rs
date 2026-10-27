@@ -54,6 +54,7 @@ pub enum Lowering {
     PointerSegment,
     VarptrString,
     StringAddress,
+    StringSegment,
     Abs,
     Sqrt,
     Sign,
@@ -260,6 +261,15 @@ pub static INTRINSICS: &[Intrinsic] = &[
     intrinsic!("PEN", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPEN")),
     intrinsic!("$VARPTR", 1..=1, String, Runtime, Lowering::VarptrString),
     intrinsic!("SADD", 1..=1, Integer, Pure, Lowering::StringAddress),
+    Intrinsic {
+        name: "SSEG",
+        min_arity: 1,
+        max_arity: 1,
+        result: ResultClass::Integer,
+        effect: Effect::Pure,
+        lowering: Lowering::StringSegment,
+        dialects: PDS | VBDOS,
+    },
     intrinsic!("PLAY", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPLY")),
     intrinsic!("POS", 1..=1, Integer, Runtime, Lowering::RuntimeInteger("B$FPOS")),
     // The event checks the front end writes (never a program's: `$` cannot

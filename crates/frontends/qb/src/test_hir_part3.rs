@@ -3600,3 +3600,38 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
         records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "vbdos", "vbdos"), "T.BAS");
     }
 }
+
+/// The listing of `source` under one dialect and its runtime.
+fn listing_in(
+    dialect: &str,
+    name: &str,
+    source: &str,
+) -> String {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join(format!("{name}.asm"));
+    let input = written(&directory, &format!("{name}.bas"), source.as_bytes());
+    let argv = [
+        input.to_str().unwrap(),
+        "--dialect",
+        dialect,
+        "--runtime",
+        dialect,
+        "-O2",
+        "-march=i486",
+        "-S",
+        "-o",
+        out.to_str().unwrap(),
+    ]
+    .map(str::to_owned);
+    assert_eq!(crate::cli::main(&argv), 0);
+    std::fs::read_to_string(&out).expect("the listing")
+}
+
+/// SSEG(a$) was refused ("cannot generate code for it yet"): it is
+/// B$SSEG(descriptor), the string data's segment in AX.
+#[test]
+fn test_sseg_asks_the_runtime_for_a_strings_segment() {
+    let text = listing_in("vbdos", "ssegcall", "DIM t AS STRING\r\nt = \"ABCD\"\r\nPRINT SSEG(t)\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    assert_eq!(main.matches("call far ptr B$SSEG").count(), 1, "{main}");
+}
