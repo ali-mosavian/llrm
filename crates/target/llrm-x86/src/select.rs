@@ -2218,6 +2218,15 @@ fn scalar_sse(
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_mem_reg(code, built, outof.register)), at, relocated)
         }
+        // movd/movq: between an integer register and an xmm register.
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "movq" | "movd") && !xmm(first) => {
+            let code = code_of!(upper, "_RM", into.width * 8, "_XMM")?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "movq" | "movd") => {
+            let code = code_of!(upper, "_XMM_RM", outof.width * 8)?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
         // cvttsd2si: an integer register from an xmm register or memory.
         (Loc::Reg(into), source) if !xmm(first) => {
             let code = code_of!(upper, "_R", into.width * 8, "_XMMM", bits(source))?;

@@ -282,3 +282,14 @@ fn the_scalar_double_move_is_not_the_string_copy() {
     let mov = sem(Operation::Move, Some("movsd_x"), vec![rg(x(0), 16)], vec![rg(x(1), 16)], None, false);
     assert_eq!(bytes(&mov), [0xf2, 0x0f, 0x10, 0xc1]);
 }
+
+/// `movq rax, xmm0` was `Semantics(... name='movq' ...)` with no encoding,
+/// so an object file of a float/integer bitcast (`fconst`) failed.
+#[test]
+fn a_move_between_an_integer_and_an_xmm_register_encodes() {
+    let x = RegId::from(Register::XMM0);
+    let to_xmm = sem(Operation::Extend, Some("movq_x"), vec![rg(x, 16)], vec![rg(RegId::RDI, 8)], None, false);
+    assert_eq!(bytes(&to_xmm), [0x66, 0x48, 0x0f, 0x6e, 0xc7]);
+    let from_xmm = sem(Operation::Extend, Some("movd"), vec![rg(RegId::EAX, 4)], vec![rg(x, 16)], None, false);
+    assert_eq!(bytes(&from_xmm), [0x66, 0x0f, 0x7e, 0xc0]);
+}
