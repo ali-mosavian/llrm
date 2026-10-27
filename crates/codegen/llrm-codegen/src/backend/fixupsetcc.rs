@@ -48,7 +48,6 @@
 
 use std::sync::Arc;
 
-
 use crate::backend::liveness;
 use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
