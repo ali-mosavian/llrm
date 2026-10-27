@@ -1173,7 +1173,7 @@ impl Emitter<'_, '_> {
             dests.push(Loc::Held(held));
         }
         let cell_width =
-            super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+            self.ctx.map.memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
         let mut operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
         // A memory destination (`ADD32mr`, no result): the cell is the
         // destination and its tied source.
