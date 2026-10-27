@@ -735,7 +735,9 @@ fn selected_in(
         // only). Flipping it grows m32 -Os +250 B and m16 -Os +301 B; only
         // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
         // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
-        // +59 B in 4 spill slots).
+        // +59 B in 4 spill slots). Cost: an idiv is ~40 clocks on a 486 where
+        // the multiply is ~13; div_constants_long m32 -Os is 5095 B against the
+        // pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
