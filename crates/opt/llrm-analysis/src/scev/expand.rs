@@ -645,24 +645,8 @@ impl Run<'_> {
             return found;
         }
         self.x.insert_point = Some(at);
-        // Expand the expression into instructions, or reuse a value of it.
-        let mut drop = Vec::new();
-        let found = {
-            let cx = cx!(self);
-            self.x.find_value_in_expr_value_map(&cx, self.se, s, at, &mut drop)
-        };
-        let v = match found {
-            None => {
-                let v = self.visit(s);
-                self.fixup_lcssa_form_for(v)
-            }
-            Some(v) => {
-                for inst in drop {
-                    self.drop_reused_poison_flags(inst);
-                }
-                v
-            }
-        };
+        let v = self.visit(s);
+        let v = self.fixup_lcssa_form_for(v);
         self.x.insert_point = Some(here);
         self.x.expressions.insert((s, at), v);
         v
