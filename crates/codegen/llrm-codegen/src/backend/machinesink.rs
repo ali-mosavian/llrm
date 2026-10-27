@@ -50,8 +50,11 @@
 //! 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 //! identical). The rule had bought -85 B of QCport -Os on the old allocator.
 //!
-//! DEVIATE M5 (#2903): in a build for size no edge is broken, except one that
-//! leaves the loop its instruction runs in (row M6, below). The block
+//! DEVIATE M5 (#2903): in a build for size no edge is broken, except where the
+//! instruction is in a loop (row M6, below); the pin breaks it at any size
+//! (`isWorthBreakingCriticalEdge`, MachineSink.cpp:1040-1105, has no size
+//! check). Without the rule m16 -Os grows 66 B in 22 objects (recgcd +5,
+//! recsum +5, switch +4, bintree +4), m32 79 B. The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 //! 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
 //! +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
@@ -60,7 +63,8 @@
 //! 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 //! or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 //!
-//! Row M6: the edge that leaves a loop is broken in a build for size too: the
+//! Row M6: an edge of a loop is broken in a build for size too (x_collatz -Os
+//! m32 313 -> 309 B, m16 340 -> 334, no object grows): the
 //! pin's `mov ecx, 32` of an exit phi runs once, in a block of its own, not
 //! every trip in the latch. Measured (own dist pair, sizes.py, clocksweep, m16
 //! -Os, 312 programs): 185933 -> 185910 B, 10 programs changed (6 smaller, 4
@@ -818,10 +822,9 @@ impl Sinker {
         deferred: &mut Option<usize>,
     ) -> bool {
         // A block on an edge costs a jump the size build does not get back,
-        // unless the edge leaves the loop the instruction runs in every trip
-        // of.
-        let leaves_loop = self.cycle[from].is_some() && self.cycle[to] != self.cycle[from];
-        if self.size && !leaves_loop {
+        // unless the instruction runs in a loop: there the other path stops
+        // paying for it every trip.
+        if self.size && self.cycle[from].is_none() {
             return false;
         }
         // An edge already considered this walk: sink several cheap
@@ -1320,6 +1323,70 @@ mod tests {
         let moved = sunk(&body, true);
         assert!(!names(&moved, 2).contains(&"mov".to_owned()), "the constant left the latch: {:?}", names(&moved, 2));
         assert!(moved.blocks.len() == 5, "and went into a block of its own on the exit edge");
+    }
+
+    /// x_collatz -Os m32: `x & 1 ? 3x + 1 : x >> 1` in a loop computed the
+    /// `shr` above the test and copied it, where the pin sinks it into a block
+    /// on the edge it alone takes (inner loop 10 instructions against 4). A
+    /// size build broke no edge inside a loop.
+    #[test]
+    fn test_in_a_size_build_an_instruction_of_a_loop_sinks_onto_its_critical_edge() {
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let phi = |result: u32, incoming: Vec<(i64, u32)>| crate::model::lir::Phi { result, incoming };
+        let header = LirBlock {
+            phis: vec![phi(2, vec![(0, 1), (3, 5)])].into(),
+            ..block(
+                1,
+                vec![2, 3],
+                vec![
+                    insn(10, Operation::Binary, "shr", vec![held(3)], vec![held(2), imm(1)], vec![3], vec![2]),
+                    insn(11, Operation::Compare, "test", vec![], vec![held(2), imm(1)], vec![], vec![2]),
+                    insn(12, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let join = LirBlock {
+            phis: vec![phi(5, vec![(2, 4), (1, 3)])].into(),
+            ..block(
+                3,
+                vec![1, 4],
+                vec![
+                    insn(30, Operation::Compare, "cmp", vec![], vec![held(5), imm(1)], vec![], vec![5]),
+                    insn(31, Operation::Branch, "jne", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut body = LirBody::new(
+            "collatz",
+            0,
+            vec![
+                block(0, vec![1], vec![insn(0, Operation::Move, "mov", vec![held(1)], vec![imm(7)], vec![1], vec![])])
+                    .into(),
+                header.into(),
+                block(
+                    2,
+                    vec![3],
+                    vec![insn(20, Operation::Binary, "lea", vec![held(4)], vec![held(2), imm(1)], vec![4], vec![2])],
+                )
+                .into(),
+                join.into(),
+                block(4, vec![], vec![insn(40, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let moved = sunk(&body, true);
+        let header: Vec<_> = moved.blocks[1]
+            .insns
+            .iter()
+            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+            .collect();
+        assert!(!header.iter().any(|name| &**name == "shr"), "the shr left the header: {header:?}");
+        assert_eq!(moved.blocks.len(), 6, "and went into a block of its own on the edge to the join");
     }
 
     /// `x > 65520 ? x - 65521 : x` in a build for size: the `add` was computed
