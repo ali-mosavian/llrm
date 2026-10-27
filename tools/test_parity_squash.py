@@ -1223,10 +1223,10 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
 
 def test_a_page_a_pr_leaves_stale_is_named_even_when_the_head_already_has_stale_pages():
     """#5031, #5049 and #4988 changed a `//!` header, passed alone and landed with six pages stale: the head's red docs_in_sync was excused, so no check saw a new one."""
-    why, now = ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: {"docs/a.md", "docs/b.md", "docs/c.md"})
+    why, now = ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: {"docs/a.md", "docs/b.md", "docs/c.md"})
     assert "docs/b.md" in why and "docs/c.md" in why and "docs/a.md" not in why and now == {"docs/a.md", "docs/b.md", "docs/c.md"}
-    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: {"docs/a.md"})[0] == ""
-    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: set())[0] == "", "a PR that regenerates a page is not refused"
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: {"docs/a.md"})[0] == ""
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: set())[0] == "", "a PR that regenerates a page is not refused"
 
 
 def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others_stay(tmp_path):
@@ -1245,7 +1245,7 @@ def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others
 
     stale_after = {"1": {"docs/old.md"}, "2": {"docs/old.md", "docs/new.md"}, "3": {"docs/old.md"}}
     current = []
-    gated = ps.docs_gated(lambda number: (current.append(number), merge_one(number))[1], {"docs/old.md"}, tmp_path, docs=lambda: stale_after[current[-1]])
+    gated = ps.docs_gated(lambda number: (current.append(number), merge_one(number))[1], {"docs/old.md"}, tmp_path, docs=lambda root: stale_after[current[-1]])
     assert gated("1") == ""
     why = gated("2")
     assert "docs/new.md" in why and "docs/old.md" not in why
@@ -1313,3 +1313,13 @@ def test_a_head_whose_header_changed_without_its_page_is_named_once_merged_with_
     run("checkout", "-q", "--detach", base)
     assert "docs/a.md" in ps.docs_recheck(head, base, tmp_path, set())
     assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
+
+
+def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names_the_exception(tmp_path):
+    """05:18: `docs_refusal` called `docs()` while the default `docs_stale` needs the root: every batch died with a TypeError and all 13 PRs were refused with an empty reason; #5073's tests mocked `docs`."""
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=tmp_path, check=True)
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
+    line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
+    assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
