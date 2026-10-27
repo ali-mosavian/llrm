@@ -581,6 +581,17 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
+            ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddO | ISD::SSubO if value.res == 1 => {
+                // `PromoteIntRes_Overflow`: the node again with the target's
+                // boolean type for the flag; the sum is switched to the new
+                // node and the flag is the promoted value.
+                let sum_vt = self.dag.value_type(SDValue { node: value.node, res: 0 });
+                let flag_vt = self.tli.types.set_cc_result_type(sum_vt);
+                let ops = self.dag.node(value).ops.clone();
+                let node = self.dag.get_node_multi(self.dag.opcode(value), &[sum_vt, flag_vt], &ops);
+                self.replace_value_with(SDValue { node: value.node, res: 0 }, SDValue { node: node.node, res: 0 });
+                SDValue { node: node.node, res: 1 }
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -669,6 +680,21 @@ impl<'a> TypeLegalizer<'a> {
                 let (lhs, rhs) = (extend(self, lhs), extend(self, rhs));
                 let ops = [lhs, rhs, self.dag.operand(node, 2)];
                 let updated = self.dag.update_node_operands(n, &ops);
+                SDValue { node: updated, res: 0 }
+            }
+            ISD::UAddOCarry | ISD::USubOCarry if at == 2 => {
+                // `PromoteIntOp_ADDSUBO_CARRY`: the carry in as the target's
+                // boolean type (`PromoteTargetBoolean`).
+                let (lhs, rhs, carry) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(lhs));
+                let extend = match self.dag.config().boolean_contents {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let carry = self.dag.get_node(extend, bool_vt, &[carry]);
+                let updated = self.dag.update_node_operands(n, &[lhs, rhs, carry]);
                 SDValue { node: updated, res: 0 }
             }
             ISD::BrCond if at == 1 => {
@@ -848,6 +874,7 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
+            op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
             ISD::Mul => self.expand_mul(value, half)?,
             op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => self.expand_division(value, op, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
@@ -1063,6 +1090,39 @@ impl<'a> TypeLegalizer<'a> {
         } else {
             self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, carry])
         };
+        Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_UADDSUBO`: the low halves' overflow form, the high halves
+    /// with its carry in, whose overflow is the whole one. Without a carry
+    /// operation the sum is the plain one, and overflow is `sum < lhs` (`sum >
+    /// lhs` for a subtract).
+    fn expand_addsub_overflow(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> Result<(SDValue, SDValue), LegalizeError> {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let (carry_op, plain, cc) = if op == ISD::UAddO {
+            (ISD::UAddOCarry, ISD::Add, CondCode::SetULt)
+        } else {
+            (ISD::USubOCarry, ISD::Sub, CondCode::SetUGt)
+        };
+        let overflow_vt = self.dag.node(value).values[1];
+        let (lo, hi, overflow) = if self.tli.is_operation_legal_or_custom(carry_op, half) {
+            let lo = self.dag.get_node_multi(op, &[half, overflow_vt], &[ll, rl]);
+            let hi =
+                self.dag.get_node_multi(carry_op, &[half, overflow_vt], &[lh, rh, SDValue { node: lo.node, res: 1 }]);
+            (lo, SDValue { node: hi.node, res: 0 }, SDValue { node: hi.node, res: 1 })
+        } else {
+            let wide = self.dag.value_type(value);
+            let sum = self.dag.get_node(plain, wide, &[lhs, rhs]);
+            let (lo, hi) = self.split_integer(sum, half);
+            (lo, hi, self.dag.get_setcc(overflow_vt, sum, lhs, cc))
+        };
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
         Ok((lo, hi))
     }
 

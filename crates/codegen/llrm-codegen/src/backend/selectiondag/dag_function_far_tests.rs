@@ -897,3 +897,37 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
     let crate::model::ir::Loc::Held(destination) = &sources[2] else { panic!("{fill:?}") };
     assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
 }
+
+/// `uadd.with.overflow` and `usub.with.overflow` returning the `i1` flag
+/// stopped the legalizer with `Unsupported { op: UAddO, ty: I1, what: "promote
+/// result" }` (any width), and at `i64` with `"expand result"`. An `i64` one is
+/// `add; adc` (`sub; sbb`) and the carry out.
+#[test]
+fn an_unsigned_overflow_flag_is_the_carry_of_the_whole_sum() {
+    for (op, width, carry) in [
+        ("uadd", 16, None),
+        ("usub", 16, None),
+        ("uadd", 32, None),
+        ("uadd", 64, Some("adc")),
+        ("usub", 64, Some("sbb")),
+    ] {
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare {{i{width}, i1}} @llvm.{op}.with.overflow.i{width}(i{width}, i{width})
+define i1 @f(i{width} %a, i{width} %b) {{
+entry:
+  %r = call {{i{width}, i1}} @llvm.{op}.with.overflow.i{width}(i{width} %a, i{width} %b)
+  %o = extractvalue {{i{width}, i1}} %r, 1
+  ret i1 %o
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{op} i{width}: {}", e.0));
+        let names = mnemonics(&done);
+        if let Some(carry) = carry {
+            assert!(names.iter().any(|m| m == carry), "{op} i{width}: {names:?}");
+        }
+    }
+}
