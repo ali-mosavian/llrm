@@ -5,7 +5,9 @@
 //!
 //! # How it works
 //! A copy of a variable length, of a constant length over [`INLINE_LIMIT`]
-//! (`getMaxInlineSizeThreshold`) or of pointers aligned under four bytes is
+//! (`getMaxInlineSizeThreshold`) or of pointers aligned under four bytes (the
+//! `align` the call states or the pointer's known alignment: LLVM's
+//! InstCombine raises the intrinsic's alignment to it) is
 //! a call of `memcpy(dst, src, len)` in the ABI's default convention; the
 //! rest stays for the selector. Only on a target whose runtime says it has
 //! `memcpy` (`libcalls` of its `c.toml`): the selector's `rep movs` stays
@@ -78,9 +80,10 @@ pub fn expanded(
     symbol: &str,
 ) -> Result<(), String> {
     let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
+    let known = known_alignments(module)?;
     let mut any = false;
-    expansion::expand_calls(module, needs, |context, function, call, ()| {
-        any |= calls(context, function, call);
+    expansion::expand_calls_in(module, needs, |context, at, function, call, ()| {
+        any |= calls(context, function, call, known.get(&(at, call)));
         Ok(())
     })?;
     if !any {
@@ -105,8 +108,8 @@ pub fn expanded(
         None => module.add_function(symbol, ty, Linkage::External)?,
     };
     let reference = module.reference(id);
-    expansion::expand_calls(module, needs, |context, function, call, ()| {
-        if !calls(context, function, call) {
+    expansion::expand_calls_in(module, needs, |context, at, function, call, ()| {
+        if !calls(context, function, call, known.get(&(at, call))) {
             return Ok(());
         }
         let instruction = function.instruction(call).clone();
@@ -144,11 +147,42 @@ pub fn expanded(
     })
 }
 
+/// What the pointers of each `llvm.memcpy` are known to be aligned to
+/// (`Value::getPointerAlignment`, the alignment InstCombine's
+/// `SimplifyAnyMemTransfer` states on the intrinsic), by function name and
+/// call.
+type Known = std::collections::HashMap<(usize, llrm_mir::module::InstId), (u64, u64)>;
+
+fn known_alignments(module: &Module) -> Result<Known, String> {
+    use llrm_mir::valuetracking::Query;
+    let layout =
+        module.datalayout.as_deref().map_or_else(|| Ok(Default::default()), llrm_mir::datalayout::DataLayout::parse)?;
+    let mut known = Known::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { continue };
+        for (_, inst) in function.walk() {
+            let Some(callee) = llrm_mir::memory::callee(&module.context, function, inst) else { continue };
+            if module.global(callee).intrinsic() != Some(Intrinsic::MemCpy) {
+                continue;
+            }
+            let operands = &function.instruction(inst).operands;
+            let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+            let (dst, src) = (
+                llrm_mir::valuetracking::known::pointer_alignment(&query, operands[0]),
+                llrm_mir::valuetracking::known::pointer_alignment(&query, operands[1]),
+            );
+            known.insert((at, inst), (dst, src));
+        }
+    }
+    Ok(known)
+}
+
 /// Whether `call` is a copy the target does not make inline.
 fn calls(
     context: &llrm_mir::context::Context,
     function: &llrm_mir::module::Function,
     call: llrm_mir::module::InstId,
+    known: Option<&(u64, u64)>,
 ) -> bool {
     let instruction = function.instruction(call);
     let Opcode::Call(info) = &instruction.opcode else { return false };
@@ -183,7 +217,8 @@ fn calls(
             return false;
         }
     }
-    if align(0) < 4 || align(1) < 4 {
+    let inferred = known.copied().unwrap_or((1, 1));
+    if align(0).max(inferred.0) < 4 || align(1).max(inferred.1) < 4 {
         return true;
     }
     match instruction.operands[2] {

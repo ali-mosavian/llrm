@@ -78,3 +78,28 @@ fn test_a_short_constant_copy_of_unaligned_pointers_stays_for_the_selector() {
     assert!(!expanded(1, "32").contains("call ptr @memcpy("), "eight 4-byte moves");
     assert!(expanded(1, "36").contains("call ptr @memcpy("), "nine moves");
 }
+
+/// A 100-byte copy between globals declared `align 4` stated no `align` on the
+/// call and was a call of `memcpy_`; the pin raises the intrinsic's alignment
+/// to what it knows of the pointers and copies with `rep movsl`.
+#[test]
+fn test_a_copy_between_aligned_globals_stays_for_the_selector() {
+    let text = |align: u32| {
+        format!(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\
+             @a = global [100 x i8] zeroinitializer, align {align}\n\
+             @b = global [100 x i8] zeroinitializer, align {align}\n\
+             declare void @llvm.memcpy.p0.p0.i32(ptr, ptr, i32, i1)\n\
+             define void @f() {{\n\
+             call void @llvm.memcpy.p0.p0.i32(ptr @b, ptr @a, i32 100, i1 false)\n\
+             ret void\n}}\n"
+        )
+    };
+    let run = |align: u32| {
+        let mut module: Module = llrm_mir::parse::module(&text(align)).expect("parses");
+        super::memcpycall::expanded(&mut module, 0, "memcpy").expect("expands");
+        llrm_mir::print::module(&module)
+    };
+    assert!(run(4).contains("call void @llvm.memcpy"), "{}", run(4));
+    assert!(run(1).contains("@memcpy("), "premise: unaligned globals are still a call");
+}
