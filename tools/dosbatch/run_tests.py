@@ -167,14 +167,27 @@ def compile_command(program: Program, obj: Path) -> list[str]:
     # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
     excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
     extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
+    if program.source.suffix == ".c" and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc":
+        # llrm-cc takes the target as a row (compile_env), not a -m flag, and stops at the object with -c.
+        tool, flags = "llrm-cc", [one for one in program.flags if one not in ("-m16", "-m32")]
+        command = [str(BIN / tool), "-c", str(program.source), *rest, *dialect, *flags, *excess, *extra, "-o", str(obj)]
+        return dosbatch.with_isel(command)
     command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, *excess, *extra, "-o", str(obj)]
     # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
     real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
     return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)
 
 
+def compile_env(program: Program) -> dict[str, str]:
+    """What `compile_command` needs set: llrm-cc's target row, for a C program where the run builds C with it."""
+    if program.source.suffix != ".c" or os.environ.get("LLRM_C_FRONTEND") != "llrm-cc":
+        return {}
+    return dosbatch.c_compile(program.source, Path("x.obj"), dosbatch.target_of(program.flags, dosbatch.REAL_MODE), "-O2", Path("."), [])[1]
+
+
 def compile_one(program: Program, obj: Path) -> str | None:
-    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True)
+    env = compile_env(program)
+    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-600:]
     return None
@@ -279,7 +292,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                     command, env = dosbatch.c_compile(source, extra, target, level, dosbatch.c_include(target, work), [one for one in program.flags if one.startswith("-mabi=")])
                     dosbatch._host(command, env)
                 others.append(extra)
-            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others), defines=dosbatch.os_defines(target, "c", next((one[len("-mabi="):] for one in program.flags if one.startswith("-mabi=")), None)))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"

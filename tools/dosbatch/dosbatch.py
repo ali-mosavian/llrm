@@ -11,6 +11,7 @@ stopping comes from the launch's events.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -205,6 +206,12 @@ def target_link(target: str) -> dict:
 _ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
 
 
+def runtime_path(made: Path, name: str, defines: tuple[str, ...]) -> Path:
+    """Where the object of runtime file `name` goes in `made`: one path per set of defines, as builds that differ in them run at once."""
+    one = object_name(name)
+    return made / (one if not defines else f"{hashlib.md5(' '.join(defines).encode()).hexdigest()[:8]}-{one}")
+
+
 def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path:
     """`path`, the object of the runtime file `name`, made once for this process however many builds ask: one
     made with the description's defines is not dated by its source, so it is made on the first ask, and an
@@ -257,7 +264,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:
-        return [runtime_object(name, made / object_name(name), defines) for name in names]
+        return [runtime_object(name, runtime_path(made, name, defines), defines) for name in names]
 
     first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
@@ -289,9 +296,11 @@ def os_layer(target: str, field: str, language: str) -> str:
     return said
 
 
-def os_defines(target: str, language: str) -> tuple[str, ...]:
+def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str, ...]:
     """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
-    return tuple(os_layer(target, "defines", language).split())
+    defines = tuple(os_layer(target, "defines", language).split())
+    # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
+    return (*defines, "LL_MAIN=main_") if language == "c" and abi not in ("sysv", "cdecl") and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else defines
 
 
 def os_start(target: str, language: str) -> list[str]:

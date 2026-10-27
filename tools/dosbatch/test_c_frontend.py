@@ -45,3 +45,48 @@ def test_a_target_without_a_row_is_a_build_error_not_a_key_error(monkeypatch):
         assert "no row for x86-m64" in str(why)
     else:
         raise AssertionError("no error")
+
+
+def test_a_c_program_itself_is_built_by_llrm_cc_where_the_run_names_it(monkeypatch, tmp_path):
+    """Only the `link:` extras went through LLRM_C_FRONTEND: a pass of 463 programs 'on llrm-cc' ran llrm-c for all but 21 of them
+    (wccq errors in its log), and passed with LLRM_CLANG_M16 unset."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
+    monkeypatch.delenv("LLRM_ISEL", raising=False)
+    source = tmp_path / "p.c"
+    source.write_text("int main(void) { return 0; }\n")
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
+    program = run_tests.Program(source=source, flags=["-O2", "-m32", "-march=i486"], known=None)
+    command = run_tests.compile_command(program, tmp_path / "p.obj")
+    assert Path(command[0]).name == "llrm-cc" and "-c" in command and "-m32" not in command and "-march=i486" in command, command
+    assert run_tests.compile_env(program) == {"LLRM_CC_TARGET": "x86_32-wat"}
+    assert run_tests.compile_env(run_tests.Program(source=source, flags=[], known=None)) == {"LLRM_CC_TARGET": "x86_16-wat"}
+
+
+def test_the_start_up_of_a_llrm_cc_c_program_enters_main_(monkeypatch):
+    """The Watcom rows name the entry `main_`: with the start-up asking for `_main`, 420 of 463 programs failed to link
+    ("E2028: _main is an undefined reference")."""
+    monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1 B=2")
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
+    assert dosbatch.os_defines("x86-m16", "c") == ("A=1", "B=2", "LL_MAIN=main_")
+    assert dosbatch.os_defines("x86-m16", "nib") == ("A=1", "B=2")
+    monkeypatch.delenv("LLRM_C_FRONTEND")
+    assert dosbatch.os_defines("x86-m16", "c") == ("A=1", "B=2")
+
+
+def test_a_sysv_or_cdecl_program_keeps_the_start_ups_default_entry(monkeypatch):
+    """-mabi=sysv names `_main`, not Watcom's `main_`: 21 rows failed "main_ is an undefined reference"."""
+    monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
+    assert dosbatch.os_defines("x86-m32", "c", "sysv") == ("A=1",)
+    assert dosbatch.os_defines("x86-m32", "c", "cdecl") == ("A=1",)
+    assert dosbatch.os_defines("x86-m32", "c", None) == ("A=1", "LL_MAIN=main_")
+
+
+def test_start_up_objects_built_with_different_entries_do_not_share_a_path(tmp_path):
+    """Rows run at once in one work directory: the sysv rows' `_main` start-up and the Watcom rows' `main_` one were written to one
+    file and replaced each other (a pass fell from 392 to 215, "_main is an undefined reference")."""
+    a = dosbatch.runtime_path(tmp_path, "runtime/shared/dos/m32/start.asm", ("A=1",))
+    b = dosbatch.runtime_path(tmp_path, "runtime/shared/dos/m32/start.asm", ("A=1", "LL_MAIN=main_"))
+    assert a != b and a.parent == b.parent == tmp_path
