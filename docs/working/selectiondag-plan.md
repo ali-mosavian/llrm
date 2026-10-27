@@ -233,6 +233,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD219 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
+| SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
