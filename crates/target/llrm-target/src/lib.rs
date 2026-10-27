@@ -33,6 +33,9 @@ pub struct StringRegisters {
     pub source: RegId,
     pub destination: RegId,
     pub source_segment: RegId,
+    /// The segment a destination is written through, which a string move
+    /// leaves loaded with the source's.
+    pub destination_segment: RegId,
     /// A data register a tail's byte count rides in.
     pub tail: RegId,
 }
