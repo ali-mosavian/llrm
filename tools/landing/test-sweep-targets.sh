@@ -20,4 +20,9 @@ touch -d "10 hours ago" $r/idle/target/debug/deps/filler.bin $r/idle/target/debu
 idle=$(SWEEP_ROOTS=$r CAP_KB=100000000 IDLE_CAP_KB=60 IDLE_HOURS=3 "$here/sweep-targets.sh")
 echo "$idle" | grep -q "idle/target: pruned" || { echo "FAIL: an idle target under the cap was not pruned: $idle"; exit 1; }
 echo "$idle" | grep -q "busy/target" && { echo "FAIL: a busy target under the cap was pruned: $idle"; exit 1; }
+# a live build writes deep under target/ while the top dirs sit old: a depth-2 age pruned cool-zhukovsky (15 GB, newest file 15 min old) as 38 h idle
+mkt deep/target; mkdir -p $r/deep/target/release/deps/x; head -c 100000 /dev/zero > $r/deep/target/release/deps/x/fresh.o
+touch -d "10 hours ago" $r/deep/target/debug/deps $r/deep/target/debug $r/deep/target/.rustc_info.json $r/deep/target/release/deps/x $r/deep/target/release/deps $r/deep/target/release $r/deep/target
+deep=$(SWEEP_ROOTS=$r CAP_KB=100000000 IDLE_CAP_KB=60 IDLE_HOURS=3 "$here/sweep-targets.sh")
+echo "$deep" | grep -q "deep/target" && { echo "FAIL: a target with a fresh deep file was pruned as idle: $deep"; exit 1; }
 echo PASS
