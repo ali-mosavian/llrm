@@ -38,8 +38,15 @@ def insn_count(obj):
     return sum(1 for l in out.splitlines() if re.match(r"^[0-9a-f]{16}\s", l))
 
 
+SHIM = "#include <stdio.h>\nvoid report(long v){printf(\"%ld\\n\",v);}\n"  # the benches' output hook
+
+
 def link(obj, exe):
-    r = sh(["clang", "-arch", "arm64", str(obj), "-o", str(exe)])
+    shim = exe.parent / "shim.o"
+    if not shim.exists():
+        (exe.parent / "shim.c").write_text(SHIM)
+        sh(["clang", "-arch", "arm64", "-c", str(exe.parent / "shim.c"), "-o", str(shim)])
+    r = sh(["clang", "-arch", "arm64", str(obj), str(shim), "-o", str(exe)])
     return r.returncode == 0, r.stderr.strip()
 
 
@@ -128,7 +135,7 @@ def main():
                 worse += ob > pb
             ref = outs.get("clang")
             exp = src.with_suffix(".out")
-            if exp.exists():  # the recorded output beats any build's  # .ll with a recorded expectation
+            if exp.exists() and src.suffix == ".ll":  # the recorded output beats any build's  # .ll with a recorded expectation
                 st = src.with_suffix(".status")
                 ref = (exp.read_bytes(), int(st.read_text()) if st.exists() else 0)
             res = "-" if "ours" not in outs else ("ok" if outs["ours"] == ref else "DIFF")

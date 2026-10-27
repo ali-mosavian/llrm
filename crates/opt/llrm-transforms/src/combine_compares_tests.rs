@@ -144,3 +144,23 @@ fn test_a_constant_outside_the_narrow_type_is_not_narrowed() {
         combined("define i1 @f(i8 %x) {\nb0:\n  %e = zext i8 %x to i32\n  %r = icmp ult i32 %e, 300\n  ret i1 %r\n}\n");
     assert!(!out.contains("icmp ult i8"), "{out}");
 }
+
+/// `foldICmpSubConstant` and `foldICmpBinOpEqualityWithConstant` were not translated, so the
+/// crc step `(0 - (x & 1)) == 0` stayed a `sub` and a compare: bench/crc came to 288 bytes against
+/// the pin's 188.
+#[test]
+fn test_an_equality_of_a_binary_operator_with_a_constant_is_a_compare_of_its_operand() {
+    let folds = |op: &str, pred: &str, constant: u32, wanted: &str| {
+        let text = format!(
+            "define i1 @f(i16 %x, i16 %y) {{\nb0:\n  %s = {op}\n  %r = icmp {pred} i16 %s, {constant}\n  ret i1 %r\n}}\n"
+        );
+        let out = combined(&text);
+        assert!(out.contains(wanted) && !out.contains("%s ="), "{wanted}\n{out}");
+    };
+    folds("sub nsw i16 0, %x", "eq", 0, "icmp eq i16 %x, 0");
+    folds("sub i16 10, %x", "eq", 3, "icmp eq i16 %x, 7");
+    folds("add i16 %x, 5", "eq", 8, "icmp eq i16 %x, 3");
+    folds("xor i16 %x, 5", "ne", 3, "icmp ne i16 %x, 6");
+    folds("sub i16 %x, %y", "ne", 0, "icmp ne i16 %x, %y");
+    folds("udiv i16 %x, %y", "eq", 0, "icmp ugt i16 %y, %x");
+}
