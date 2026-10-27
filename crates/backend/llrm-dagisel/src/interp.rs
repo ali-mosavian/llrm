@@ -80,6 +80,20 @@ pub struct Scratch {
     chain_nodes_matched: Vec<Option<u32>>,
 }
 
+thread_local! {
+    /// The buffers the last [`Selector::select`] on this thread left.
+    static KEPT: std::cell::Cell<Option<Box<Scratch>>> = const { std::cell::Cell::new(None) };
+}
+
+/// The capacity the buffers kept for the next selection hold.
+#[cfg(test)]
+pub(crate) fn kept_capacity() -> usize {
+    let kept = KEPT.take();
+    let capacity = kept.as_ref().map_or(0, |one| one.node_stack.capacity() + one.match_scopes.capacity());
+    KEPT.set(kept);
+    capacity
+}
+
 impl Selector {
     pub fn new(table: Table) -> Selector {
         let mut opcode_offset = Vec::new();
@@ -116,7 +130,13 @@ impl Selector {
         hooks: &mut H,
         node_to_match: u32,
     ) -> Outcome {
-        self.select_with(&mut Scratch::default(), dag, hooks, node_to_match)
+        // The buffers are the thread's, taken for the selection and put back:
+        // a fresh set per node cost five allocations and their growth each
+        // (d_faces -O2: 5,336 selections).
+        let mut scratch = KEPT.take().unwrap_or_default();
+        let outcome = self.select_with(&mut scratch, dag, hooks, node_to_match);
+        KEPT.set(Some(scratch));
+        outcome
     }
 
     /// [`Selector::select`] with the caller's buffers.

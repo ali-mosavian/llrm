@@ -296,6 +296,15 @@ pub enum FloatFunction {
     Exp,
     /// Rounds to an integral float as the rounding mode says.
     Rint,
+    Floor,
+    Ceil,
+    Trunc,
+    /// Halfway cases away from zero.
+    Round,
+    /// Halfway cases to even.
+    RoundEven,
+    /// As `Rint`, without raising inexact.
+    NearbyInt,
 }
 
 impl FloatFunction {
@@ -313,7 +322,11 @@ impl FloatFunction {
             Self::Exp2 => x.exp2(),
             Self::Log => x.ln(),
             Self::Exp => x.exp(),
-            Self::Rint => x.round_ties_even(),
+            Self::Rint | Self::RoundEven | Self::NearbyInt => x.round_ties_even(),
+            Self::Floor => x.floor(),
+            Self::Ceil => x.ceil(),
+            Self::Trunc => x.trunc(),
+            Self::Round => x.round(),
         }
     }
 }
@@ -433,7 +446,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 54] = [
+const TABLE: [Spec; 60] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -480,6 +493,12 @@ const TABLE: [Spec; 54] = [
     unary("llvm.log", FloatFunction::Log),
     unary("llvm.exp", FloatFunction::Exp),
     unary("llvm.rint", FloatFunction::Rint),
+    unary("llvm.floor", FloatFunction::Floor),
+    unary("llvm.ceil", FloatFunction::Ceil),
+    unary("llvm.trunc", FloatFunction::Trunc),
+    unary("llvm.round", FloatFunction::Round),
+    unary("llvm.roundeven", FloatFunction::RoundEven),
+    unary("llvm.nearbyint", FloatFunction::NearbyInt),
     Spec {
         name: "llvm.lrint",
         intrinsic: Intrinsic::LRint,

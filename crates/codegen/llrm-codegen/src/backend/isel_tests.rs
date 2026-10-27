@@ -6,7 +6,7 @@ use crate::backend::isel::{self, Unselected};
 use crate::backend::masm;
 
 const LAYOUT: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"\n";
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"\n";
 
 fn qb() -> HirAbi {
     HirAbi {
@@ -5180,7 +5180,7 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
             "define i16 @f(ptr addrspace({space}) %p, i16 %i) addrspace(1) {{\n  %q = getelementptr i16, ptr addrspace({space}) %p, i16 %i\n  %v = load volatile i16, ptr addrspace({space}) %q\n  ret i16 %v\n}}\n"
         )
     };
-    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"\n";
+    let layout = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n";
     let listing = |space| {
         let module = llrm_mir::parse::module(&format!("{layout}{}", body(space))).expect("parses");
         let chosen = isel::selected(
@@ -7032,6 +7032,22 @@ define void @f() addrspace(1) {
     assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
     assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
+}
+
+/// `llvm.abs` of an i64 is expanded with a `freeze` of its operand; where i64
+/// is two words the old selector refused it ("freeze"), which stopped the QB
+/// runtime's `_i8_output` from building. A frozen value is the value.
+#[test]
+fn test_a_frozen_i64_is_its_two_words() {
+    let text = "define i64 @frozen(i64 %0) addrspace(1) {
+b1:
+  %1 = freeze i64 %0
+  %2 = add i64 %1, 1
+  ret i64 %2
+}
+";
+    let got = selected(text, "frozen").unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(!got.body.insns().is_empty());
 }
 
 /// `candidates` found each instruction's opcode, types and kinds by string
