@@ -213,3 +213,11 @@ def test_a_new_compile_failure_outside_the_known_list_is_unexpected():
     other_level = ("m16", "O1", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40:")
     assert sweep.unexpected([*seen, new, other_level]) == [new, other_level]
     assert [entry.name for entry in sweep.fixed(seen[:1])] == ["x_ll_div", "x_ll_div", "lru"]
+
+
+def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
+    """After llrm-cc's m32 default became regcall every m32 row read `no figures`: ours was run with -mabi=sysv ('calling convention 92')."""
+    pindiff = load("pindiff")
+    cfg = pindiff.MACHINES["m32"]
+    assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
+    assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
