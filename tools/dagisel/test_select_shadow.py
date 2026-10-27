@@ -49,7 +49,7 @@ def test_the_example_expands_memset_pattern_as_the_driver_does(tmp_path):
         pytest.skip("SELECT_SHADOW names a built select_shadow example")
     ir = tmp_path / "p.ll"
     ir.write_text(
-        'target datalayout = "e-p:16:16-i32:16-i64:16-n8:16:32"\n'
+        'target datalayout = "e-p:16:16-i32:16-i64:16-f80:16-n8:16:32"\n'
         "define void @f(ptr %p, i16 %n) {\nentry:\n"
         "  call void @llvm.experimental.memset.pattern.p0.i16.i16(ptr %p, i16 4660, i16 %n, i1 false)\n  ret void\n}\n"
         "declare void @llvm.experimental.memset.pattern.p0.i16.i16(ptr, i16, i16, i1)\n"

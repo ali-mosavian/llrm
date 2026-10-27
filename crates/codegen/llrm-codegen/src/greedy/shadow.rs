@@ -319,6 +319,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         new: u32,
         from: u32,
     ) {
+        self.tables.derive_family(new, from);
         let mut widths = self.tables.widths.borrow_mut();
         let width = widths.get(&from).copied().or_else(|| Self::named_width(lis, from));
         if let Some(width) = width {
@@ -413,11 +414,14 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             return None;
         }
         let what = def.what.clone()?;
-        // A literal or address is rematerializable per definition, as
-        // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
-        // the register's facts say its cell holds (D-I).
+        // `SplitEditor::defFromParent` asks `canRematerializeAt(..,
+        // cheapAsAMove = true)`: a literal or an address is made again,
+        // a load (`MOV32rm` of a stack argument) or an `lea` is not
+        // `isAsCheapAsAMove`, and the split copies the register
+        // instead.
+        let _ = parent;
         let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
-        if load && !self.tables.remat.borrow().contains(&parent) {
+        if load || what.op == Operation::Address {
             return None;
         }
         let Loc::Held(defined) = what.dests[0] else { return None };
@@ -451,6 +455,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         let known = self.tables.widths.borrow().get(&from).copied();
         let width = known.or_else(|| Self::named_width(lis, from)).unwrap_or(4);
         self.tables.widths.borrow_mut().insert(to, width);
+        self.tables.derive_family(to, from);
         let bytes = self.tables.float_bytes.borrow().get(&from).copied();
         if let Some(bytes) = bytes {
             self.tables.float_bytes.borrow_mut().insert(to, bytes);
@@ -470,6 +475,13 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
     }
 }
 
+/// The successors of each block, by position.
+fn successors(body: &LirBody) -> Vec<Vec<usize>> {
+    let position: std::collections::HashMap<i64, usize> =
+        body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
+    body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| position.get(to).copied()).collect()).collect()
+}
+
 /// The calls: where registers are destroyed.
 struct CallMasks {
     /// The reg slot of each instruction that destroys registers, ascending
@@ -479,12 +491,20 @@ struct CallMasks {
     calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)>,
     /// Whether each of `calls` destroys any register (the rest only read one).
     destroying: Vec<bool>,
+    /// Everything any call takes from a narrow and from a wide value (and
+    /// every read): a range that has lost it all meets no call that adds.
+    ceiling: [RegSet; 2],
     /// Each block's slots, start and end, and the run of `calls` in it
     /// (`getRegMaskSlotsInBlock`), in slot order.
     blocks: Vec<(SlotIndex, SlotIndex, std::ops::Range<usize>)>,
     /// The widest each value is named (bytes): a value wider than 2 loses the
     /// high half of the roots in a call's third list.
     widths: Rc<Tables>,
+    /// The blocks' successors (by position), where a call can lose a high half
+    /// only if a wide read can follow it: set by `with_flow`.
+    flow: Option<Vec<Vec<usize>>>,
+    /// Each block's blocks reachable by one edge or more, as bits.
+    reach: std::cell::OnceCell<Vec<Vec<u64>>>,
 }
 
 thread_local! {
@@ -525,7 +545,78 @@ impl CallMasks {
                 (slot, narrow, narrow.union(&high), read)
             })
             .collect();
-        Self { calls, destroying, blocks, widths }
+        let ceiling = [false, true].map(|wide| {
+            let mut all = RegSet::default();
+            for &(_, narrow, lost, read) in &calls {
+                all.union_with(&if wide { lost } else { narrow });
+                all.union_with(&read);
+            }
+            all
+        });
+        Self { calls, destroying, ceiling, blocks, widths, flow: None, reach: Default::default() }
+    }
+
+    /// The same, told the blocks' successors.
+    fn with_flow(
+        mut self,
+        succ: Vec<Vec<usize>>,
+    ) -> Self {
+        self.flow = Some(succ);
+        self
+    }
+
+    /// Whether block `to` can be reached from block `from` by one edge or more.
+    fn reaches(
+        &self,
+        from: usize,
+        to: usize,
+    ) -> bool {
+        let reach = self
+            .reach
+            .get_or_init(
+                || {
+                    let succ = self.flow.as_deref().unwrap_or_default();
+                    let words = succ.len().div_ceil(64);
+                    (0..succ.len())
+                        .map(|start| {
+                            let mut seen = vec![0u64; words];
+                            let mut work: Vec<usize> = succ[start].clone();
+                            while let Some(block) = work.pop() {
+                                if seen[block / 64] >> (block % 64) & 1 == 0 {
+                                    seen[block / 64] |= 1 << (block % 64);
+                                    work.extend(succ[block].iter().copied());
+                                }
+                            }
+                            seen
+                        })
+                        .collect()
+                },
+            );
+        reach.get(from).is_some_and(|row| row[to / 64] >> (to % 64) & 1 == 1)
+    }
+
+    /// Whether a read of more than 2 bytes of a value of `reg`'s family can
+    /// follow the call at `slot` (a later one in its block, one in a block it
+    /// reaches, or an earlier one round a loop). A value in no family, or a
+    /// body without flow, is wide.
+    fn wide_read_follows(
+        &self,
+        reg: u32,
+        slot: &SlotIndex,
+    ) -> bool {
+        let (Some(_), Some(root)) = (&self.flow, self.widths.family.borrow().get(&reg).copied()) else { return true };
+        let reads = self.widths.wide_reads.borrow();
+        let Some(list) = reads.get(&root) else { return true };
+        let Some(call_block) = self.blocks.partition_point(|(begin, ..)| begin <= slot).checked_sub(1) else {
+            return true;
+        };
+        list.iter().any(|(read, block)| {
+            if *block == call_block {
+                read > slot || self.reaches(call_block, call_block)
+            } else {
+                self.reaches(call_block, *block)
+            }
+        })
     }
 
     /// `LiveIntervals::intervalIsInOneMBB`: the run of calls in the one block
@@ -546,19 +637,21 @@ impl CallMasks {
 }
 
 /// LLVM's physical register range for a value an instruction pins to a
-/// register (`LIS->getRegUnit`), behind `LLRM_FIXED_PINS` (POC): the value is
+/// register (`LIS->getRegUnit`): the value is
 /// not allocated; every other range meets it as a fixed range, except where
 /// the overlap starts at a copy between the two (`LiveRange::overlaps(Other,
 /// CP, Indexes)`, `LiveRegMatrix::checkRegUnitInterference`).
+/// `LLRM_PINS_AS_VREGS` allocates pinned values as virtual registers again (the
+/// old way, to be deleted).
 struct FixedPins {
     tri: RegisterInfo,
     pins: Vec<FixedPin>,
     /// The pinned ranges of each register unit, merged (`LIS->getRegUnit`):
     /// what the interference cache and the region splitter see of them.
-    units: std::collections::HashMap<u32, crate::liveness::liverange::LiveRange>,
+    units: crate::support::hash::HashMap<u32, crate::liveness::liverange::LiveRange>,
     /// The copies of the body by the slot they define at: (destination,
     /// source).
-    copies: std::collections::HashMap<SlotIndex, (u32, u32)>,
+    copies: crate::support::hash::HashMap<SlotIndex, (u32, u32)>,
 }
 
 struct FixedPin {
@@ -696,7 +789,9 @@ impl PhysInterference for CallMasks {
         // Per segment, as `checkRegMaskInterference` walks `SlotI`: the calls
         // at or before its start are crossed by a search (a hole looks at
         // none), those inside it are lost across, and one at its end takes
-        // what it reads.
+        // what it reads. Once a range has lost all any call takes, no call
+        // adds.
+        let ceiling = &self.ceiling[usize::from(wide)];
         let mut at = calls.partition_point(|(slot, ..)| *slot < li.begin_index());
         for s in &li.segments {
             at += calls[at..].partition_point(|(slot, ..)| *slot <= s.start);
@@ -704,7 +799,15 @@ impl PhysInterference for CallMasks {
                 #[cfg(test)]
                 CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
                 debug_assert!(s.start < *slot);
-                found.get_or_insert_with(RegSet::default).union_with(if wide { wide_lost } else { narrow });
+                // DEVIATE C-LANE: a call destroys the high half of the pin's
+                // whole register; here a value loses it only where a wide
+                // read can follow.
+                let lost = wide && (narrow == wide_lost || self.wide_read_follows(li.reg(), slot));
+                let found = found.get_or_insert_with(RegSet::default);
+                found.union_with(if lost { wide_lost } else { narrow });
+                if found == ceiling {
+                    return Some(*found);
+                }
                 at += 1;
             }
             match calls.get(at) {
@@ -714,7 +817,11 @@ impl PhysInterference for CallMasks {
                 Some((slot, _, _, read)) if *slot == s.end && !read.is_empty() => {
                     #[cfg(test)]
                     CALLS_VISITED.with(|visited| visited.set(visited.get() + 1));
-                    found.get_or_insert_with(RegSet::default).union_with(read);
+                    let found = found.get_or_insert_with(RegSet::default);
+                    found.union_with(read);
+                    if found == ceiling {
+                        return Some(*found);
+                    }
                 }
                 Some(_) => {}
             }
@@ -923,6 +1030,10 @@ pub fn decide_with_split(
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
     let floats = crate::backend::floatassign::_floating_values(body);
+    // A value named only as a byte is of the GR8 class, whose order names the
+    // high bytes too (X86RegisterInfo.td); the others hold their root.
+    let widest = crate::backend::allocate::_widest(body);
+    let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
             crate::backend::allocate::RFP.to_vec()
@@ -930,10 +1041,45 @@ pub fn decide_with_split(
             (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
         };
         order.dedup();
+        if widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
+            let roots = order.clone();
+            let lanes: Vec<RegId> =
+                bytes.iter().copied().filter(|byte| roots.contains(&crate::model::ir::root(*byte))).collect();
+            if !lanes.is_empty() {
+                order = lanes;
+            }
+        }
         tables.orders.borrow_mut().insert(reg, order);
     }
+    // DEVIATE C-LANE (the pin's regmask is per whole GR32 register): where a
+    // call destroys the high halves of registers (`clobbers_high`), a value no
+    // instruction reads wider than 2 bytes is 2 bytes wide: its high half is
+    // never read, so a call does not lose it and its spill is a word. Sound
+    // because the width is the widest read of the value anywhere in the body,
+    // so a read after the call, around a loop, or through a copy of the value
+    // keeps it wide.
+    let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
+    let read_widths = if lanes { crate::backend::allocate::_widest_read(body) } else { Default::default() };
     for (value, width) in crate::backend::allocate::_widest(body) {
+        let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
+    }
+    if lanes {
+        // Where the wide reads are, for `CallMasks::wide_read_follows`.
+        let mut family = tables.family.borrow_mut();
+        let mut wide_reads = tables.wide_reads.borrow_mut();
+        for (at, block) in body.blocks.iter().enumerate() {
+            for one in &block.insns {
+                let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
+                for (value, _) in crate::backend::allocate::_read_widths(one).into_iter().filter(|(_, w)| *w > 2) {
+                    wide_reads.entry(value).or_default().push((slot.clone(), at));
+                }
+            }
+        }
+        for value in read_widths.keys().chain(lis.virt_regs().iter()) {
+            family.insert(*value, *value);
+            wide_reads.entry(*value).or_default();
+        }
     }
     tables.float_bytes.borrow_mut().extend(super::inlinespiller::float_precisions(body));
     let invariant = if !inputs.stable_loads {
@@ -1010,11 +1156,17 @@ pub fn decide_with_split(
         );
         blocks.push((start, end, first..calls.len()));
     }
-    let fixed_pins = llrm_support::env_flag!("LLRM_FIXED_PINS");
+    let fixed_pins = !llrm_support::env_flag!("LLRM_PINS_AS_VREGS");
     let pins_cell: Rc<std::cell::OnceCell<FixedPins>> = Rc::default();
     let matrix = LiveRegMatrix::new(
         RegisterInfo::new(inputs.registers),
-        Box::new(Fixed { calls: CallMasks::of(calls, blocks, Rc::clone(&tables)), pins: Rc::clone(&pins_cell) }),
+        Box::new(Fixed {
+            calls: {
+                let masks = CallMasks::of(calls, blocks, Rc::clone(&tables));
+                if lanes { masks.with_flow(successors(body)) } else { masks }
+            },
+            pins: Rc::clone(&pins_cell),
+        }),
     );
     let inline = matches!(mode, Mode::Inline { .. });
     // A split edits the function, and a caller that only records what to spill
@@ -1048,7 +1200,7 @@ pub fn decide_with_split(
     }
     greedy.calculate_spill_weights_and_hints();
     let fixed_regs: Vec<(u32, RegId)> = if fixed_pins {
-        let mut copies = std::collections::HashMap::new();
+        let mut copies = crate::support::hash::HashMap::default();
         for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
             if let Some((d, s)) =
                 one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
@@ -1081,12 +1233,16 @@ pub fn decide_with_split(
             .collect();
         let regs = pins.iter().map(|pin| (pin.reg, pin.root)).collect();
         let tri = RegisterInfo::new(inputs.registers);
-        let mut spans: std::collections::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> = std::collections::HashMap::new();
+        let mut spans: crate::support::hash::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> =
+            crate::support::hash::HashMap::default();
         for pin in &pins {
             for unit in tri.regunits(pin.root) {
                 spans.entry(unit).or_default().extend(pin.segments.iter().cloned());
             }
         }
+        // Two pinned values meeting in one register, other than at a copy
+        // between them, cannot both be there: no allocation exists.
+        let mut conflict = false;
         let units = spans
             .into_iter()
             .map(|(unit, mut list)| {
@@ -1094,7 +1250,10 @@ pub fn decide_with_split(
                 let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
                 for (start, end) in list {
                     match merged.last_mut() {
-                        Some(last) if start <= last.1 => last.1 = std::cmp::max(last.1.clone(), end),
+                        Some(last) if start <= last.1 => {
+                            conflict |= start < last.1 && !copies.contains_key(&start);
+                            last.1 = std::cmp::max(last.1.clone(), end)
+                        }
                         _ => merged.push((start, end)),
                     }
                 }
@@ -1108,6 +1267,9 @@ pub fn decide_with_split(
                 (unit, range)
             })
             .collect();
+        if conflict {
+            return None;
+        }
         let _ = pins_cell.set(FixedPins { tri, pins, units, copies });
         regs
     } else {
@@ -1163,7 +1325,7 @@ pub fn decide_with_split(
             placed.push((reg, phys));
         }
     }
-    if llrm_support::env_set("LLRM_PLACED_DEBUG") {
+    if llrm_support::env_flag!("LLRM_PLACED_DEBUG") {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
                 eprintln!(
@@ -1607,8 +1769,14 @@ mod tests {
         let indexes = SlotIndexes::new(&body);
         let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
         let esi = crate::model::ir::root(RegId::ESI);
+        // The call at 70 takes edi too, which no call in the range does: the
+        // range never has all the calls take, and meets each one it spans.
+        let edi = crate::model::ir::root(RegId::EDI);
         let calls = [5, 12, 15, 30, 40, 55, 70]
-            .map(|n| (at(n), [esi].into_iter().collect::<RegSet>(), RegSet::new(), RegSet::new()))
+            .map(|n| {
+                let taken = if n == 70 { vec![esi, edi] } else { vec![esi] };
+                (at(n), taken.into_iter().collect::<RegSet>(), RegSet::new(), RegSet::new())
+            })
             .into_iter()
             .collect();
         let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
@@ -1620,6 +1788,33 @@ mod tests {
         assert_eq!(masks.reg_mask_clobbered(&li), Some([esi].into_iter().collect()));
         // 12, 15 and 55.
         assert_eq!(calls_visited() - before, 3);
+    }
+
+    /// A range live across calls that all take the same registers lost them at
+    /// the first: it was unioned with the other 98 of each query (d_faces:
+    /// 98 calls a query, 2.8 M for 1,067 queries; LLVM's 2.2 unions a query).
+    #[test]
+    fn test_a_range_that_has_lost_all_any_call_takes_looks_at_no_more_calls() {
+        let insns: Vec<Arc<Insn>> = (0..100).map(|_| Arc::new(Insn::new(0, None, None, vec![], vec![]))).collect();
+        let body = LirBody::new(
+            "shadow",
+            0,
+            vec![Block::from(LirBlock::new(0, insns.clone()))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let indexes = SlotIndexes::new(&body);
+        let at = |n: usize| indexes.get_instruction_index(insns[n].id()).get_reg_slot(false);
+        let esi = crate::model::ir::root(RegId::ESI);
+        let calls =
+            (10..90).map(|n| (at(n), [esi].into_iter().collect::<RegSet>(), RegSet::new(), RegSet::new())).collect();
+        let masks = CallMasks::of(calls, Vec::new(), widths(&[(1, 4)]));
+        let mut li = LiveInterval::new(1, 1.0);
+        let v = li.get_next_value(at(2));
+        li.add_segment(Segment::new(at(2), at(95), Some(v)));
+        let before = calls_visited();
+        assert_eq!(masks.reg_mask_clobbered(&li), Some([esi].into_iter().collect()));
+        assert_eq!(calls_visited() - before, 1, "80 calls, all taking esi");
     }
 
     /// A value used before and after a stretch where two others need both

@@ -1,4 +1,4 @@
-; target: triple=i386-unknown-unknown-code16 cpu=i486 features=-sse,-sse2,-mmx datalayout=e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32 optsize=false
+; target: triple=i386-unknown-unknown-code16 cpu=i486 features=-sse,-sse2,-mmx datalayout=e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32 optsize=false
 Target Library Information
 Runtime Library Function Analysis
 Target Pass Configuration
