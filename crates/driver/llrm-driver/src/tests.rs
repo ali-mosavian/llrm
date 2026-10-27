@@ -850,3 +850,25 @@ fn a_static_function_is_entered_by_a_near_call() {
     assert!(listing.contains("call _h@3\n"), "{listing}");
     assert!(listing.contains("call far ptr _taken@3"), "{listing}");
 }
+
+/// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
+/// not the `.ll` file: the debugger could not find the text.
+#[test]
+fn a_clang_units_source_file_reaches_the_debug_info() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-g"]), &text, "dbgfix").unwrap();
+    let source = built.debug.expect("debug info").source;
+    let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
+    assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
+}
