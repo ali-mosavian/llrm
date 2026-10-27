@@ -36,6 +36,20 @@ use super::expansion;
 /// many bytes is a call.
 pub const INLINE_LIMIT: u128 = 128;
 
+/// The bytes of a constant memset's `rep stosb` through es:di, as
+/// `memset` makes it tuned for size: `lea di`, ES saved and set, the byte,
+/// the count, the fill, and DI's save in the frame.
+pub(crate) const FILL_BYTES: i64 = 3 + 4 + 2 + 3 + 2 + 2;
+
+/// The bytes of the stores a memset expands a constant `length` to, each at a
+/// one-byte displacement: two or more dwords store a register.
+pub(crate) fn stored_bytes(length: i64) -> i64 {
+    let dwords = length / 4;
+    let each = if dwords > 1 { 4 } else { 8 };
+    let setup = if dwords > 1 { 6 } else { 0 };
+    setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
+}
+
 /// `findOptimalMemOpLowering` for x86 without SSE: the width in bytes of each
 /// memory operation covering `size` bytes, the widest being `i32`; `None` past
 /// `limit` operations. A last operation wider than the bytes left overlaps the

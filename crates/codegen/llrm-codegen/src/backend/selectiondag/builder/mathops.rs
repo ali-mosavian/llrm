@@ -108,6 +108,13 @@ impl Builder<'_> {
                     FloatFunction::Log => ISD::FLog,
                     FloatFunction::Exp => ISD::FExp,
                     FloatFunction::Rint => ISD::FRint,
+                    // Calls of the C library before selection (`libmcalls`).
+                    FloatFunction::Floor
+                    | FloatFunction::Ceil
+                    | FloatFunction::Trunc
+                    | FloatFunction::Round
+                    | FloatFunction::RoundEven
+                    | FloatFunction::NearbyInt => return Err(Refused("a rounding intrinsic without its library call")),
                 };
                 self.dag.get_node_flags(code, dest, &[first], flags)
             }

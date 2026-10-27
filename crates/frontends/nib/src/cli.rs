@@ -378,6 +378,14 @@ mod tests {
         ) -> Result<llrm_target::routines::Divide, String> {
             self.0.divide_routine(signed, wide_divisor)
         }
+        fn divide_routine_used(
+            &self,
+            signed: bool,
+            wide_divisor: bool,
+            used: llrm_target::routines::Used,
+        ) -> Result<llrm_target::routines::Divide, String> {
+            self.0.divide_routine_used(signed, wide_divisor, used)
+        }
         fn float_width(
             &self,
             bytes: u32,

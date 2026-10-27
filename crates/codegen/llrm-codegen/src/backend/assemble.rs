@@ -93,10 +93,6 @@ use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
-/// A far object of more bytes than this is laid down in 64K segments.
-const HUGE_PIECE: i64 = 0xFFFF;
-const HUGE_PIECE_BYTES: i64 = 0x10000;
-
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
 pub trait Abi {
@@ -172,6 +168,9 @@ pub fn assembled_by(
     libcalls: &[(String, u32, String)],
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
+    // A far object of more bytes than a segment holds is laid down in
+    // segments, which a huge pointer steps through.
+    let segment_bytes = arch.layout().segment_bytes().map_or(i64::MAX, |bytes| bytes as i64);
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
     let mut names =
         timed("global names", || globals::names(module, &arch.layout().spaces.roles, &|name| abi.linked(name)))?;
@@ -216,6 +215,21 @@ pub fn assembled_by(
             done.insert(id, made);
         }
     }
+    let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
+    // DEVIATE SD314: a routine one site calls is pasted there, as the old
+    // selector does: its procedure, call and return cost more than it saves.
+    // The pin has no such routine (a libcall in the library).
+    let mut sites: IndexMap<String, usize> = IndexMap::default();
+    for made in done.values() {
+        for (at, callee) in &made.calls {
+            if callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
+                && made.inline.contains_key(at)
+                && made.inline_symbols.get(at).is_none_or(Vec::is_empty)
+            {
+                *sites.entry(callee.clone()).or_default() += 1;
+            }
+        }
+    }
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
@@ -223,13 +237,22 @@ pub fn assembled_by(
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
                 // A far or huge object lies outside DGROUP, in a segment of the
                 // module's own.
-                let datums = globals::datums(module, id, &names)?;
+                let mut datums = globals::datums(module, id, &names)?;
+                if let Some(to) = globals::alignment(
+                    module,
+                    layout.as_ref(),
+                    variable,
+                    module.sections.contains_key(name),
+                    arch.layout().segment_bytes().is_some(),
+                ) {
+                    datums.insert(0, masm::Datum::Align(masm::Align { to }));
+                }
                 if let Some(section) = module.sections.get(name) {
                     // `#pragma data_seg`: a segment of the program's own
                     // naming.
                     sectioned.entry(section.clone()).or_default().extend(datums);
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE)
-                    && masm::data_size(&datums, 0) > HUGE_PIECE
+                    && masm::data_size(&datums, 0) >= segment_bytes
                 {
                     // Past 64K: consecutive segments of 64K, which a huge
                     // pointer steps through.
@@ -261,6 +284,7 @@ pub fn assembled_by(
                         if !matches!(selector, Selector::Old)
                             && callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
                             && inline_symbols.get(at).is_none_or(Vec::is_empty)
+                            && sites.get(callee).is_some_and(|&count| count > 1)
                         {
                             let routine = format!("${callee}");
                             shared.entry(routine.clone()).or_insert_with(|| code.clone());
@@ -478,7 +502,7 @@ pub fn assembled_by(
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     for (name, datums) in huge_objects {
-        let pieces = masm::split_data(datums, HUGE_PIECE_BYTES).map_err(|why| format!("@{name}: {why}"))?;
+        let pieces = masm::split_data(datums, segment_bytes).map_err(|why| format!("@{name}: {why}"))?;
         for (at, piece) in pieces.into_iter().enumerate() {
             huge_segments.push((format!("{far_segment}_{}${at}", name.trim_start_matches('_')), piece));
         }
