@@ -13,3 +13,9 @@
 A variadic `__cdecl` function cannot be told from an unmarked one and takes the ABI's.
 
 Rows without `-mregcall-default` (`x86_16-wat`, `x86_32-linux`, ...) keep the old rule: `ccc` is the ABI's.
+
+# Other llrm-llc behaviour on clang IR
+
+- **weak**: `weak`, `linkonce` and `extern_weak` are refused where the object format cannot say them (OMF), naming the symbol. No corpus program uses one.
+- **Zero statics**: a non-constant zero static in the data space moves to `_BSS` (`zero_to_bss`), after `BSSB` under `-mbss-begin`. Constants and nonzero values stay in `_DATA`.
+- **Foreign memory**: a load or store at a constant address the target lists as foreign (`foreign_span`: video, ROM, BIOS data) is apart from every global and local, so a global is not reloaded after a store to video.
