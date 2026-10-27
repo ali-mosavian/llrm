@@ -100,7 +100,7 @@ def run(ir: Path, name: str, of, llrm_pass: str, level: str):
         return ir, None, f"pin: {pin_out.stderr.strip().splitlines()[:1]}"
     tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"pid-{os.getpid()}-{ir.parent.name}-{name}.ll"
     tmp.write_text(ours_text(start.stdout))
-    cmd = [llrm_pass, level, *args, str(tmp)]
+    cmd = [llrm_pass, level, "--mode", "16" if of.triple.endswith("code16") else "32", *args, str(tmp)]
     ours = subprocess.run(cmd, capture_output=True, text=True)
     tmp.unlink(missing_ok=True)
     if ours.returncode:
