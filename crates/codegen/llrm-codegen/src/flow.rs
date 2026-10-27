@@ -282,6 +282,14 @@ pub fn machine_with<'a>(
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
     ];
+    // POC: the pin's order, the scheduler after the coalescer.
+    if std::env::var_os("LLRM_POC_ORDER").is_some()
+        && let Some(at) = phases.iter().position(|phase| phase.class_name() == "MachineScheduler")
+    {
+        let moved = phases.remove(at);
+        let after = phases.iter().position(|phase| phase.class_name() == "Coalescer").map_or(at, |c| c + 1);
+        phases.insert(after, moved);
+    }
     // -O0: gcc and clang improve nothing after selection and allocation.
     if !target.optimized {
         phases.retain(|phase| !UNOPTIMIZED.contains(&phase.class_name()));
