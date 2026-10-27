@@ -90,13 +90,22 @@ fn is_register_asm(line: &str) -> bool {
     constraints.split(',').any(|one| one.starts_with("={") || one.starts_with('{'))
 }
 
+/// The registers inline asm may name, from the 16-bit target's register file
+/// (`@asm`): the one description that says, not a list here.
+fn asm_registers() -> &'static [String] {
+    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+        llrm_target::registers::asm_names(&llrm_target::Target::registers_text(&llrm_x86_m16::M16))
+    });
+    &NAMES
+}
+
 /// A register's name as the backend takes it: its width is the name's.
 fn register_name(name: &str) -> Result<&str, String> {
-    Ok(match name {
-        "al" | "bl" | "cl" | "dl" | "ax" | "bx" | "cx" | "dx" | "si" | "di" | "eax" | "ebx" | "ecx" | "edx" | "esi"
-        | "edi" => name,
-        other => return Err(format!("asm: register {other} is not carried")),
-    })
+    if asm_registers().iter().any(|one| one == name) {
+        Ok(name)
+    } else {
+        Err(format!("asm: register {name} is not carried"))
+    }
 }
 
 /// One register-declared asm call as a call of `llrm.ia16.asm.*`, and the
@@ -355,6 +364,20 @@ fn renumber(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The registers an asm constraint may name come from the target's `@asm`
+    /// line: the whole-value ones, not the frame, the stack, a high byte or a
+    /// segment register.
+    #[test]
+    fn a_register_constraint_names_what_the_target_description_lists() {
+        for name in ["ax", "dl", "esi", "edi", "bx"] {
+            assert_eq!(register_name(name), Ok(name));
+        }
+        for name in ["bp", "sp", "ah", "ds", "xmm0", ""] {
+            assert!(register_name(name).unwrap_err().contains("not carried"), "{name}");
+        }
+        assert_eq!(asm_registers().len(), 16);
+    }
 
     fn fake(source: &str) -> Result<Vec<u8>, String> {
         assert!(source.contains("[bp+0x7001]") || source.contains("[0x7001]"), "{source}");
