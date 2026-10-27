@@ -679,17 +679,6 @@ entry:
     assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
 }
 
-/// `sitofp i32 to double` at m64 stopped at `CannotSelect("Target(586)")`:
-/// the conversion took the x87 `fild` because the lowering was told there is
-/// no SSE2. x86-64 has it, and the conversion is `cvtsi2sd`.
-#[test]
-fn an_m64_integer_to_double_conversion_is_cvtsi2sd() {
-    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
-define double @f(i32 %a) {
-entry:
-  %r = sitofp i32 %a to double
-  ret double %r
-
 /// `umul.with.overflow.i64` at m64 stopped at `CannotSelect("Target(776)")`:
 /// `X86ISD::UMUL` had the one-operand `mul` at 8, 16 and 32 bits only. It is
 /// `mul` with the operand in `rax`.
@@ -704,6 +693,25 @@ entry:
   %o = extractvalue { i64, i1 } %r, 1
   %z = select i1 %o, i64 0, i64 %v
   ret i64 %z
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
+}
+
+/// `sitofp i32 to double` at m64 stopped at `CannotSelect("Target(586)")`:
+/// the conversion took the x87 `fild` because the lowering was told there is
+/// no SSE2. x86-64 has it, and the conversion is `cvtsi2sd`.
+#[test]
+fn an_m64_integer_to_double_conversion_is_cvtsi2sd() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to double
+  ret double %r
 }
 ";
     let module = llrm_mir::parse::module(text).expect("parses");
@@ -779,6 +787,4 @@ entry:
     let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
-
-    assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
 }
