@@ -289,3 +289,11 @@ fn an_unused_fprintf_fputs_or_fwrite_is_the_cheaper_routine() {
     assert_eq!(asm.matches("_fputc").count(), 2, "{asm}");
     assert_eq!(asm.matches("_fputs").count(), 1, "{asm}");
 }
+
+/// `return fn(x + 1)` through a pointer was `blr` between a frame made and taken down; the pin
+/// jumps (`br`), its target held where the epilogue leaves it.
+#[test]
+fn a_tail_call_through_a_pointer_is_a_register_jump() {
+    let asm = driver::assembly(include_str!("data/tail_indirect.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.contains("br x") && !asm.contains("blr") && !asm.contains("stp"), "{asm}");
+}
