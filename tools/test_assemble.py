@@ -120,7 +120,7 @@ def test_a_refusal_of_a_head_the_pr_has_moved_off_does_not_drop_it(tmp_path):
 def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
     """#4993 was refused for `4 problem(s)`: the baseline `no # Example` hits, with every page current."""
     lint = "crates/x/remidiom.rs: no # Example\n4 problem(s)\n"
-    stale = "generated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
+    stale = "generated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
     assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
 
 
