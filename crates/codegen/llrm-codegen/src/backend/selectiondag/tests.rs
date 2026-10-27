@@ -59,6 +59,7 @@ mod or_simplify;
 mod pair_arith;
 mod pair_mul;
 mod promote_int_op;
+mod reassociate;
 mod select_cmp_zero;
 mod select_fold;
 mod select_i1;

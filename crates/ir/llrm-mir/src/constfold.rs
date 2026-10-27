@@ -27,7 +27,12 @@
 //! `build::Builder::{binary, icmp, fcmp, cast, select}`; `constantfolding` for
 //! `FCmp`.
 
+use std::cmp::Ordering;
+
+use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_SINGLE};
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
+use crate::fp80;
+use crate::fpclass::RoundingMode;
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
 use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
@@ -251,6 +256,17 @@ fn binary_with_undef(
     }
 }
 
+/// Whether `id` is of type `x86_fp80`.
+fn is_x87(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    matches!(
+        context.types.get(context.get(id).ty),
+        Type::Float(FloatKind::X86Fp80)
+    )
+}
+
 /// A floating constant's value as a double and its kind: `Float` bits are IEEE
 /// single in the low 32, `Double` IEEE double, `X86Fp80` the double nearest its
 /// value (MIR holds an 80-bit constant that way), and a zero is +0.0.
@@ -330,6 +346,38 @@ pub fn cast(
                 _ => return None,
             };
             (float == width).then(|| context.constant(Constant { ty: to, kind: ConstantKind::Int(u128::from(bits)) }))
+        }
+        (CastOp::FPTrunc | CastOp::FPRound, Type::Float(kind @ (FloatKind::Float | FloatKind::Double)))
+            if is_x87(context, c) =>
+        {
+            let mut number = fp80::value(&context.get(c).kind)?;
+            if !number.is_finite() {
+                return None;
+            }
+            let semantics = if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE };
+            number.convert(semantics, RoundingMode::NearestTiesToEven);
+            (number.is_finite())
+                .then(|| context.constant(Constant { ty: to, kind: ConstantKind::Float(number.to_bits() as u64) }))
+        }
+        (CastOp::FPToSI | CastOp::FPToUI, Type::Int(width)) if width <= 127 && is_x87(context, c) => {
+            let number = fp80::value(&context.get(c).kind)?;
+            // Out of range or not a number is poison, as for the other formats.
+            let Some(value) = fp80::to_integer(&number, RoundingMode::TowardZero, width, op == CastOp::FPToSI) else {
+                return Some(poison(context, to));
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(value as u128 & mask(width)) }))
+        }
+        (CastOp::SIToFP | CastOp::UIToFP, Type::Float(FloatKind::X86Fp80)) => {
+            let (x, from) = number(context, c)?;
+            let (magnitude, negative) = if op == CastOp::SIToFP && signed(x, from) < 0 {
+                (signed(x, from).unsigned_abs(), true)
+            } else if op == CastOp::SIToFP {
+                (signed(x, from) as u128, false)
+            } else {
+                (x, false)
+            };
+            let magnitude = u64::try_from(magnitude).ok()?;
+            Some(fp80::constant(context, to, &fp80::from_integer(magnitude, negative)))
         }
         (CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound, Type::Float(kind)) => {
             let (from, value) = float_number(context, c)?;
@@ -420,6 +468,16 @@ pub fn compare_float(
     if is_undef(context, c1) || is_undef(context, c2) {
         return Some(result(predicate.holds(None)));
     }
+    if is_x87(context, c1) {
+        let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
+        let order = match a.compare(&b) {
+            CmpResult::LessThan => Some(Ordering::Less),
+            CmpResult::Equal => Some(Ordering::Equal),
+            CmpResult::GreaterThan => Some(Ordering::Greater),
+            CmpResult::Unordered => None,
+        };
+        return Some(result(predicate.holds(order)));
+    }
     let ((kind, x), (_, y)) = (float_number(context, c1)?, float_number(context, c2)?);
     if kind == FloatKind::X86Fp80 {
         return None;
@@ -454,6 +512,11 @@ pub fn float_binary(
         || flags.contains(Flags::ARCP)
     {
         return None;
+    }
+    if is_x87(context, c1) {
+        let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
+        let ty = context.get(c1).ty;
+        return Some(fp80::constant(context, ty, &fp80::binary(op, &a, &b)?));
     }
     let ((kind, x), (kind2, y)) = (float_number(context, c1)?, float_number(context, c2)?);
     if kind != kind2 || kind == FloatKind::X86Fp80 || !x.is_finite() || !y.is_finite() {

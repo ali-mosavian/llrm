@@ -1,5 +1,7 @@
 //! What the header copy (`-ftree-ch`) leaves for the passes after it.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(
@@ -8,7 +10,7 @@ fn listing(
 ) -> String {
     let source = format!("{}/crates/target/llrm-x86-m32/vsgcc/kernels/{kernel}/{kernel}.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486"])
         .args(flags)
@@ -69,7 +71,7 @@ fn test_fib_with_the_header_copy_on_keeps_its_self_inlined_nest() {
 fn test_a_loop_behind_a_guard_that_rules_out_its_bound_ends_on_the_flags_of_its_step() {
     let source = format!("{}/bench/recsum/recsum.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -149,7 +151,7 @@ void f(int n, int cur, int y)
 ",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O3", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -198,7 +200,7 @@ void g(void) { tab[1] = 2000; }
 ",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -230,14 +232,16 @@ fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
 }
 
 /// With no flag the copy is on and `Hoist` runs before the counters are
-/// chosen: `sum_three`'s three row loads leave the loop and its counter runs
-/// to zero, `add ax, [p+i] x3; add i, 2; jne` (5 instructions a trip). Hoist
-/// after LSR, or the copy off, left `inc ecx` beside `add edi, 2` (6).
+/// chosen: `sum_three`'s three row loads leave the loop, `add ax, [p+i] x3;
+/// inc i; cmp n, i; jne`, six instructions a trip. That is the pin's loop
+/// (clang -O2 -m32 -march=i486 on the same C, and its llc on our IR): this
+/// test asserted a count-to-zero loop of five (`add i, 2; jne`) from the gcc
+/// order, a win past the pin that the LLVM order does not make.
 #[test]
-fn test_sum_three_loop_is_five_instructions_by_default() {
+fn test_sum_three_loop_is_the_pins_six_instructions_by_default() {
     let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
         .output()
@@ -246,12 +250,12 @@ fn test_sum_three_loop_is_five_instructions_by_default() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
     let loop_ = lines
-        .windows(5)
+        .windows(6)
         .any(
             |w| w[..3].iter().all(|line| line.starts_with("add ax, word ptr"))
-                && w[3].starts_with("add e")
-                && w[3].ends_with(", 2")
-                && w[4].starts_with("jne "),
+                && w[3].starts_with("inc e")
+                && w[4].starts_with("cmp e")
+                && w[5].starts_with("jne "),
         );
     assert!(loop_, "{text}");
 }
@@ -264,7 +268,7 @@ fn test_sum_three_loop_is_five_instructions_by_default() {
 fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
     let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-Os", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
         .output()
@@ -285,7 +289,7 @@ fn test_tuned_for_size_the_row_loads_still_leave_the_loop() {
 fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
     let source = format!("{}/bench/mandel/mandel.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -309,7 +313,7 @@ fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
 fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     let source = format!("{}/bench/queens/queens.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O2", "-m16", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -350,7 +354,7 @@ fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
 fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
     let source = format!("{}/bench/recchop/recchop.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()
@@ -376,7 +380,7 @@ fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
 fn test_a_loop_entered_at_its_second_block_is_laid_out_from_it() {
     let source = format!("{}/bench/shellsort/shellsort.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
         .output()

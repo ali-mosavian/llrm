@@ -402,3 +402,29 @@ fn test_an_instruction_that_reads_the_copys_destination_twice_reads_the_source_t
     let got = propagated(&body(vec![mov(0, rl(RegId::BX, 2), rl(RegId::AX, 2)), test], &[RegId::BX]));
     assert_eq!(lines(&got), ["-", "test AX,AX"]);
 }
+
+/// A copy of a value and a compare of the copy: the compare reads the source
+/// once the copy is forwarded, and the copy is dead. The compare kept naming
+/// the copy's value, which no instruction defined any more: `LLRM_VERIFY=1`
+/// stopped bench/lru at -Os with "value#89 is read but never defined".
+#[test]
+fn test_a_forwarded_read_names_the_value_of_the_source_not_of_the_dead_copy() {
+    let valued = |one: Arc<Insn>, defines: Vec<u32>, uses: Vec<u32>| Arc::new(Insn { defines, uses, ..(*one).clone() });
+    let cmp = Arc::new(Insn::new(
+        2,
+        Some((2, 2)),
+        Some(semantics(Operation::Compare, "cmp", vec![], vec![rl(RegId::BX, 2), imm(-1, 2)])),
+        vec![],
+        vec![89],
+    ));
+    let got = propagated(&body(
+        vec![
+            valued(mov(0, rl(RegId::DX, 2), imm(0, 2)), vec![90], vec![]),
+            valued(mov(1, rl(RegId::BX, 2), rl(RegId::DX, 2)), vec![89], vec![90]),
+            cmp,
+        ],
+        &[RegId::BX],
+    ));
+    assert_eq!(lines(&got)[2], "cmp DX,imm");
+    assert_eq!(first(&got)[2].uses, [90], "the cmp still reads the value of the deleted copy");
+}

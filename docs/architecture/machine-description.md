@@ -72,7 +72,11 @@ Files shared by all models of one OS sit in `machine/platform/<os>/` (`dos/ports
 | `llrm-x86-m64/src/machines/linux64.toml` | `machine/platform/linux/flat64.toml` |
 | `llrm-target/src/machines/pc-ports.toml` | `machine/platform/dos/ports.toml` |
 
-New: `machine/isa/` and `machine/tune/` (instruction costs live in code today) `platform/linux/flat32.toml`, and `platform/darwin/flat64.toml`, written with the Mach-O platform work. Calling, data layout and object files stay in the target crate: the `-darwin` files in `llrm-arm64/src/machines/` are data layout and object content, not a platform file, and stay there.
+New: `machine/isa/x86/` (read by `llrm-target`'s `isa`), `machine/tune/x86/` (a CPU's prices, read where a target's `timings.times` cell is `=`), `platform/linux/flat32.toml`, and `platform/darwin/flat64.toml`, written with the Mach-O platform work. Calling, data layout and object files stay in the target crate: the `-darwin` files in `llrm-arm64/src/machines/` are data layout and object content, not a platform file, and stay there.
+
+## Copies of a datalayout
+
+A target's datalayout string is stated once, in its `datalayout.toml`. Tests, fixtures and the cc driver's table spell it too; `tools/datalayout_sync.py --check` names each copy that differs and `--sync` rewrites them (`tools/test_datalayout_sync.py` runs the check). A change to the string is one edit and one `--sync`.
 
 ## Adding to it
 

@@ -278,7 +278,7 @@ def causes_of(names) -> str:
     return f" [{text}]" if text else ""
 
 
-def panic_reasons(output: str) -> dict[str, str]:
+def panic_reasons(output: str, more: int = 0) -> dict[str, str]:
     """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
     names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
     found: dict[str, str] = {}
@@ -289,7 +289,13 @@ def panic_reasons(output: str) -> dict[str, str]:
         reason = lines[at + 1].strip()
         pair = [one.strip() for one in lines[at + 2 : at + 4] if re.match(r"\s*(left|right):", one)]
         short = m["name"].rsplit("::", 1)[-1]
-        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else ""))
+        # `more` lines of the message that follow, up to a blank line or rustc's `note:`: docs_in_sync prints the stale pages' names there
+        extra = []
+        for one in lines[at + 2 : at + 2 + more]:
+            if not one.strip() or one.startswith("note:"):
+                break
+            extra.append(one.strip())
+        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else "") + (f" [{'; '.join(extra)}]" if extra and not pair else ""))
         found.setdefault(m["name"], found[short])
     return found
 
@@ -601,6 +607,7 @@ SCANNERS = {
     "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
     "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
+    "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }
@@ -700,6 +707,11 @@ def integration_failures(
     if done.returncode and not found:
         found = {"integration-did-not-run"}
         CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
+    reasons = panic_reasons(done.stdout, more=8)
+    for one in found:
+        short = one.split("::", 1)[-1]
+        if short in reasons:
+            CAUSES[one] = reasons[short][:400]
     listed = xfail.load_for(root).keys()
     # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
     passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}

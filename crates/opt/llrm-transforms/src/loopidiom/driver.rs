@@ -86,14 +86,17 @@ impl LoopIdiomRecognize {
             run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize"))
                 && self.options.use_lir_code_size_heurs;
 
-        self.has_memset = self.library.memset;
+        // `"no-builtins"` disables every library function in the pin's TLI.
+        let no_builtins =
+            run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins"));
+        self.has_memset = self.library.memset && !no_builtins;
         // TODO (LLVM): Unconditionally enable use of the memset pattern
         // intrinsic (or at least, opt-in via target hook) once we are
         // confident it will never result in worse codegen than without. For
         // now, use it only when the target supports memset_pattern16 libcall
         // (or unless this is overridden by command line option).
-        self.has_memset_pattern = self.library.memset_pattern16;
-        self.has_memcpy = self.library.memcpy;
+        self.has_memset_pattern = self.library.memset_pattern16 && !no_builtins;
+        self.has_memcpy = self.library.memcpy && !no_builtins;
 
         if self.has_memset
             || self.has_memset_pattern

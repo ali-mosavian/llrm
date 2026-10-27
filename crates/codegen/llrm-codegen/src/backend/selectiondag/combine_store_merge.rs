@@ -1,16 +1,17 @@
-//! `mergeConsecutiveStores`, the constant half: stores of constants to
-//! consecutive addresses on one chain become one store of the joined constant,
-//! of the widest legal integer type that covers a run of them.
+//! `mergeConsecutiveStores`: stores of constants to consecutive addresses on
+//! one chain become one store of the joined constant, and stores of loads from
+//! consecutive addresses become one wider load and store, of the widest legal
+//! integer type that covers a run of them.
 //!
-//! DEVIATE SD217: only the stores of constants (no loads or vector element
+//! DEVIATE SD217: only the stores of constants and of loads (no vector element
 //! extracts as the source, no vector store, no truncating store for a type that
-//! promotes), the base of an address is a frame index, a global or one node
-//! plus constant offsets (`BaseIndexOffset::match` without the index
-//! register), and `allowsMemoryAccess` is true for every scalar the target
-//! holds (x86 assumes up to 8 bytes fast), and the argument stores of a call
-//! sequence (chained off `CALLSEQ_START`) are not merged: they are pushes,
-//! and a merged `pushd` is longer at m16. Exit: the load source with the
-//! alias queries, the vectors. Owner w10. Review 2026-11-13.
+//! promotes, no rotate of two loads in reverse order), the base of an address
+//! is a frame index, a global or one node plus constant offsets
+//! (`BaseIndexOffset::match` without the index register), and
+//! `allowsMemoryAccess` is true for every scalar the target holds (x86 assumes
+//! up to 8 bytes fast), and the argument stores of a call sequence (chained off
+//! `CALLSEQ_START`) are not merged: they are pushes, and a merged `pushd` is
+//! longer at m16. Exit: the vectors, the rotate. Owner w10. Review 2026-11-13.
 //!
 //! # See also
 //! LLVM's `DAGCombiner::mergeConsecutiveStores`
@@ -18,7 +19,9 @@
 //! `getStoreMergeCandidates`
 //! ([L23456](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23456)),
 //! `tryStoreMergeOfConstants`
-//! ([L23770](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23770)).
+//! ([L23770](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23770)),
+//! `tryStoreMergeOfLoads`
+//! ([L23969](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L23969)).
 
 use super::dag::{MemBase, MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
@@ -34,6 +37,16 @@ enum Base {
     Global(u32),
     Frame(i32),
     Node(u32),
+}
+
+/// `StoreSource`: what a store writes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    Constant,
+    /// A load of the stored type, a simple one with no other reader.
+    Load {
+        base: Base,
+    },
 }
 
 /// A store `MemOpLink`: the store, and its byte offset from the base.
@@ -69,45 +82,97 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         (Base::Node(at.node), offset)
     }
 
-    /// `getStoreMergeCandidates`, for a constant source: the stores on the
-    /// same chain node as `st` that store as many bytes as `st` to an address
-    /// of the same base, with their offsets from `st`'s.
+    /// `getStoreSource`, for a store of `info`'s type: the constant, or the
+    /// load that is the only reader of its value; none for the rest.
+    fn store_source(
+        &self,
+        value: SDValue,
+        info: MemInfo,
+    ) -> Option<Source> {
+        if self.dag.constant(value).is_some() {
+            return Some(Source::Constant);
+        }
+        if self.dag.opcode(value) != ISD::Load || value.res != 0 {
+            return None;
+        }
+        let NodeData::Mem(load) = self.dag.node(value).data else { return None };
+        if load.volatile
+            || load.ext.is_some()
+            || load.mem_vt != info.mem_vt
+            || load.space != info.space
+            || self.dag.users(value).count() != 1
+        {
+            return None;
+        }
+        Some(Source::Load { base: self.match_address(self.dag.operand(value, 1)).0 })
+    }
+
+    /// `getStoreMergeCandidates`: the stores that store as many bytes as `st`,
+    /// of the same kind of source, to an address of the same base, with their
+    /// offsets from `st`'s, and the root they hang from. The root is the chain
+    /// of `st`, or the chain of the load that is that chain.
     fn store_merge_candidates(
         &self,
         st: SDValue,
         info: MemInfo,
-    ) -> Vec<Link> {
+        source: Source,
+    ) -> (SDValue, Vec<Link>) {
         let ptr = self.dag.operand(st, 2);
         let (base, here) = self.match_address(ptr);
-        let root = self.dag.operand(st, 0);
+        let mut root = self.dag.operand(st, 0);
         // Deviation: the argument stores of a call sequence become pushes, and
         // a merged one is a `pushd` with an operand-size prefix and a
         // 32-bit immediate (`push 63; push 4` grew by a byte at m16
         // -Os).
         if self.dag.opcode(root) == ISD::CallSeqStart {
-            return Vec::new();
+            return (root, Vec::new());
+        }
+        let through_load = self.dag.opcode(root) == ISD::Load && root.res == 1;
+        if through_load {
+            root = self.dag.operand(root, 0);
         }
         let mut found = Vec::new();
-        for user in self.dag.users(root).take(MAX_SEARCH_NODES) {
-            let other = SDValue { node: user, res: 0 };
-            if self.dag.opcode(other) != ISD::Store || self.dag.operand(other, 0) != root {
-                continue;
+        let mut consider = |this: &Self, other: SDValue| {
+            // A merged store is dead but still on the chain of the load it
+            // read.
+            if this.dag.opcode(other) != ISD::Store
+                || (!this.dag.has_users(other) && other.node != this.dag.get_root().node)
+            {
+                return;
             }
-            let NodeData::Mem(theirs) = self.dag.node(other).data else { continue };
+            let NodeData::Mem(theirs) = this.dag.node(other).data else { return };
             if theirs.volatile
                 || theirs.mem_vt != info.mem_vt
                 || theirs.space != info.space
                 || theirs.ext.is_some()
-                || self.dag.constant(self.dag.operand(other, 1)).is_none()
+                || this.store_source(this.dag.operand(other, 1), theirs) != Some(source)
             {
-                continue;
+                return;
             }
-            let (their_base, there) = self.match_address(self.dag.operand(other, 2));
+            let (their_base, there) = this.match_address(this.dag.operand(other, 2));
             if their_base == base {
                 found.push(Link { store: other, offset: there - here });
             }
+        };
+        for user in self.dag.users(root).take(MAX_SEARCH_NODES) {
+            let other = SDValue { node: user, res: 0 };
+            if self.dag.operand(other, 0) != root {
+                continue;
+            }
+            if through_load && self.dag.opcode(other) == ISD::Load {
+                // "Walk down chain": the stores that read this load's chain.
+                let chain = SDValue { node: user, res: 1 };
+                for store in self.dag.users(chain).take(MAX_SEARCH_NODES) {
+                    let store = SDValue { node: store, res: 0 };
+                    if self.dag.operand(store, 0) == chain {
+                        consider(self, store);
+                    }
+                }
+            } else {
+                consider(self, other);
+            }
         }
-        found
+        (root, found)
     }
 
     /// `checkMergeStoreCandidatesForDependencies`: none of the stores reads,
@@ -117,7 +182,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         stores: &[Link],
         root: SDValue,
     ) -> bool {
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = crate::support::hash::HashSet::default();
         let mut worklist = vec![root.node];
         while let Some(node) = worklist.pop() {
             if !visited.insert(node) {
@@ -144,7 +209,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     fn has_predecessor(
         &self,
         target: u32,
-        visited: &mut std::collections::HashSet<u32>,
+        visited: &mut crate::support::hash::HashSet<u32>,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {
@@ -165,7 +230,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         false
     }
 
-    /// `mergeConsecutiveStores` for stores of constants. True when stores
+    /// `mergeConsecutiveStores`. True when stores
     /// were merged (the originals are then dead).
     pub(super) fn merge_consecutive_stores(
         &mut self,
@@ -184,28 +249,26 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             .filter(|&bits| tli.types.is_type_legal(EVT::integer(bits)))
             .max()
             .unwrap_or(0);
-        if info.volatile
-            || !mem.is_integer()
-            || mem.size_in_bits() % 8 != 0
-            || mem.size_in_bits() * 2 > widest
-            || self.dag.constant(self.dag.operand(st, 1)).is_none()
-        {
+        if info.volatile || !mem.is_integer() || mem.size_in_bits() % 8 != 0 || mem.size_in_bits() * 2 > widest {
             return false;
         }
+        let Some(source) = self.store_source(self.dag.operand(st, 1), info) else { return false };
         let element = i64::from(mem.size_in_bits() / 8);
-        let mut stores = self.store_merge_candidates(st, info);
+        let (root, mut stores) = self.store_merge_candidates(st, info, source);
         if stores.len() < 2 {
             return false;
         }
         stores.sort_by_key(|link| link.offset);
-        let root = self.dag.operand(st, 0);
         let mut changed = false;
         while stores.len() > 1 {
             let run = Self::consecutive_stores(&mut stores, element);
             if run == 0 {
                 return changed;
             }
-            changed |= self.merge_constants(&mut stores, run, mem, root, widest);
+            changed |= match source {
+                Source::Constant => self.merge_constants(&mut stores, run, mem, root, widest),
+                Source::Load { .. } => self.merge_loads(&mut stores, run, mem, root, widest),
+            };
         }
         changed
     }
@@ -323,8 +386,26 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 (joined << element_bits) | (self.dag.constant(self.dag.operand(link.store, 1)).unwrap_or(0) & mask);
         }
         let first = stores[0].store;
-        let NodeData::Mem(first_info) = self.dag.node(first).data else { return false };
-        // `getMergeStoreChains`: the stores' chains, each once, not the stores.
+        let (chain, info) = self.merged_chain_and_info(stores, total);
+        let value = self.dag.get_constant(joined, EVT::integer(total));
+        let ptr = self.dag.operand(first, 2);
+        let new = self.dag.get_store(chain, value, ptr, info);
+        for link in stores {
+            self.replace_value(link.store, new);
+        }
+        self.add_to_worklist(chain.node);
+        true
+    }
+
+    /// `getMergeStoreChains` and the `MemInfo` of the joined store of `total`
+    /// bits: the stores' chains, each once, not the stores; the pointer info
+    /// of the first when all name one object.
+    fn merged_chain_and_info(
+        &mut self,
+        stores: &[Link],
+        total: u32,
+    ) -> (SDValue, MemInfo) {
+        let NodeData::Mem(first_info) = self.dag.node(stores[0].store).data else { unreachable!("a store") };
         let merged: Vec<u32> = stores.iter().map(|link| link.store.node).collect();
         let mut chains = Vec::new();
         for link in stores {
@@ -347,11 +428,121 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             base: if same_object { first_info.base } else { MemBase::Unknown },
             ..first_info
         };
-        let value = self.dag.get_constant(joined, EVT::integer(total));
-        let ptr = self.dag.operand(first, 2);
-        let new = self.dag.get_store(chain, value, ptr, info);
+        (chain, info)
+    }
+
+    fn stored_load(
+        &self,
+        link: &Link,
+    ) -> SDValue {
+        self.dag.operand(link.store, 1)
+    }
+
+    fn load_align(
+        &self,
+        load: SDValue,
+    ) -> u32 {
+        match self.dag.node(load).data {
+            NodeData::Mem(info) => info.align,
+            _ => 0,
+        }
+    }
+
+    /// `tryStoreMergeOfLoads`: the stores of loads from consecutive addresses
+    /// off one chain, as many as one legal integer type holds, become a wide
+    /// load and a wide store.
+    fn merge_loads(
+        &mut self,
+        stores: &mut Vec<Link>,
+        mut consecutive: usize,
+        mem: EVT,
+        root: SDValue,
+        widest: u32,
+    ) -> bool {
+        let tli = self.tli.expect("a merge has a target");
+        let element_bits = mem.size_in_bits();
+        let element = i64::from(element_bits / 8);
+        let mut changed = false;
+        while consecutive >= 2 {
+            let first_load = self.stored_load(&stores[0]);
+            let first_align = self.load_align(first_load);
+            let first_store_align = self.store_align(stores[0].store);
+            let load_chain = self.dag.operand(first_load, 0);
+            let start = self.match_address(self.dag.operand(first_load, 1)).1;
+            let (mut last_consecutive, mut last_legal) = (1, 1);
+            for i in 1..consecutive {
+                let load = self.stored_load(&stores[i]);
+                // "All loads must share the same chain."
+                if self.dag.operand(load, 0) != load_chain {
+                    break;
+                }
+                if self.match_address(self.dag.operand(load, 1)).1 - start != element * i as i64 {
+                    break;
+                }
+                last_consecutive = i + 1;
+                let bits = (i as u32 + 1) * element_bits;
+                if bits > widest {
+                    break;
+                }
+                if tli.types.is_type_legal(EVT::integer(bits)) {
+                    last_legal = i + 1;
+                }
+            }
+            let count = last_consecutive.min(last_legal);
+            if count < 2 {
+                // "Drop as many candidates as we can here."
+                let mut skip = 1;
+                while skip < consecutive
+                    && self.load_align(self.stored_load(&stores[skip])) <= first_align
+                    && self.store_align(stores[skip].store) <= first_store_align
+                {
+                    skip += 1;
+                }
+                stores.drain(..skip);
+                consecutive -= skip;
+                continue;
+            }
+            if !self.merge_candidates_are_independent(&stores[..count], root) {
+                stores.drain(..count);
+                consecutive -= count;
+                continue;
+            }
+            changed |= self.merge_store_loads(&stores[..count]);
+            stores.drain(..count);
+            consecutive -= count;
+        }
+        changed
+    }
+
+    /// The joined load and store, the loads' chain readers moved to the new
+    /// load.
+    fn merge_store_loads(
+        &mut self,
+        stores: &[Link],
+    ) -> bool {
+        let total = self.dag.value_type(self.stored_load(&stores[0])).size_in_bits() * stores.len() as u32;
+        let first_load = self.stored_load(&stores[0]);
+        let NodeData::Mem(load_info) = self.dag.node(first_load).data else { return false };
+        let (chain, store_info) = self.merged_chain_and_info(stores, total);
+        let same_object = stores
+            .iter()
+            .all(
+                |link| matches!(
+                    self.dag.node(self.stored_load(link)).data,
+                    NodeData::Mem(info) if info.base == load_info.base && info.base != MemBase::Unknown
+                ),
+            );
+        let joint = EVT::integer(total);
+        let wide =
+            MemInfo { mem_vt: joint, base: if same_object { load_info.base } else { MemBase::Unknown }, ..load_info };
+        let new_load = self.dag.get_load(joint, self.dag.operand(first_load, 0), self.dag.operand(first_load, 1), wide);
+        let new_store = self.dag.get_store(chain, new_load, self.dag.operand(stores[0].store, 2), store_info);
         for link in stores {
-            self.replace_value(link.store, new);
+            let load = self.stored_load(link);
+            self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new_load.node, res: 1 });
+        }
+        for link in stores {
+            self.replace_value(link.store, new_store);
         }
         self.add_to_worklist(chain.node);
         true

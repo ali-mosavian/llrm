@@ -1,0 +1,24 @@
+# RUN: llrm-nib %s -m16 -Os -S -o /dev/stdout
+# At m16 -Os a callee called from two sites was refused site by site (each alone grows the code) and
+# stayed called twice: far_near.nib +62 B and +26% clocks against main. Both sites inline together,
+# for the callee goes with the last call.
+# CHECK-LABEL: _main proc
+# CHECK-NOT: call _sum
+# CHECK: _main endp
+var table: i16[8] = [1, 2, 3, 4, 5, 6, 7, 8]
+
+fn sum(p: *far i16, n: u16) -> i16:
+    let mut t: i16 = 0
+    unsafe:
+        for i in 0..n:
+            t += *p.offset(i)
+    return t
+
+fn main() -> i16:
+    let mut local: i16[4] = [10, 20, 30, 40]
+    unsafe:
+        let a: *far i16 = &table
+        let c: *far i16 = &local
+        print(sum(a, 8))
+        print(sum(c, 4))
+    return 0
