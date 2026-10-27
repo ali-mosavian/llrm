@@ -513,3 +513,35 @@ fn an_and_compared_with_its_operand_is_an_equality_or_a_sign_test() {
         "  %0 = icmp slt i32 %y, 0\n  ret i1 %0\n",
     );
 }
+
+/// `foldICmpXNegX`: a value against its negation (`opt`: `icmp sgt i32 %x, 0`,
+/// `icmp slt i32 %x, 0`); without `nsw` only an equality folds, to the value
+/// without its sign bit.
+#[test]
+fn a_value_compared_with_its_negation_is_compared_with_zero() {
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp eq i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp eq i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp slt i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp ult i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp ule i32 %x, %n\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub i32 0, %x\n  %r = icmp ne i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = and i32 %x, 2147483647\n  %1 = icmp ne i32 %0, 0\n  ret i1 %1\n",
+    );
+}

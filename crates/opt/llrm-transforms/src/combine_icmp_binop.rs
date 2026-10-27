@@ -5,9 +5,9 @@
 //! MIRROR: the order of the steps and each condition, up to the `Xor`/`Or`
 //! folds.
 //!
-//! OWED, in place as `// OWED:` comments: `foldICmpXNegX`, the sign-mask and
-//! low-bit-mask forms, the equality forms of `foldICmpOrXX`, and every arm
-//! after `srem` (the shared second operand, `udiv`, `shl`, `lshr`, `and`...).
+//! OWED, in place as `// OWED:` comments: the sign-mask and low-bit-mask forms,
+//! the equality forms of `foldICmpOrXX`, and every arm after `srem` (the shared
+//! second operand, `udiv`, `shl`, `lshr`, `and`...).
 //!
 //! DEVIATE 1: `ShareCommonDivisor` takes only its fast path (the offset is 1,
 //! or -1 for the negative forms); the general case needs `isMultipleOf`, which
@@ -176,7 +176,9 @@ pub fn fold_icmp_bin_op(
         return None;
     }
     let ty = c.type_of(op0);
-    // OWED: foldICmpXNegX.
+    if let Some(r) = fold_icmp_x_neg_x(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
 
     // (X urem Y) == X --> X u< Y
     // (X urem Y) != X --> X u>= Y
@@ -470,6 +472,52 @@ fn fold_icmp_and_xx(
         // (NegX & Y) s> NegX --> Y s>= 0
         let zero = c.int(c.type_of(a), 0);
         return Some(new_icmp(c, inst, flipped_strictness(pred), a, zero));
+    }
+    None
+}
+
+/// `foldICmpXNegX`: a compare of `-X` with `X`.
+fn fold_icmp_x_neg_x(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    // `m_Neg` is `sub 0, X`; of the two operands, the negation is the one
+    // whose operand is the other (`m_c_ICmp`).
+    let negation_of = |c: &Combiner, neg: Operand, x: Operand| {
+        binary_operator(c, neg)
+            .filter(|&(op, zero, v, _)| op == BinaryOp::Sub && v == x && const_bits(c, zero) == Some(0))
+            .map(|(_, _, _, flags)| flags)
+    };
+    let (flags, x, pred, neg) = if let Some(flags) = negation_of(c, op0, op1) {
+        (flags, op1, pred, op0)
+    } else if let Some(flags) = negation_of(c, op1, op0) {
+        (flags, op0, swapped(pred), op1)
+    } else {
+        return None;
+    };
+    let ty = c.type_of(x);
+    if flags.contains(Flags::NSW) {
+        let new = if is_signed(pred) {
+            swapped(pred)
+        } else if is_unsigned(pred) {
+            flipped_signedness(pred)
+        } else {
+            pred
+        };
+        let zero = c.int(ty, 0);
+        return Some(new_icmp(c, inst, new, x, zero));
+    }
+    // A value is not equal to its negation unless that value is 0 or
+    // MinSignedValue, ie: a != -a --> (a & MaxSignedVal) != 0
+    if is_equality(pred) && has_one_use(c, neg) {
+        let width = query(c, None).int_constant(c.int(ty, 0)).map_or(0, |(_, w)| w);
+        let max_signed = c.int(ty, (1u128 << (width - 1)) - 1);
+        let and = c.create_binop(inst, BinaryOp::And, x, max_signed, Flags::default());
+        let zero = c.int(ty, 0);
+        return Some(new_icmp(c, inst, pred, and, zero));
     }
     None
 }
