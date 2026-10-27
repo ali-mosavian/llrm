@@ -2540,7 +2540,10 @@ mod tests {
     #[test]
     fn test_a_volatile_far_store_leaves_the_loop_the_cells_the_pin_leaves_it() {
         let loads = |body: &[String]| body.iter().filter(|one| one.contains("ptr [")).count();
-        let stores = |body: &[String]| body.iter().filter(|one| one.contains("byte ptr es:[")).count();
+        // the far pointers are in whichever segment registers the allocator
+        // keeps them
+        let stores =
+            |body: &[String]| body.iter().filter(|one| one.contains("byte ptr ") && one.contains("s:[")).count();
         let video = driven_loop("farvolatile", "_video");
         assert_eq!((loads(&video), stores(&video)), (2, 2), "{video:#?}");
         let conventional = driven_loop("farvolatile", "_conventional");
