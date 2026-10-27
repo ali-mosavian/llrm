@@ -201,8 +201,8 @@ fn touches_frame(one: &Insn) -> bool {
 /// cells: they sit directly below the arguments, and a push before the
 /// reserve would put the cells over it. With `stack_addressed` the stack
 /// pointer addresses them at the depth each block is entered at, and every
-/// block must be entered at one, whatever a piece sets up. With `size` at 16
-/// bits a restore that needs the epilogue placed on an edge is refused.
+/// block must be entered at one, whatever a piece sets up. With `size` a
+/// restore that needs the epilogue placed on an edge is refused.
 pub fn wrapped(
     body: &LirBody,
     kept: &BTreeSet<RegId>,
@@ -236,11 +236,12 @@ pub fn wrapped(
         // the epilogue at the end of each predecessor, before its jump to the
         // restore or where it falls into it, and refuses any other.
         let split = placement.split.as_deref().unwrap_or_default();
-        // Under `size` at 16 bits the split changes where the early exit lands,
-        // and a branch over the epilogue grows past its short form (QCport m16
-        // -Os +9 B, nothing smaller): the registers stay saved at the entry.
-        // The pin has no such check, and at 32 bits the pops are short.
-        if size && body.bits < 32 && (!split.is_empty() || !uses.is_return(placement.restore)) {
+        // Under `size` the split changes where the early exit lands, and a
+        // branch over the epilogue grows past its short form (QCport m16 -Os
+        // +9 B, nothing smaller): the registers stay saved at the entry. The
+        // caller states `size` only for a target that says so (the pin has no
+        // such check).
+        if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
             continue;
         }
         if !split.iter().all(|&one| {
@@ -635,20 +636,6 @@ mod tests {
             block(3, vec![ret(30)], vec![]),
         ];
         assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, true).is_none());
-    }
-
-    /// The pin's ShrinkWrap has no size check: at 32 bits -Os the split return
-    /// is wrapped too (x_hanoi2 `mv` pushed four registers before its `n == 0`
-    /// exit, +14.3%).
-    #[test]
-    fn test_a_split_restore_is_wrapped_under_size_at_32_bits() {
-        let blocks = vec![
-            block(0, vec![branch(2, 3)], vec![3, 2]),
-            block(2, vec![touch(20, RegId::ESI)], vec![3]),
-            block(3, vec![ret(30)], vec![]),
-        ];
-        let body = LirBody { bits: 32, ..body(blocks) };
-        assert!(wrapped(&body, &BTreeSet::from([RegId::ESI]), None, false, true).is_some());
     }
 
     /// The late path that does not fall into the return but is laid out away

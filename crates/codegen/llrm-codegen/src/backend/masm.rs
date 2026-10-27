@@ -798,7 +798,7 @@ pub(crate) fn wrap_of(
         &kept,
         (frame && movable).then_some((registers.pointer, registers.stack)),
         stack_addressed,
-        procedure.size,
+        procedure.size && !registers.wrap_split_size,
     )
 }
 
@@ -2811,6 +2811,57 @@ mod tests {
         assert!(!lines.iter().any(|one| one == "ret"), "{lines:?}");
     }
 
+    /// x_hanoi2 `mv` -Os m32 pushed four registers before its `n == 0` exit:
+    /// the size refusal of a wrap around a shared return was the 16-bit
+    /// target's (a jump over the epilogue outgrows its short form), and applied
+    /// everywhere. The target description states it (`frame_wrap_split_size`).
+    #[test]
+    fn test_a_size_build_wraps_a_shared_return_only_where_the_target_allows() {
+        let esi = Loc::Reg(ir::Reg { register: RegId::ESI, width: 4 });
+        let jump = |at: i64, target: i64| {
+            insn(at, Semantics { name: Some("je".into()), target: Some(target), ..Semantics::new(Operation::Branch) })
+        };
+        let touch = insn(20, semantics(Operation::Move, "mov", vec![esi.clone()], vec![esi]));
+        let ret = |at: i64| insn(at, semantics(Operation::Return, "ret", vec![], vec![]));
+        let block = |at: i64, insns: Vec<Arc<lir::Insn>>, succ: Vec<i64>| lir::LirBlock {
+            succ: succ.into(),
+            ..lir::LirBlock::new(at, insns)
+        };
+        let blocks = vec![
+            block(0, vec![jump(1, 3)], vec![3, 2]),
+            block(2, vec![touch], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let wrapped = |target: &dyn llrm_target::Target, bits: u32| {
+            let body = lir::LirBody {
+                bits,
+                ..lir::LirBody::new(
+                    "f",
+                    0,
+                    crate::model::lir::shared(blocks.clone()),
+                    IndexMap::default(),
+                    IndexMap::default(),
+                )
+            };
+            let procedure = Procedure {
+                name: "_f".into(),
+                public: true,
+                far: false,
+                body: body.clone(),
+                reserve: 0,
+                callees: IndexMap::default(),
+                interrupt: None,
+                size: true,
+                entry: 0,
+                stack_check: None,
+                registers: target.frame_registers(),
+            };
+            wrap_of(&procedure, &body, false, false).is_some()
+        };
+        assert!(wrapped(&llrm_x86_m32::M32, 32), "m32 states it");
+        assert!(!wrapped(&llrm_x86_m16::M16, 16), "m16 does not");
+    }
+
     fn through_bp() -> Loc {
         Loc::Mem(ir::Mem { through: RegId::BP, ..ir::Mem::new(Some(Addr::new(Space::Frame, 6)), 2) })
     }
@@ -3111,6 +3162,7 @@ mod tests {
             align: 4,
             optional: false,
             enter: false,
+            wrap_split_size: false,
             free: false,
         };
         let procedure = Procedure {
@@ -3160,6 +3212,7 @@ mod tests {
                 align: 4,
                 optional: false,
                 enter,
+                wrap_split_size: false,
                 free: false,
             };
             let procedure = Procedure {
@@ -3214,6 +3267,7 @@ mod tests {
             align: 4,
             optional,
             enter: false,
+            wrap_split_size: false,
             free: false,
         };
         let procedure = Procedure {
@@ -3370,6 +3424,7 @@ mod tests {
             align: 4,
             optional: false,
             enter: false,
+            wrap_split_size: false,
             free: false,
         };
         let procedure = Procedure {
