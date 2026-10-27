@@ -149,6 +149,7 @@ impl CombineHooks for X86Lowering {
             || op == x86isd::BRCOND
             || op == x86isd::ADC
             || op == x86isd::SBB
+            || op == ISD::UIntToFp
     }
 
     fn perform_dag_combine(
@@ -166,6 +167,7 @@ impl CombineHooks for X86Lowering {
             x86isd::SETCC => combine_setcc(dag, node),
             x86isd::BRCOND => combine_brcond(dag, node),
             x86isd::ADC | x86isd::SBB => combine_adc_sbb(dag, node),
+            ISD::UIntToFp => combine_uint_to_fp(dag, node),
             _ => None,
         }
     }
@@ -1137,6 +1139,22 @@ fn combine_x86_add_sub(
 /// (`SETCC_CARRY`), where `and; neg` took two instructions and a mask. (The
 /// `adc`/`sbb` forms with a variable first operand, the `cmp`/`neg` carry
 /// forms and `-1 + setae` are not translated.)
+/// `combineUIntToFP`: `UINT_TO_FP` is custom, so the generic combine never
+/// makes it a `SINT_TO_FP` when the sign bit is clear; here a `nneg` flag or a
+/// known clear sign bit does, which is one `fild` of the value itself and not
+/// of a 64-bit buffer holding it. (Vector forms are not translated.)
+fn combine_uint_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let value = dag.operand(node, 0);
+    let vt = dag.value_type(node);
+    let bits = dag.value_type(value).size_in_bits();
+    let non_neg = dag.node(node).flags.has(SDNodeFlags::NON_NEG)
+        || super::known_bits::known_bits(dag, value).zero >> (bits - 1) & 1 == 1;
+    non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
+}
+
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,

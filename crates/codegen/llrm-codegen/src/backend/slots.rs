@@ -206,7 +206,16 @@ pub(crate) const WORD: u32 = frames::WORD as u32;
 /// worked out again. None where a home has no range (it was not made by an
 /// inline spill).
 pub(crate) fn _stacked_colors(frame: &Frame) -> Option<Vec<(i64, u32, Vec<Interval>)>> {
-    let mut homes: Vec<i64> = frame.slots.values().copied().collect::<BTreeSet<i64>>().into_iter().collect();
+    // The scratch temporaries have no LiveStacks range: `slots_colored` works
+    // theirs out from the body.
+    let mut homes: Vec<i64> = frame
+        .slots
+        .values()
+        .copied()
+        .filter(|home| !frame.scratch.contains(home))
+        .collect::<BTreeSet<i64>>()
+        .into_iter()
+        .collect();
     homes.sort_unstable();
     let first = u32::MAX - homes.len() as u32;
     homes
@@ -252,8 +261,12 @@ pub(crate) fn slots_colored(
         eprintln!("stacks {}: {} homes, {} with a LiveStacks range", body.name, homes.len(), covered);
     }
     let colors = match _stacked_colors(frame) {
-        Some(colors) if !llrm_support::env_flag!("LLRM_NO_STACKS") => {
+        Some(mut colors) if !llrm_support::env_flag!("LLRM_NO_STACKS") => {
             COLOURED.with(|one| one.set((one.get().0 + 1, one.get().1)));
+            if !frame.scratch.is_empty() {
+                let scratch = frame.scratch.clone();
+                colors.extend(_existing_colors(body, frame).0.into_iter().filter(|color| scratch.contains(&color.0)));
+            }
             colors
         }
         _ => {
@@ -328,7 +341,10 @@ pub(crate) fn slots_colored(
             // A loop's slot is shared only by what is as wide: a word shares no
             // slot a double word is read from, which no register stands in for
             // (`loopslots`).
-            let same = |at: &usize| shared[*at].1 == *capacity || (!looped[*at] && !in_loop.contains(home));
+            let same = |at: &usize| {
+                frame.scratch.contains(&shared[*at].0) == frame.scratch.contains(home)
+                    && (shared[*at].1 == *capacity || (!looped[*at] && !in_loop.contains(home)))
+            };
             // `ColorSlot`: the first slot in use that nothing overlaps.
             let chosen =
                 (0..shared.len()).filter(same).find(|at| crate::backend::slots::overlaps_none(&shared[*at], &interval));
@@ -391,6 +407,7 @@ pub(crate) fn slots_colored(
         again.slots.insert(key.clone(), new);
         moved.insert(*home, new);
     }
+    again.scratch = frame.scratch.iter().filter_map(|home| moved.get(home).copied()).collect();
     let Some(out) = crate::backend::slots::moved(body, &moved) else { return body.clone() };
     *frame = again;
     _identities_dropped(&out)
