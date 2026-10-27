@@ -55,8 +55,8 @@ use std::sync::Arc;
 
 use llrm_lir::registers::Regs;
 
-use crate::backend::allocate::RFP;
 use crate::backend::floatregions::clears_stack;
+use crate::backend::fpregs::RFP;
 use crate::backend::fpregs::{live_out, slot_of, touched};
 use crate::model::ir::{Loc, Operation, Reg, Semantics, Space};
 use crate::model::lir::{self, Insn, LirBody};

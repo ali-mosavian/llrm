@@ -1519,9 +1519,6 @@ pub fn greedy_rewritten(
     ))
 }
 
-/// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
-pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
-
 thread_local! {
     static FACTS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -4135,10 +4132,10 @@ mod tests {
             vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -8)), 8))],
         );
         let one = Arc::new(Insn::new(1, Some((1, 1)), Some(load), vec![7], vec![]));
-        let held = pins(&[(7, RFP[3])]);
+        let held = pins(&[(7, crate::backend::fpregs::RFP[3])]);
         let placed = _placed(&one, &held, &crate::backend::classes::RegisterClasses::m16()).expect("placed");
         let what = placed.what.as_ref().expect("semantics");
-        assert_eq!(what.dests, vec![Loc::Reg(Reg { register: RFP[3], width: 10 })]);
+        assert_eq!(what.dests, vec![Loc::Reg(Reg { register: crate::backend::fpregs::RFP[3], width: 10 })]);
         assert!(placed.defines.is_empty(), "{:?}", placed.defines);
     }
 }

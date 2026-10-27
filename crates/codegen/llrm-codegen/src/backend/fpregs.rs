@@ -19,16 +19,18 @@
 //! `b1 := fld [a]; b1 := fmul b1, b0`, `b1` being `fp1`'s value.
 //!
 //! # Needs
-//! [`crate::backend::allocate::RFP`].
+//! [`RFP`].
 
 use std::collections::VecDeque;
 
-use llrm_lir::registers::{Regs, class};
+use llrm_lir::registers::{RegId, Regs, class};
 
-use crate::backend::allocate::RFP;
 use crate::model::ir::{Held, Loc, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashSet, IndexMap};
+
+/// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
+pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
 
 const SLOTS: usize = RFP.len();
 

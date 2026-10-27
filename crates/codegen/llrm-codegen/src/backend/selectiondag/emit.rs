@@ -3117,7 +3117,7 @@ impl Emitter<'_, '_> {
                     Arc::get_mut(last)
                         .expect("a fresh instruction")
                         .clobbers
-                        .extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                        .extend(crate::backend::fpregs::RFP.iter().rev().take(scratch).copied());
                 }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {

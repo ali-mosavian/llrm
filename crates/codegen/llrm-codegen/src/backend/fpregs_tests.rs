@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::backend::allocate::RFP;
+use crate::backend::fpregs::RFP;
 use crate::model::ir::{Mem, Operation};
 use crate::model::lir::LirBlock;
 

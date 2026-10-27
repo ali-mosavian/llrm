@@ -721,7 +721,7 @@ impl InlineSpiller<'_> {
             lis.insert_instr_after(block, renamed[renamed.len() - 1].id(), store);
             self.stores += 1;
         }
-        self.tables.orders.borrow_mut().insert(new, crate::backend::allocate::RFP.to_vec());
+        self.tables.orders.borrow_mut().insert(new, crate::backend::fpregs::RFP.to_vec());
         self.tables.widths.borrow_mut().insert(new, 10);
         self.tables.float_bytes.borrow_mut().insert(new, bytes);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));

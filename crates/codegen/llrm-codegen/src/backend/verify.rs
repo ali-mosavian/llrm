@@ -757,7 +757,7 @@ mod tests {
             Operation::FloatStore,
             "fstp",
             vec![Loc::Mem(ir::Mem::new(Some(ir::Addr::new(ir::Space::Frame, -8)), 8))],
-            vec![Loc::Reg(ir::Reg { register: crate::backend::allocate::RFP[0], width: 10 })],
+            vec![Loc::Reg(ir::Reg { register: crate::backend::fpregs::RFP[0], width: 10 })],
         );
         let body = body(
             "x87",
