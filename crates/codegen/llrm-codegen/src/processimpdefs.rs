@@ -14,6 +14,13 @@
 //! DEVIATE PI-1 (no number): no physical-register implicit defs; the target has
 //! none before allocation.
 //!
+//! DEVIATE PI-4 (exit: none while the core runs in order): an instruction that
+//! reads a value it ignores reads it undefined, where the pin leaves a zero in
+//! it to break the wait for the old register (`sbb r, r` after `MOV32r0`). A
+//! core that runs in order does not wait, so `v1 := mov 0; v2 := sbb v1, v1`
+//! is `v2 := sbb undef, undef`, and `v2` is free to be where it is wanted
+//! (`cmp ax, 1; sbb ax, ax`, not `sbb ecx, ecx; mov ax, cx`).
+//!
 //! DEVIATE PI-3 (exit: none): only a full copy is turned into an
 //! `implicit_def`; the pin also turns `INSERT_SUBREG` and `REG_SEQUENCE`, which
 //! LIR has not.
@@ -100,8 +107,59 @@ fn made_defining(
 }
 
 /// The pass as a phase: what a phi reads stays an `implicit_def`, for
-/// PHIElimination.
-pub struct ProcessImplicitDefs;
+/// PHIElimination. With `ignored_inputs` a constant only an instruction that
+/// ignores it reads is one too (PI-4).
+pub struct ProcessImplicitDefs {
+    pub ignored_inputs: bool,
+}
+
+/// `one` is `sbb r, r`: its result is the borrow whatever `r` holds. The value
+/// it reads.
+fn ignores_its_input(one: &Insn) -> Option<u32> {
+    let value = *one.uses.first()?;
+    (one.what.as_ref()?.name.as_deref() == Some("sbb") && one.uses.iter().all(|used| *used == value)).then_some(value)
+}
+
+/// `body` with each constant that only `sbb r, r` reads an `implicit_def`.
+fn ignored_inputs_undefined(body: LirBody) -> LirBody {
+    let ignored: HashSet<u32> =
+        body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| ignores_its_input(one)).collect();
+    if ignored.is_empty() {
+        return body;
+    }
+    // A value anything else reads stays a constant.
+    let read_otherwise: HashSet<u32> = body
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| ignores_its_input(one).is_none())
+        .flat_map(|one| one.uses.iter().chain(&one.requires.iter().map(|(held, _)| held.value).collect::<Vec<_>>()).copied().collect::<Vec<_>>())
+        .chain(body.blocks.iter().flat_map(|block| block.phis.iter()).flat_map(|phi| phi.incoming.iter().map(|&(_, value)| value)))
+        .collect();
+    let constant = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::Move && what.sources.len() == 1 && matches!(what.sources[0], Loc::Imm(_))
+        })
+    };
+    let blocks: Vec<_> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns: Vec<Arc<Insn>> = block
+                .insns
+                .iter()
+                .map(|one| match one.defines.as_slice() {
+                    [value] if constant(one) && ignored.contains(value) && !read_otherwise.contains(value) => {
+                        made_implicit(one, *value)
+                    }
+                    _ => Arc::clone(one),
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    body.with_blocks(blocks)
+}
 
 impl LIRTransform for ProcessImplicitDefs {
     fn class_name(&self) -> &'static str {
@@ -116,6 +174,7 @@ impl LIRTransform for ProcessImplicitDefs {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
+        let body = if self.ignored_inputs { ignored_inputs_undefined(body) } else { body };
         if !body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| implicit_def_of(one).is_some()) {
             return Ok(body);
         }
@@ -286,6 +345,56 @@ mod tests {
 
     fn names(body: &LirBody) -> Vec<String> {
         body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+    }
+
+    fn zero(value: u32) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("mov".into()),
+            dests: vec![held(value)],
+            sources: vec![Loc::Imm(crate::model::ir::Imm { value: 0, width: 4, address: None })],
+            ..Semantics::new(Operation::Move)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![value], Vec::new()))
+    }
+
+    fn sbb(
+        into: u32,
+        from: u32,
+    ) -> Arc<Insn> {
+        let what = Semantics {
+            name: Some("sbb".into()),
+            dests: vec![held(into)],
+            sources: vec![held(from), held(from)],
+            ..Semantics::new(Operation::Binary)
+        };
+        Arc::new(Insn::new(0, None, Some(what), vec![into], vec![from, from]))
+    }
+
+    fn pass_over(
+        ignored_inputs: bool,
+        insns: Vec<Arc<Insn>>,
+    ) -> LirBody {
+        ProcessImplicitDefs { ignored_inputs }.transform(body(insns, Vec::new())).unwrap()
+    }
+
+    /// `mask` (`a == 0 ? -1 : 0`) at -Os m16 was `cmp ax, 1; sbb ecx, ecx; mov
+    /// ax, cx`: the zero `sbb r, r` ignores was live across the compare, so the
+    /// result could not take the register the argument was in. On an in-order
+    /// core the zero goes and `sbb` reads undef.
+    #[test]
+    fn test_the_zero_an_sbb_of_one_register_ignores_is_read_undef_on_an_in_order_core() {
+        let got = pass_over(true, vec![zero(1), sbb(2, 1)]);
+        assert_eq!(names(&got), ["sbb"]);
+        let sbb = &got.insns()[0];
+        assert!(sbb.uses.is_empty() && !sbb.undefs.is_empty() && sbb.undefs.iter().all(|value| *value == 1), "{sbb:?}");
+    }
+
+    /// A core that waits for the old register keeps the zero that breaks the
+    /// wait, and a zero something else reads stays a constant.
+    #[test]
+    fn test_the_zero_stays_where_it_is_waited_for_or_read_otherwise() {
+        assert_eq!(names(&pass_over(false, vec![zero(1), sbb(2, 1)])), ["mov", "sbb"]);
+        assert_eq!(names(&pass_over(true, vec![zero(1), sbb(2, 1), add(3, 4, 1)])), ["mov", "sbb", "add"]);
     }
 
     /// The use becomes an undef read and the definition goes.
