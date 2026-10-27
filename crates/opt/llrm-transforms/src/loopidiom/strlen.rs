@@ -47,7 +47,7 @@ use llrm_analysis::scev::expr::Use;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{CallInfo, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, CallInfo, Flags, IntPredicate, Opcode};
 use llrm_mir::types::Type;
 
 use super::LoopIdiomRecognize;
@@ -98,7 +98,9 @@ impl LoopIdiomRecognize {
         &mut self,
         run: &mut Run,
     ) -> bool {
-        if self.options.disable_all {
+        let no_builtins =
+            run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins"));
+        if self.options.disable_all || no_builtins {
             return false;
         }
         let Some(verified) = self.verify_strlen_idiom(run) else { return false };
@@ -385,6 +387,17 @@ exit:
     fn a_compile_that_states_no_strlen_keeps_its_loop() {
         let after = run_with(MESSAGE, false);
         assert!(!after.contains("strlen"), "{after}");
+    }
+
+    /// x_strlen (Open Watcom, `-fno-builtin`) got a `call _strlen` in a
+    /// `"no-builtins"` function, which the pin's TLI forbids (+15
+    /// instructions).
+    #[test]
+    fn a_no_builtins_function_keeps_its_strlen_loop() {
+        let text = MESSAGE.replace("@len(ptr %s) {", "@len(ptr %s) \"no-builtins\" {");
+        let after = run(&text);
+        assert!(!after.contains("strlen"), "{after}");
+        assert!(run(MESSAGE).contains("strlen"));
     }
 
     #[test]
