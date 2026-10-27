@@ -89,6 +89,15 @@ pub struct BuilderTarget {
     pub opt_size: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
+    /// At size, the most stores a constant memset is inline for; 0 where the
+    /// pin's limit stands. Real mode: a dword store is 4 bytes (prefix, opcode,
+    /// ModRM, disp8) against 13 for the fill (`lea di`, `mov es,ss`, `mov cx`,
+    /// `rep stos`, the zero) that also takes ax, cx and di from the code
+    /// around it, so four.
+    pub memset_stores_size: usize,
+    /// The same for the load and store pairs of a constant memcpy: a dword
+    /// pair is 8 bytes against about 16 for `rep movs`, so two.
+    pub memcpy_moves_size: usize,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -159,6 +168,24 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with its size limit of memcpy pairs.
+    pub fn with_memcpy_moves_size(
+        mut self,
+        moves: usize,
+    ) -> BuilderTarget {
+        self.memcpy_moves_size = moves;
+        self
+    }
+
+    /// This target with its size limit of memset stores.
+    pub fn with_memset_stores_size(
+        mut self,
+        stores: usize,
+    ) -> BuilderTarget {
+        self.memset_stores_size = stores;
+        self
+    }
+
     /// This target with a stack alignment, whatever the target's is.
     pub fn with_stack_alignment(
         mut self,
@@ -208,6 +235,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
+            memset_stores_size: 0,
+            memcpy_moves_size: 0,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -236,6 +265,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
+            memset_stores_size: 0,
+            memcpy_moves_size: 0,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -382,13 +413,17 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
-                // globals the IR marks local, an ELF target's only ones
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
+                // every symbol under the static relocation
+                // model, which these targets (DOS objects, no
+                // PIC) always use.
                 super::function_lowering::Tables {
                     global_names: std::rc::Rc::new(
                         module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
                     ),
-                    local_symbols: std::rc::Rc::new(
+                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
+                        vec![true; module.globals.len()]
+                    } else {
                         module
                             .globals
                             .iter()
@@ -398,8 +433,8 @@ impl<'a> Builder<'a> {
                                     llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
                                 )
                             })
-                            .collect(),
-                    ),
+                            .collect()
+                    }),
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -711,32 +746,6 @@ impl Builder<'_> {
                 Ok(made)
             }
         }
-    }
-
-    /// The byte register of a dword one: `EAX` -> `AL`; none for `ESI`, `EDI`.
-    fn byte_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
-        use llrm_lir::registers::RegId;
-        Some(match reg {
-            RegId::EAX => RegId::AL,
-            RegId::EBX => RegId::BL,
-            RegId::ECX => RegId::CL,
-            RegId::EDX => RegId::DL,
-            _ => return None,
-        })
-    }
-
-    /// The word register of a dword one: `EAX` -> `AX`.
-    fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
-        use llrm_lir::registers::RegId;
-        Some(match reg {
-            RegId::EAX => RegId::AX,
-            RegId::EBX => RegId::BX,
-            RegId::ECX => RegId::CX,
-            RegId::EDX => RegId::DX,
-            RegId::ESI => RegId::SI,
-            RegId::EDI => RegId::DI,
-            _ => return None,
-        })
     }
 
     /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
@@ -1289,7 +1298,7 @@ impl Builder<'_> {
                         // required in a dword register is a dword to the
                         // allocator.
                         let word = (vt == EVT::I16 && self.target.dag.pointer == EVT::I16)
-                            .then(|| Self::word_register(reg))
+                            .then(|| self.arch.registers().view(self.arch.registers().root(reg), 16))
                             .flatten();
                         if let Some(word) = word {
                             copies.push((word, piece));
@@ -1300,7 +1309,7 @@ impl Builder<'_> {
                         // it, so extending it is a 6-byte
                         // `mov edx, 12` for a 2-byte `mov dl, 12`
                         let byte = (vt == EVT::I8 && self.target.dag.pointer == EVT::I16)
-                            .then(|| Self::byte_register(reg))
+                            .then(|| self.arch.registers().view(self.arch.registers().root(reg), 8))
                             .flatten();
                         if let Some(byte) = byte {
                             copies.push((byte, piece));
@@ -1570,11 +1579,12 @@ impl Builder<'_> {
                 Ok(self.dag.get_node(ISD::BuildPair, vt, &[zero, zero]))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
-            // MIR holds an `x86_fp80` constant as the double nearest its value;
-            // the DAG's is the 80-bit encoding.
+            // MIR holds an `x86_fp80` constant a double holds exactly as that
+            // double; the DAG's is the 80-bit encoding.
             ConstantKind::Float(bits) if vt == EVT::Simple(MVT::F80) => {
                 Ok(self.dag.get_constant_fp(f80_from_double_bits(*bits), vt))
             }
+            ConstantKind::Float80(bits) => Ok(self.dag.get_constant_fp(*bits, vt)),
             ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
             ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
@@ -1730,7 +1740,7 @@ impl Builder<'_> {
         self.current = Some(inst);
         // `++SDNodeOrder`: what the nodes built for this instruction carry.
         self.dag.cur_order += 1;
-        if self.prelowered.contains(&inst) {
+        if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();
@@ -1836,7 +1846,9 @@ impl Builder<'_> {
         let result = if self.is_pointer_cast(op, instruction)? {
             self.pointer_cast(op, instruction.operands[0], operand, instruction.ty)?
         } else if op == CastOp::FPRound {
-            self.round_through_memory(operand, dest)
+            // A store of the type rounds it: no slot first (the old selector's
+            // single `fstp`).
+            if self.read_only_by_stores(instruction) { operand } else { self.round_through_memory(operand, dest) }
         } else {
             let converted = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
             // an integer wider than the float's mantissa is rounded to its type
@@ -1854,6 +1866,26 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether every reader of `instruction`'s value stores it: a store's
+    /// value, or a call's argument (passed on the stack, so stored, at the
+    /// argument's own type).
+    fn read_only_by_stores(
+        &self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = instruction.result else { return false };
+        let users = self.function.users(result);
+        !users.is_empty()
+            && users.iter().all(|one| {
+                let user = self.function.instruction(one.user);
+                match user.opcode {
+                    Opcode::Store { .. } => one.index == 0,
+                    Opcode::Call(_) => (one.index as usize) + 1 < user.operands.len(),
+                    _ => false,
+                }
+            })
     }
 
     /// `fpround`: the value stored to a stack slot of its own type and loaded

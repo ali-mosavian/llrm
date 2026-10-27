@@ -218,3 +218,11 @@ def test_a_pr_touching_llrm_c_is_checked_and_tested_with_the_toolchain_feature()
 
     assert pc.warning_failures(Path("."), ["llrm-c"], cargo, {}) == []
     assert pc._failing(Path("."), "llrm-c", None, cargo) == set()
+
+
+def test_a_branch_that_leaves_a_generated_page_stale_is_told_before_it_is_marked_ready(tmp_path):
+    """#5062, #5085 and #5088 changed sources, were marked ready, and failed the batch's docs check; precheck never ran build.py --check."""
+    out = pc.docs_failures(tmp_path, docs=lambda root: {"docs/a.md", "docs/b.md"}, docs_on_base=lambda: {"docs/b.md"})
+    assert len(out) == 1 and "docs/a.md" in out[0] and "docs/b.md" not in out[0] and "build.py --sync" in out[0]
+    assert pc.docs_failures(tmp_path, docs=lambda root: {"docs/b.md"}, docs_on_base=lambda: {"docs/b.md"}) == [], "a page the tip has stale is not the branch's"
+    assert pc.docs_failures(tmp_path, docs=lambda root: set()) == []

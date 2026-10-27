@@ -621,6 +621,7 @@ fn a_runtime_call_pops_every_argument_it_is_given() {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
+        frame_zeroed: false,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
@@ -908,8 +909,12 @@ declare cc 1000 void @user(i16) addrspace(1)
         }
     }
     let module = llrm_mir::parse::module(IR).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Keeps, segments: &crate::backend::target::BASIC, runtime: false };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Keeps,
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
         &module,

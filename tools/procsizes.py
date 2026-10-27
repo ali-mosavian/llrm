@@ -2,7 +2,7 @@
 
 usage: procsizes.py OLD.obj NEW.obj [N]
 
-A procedure is the distance from its PUBDEF offset to the next one in the same segment; the last public of a segment has no size.
+A procedure is the distance from its PUBDEF offset to the next one in the same segment; the last public of a segment runs to the end of the segment (its SEGDEF length).
 """
 
 import struct
@@ -41,11 +41,32 @@ def publics(data: bytes) -> dict[int, list[tuple[int, str]]]:
     return found
 
 
+def lengths(data: bytes) -> list[int]:
+    """The length of each segment, in SEGDEF order (segment indexes count from 1)."""
+    found = []
+    at = 0
+    while at < len(data):
+        kind, length = data[at], struct.unpack("<H", data[at + 1 : at + 3])[0]
+        body = data[at + 3 : at + 3 + length - 1]
+        at += 3 + length
+        if kind not in (0x98, 0x99):
+            continue
+        attributes, i = body[0], 1
+        if attributes >> 5 == 0:
+            i += 3
+        size = 4 if kind & 1 else 2
+        found.append(int.from_bytes(body[i : i + size], "little") or (1 << (8 * size) if attributes & 2 else 0))
+    return found
+
+
 def sizes(data: bytes) -> dict[str, int]:
     result = {}
-    for entries in publics(data).values():
+    ends = lengths(data)
+    for segment, entries in publics(data).items():
         entries.sort()
-        result.update({name: after - offset for (offset, name), (after, _) in zip(entries, entries[1:])})
+        end = ends[segment - 1] if 0 < segment <= len(ends) else None
+        following = [offset for offset, _ in entries[1:]] + ([end] if end is not None else [])
+        result.update({name: after - offset for (offset, name), after in zip(entries, following)})
     return result
 
 
