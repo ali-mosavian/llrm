@@ -42,6 +42,20 @@ def tag_of(name: str, rules: list[dict]) -> tuple[str, str]:
     return "untriaged", "unassigned"
 
 
+def status_of(name: str, rules: list[dict]) -> tuple[str, str]:
+    """(status, oracle) of the first rule matching `name`: status is open, cause known, pin-faithful or DEVIATE; oracle is what the verdict rests on
+    (m32 llc, pin opt, or none). The pin's llc at code16 takes 32-bit pointers, so it is no 16-bit oracle: a verdict from it says `none`."""
+    for rule in rules:
+        if fnmatch.fnmatch(name, rule["match"]):
+            return rule.get("status", "open"), rule.get("oracle", "none")
+    return "open", "none"
+
+
+def growers(both: list[str], base: dict, new: dict) -> list[str]:
+    """The programs the new build makes bigger by even one byte, the largest growth first."""
+    return sorted((n for n in both if new[n] > base[n]), key=lambda n: base[n] - new[n])
+
+
 def clock_ratio(name: str, level: str, before: dict, after: dict) -> str:
     """new/base clocks of the program's bench row, '-' where it has none (tests/run and examples programs are not in bench), 'folded' where a kernel is a constant."""
     directory, _, file = name.partition("/")
@@ -153,7 +167,7 @@ def main() -> None:
             if cache:
                 cache.write_text(json.dumps(ablated))
         tagged = attribute({n: new[n] for n in both if new[n] > base[n]}, ablated)
-    grew = sorted((n for n in both if new[n] > base[n]), key=lambda n: base[n] - new[n])
+    grew = growers(both, base, new)
     level = args.level.lstrip("-")
     def classified(name: str) -> tuple[str, str]:
         cause, owner = tag_of(name, rules)
@@ -162,7 +176,7 @@ def main() -> None:
             owner = "w-13/w-1" if cause == "RA/peephole" else flag_owner.get(cause.removeprefix("multi: ").split("+")[0], owner)
         return cause, owner
 
-    rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *classified(n)) for n in grew]
+    rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *classified(n), *status_of(n, rules)) for n in grew]
     out = [f"# m16 {args.level} burn-down", "", f"base {m16os.identify(args.base)}", f"new  {m16os.identify(args.new)}", f"sources: this checkout at {source_state()}; the set is tools/sizes.py's programs, demos left out, {len(base)} programs",
            f"compared {len(both)}; base cannot compile {len(base) - sum(map(bool, base.values()))}, new cannot compile {len(new) - sum(map(bool, new.values()))}",
            f"TOTAL {sum(base[n] for n in both)} -> {sum(new[n] for n in both)} B ({sum(new[n] - base[n] for n in both):+}); {len(grew)} programs grew, {sum(new[n] < base[n] for n in both)} shrank, {sum(new[n] == base[n] for n in both)} same",
@@ -191,8 +205,9 @@ def main() -> None:
         grown = [n for n in names if new[n] > base[n]]
         out.append(f"| {language} | {len(names)} | {sum(base[n] for n in names)} | {sum(new[n] for n in names)} | {sum(new[n] - base[n] for n in names):+} | {len(grown)} | {sum(new[n] - base[n] for n in grown)} |")
     out.append("")
-    out += ["## growers", "", "| program | main | tip | delta | clocks tip/main | cause | owner |", "|---|--:|--:|--:|--:|---|---|"]
-    out += [f"| {n} | {a} | {b} | {d:+} | {c} | {cause} | {owner} |" for n, a, b, d, c, cause, owner in rows]
+    out += ["## growers", "", "| program | main | tip | delta | clocks tip/main | cause | owner | status | oracle |", "|---|--:|--:|--:|--:|---|---|---|---|"]
+    out += [f"| {n} | {a} | {b} | {d:+} | {c} | {cause} | {owner} | {status} | {oracle} |" for n, a, b, d, c, cause, owner, status, oracle in rows]
+    out += ["", f"## ten biggest growers", ""] + [f"- {n} {d:+} B, {owner}, {status}" for n, _, _, d, _, _, owner, status, _ in sorted(rows, key=lambda r: -r[3])[:10]]
     args.out.write_text("\n".join(out) + "\n")
     print("\n".join(out[:12]))
 

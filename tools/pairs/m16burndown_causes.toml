@@ -24,8 +24,10 @@ owner = "w-2"
 
 [[program]]
 match = "*/stft_single.*"
-cause = "untriaged"
+cause = "integer movs (+15 on the pin's own IR at m32); x87 ops and fxch equal"
 owner = "w-13"
+status = "cause known"
+oracle = "m32 llc"
 
 [[program]]
 match = "*/log_exp*"
@@ -79,8 +81,10 @@ owner = "w-1"
 
 [[program]]
 match = "*/lru*"
-cause = "untriaged"
-owner = "w-13"
+cause = "relocatable-immediate store (w12) and RA; the stosb fill saves 5 B (disabled: 378 vs 373)"
+owner = "w-12"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/matmul*"
