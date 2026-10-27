@@ -1043,3 +1043,35 @@ entry:
     }
 }
 
+/// `llvm.{u,s}{add,sub}.sat` stopped the selector at "intrinsic call" (and the
+/// MIR parser at the unknown name) at every width. They are the wrapped
+/// operation and a select on its overflow, so each width's selection holds the
+/// operation's own instruction (`adc`/`sbb` for the halves of a wide one).
+#[test]
+fn a_saturating_add_or_subtract_is_the_wrapped_operation_and_a_select() {
+    for op in ["uadd", "usub", "sadd", "ssub"] {
+        for width in [8, 16, 32, 64] {
+            let ir = format!(
+                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare i{width} @llvm.{op}.sat.i{width}(i{width}, i{width})
+define i{width} @f(i{width} %a, i{width} %b) {{
+entry:
+  %r = call i{width} @llvm.{op}.sat.i{width}(i{width} %a, i{width} %b)
+  ret i{width} %r
+}}
+"
+            );
+            let module = llrm_mir::parse::module(&ir).expect("parses");
+            let done =
+                selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+                    .unwrap_or_else(|e| panic!("{op}.sat i{width}: {}", e.0));
+            let names = mnemonics(&done);
+            let wrapped = if op.ends_with("add") { "add" } else { "sub" };
+            assert!(names.iter().any(|m| m == wrapped), "{op}.sat i{width}: {names:?}");
+            if width == 64 {
+                let carry = if op.ends_with("add") { "adc" } else { "sbb" };
+                assert!(names.iter().any(|m| m == carry), "{op}.sat i64: {names:?}");
+            }
+        }
+    }
+}

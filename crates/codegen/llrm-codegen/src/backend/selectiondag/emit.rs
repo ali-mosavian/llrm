@@ -1081,6 +1081,9 @@ impl Emitter<'_, '_> {
                         };
                         Some(Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone())))
                     }
+                    // An `add` has no cheaper form: made again with a result of
+                    // its own, as the pin's scheduler clones the unit.
+                    (Operation::Binary, Some("add")) if what.sources.len() == 2 => Some(Arc::clone(last)),
                     _ => None,
                 });
                 if let Some(again) = again {

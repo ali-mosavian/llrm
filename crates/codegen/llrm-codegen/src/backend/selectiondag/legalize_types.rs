@@ -886,6 +886,11 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
             op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
+            ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
+                // `ExpandIntRes_ADDSUBSAT`.
+                let expanded = super::expand_sat::expand_add_sub_sat(self.dag, self.tli, value);
+                self.split_integer(expanded, half)
+            }
             ISD::UMulO => self.expand_umulo(value, half),
             ISD::SMulO => self.expand_smulo(value, half),
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {

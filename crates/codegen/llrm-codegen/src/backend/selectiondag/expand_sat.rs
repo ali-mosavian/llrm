@@ -75,9 +75,11 @@ pub fn expand_add_sub_sat(
     // A known operand sign fixes the direction of any overflow; for a
     // subtract the subtrahend's sign is flipped.
     let (known_lhs, known_rhs) = (known_bits(dag, lhs), known_bits(dag, rhs));
-    let sign = |known: &super::known_bits::KnownBits| (known.zero >> (bits - 1) & 1 == 1, known.one >> (bits - 1) & 1 == 1);
+    let sign =
+        |known: &super::known_bits::KnownBits| (known.zero >> (bits - 1) & 1 == 1, known.one >> (bits - 1) & 1 == 1);
     let ((lhs_non_negative, lhs_negative), (rhs_non_negative, rhs_negative)) = (sign(&known_lhs), sign(&known_rhs));
-    let (rhs_up, rhs_down) = if op == ISD::SAddSat { (rhs_non_negative, rhs_negative) } else { (rhs_negative, rhs_non_negative) };
+    let (rhs_up, rhs_down) =
+        if op == ISD::SAddSat { (rhs_non_negative, rhs_negative) } else { (rhs_negative, rhs_non_negative) };
     if lhs_non_negative || rhs_up {
         let saturated = dag.get_constant(max, vt);
         return dag.get_select(vt, overflow, saturated, sum_diff);
