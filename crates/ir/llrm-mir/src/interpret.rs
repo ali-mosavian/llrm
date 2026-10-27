@@ -492,6 +492,15 @@ impl<'m> Machine<'m> {
                 Val::Int { bits: value as u128 & mask(width), width }
             }
             // Fused or not is the machine's choice, as the LangRef allows.
+            Intrinsic::CopySign => match (argument(0), argument(1)) {
+                (Val::Float(FloatKind::Float, magnitude), Val::Float(FloatKind::Float, sign)) => {
+                    Val::Float(FloatKind::Float, (magnitude & 0x7fff_ffff) | (sign & 0x8000_0000))
+                }
+                (Val::Float(kind, magnitude), Val::Float(_, sign)) if kind != FloatKind::Float => {
+                    Val::Float(kind, (magnitude & (u64::MAX >> 1)) | (sign & (1 << 63)))
+                }
+                _ => Val::Poison,
+            },
             Intrinsic::FMulAdd => {
                 let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?

@@ -63,6 +63,8 @@ pub enum Intrinsic {
         signed: bool,
     },
     FMulAdd,
+    /// `llvm.copysign`: the first argument with the second's sign.
+    CopySign,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
@@ -451,7 +453,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 61] = [
+const TABLE: [Spec; 62] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -488,6 +490,7 @@ const TABLE: [Spec; 61] = [
         &[Slot::Any(0), Slot::Any(0), Slot::Any(0)],
         Kind::Float,
     ),
+    arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),

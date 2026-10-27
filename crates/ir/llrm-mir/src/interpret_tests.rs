@@ -158,6 +158,17 @@ define float @f() {
     assert_eq!(result(text), Ok(Val::Float(FloatKind::Float, u64::from(10.0f32.to_bits()))));
 }
 
+#[test]
+fn copysign_takes_the_second_arguments_sign() {
+    let text = "declare double @llvm.copysign.f64(double, double)
+define double @f() {
+  %r = call double @llvm.copysign.f64(double 2.000000e+00, double -0.000000e+00)
+  ret double %r
+}
+";
+    assert_eq!(result(text), Ok(Val::Float(FloatKind::Double, (-2.0f64).to_bits())));
+}
+
 /// BASIC's float to integer conversion, the machine's round to nearest,
 /// ties to even; derived by hand, since lli cannot run it.
 #[test]
