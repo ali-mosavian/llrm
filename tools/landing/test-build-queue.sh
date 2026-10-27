@@ -2,11 +2,12 @@
 # Regression: the hand-built queue dropped 17 of 58 ready PRs, and `gh pr list` without --limit silently returned 30. A stub gh returns only 30 PRs unless
 # given --limit >= the count. The queue must hold every ready PR, minus waits, priority first, even those missing from priority.txt.
 here=$(cd "$(dirname "$0")" && pwd); d=$(mktemp -d)
+export PREFLIGHT_REPO=$d/norepo  # no git repo: the pre-flight fails open and the cases below see GitHub's flag alone
 cat > $d/gh <<'S'
 #!/bin/sh
 [ "$1" = api ] && { echo paritysha1; exit 0; }
 limit=30; q=.; while [ $# -gt 0 ]; do case "$1" in --limit) limit=$2;; -q) q=$2;; esac; shift; done
-i=0; while [ $i -lt 40 ]; do n=$((3000+i)); d=false; [ $i -eq 5 ] && d=true; m=MERGEABLE; [ $i -eq 7 ] && m=CONFLICTING; b=""; case $i in 2|30) ;; *) b="Owner: sess-$i";; esac; echo "{\"number\":$n,\"isDraft\":$d,\"mergeable\":\"$m\",\"body\":\"$b\",\"headRefOid\":\"h$n\"}"; i=$((i+1)); done | head -n $limit | jq -s "$q" | jq -r 'if type=="array" then .[] else . end'
+i=0; while [ $i -lt 40 ]; do n=$((3000+i)); d=false; [ $i -eq 5 ] && d=true; m=MERGEABLE; [ $i -eq 7 ] && m=CONFLICTING; [ $i -eq 8 ] || [ $i -eq 9 ] && m=UNKNOWN; b=""; case $i in 2|30) ;; *) b="Owner: sess-$i";; esac; echo "{\"number\":$n,\"isDraft\":$d,\"mergeable\":\"$m\",\"body\":\"$b\",\"headRefOid\":\"h$n\"}"; i=$((i+1)); done | head -n $limit | jq -s "$q" | jq -r 'if type=="array" then .[] else . end'
 S
 chmod +x $d/gh; echo "3030 3002" > $d/priority.txt; echo "3010 # waits" > $d/waits.txt
 out=$(PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>$d/err | tr '\n' ' ')
@@ -41,4 +42,25 @@ echo "$later" | grep -qw 3020 && echo "$later" | grep -qw 3021 || { echo "FAIL: 
 # an unreadable feat/parity (a 403) keeps the old queue: it would match no refused.state line and re-queue every refused PR
 mkdir -p $d/p403; printf '#!/bin/sh\n[ "$1" = api ] && exit 1\nexec %s/gh "$@"\n' "$d" > $d/p403/gh; chmod +x $d/p403/gh
 PATH=$d/p403:$PATH "$here/build-queue.sh" >/dev/null 2>&1 && { echo "FAIL: build-queue.sh succeeded with feat/parity unreadable"; exit 1; }
+# GitHub says UNKNOWN right after a landing: a PR that conflicts with feat/parity must not be queued then (#5269 was batched three times while CONFLICTING); one that merges is
+printf '#!/bin/sh\n[ "$1" = 3008 ]\n' > $d/conflicts.sh; chmod +x $d/conflicts.sh
+pre=$(PREFLIGHT_CMD=$d/conflicts.sh PATH=$d:$PATH PRIORITY=$d/priority.txt WAITS=$d/waits.txt "$here/build-queue.sh" 2>$d/err4 | tr '\n' ' ')
+echo "$pre" | grep -qw 3008 && { echo "FAIL: an UNKNOWN PR that conflicts with feat/parity was queued"; exit 1; }
+echo "$pre" | grep -qw 3009 || { echo "FAIL: an UNKNOWN PR that merges was dropped"; exit 1; }
+grep -q "^3008: REFUSED: conflicts with feat/parity" $d/err4 || { echo "FAIL: the pre-flight conflict is not reported with its owner: $(cat $d/err4)"; exit 1; }
+# the real check, on real git: FETCH_HEAD must be the PR's head, not feat/parity (fetching parity last compared parity with itself and called #5269 clean)
+g() { git -C "$d/o" -c user.email=t@t -c user.name=t "$@"; }
+git init -q --bare -b feat/parity $d/origin.git; git clone -q $d/origin.git $d/o 2>/dev/null; echo a > $d/o/f; g add f; g commit -qm base; g push -q origin HEAD:feat/parity
+g checkout -q -b clash; echo b > $d/o/f; g commit -qam clash; g push -q origin HEAD:refs/pull/5001/head
+g checkout -q feat/parity 2>/dev/null || g checkout -q -b main2 origin/feat/parity; g checkout -q -b clean origin/feat/parity; echo c > $d/o/g; g add g; g commit -qm clean; g push -q origin HEAD:refs/pull/5002/head
+g checkout -q origin/feat/parity 2>/dev/null; echo parity > $d/o/f; g commit -qam move; g push -q origin HEAD:feat/parity
+mkdir -p $d/real; cat > $d/real/gh <<'S'
+#!/bin/sh
+[ "$1" = api ] && { echo paritysha1; exit 0; }
+echo "5001 UNKNOWN a h1"; echo "5002 UNKNOWN b h2"
+S
+chmod +x $d/real/gh
+realq=$(PREFLIGHT_REPO=$d/o PATH=$d/real:$PATH PRIORITY=/dev/null WAITS=/dev/null "$here/build-queue.sh" 2>$d/err5 | tr '\n' ' ')
+echo "$realq" | grep -qw 5001 && { echo "FAIL: a PR that conflicts on real git was queued: $(cat $d/err5)"; exit 1; }
+echo "$realq" | grep -qw 5002 || { echo "FAIL: a PR that merges cleanly on real git was dropped: $(cat $d/err5)"; exit 1; }
 [ "$out" = "$want" ] && echo PASS || { echo "FAIL"; echo " got: $out"; echo "want: $want"; exit 1; }
