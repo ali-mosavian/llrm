@@ -30,7 +30,8 @@
 //! `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 //! `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
 //! `foldDeadPhiWeb`, `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`,
-//! `simplifyUsingControlFlow` and `foldDependentIVs`. Exit: later slices.
+//! `foldDependentIVs`, and `simplifyUsingControlFlow` for a switch. Exit: later
+//! slices.
 //!
 //! DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 //! cannot have a phi before; no debug locations.
@@ -82,7 +83,67 @@ impl Combiner<'_> {
         {
             return Visit::Replace(folded);
         }
+        if let Some(folded) = self.simplify_using_control_flow(phi, &incoming) {
+            return Visit::Replace(folded);
+        }
         Visit::None
+    }
+
+    /// `simplifyUsingControlFlow`, for a conditional branch: a phi of `true`
+    /// and `false` whose inputs the two edges of its immediate dominator's
+    /// branch dominate is that branch's condition, or its negation.
+    fn simplify_using_control_flow(
+        &mut self,
+        phi: InstId,
+        incoming: &[(Operand, BlockId)],
+    ) -> Option<Operand> {
+        let ty = self.function.instruction(phi).ty;
+        if self.context.types.int_bits(ty) != Some(1) {
+            return None;
+        }
+        let mut inputs = Vec::with_capacity(incoming.len());
+        for &(value, from) in incoming {
+            let (bits, _) = pattern::apint(&query(self, None), value)?;
+            inputs.push((bits != 0, from));
+        }
+        let block = self.function.parent(phi).expect("a placed phi");
+        let tree = self.env.analyses.dominator_tree();
+        if !tree.is_reachable_from_entry(block) {
+            return None;
+        }
+        let idom = tree.immediate_dominator(block)?;
+        let branch = self.function.terminator(idom)?;
+        let &[cond, Operand::Block(taken), Operand::Block(other)] = &self.function.instruction(branch).operands[..]
+        else {
+            return None;
+        };
+        if self.function.instruction(branch).opcode != Opcode::Br || taken == other || self.type_of(cond) != ty {
+            return None;
+        }
+        // `BasicBlockEdge(IDom, successor)` dominates `BasicBlockEdge(pred, block)`.
+        let function = &*self.function;
+        let correct = |value: bool, from: BlockId| {
+            let successor = if value { taken } else { other };
+            (idom == from && successor == block) || tree.dominates_edge(function, idom, successor, from)
+        };
+        let mut invert = None;
+        for &(value, from) in &inputs {
+            let needs = if correct(value, from) {
+                false
+            } else if correct(!value, from) {
+                true
+            } else {
+                return None;
+            };
+            if *invert.get_or_insert(needs) != needs {
+                return None;
+            }
+        }
+        if invert? {
+            let at = self.after_phis(phi);
+            return Some(self.create_not(at, cond));
+        }
+        Some(cond)
     }
 
     /// The first instruction of `phi`'s block that is not a phi: where the

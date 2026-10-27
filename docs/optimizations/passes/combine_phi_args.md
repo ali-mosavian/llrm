@@ -35,7 +35,8 @@ DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP, load,
 `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
 `foldDeadPhiWeb`, `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`,
-`simplifyUsingControlFlow` and `foldDependentIVs`. Exit: later slices.
+`foldDependentIVs`, and `simplifyUsingControlFlow` for a switch. Exit: later
+slices.
 
 DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 cannot have a phi before; no debug locations.
