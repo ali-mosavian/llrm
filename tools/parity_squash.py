@@ -1025,6 +1025,14 @@ def _run_behavioural() -> str:
     return done.stdout + done.stderr
 
 
+def head_files(head: str, base: str = BASE, cwd: Path = ROOT) -> list[str]:
+    """The files `head` changes against `base`. A head pushed after the batch's fetch (the round re-reads heads) is not in the checkout: it is fetched first, where `git diff base...head` died with
+    'Invalid symmetric difference' and took the whole batch down (11:04, #5183)."""
+    if subprocess.run(["git", "cat-file", "-e", f"{head}^{{commit}}"], cwd=cwd, capture_output=True).returncode:
+        git("fetch", "-q", "origin", head, cwd=cwd)
+    return git("diff", "--name-only", f"{base}...{head}", cwd=cwd).split()
+
+
 def behavioural_culprits(group: list[str], files_of, alone_red) -> list[str]:
     """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else each backend PR merged alone and asked."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1691,13 +1699,13 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if failed_build:
             own = {}
             named_files = error_files(failed_build[-1])
-            suspects = [number for number in group if named_files & set(git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split())]
+            suspects = [number for number in group if named_files & set(head_files(infos[number]['headRefOid']))]
             culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own, suspects)
             named.update({number: f"alone on the head it does not build: {own[number][:160]}" for number in culprits})
             return culprits
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
         if wrong:
-            files_of = lambda number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split()  # noqa: E731
+            files_of = lambda number: head_files(infos[number]['headRefOid'])  # noqa: E731
             culprits = behavioural_culprits(group, files_of, lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))))
             for number in culprits:
                 named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
@@ -1721,7 +1729,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return []
         smoke = parity_smoke_module()
         packages, graph = smoke.workspace_graph()
-        changed = {number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split() for number in group}
+        changed = {number: head_files(infos[number]['headRefOid']) for number in group}
         def probe(package: str, tests: set[str]) -> set[str]:
             LAST_PANICS.clear()  # a panic read for another PR's probe is not this one's reason
             return failing_on_checkout(package, tests)
