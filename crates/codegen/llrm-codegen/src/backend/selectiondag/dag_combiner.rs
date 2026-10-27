@@ -648,7 +648,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
-            return None;
+            return self.reassociate_ops(ISD::Xor, n0, n1);
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
@@ -982,15 +982,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if let Some(folded) = self.fold_logic_of_setccs(true, n0, n1) {
             return Some(folded);
         }
+        if let Some(reassociated) = self.reassociate_ops(ISD::And, n0, n1) {
+            return Some(reassociated);
+        }
         if let (Some(c1), true) = (self.dag.constant(n1), !self.dag.is_opaque(n1)) {
-            // `reassociateOps`: `(and (and x, c0), c1)` is `(and x, c0 & c1)`.
-            if self.dag.opcode(n0) == ISD::And {
-                let (x, inner) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-                if self.dag.constant(inner).is_some() && !self.dag.is_opaque(inner) {
-                    let both = self.dag.get_node(ISD::And, vt, &[inner, n1]);
-                    return Some(self.dag.get_node(ISD::And, vt, &[x, both]));
-                }
-            }
             // `(and (or x, C), D)` is `D` when `D` is a subset of `C`.
             if self.dag.opcode(n0) == ISD::Or {
                 if let Some(c) = self.dag.constant(self.dag.operand(n0, 1)) {
@@ -1634,7 +1629,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 }
             }
         }
-        None
+        self.reassociate_ops(ISD::Mul, n0, n1)
     }
 }
 

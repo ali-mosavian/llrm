@@ -20,6 +20,7 @@
 use super::dag::{BooleanContents, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::ISD;
+use super::x86_lowering::x86isd;
 
 /// `MaxRecursionDepth`.
 const MAX_DEPTH: u32 = 6;
@@ -90,6 +91,9 @@ fn walk(
             let zero_or_one = dag.config().boolean_contents == BooleanContents::ZeroOrOne && width > 1;
             KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
         }
+        // `X86TargetLowering::computeKnownBitsForTargetNode`:
+        // `Known.Zero.setBitsFrom(1)`.
+        op if op == x86isd::SETCC && value.res == 0 => KnownBits { zero: all & !1, one: 0, width },
         ISD::And => {
             let (rhs, lhs) = (operand(1), operand(0));
             KnownBits { zero: lhs.zero | rhs.zero, one: lhs.one & rhs.one, width }
