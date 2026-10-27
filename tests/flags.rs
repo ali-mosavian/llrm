@@ -32,7 +32,7 @@ fn tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "llrm-c",
-            path: env!("CARGO_BIN_EXE_llrm-cc"),
+            path: env!("CARGO_BIN_EXE_llrm-c"),
             input: ("a.c", C),
             more: &["-S", "-o", "a.s"],
             meets: Meets::Builds,
@@ -76,7 +76,8 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 5] = [
+const EXEMPT: [(&str, &str); 6] = [
+    ("llrm-cc", "drives clang, which parses the flags; its target is a row of targets.toml (LLRM_CC_TARGET)"),
     ("llrm-llc", "reads LLVM IR; takes -m through the shared flag parser"),
     ("qbfront", "prints HIR text; takes -m through the shared flag parser"),
     ("llrm-mir", "reads MIR, which states its own datalayout"),

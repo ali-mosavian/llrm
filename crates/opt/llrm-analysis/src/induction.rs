@@ -967,6 +967,19 @@ fn _proven(
                 (stepped, shifted) = (true, true);
             }
         }
+        // The same against `x - step`: `i < x - 1` before a step of 1 is the
+        // stepped counter `< x`. The subtract must not wrap in the test's
+        // signedness, or `x` is not one step on from the bound.
+        if shape.posttested
+            && !stepped
+            && test != IntPredicate::Ne
+            && function.parent(branch) == Some(cfg::block(latch))
+            && let AffineOperand::Value(value, _) = &bound
+            && let Some(on) = _one_step_on(unit, *value, &step, _unsigned(test), width)
+            && _promised(function, update, &step, _unsigned(test), _signed(&counter.start, facts, width).as_ref())
+        {
+            (bound, stepped, shifted) = (on, true, true);
+        }
         let start = counter.start.clone();
         let limit = _constant(&bound, facts, width);
         let counted_from = |start: &AffineOperand| {
@@ -1136,7 +1149,26 @@ fn _entered(
             root.map_or(number.clone(), |root| Scev::unknown(root, width).plus(&number))
         };
         let (start, bound) = (rooted(value), rooted(limit));
-        return guards().iter().any(|guard| crate::guards::implies_at_offset(guard, test, &start, &bound));
+        // A guard on a value that is a root and a constant (`n - 1 >= 0`) is
+        // read in the same terms.
+        let rooted_guard = |guard: &crate::guards::Guard| {
+            let side = |one: &Scev| -> Option<Scev> {
+                let [(product, factor)] = one.terms.iter().collect::<Vec<_>>()[..] else { return None };
+                let value =
+                    product.single().filter(|_| *factor == BigInt::from(1) && one.constant == BigInt::from(0))?;
+                Some(rooted(&AffineOperand::Value(value, width)))
+            };
+            Some(crate::guards::Guard {
+                predicate: guard.predicate,
+                left: side(&guard.left)?,
+                right: guard.right.clone(),
+            })
+        };
+        return guards().iter().any(|guard| crate::guards::implies_at_offset(guard, test, &start, &bound))
+            || guards().iter().any(|guard| {
+                rooted_guard(guard)
+                    .is_some_and(|rooted| crate::guards::implies_at_rooted_offset(&rooted, test, &start, &bound))
+            });
     }
     // Only an equality test reads the guards at an offset (`a != 1` proves `a -
     // 1 != 0`), and only where the ones above do not prove it as they
@@ -1519,6 +1551,34 @@ fn _compared(
 /// without a signed wrap stays in `0 ..= signed max`, where a signed sum is the
 /// unsigned one: `nsw` there is `nuw` too, as LLVM's SCEV infers it. `start` is
 /// the counter's signed start where known.
+/// `x` where `value` is `x - step` and the difference does not wrap in the
+/// test's signedness: the bound one step on.
+fn _one_step_on(
+    unit: &Unit,
+    value: ValueId,
+    step: &BigInt,
+    unsigned: bool,
+    width: u32,
+) -> Option<AffineOperand> {
+    let function = unit.function;
+    let op = function.instruction(defining(function, value)?);
+    let stated = llrm_mir::facts::Facts::of_flags(op.flags);
+    let no_wrap = if unsigned { stated.no_unsigned_wrap() } else { stated.no_signed_wrap() };
+    let (Operand::Value(base), offset) = (op.operands.first().copied()?, unit.int_constant(*op.operands.get(1)?)?)
+    else {
+        return None;
+    };
+    let offset = BigInt::from(offset);
+    let offset = if unsigned { offset } else { _signed_value(&offset, width) };
+    let wanted = match op.opcode {
+        Opcode::Binary(BinaryOp::Add) => -step,
+        Opcode::Binary(BinaryOp::Sub) => step.clone(),
+        _ => return None,
+    };
+    let wanted = if unsigned { mod_floor(&wanted, &(BigInt::from(1) << width)) } else { _signed_value(&wanted, width) };
+    (no_wrap && offset == wanted).then(|| AffineOperand::Value(base, width))
+}
+
 fn _promised(
     function: &Function,
     update: ValueId,

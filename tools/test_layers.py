@@ -88,3 +88,15 @@ def test_the_root_mir_directory_is_not_tracked():
     """`--dump` writes ./mir/ in the cwd; 97 of its files were committed by accident and nothing reads them."""
     tracked = subprocess.check_output(["git", "ls-files", "mir"], cwd=ROOT, text=True)
     assert tracked == "", tracked.splitlines()[:3]
+
+
+def test_the_workspace_members_follow_the_layer_glob():
+    """Members were `crates/*/llrm-*` plus three frontends and a runtime crate named one by one; a crate in a layer directory that matched none was silently outside the workspace."""
+    import tomllib
+
+    members = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["members"]
+    assert members == [".", "crates/*/*", "runtime/qb"]
+    metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+    inside = {Path(p["manifest_path"]).parent.relative_to(ROOT).as_posix() for p in metadata["packages"]}
+    layers = {p.parent.relative_to(ROOT).as_posix() for p in (ROOT / "crates").glob("*/*/Cargo.toml")}
+    assert layers <= inside, sorted(layers - inside)
