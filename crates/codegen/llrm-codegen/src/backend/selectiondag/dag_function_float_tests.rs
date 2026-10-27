@@ -631,3 +631,22 @@ fn a_bitcast_between_a_float_and_an_integer_goes_through_the_stack() {
             .unwrap_or_else(|e| panic!("{name}: {}", e.0));
     }
 }
+
+const BITREVERSE_OF_A_HIGH_BYTE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @llvm.bitreverse.i32(i32)
+define i32 @f(i32 %x) {
+  %m = and i32 %x, -16777216
+  %r = call i32 @llvm.bitreverse.i32(i32 %m)
+  ret i32 %r
+}
+";
+
+/// The pin's `SimplifyDemandedBits` turns a `bswap` of which one byte is
+/// demanded into a shift (and the mask beneath it into nothing): the
+/// bit-reverse of a masked high byte kept `and; bswap` and full-width stage
+/// masks, 21 instructions against the pin's 17.
+#[test]
+fn a_bswap_of_which_one_byte_is_demanded_is_a_shift() {
+    let made = super::dag_function_tests::names(BITREVERSE_OF_A_HIGH_BYTE).unwrap_or_else(|why| panic!("{why}"));
+    assert!(!made.iter().any(|name| name == "bswap"), "{made:?}");
+}
