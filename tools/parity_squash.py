@@ -640,11 +640,14 @@ def refusal_line(number: str, named: dict[str, str], failed_build: list[str], fa
 HELD_STATE = Path(os.environ.get("LAND_TMP") or "/tmp/landing") / "held.state"  # `<PR> <head sha>` per line: the queue skips a PR at a head that was refused for itself
 
 
+GITHUB_TRANSIENT = ("Something went wrong", "502 Bad Gateway", "503 Service", "504 Gateway", "timed out")  # GitHub's side, not the PR's: #5039, 2026-10-27 00:14
+
+
 def own_refusal(reason: str) -> bool:
     """Whether a refusal is the PR's own (its build, a test it fails alone on the head, its docs or format), which the same head will meet again, and not the batch's or the
     head's (a conflict, a stale merge base, GitHub's "head modified", a rescan after another PR was dropped), which a retry may clear."""
     return bool(reason) and not any(
-        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "the batch dropped", "waits.txt")
+        one in reason for one in ("conflicts with", "does not contain", "Head branch was modified", "Head branch is out of date", "does not merge into it cleanly", "not mergeable", "Something went wrong", "the batch dropped", "waits.txt")
     )
 
 
@@ -680,7 +683,7 @@ def waiting(number: str, path: str | None = None) -> bool:
     return number in re.sub(r"#.*", "", text).split()
 
 
-def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity) -> bool | None:
+def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
     """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     if waiting(number):
         print(f"#{number}: HELD: in waits.txt now; not pushed")
@@ -703,6 +706,10 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
             done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", fresh, "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
         else:
             print(f"#{number}: head out of date and feat/parity does not merge into it cleanly: the owner merges fresh feat/parity")
+    if done.returncode and any(one in f"{done.stderr}{done.stdout}" for one in GITHUB_TRANSIENT):
+        print(f"#{number}: GitHub failed on its side, retrying once after {retry_wait:g} s")
+        time.sleep(retry_wait)
+        done = run(["gh", "pr", "merge", number, "--squash", "--match-head-commit", info["headRefOid"], "--subject", info["title"], "--body", body], capture_output=True, text=True, errors="replace")
     if done.returncode:
         # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
         print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")

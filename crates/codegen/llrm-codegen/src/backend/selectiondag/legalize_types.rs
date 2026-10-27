@@ -619,16 +619,13 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(ISD::AnyExtend, vt, &[promoted])
             }
             ISD::SignExtend => {
-                // `PromoteIntOp_SIGN_EXTEND`: `getNode(ISD::SIGN_EXTEND_INREG)`
-                // as a shift left and an arithmetic one right.
+                // `PromoteIntOp_SIGN_EXTEND`.
                 let src = self.dag.operand(node, 0);
                 let promoted = self.promoted_integer(src);
                 let vt = self.dag.value_type(node);
                 let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
-                let unused = vt.size_in_bits() - self.dag.value_type(src).size_in_bits();
-                let amount = self.dag.get_constant(u128::from(unused), EVT::I8);
-                let high = self.dag.get_node(ISD::Shl, vt, &[wide, amount]);
-                self.dag.get_node(ISD::Sra, vt, &[high, amount])
+                let inner = self.dag.get_value_type_node(self.dag.value_type(src));
+                self.dag.get_node(ISD::SignExtendInReg, vt, &[wide, inner])
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
