@@ -730,27 +730,35 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
 
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
 /// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
-/// first): bench/mandel.nib m16 -Os, +8 B.
+/// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`
+/// only, so at m32 -Os the chain stays: histo's `x * 7` was `imul` (13+ clocks
+/// on a 486) against the pin's `lea; sub`, +25.5% clk, x_dct +60% clk.
 #[test]
-fn at_os_a_multiply_by_a_constant_stays_one_imul() {
-    let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-define i32 @f(i32 %a) {
-  %r = mul i32 %a, 24
+fn at_os_a_multiply_by_a_constant_is_one_imul_at_m16_and_a_chain_at_m32() {
+    let names = |pointer: &str, size: bool, factor: u32| {
+        let module = llrm_mir::parse::module(&format!(
+            "target datalayout = \"e-p:{pointer}:{pointer}-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {{
+  %r = mul i32 %a, {factor}
   ret i32 %r
-}
-",
-    )
-    .expect("parses");
-    let names = |size: bool| {
+}}
+"
+        ))
+        .expect("parses");
         let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
         cpu.size = size;
         let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
     };
     let count = |names: &[String], one: &str| names.iter().filter(|n| *n == one).count();
-    assert_eq!((count(&names(false), "imul"), count(&names(false), "shl")), (0, 1), "speed: lea and shift");
-    assert_eq!((count(&names(true), "imul"), count(&names(true), "shl")), (1, 0), "-Os: {:?}", names(true));
+    let speed = names("32", false, 24);
+    assert_eq!((count(&speed, "imul"), count(&speed, "shl")), (0, 1), "speed: lea and shift");
+    let m16 = names("16", true, 24);
+    assert_eq!((count(&m16, "imul"), count(&m16, "shl")), (1, 0), "m16 -Os: {m16:?}");
+    let m32 = names("32", true, 24);
+    assert_eq!((count(&m32, "imul"), count(&m32, "shl")), (0, 1), "m32 -Os: {m32:?}");
+    let seven = names("32", true, 7);
+    assert_eq!(count(&seven, "imul"), 0, "m32 -Os x*7: {seven:?}");
 }
 
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
