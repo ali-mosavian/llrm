@@ -108,6 +108,11 @@ const DEFAULT_TARGET: &str = "x86_64-linux";
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
+        target.datalayout = target.datalayout.replace("{datalayout:x86-m16}", &llrm_x86_m16::layout().datalayout);
+        target.clang_datalayout = target
+            .clang_datalayout
+            .take()
+            .map(|one| one.replace("{datalayout:x86-m16}", &llrm_x86_m16::layout().datalayout));
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
         }

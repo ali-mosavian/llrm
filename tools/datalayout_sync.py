@@ -77,7 +77,7 @@ def copies(root: Path = ROOT) -> dict[str, int]:
     found = {}
     for path in tracked(root):
         name = str(path.relative_to(root))
-        if path.is_symlink() or not path.is_file() or name.endswith("/datalayout.toml") or name.startswith(PORTED) or name == "tools/test_datalayout_sync.py":
+        if path.is_symlink() or not path.is_file() or name.endswith("/datalayout.toml") or name.startswith(PORTED) or name in ("tools/test_datalayout_sync.py", "tools/test_datalayout_copies.py"):
             continue
         try:
             n = len(pattern.findall(path.read_text()))

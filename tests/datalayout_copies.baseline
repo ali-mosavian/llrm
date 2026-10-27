@@ -13,7 +13,7 @@
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/tests/bit_reverse.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/tests/m16_coverage.rs
 1 crates/driver/llrm-cc/src/tests.rs
-9 crates/driver/llrm-cc/targets.toml
+6 crates/driver/llrm-cc/targets.toml
 1 crates/driver/llrm-driver/src/llc.rs
 35 crates/driver/llrm-driver/src/tests.rs
 1 crates/ir/llrm-mir/src/datalayout.rs
@@ -93,12 +93,6 @@
 1 mir/mir/29-extload.ll
 1 mir/mir/30-switchconv.ll
 1 mir/mir/31-switchlower.ll
-1 tests/check/mir/findloop.ll
-1 tests/check/mir/loopinvariants.ll
-1 tests/check/mir/lowword.ll
-1 tests/check/mir/sievejumps.ll
-1 tests/check/mir/x87phis.ll
-1 tests/check/mir/x87rotate.ll
 1 tests/data/crc_sbb_mask.ll
 1 tests/data/queens_place_arg.ll
 1 tests/fixtures/pin-codegen/m16-O1.txt
