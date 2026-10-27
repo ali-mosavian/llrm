@@ -1531,6 +1531,14 @@ def test_the_group_rescan_regenerates_the_pages_before_it_scans(monkeypatch):
     assert order[-2:] == ["sync", "scan"]
 
 
+def test_land_skip_rescan_is_read_where_the_rescan_check_is_made():
+    """12:03-12:12: every PR the squash refused (merge conflicts) cost a ~80 s group rescan, ~1 PR a minute for 40 PRs; the bulk order skips it with LAND_SKIP_RESCAN=1."""
+    import inspect  # noqa: PLC0415
+
+    source = inspect.getsource(ps.merge_batch)
+    assert 'os.environ.get("LAND_SKIP_RESCAN") == "1"' in source and "make_rescan_check()" in source
+
+
 def test_the_head_red_limit_is_read_from_the_environment():
     """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
