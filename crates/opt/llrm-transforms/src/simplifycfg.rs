@@ -475,6 +475,8 @@ fn block_simplified(
 
 #[cfg(test)]
 thread_local! {
+    /// The predecessor lists `predecessor_list` built.
+    pub(crate) static PREDECESSOR_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// The blocks `cond_branch_simplified` visited.
     pub(crate) static CONDITIONAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -632,14 +634,28 @@ fn reached_from(
     }
 }
 
+/// `predecessors(block)`, counted in tests.
+fn predecessor_list(
+    function: &Function,
+    block: BlockId,
+) -> llrm_mir::blocklist::BlockList {
+    #[cfg(test)]
+    PREDECESSOR_LISTS.with(|count| count.set(count.get() + 1));
+    function.predecessors(block)
+}
+
 /// The block `block`'s predecessors all have as their only predecessor:
 /// `allPredecessorsComeFromSameSource`.
 fn all_predecessors_come_from_same_source(
     function: &Function,
     block: BlockId,
 ) -> Option<BlockId> {
+    // One predecessor, the common case: no list.
+    if let Some(only) = function.sole_predecessor(block) {
+        return function.sole_predecessor(only);
+    }
     let mut source = None;
-    for &pred in function.predecessors(block).iter() {
+    for &pred in predecessor_list(function, block).iter() {
         let only = function.sole_predecessor(pred)?;
         if source.is_some_and(|one| one != only) {
             return None;
@@ -695,7 +711,7 @@ fn cond_to_cond_simplified(
     }) else {
         return false;
     };
-    for pred in function.predecessors(block).iter().copied().collect::<Vec<_>>() {
+    for pred in predecessor_list(function, block) {
         if let Some(pbi) = function.terminator(pred).filter(|&last| {
             last != bi
                 && function.instruction(last).opcode == Opcode::Br
