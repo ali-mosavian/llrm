@@ -7,7 +7,13 @@ roots=${SWEEP_ROOTS:-"$HOME/scratch $(git -C "$HERE" worktree list --porcelain |
 for root in $roots; do
   # every cargo target by its marker file, whatever the dir is called (tgt-*, */target, */*/target, *-target): a name glob missed ~/scratch/tgt-backend-two (56 GB)
   for d in $(find "$root" -maxdepth 4 \( -name .rustc_info.json -o -name CACHEDIR.TAG \) -printf '%h\n' 2>/dev/null | sort -u); do
-    [ "$(du -sk "$d" 2>/dev/null | cut -f1)" -gt "$cap" ] || continue
+    size=$(du -sk "$d" 2>/dev/null | cut -f1)
+    if [ "$size" -le "$cap" ]; then
+      # a target under the cap that nothing has touched for IDLE_HOURS (default 3) and that holds over IDLE_CAP_KB (default 1 GB) is pruned too: the six alone slots of ~/.cache/llrm
+      # were 18 dirs of 7-15 GB each, all under the cap, 139 GB idle for 6 h
+      newest=$(find "$d" -maxdepth 2 -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1)
+      [ "$size" -gt "${IDLE_CAP_KB:-1048576}" ] && [ -n "$newest" ] && [ $(( $(date +%s) - newest )) -gt $(( ${IDLE_HOURS:-3} * 3600 )) ] || continue
+    fi
     [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d"; continue; }
     out=$("$HERE/prune-target.sh" "$d" --apply) && echo "$d: pruned $out"
   done

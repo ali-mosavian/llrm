@@ -14,4 +14,10 @@ echo "$out" | grep -q "big/llrm/target: pruned" || { echo "FAIL: the nested over
 for small in shallow/target flat-target other/llrm/target notcargo/llrm/target; do [ -e $r/$small/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib ] || { echo "FAIL: $small was pruned"; exit 1; }; done
 echo "$out" | grep -q "tgt-big: pruned" || { echo "FAIL: a target not named target (tgt-big, 56 GB in the field) was not pruned: $out"; exit 1; }
 [ "$(echo "$out" | wc -l)" = 2 ] || { echo "FAIL: other than the two over-cap dirs pruned: $out"; exit 1; }
+# a target under the cap that has sat idle for hours is pruned; a busy one of the same size is not (139 GB of idle alone slots, every dir under the 15 GB cap)
+mkt idle/target; mkt busy/target; head -c 100000 /dev/zero > $r/idle/target/debug/deps/filler.bin; head -c 100000 /dev/zero > $r/busy/target/debug/deps/filler.bin
+touch -d "10 hours ago" $r/idle/target/debug/deps/filler.bin $r/idle/target/debug/deps/libu-bbbbbbbbbbbbbbbb.rlib $r/idle/target/.rustc_info.json $r/idle/target/debug/deps $r/idle/target/debug $r/idle/target
+idle=$(SWEEP_ROOTS=$r CAP_KB=100000000 IDLE_CAP_KB=60 IDLE_HOURS=3 "$here/sweep-targets.sh")
+echo "$idle" | grep -q "idle/target: pruned" || { echo "FAIL: an idle target under the cap was not pruned: $idle"; exit 1; }
+echo "$idle" | grep -q "busy/target" && { echo "FAIL: a busy target under the cap was pruned: $idle"; exit 1; }
 echo PASS
