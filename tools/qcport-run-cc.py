@@ -45,6 +45,8 @@ def main() -> int:
 
     def compile_one(source: Path):
         out = sides["llrm"] / f"{source.stem}.obj"
+        if source.stem in os.environ.get("QCPORT_BORLAND_MODULES", "").split():
+            return None
         if source.stem in by_llrm_c:
             return qr.compile_failure(llrm_c, [*dirs, "-I", str(include)], source, out, level)
         env = {**os.environ, "LLRM_CC_TARGET": "x86_16-dos"}
