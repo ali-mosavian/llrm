@@ -211,11 +211,11 @@ def ratchet_entries(
     return [f"ratchet:{ratchet_name(command)}::{test}" for test in failed_tests(output)] or [f"ratchet:{ratchet_name(command)}"]
 
 
-def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None) -> dict[str, str]:
+def ratchet_failures(root: Path = ROOT, tiers: Path = TIERS, run=None, skip: tuple[str, ...] = ()) -> dict[str, str]:
     """name -> why, for EVERY ratchet that fails on the tree in `root` (the subset rule compares whole failure sets, not the first failure).
-    The commands run RATCHET_WORKERS at a time (default 1); the result is in command order."""
+    The commands run RATCHET_WORKERS at a time (default 1); the result is in command order; the ratchets named in `skip` are not run."""
     run = run or (lambda command: subprocess.run(slotted(command), cwd=root, capture_output=True, text=True))
-    commands = ratchet_commands(tiers)
+    commands = [command for command in ratchet_commands(tiers) if ratchet_name(command) not in skip]
     with ThreadPoolExecutor(max_workers=RATCHET_WORKERS) as pool:  # read per call: the env and the tests set it
         done = list(pool.map(run, commands))
     failed = {}

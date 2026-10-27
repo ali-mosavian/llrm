@@ -1810,3 +1810,21 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+def test_precheck_runs_only_the_ratchets_no_batch_stage_covers(monkeypatch):
+    """Precheck ran all 12 ratchets (median 80 s a PR at load 70) and six of them again in every batch's scanners; it runs the other six."""
+    smoke = ps.parity_smoke_module()
+    ran = []
+    monkeypatch.setattr(smoke, "ratchet_commands", lambda tiers=None: [["cargo", "test", "--test", name] for name in ("no_todo", "seeded_maps", "target_facts", "qb_dev_interface")])
+    smoke.ratchet_failures(run=lambda command: ran.append(command[-1]) or type("Done", (), {"returncode": 0, "stdout": "", "stderr": ""})(), skip=ps.ALWAYS_SCANNERS)
+    assert ran == ["seeded_maps", "qb_dev_interface"], ran
+
+
+def test_the_ratchets_precheck_runs_are_tiers_toml_minus_the_always_on_scanners(monkeypatch):
+    """The wiring: precheck's ratchet check passes ALWAYS_SCANNERS as the skip list, so a ratchet added to tiers.toml is precheck's unless a batch scanner already runs it."""
+    smoke = ps.parity_smoke_module()
+    seen = {}
+    monkeypatch.setattr(smoke, "ratchet_failures", lambda root, **kwargs: seen.update(kwargs) or {})
+    dict(ps.precheck_checks(Path("."), Path(".")))["ratchets"](Path("."))
+    assert tuple(seen["skip"]) == tuple(ps.ALWAYS_SCANNERS), seen
+    names = {smoke.ratchet_name(command) for command in smoke.ratchet_commands()}
+    assert sorted(names - set(ps.ALWAYS_SCANNERS)) == ["facts_rewrite", "no_file_gains_a_hash_or_tree_map_keyed_by_a_dense_id", "no_file_gains_a_slice_read_of_a_use_list", "no_uncached_env_checks", "qb_dev_interface", "seeded_maps"]

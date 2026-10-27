@@ -318,7 +318,7 @@ def precheck_checks(dev: Path, target: Path):
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
 
     def ratchets(root: Path) -> dict[str, set[str]]:
-        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True, errors="replace"))
+        failed = parity_smoke.ratchet_failures(root, skip=ALWAYS_SCANNERS, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True, errors="replace"))
         return {name: {name} for name in failed}
 
     def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
