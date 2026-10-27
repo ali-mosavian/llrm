@@ -64,6 +64,7 @@ use iced_x86::RflagsBits;
 
 use crate::backend::lanes::Lanes;
 use crate::backend::precse::flag_lanes;
+use crate::backend::pushfold;
 use crate::model::ir::{Imm, Loc, Operation, Semantics};
 use crate::model::lir::{self, Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -88,7 +89,7 @@ impl LIRTransform for PeepholeOptimizer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(compared(&immediates_folded(&body, self.size)))
+        Ok(loads_folded(&compared(&immediates_folded(&body, self.size))))
     }
 }
 
@@ -383,6 +384,77 @@ fn successor_overwrites_flags(
         }
     }
     false
+}
+
+/// `PeepholeOptimizer`'s load fold (`optimizeLoadInstr`): a once-read load is
+/// the memory operand of the compare that reads it.
+///
+/// The first source that is such a load is the one folded, so `cmp [m], r`
+/// over `cmp r, [m]`. The load must be a plain one of the block and nothing
+/// between it and the compare a barrier or a write of the cell, as the pin's
+/// `isLoadFoldBarrier` finds. Not translated: the other readers
+/// `foldMemoryOperand` handles (`test`, the arithmetic forms are
+/// [`pushfold`](crate::backend::pushfold) at selection).
+pub fn loads_folded(body: &LirBody) -> LirBody {
+    let reads = pushfold::read_counts(body);
+    let mut changed = false;
+    let blocks: Vec<_> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+            let mut at = 0;
+            while at < insns.len() {
+                let Some((home, value, what)) = compare_of_load(&insns, at, &reads) else {
+                    at += 1;
+                    continue;
+                };
+                insns[at] = pushfold::fused(&insns[at], &insns[home], value, what);
+                insns.remove(home);
+                changed = true;
+            }
+            block.with_insns(insns)
+        })
+        .collect();
+    if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// The load `insns[at]`, a `cmp` of two registers or a register and a constant,
+/// may read from: its position, the value and the compare with the cell.
+fn compare_of_load(
+    insns: &[Arc<Insn>],
+    at: usize,
+    reads: &HashMap<u32, usize>,
+) -> Option<(usize, u32, Semantics)> {
+    let what = insns[at].what.as_ref()?;
+    if what.op != Operation::Compare || what.name.as_deref() != Some("cmp") || !what.dests.is_empty() {
+        return None;
+    }
+    let [first, second] = &what.sources[..] else { return None };
+    // x86 has no `cmp [m], [m]`
+    if what.sources.iter().any(|one| matches!(one, Loc::Mem(_))) {
+        return None;
+    }
+    let candidates = [(first, 0), (second, 1)];
+    for (loc, place) in candidates {
+        let Loc::Held(held) = loc else { continue };
+        let other = &what.sources[1 - place];
+        if matches!(other, Loc::Held(also) if also.value == held.value) || !matches!(held.width, 1 | 2 | 4) {
+            continue;
+        }
+        // a constant is the second operand of `cmp [m], imm`, never the first
+        if place == 1 && matches!(other, Loc::Imm(_)) {
+            continue;
+        }
+        let Some(home) = pushfold::once_read_load(insns, at, *held, reads) else { continue };
+        let Some(Loc::Mem(cell)) = insns[home].what.as_ref().and_then(|load| load.sources.first()) else {
+            continue;
+        };
+        let mut sources = what.sources.clone();
+        sources[place] = Loc::Mem(cell.clone());
+        return Some((home, held.value, Semantics { sources, ..what.clone() }));
+    }
+    None
 }
 
 /// `PeepholeOptimizer`'s `foldImmediate` (`X86InstrInfo::foldImmediateImpl`,
@@ -934,5 +1006,71 @@ mod tests {
             insn(3, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(immediates_folded(&body, false).blocks[0].insns[1].what.as_ref().unwrap().sources, [constant(0)]);
+    }
+
+    fn cell(base: u32) -> Loc {
+        Loc::Mem(llrm_lir::Mem { base: Some(Held { value: base, width: 4 }), ..llrm_lir::Mem::new(None, 4) })
+    }
+
+    fn load(
+        at: i64,
+        value: u32,
+        base: u32,
+    ) -> Arc<Insn> {
+        insn(at, Operation::Move, "mov", vec![held(value)], vec![cell(base)], vec![value], vec![base])
+    }
+
+    /// `v2 := mov [v1]; cmp v2, v3; jl`, the binary search's probe once
+    /// MachineCSE leaves the load one reader: the pin's `optimizeLoadInstr`
+    /// makes `cmp [v1], v3`, ours kept the load (x_binsearch -O2: +9.5% ins).
+    #[test]
+    fn test_a_once_read_load_is_the_memory_operand_of_its_compare() {
+        let body = body_of(vec![
+            load(0, 2, 1),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(2), held(3)], vec![], vec![2, 3]),
+            insn(2, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = loads_folded(&body);
+        assert_eq!(names(&done, true), ["cmp", "jl"]);
+        let cmp = &done.blocks[0].insns[0];
+        assert_eq!(cmp.what.as_ref().unwrap().sources, [cell(1), held(3)]);
+        assert_eq!(cmp.uses, [3, 1]);
+    }
+
+    /// A load the compare shares with another reader stays a register.
+    #[test]
+    fn test_a_load_read_twice_stays_a_load() {
+        let body = body_of(vec![
+            load(0, 2, 1),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(2), held(3)], vec![], vec![2, 3]),
+            insn(2, Operation::Move, "mov", vec![held(4)], vec![held(2)], vec![4], vec![2]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(loads_folded(&body), body);
+    }
+
+    /// A store between the load and the compare may write the cell.
+    #[test]
+    fn test_a_store_between_the_load_and_the_compare_blocks_the_fold() {
+        let body = body_of(vec![
+            load(0, 2, 1),
+            insn(1, Operation::Move, "mov", vec![cell(1)], vec![held(5)], vec![], vec![1, 5]),
+            insn(2, Operation::Compare, "cmp", vec![], vec![held(2), held(3)], vec![], vec![2, 3]),
+            insn(3, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(loads_folded(&body), body);
+    }
+
+    /// `cmp [m1], [m2]` has no encoding: quicksort -O2 compared a memory
+    /// operand with a once-read load, the fold made both operands memory and
+    /// the object failed to assemble.
+    #[test]
+    fn test_a_compare_with_a_memory_operand_takes_no_second_one() {
+        let body = body_of(vec![
+            load(0, 3, 1),
+            insn(1, Operation::Compare, "cmp", vec![], vec![cell(2), held(3)], vec![], vec![2, 3]),
+            insn(2, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        assert_eq!(loads_folded(&body), body);
     }
 }

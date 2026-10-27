@@ -76,7 +76,7 @@ use llrm_lir::Held;
 use llrm_lir::registers::RegId;
 
 use crate::backend::storedhomes::may_write;
-use crate::model::ir::{Loc, Operation};
+use crate::model::ir::{Loc, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::HashMap;
@@ -125,24 +125,7 @@ impl LIRTransform for LoadFold {
 
 /// `body` with each push of a once-read load pushed from the load's cell.
 pub fn folded(body: &LirBody) -> LirBody {
-    // Reads of each value: instructions' register uses (an address's registers
-    // included) and phi operands.
-    let mut reads: HashMap<u32, usize> = HashMap::default();
-    for block in &body.blocks {
-        for one in block.insns.iter() {
-            let mut seen: Vec<u32> = one.uses.clone();
-            seen.sort_unstable();
-            seen.dedup();
-            for used in seen {
-                *reads.entry(used).or_default() += 1;
-            }
-        }
-        for phi in block.phis.iter() {
-            for &(_, value) in &phi.incoming {
-                *reads.entry(value).or_default() += 1;
-            }
-        }
-    }
+    let reads = read_counts(body);
     let mut blocks = Vec::new();
     let mut changed = false;
     for block in &body.blocks {
@@ -177,21 +160,7 @@ pub fn folded(body: &LirBody) -> LirBody {
                     continue;
                 }
             };
-            let mut fused = (*consumer).clone();
-            fused.what = Some(what);
-            fused.uses =
-                consumer.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
-            fused.uses.dedup();
-            fused.widths = consumer
-                .widths
-                .iter()
-                .chain(&load.widths)
-                .copied()
-                .filter(|(one, _)| *one != value)
-                .collect::<std::collections::BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            insns[at] = Arc::new(fused);
+            insns[at] = fused(&consumer, &load, value, what);
             insns.remove(home);
             changed = true;
             // `at` now names the instruction after the fused push.
@@ -199,6 +168,28 @@ pub fn folded(body: &LirBody) -> LirBody {
         blocks.push(block.with_insns(insns));
     }
     if changed { body.with_blocks(blocks) } else { body.clone() }
+}
+
+/// Reads of each value: instructions' register uses (an address's registers
+/// included, once per instruction) and phi operands.
+pub(crate) fn read_counts(body: &LirBody) -> HashMap<u32, usize> {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for block in &body.blocks {
+        for one in block.insns.iter() {
+            let mut seen: Vec<u32> = one.uses.clone();
+            seen.sort_unstable();
+            seen.dedup();
+            for used in seen {
+                *reads.entry(used).or_default() += 1;
+            }
+        }
+        for phi in block.phis.iter() {
+            for &(_, value) in &phi.incoming {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+    }
+    reads
 }
 
 /// The load `insns[at]`, a push of one value, may take its cell from: its
@@ -257,12 +248,26 @@ fn candidate(
         }
         _ => return None,
     };
-    let plain = push.clobbers.is_empty()
-        && push.requires.is_empty()
-        && push.delivers.is_empty()
-        && push.group.is_none()
-        && !push.volatile
-        && push.call.is_none();
+    once_read_load(insns, at, held, reads).map(|home| (home, held.value))
+}
+
+/// The position of the load `insns[at]` may take the cell of `held` from:
+/// `held` is read once, defined by a plain load of this block, and nothing
+/// between the two is a barrier or may write the cell (`optimizeLoadInstr`'s
+/// `isSafeToMove` and `isLoadFoldBarrier`).
+pub(crate) fn once_read_load(
+    insns: &[Arc<Insn>],
+    at: usize,
+    held: Held,
+    reads: &HashMap<u32, usize>,
+) -> Option<usize> {
+    let consumer = &insns[at];
+    let plain = consumer.clobbers.is_empty()
+        && consumer.requires.is_empty()
+        && consumer.delivers.is_empty()
+        && consumer.group.is_none()
+        && !consumer.volatile
+        && consumer.call.is_none();
     if !plain || !matches!(held.width, 2 | 4) || reads.get(&held.value) != Some(&1) {
         return None;
     }
@@ -308,7 +313,31 @@ fn candidate(
                     .as_ref()
                     .is_none_or(|w| matches!(w.op, Operation::Call | Operation::Barrier | Operation::Escape)),
         );
-    (!blocked).then_some((home, held.value))
+    (!blocked).then_some(home)
+}
+
+/// `consumer` reading the cell of `load` in place of `value`, with `what` its
+/// semantics; the load's address registers join its reads.
+pub(crate) fn fused(
+    consumer: &Insn,
+    load: &Insn,
+    value: u32,
+    what: Semantics,
+) -> Arc<Insn> {
+    let mut fused = consumer.clone();
+    fused.what = Some(what);
+    fused.uses = consumer.uses.iter().copied().filter(|one| *one != value).chain(load.uses.iter().copied()).collect();
+    fused.uses.dedup();
+    fused.widths = consumer
+        .widths
+        .iter()
+        .chain(&load.widths)
+        .copied()
+        .filter(|(one, _)| *one != value)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Arc::new(fused)
 }
 
 /// Whether `one` defines the value.
