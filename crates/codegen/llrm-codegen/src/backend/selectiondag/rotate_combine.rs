@@ -2,7 +2,7 @@
 //! operand; an amount past the width is taken modulo it; `rotl i16 x, 8` is
 //! a `bswap`; two rotates by constants are one.
 //!
-//! DEVIATE SD322: not the demanded-bits simplification of the operand and
+//! DEVIATE SD244: not the demanded-bits simplification of the operand and
 //! not `distributeTruncateThroughAnd` (the amount is a constant in the cases
 //! this target meets). Owner sdag-b.
 //!
