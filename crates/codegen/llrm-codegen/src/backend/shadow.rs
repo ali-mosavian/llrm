@@ -39,9 +39,10 @@ use crate::model::lir::LirBody;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Selector {
     /// `isel`: one forward walk over MIR.
-    #[default]
     Old,
-    /// The SelectionDAG translation, `selectiondag-plan.md`.
+    /// The SelectionDAG translation, `selectiondag-plan.md`. The default, as
+    /// the pin has no other.
+    #[default]
     Dag,
     /// The DAG path where it can select, else the old selector, each refusal
     /// reported (`[isel] NAME refused: WHY`): what the harness measures.

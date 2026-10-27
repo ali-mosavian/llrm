@@ -400,7 +400,7 @@ fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
 /// argument; anything else is an error.
 #[test]
 fn test_isel_names_the_selector() {
-    assert_eq!(parsed(&[]).unwrap().isel, Selector::Old);
+    assert_eq!(parsed(&[]).unwrap().isel, Selector::Dag);
     assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Selector::Dag);
     assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Selector::Shadow);
     assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Selector::Old);
