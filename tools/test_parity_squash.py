@@ -1817,3 +1817,12 @@ def test_a_scanner_refusal_names_the_prs_and_files_behind_it():
     got = ps.offender_detail(failing, members)
     assert got == " [offending files: #5424 crates/codegen/llrm-codegen/src/backend/funnel.rs; #5428 crates/codegen/llrm-codegen/src/backend/latecleanup.rs; no PR of the batch: tools/other.py]", got
     assert ps.offender_detail({"lib x::t: failed"}, members) == ""
+
+
+def test_a_link_refusal_names_the_prs_touching_the_directory_of_the_file_that_panicked():
+    """sqb-5413's link refusal said `panicked at greedy/spliteditor.rs:125` and no PR; it was #5486's change in the same directory, found by w13's bisect."""
+    unlinked = ["qb arena_type: llrm-c: thread 'main' (2594298) panicked at crates/codegen/llrm-codegen/src/greedy/spliteditor.rs:125:9:"]
+    members = lambda: {"5443": ["crates/codegen/llrm-codegen/src/greedy/spiller.rs"], "5486": ["crates/codegen/llrm-codegen/src/greedy/spill.rs"], "5409": ["crates/x/src/other.rs"]}
+    got = ps.offender_detail(unlinked, members, near=True)
+    assert got == " [offending files: crates/codegen/llrm-codegen/src/greedy/spliteditor.rs: same directory touched by #5443 #5486]", got
+    assert "no PR of the batch" in ps.offender_detail(unlinked, lambda: {"5409": ["crates/x/src/other.rs"]}, near=True)

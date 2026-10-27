@@ -952,9 +952,10 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
 
 
-def offender_detail(names, members=None) -> str:
+def offender_detail(names, members=None, near: bool = False) -> str:
     """` [offending files: #N path path; ...]` for the files a failing scan names, each under the PRs of the batch whose diff touches it (`members()` -> {PR: files}): the target_facts refusal
-    of sqb-5378 listed three files and no PR, and the owners were found by hand."""
+    of sqb-5378 listed three files and no PR, and the owners were found by hand. `near`: a file no PR touches names the PRs that touch its directory (a link panic in greedy/spliteditor.rs
+    was another file's change, #5486's, in the same directory)."""
     paths = list(dict.fromkeys(re.findall(r"(?<![\w./-])[\w][\w.-]*(?:/[\w.-]+)+\.(?:rs|py|toml|md|sh|json)\b", " ".join(names))))
     if not paths or not members:
         return ""
@@ -962,6 +963,12 @@ def offender_detail(names, members=None) -> str:
     by_pr = {number: [one for one in paths if one in files] for number, files in touched.items()}
     parts = [f"#{number} {' '.join(found)}" for number, found in by_pr.items() if found]
     left = [one for one in paths if not any(one in found for found in by_pr.values())]
+    if near:
+        for one in list(left):
+            folder = one.rsplit("/", 1)[0] + "/"
+            if neighbours := [f"#{number}" for number, files in touched.items() if any(other.startswith(folder) for other in files)]:
+                parts.append(f"{one}: same directory touched by {' '.join(neighbours)}")
+                left.remove(one)
     parts += [f"no PR of the batch: {' '.join(left)}"] if left else []
     return f" [offending files: {'; '.join(parts)}]" if parts else ""
 
@@ -1997,7 +2004,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not tests_ok:
             return False
         if unlinked:
-            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
+            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}{offender_detail(unlinked, members_files, near=True)}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
         if red:
