@@ -1000,3 +1000,29 @@ declare void @llrm.qb.B$PER4(float) nocallback
     );
     assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
+
+const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+@g = global i16 0
+declare void @h(ptr addrspace(2), ptr)
+define void @f(ptr %p) {
+entry:
+  %s = addrspacecast ptr %p to ptr addrspace(2)
+  call void @h(ptr addrspace(2) %s, ptr %p)
+  ret void
+}
+";
+
+/// The segment of a global is pushed as an immediate (`push DGROUP`, 3 bytes);
+/// the DAG path moved it to a register and pushed that (4 bytes, 205 times in
+/// the QB corpus). Pin: `X86CallFrameOptimization` folds a `MOV32ri` of one
+/// use.
+#[test]
+fn a_pushed_segment_of_a_global_is_an_immediate() {
+    let module = llrm_mir::parse::module(PUSH_SEGMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let pushes: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("push")).collect();
+    assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
+}

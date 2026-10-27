@@ -427,6 +427,52 @@ pub fn emit_in(
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
 }
 
+/// A push of a register whose only use it is, and which a `mov` of an
+/// immediate made (a constant, or the segment of a global), pushes the
+/// immediate: `X86CallFrameOptimization::canFoldIntoRegPush`'s
+/// `MOV32ri` with one use.
+fn fold_immediate_pushes(insns: &mut Vec<Arc<Insn>>) {
+    let mut at = 0;
+    while at < insns.len() {
+        let pushed = insns[at]
+            .what
+            .as_ref()
+            .filter(|what| what.op == Operation::Push)
+            .and_then(
+                |what| match what.sources.first() {
+                    Some(Loc::Held(held)) => Some(held.value),
+                    _ => None,
+                },
+            );
+        let Some(value) = pushed else {
+            at += 1;
+            continue;
+        };
+        let reads = insns.iter().filter(|insn| insn.uses.contains(&value)).count();
+        let made = insns.iter().position(|insn| insn.defines == [value]);
+        let immediate = made.and_then(|place| {
+            let what = insns[place].what.as_ref()?;
+            match (&what.op, &what.dests[..], &what.sources[..]) {
+                (Operation::Move, [Loc::Held(_)], [Loc::Imm(imm)]) => Some(imm.clone()),
+                _ => None,
+            }
+        });
+        let (Some(place), Some(imm), 1) = (made, immediate, reads) else {
+            at += 1;
+            continue;
+        };
+        let old = insns[at].clone();
+        let mut what = old.what.clone().expect("a push");
+        what.sources[0] = Loc::Imm(imm);
+        insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()));
+        insns.remove(place);
+        if place < at {
+            at -= 1;
+        }
+        at += 1;
+    }
+}
+
 /// Real-mode addressing has no `[sp+k]`: the arguments a call takes on the
 /// stack are pushed, last first, where the lowering stored them into the area
 /// it made (`sub sp, n` and a store to each cell before the call): the
@@ -565,6 +611,7 @@ fn pushed_arguments(
             }
         }
         *insns = rebuilt;
+        fold_immediate_pushes(insns);
         // Back to the start: indices moved.
         at = 0;
         while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
