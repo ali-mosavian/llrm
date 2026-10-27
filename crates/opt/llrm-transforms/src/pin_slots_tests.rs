@@ -442,7 +442,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "deadargelim",
         Why::Deviate,
-        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block",
+        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
         "",
     ),
     row(
@@ -463,7 +463,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on all 65 QCport modules at -Os m16 (pin ablation, 2026-10-23), so N/A until a row moves (owner w-6)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w-6)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
