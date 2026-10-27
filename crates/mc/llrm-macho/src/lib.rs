@@ -11,9 +11,10 @@
 //! An arm64 object carries `LC_BUILD_VERSION` (macOS 11, no tools, no SDK), as LLVM's does
 //! for `arm64-apple-macos`; `ld` takes the platform from it.
 //!
-//! The file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays
-//! one atom, so a call between two functions of it may be resolved where it is
-//! written.
+//! An x86-64 file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays one atom, so a call
+//! between two functions of it may be resolved where it is written. An arm64 file is, as clang's is: a
+//! weak definition (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols is a
+//! relocation.
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 
@@ -21,6 +22,7 @@ const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const CPU_TYPE_X86_64: u32 = 0x0100_0007;
 const CPU_SUBTYPE_X86_64_ALL: u32 = 3;
 const MH_OBJECT: u32 = 1;
+const MH_SUBSECTIONS_VIA_SYMBOLS: u32 = 0x2000;
 const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xB;
 const LC_SEGMENT_64: u32 = 0x19;
@@ -32,6 +34,7 @@ const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 const S_ATTR_DEBUG: u32 = 0x0200_0000;
 const N_EXT: u8 = 1;
+const N_WEAK_DEF: u16 = 0x80;
 const N_SECT: u8 = 0xE;
 const X86_64_RELOC_UNSIGNED: u32 = 0;
 const X86_64_RELOC_SIGNED: u32 = 1;
@@ -143,6 +146,11 @@ trait Flavor {
     /// relocation then names the symbol and not its section.
     fn lists_locals(&self) -> bool;
 
+    /// Whether the linker may treat each symbol of a section as an atom of its own
+    /// (`MH_SUBSECTIONS_VIA_SYMBOLS`): then a weak definition replaces only itself, and every
+    /// reference between two symbols of a section carries a relocation.
+    fn subsections_via_symbols(&self) -> bool;
+
     fn relocation(
         &self,
         kind: Kind,
@@ -158,6 +166,10 @@ impl Flavor for X8664 {
 
     fn build_version(&self) -> Option<(u32, u32)> {
         None
+    }
+
+    fn subsections_via_symbols(&self) -> bool {
+        false
     }
 
     fn lists_locals(&self) -> bool {
@@ -197,6 +209,10 @@ impl Flavor for Arm64 {
     /// "no platform load command" without it.
     fn build_version(&self) -> Option<(u32, u32)> {
         Some((PLATFORM_MACOS, 11 << 16))
+    }
+
+    fn subsections_via_symbols(&self) -> bool {
+        true
     }
 
     fn lists_locals(&self) -> bool {
@@ -285,7 +301,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // within its kind.
     let mut defined: Vec<usize> = (0..object.symbols.len())
         .filter(|&one| {
-            object.symbols[one].binding == Binding::Public
+            matches!(object.symbols[one].binding, Binding::Public | Binding::Weak)
                 && matches!(object.symbols[one].definition, Definition::Defined { .. })
         })
         .collect();
@@ -316,9 +332,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         put32(&mut nlist, name);
         match symbol.definition {
             Definition::Defined { section, offset } => {
-                let external = if symbol.binding == Binding::Public { N_EXT } else { 0 };
+                let external = if symbol.binding == Binding::Local { 0 } else { N_EXT };
                 nlist.extend([N_SECT | external, ordinal(section) as u8]);
-                nlist.extend(0u16.to_le_bytes());
+                nlist.extend((if symbol.binding == Binding::Weak { N_WEAK_DEF } else { 0 }).to_le_bytes());
                 put64(&mut nlist, (address[section] + offset) as u64);
             }
             Definition::Undefined => {
@@ -455,7 +471,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
     let mut out = Vec::new();
     let (cpu_type, cpu_subtype) = flavor.cpu();
-    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, if version.is_some() { 4 } else { 3 }, commands as u32, 0, 0] {
+    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, if version.is_some() { 4 } else { 3 }, commands as u32, if flavor.subsections_via_symbols() { MH_SUBSECTIONS_VIA_SYMBOLS } else { 0 }, 0] {
         put32(&mut out, field);
     }
     put32(&mut out, LC_SEGMENT_64);
@@ -651,6 +667,31 @@ mod tests {
     fn an_x86_64_object_has_none() {
         let written = write(&program()).unwrap();
         assert!(commands_of(&written).iter().all(|(cmd, _)| *cmd != LC_BUILD_VERSION));
+    }
+
+    /// A weak definition (`__attribute__((weak))`) was written as a strong one: two objects
+    /// that defined it were "duplicate symbol" to `ld`. It carries `N_WEAK_DEF`.
+    #[test]
+    fn a_weak_symbol_is_a_weak_definition() {
+        let mut object = program();
+        object.arch = Arch::Arm64;
+        object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
+        object.symbols = vec![defined("_strong", 0, 0), Symbol { binding: Binding::Weak, ..defined("_hook", 0, 0) }];
+        let written = write(&object).unwrap();
+        let word = |at: usize| u32::from_le_bytes(written[at..at + 4].try_into().unwrap()) as usize;
+        let symtab = commands_of(&written).into_iter().find(|(cmd, _)| *cmd == LC_SYMTAB).unwrap().1;
+        let field = |at: usize| u32::from_le_bytes(symtab[at..at + 4].try_into().unwrap()) as usize;
+        let (symbols_at, count, strings_at) = (field(8), field(12), field(16));
+        let mut found = Vec::new();
+        for index in 0..count {
+            let entry = symbols_at + index * 16;
+            let name_at = strings_at + word(entry);
+            let name = written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
+            let desc = u16::from_le_bytes([written[entry + 6], written[entry + 7]]);
+            found.push((name, written[entry + 4] & N_EXT != 0, desc & N_WEAK_DEF != 0));
+        }
+        found.sort();
+        assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
     }
 
     const REFERENCE: &str = "

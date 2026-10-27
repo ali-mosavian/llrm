@@ -159,6 +159,8 @@ pub struct Section {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Binding {
     Public,
+    /// Exported, but a strong definition of the name elsewhere replaces it (`weak`, `linkonce`).
+    Weak,
     Local,
 }
 
