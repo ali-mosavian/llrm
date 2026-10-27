@@ -1882,9 +1882,10 @@ fn declare_outside(
             && let Ok(to) =
                 value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
             && let Type::Pointer(space) = *module.context.types.get(to)
-            && (tables.layout.pointer(space).bits == 64 || tables.hosted)
+            && let pointer_bits = tables.layout.pointer(space).bits
+            && tables.hosted
         {
-            let wide = module.context.types.int(tables.layout.pointer(space).bits);
+            let wide = module.context.types.int(pointer_bits);
             let ty = function_type(&mut module.context.types, to, vec![wide]);
             let global = module.add_function(REAL_ADDRESS, ty, Linkage::External)?;
             let reference = module.reference(global);
@@ -3555,17 +3556,17 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let Type::Pointer(space) = *self.b.context.types.get(ty) else {
                     return Err("a concat that is no pointer".to_owned());
                 };
-                let bits = self.tables.layout.pointer(space).bits;
-                let wide = self.b.context.types.int(bits);
+                let pointer_bits = self.tables.layout.pointer(space).bits;
+                let wide = self.b.context.types.int(pointer_bits);
                 let selector = self.convert(selector, false, wide)?;
-                let four = self.b.int(bits, 4);
+                let four = self.b.int(pointer_bits, 4);
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
                 let offset = self.convert(offset, false, wide)?;
                 let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
-                // A 64-bit host has no memory at the PC's low addresses: the
+                // A host has no memory at the PC's low addresses: the
                 // runtime gives the place of the byte `address` in its image
                 // of them.
-                let result = if bits == 64 || self.tables.hosted {
+                let result = if self.tables.hosted {
                     let callee = Value::Constant(
                         *self.tables.callees.get(REAL_ADDRESS).ok_or_else(|| format!("@{REAL_ADDRESS} undeclared"))?,
                     );

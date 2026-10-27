@@ -1013,7 +1013,7 @@ fn billed_asking_for_costly(trips: u64) -> (super::Run, u64) {
         rerun: false,
         idle_at: Vec::new(),
     };
-    run.step(&mut Asks, "asks", &mut unit, &mut analyses);
+    run.step(&mut Asks, &"asks", &mut unit, &mut analyses);
     (run, reference)
 }
 
@@ -1235,7 +1235,7 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
 fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
     let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
     let text = format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @p = global [100 x i16] [{}]
 @v = global [100 x i16] [{}]
 
@@ -1572,11 +1572,14 @@ fn test_instsimplify_closes_the_function_pipeline_and_its_slot_is_translated() {
         late,
         [
             "float2int@1594",
+            "lower-constant-intrinsics@1597",
             "loop-interchange@1631",
+            "infer-alignment@1362",
             "loop-load-elim@1400",
             "combine@1403",
             "simplifycfg@1438",
             "combine@1464",
+            "infer-alignment@1498",
             "combine@1499",
             "licm@1508",
             "instsimplify@1662",
@@ -1753,10 +1756,62 @@ fn test_a_run_that_changes_nothing_leaves_its_input_and_a_manifest_line() {
         rerun: false,
         idle_at: Vec::new(),
     };
-    assert!(!run.step(&mut Idle, "idle", &mut unit, &mut analyses));
+    assert!(!run.step(&mut Idle, &"idle", &mut unit, &mut analyses));
     let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
     let _ = std::fs::remove_dir_all(&directory);
     assert_eq!(manifest, "idle 1 0001-in-idle.ll 1\n");
+}
+
+/// A pass's stage name was formatted into a `String` for every step, 699 times
+/// and 0.7 M Ir in d_faces, to be read only by a dump or a log. A step with
+/// neither never formats it.
+#[test]
+fn test_a_step_that_dumps_and_logs_nothing_formats_no_stage_name() {
+    use llrm_mir::module::{GlobalKind, Module};
+    use llrm_mir::passes::{Analyses, Declared, Outer, Unit};
+    let mut module: Module = crate::testing::parsed("define i16 @f() {\nb:\n  ret i16 0\n}\n");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let mut declared = Declared::of(&module);
+    let Module { context, globals, metadata, .. } = &mut module;
+    let GlobalKind::Function(function) = &mut globals[0].kind else { panic!("a function") };
+    let mut unit = Unit { context, layout: &layout, function, id: None, metadata, declared: &mut declared };
+    let mut run = super::Run {
+        version: 0,
+        promotes: true,
+        inputs: false,
+        dump: None,
+        rounds: 0,
+        steps: 0,
+        skipped: 0,
+        fixed: 0,
+        billing: false,
+        idle: 0,
+        useful: 0,
+        idle_with_analyses: 0,
+        useful_with_analyses: 0,
+        classified: unit.function.mark(),
+        stretches: Vec::new(),
+        unreached: 0,
+        slice: None,
+        persisted: 0,
+        records: unit.context.extension::<crate::settled::Settled>(),
+        rerun: false,
+        idle_at: Vec::new(),
+    };
+    struct Probe(std::cell::Cell<usize>);
+    impl std::fmt::Display for Probe {
+        fn fmt(
+            &self,
+            formatter: &mut std::fmt::Formatter<'_>,
+        ) -> std::fmt::Result {
+            self.0.set(self.0.get() + 1);
+            formatter.write_str("probe")
+        }
+    }
+    let stage = Probe(std::cell::Cell::new(0));
+    assert!(!run.step(&mut Idle, &stage, &mut unit, &mut analyses));
+    assert_eq!(stage.0.get(), 0, "the stage name was formatted for nobody");
 }
 
 struct Idle;
@@ -1850,7 +1905,7 @@ impl llrm_mir::passes::FunctionPass for Agree {
 /// panicked at ranger.rs:925, #2369).
 #[test]
 fn test_the_ranger_and_the_table_agree_between_the_stages_of_the_llvm_order() {
-    let mut module = crate::testing::parsed("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    let mut module = crate::testing::parsed("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 define internal cc 1005 void @insert(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, i16 %1, i16 %2) addrspace(1) nearcode memory(readwrite, argmem: read) {
 b1:
@@ -2373,11 +2428,14 @@ fn test_the_late_simplifycfg_slots_are_built_in_the_pins_order() {
         late,
         [
             "float2int@1594",
+            "lower-constant-intrinsics@1597",
             "loop-interchange@1631",
+            "infer-alignment@1362",
             "loop-load-elim@1400",
             "combine@1403",
             "simplifycfg@1438",
             "combine@1464",
+            "infer-alignment@1498",
             "combine@1499",
             "licm@1508",
             "instsimplify@1662",
@@ -2572,7 +2630,7 @@ fn a_slot_names_the_member_that_left_a_phi_short() {
 #[test]
 fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
     let mut module = llrm_analysis::testing::parsed(
-        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
 define internal cc 1005 void @"_frame@3"(ptr addrspace(1) nocapture %0, i16 %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
 b1:
@@ -2860,15 +2918,54 @@ b2:
 /// its reader through a phi that was not LCSSA, so the use counted as outside
 /// the loop and got `-1` scales: a second counter stepping down by 4 beside
 /// the one stepping up by 4, live across a call (+224 bytes). LSR requires
-/// LoopSimplify and LCSSA, so they run right before it.
+/// LoopSimplify, and the phis are cleaned by InstSimplify right before it, as
+/// the pin's llc takes the IR after opt's closing InstSimplify.
 #[test]
-fn lsr_runs_on_simplified_loops_in_lcssa_form() {
+fn lsr_runs_on_simplified_loops_after_the_closing_instsimplify() {
     for options in [pipeline::Options::size(), pipeline::Options::basic(), pipeline::Options::default()] {
         let applied = Applied { options, ..Applied::default() };
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
-        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
+        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "instsimplify", "canonfreeze"], "{names:?}");
     }
+}
+
+/// x_strlen at -O2: the end of a scan was read through an exit phi, which
+/// stops IVUsers where the pin's walk goes on, so LSR kept the pointer IV
+/// (`lea eax,_buf-1`, a copy of it in the loop) where the pin has an index.
+#[test]
+fn a_scan_whose_end_is_read_after_the_loop_is_an_index_not_a_pointer() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@buf = global [64 x i8] zeroinitializer
+define i16 @f(i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ @buf, %b0 ], [ %n, %b1 ]
+  %c = load i8, ptr %p
+  %n = getelementptr inbounds i8, ptr %p, i16 1
+  %z = icmp eq i8 %c, 0
+  br i1 %z, label %b2, label %b1
+
+b2:
+  %a = ptrtoint ptr %p to i16
+  %e = ptrtoint ptr @buf to i16
+  %d = sub i16 %a, %e
+  %r = add i16 %d, %k
+  ret i16 %r
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("phi ptr"), "{text}");
 }
 
 /// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)

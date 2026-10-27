@@ -216,18 +216,20 @@ fn with_default_convention(
     else {
         return;
     };
-    let takes = |convention: u32, variadic: bool| {
-        match (regcall_default, convention) {
-            (false, 0) => true,
-            (true, llrm_mir::opcode::REGCALL) => true,
-            (true, 0) => variadic,
-            _ => false,
-        }
+    let takes = |convention: u32, variadic: bool| match (regcall_default, convention) {
+        (false, 0) => true,
+        (true, llrm_mir::opcode::REGCALL) => true,
+        (true, 0) => variadic,
+        _ => false,
     };
-    // Under the register-size convention `main` is C's: the start-up calls `_main`.
+    // Under the register-size convention `main` is C's: the start-up calls
+    // `_main`.
     let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
     let types = &module.context.types;
-    let is_variadic = |ty| matches!(types.get(ty), llrm_mir::types::Type::Function { variadic: true, .. });
+    let is_variadic = |ty| matches!(
+        types.get(ty),
+        llrm_mir::types::Type::Function { variadic: true, .. }
+    );
     for global in &mut module.globals {
         if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
             continue;
@@ -293,13 +295,34 @@ pub fn compiled_dumping(
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
+    llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
         options.dump = Some(dump.to_path_buf());
     }
+    options.libcalls.extend(libm_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+}
+
+/// The C library's rounding routines, in the convention and spelling a call
+/// the source declared would have: what `llvm.floor` and its family become
+/// where the target has no instruction for them. A C program that made one
+/// called the routine, so its runtime has it.
+fn libm_calls(
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) -> Vec<(String, u32, String)> {
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
+    ["floor", "ceil", "trunc", "round", "roundeven", "nearbyint"]
+        .iter()
+        .flat_map(|op| ["", "f", "l"].map(|suffix| format!("{op}{suffix}")))
+        .map(|name| {
+            let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
+            (name, number, symbol)
+        })
+        .collect()
 }
 
 /// A C `static` function may be entered by a near call wherever only its own
@@ -324,10 +347,9 @@ fn allow_near_calls(module: &mut llrm_mir::module::Module) {
 fn refuse_foreign_conventions(module: &llrm_mir::module::Module) -> Result<(), String> {
     for global in &module.globals {
         let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { continue };
-        let Some((name, _)) = llrm_mir::opcode::CONVENTIONS
-            .iter()
-            .find(|(name, number)| *number == function.calling_convention && matches!(*name, "x86_stdcallcc" | "x86_fastcallcc"))
-        else {
+        let Some((name, _)) = llrm_mir::opcode::CONVENTIONS.iter().find(|(name, number)| {
+            *number == function.calling_convention && matches!(*name, "x86_stdcallcc" | "x86_fastcallcc")
+        }) else {
             continue;
         };
         let function_name = global.name.as_deref().unwrap_or("?");

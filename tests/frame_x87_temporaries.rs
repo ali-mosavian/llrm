@@ -5,7 +5,6 @@
 
 mod common;
 
-
 const ROUNDINGS: &str = "float g(double a, double b, double c) {
   float s = (float)(a * b);
   s = (float)(s * c);

@@ -38,4 +38,7 @@ alone=$(run 1000)
 grep -q "^HOLD: landing 3020" $d/err2 || { echo "FAIL: the hold is not logged with the PR number"; exit 1; }
 later=$(run 1700)
 echo "$later" | grep -qw 3020 && echo "$later" | grep -qw 3021 || { echo "FAIL: after the grace the queue did not resume its normal order: got '$later'"; exit 1; }
+# an unreadable feat/parity (a 403) keeps the old queue: it would match no refused.state line and re-queue every refused PR
+mkdir -p $d/p403; printf '#!/bin/sh\n[ "$1" = api ] && exit 1\nexec %s/gh "$@"\n' "$d" > $d/p403/gh; chmod +x $d/p403/gh
+PATH=$d/p403:$PATH "$here/build-queue.sh" >/dev/null 2>&1 && { echo "FAIL: build-queue.sh succeeded with feat/parity unreadable"; exit 1; }
 [ "$out" = "$want" ] && echo PASS || { echo "FAIL"; echo " got: $out"; echo "want: $want"; exit 1; }

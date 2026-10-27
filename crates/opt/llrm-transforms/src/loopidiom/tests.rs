@@ -334,6 +334,33 @@ fn test_a_no_builtins_function_gets_no_memset() {
     assert!(pass_output(FILL).contains("llvm.memset"));
 }
 
+/// The trip counts `runs` loop-idiom passes in a row work out over `text`.
+fn idiom_trip_counts(
+    text: &str,
+    runs: usize,
+) -> usize {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for _ in 0..runs {
+        manager.add(super::pass::LoopIdiom::new());
+    }
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// Every run started a `ScalarEvolution` of its own, so a loop it left alone
+/// had its trip count worked out again by the next pass (53 of d_faces -O2's
+/// 226 counts were such repeats). A run that changes nothing hands its
+/// expressions on.
+#[test]
+fn test_a_loop_the_pass_leaves_alone_is_not_counted_again_by_the_next_run() {
+    let text = FILL.replace("  store i8 0, ptr %a\n", "  store i8 0, ptr %a\n  %l = load i8, ptr %a\n");
+    let (once, twice) = (idiom_trip_counts(&text, 1), idiom_trip_counts(&text, 2));
+    assert!(once > 0, "the pass asks for the count: {once}");
+    assert_eq!(twice, once, "one run {once} counts, two runs {twice}");
+}
+
 /// The load/store/default dispatch of `getModRefInfo(Instruction)`: BasicAA
 /// answered ModRef for every instruction, so no loop with a phi could pass
 /// `mayLoopAccessLocation` and the fill above stayed a loop.
@@ -411,7 +438,7 @@ fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
 /// tests/run/huge/copyw printed 732590080 for 427417504 once LoopRotate was on.
 #[test]
 fn test_a_copy_of_a_huge_pointer_is_not_a_memcpy() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 
 @a = addrspace(3) global [40000 x i16] zeroinitializer
 @b = addrspace(3) global [40000 x i16] zeroinitializer
