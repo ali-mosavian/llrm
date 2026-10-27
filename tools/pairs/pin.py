@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# Where `ld` places the code of an ELF object linked against the pin's stub (the stub sits below it): any address above the stub.
+LINK_TEXT_BASE = 1 << 16
 sys.path.insert(0, str(HERE.parent))
 import targetdesc  # noqa: E402
 
