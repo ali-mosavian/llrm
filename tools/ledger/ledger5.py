@@ -22,6 +22,7 @@ RULES = [
  (r"llrm_analysis::", "other analyses"),
  (r"llrm_mir::passes|llrm_mir::edit|llrm_mir::uselist", "pass manager, IR edits"),
  (r"llrm_mir::", "MIR core (shared: Function, Opcode, types)"),
+ (r"llrm_cc::|clang::|/clang[-\d.]*:|llvm::", "clang (llrm-cc front end)"),
  (r"llrm_hir|llrm_c::|llrm_frontend|llrm_lexer|frontends", "front end"),
  (r"alloc::|core::|std::|hashbrown|libc|\.so|memmove|memcmp|memcpy|malloc|free|cfree", "alloc/libc/std (shared leaves)"),
 ]
