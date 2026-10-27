@@ -1221,6 +1221,49 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
 
 
+def test_a_page_a_pr_leaves_stale_is_named_even_when_the_head_already_has_stale_pages():
+    """#5031, #5049 and #4988 changed a `//!` header, passed alone and landed with six pages stale: the head's red docs_in_sync was excused, so no check saw a new one."""
+    why, now = ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: {"docs/a.md", "docs/b.md", "docs/c.md"})
+    assert "docs/b.md" in why and "docs/c.md" in why and "docs/a.md" not in why and now == {"docs/a.md", "docs/b.md", "docs/c.md"}
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: {"docs/a.md"})[0] == ""
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda: set())[0] == "", "a PR that regenerates a page is not refused"
+
+
+def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others_stay(tmp_path):
+    """#5031, #5049 and #4988 each changed a `//!` header and landed with six pages stale: nothing refused the PR whose merge made a page new-stale."""
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+
+    def merge_one(number):
+        (tmp_path / f"pr{number}.txt").write_text(number)
+        run("add", ".")
+        run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"pr {number}")
+        return ""
+
+    stale_after = {"1": {"docs/old.md"}, "2": {"docs/old.md", "docs/new.md"}, "3": {"docs/old.md"}}
+    current = []
+    gated = ps.docs_gated(lambda number: (current.append(number), merge_one(number))[1], {"docs/old.md"}, tmp_path, docs=lambda: stale_after[current[-1]])
+    assert gated("1") == ""
+    why = gated("2")
+    assert "docs/new.md" in why and "docs/old.md" not in why
+    assert not (tmp_path / "pr2.txt").exists() and run("log", "--format=%s").splitlines() == ["pr 1", "base"], "the merge of the refused PR is reset"
+    assert gated("3") == "" and (tmp_path / "pr3.txt").exists(), "a later PR still joins"
+
+
+def test_a_build_error_that_names_a_file_builds_only_the_prs_touching_it_alone():
+    """The 00:49 batch of 8 failed at lsr_pass_tests.rs:816; the runner built all 8 alone (about 50 s each) to find the one PR that touched it."""
+    built = []
+    group = [str(number) for number in range(1, 9)]
+    culprits = ps.build_offenders(group, lambda number: built.append(number) or True, lambda: "error" if built[-1] == "8" else "", {}, suspects=["8"])
+    assert culprits == ["8"] and built == ["8"], "one suspect at fault: one alone-build"
+    built.clear()
+    culprits = ps.build_offenders(group, lambda number: built.append(number) or True, lambda: "error" if built[-1] == "5" else "", {}, suspects=["8"])
+    assert culprits == ["5"] and built[0] == "8" and len(built) == 8, "no suspect at fault: every other PR is built alone, as before"
+    assert ps.error_files("crates/opt/llrm-transforms/src/lsr_pass_tests.rs:816:16: error[E0063]") == {"crates/opt/llrm-transforms/src/lsr_pass_tests.rs"}
+
 def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_refused(capsys):
     """#5039 was REFUSED with `GraphQL: Something went wrong` (00:14, request A186:1A8971): GitHub's own error, the PR open, mergeable and unchanged; it cost a batch cycle."""
     run, calls = _gh(["GraphQL: Something went wrong while executing your query.", ""])

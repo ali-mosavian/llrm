@@ -196,7 +196,13 @@ impl FunctionPass for CgpAddr {
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
         let sunk_casts = match analyses.outer().target().lowering() {
-            Some(lowering) => crate::sinkcast::casts_sunk(unit.context, unit.layout, &*lowering, unit.function),
+            Some(lowering) => crate::sinkcast::casts_sunk(
+                unit.context,
+                unit.layout,
+                &*lowering,
+                analyses.outer().target().spaces(),
+                unit.function,
+            ),
             None => false,
         };
         let extended = match analyses.outer().target().lowering() {
