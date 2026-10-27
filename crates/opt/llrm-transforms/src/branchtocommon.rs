@@ -434,6 +434,7 @@ mod tests;
 
 #[cfg(test)]
 thread_local! {
-    /// Predecessor pairs `safe_to_merge_terminators` has been asked about on this thread.
+    /// Predecessor pairs `safe_to_merge_terminators` has been asked about on
+    /// this thread.
     pub(crate) static SAFE_TO_MERGE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
