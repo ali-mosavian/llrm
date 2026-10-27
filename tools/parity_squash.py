@@ -988,6 +988,9 @@ def new_link_failures(
 ) -> list[str]:
     """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
     and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
+    if os.environ.get("LAND_SKIP_LINK") == "1":  # the user's call while a break already on feat/parity is fixed forward: it refused every batch that touched the runtime
+        print("link: skipped (LAND_SKIP_LINK=1)")
+        return []
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import link_check  # noqa: PLC0415
 
@@ -1538,7 +1541,7 @@ def refresh_heads(infos: dict[str, dict], numbers: list[str], view=None) -> dict
     return moved
 
 
-BATCH_MAX_SECONDS = 1200  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
+BATCH_MAX_SECONDS = int(os.environ.get("BATCH_MAX_SECONDS", "1200"))  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
 
 
 class BatchTooOld(Exception):
