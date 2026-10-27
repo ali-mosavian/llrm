@@ -652,7 +652,9 @@ fn test_local_error_and_resume_label_use_their_measured_procedure_abi() {
     let registered = procedure.find("call far ptr B$OEGP").expect("B$OEGP");
     let raised = procedure.find("call far ptr B$SERR").expect("B$SERR");
     assert!(entered < registered && registered < raised, "{procedure}");
-    assert!(procedure[..registered].contains("mov ax, offset"), "{procedure}");
+    // The landing offset is the argument of B$OEGP: `push offset` since a
+    // symbol pushed through a register is one instruction (be7eda62c).
+    assert!(procedure[..registered].contains("push offset"), "{procedure}");
     assert!(!procedure.contains("call far ptr B$OEGA"), "{procedure}");
 }
 
