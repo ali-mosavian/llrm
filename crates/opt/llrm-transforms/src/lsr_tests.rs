@@ -1920,7 +1920,7 @@ fn test_a_loop_the_pass_cannot_improve_is_left_as_it_is() {
 
 /// `a[i]` over a huge pointer, as C's `__huge` lowers it: the counter beside
 /// a pointer that each trip advances with a carry into its selector.
-const HUGE_WALK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+const HUGE_WALK: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 
 define i16 @f(ptr addrspace(3) %a, i16 %n) {
 start:

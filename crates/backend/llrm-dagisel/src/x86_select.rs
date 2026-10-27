@@ -32,7 +32,7 @@ use crate::x86_llrm::{
     FATAN_OPCODE, FCOS_OPCODE, FEXP_OPCODE, FEXP2_OPCODE, FLN_OPCODE, FLOG2_OPCODE, FRINT_OPCODE, FSIN_OPCODE,
     llrm_opcode, select_llrm_node,
 };
-use crate::x86_mul::select_mul_lohi;
+use crate::x86_mul::{select_mul_flags, select_mul_lohi};
 use crate::x86_rmw::fold_load_store_into_mem_operand;
 use crate::x86_shift::try_shift_amount_mod;
 use crate::x86_test::select_cmp_of_and;
@@ -99,6 +99,16 @@ pub fn select_node<D: AddrDag>(
         }
         isd::SMUL_LOHI | isd::UMUL_LOHI => {
             if select_mul_lohi(dag, hooks, node) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::UMUL => {
+            if select_mul_flags(dag, hooks, node, false) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::SMUL => {
+            if select_mul_flags(dag, hooks, node, true) {
                 return Outcome::Selected;
             }
         }

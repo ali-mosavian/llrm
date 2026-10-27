@@ -393,7 +393,7 @@ impl Walk<'_> {
                 return false;
             }
             let calls = one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
-            if calls || sets_flags(self.regs, self.body.bits, one) {
+            if calls || (!is_terminator(one) && sets_flags(self.regs, self.body.bits, one)) {
                 return false;
             }
             left -= 1;
@@ -416,10 +416,10 @@ impl Walk<'_> {
 /// instruction names lanes past the six of EFLAGS (its status word, which
 /// `fnstsw; sahf` moves there): it counts as reading and writing all six.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
-    use iced_x86::RflagsBits as F;
-    let six = (F::OF | F::SF | F::ZF | F::CF | F::PF) as u32;
+    use llrm_lir::flag::Flag;
+    let six = Flag::READ.bits();
     let mask = lanes.mask() as u32;
-    let beyond = mask & !(six | F::AF as u32) != 0;
+    let beyond = mask & !(six | Flag::AF.bits()) != 0;
     crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
 }
 
@@ -1118,5 +1118,77 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// Two blocks: `first` ends in a branch on the flags of `sub v1, v2`;
+    /// `second` follows it (its only predecessor when `lone`) and compares the
+    /// same operands before its own branch.
+    fn compare_twice(
+        between: Vec<Arc<Insn>>,
+        lone: bool,
+    ) -> LirBody {
+        let first = LirBlock {
+            succ: if lone { vec![1, 2] } else { vec![1, 3] }.into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "sub", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+                    insn(1, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut insns = between;
+        insns.push(insn(4, Operation::Binary, "sub", vec![held(4)], vec![held(1), held(2)], vec![4], vec![1, 2]));
+        insns.push(insn(5, Operation::Branch, "jle", vec![], vec![], vec![], vec![]));
+        let second = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, insns) };
+        let third = LirBlock::new(2, vec![insn(6, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        // with a second way into `second`: block 3, reached from the first
+        let side = LirBlock { succ: vec![1].into(), ..LirBlock::new(3, vec![]) };
+        let blocks = if lone {
+            vec![first.into(), second.into(), third.into()]
+        } else {
+            vec![first.into(), second.into(), third.into(), side.into()]
+        };
+        let mut body = LirBody::new("twice", 0, blocks, IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body
+    }
+
+    fn subs(body: &LirBody) -> usize {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("sub"))
+            .count()
+    }
+
+    /// The pin's `PhysRegDefsReach`: the compare in the only successor of a
+    /// block that made the same flags is the first one's, and `jle` reads
+    /// them. x_binsearch -O2: `a[mid] < key` then `a[mid] > key` kept two
+    /// compares, so the load had two readers and `cmp [m], r` was not made
+    /// (+9.5% executed instructions).
+    #[test]
+    fn test_a_compare_repeated_in_the_sole_successor_reads_the_first_flags() {
+        let body = compare_twice(vec![], true);
+        assert_eq!(subs(&body), 2, "the premise: two compares");
+        assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// Something that writes the flags between the two compares breaks the
+    /// reach.
+    #[test]
+    fn test_a_flag_write_between_the_two_compares_keeps_both() {
+        let between =
+            vec![insn(7, Operation::Binary, "add", vec![held(9)], vec![held(1), held(5)], vec![9], vec![1, 5])];
+        let body = compare_twice(between, true);
+        assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 2);
+    }
+
+    /// A block with a second way in is not the sole successor.
+    #[test]
+    fn test_a_block_with_two_predecessors_keeps_its_compare() {
+        let body = compare_twice(vec![], false);
+        assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 2);
     }
 }

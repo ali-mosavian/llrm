@@ -4,7 +4,7 @@
 use super::CgpAddr as AddressSink;
 use crate::testing::{managed, parsed, results};
 
-const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"\n\n@g = global [64 x i16] zeroinitializer\n\n";
+const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n@g = global [64 x i16] zeroinitializer\n\n";
 
 /// `text` through the pass, answering as before on `inputs`: the text after.
 fn sunk(

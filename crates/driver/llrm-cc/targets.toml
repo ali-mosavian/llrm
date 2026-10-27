@@ -45,7 +45,7 @@ run = ["qemu-aarch64"]
 # Needs the patched clang: tools/build-clang-m16.sh, then LLRM_CLANG_M16=<its path>.
 [x86_16-dos]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off", 
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
@@ -60,7 +60,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # lower-case mirror tools/lowercase-includes.sh makes of its INCLUDE, LLRM_BORLAND_LIB its LIB.
 [x86_16-bcc]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
@@ -76,12 +76,12 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 # tree it built in. Calls are Watcom's register convention, as the library's.
 [x86_16-wat]
 triple = "i386-unknown-unknown-code16"
-datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99",
-  "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
+  "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
 llc = []
 object = "omf"

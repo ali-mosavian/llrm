@@ -19,7 +19,7 @@ use super::super::function_lowering::FunctionLoweringInfo;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n";
+const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n";
 
 /// Builds, legalizes and selects each block of the first function; the error
 /// names the stage.

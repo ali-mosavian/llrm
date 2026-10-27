@@ -23,7 +23,6 @@
 
 use llrm_analysis::aa::AAResults;
 use llrm_analysis::basicaa::BasicAA;
-use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expander::Env;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
@@ -144,7 +143,9 @@ impl FunctionPass for LoopIdiom {
         };
         let tti = outer.target().tti();
         let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
-        let mut se = ScalarEvolution::new();
+        let mark = unit.function.mark();
+        let held = analyses.get::<llrm_analysis::scev::analysis::Scevs>(unit.context, unit.layout, unit.function);
+        let mut se = held.take();
         let size_costs = self.for_size.then(|| outer.target().size_costs());
         let mut changed = false;
         for header in headers {
@@ -166,13 +167,18 @@ impl FunctionPass for LoopIdiom {
             idiom.for_size = self.for_size;
             if idiom.run_on_loop(&mut run) == Some(true) {
                 changed = true;
-                let cx = env.cx(&*unit.context, &*unit.function);
-                se.forget_loop(&cx, header);
+                // The pass reports a change when it expanded code it then
+                // removed (the pin does): nothing was edited, the counts stand.
+                if unit.function.mark() != mark {
+                    let cx = env.cx(&*unit.context, &*unit.function);
+                    se.forget_loop(&cx, header);
+                }
             }
         }
-        if changed {
+        if changed && unit.function.mark() != mark {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
+            held.put(se);
             PreservedAnalyses::all()
         }
     }
