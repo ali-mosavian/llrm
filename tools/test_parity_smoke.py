@@ -710,3 +710,10 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
     cause = ps.causes_of(failed)
     assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
+
+
+def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
+    """llrm-codegen had no ranking, so a codegen PR ran its whole lib: 168 G of 60 G, #5325's batch refused four times."""
+    ranking = ps.selection().get("units", {})
+    for crate in ("llrm-codegen", "llrm-mir", "llrm-cc"):
+        assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
