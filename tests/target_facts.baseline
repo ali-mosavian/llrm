@@ -31,12 +31,14 @@
 1 crates/codegen/llrm-codegen/src/backend/framefree.rs
 16 crates/codegen/llrm-codegen/src/backend/inline_asm.rs
 2 crates/codegen/llrm-codegen/src/backend/intbits.rs
+10 crates/codegen/llrm-codegen/src/backend/isel.rs
 15 crates/codegen/llrm-codegen/src/backend/isel.rs
 2 crates/codegen/llrm-codegen/src/backend/isel/matcher.rs
 2 crates/codegen/llrm-codegen/src/backend/isel/wide.rs
 1 crates/codegen/llrm-codegen/src/backend/leaopt.rs
 6 crates/codegen/llrm-codegen/src/backend/machinecp.rs
 16 crates/codegen/llrm-codegen/src/backend/masm.rs
+1 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 21 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 2 crates/codegen/llrm-codegen/src/backend/objbuild.rs
 6 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
