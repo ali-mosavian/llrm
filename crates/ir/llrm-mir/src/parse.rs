@@ -553,6 +553,15 @@ impl Parser {
         define: bool,
     ) -> Parsed<()> {
         self.next();
+        // `declare !dbg !36 i32 @f(...)`: clang's attachments stand before the
+        // linkage; a `define`'s stand after the attributes.
+        let mut early = Vec::new();
+        while let Token::MetadataName(kind) = self.peek().clone() {
+            let Token::MetadataId(number) = self.peek_at(1).clone() else { break };
+            self.next();
+            self.next();
+            early.push((kind, self.metadata_id(number)));
+        }
         let linkage = self.linkage();
         let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
@@ -626,6 +635,7 @@ impl Parser {
             let node = self.metadata_id(number);
             local.function.metadata.push((kind, node));
         }
+        local.function.metadata.splice(0..0, early);
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
         if let Some(name) = self.module.globals[id.0 as usize].name.as_deref() {
             intrinsics::declare(&mut local.function, &self.module.context.types, name);

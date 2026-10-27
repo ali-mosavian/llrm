@@ -1169,3 +1169,86 @@ b5:
     let got: Vec<usize> = (0..blocks.len()).filter(|&at| headers.contains(&blocks[at])).collect();
     assert_eq!(got, [1, 3]);
 }
+
+/// The preheader and the two exits of a rotated shellsort loop, each a jump
+/// alone in a block with one predecessor, stayed through the LLVM-order
+/// pipeline's SimplifyCFG (16 blocks in and out); the pin's, which asks only
+/// the loop headers, leaves 9 (`opt -passes=simplifycfg`).
+#[test]
+fn test_a_jump_holding_a_loops_simple_form_goes_where_the_pin_removes_it() {
+    let text = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %b18
+
+b18:
+  %p = phi i16 [ 0, %b0 ], [ %next, %b35 ]
+  %c = icmp ult i16 %p, %n
+  br i1 %c, label %b35, label %b23
+
+b23:
+  br label %b24
+
+b24:
+  %q = phi i16 [ %p, %b23 ], [ %r, %b30 ]
+  %r = sub i16 %q, 1
+  %cc = icmp ugt i16 %r, %k
+  br i1 %cc, label %b30, label %b34
+
+b30:
+  %d = icmp ult i16 %r, %n
+  br i1 %d, label %b33, label %b24
+
+b33:
+  %split = phi i16 [ %r, %b30 ]
+  br label %b35
+
+b34:
+  %split1 = phi i16 [ %q, %b24 ]
+  br label %b35
+
+b35:
+  %m = phi i16 [ %split, %b33 ], [ %split1, %b34 ], [ %p, %b18 ]
+  %next = add i16 %p, 1
+  %e = icmp ult i16 %next, 8
+  br i1 %e, label %b18, label %b40
+
+b40:
+  ret i16 %m
+}
+";
+    let off = super::Options { loop_form_kept: false, ..Default::default() };
+    check_with(
+        &off,
+        text,
+        "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %b18
+
+b18:
+  %p = phi i16 [ 0, %b0 ], [ %next, %b35 ]
+  %c = icmp ult i16 %p, %n
+  br i1 %c, label %b35, label %b24
+
+b24:
+  %q = phi i16 [ %r, %b30 ], [ %p, %b18 ]
+  %r = sub i16 %q, 1
+  %cc = icmp ugt i16 %r, %k
+  br i1 %cc, label %b30, label %b35
+
+b30:
+  %d = icmp ult i16 %r, %n
+  br i1 %d, label %b35, label %b24
+
+b35:
+  %m = phi i16 [ %p, %b18 ], [ %r, %b30 ], [ %q, %b24 ]
+  %next = add i16 %p, 1
+  %e = icmp ult i16 %next, 8
+  br i1 %e, label %b18, label %b40
+
+b40:
+  ret i16 %m
+}
+",
+        &[&[3, 0], &[10, 2], &[8, 3], &[6, 1]],
+    );
+}

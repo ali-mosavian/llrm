@@ -221,3 +221,30 @@ def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
     cfg = pindiff.MACHINES["m32"]
     assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
     assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
+
+
+def test_a_known_failure_that_is_gone_is_reported_not_failed():
+    """The sweep exited 1 when #5202 fixed x_ll_div's Freeze crash: the fixing PR could not land until it edited KNOWN in step, and w9/w13
+    could not drop the entry at all while crashsweep.py was not on feat/parity (2026-10-27). A fix is reported (`FIXED?`); only a new crash fails."""
+    sweep = load("crashsweep")
+    crc = ("m16", "O2", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40:")
+    lru = ("m16", "O0", "lru", "-", "clang: lru.c:5:22: error")
+    code, lines = sweep.verdict([crc, lru])
+    assert code == 0 and any(line.startswith("FIXED? x_ll_div dag") for line in lines)
+    new = ("m32", "O2", "fib", "dag", "thread 'main' panicked at x.rs:1:1")
+    code, lines = sweep.verdict([crc, lru, new])
+    assert code == 1 and any(line.startswith("UNEXPECTED m32 O2 fib dag") for line in lines)
+
+
+def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
+    """An A/B of two builds was one-off awk and a scratch script (x_radix O2, 2026-10-27); it must read the table pindiff prints."""
+    pindiff = load("pindiff")
+    rowdelta = load("rowdelta")
+
+    def row(name, ins, free):
+        return {"name": name, "ins": ins, "pin_ins": 100, "bytes": free + 4, "free": free, "pin_bytes": 300, "pin_free": 296, "old_bytes": None, "old_free": None}
+
+    before = "\n".join(pindiff.table([row("a", 134, 462), row("b", 50, 100), row("gone", 1, 1)], old=False))
+    after = "\n".join(pindiff.table([row("a", 124, 379), row("b", 50, 100), row("new", 1, 1)], old=False))
+    assert rowdelta.parse(before)["a"] == (134, 100, 462, 296)
+    assert rowdelta.deltas(before, after) == ["a: ins 134->124 (pin 100), nopad 462->379 (pin 296)"]

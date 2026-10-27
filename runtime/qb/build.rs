@@ -81,6 +81,19 @@ fn main() {
         }
     }
     out.push_str("];\n");
+    out.push_str("\n/// Fixed stack blocks with their evidence: (routines, bytes, evidence).\npub static POP_NOTES: &[(&[&str], i64, &str)] = &[\n");
+    for one in rows.get("pop").and_then(|one| one.as_array()).into_iter().flatten() {
+        let one = one.as_table().expect("a pop entry is a table");
+        writeln!(
+            out,
+            "    ({}, {}, {:?}),",
+            list(one, "names"),
+            one["bytes"].as_integer().expect("bytes is an int"),
+            string(one, "evidence").trim()
+        )
+        .expect("a string takes text");
+    }
+    out.push_str("];\n");
     out.push_str("\n/// The cells a program names by EXTDEF and the routines that write each: (cell, family, routines).\npub static WRITERS_ROWS: &[(&str, &str, &[&str])] = &[\n");
     for one in rows.get("writers").and_then(|one| one.as_array()).expect("[[writers]]") {
         let one = one.as_table().expect("a writers entry is a table");
