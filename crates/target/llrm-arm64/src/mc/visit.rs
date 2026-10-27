@@ -154,7 +154,7 @@ impl Inst {
                 address(addr, f);
             }
             Inst::Adr { rd, .. } => f(G(rd), Role::Def),
-            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } => {
+            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } | Inst::VectorMov { rd, rn } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }

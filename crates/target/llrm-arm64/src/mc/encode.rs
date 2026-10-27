@@ -362,6 +362,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             0x1E20_4000 | size.field() << 22 | opcode << 15 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorMov { rd, rn } => 0x4EA0_1C00 | vreg(*rn)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?,
         Inst::FpBinary { op, size, rd, rn, rm } => {
             let opcode = match op {
                 FpBinary::Mul => 0b0000,

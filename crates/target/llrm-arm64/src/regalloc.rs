@@ -7,11 +7,14 @@
 //! callee-saved register of its own: each use makes it again (LLVM
 //! rematerializes it: `TargetInstrInfo::isReMaterializable`).
 //!
+//! A 128-bit value (one a `q` access names) is spilled and copied whole
+//! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not keep.
+//!
 //! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR. This
 //! allocator stands in until the core machine passes run on arm64 LIR (see
 //! docs/architecture/arm64-spike.md); it is not a translation.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -288,6 +291,47 @@ fn coalesce(function: &mut MFunc) {
     }
 }
 
+/// The floating-point registers that hold 128 bits: a `q` load or store names
+/// them (an instruction that makes a `q` value lists its destination here), and
+/// so does every register a copy ties to one. Such a register is spilled and
+/// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
+/// never takes one.
+fn wide_registers(function: &MFunc) -> HashSet<Reg> {
+    let mut wide: HashSet<Reg> = HashSet::new();
+    let mut copies: Vec<(Reg, Reg)> = Vec::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        match op {
+            Op::I(Inst::Load { mem: Memory::Fp { bytes: 16, reg }, .. })
+            | Op::I(Inst::Store { mem: Memory::Fp { bytes: 16, reg }, .. }) => {
+                wide.insert(Reg::Fpr(*reg));
+            }
+            Op::I(Inst::LoadPair { first, second, .. }) | Op::I(Inst::StorePair { first, second, .. }) => {
+                for memory in [first, second] {
+                    if let Memory::Fp { bytes: 16, reg } = memory {
+                        wide.insert(Reg::Fpr(*reg));
+                    }
+                }
+            }
+            Op::I(Inst::VectorMov { rd, rn }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
+            }
+            Op::Copy { dst: dst @ Reg::Fpr(_), src } => copies.push((*dst, *src)),
+            _ => {}
+        }
+    }
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (dst, src) in &copies {
+            if wide.contains(dst) != wide.contains(src) {
+                wide.extend([*dst, *src]);
+                changed = true;
+            }
+        }
+    }
+    wide
+}
+
 /// `function` with every register physical.
 pub fn allocate(function: &mut MFunc) -> Allocation {
     coalesce(function);
@@ -331,6 +375,7 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     };
     order.sort_by(|a, b| priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
     let candidates = rematerializable(function);
+    let wide = wide_registers(function);
     let mut made_again: HashMap<Reg, Op> = HashMap::new();
     let mut assigned: HashMap<Reg, Reg> = HashMap::new();
     let mut spilled: HashMap<Reg, u32> = HashMap::new();
@@ -339,7 +384,11 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
         let live = &ranges[&register];
         let class: Vec<Reg> = match register {
             Reg::Gpr(_) => universe.iter().copied().filter(|one| matches!(one, Reg::Gpr(_))).collect(),
-            Reg::Fpr(_) => universe.iter().copied().filter(|one| matches!(one, Reg::Fpr(_))).collect(),
+            Reg::Fpr(_) => universe
+                .iter()
+                .copied()
+                .filter(|one| matches!(one, Reg::Fpr(_)) && !(wide.contains(&register) && pool::callee_saved(*one)))
+                .collect(),
         };
         let fits = |candidate: &Reg| !occupied.get(candidate).is_some_and(|held| held.overlaps(live));
         // A register a copy partner has (or is) is tried first.
@@ -371,12 +420,12 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
                 made_again.insert(register, candidates[&register].0.clone());
             }
             None => {
-                let slot = function.slot(8, 8);
+                let slot = if wide.contains(&register) { function.slot(16, 16) } else { function.slot(8, 8) };
                 spilled.insert(register, slot);
             }
         }
     }
-    rewrite(function, &assigned, &spilled, &made_again);
+    rewrite(function, &assigned, &spilled, &made_again, &wide);
     let mut allocation = Allocation::default();
     for register in used_callee_saved {
         match register {
@@ -395,6 +444,7 @@ fn rewrite(
     assigned: &HashMap<Reg, Reg>,
     spilled: &HashMap<Reg, u32>,
     made_again: &HashMap<Reg, Op>,
+    wide: &HashSet<Reg>,
 ) {
     for block in &mut function.blocks {
         let mut out = Vec::with_capacity(block.ops.len());
@@ -413,19 +463,25 @@ fn rewrite(
                     Some(slot) => {
                         let scratch = Reg::Gpr(Gpr(pool::GPR_SCRATCH[0]));
                         out.push(aimed_at(def, scratch));
-                        out.push(spill_access(scratch, *slot, false));
+                        out.push(spill_access(scratch, *slot, false, false));
                     }
                 }
                 continue;
             }
             // A copy between a spill slot and a register is a load or store.
             if let Op::Copy { dst, src } = &op
-                && let Some(done) = spilled_copy(*dst, *src, assigned, spilled)
+                && let Some(done) = spilled_copy(*dst, *src, assigned, spilled, wide.contains(dst))
             {
                 out.extend(done);
                 continue;
             }
-            let (mut loads, mut stores) = (Vec::new(), Vec::new());
+            // A copy of 128 bits moves all of them.
+            if let Op::Copy { dst: Reg::Fpr(rd), src: Reg::Fpr(rn) } = &op
+                && wide.contains(&Reg::Fpr(*rd))
+            {
+                op = Op::I(Inst::VectorMov { rd: *rd, rn: *rn });
+            }
+            let (mut loads, mut stores): (Vec<(Reg, u32, bool)>, Vec<(Reg, u32, bool)>) = (Vec::new(), Vec::new());
             let mut again: Vec<(Reg, Reg)> = Vec::new();
             let (mut next_gpr, mut next_fpr) = (0usize, 0usize);
             // One scratch register per spilled register of this operation.
@@ -457,11 +513,11 @@ fn rewrite(
                                 }
                             },
                         );
-                    if role.reads() && !loads.iter().any(|(r, _): &(Reg, u32)| *r == scratch_reg) {
-                        loads.push((scratch_reg, *slot));
+                    if role.reads() && !loads.iter().any(|(r, ..)| *r == scratch_reg) {
+                        loads.push((scratch_reg, *slot, wide.contains(&key)));
                     }
-                    if role.writes() && !stores.iter().any(|(r, _): &(Reg, u32)| *r == scratch_reg) {
-                        stores.push((scratch_reg, *slot));
+                    if role.writes() && !stores.iter().any(|(r, ..)| *r == scratch_reg) {
+                        stores.push((scratch_reg, *slot, wide.contains(&key)));
                     }
                     scratch_reg
                 } else {
@@ -473,20 +529,21 @@ fn rewrite(
                     _ => unreachable!("a register keeps its class"),
                 }
             });
-            for (register, slot) in loads {
-                out.push(spill_access(register, slot, true));
+            for (register, slot, quad) in loads {
+                out.push(spill_access(register, slot, true, quad));
             }
             for (register, key) in again {
                 out.push(aimed_at(&made_again[&key], register));
             }
-            let is_noop = matches!(&op, Op::Copy { dst, src } if dst == src);
+            let is_noop = matches!(&op, Op::Copy { dst, src } if dst == src)
+                || matches!(&op, Op::I(Inst::VectorMov { rd, rn }) if rd == rn);
             let is_return = matches!(op, Op::Return { .. });
             if !is_noop {
                 out.push(op);
             }
             debug_assert!(!(is_return && !stores.is_empty()));
-            for (register, slot) in stores {
-                out.push(spill_access(register, slot, false));
+            for (register, slot, quad) in stores {
+                out.push(spill_access(register, slot, false, quad));
             }
         }
         block.ops = out;
@@ -564,18 +621,19 @@ fn spilled_copy(
     src: Reg,
     assigned: &HashMap<Reg, Reg>,
     spilled: &HashMap<Reg, u32>,
+    quad: bool,
 ) -> Option<Vec<Op>> {
     let physical = |register: Reg| assigned.get(&register).copied().unwrap_or(register);
     match (spilled.get(&dst), spilled.get(&src)) {
         (None, None) => None,
-        (Some(slot), None) => Some(vec![spill_access(physical(src), *slot, false)]),
-        (None, Some(slot)) => Some(vec![spill_access(physical(dst), *slot, true)]),
+        (Some(slot), None) => Some(vec![spill_access(physical(src), *slot, false, quad)]),
+        (None, Some(slot)) => Some(vec![spill_access(physical(dst), *slot, true, quad)]),
         (Some(to), Some(from)) => {
             let scratch = match dst {
                 Reg::Gpr(_) => Reg::Gpr(Gpr(pool::GPR_SCRATCH[0])),
                 Reg::Fpr(_) => Reg::Fpr(Vreg(pool::FPR_SCRATCH[0])),
             };
-            Some(vec![spill_access(scratch, *from, true), spill_access(scratch, *to, false)])
+            Some(vec![spill_access(scratch, *from, true, quad), spill_access(scratch, *to, false, quad)])
         }
     }
 }
@@ -584,13 +642,78 @@ fn spill_access(
     register: Reg,
     slot: u32,
     load: bool,
+    quad: bool,
 ) -> Op {
     let addr = Addr::Slot { slot, offset: 0 };
     let mem = match register {
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
-        Reg::Fpr(reg) => Memory::Fp { bytes: 8, reg },
+        Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
     };
     Op::I(if load { Inst::Load { mem, addr } } else { Inst::Store { mem, addr } })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mfunc::MBlock;
+
+    fn quad(register: Vreg) -> Memory {
+        Memory::Fp { bytes: 16, reg: register }
+    }
+
+    fn function(ops: Vec<Op>) -> MFunc {
+        let mut function = MFunc::new("f");
+        function.slot(16, 16);
+        function.blocks.push(MBlock { label: "entry".into(), ops });
+        function
+    }
+
+    fn load(register: Vreg) -> Op {
+        Op::I(Inst::Load { mem: quad(register), addr: Addr::Slot { slot: 0, offset: 0 } })
+    }
+
+    fn store(register: Vreg) -> Op {
+        Op::I(Inst::Store { mem: quad(register), addr: Addr::Slot { slot: 0, offset: 0 } })
+    }
+
+    fn call() -> Op {
+        Op::Call { callee: Callee::Symbol("g".into()), uses: vec![], defs: vec![], tail: false }
+    }
+
+    fn eight_byte_fp_accesses(function: &MFunc) -> usize {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.ops)
+            .filter(|op| matches!(op, Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, .. }, .. } | Inst::Store { mem: Memory::Fp { bytes: 8, .. }, .. })))
+            .count()
+    }
+
+    /// A 128-bit value live across a call took `d8`, whose upper half the callee
+    /// may clobber, or was spilled as 8 bytes: its top 64 bits were lost.
+    #[test]
+    fn a_quad_across_a_call_is_spilled_whole() {
+        let mut function = function(vec![load(Vreg(100)), call(), store(Vreg(100))]);
+        function.next_register = 101;
+        allocate(&mut function);
+        let ops = &function.blocks[0].ops;
+        assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
+        let spills = ops.iter().filter(|op| matches!(op, Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, mem: Memory::Fp { bytes: 16, .. } }) if *slot != 0)).count();
+        assert_eq!(spills, 1, "{ops:?}");
+    }
+
+    /// A copy of a 128-bit value that is not coalesced was `fmov d`, which
+    /// zeroes the upper half.
+    #[test]
+    fn a_copy_of_a_quad_moves_all_of_it() {
+        let (a, b) = (Vreg(100), Vreg(101));
+        let mut function =
+            function(vec![load(a), Op::Copy { dst: Reg::Fpr(b), src: Reg::Fpr(a) }, load(a), store(a), store(b)]);
+        function.next_register = 102;
+        allocate(&mut function);
+        let ops = &function.blocks[0].ops;
+        assert!(ops.iter().any(|op| matches!(op, Op::I(Inst::VectorMov { .. }))), "{ops:?}");
+    }
 }
 
 #[allow(dead_code)]

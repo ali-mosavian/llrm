@@ -507,7 +507,14 @@ mod tests {
             })
         };
         let mut function = function();
-        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), branch_to("loop")];
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+            })
+        };
+        function.blocks[0].ops =
+            vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
         run(&mut function);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
