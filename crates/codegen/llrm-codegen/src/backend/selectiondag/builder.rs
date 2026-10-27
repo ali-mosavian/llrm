@@ -93,6 +93,9 @@ pub struct BuilderTarget {
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
     pub runtime_calls: Option<IdMap<InstId, Result<RuntimeAnswer, &'static str>>>,
+    /// The zero writes a zeroed frame already holds (B$ENRA zero-fills a
+    /// BASIC function's locals); no node is built for them.
+    pub prezeroed: std::collections::BTreeSet<InstId>,
 }
 
 impl BuilderTarget {
@@ -177,6 +180,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with the zero writes a zeroed frame makes needless.
+    pub fn with_prezeroed(
+        mut self,
+        writes: std::collections::BTreeSet<InstId>,
+    ) -> BuilderTarget {
+        self.prezeroed = writes;
+        self
+    }
+
     /// This target with the runtime routines the driver states.
     pub fn with_runtime_calls(
         mut self,
@@ -211,6 +223,7 @@ impl BuilderTarget {
             tail_calls: false,
             tti: None,
             runtime_calls: None,
+            prezeroed: Default::default(),
         }
     }
 
@@ -239,6 +252,7 @@ impl BuilderTarget {
             tail_calls: false,
             tti: None,
             runtime_calls: None,
+            prezeroed: Default::default(),
         }
     }
 }
@@ -302,6 +316,9 @@ pub fn build_block(
     for inst in
         function.iter_block(block).filter(|inst| function.instruction(*inst).opcode != Opcode::Phi).collect::<Vec<_>>()
     {
+        if builder.target.prezeroed.contains(&inst) {
+            continue;
+        }
         builder.visit(inst)?;
         if builder.had_tail_call {
             break;

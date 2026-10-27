@@ -621,6 +621,7 @@ fn a_runtime_call_pops_every_argument_it_is_given() {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
+        zeroed: false,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
@@ -908,8 +909,12 @@ declare cc 1000 void @user(i16) addrspace(1)
         }
     }
     let module = llrm_mir::parse::module(IR).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Keeps, segments: &crate::backend::target::BASIC, runtime: false };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Keeps,
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        zeroed: false,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
         &module,
@@ -999,4 +1004,48 @@ declare void @llrm.qb.B$PER4(float) nocallback
         &super::dag_function_tests::Stub { flags: false },
     );
     assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
+}
+
+const ZERO_LOCALS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare void @g(ptr)
+define void @f() {
+entry:
+  %a = alloca i32
+  store i32 0, ptr %a
+  call void @g(ptr %a)
+  ret void
+}
+";
+
+/// A zeroed frame (B$ENRA fills a BASIC function's locals) already holds the
+/// zero a local is initialised with: the DAG path stored it again, 27 stores
+/// and 111 bytes in `grep.bas`.
+#[test]
+fn a_zero_store_to_a_local_of_a_zeroed_frame_is_not_made() {
+    let module = llrm_mir::parse::module(ZERO_LOCALS).expect("parses");
+    let stores = |zeroed: bool| {
+        let contracts = super::dag_function::RuntimeContracts {
+            abi: &Stub { flags: false },
+            segments: &crate::backend::target::BASIC,
+            runtime: false,
+            zeroed,
+        };
+        let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+        let done = super::dag_function::selected_in_pool(
+            &module,
+            "f",
+            &llrm_x86_m16::M16,
+            crate::backend::cpu::profile("386").expect("a cpu"),
+            &[],
+            Some(&contracts),
+            pool,
+        )
+        .unwrap_or_else(|why| panic!("{}", why.0));
+        done.body
+            .insns()
+            .iter()
+            .filter(|i| i.what.as_ref().is_some_and(|w| w.dests.iter().any(|d| matches!(d, Loc::Mem(_)))))
+            .count()
+    };
+    assert_eq!((stores(false), stores(true)), (1, 0));
 }

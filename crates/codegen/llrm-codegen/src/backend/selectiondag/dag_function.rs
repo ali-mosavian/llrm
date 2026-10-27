@@ -208,6 +208,8 @@ pub struct RuntimeContracts<'a> {
     /// (QB's); a call of any other routine reads the ABI's for what it
     /// destroys.
     pub runtime: bool,
+    /// The function's frame starts its locals zeroed (B$ENRA).
+    pub zeroed: bool,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -703,6 +705,12 @@ fn selected_in(
         .with_min_size(cpu.min_size)
         .with_tail_calls(tail_calls_on())
         .with_tti(cpu.target().tti())
+        .with_prezeroed(
+            contracts
+                .filter(|contracts| contracts.zeroed)
+                .map(|_| crate::backend::zeroed::prezeroed(module, function))
+                .unwrap_or_default(),
+        )
         .with_runtime_call_verdicts(
             contracts
                 .filter(|contracts| contracts.runtime)
