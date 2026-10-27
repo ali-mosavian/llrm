@@ -92,6 +92,7 @@ pub fn fold_memory_operand(
     out.what = Some(made);
     out.defines.retain(|value| *value != reg);
     out.uses.retain(|value| *value != reg);
+    out.undefs.retain(|value| *value != reg);
     Some(Arc::new(out))
 }
 
@@ -219,6 +220,7 @@ pub(crate) fn fold_copy_member(
                 Some(Semantics { dests: vec![Loc::Mem(dest)], sources: vec![Loc::Mem(source)], ..what.clone() });
             made.defines = one.defines.iter().copied().filter(|value| !into.contains(value)).collect();
             made.uses = one.uses.iter().copied().filter(|value| !outof.contains(value)).collect();
+            made.undefs.retain(|value| !into.contains(value) && !outof.contains(value));
         })));
     }
     let value = if into.is_empty() { outof[0] } else { into[0] };
@@ -227,11 +229,13 @@ pub(crate) fn fold_copy_member(
         return Ok(Some(_with(one, |made| {
             made.what = Some(Semantics { dests: vec![Loc::Mem(cell)], ..what.clone() });
             made.defines = one.defines.iter().copied().filter(|v| *v != value).collect();
+            made.undefs.retain(|v| *v != value);
         })));
     }
     Ok(Some(_with(one, |made| {
         made.what = Some(Semantics { sources: vec![Loc::Mem(cell)], ..what.clone() });
         made.uses = one.uses.iter().copied().filter(|v| *v != value).collect();
+        made.undefs.retain(|v| *v != value);
     })))
 }
 
