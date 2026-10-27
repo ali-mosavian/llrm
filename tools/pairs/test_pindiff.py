@@ -249,3 +249,24 @@ def test_the_m32_clang_flags_leave_out_the_watcom_regcall_default():
     _, flags = pindiff.clang_flags("m32")
     assert not any("regcall" in flag for flag in flags), flags
     assert not any(flag == "-Xclang" and flags[i + 1].startswith("-fdefault-calling-conv") for i, flag in enumerate(flags[:-1])), flags
+
+
+def _row(name, ins, pin_ins):
+    return {"name": name, "ins": ins, "pin_ins": pin_ins, "bytes": 100, "pin_bytes": 100, "free": 90, "pin_free": 90, "old_bytes": None, "old_free": None}
+
+
+def test_the_dynamic_columns_rank_by_clocks_and_flag_what_runs_slower_or_differs():
+    """tile was 79 instructions below the pin and ran 94.7% more instructions (static counts flattered it): a row that is smaller and slower is flagged
+    CLK>pin and listed before one that is larger and faster; an output that differs is flagged whatever the clocks."""
+    pindiff = load("pindiff")
+    dyn = {
+        "tile": {"ins": 4210, "pin_ins": 2162, "clk": 8321, "pin_clk": 4277, "same": True},
+        "big": {"ins": 900, "pin_ins": 800, "clk": 1000, "pin_clk": 1500, "same": True},
+        "odd": {"ins": 10, "pin_ins": 10, "clk": 90, "pin_clk": 100, "same": False},
+    }
+    lines = pindiff.table([_row("big", 200, 100), _row("tile", 100, 179), _row("odd", 10, 10)], False, dyn)
+    names = [line.split()[0] for line in lines[1:-1]]
+    assert names == ["tile", "odd", "big"], lines
+    assert "CLK>pin" in lines[1] and "OUTPUT-DIFFERS" not in lines[1]
+    assert "OUTPUT-DIFFERS" in lines[2] and "CLK>pin" not in lines[2]
+    assert "clk" in lines[0]
