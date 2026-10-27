@@ -111,17 +111,17 @@ fn cell(
     };
     let addr = mem.addr.as_ref();
     match addr.map(|a| a.space) {
-        Some(Space::Frame) if mem.base.is_none() && mem.index.is_none() => {
+        Some(Space::Frame) if mem.base.is_none() => {
             let disp = addr.map_or(0, |a| a.disp) + mem.offset;
             if disp < 0 {
                 let home = addr.and_then(|a| a.slot_home()).unwrap_or(disp);
                 let found =
                     LOCALS.with(|l| l.borrow().iter().position(|(h, ..)| *h == home).map(|k| (k, l.borrow()[k].1)));
                 let Some((object, start)) = found else { return Err("a local frame cell".to_owned()) };
-                return Ok(format!("%stack.{object}, 1, $noreg, {}, $noreg", disp - start));
+                return Ok(format!("%stack.{object}, {}, {}, {}, $noreg", index.0, index.1, disp - start));
             }
             let at = disp - ARGUMENTS_AT.with(|a| a.get());
-            Ok(format!("%fixed-stack.{}, 1, $noreg, {}, $noreg", at / 4, at % 4))
+            Ok(format!("%fixed-stack.{}, {}, {}, {}, $noreg", at / 4, index.0, index.1, at % 4))
         }
         Some(Space::Segment) => {
             let a = addr.expect("an address");
@@ -266,6 +266,37 @@ fn instruction(
                 writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
             }
         }
+        // The one-operand divide: the dividend arrives in (dx, ax), the
+        // quotient and remainder leave in (ax, dx).
+        ("div" | "idiv", Some(Loc::Held(quotient)), [Loc::Held(high), Loc::Held(low), divisor])
+            if what.dests.len() == 2 =>
+        {
+            let (width, form, by) = match divisor {
+                Loc::Held(by) => (by.width, "r", vreg(by)?),
+                Loc::Mem(m) => (m.width, "m", cell(m, symbols)?),
+                _ => return Err("a divide by that source".to_owned()),
+            };
+            let Some(Loc::Held(remainder)) = what.dests.get(1) else { return Err("a divide without a remainder".to_owned()) };
+            let (ax, dx) = if width == 2 { ("ax", "dx") } else { ("eax", "edx") };
+            if one.requires.is_empty() {
+                writeln!(out, "    ${dx} = COPY {}\n    ${ax} = COPY {}", vreg(high)?, vreg(low)?).unwrap();
+            }
+            let opcode = if name == "idiv" { "IDIV" } else { "DIV" };
+            writeln!(
+                out,
+                "    {opcode}{}{form} {by}, implicit-def ${ax}, implicit-def ${dx}, implicit-def $eflags, implicit ${ax}, implicit ${dx}",
+                bits(width)?
+            )
+            .unwrap();
+            writeln!(out, "    {} = COPY ${ax}\n    {} = COPY ${dx}", vreg(quotient)?, vreg(remainder)?).unwrap();
+        }
+        // Sign-extends eax into edx.
+        ("cdq", Some(Loc::Held(d)), [Loc::Held(s)]) => {
+            if one.requires.is_empty() {
+                writeln!(out, "    $eax = COPY {}", vreg(s)?).unwrap();
+            }
+            writeln!(out, "    CDQ implicit-def $eax, implicit-def $edx, implicit $eax\n    {} = COPY $edx", vreg(d)?).unwrap();
+        }
         // A switch: the table's entries are the block's successors.
         ("jmp", None, [Loc::Mem(m)]) if m.base.is_none() && m.addr.is_some_and(|a| a.space == Space::Segment) => {
             let index = m.index.as_ref().ok_or("a jump through a table without an index")?;
@@ -377,6 +408,10 @@ fn instruction(
             writeln!(out, "    {} = IMUL{}rri {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, immediate(i)?)
                 .unwrap()
         }
+        ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Mem(m)]) if what.dests.len() == 1 => {
+            writeln!(out, "    {} = IMUL{}rm {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, cell(m, symbols)?)
+                .unwrap()
+        }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rr {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
@@ -396,6 +431,33 @@ fn instruction(
 
 /// `body` as a MIR module of one function, or the first thing this printer
 /// does not know.
+/// A register whose first definition writes only part of it has nothing to keep
+/// of the rest: the pin's verifier wants that said (`undef %5.sub_8bit = ...`).
+fn undef_first_partial_defs(text: &str) -> String {
+    let mut defined = BTreeSet::new();
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let first = line.trim_start().split(" = ").next().unwrap_or("");
+        let token = first.split(':').next().unwrap_or("");
+        let marked = line.trim_start().contains(" = ")
+            && token.starts_with('%')
+            && token[1..].split('.').next().is_some_and(|n| n.bytes().all(|b| b.is_ascii_digit()) && !n.is_empty());
+        if marked {
+            let value = token[1..].split('.').next().unwrap_or("").to_owned();
+            if token.contains(".sub_") && !defined.contains(&value) {
+                let indent = &line[..line.len() - line.trim_start().len()];
+                out.push_str(&format!("{indent}undef {}\n", line.trim_start()));
+                defined.insert(value);
+                continue;
+            }
+            defined.insert(value);
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 pub fn mir(
     body: &LirBody,
     pins: &IndexMap<u32, RegId>,
@@ -441,7 +503,7 @@ pub fn mir(
             }
             _ => continue,
         };
-        let Some(a) = m.addr.filter(|a| a.space == Space::Frame && m.base.is_none() && m.index.is_none()) else {
+        let Some(a) = m.addr.filter(|a| a.space == Space::Frame && m.base.is_none()) else {
             continue;
         };
         let disp = a.disp + m.offset;
@@ -585,6 +647,7 @@ pub fn mir(
     for v in widths.iter().filter(|v| !register_only.contains(*v)) {
         let class = match (value_widths.get(v), indexed.contains(v), byte_read.contains(v)) {
             (Some(1), ..) => "gr8",
+            (Some(2), _, true) => "gr16_abcd",
             (Some(2), ..) => "gr16",
             (_, _, true) => "gr32_abcd",
             (_, true, _) => "gr32_nosp",
@@ -592,6 +655,7 @@ pub fn mir(
         };
         writeln!(out, "  - {{ id: {v}, class: {class} }}").unwrap();
     }
+    let text = undef_first_partial_defs(&text);
     let objects = text
         .match_indices("%fixed-stack.")
         .filter_map(
@@ -819,6 +883,48 @@ mod tests {
             ),
             "{text}"
         );
+    }
+
+    #[test]
+    fn test_an_indexed_local_array_cell_is_an_indexed_stack_object() {
+        use llrm_lir::{Addr, Mem, Space};
+        let mut cell = Mem::new(Some(Addr::new(Space::Frame, -64)), 4);
+        cell.index = Some(Held { value: 2, width: 4 });
+        cell.scale = 4;
+        let load = insn("mov", Operation::Move, vec![held(1)], vec![Loc::Mem(cell)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![load, ret]))];
+        let body = LirBody::new("arr", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("an indexed local prints");
+        assert!(text.contains("MOV32rm %stack.0, 4, %2, 0, $noreg"), "{text}");
+    }
+
+    /// A byte written into a register nothing defined before left the pin's
+    /// verifier saying "defs don't dominate all uses" and aborting on
+    /// grep.c at m32.
+    #[test]
+    fn test_the_first_partial_write_of_a_register_is_undef() {
+        let text = super::undef_first_partial_defs(
+            "    %5.sub_8bit = MOV8ri 1\n    %5.sub_8bit = MOV8ri 2\n    %6 = COPY %5\n",
+        );
+        assert_eq!(text, "    undef %5.sub_8bit = MOV8ri 1\n    %5.sub_8bit = MOV8ri 2\n    %6 = COPY %5\n");
+    }
+
+    #[test]
+    fn test_a_divide_a_sign_extend_and_a_multiply_by_a_cell_print() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 4);
+        let sign = insn("cdq", Operation::Binary, vec![held(2)], vec![held(1)]);
+        let divide = insn("idiv", Operation::Binary, vec![held(3), held(4)], vec![held(2), held(1), held(5)]);
+        let times = insn("imul", Operation::Binary, vec![held(3)], vec![held(3), Loc::Mem(cell)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![sign, divide, times, ret]))];
+        let body = LirBody::new("div", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("CDQ implicit-def $eax, implicit-def $edx, implicit $eax"), "{text}");
+        assert!(text.contains("IDIV32r %5, implicit-def $eax, implicit-def $edx"), "{text}");
+        assert!(text.contains("%3 = COPY $eax\n    %4 = COPY $edx"), "{text}");
+        assert!(text.contains("%3 = IMUL32rm %3, %fixed-stack.0"), "{text}");
     }
 
     #[test]
