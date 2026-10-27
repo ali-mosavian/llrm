@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod instr;
 pub mod isa;
 pub mod layout;
 pub mod machine;
@@ -481,7 +482,7 @@ pub trait Target {
     fn forms_text(&self) -> String;
 
     /// What the reader of `forms_text` must know of this target's family.
-    fn dialect(&self) -> &'static llrm_instr::Dialect;
+    fn dialect(&self) -> &'static instr::Dialect;
 
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
