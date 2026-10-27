@@ -477,7 +477,7 @@ impl<'a> BasicAA<'a> {
         operand: Operand,
     ) -> bool {
         self.argument_attrs(operand).is_some_and(|attrs| {
-            llrm_mir::memory::has(attrs, "noalias")
+            llrm_mir::facts::Fact::NoAlias.stated_by(attrs)
                 || attrs.iter().any(|one| match one {
                     llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) => {
                         name == "byval"

@@ -4,7 +4,7 @@
 
 use crate::context::{ConstantKind, Context, GlobalId};
 use crate::datalayout::DataLayout;
-use crate::facts::Facts;
+use crate::facts::{Fact, Facts};
 use crate::hash::HashMap;
 use crate::module::{Function, GlobalKind, GlobalValue, InstId, Module, Operand, ValueDef};
 use crate::opcode::{Attribute, BinaryOp, Opcode};
@@ -94,7 +94,7 @@ pub fn summary(function: &Function) -> Summary {
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),
         returns: returns(attrs),
-        nocapture: function.parameter_attrs.iter().map(|one| has(one, "nocapture")).collect(),
+        nocapture: function.parameter_attrs.iter().map(|one| Fact::NoCapture.stated_by(one)).collect(),
         memset: false,
         pattern: false,
         lifetime: false,
@@ -167,7 +167,7 @@ pub fn has(
 
 /// Whether `attrs` promise `willreturn`.
 pub fn returns(attrs: &[Attribute]) -> bool {
-    has(attrs, "willreturn")
+    Fact::WillReturn.stated_by(attrs)
 }
 
 /// Whether the call `inst` keeps no copy of its argument `index`.
@@ -179,7 +179,7 @@ pub fn nocapture(
     index: usize,
 ) -> bool {
     let Opcode::Call(info) = &function.instruction(inst).opcode else { return false };
-    info.argument_attrs.get(index).is_some_and(|attrs| has(attrs, "nocapture"))
+    info.argument_attrs.get(index).is_some_and(|attrs| Fact::NoCapture.stated_by(attrs))
         || callee(context, function, inst)
             .and_then(|one| callees.get(&one))
             .is_some_and(|one| one.nocapture.get(index) == Some(&true))
@@ -198,8 +198,8 @@ pub fn noretain(
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
     let declared =
         callee(context, function, inst).and_then(|one| globals.get(one.0 as usize)).and_then(|one| one.function());
-    info.argument_attrs.get(index).is_some_and(|attrs| has(attrs, "noretain"))
-        || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| has(attrs, "noretain"))
+    info.argument_attrs.get(index).is_some_and(|attrs| Fact::NoRetain.stated_by(attrs))
+        || declared.and_then(|one| one.parameter_attrs.get(index)).is_some_and(|attrs| Fact::NoRetain.stated_by(attrs))
 }
 
 /// Whether `attrs` confine every access to memory the pointer arguments
@@ -244,10 +244,10 @@ pub fn returns_noalias(
     inst: InstId,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    has(&info.return_attrs, "noalias")
+    Fact::NoAlias.stated_by(&info.return_attrs)
         || callee(context, function, inst).and_then(|global| globals.get(global.0 as usize)).is_some_and(|global| {
             match &global.kind {
-                GlobalKind::Function(callee) => has(&callee.return_attrs, "noalias"),
+                GlobalKind::Function(callee) => Fact::NoAlias.stated_by(&callee.return_attrs),
                 GlobalKind::Variable(_) => false,
             }
         })
@@ -448,10 +448,10 @@ fn at(
 pub fn through(attrs: &[Attribute]) -> Effects {
     // Only the three flags matter: `Facts::of` over the whole list built a
     // vector of every fact for each of 12.5 K calls in d_faces.
-    let stated = |name: &str| attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name));
-    let mut effects = if stated("readnone") { Effects::NONE } else { Effects::ANY };
-    effects.writes &= !stated("readonly");
-    effects.reads &= !stated("writeonly");
+    let stated = |fact: Fact| fact.stated_by(attrs);
+    let mut effects = if stated(Fact::ReadNone) { Effects::NONE } else { Effects::ANY };
+    effects.writes &= !stated(Fact::ReadOnly);
+    effects.reads &= !stated(Fact::WriteOnly);
     effects
 }
 
@@ -557,7 +557,6 @@ pub fn call_returns(
 #[cfg(test)]
 mod stated_tests {
     use super::*;
-    use crate::facts::Facts;
 
     fn flag(name: &str) -> Attribute {
         Attribute::Flag(name.to_owned())
@@ -585,9 +584,9 @@ mod stated_tests {
             want.reads &= !facts.write_only();
             assert_eq!(through(attrs), want, "{attrs:?}");
             assert_eq!(returns(attrs), facts.will_return(), "{attrs:?}");
-            assert_eq!(has(attrs, "nocapture"), facts.no_capture(), "{attrs:?}");
-            assert_eq!(has(attrs, "noretain"), facts.no_retain(), "{attrs:?}");
-            assert_eq!(has(attrs, "noalias"), facts.no_alias(), "{attrs:?}");
+            assert_eq!(Fact::NoCapture.stated_by(attrs), facts.no_capture(), "{attrs:?}");
+            assert_eq!(Fact::NoRetain.stated_by(attrs), facts.no_retain(), "{attrs:?}");
+            assert_eq!(Fact::NoAlias.stated_by(attrs), facts.no_alias(), "{attrs:?}");
         }
     }
 }
