@@ -414,11 +414,14 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
             return None;
         }
         let what = def.what.clone()?;
-        // A literal or address is rematerializable per definition, as
-        // `isTriviallyReMaterializable` asks of `RM.OrigMI`; a load only when
-        // the register's facts say its cell holds (D-I).
+        // `SplitEditor::defFromParent` asks `canRematerializeAt(..,
+        // cheapAsAMove = true)`: a literal or an address is made again,
+        // a load (`MOV32rm` of a stack argument) or an `lea` is not
+        // `isAsCheapAsAMove`, and the split copies the register
+        // instead.
+        let _ = parent;
         let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
-        if load && !self.tables.remat.borrow().contains(&parent) {
+        if load || what.op == Operation::Address {
             return None;
         }
         let Loc::Held(defined) = what.dests[0] else { return None };
@@ -634,10 +637,12 @@ impl CallMasks {
 }
 
 /// LLVM's physical register range for a value an instruction pins to a
-/// register (`LIS->getRegUnit`), behind `LLRM_FIXED_PINS` (POC): the value is
+/// register (`LIS->getRegUnit`): the value is
 /// not allocated; every other range meets it as a fixed range, except where
 /// the overlap starts at a copy between the two (`LiveRange::overlaps(Other,
 /// CP, Indexes)`, `LiveRegMatrix::checkRegUnitInterference`).
+/// `LLRM_PINS_AS_VREGS` allocates pinned values as virtual registers again (the
+/// old way, to be deleted).
 struct FixedPins {
     tri: RegisterInfo,
     pins: Vec<FixedPin>,
@@ -1151,7 +1156,7 @@ pub fn decide_with_split(
         );
         blocks.push((start, end, first..calls.len()));
     }
-    let fixed_pins = llrm_support::env_flag!("LLRM_FIXED_PINS");
+    let fixed_pins = !llrm_support::env_flag!("LLRM_PINS_AS_VREGS");
     let pins_cell: Rc<std::cell::OnceCell<FixedPins>> = Rc::default();
     let matrix = LiveRegMatrix::new(
         RegisterInfo::new(inputs.registers),
@@ -1235,6 +1240,9 @@ pub fn decide_with_split(
                 spans.entry(unit).or_default().extend(pin.segments.iter().cloned());
             }
         }
+        // Two pinned values meeting in one register, other than at a copy
+        // between them, cannot both be there: no allocation exists.
+        let mut conflict = false;
         let units = spans
             .into_iter()
             .map(|(unit, mut list)| {
@@ -1242,7 +1250,10 @@ pub fn decide_with_split(
                 let mut merged: Vec<(SlotIndex, SlotIndex)> = Vec::new();
                 for (start, end) in list {
                     match merged.last_mut() {
-                        Some(last) if start <= last.1 => last.1 = std::cmp::max(last.1.clone(), end),
+                        Some(last) if start <= last.1 => {
+                            conflict |= start < last.1 && !copies.contains_key(&start);
+                            last.1 = std::cmp::max(last.1.clone(), end)
+                        }
                         _ => merged.push((start, end)),
                     }
                 }
@@ -1256,6 +1267,9 @@ pub fn decide_with_split(
                 (unit, range)
             })
             .collect();
+        if conflict {
+            return None;
+        }
         let _ = pins_cell.set(FixedPins { tri, pins, units, copies });
         regs
     } else {

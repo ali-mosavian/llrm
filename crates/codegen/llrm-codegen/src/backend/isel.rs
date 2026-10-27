@@ -1451,6 +1451,32 @@ fn noted(
     };
     // What the records say, by where each stands.
     let mut said_at: Vec<(i64, u32, Option<(u32, u32)>, NoteValue)> = Vec::new();
+    // A parameter whose every record says its own argument is said where the
+    // function is entered, wherever the passes left the records
+    // (`SelectionDAGBuilder::EmitFuncArgumentDbgValue`): the argument is in
+    // its register from the entry, and a record the code folded away from
+    // stands past the last use.
+    let entered = function
+        .entry()
+        .and_then(|entry| function.iter_block(entry).find(|&inst| function.instruction(inst).opcode != Opcode::Phi))
+        .and_then(|first| ats.get(&first).copied());
+    let own_argument = |record: &llrm_mir::DebugRecord| match record.what {
+        llrm_mir::DebugWhat::Value(llrm_mir::Operand::Value(one)) => function.parameters().contains(&one),
+        _ => false,
+    };
+    let at_entry: BTreeSet<_> = function
+        .debug_records()
+        .iter()
+        .map(|record| record.variable)
+        .filter(|&variable| {
+            llrm_mir::debuginfo::read_variable(module, variable).is_some_and(|one| one.parameter)
+                && function
+                    .debug_records()
+                    .iter()
+                    .filter(|record| record.variable == variable)
+                    .all(|record| own_argument(record))
+        })
+        .collect();
     for record in function.debug_records() {
         // A value held in two registers (an i64's dwords on a 32-bit target, a
         // long's words on a 16-bit one) is said as the two pieces it is.
@@ -1471,6 +1497,7 @@ fn noted(
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
         };
         let Some(&at) = ats.get(&record.before) else { continue };
+        let at = if at_entry.contains(&record.variable) { entered.unwrap_or(at) } else { at };
         said_at.push((at, record.variable.0, piece, value));
     }
     // Records of one variable that stand together and disagree (the statements
