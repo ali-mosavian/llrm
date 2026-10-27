@@ -530,3 +530,20 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod pressure_tests {
+    use llrm_target::Target;
+
+    /// The scheduler counted every m16 value against one set of six registers
+    /// (`pressure` was `None`, DEVIATE MS5): a byte value and a word value took
+    /// the same room, and the pin's per-set limits (GR8 and GR16
+    /// ten) never applied.
+    #[test]
+    fn test_m16_has_the_pins_pressure_sets_and_their_limits() {
+        let (sets, limits) = super::M16.pressure().expect("m16 has pressure sets");
+        assert_eq!(sets.sets.len(), limits.len());
+        let limit = |name: &str| limits[sets.sets.iter().position(|set| set.name == name).expect(name)];
+        assert_eq!((limit("GR8"), limit("GR16"), limit("GR32_BPSP")), (10, 10, 6));
+    }
+}
