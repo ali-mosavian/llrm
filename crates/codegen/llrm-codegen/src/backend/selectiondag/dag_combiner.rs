@@ -148,6 +148,10 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) tli: Option<&'a TargetLowering>,
 }
 
+fn op_is_srl(op: ISD) -> bool {
+    op == ISD::Srl
+}
+
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     pub fn new(
         dag: &'a mut SelectionDAG,
@@ -313,7 +317,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
-            ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
+            ISD::And => self
+                .visit_and(node)
+                .or_else(|| self.reduce_load_width_of(node))
+                .or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
@@ -323,8 +330,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FNeg => self.visit_fneg(node),
             ISD::FAbs => self.visit_fabs(node),
             ISD::FDiv => self.visit_fdiv(node),
-            ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
-            ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
+            ISD::Shl | ISD::Srl => self
+                .visit_shift(node)
+                .or_else(|| if op_is_srl(self.dag.opcode(node)) { self.reduce_load_width_of(node) } else { None })
+                .or_else(|| self.simplify_demanded(node)),
+            ISD::Sra => {
+                self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
+            }
             ISD::FShl | ISD::FShr => self.visit_funnel_shift(node),
             ISD::BSwap => self.visit_bswap(node),
             ISD::BitReverse => self.visit_bitreverse(node),

@@ -27,8 +27,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let op = self.dag.opcode(node);
-        let (vt, n0, n1, n2) =
-            (self.dag.value_type(node), self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let (vt, n0, n1, n2) = (
+            self.dag.value_type(node),
+            self.dag.operand(node, 0),
+            self.dag.operand(node, 1),
+            self.dag.operand(node, 2),
+        );
         let is_fshl = op == ISD::FShl;
         let width = u128::from(vt.size_in_bits());
         let amount_vt = self.dag.value_type(n2);
@@ -40,7 +44,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if amount == 0 {
             return Some(if is_fshl { n0 } else { n1 });
         }
-        let undef_or_zero = |this: &Self, value: SDValue| this.dag.is_undef(value) || this.dag.constant(value) == Some(0);
+        let undef_or_zero =
+            |this: &Self, value: SDValue| this.dag.is_undef(value) || this.dag.constant(value) == Some(0);
         if undef_or_zero(self, n0) {
             let by = self.dag.get_constant(if is_fshl { width - amount } else { amount }, amount_vt);
             return Some(self.dag.get_node(ISD::Srl, vt, &[n1, by]));
@@ -101,7 +106,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.add_to_worklist(moved.node);
         let load = self.dag.get_load(self.dag.value_type(n1), chain, moved, MemInfo { align, ..rhs });
         for old in [n0, n1] {
-            self.make_equivalent_memory_ordering(SDValue { node: old.node, res: 1 }, SDValue { node: load.node, res: 1 });
+            self.make_equivalent_memory_ordering(
+                SDValue { node: old.node, res: 1 },
+                SDValue { node: load.node, res: 1 },
+            );
         }
         Some(load)
     }
