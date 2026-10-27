@@ -82,3 +82,9 @@ def test_no_new_upward_dependency_and_the_allow_list_only_shrinks():
     found = violations(workspace())
     assert not found - ALLOWED, f"new upward dependencies: {sorted(found - ALLOWED)}"
     assert not ALLOWED - found, f"no longer violations, remove from ALLOWED: {sorted(ALLOWED - found)}"
+
+
+def test_a_frontend_crate_has_no_binary_of_its_own():
+    """qbfront was a second QB binary beside llrm-qb; frontends are libraries the root binaries link."""
+    for manifest in sorted((ROOT / "crates" / "frontends").glob("*/Cargo.toml")):
+        assert "[[bin]]" not in manifest.read_text(), manifest.relative_to(ROOT)
