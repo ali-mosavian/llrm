@@ -258,6 +258,9 @@ struct DataObject {
     relocations: Vec<DataRelocation>,
     linkage: &'static str,
     address: &'static str,
+    /// Declared by a COMMON statement: BC's COMMON segment, which a CHAINed
+    /// program reads.
+    common: bool,
 }
 
 struct Function {
@@ -352,6 +355,8 @@ struct Compiler {
     common_repeats: BTreeSet<(usize, usize)>,
     /// The arrays COMMON declared without bounds, which a later DIM dimensions.
     common_arrays: BTreeSet<String>,
+    /// Set while a COMMON statement's variables are declared.
+    declaring_common: bool,
     next_value: u32,
     next_place: u32,
     next_instruction: u32,
@@ -1740,6 +1745,7 @@ impl Compiler {
                     relocations: Vec::new(),
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 },
                 DataObject {
                     align: 1,
@@ -1750,6 +1756,7 @@ impl Compiler {
                     relocations: Vec::new(),
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 },
             ],
             values: Vec::new(),
@@ -1778,6 +1785,7 @@ impl Compiler {
             next_type: 14,
             common_repeats: BTreeSet::new(),
             common_arrays: BTreeSet::new(),
+            declaring_common: false,
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -2549,7 +2557,11 @@ impl Compiler {
                             dynamic.dynamic = true;
                             self.declare_as(&dynamic, storage)?;
                         } else {
-                            self.declare_as(item, storage)?;
+                            self.declaring_common =
+                                matches!(statement, Statement::Common { .. }) && storage == "module";
+                            let declared = self.declare_as(item, storage);
+                            self.declaring_common = false;
+                            declared?;
                         }
                         if matches!(statement, Statement::Common { .. }) && item.array && item.bounds.is_empty() {
                             self.common_arrays.insert(self.declaration_key(item)?);
@@ -3087,6 +3099,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: self.declaring_common,
             });
             (0, symbol)
         } else if storage == "module" {
@@ -3215,6 +3228,7 @@ impl Compiler {
             relocations: Vec::new(),
             linkage: "internal",
             address: "near",
+            common: self.declaring_common,
         });
         symbol
     }
@@ -3309,6 +3323,7 @@ impl Compiler {
             ],
             linkage: "internal",
             address: "near",
+            common: false,
         });
         symbol
     }
@@ -4026,6 +4041,7 @@ impl Compiler {
                             // DGROUP and pass DS:offset, as documented by
                             // QB45 runtime/rt/inptty.asm's pBlock contract.
                             address: if self.runtime == "vbdos" { "far" } else { "near" },
+                            common: false,
                         });
                         let place = self.next_place;
                         self.next_place += 1;
@@ -4776,6 +4792,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             self.data.len() - 1
         };
@@ -6137,6 +6154,7 @@ impl Compiler {
             relocations: Vec::new(),
             linkage: "internal",
             address: "near",
+            common: false,
         });
         let place = self.next_place;
         self.next_place += 1;
@@ -9730,6 +9748,7 @@ impl Compiler {
                     relocations: Vec::new(),
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 });
                 (0, symbol)
             }
@@ -9745,6 +9764,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             (0, symbol)
         } else {
@@ -9814,6 +9834,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             self.def_segment_base_symbol = Some(symbol);
             symbol
@@ -9851,6 +9872,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "external",
                 address: "near",
+                common: false,
             });
             self.def_segment_symbol = Some(symbol);
             symbol
@@ -9924,6 +9946,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             self.floating_literals.insert(key, symbol);
             symbol
@@ -9988,6 +10011,7 @@ impl Compiler {
                 }],
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             (payload_symbol, near.size as isize)
         } else {
@@ -10005,6 +10029,7 @@ impl Compiler {
                     relocations: vec![DataRelocation { at: 0, target: payload_symbol, addend: 0, address: "segment" }],
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 });
                 self.far_string_segment_symbol = Some(symbol);
                 symbol
@@ -10025,6 +10050,7 @@ impl Compiler {
                 relocations: vec![DataRelocation { at: 2, target: payload_symbol, addend: 4, address: "near" }],
                 linkage: "internal",
                 address: "far",
+                common: false,
             });
 
             let descriptor_symbol = self.next_data;
@@ -10041,6 +10067,7 @@ impl Compiler {
                 ],
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             (descriptor_symbol, 6)
         };
@@ -10714,7 +10741,11 @@ impl Compiler {
                 )
                 .unwrap();
             }
-            out.push_str("]}");
+            out.push(']');
+            if object.common {
+                out.push_str(",\"segment\":\"COMMON\"");
+            }
+            out.push('}');
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);

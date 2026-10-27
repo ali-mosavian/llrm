@@ -3704,3 +3704,31 @@ fn test_dateserial_calls_the_date_routine_with_year_month_day() {
     // Year and month are one pushed dword (1992 << 16 | 2), then the day.
     assert!(before.trim_end().ends_with("pushd 130547714\n    pushw 29"), "{main}");
 }
+
+/// COMMON variables sat in BC_DATA with the rest, so a CHAINed program found
+/// nothing: BC puts them, in declaration order, in the COMMON segment (10
+/// bytes for an integer, a long and a string; BC 4.50's object).
+#[test]
+fn test_common_variables_go_in_the_common_segment_in_order() {
+    let text = listing_in(
+        "qb45",
+        &[],
+        "commonseg",
+        "COMMON a AS INTEGER, b AS LONG, s AS STRING\r\nDIM z AS INTEGER\r\na = 1\r\nb = 2\r\ns = \"q\"\r\nz = 3\r\nPRINT a; b; s; z\r\nCHAIN \"NEXT\"\r\nEND\r\n",
+    );
+    let common = between(&text, "COMMON segment", "COMMON ends");
+    let names: Vec<&str> = common.lines().filter_map(|line| line.strip_suffix(" label byte")).collect();
+    assert_eq!(names, ["$QB$COMMON", "A%", "B&", "S$"], "{text}");
+    let data = between(&text, "BC_DATA segment", "BC_DATA ends");
+    assert!(!data.contains("A%") && !data.contains("S$"), "COMMON variables leave BC_DATA: {text}");
+}
+
+/// A COMMON variable set before CHAIN was a private cell the optimiser could
+/// drop the store to: the chained program read 0.
+#[test]
+fn test_a_common_variable_is_still_stored_before_a_chain() {
+    let text = listing_in("qb45", &[], "commonchain", "COMMON x AS INTEGER\r\nx = 4\r\nCHAIN \"NEXT\"\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCHN").expect("the call");
+    assert!(main[..call].contains("mov word ptr X%, 4"), "x% is stored: {main}");
+}
