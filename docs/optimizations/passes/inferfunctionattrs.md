@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferfunctionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferfunctionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferfunctionattrs.rs sha256:65c3746c4c1a6cf2684ce804ce96a0e7ff7e66b7438f1ea7dfb56c0861d5e4af -->
+<!-- src: crates/opt/llrm-transforms/src/inferfunctionattrs.rs sha256:36e83241d3a40d8d283690c703f52f4ee385897337c54c8c815f138239b6573a -->
 
 # inferfunctionattrs
 
@@ -19,6 +19,7 @@ memory (`memory(errnomem: write)` for `sin`: it sets `errno` and touches
 nothing else) and what each pointer parameter is. A call of `sin(x)` twice
 is then one call to the optimizer's CSE.
 
+## Example
 ```text
   declare double @sin(double)
   ==>

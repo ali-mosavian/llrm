@@ -14,6 +14,7 @@
 //! nothing else) and what each pointer parameter is. A call of `sin(x)` twice
 //! is then one call to the optimizer's CSE.
 //!
+//! # Example
 //! ```text
 //!   declare double @sin(double)
 //!   ==>
