@@ -213,6 +213,9 @@ pub struct RuntimeContracts<'a> {
     /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
     /// then dropped.
     pub frame_zeroed: bool,
+    /// What the module's finished callees wrote, which a call of one destroys
+    /// and no more (`isel`'s `written`).
+    pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -359,6 +362,19 @@ impl CallConventions<'_> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn written(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<(
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    )> {
+        let Some(Callee::Global(id)) = callee else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned()?;
+        let written = self.contracts?.facts?.written(&name)?;
+        Some((written.whole, written.high))
+    }
+
     fn clobbers_high(
         &self,
         callee: Option<&Callee>,
