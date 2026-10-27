@@ -28,7 +28,7 @@ link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{o
 # How a program runs on the host: a command taking the executable last.
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 
-# arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/arm64_link.sh).
+# arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/targets/arm64-link.sh).
 [arm64-linux]
 triple = "aarch64-unknown-linux-gnu"
 datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
@@ -37,7 +37,7 @@ llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = false
 object = "elf"
-link = ["{root}/tools/arm64_link.sh", "{output}", "{objects}"]
+link = ["{root}/tools/targets/arm64-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
 
 # Real-mode DOS, Borland medium model: far code (function pointers and `P1` functions), near data, byte-packed
@@ -107,7 +107,7 @@ llc = []
 llc_program = "llrm-arm64-llc"
 llc_level = false
 object = "elf"
-link = ["{root}/tools/arm64_glibc_link.sh", "{output}", "{objects}"]
+link = ["{root}/tools/targets/arm64-glibc-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
 
 # 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
