@@ -380,10 +380,12 @@ impl Options {
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
     /// code, and the larger inline threshold; the copy budget is LLVM's -O3
-    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
+    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
+    /// clones: the pin makes none, and they grew recchop 1541 lines against
+    /// 171.
     pub fn speed() -> Self {
         Self {
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold::new(250),
             unswitch: true,
             unroll_and_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
@@ -789,12 +791,13 @@ pub(crate) fn llvm_order(
             combine("combine@1499"),
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
+            slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
             // is the only one, so a self-recursive tail call is a loop there
             // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
-            // runs in one). DivRemPairs and ExpandMemCmp, between the two at
-            // the pin, are not slots.
+            // runs in one). ExpandMemCmp, between the two at the pin, is not
+            // a slot.
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
         ],
@@ -1237,7 +1240,7 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(lcssa::LoopClosedSSA));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
-        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.

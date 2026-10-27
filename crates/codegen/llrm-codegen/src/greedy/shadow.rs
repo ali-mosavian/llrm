@@ -651,10 +651,10 @@ struct FixedPins {
     pins: Vec<FixedPin>,
     /// The pinned ranges of each register unit, merged (`LIS->getRegUnit`):
     /// what the interference cache and the region splitter see of them.
-    units: std::collections::HashMap<u32, crate::liveness::liverange::LiveRange>,
+    units: crate::support::hash::HashMap<u32, crate::liveness::liverange::LiveRange>,
     /// The copies of the body by the slot they define at: (destination,
     /// source).
-    copies: std::collections::HashMap<SlotIndex, (u32, u32)>,
+    copies: crate::support::hash::HashMap<SlotIndex, (u32, u32)>,
 }
 
 struct FixedPin {
@@ -1216,7 +1216,7 @@ pub fn decide_with_split(
     }
     greedy.calculate_spill_weights_and_hints();
     let fixed_regs: Vec<(u32, RegId)> = if fixed_pins {
-        let mut copies = std::collections::HashMap::new();
+        let mut copies = crate::support::hash::HashMap::default();
         for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
             if let Some((d, s)) =
                 one.what.as_ref().and_then(|w| match (w.name.as_deref(), &w.dests[..], &w.sources[..]) {
@@ -1249,7 +1249,8 @@ pub fn decide_with_split(
             .collect();
         let regs = pins.iter().map(|pin| (pin.reg, pin.root)).collect();
         let tri = RegisterInfo::new(inputs.registers);
-        let mut spans: std::collections::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> = std::collections::HashMap::new();
+        let mut spans: crate::support::hash::HashMap<u32, Vec<(SlotIndex, SlotIndex)>> =
+            crate::support::hash::HashMap::default();
         for pin in &pins {
             for unit in tri.regunits(pin.root) {
                 spans.entry(unit).or_default().extend(pin.segments.iter().cloned());
@@ -1331,7 +1332,7 @@ pub fn decide_with_split(
             placed.push((reg, phys));
         }
     }
-    if llrm_support::env_set("LLRM_PLACED_DEBUG") {
+    if llrm_support::env_flag!("LLRM_PLACED_DEBUG") {
         for reg in greedy.lis.values().collect::<Vec<_>>() {
             if greedy.matrix.vrm.get_phys(reg).is_none() {
                 eprintln!(
