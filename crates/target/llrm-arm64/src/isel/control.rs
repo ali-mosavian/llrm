@@ -57,32 +57,16 @@ impl Selector<'_> {
             };
             let incoming = pair[0];
             let result = phi.result.expect("a phi has a result");
-            let value = self.vals.get(&result).ok_or("a phi with no register")?.clone();
+            let dst = self.vals.get(&result).and_then(|value| self.reg_of(value)).ok_or("a phi with no register")?;
             let src = self.src(incoming)?;
-            // An aggregate moves member by member.
-            let sources: Vec<Src> = match (&value, &src) {
-                (Val::Agg(_), Src::Val(Val::Agg(_))) => {
-                    let Src::Val(whole) = &src else { unreachable!() };
-                    whole.leaves().into_iter().map(|leaf| Src::Val(leaf.clone())).collect()
-                }
-                (Val::Agg(_), _) => return refuse("an aggregate phi of a value held whole"),
-                _ => vec![src],
+            let src = match &src {
+                Src::Val(value) => match self.reg_of(value) {
+                    Some(reg) => PhiSource::Reg(reg),
+                    None => PhiSource::Value(src),
+                },
+                _ => PhiSource::Value(src),
             };
-            let dsts = value.leaves();
-            if dsts.len() != sources.len() {
-                return refuse("a phi whose members differ from its incoming value's");
-            }
-            for (dst, src) in dsts.into_iter().zip(sources) {
-                let dst = self.reg_of(dst).ok_or("a phi with no register")?;
-                let src = match &src {
-                    Src::Val(value) => match self.reg_of(value) {
-                        Some(reg) => PhiSource::Reg(reg),
-                        None => PhiSource::Value(src),
-                    },
-                    _ => PhiSource::Value(src),
-                };
-                copies.push(PhiCopy { dst, src });
-            }
+            copies.push(PhiCopy { dst, src });
         }
         Ok(copies)
     }
