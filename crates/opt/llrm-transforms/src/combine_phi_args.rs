@@ -120,7 +120,8 @@ impl Combiner<'_> {
         if self.function.instruction(branch).opcode != Opcode::Br || taken == other || self.type_of(cond) != ty {
             return None;
         }
-        // `BasicBlockEdge(IDom, successor)` dominates `BasicBlockEdge(pred, block)`.
+        // `BasicBlockEdge(IDom, successor)` dominates `BasicBlockEdge(pred,
+        // block)`.
         let function = &*self.function;
         let correct = |value: bool, from: BlockId| {
             let successor = if value { taken } else { other };
