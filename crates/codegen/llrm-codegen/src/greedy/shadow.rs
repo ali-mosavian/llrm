@@ -854,6 +854,21 @@ fn float_live_blocks(
     (live_in, live_out)
 }
 
+/// The intervals the allocator starts from: the coalescer's, edited to `body`,
+/// else new ones.
+///
+/// `RAGreedy::runOnMachineFunction` then renumbers before allocating, "to get
+/// accurate and consistent results from getApproxInstrDistance": the erased
+/// copies leave gaps that inflate range sizes, and the dequeue priority is the
+/// size.
+/// https://github.com/llvm/llvm-project/blob/main/llvm/lib/CodeGen/RegAllocGreedy.cpp#L3074
+fn intervals_to_allocate(body: &LirBody) -> LiveIntervals {
+    let mut lis =
+        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
+    lis.indexes.pack_indexes();
+    lis
+}
+
 pub fn decide_with_split(
     inputs: &ShadowInputs,
     mode: Mode<'_>,
@@ -883,8 +898,7 @@ pub fn decide_with_split(
             }
         }
     }
-    let mut lis =
-        crate::liveness::liveintervals::take_handed_over_edited_to(body).unwrap_or_else(|| LiveIntervals::new(body));
+    let mut lis = intervals_to_allocate(body);
     // The environment: orders, frequencies, loop exits.
     let mbfi = crate::liveness::blockfrequency::MachineBlockFrequencyInfo::of(body);
     let freq: Vec<f32> =
@@ -1261,6 +1275,35 @@ mod tests {
         // (the registers placed are the reloads' and the stores' short ranges).
         assert!(decided.placed.iter().all(|(value, _)| *value > 9), "{:?}", decided.placed);
         assert_eq!(decided.report.stats.spilled_ranges, 9, "{:?}", decided.report.stats);
+    }
+
+    /// Instructions added since the slot indexes were made are numbered at half
+    /// the spacing, and the allocator did not renumber as `RAGreedy` does: a
+    /// range across them was shorter than the same range elsewhere, so the
+    /// dequeue order (the size) followed where the edits were
+    /// (_bench_x_dct under the scheduler after the coalescer: 253 insns,
+    /// 227 packed).
+    #[test]
+    fn test_the_allocator_starts_from_packed_slot_indexes() {
+        let make = |from: i64, n: i64| -> Vec<Arc<Insn>> {
+            (from..from + n).map(|k| Arc::new(Insn::new(k, None, None, vec![], vec![]))).collect()
+        };
+        let old = make(0, 2);
+        let added = make(10, 5);
+        let body_of = |list: Vec<Arc<Insn>>| {
+            LirBody::new("pack", 0, vec![Block::from(LirBlock::new(0, list))], IndexMap::default(), IndexMap::default())
+        };
+        let before = body_of(old.clone());
+        let mut grown = vec![Arc::clone(&old[0])];
+        grown.extend(added.iter().cloned());
+        grown.push(Arc::clone(&old[1]));
+        let after = body_of(grown);
+        crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
+        let lis = intervals_to_allocate(&after);
+        let at: Vec<u32> =
+            after.blocks[0].insns.iter().map(|one| lis.indexes.get_instruction_index(one.id()).get_index()).collect();
+        let steps: Vec<u32> = at.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(steps.iter().all(|step| *step == SlotIndex::INSTR_DIST), "{steps:?}");
     }
 
     /// Greedy's spill weights read `MachineBlockFrequencyInfo`
