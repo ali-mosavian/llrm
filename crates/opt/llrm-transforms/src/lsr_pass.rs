@@ -124,7 +124,7 @@ enum Outcome {
     /// The loop is left as it is, or this is its plan.
     Planned(Option<Plan>),
     /// Exit tests to edit first; the loop is then analysed again.
-    Edit(Vec<ExitEdit>),
+    Edit(Vec<ExitEdit>, IvUsers),
     /// An integer variable's conversion to float, made a variable of its own.
     Shadow(ShadowEdit),
 }
@@ -171,6 +171,7 @@ fn plan_loop(
     env: &ExpandEnv,
     header: BlockId,
     marked: Option<&[InstId]>,
+    carried: Option<IvUsers>,
     stress_chains: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
@@ -196,8 +197,14 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let mut users =
-        IvUsers::of(se, &cx, header, &Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral });
+    let env_users = Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral };
+    let mut users = match carried {
+        Some(users) => {
+            users.assert_current(se, &cx, &env_users);
+            users
+        }
+        None => IvUsers::of(se, &cx, header, &env_users),
+    };
     // No interesting work, or too much analysis to model it.
     if users.uses.is_empty() || users.uses.len() > MAX_IV_USERS {
         return planned(None);
@@ -213,7 +220,7 @@ fn plan_loop(
             }
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
             if edits.iter().any(|edit| edit.max.is_some() || edit.post_inc) {
-                return Outcome::Edit(edits);
+                return Outcome::Edit(edits, users);
             }
         }
         Some(conds) => {
@@ -324,6 +331,8 @@ pub fn reduced_held(
         // The first look may find exit tests to edit, and the plan may split
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
+        // The users of the first look, kept through the edit of the exit tests.
+        let mut carried: Option<IvUsers> = None;
         for _ in 0..6 {
             // What the edits since changed is no longer what the expressions
             // say; the rest of them stay, as they do in LLVM.
@@ -342,12 +351,24 @@ pub fn reduced_held(
                     &env,
                     header,
                     marked.as_deref(),
+                    carried.take(),
                     stress_chains,
                 ) {
                     Outcome::Planned(None) => break,
-                    Outcome::Edit(edits) => {
+                    Outcome::Edit(edits, mut users) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
-                        marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
+                        let applied = lsr_prepare::apply(function, &context.types, header, &edits);
+                        marked = Some(applied.marked.clone());
+                        // A moved or copied test is the same use; `OptimizeMax`
+                        // makes a new compare, so its users are made again.
+                        if edits.iter().all(|edit| edit.max.is_none()) {
+                            let ok = applied.moved.iter().all(|&test| users.carry_exit_test(function, test, None))
+                                && applied
+                                    .copied
+                                    .iter()
+                                    .all(|&(old, copy)| users.carry_exit_test(function, old, Some(copy)));
+                            carried = ok.then_some(users);
+                        }
                         changed = true;
                         continue;
                     }

@@ -34,9 +34,15 @@ use std::cell::RefCell;
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::dense::{IdMap, IdSet};
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern::phi_incoming;
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`IvUsers::of`] ran on this thread.
+    pub static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// What the analysis asks of the pass that runs it.
 pub struct Env<'a> {
@@ -191,6 +197,8 @@ impl IvUsers {
         l: BlockId,
         env: &Env,
     ) -> Self {
+        #[cfg(test)]
+        BUILDS.with(|made| made.set(made.get() + 1));
         let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0, ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
@@ -322,6 +330,56 @@ impl IvUsers {
         inst: InstId,
     ) -> bool {
         self.processed.contains(&inst)
+    }
+
+    /// The exit test `old` was moved beside the branch, or copied there as
+    /// `copy`, which is then a use of its own: whether the uses are still the
+    /// ones [`Self::of`] would make. They are not where the test's operand has
+    /// users the move put out of program order (IU1); then they are made again.
+    pub fn carry_exit_test(
+        &mut self,
+        function: &Function,
+        old: InstId,
+        copy: Option<InstId>,
+    ) -> bool {
+        let Some(at) = self.uses.iter().position(|u| u.user == old) else { return true };
+        // A test of two induction variables is a user of both: which of them
+        // finds it first depends on where it is.
+        let walked = |value: &Operand| match value {
+            Operand::Value(v) => {
+                matches!(
+                    function.value(*v).def,
+                    ValueDef::Instruction(def) if self.processed.contains(&def)
+                )
+            }
+            _ => false,
+        };
+        if function.instruction(old).operands.iter().filter(|op| walked(op)).count() > 1 {
+            return false;
+        }
+        let place = |user: InstId| {
+            let block = function.parent(user)?;
+            let index = function.layout().iter().position(|&one| one == block)?;
+            Some((index, function.number_in_block(user)?))
+        };
+        if let Some(copy) = copy {
+            // The copy is found just before the test it copies, or among the
+            // descendants of a user between them: only the first is kept.
+            let Operand::Value(value) = self.uses[at].operand else { return false };
+            let mut users: Vec<InstId> = function.users(value).iter().map(|one| one.user).collect();
+            users.sort_by_key(|&user| std::cmp::Reverse(place(user)));
+            users.dedup();
+            let next = users.iter().position(|&user| user == copy).and_then(|i| users.get(i + 1));
+            if next != Some(&old) {
+                return false;
+            }
+            let mut one = self.uses[at].clone();
+            one.user = copy;
+            self.uses.insert(at, one);
+        }
+        let operand = self.uses[at].operand;
+        let places: Vec<_> = self.uses.iter().filter(|u| u.operand == operand).map(|u| place(u.user)).collect();
+        places.windows(2).all(|pair| pair[0] >= pair[1])
     }
 
     /// `transformToPostInc`: the use of `cond` takes the post-incremented value
