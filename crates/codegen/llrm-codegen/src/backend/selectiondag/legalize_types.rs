@@ -73,6 +73,9 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// The four results of a division routine's call, by operands and
+    /// signedness: the routine answers quotient and remainder together.
+    divisions: HashMap<(SDValue, SDValue, bool), [SDValue; 4]>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -93,6 +96,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            divisions: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -1401,6 +1405,24 @@ impl<'a> TypeLegalizer<'a> {
             let by = self.dag.get_constant(u128::from(lhs_shift), EVT::I8);
             lhs = self.dag.get_node(ISD::Shl, vt, &[lhs, by]);
         }
+        // DEVIATE SD322: a denominator that is a positive power of two divides
+        // by an arithmetic shift, which already rounds toward negative
+        // infinity. The pin leaves a divide and a remainder, which the
+        // type legalizer turns into two 64-bit library calls before the
+        // combiner can fold them (`sdiv.fix.i32(x, 1024, 9)`: 2 calls
+        // against a `sar`).
+        let power = self
+            .dag
+            .constant(rhs)
+            .filter(|bits| *bits != 0 && bits.count_ones() == 1 && *bits < 1u128 << (vt.size_in_bits() - 1));
+        if let Some(bits) = power {
+            let shift = bits.trailing_zeros() - rhs_shift;
+            if shift == 0 {
+                return Some(lhs);
+            }
+            let by = self.dag.get_constant(u128::from(shift), EVT::I8);
+            return Some(self.dag.get_node(ISD::Sra, vt, &[lhs, by]));
+        }
         if rhs_shift != 0 {
             let by = self.dag.get_constant(u128::from(rhs_shift), EVT::I8);
             rhs = self.dag.get_node(ISD::Sra, vt, &[rhs, by]);
@@ -1486,6 +1508,12 @@ impl<'a> TypeLegalizer<'a> {
         let signed = matches!(op, ISD::SDiv | ISD::SRem);
         let wants_quotient = matches!(op, ISD::SDiv | ISD::UDiv);
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        // DEVIATE SD323: `x / y` and `x % y` share one call. The pin makes
+        // `__divdi3` and `__moddi3` two; the routine answers both, so the
+        // second reads the first's results (the old selector's one divide).
+        if let Some(results) = self.divisions.get(&(lhs, rhs, signed)) {
+            return Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) });
+        }
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
             (self.expanded_integer(lhs), self.expanded_integer(rhs));
         let wide = self.dag.constant(divisor_hi) != Some(0);
@@ -1512,6 +1540,7 @@ impl<'a> TypeLegalizer<'a> {
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
         let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns);
+        self.divisions.insert((lhs, rhs, signed), [results[0], results[1], results[2], results[3]]);
         Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 
