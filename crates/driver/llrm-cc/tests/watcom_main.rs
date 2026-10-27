@@ -126,3 +126,47 @@ fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
+
+/// `#pragma aux NAME "LINK"` names the symbol a call links to. The pinned
+/// clang ignores it, so at m32 `cb` stayed `call cb_` and a runtime that
+/// provides `B$COPY` did not link; the x86_32-wat and x86_32-dos rows now take
+/// the i8086 fork's clang (`LLRM_CLANG_M16`), which has it (the dos row's
+/// `llrm_os.h` names the OS layer's `LL$CLOSE` so: 11 tests/run/c programs
+/// failed to link `_llrm_os_close`).
+#[test]
+fn pragma_aux_link_name_is_the_symbol_at_m32() {
+    let Some(fork) = std::env::var_os("LLRM_CLANG_M16") else {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set");
+        return;
+    };
+    if std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for row in ["x86_32-wat", "x86_32-dos"] {
+        let dir = std::env::temp_dir().join(format!("llrm-cc-wat-aux-{row}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("a.c"),
+            "#pragma aux cb \"B$COPY\"\nextern int cb(int a, int b);\nint f(int x) { return cb(x, 2); }\n",
+        )
+        .unwrap();
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", row)
+            .env("LLRM_CLANG_M16", &fork)
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+            )
+            .args(["-O2", "-w", "-S", "-o"])
+            .arg(dir.join("a.s"))
+            .arg(dir.join("a.c"))
+            .output()
+            .unwrap();
+        let listing = std::fs::read_to_string(dir.join("a.s")).unwrap_or_default();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+        assert!(listing.contains("B$COPY") && !listing.contains("cb_") && !listing.contains("_cb"), "{row}: {listing}");
+    }
+}
