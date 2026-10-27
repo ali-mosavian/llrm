@@ -138,9 +138,9 @@ def main():
             if exp.exists() and src.suffix == ".ll":  # the recorded output beats any build's  # .ll with a recorded expectation
                 st = src.with_suffix(".status")
                 ref = (exp.read_bytes(), int(st.read_text()) if st.exists() else 0)
-            res = "-" if "ours" not in outs else ("ok" if outs["ours"] == ref else "DIFF")
+            res = "FAIL" if "ours" not in outs or "clang" not in outs else ("ok" if outs["ours"] == ref else "DIFF")
             print(f"{src.stem:<14}{lvl:<4}" + "".join(f"{c:>16}" for c in cells) + f"{ratio:>11}  " + "/".join(times) + f"  {res}")
-    print(f"rows where ours is bigger than clang (bytes): {worse}")
+    print(f"rows where ours is bigger than clang (bytes): {worse}; FAIL rows count against the corpus")
 
 
 main()
