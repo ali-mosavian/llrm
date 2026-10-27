@@ -3,7 +3,7 @@
 use crate::cgpaddr::CgpAddr;
 use crate::testing::{parsed, printed};
 
-const HEAD: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+const HEAD: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
 
 fn after(text: &str) -> String {
     let mut module = parsed(&format!("{HEAD}{text}"));

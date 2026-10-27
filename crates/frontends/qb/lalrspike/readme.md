@@ -2,21 +2,20 @@
 
 The QB front's only parser is the hand-written recursive-descent one in `crates/frontends/qb/src/front/ast`. This directory holds the Nib LALR spike and the QB oracle tools (BC.EXE programs, results, `tools/oracle/qb-bc/bcprobe.py`, `verdict`, `checkfiles`); the QB LALR grammar and the first RD spike were deleted.
 
-Spike: LALR(1) grammars for Nib and the QB family. Wherever the grammar cannot
+Spike: an LALR(1) grammar for Nib. Wherever the grammar cannot
 tell two readings apart, one node keeps the written shape and a later pass
 (symbol table, semantic) chooses. Not in the workspace; `cargo test` here.
 
-Both grammars are hand-written lalrpop files (`src/nib.lalrpop`, from the
-language spec's grammar; `src/qb.lalrpop`, with the recovered `qbasbnf.prs`
-as the reference) and reuse the existing lexers. The QB one is the recovered
-grammar's ordered choices and greedy optionals written as the context-free
-shapes they mean; an earlier version generated from the `.prs` is in git history.
+The grammar is a hand-written lalrpop file (`src/nib.lalrpop`, from the
+language spec's grammar) and reuses the existing lexer. The QB grammar
+(`src/qb.lalrpop`, from the recovered `qbasbnf.prs`) was deleted; it is in git
+history.
 
 **LALR(1), checked.** lalrpop 0.23 always builds with its lane-table
 algorithm and `#[LALR]` does nothing, so "no conflicts" from it means LR(1).
-`python3 lalrpop2bison.py src/qb.lalrpop` converts a grammar (macros
+`python3 lalrpop2bison.py src/nib.lalrpop` converts a grammar (macros
 expanded, `x?` and `x*` inlined as lalrpop does) and runs bison, which builds
-true LALR(1) tables: no conflicts for either grammar.
+true LALR(1) tables: no conflicts (106 terminals, 113 rules).
 
 ## Against the existing parsers
 
@@ -190,7 +189,7 @@ changes VBDOS's verdict on a line ending in a comma; bare messages arrive with a
 
 The scanner, the typed parser (`ast`), the checker (`check`) and their tables (`kw`, `tokens`, `words`, `reserved`,
 `sigs`, `classes`) are `qbfront::front`; this crate re-exports them as `qb_ast`, `qb_check` and so on and keeps the
-LALR and recursive-descent comparators (`qb_rd`, `qb_tree`, `qb.lalrpop`) and the oracle harness (`corpus/`).
+recursive-descent comparators (`qb_rd`, `qb_tree`) and the oracle harness (`corpus/`).
 `qbfront::parse` is `front::parse`: parse, then check, the first diagnostic being the error. QuickrBASIC is not in
 the front yet (it has no BC to be held to, and its extensions are not ported), so that dialect still goes to the
 grammar-table parser in `qbfront::generated_parser`; a source only that parser takes is refused with a message that

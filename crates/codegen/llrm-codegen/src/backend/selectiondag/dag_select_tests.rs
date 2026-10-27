@@ -125,6 +125,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
+        strings: None,
+        registers: llrm_target::Target::registers(&machine),
         globals: &NoGlobals,
         block_at: &HashMap::default(),
         frame: &frame,

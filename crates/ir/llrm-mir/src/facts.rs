@@ -121,6 +121,12 @@ macro_rules! facts {
                 }
             }
 
+            /// The attribute a flag fact is stated by, none for any other fact.
+            #[inline]
+            fn flag_key(self) -> Option<&'static str> {
+                match self { $(Fact::$flag => Some($fkey),)* _ => None }
+            }
+
             /// The kinds of subject it can be stated of.
             pub fn kinds(self) -> &'static [Kind] {
                 match self {
@@ -446,6 +452,20 @@ impl Fact {
     /// otherwise has none.
     pub fn carrier(self) -> Attribute {
         self.attribute().unwrap_or_else(|| panic!("{} has no attribute", self.key()))
+    }
+
+    /// Whether `attributes` state this fact:
+    /// `Facts::of(attributes).contains(self)` for any fact but inlining
+    /// (which the strongest of wins), without building the facts.
+    #[inline]
+    pub fn stated_by(
+        self,
+        attributes: &[Attribute],
+    ) -> bool {
+        match self.flag_key() {
+            Some(key) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == key)),
+            None => attributes.iter().filter_map(Fact::of_attribute).any(|fact| fact == self),
+        }
     }
 
     /// The fact a carrier states, if it states one.

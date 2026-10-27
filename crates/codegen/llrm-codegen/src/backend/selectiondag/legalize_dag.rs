@@ -691,7 +691,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Simple(MVT::F64) => 8,
             _ => 4,
         };
-        let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
+        let NodeData::PoolIndex(entry, _) = self.dag.node(index).data else {
+            unreachable!("a pool node has its entry")
+        };
         let info = MemInfo {
             mem_vt: pool_vt,
             align,

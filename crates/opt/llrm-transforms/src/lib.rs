@@ -93,6 +93,9 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cgpmemalign;
+#[cfg(test)]
+mod cgpmemalign_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -102,8 +105,10 @@ pub mod combine_add_idioms;
 pub mod combine_addsub;
 pub mod combine_and;
 pub mod combine_and_select;
+pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
+pub mod combine_castcall;
 pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
@@ -181,6 +186,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod expansion;
 pub mod extload;
 pub mod extpromotion;
 pub mod fixednarrow;
@@ -203,6 +209,7 @@ pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
 pub mod indvars;
+pub mod inferfunctionattrs;
 pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;
@@ -274,6 +281,9 @@ mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memsetpattern;
+#[cfg(test)]
+mod memsetpattern_tests;
 pub mod mergestores;
 pub mod narrowspace;
 #[cfg(test)]
