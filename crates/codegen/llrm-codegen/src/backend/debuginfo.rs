@@ -143,6 +143,9 @@ pub struct Debug {
     /// By each procedure's symbol.
     pub procedures: IndexMap<String, Procedure>,
     pub globals: Vec<Global>,
+    /// The unit's source file where the frontend named one: its name, and the
+    /// MD5 of its text.
+    pub source: Option<(String, Option<Vec<u8>>)>,
 }
 
 fn narrow<T: TryFrom<i64>>(
@@ -335,7 +338,15 @@ pub fn described(
         nodes,
         procedures,
         globals: out,
+        source: di::file(module).map(|(name, md5)| (name, md5.and_then(|hex| unhexed(&hex)))),
     }))
+}
+
+/// The bytes a hex string spells.
+fn unhexed(hex: &str) -> Option<Vec<u8>> {
+    (hex.len() % 2 == 0)
+        .then(|| (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect())
+        .flatten()
 }
 
 /// Where one value is, as the model says it.
@@ -451,7 +462,13 @@ pub fn laid_out(
         frame_register: debug.frame_register.clone(),
         return_register: debug.return_register.clone(),
         registers: debug.registers.clone(),
-        files: vec![model::File { name: source.to_owned(), checksum: None }],
+        files: vec![match &debug.source {
+            Some((name, md5)) => model::File {
+                name: name.clone(),
+                checksum: md5.clone().map(|bytes| (llrm_object::debug::ChecksumKind::Md5, bytes)),
+            },
+            None => model::File { name: source.to_owned(), checksum: None },
+        }],
         types: debug.types.clone(),
         ..Info::default()
     };
