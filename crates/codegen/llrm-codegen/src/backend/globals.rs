@@ -88,8 +88,9 @@ pub fn space(
 
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
-/// is free, so one no assembler takes becomes `G$n`; an external one must
-/// be a symbol once mangled. An intrinsic has none.
+/// is free, so one no assembler takes becomes `G$n`, as does an external one
+/// defined here (a frontend names it for the object); an imported one must be
+/// a symbol once mangled. An intrinsic has none.
 /// The group index naming a far variable's segment, `seg name`.
 pub fn segment_of(global: GlobalId) -> i64 {
     SEGMENTS + i64::from(global.0)
@@ -113,7 +114,7 @@ pub fn names(
         let name = linked(global.name.as_deref().unwrap_or_default());
         let symbol = if is_symbol(&name) {
             name
-        } else if global.linkage == llrm_mir::Linkage::External {
+        } else if global.linkage == llrm_mir::Linkage::External && space(module, id) == Space::External {
             return Err(format!("@{name} is no assembler symbol"));
         } else {
             format!("G${at}")
