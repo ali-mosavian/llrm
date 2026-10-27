@@ -279,7 +279,11 @@ fn instruction(
             let Some(Loc::Held(remainder)) = what.dests.get(1) else { return Err("a divide without a remainder".to_owned()) };
             let (ax, dx) = if width == 2 { ("ax", "dx") } else { ("eax", "edx") };
             if one.requires.is_empty() {
-                writeln!(out, "    ${dx} = COPY {}\n    ${ax} = COPY {}", vreg(high)?, vreg(low)?).unwrap();
+                for (register, held) in [(dx, high), (ax, low)] {
+                    if !in_register.contains(&held.value) {
+                        writeln!(out, "    ${register} = COPY {}", vreg(held)?).unwrap();
+                    }
+                }
             }
             let opcode = if name == "idiv" { "IDIV" } else { "DIV" };
             writeln!(
@@ -292,7 +296,7 @@ fn instruction(
         }
         // Sign-extends eax into edx.
         ("cdq", Some(Loc::Held(d)), [Loc::Held(s)]) => {
-            if one.requires.is_empty() {
+            if one.requires.is_empty() && !in_register.contains(&s.value) {
                 writeln!(out, "    $eax = COPY {}", vreg(s)?).unwrap();
             }
             writeln!(out, "    CDQ implicit-def $eax, implicit-def $edx, implicit $eax\n    {} = COPY $edx", vreg(d)?).unwrap();
@@ -601,7 +605,10 @@ pub fn mir(
                 register_only.insert(dest.value);
                 continue;
             }
-            if one.what.as_ref().and_then(|w| w.name.as_deref()).is_some_and(|name| condition(name).is_some()) {
+            if one.what.as_ref().and_then(|w| w.name.as_deref()).is_some_and(|name| {
+                condition(name).is_some()
+                    || name.strip_prefix("set").is_some_and(|rest| condition(&format!("j{rest}")).is_some())
+            }) {
                 flags_are_read(&mut text);
             }
             instruction(one, &targets, &mut jumps, &mut symbols, &mut callees, &register_only, &mut text)
@@ -925,6 +932,21 @@ mod tests {
         assert!(text.contains("IDIV32r %5, implicit-def $eax, implicit-def $edx"), "{text}");
         assert!(text.contains("%3 = COPY $eax\n    %4 = COPY $edx"), "{text}");
         assert!(text.contains("%3 = IMUL32rm %3, %fixed-stack.0"), "{text}");
+    }
+
+    /// `and` then `sete` printed the `and`'s flags as dead, and the pin's
+    /// verifier refused "using an undefined physical register" on
+    /// jpeg_single's `SETCCr`.
+    #[test]
+    fn test_a_set_keeps_the_flags_of_the_instruction_before_it_alive() {
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let and = insn("and", Operation::Binary, vec![held(1)], vec![held(1), imm(15)]);
+        let set = insn("sete", Operation::Unary, vec![held(2)], vec![]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![and, set, ret]))];
+        let body = LirBody::new("set", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("AND32ri %1, 15, implicit-def $eflags"), "{text}");
     }
 
     #[test]
