@@ -1600,6 +1600,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // holds.
     let mut work: std::collections::VecDeque<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    // `LoopFullUnrollPass` hands `addSiblingLoops` every sibling the unroll
+    // left that was not there before, the unrolled loop's own first iteration
+    // among them: they are new to the loop passes after it.
+    let mut revisited: Vec<BlockId> = Vec::new();
     let mut changed = simplified || closed;
     if changed {
         run.scev = ScalarEvolution::new();
@@ -1685,22 +1689,36 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for one in fresh {
+        for &one in &fresh {
             work.push_front(one);
         }
+        revisited.extend(fresh);
     }
     let emptied = std::mem::take(&mut run.emptied);
     run.function.erase_blocks(&emptied).expect("blocks merged away are empty and unnamed");
     if changed {
         analyzed = Analyzed::of(run);
     }
-    run.created = analyzed
+    let mut created: Vec<BlockId> = analyzed
         .loops
         .get_loops_in_preorder()
         .iter()
         .map(|one| one.get_header())
         .filter(|header| !at_first.contains(header))
         .collect();
+    for header in revisited {
+        let Some(found) = analyzed.loops.get_loop_for(header).filter(|one| one.get_header() == header) else {
+            continue;
+        };
+        let mut nest = vec![found];
+        while let Some(one) = nest.pop() {
+            if !created.contains(&one.get_header()) {
+                created.push(one.get_header());
+            }
+            nest.extend(one.get_sub_loops());
+        }
+    }
+    run.created = created;
     changed
 }
 

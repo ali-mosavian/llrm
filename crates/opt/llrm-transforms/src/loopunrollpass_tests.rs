@@ -312,9 +312,29 @@ fn a_full_unroll_hands_over_the_loops_it_made() {
     );
     assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
     assert!(!created.borrow().is_empty(), "the copy of the inner loop is a loop the unroll made: {text}");
-    // The text has five blocks, b0 to out: a loop made is headed by a block
-    // made.
-    assert!(created.borrow().iter().all(|header| header.0 >= 5), "{:?}: {text}", created.borrow());
+    assert_eq!(created.borrow().len(), 2, "the copy and the first trip's own loop: {:?}: {text}", created.borrow());
+}
+
+/// The first trip of an unrolled loop keeps its inner loop's blocks, and
+/// `addSiblingLoops` hands that loop on with the copies. Left out, shellsort's
+/// `while (at >= 32 && ...)` after the `gap = 32` trip kept its one-trip loop
+/// (28 blocks to the pin's 25).
+#[test]
+fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
+    let mut module = parsed(OUTER_TWICE);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            created: std::rc::Rc::clone(&created),
+        },
+    );
+    // The text has five blocks, b0 to out: a loop headed by one of them is the
+    // first trip's own.
+    assert!(created.borrow().iter().any(|header| header.0 < 5), "{:?}", created.borrow());
 }
 
 /// `while (phase == DYING && now >= next_frame) { frame++; next_frame += 0.1f;
