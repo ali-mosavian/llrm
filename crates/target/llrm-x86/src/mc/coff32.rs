@@ -2,7 +2,7 @@
 //! container is `llrm-coff`'s.
 
 use llrm_coff::{Machine, Relocation};
-use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
+use llrm_object::{FixupKind, Object, Reloc, Unsupported};
 
 use super::fixup;
 
@@ -14,7 +14,7 @@ const REL32: u16 = 0x14;
 struct I386;
 
 impl Machine for I386 {
-    const ARCH: Arch = Arch::I386;
+    const BITS: u8 = 32;
     const NUMBER: u16 = 0x14C;
     const SAFE_SEH: bool = true;
 
@@ -141,7 +141,7 @@ mod tests {
     ) -> Object {
         Object {
             name: "a.c".into(),
-            arch: Arch::I386,
+            bits: 32,
             sections,
             symbols,
             omf_groups: Vec::new(),
@@ -285,7 +285,7 @@ mod tests {
         assert!(write(&object(vec![Section { role: Role::Stack, ..data(vec![0], vec![]) }], vec![])).is_err());
         assert!(write(&object(vec![Section { align: 3, ..data(vec![0], vec![]) }], vec![])).is_err());
         let mut other = object(vec![data(vec![0], vec![])], vec![]);
-        other.arch = Arch::I8086;
+        other.bits = 16;
         assert!(write(&other).is_err());
     }
 

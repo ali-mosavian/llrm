@@ -787,7 +787,7 @@ pub fn sections(
     object: &Object,
     info: &Info,
 ) -> Result<[Section; 2], Error> {
-    let wide = info.target_of(object.arch).address_bytes == 4;
+    let wide = info.target_of(object.bits).address_bytes == 4;
     let mut types =
         Types { info, wide, records: Vec::new(), index: vec![None; info.types.len()], procedures: Vec::new() };
     let mut symbols = Symbols { object, info, wide, bytes: Vec::new(), relocs: Vec::new() };

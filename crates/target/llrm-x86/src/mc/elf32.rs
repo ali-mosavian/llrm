@@ -3,7 +3,7 @@
 //! `llrm-elf`'s.
 
 use llrm_elf::{Machine, Relocation};
-use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
+use llrm_object::{FixupKind, Object, Reloc, Unsupported};
 
 use super::fixup;
 
@@ -18,7 +18,7 @@ const R_386_PC8: u32 = 23;
 struct I386;
 
 impl Machine for I386 {
-    const ARCH: Arch = Arch::I386;
+    const BITS: u8 = 32;
     const WIDE: bool = false;
     const NUMBER: u16 = 3;
     const ADDEND: bool = false;
@@ -118,7 +118,7 @@ mod tests {
     ) -> Object {
         Object {
             name: "a.c".into(),
-            arch: Arch::I386,
+            bits: 32,
             sections,
             symbols,
             omf_groups: Vec::new(),
@@ -220,7 +220,7 @@ mod tests {
         let stack = Section { role: Role::Stack, ..text(vec![0], vec![]) };
         assert!(write(&object(vec![stack], vec![])).is_err());
         let mut real = object(vec![text(vec![0], vec![])], vec![]);
-        real.arch = Arch::I8086;
+        real.bits = 16;
         assert!(write(&real).is_err());
     }
 

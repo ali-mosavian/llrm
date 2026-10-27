@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
-use llrm_object::{Arch, Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
@@ -190,7 +190,7 @@ pub fn object(
     let _ = (GlobalKind::Variable, Linkage::External);
     Ok(Object {
         name: name.to_owned(),
-        arch: Arch::Arm64,
+        bits: 64,
         sections,
         symbols: symbols.list,
         omf_groups: Vec::new(),

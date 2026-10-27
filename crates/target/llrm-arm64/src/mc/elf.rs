@@ -5,7 +5,7 @@
 //! (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64ELFObjectWriter.cpp>).
 
 use llrm_elf::{Machine, Relocation};
-use llrm_object::{Arch, Fix, FixupKind, Object, Reloc, Unsupported};
+use llrm_object::{Fix, FixupKind, Object, Reloc, Unsupported};
 
 use super::fixup;
 
@@ -26,7 +26,7 @@ const R_AARCH64_LD64_GOT_LO12_NC: u32 = 312;
 struct Arm64;
 
 impl Machine for Arm64 {
-    const ARCH: Arch = Arch::Arm64;
+    const BITS: u8 = 64;
     const WIDE: bool = true;
     const NUMBER: u16 = EM_AARCH64;
     const ADDEND: bool = true;
@@ -133,7 +133,7 @@ mod tests {
         let relocs = vec![reloc(0, fixup::PAGE21_FIX, 2, 0), reloc(4, fixup::page_offset12(Some(3)), 2, 0)];
         Object {
             name: "hello.s".into(),
-            arch: Arch::Arm64,
+            bits: 64,
             sections: vec![
                 section(".text", Role::Text, text, relocs),
                 section(".rodata", Role::ROData, b"hello\n".to_vec(), vec![]),

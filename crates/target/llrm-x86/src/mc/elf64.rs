@@ -3,7 +3,7 @@
 //! `llrm-elf`'s.
 
 use llrm_elf::{Machine, Relocation};
-use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
+use llrm_object::{FixupKind, Object, Reloc, Unsupported};
 
 use super::fixup;
 
@@ -21,7 +21,7 @@ const R_X86_64_REX_GOTPCRELX: u32 = 42;
 struct X8664;
 
 impl Machine for X8664 {
-    const ARCH: Arch = Arch::X8664;
+    const BITS: u8 = 64;
     const WIDE: bool = true;
     const NUMBER: u16 = 62;
     const ADDEND: bool = true;
@@ -108,7 +108,7 @@ mod tests {
         let pointer = Reloc::new(0, Fix::abs(8), Target::Symbol(1), 1);
         Object {
             name: "hello.s".into(),
-            arch: Arch::X8664,
+            bits: 64,
             sections: vec![
                 section(".text", Role::Text, text, vec![load]),
                 section(".rodata", Role::ROData, b"hello\n".to_vec(), vec![]),
@@ -212,7 +212,7 @@ mod tests {
         ];
         let object = Object {
             name: "puts.s".into(),
-            arch: Arch::X8664,
+            bits: 64,
             sections: vec![
                 section(".text", Role::Text, text, relocs),
                 section(".rodata", Role::ROData, b"glibc ok\0".to_vec(), vec![]),

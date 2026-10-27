@@ -98,9 +98,12 @@ pub(crate) fn record(
 
 /// `object` with its debug information as C13 sections, the information itself
 /// dropped.
-pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
+pub fn expanded(
+    object: &Object,
+    machine: Option<u16>,
+) -> Result<Object, Unsupported> {
     let Some(info) = &object.debug else { return Ok(object.clone()) };
-    let encoded = encode(object, info)?;
+    let encoded = encode(object, info, machine)?;
     let section = |name: &str, one: Section| llrm_object::Section {
         name: name.to_owned(),
         role: llrm_object::Role::Debug,
@@ -120,22 +123,25 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
 fn encode(
     object: &Object,
     info: &Info,
+    machine: Option<u16>,
 ) -> Result<Encoded, Unsupported> {
     let types = types::encode(object, info)?;
-    let symbols = symbols::encode(object, info, &Registers { info }, &types)?;
+    let symbols = symbols::encode(object, info, machine, &Registers { info }, &types)?;
     let mut image = Vec::new();
     put32(&mut image, SIGNATURE);
     image.extend(types.records);
     Ok(Encoded { symbols, types: Section { image, relocs: Vec::new() } })
 }
 
-/// CodeView's machine number, for `S_COMPILE3`.
+/// CodeView's machine number, for `S_COMPILE3`: the debug information's own,
+/// else the target's.
 pub(crate) fn machine(
     object: &Object,
     info: &Info,
+    target: Option<u16>,
 ) -> Result<u16, Unsupported> {
-    match info.target_of(object.arch).codeview_machine {
+    match info.target_of(object.bits).codeview_machine.or(target) {
         Some(number) => Ok(number),
-        None => refused(format!("{:?} has no C13 machine", object.arch)),
+        None => refused(format!("a {}-bit object has no C13 machine", object.bits)),
     }
 }

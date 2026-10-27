@@ -25,7 +25,7 @@ impl OmfTargetWriter for X86Omf {
 
 #[cfg(test)]
 mod tests {
-    use llrm_object::{Arch, Binding, Definition, Fix, Object, Reloc, Role, Section, Symbol, Target};
+    use llrm_object::{Binding, Definition, Fix, Object, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
     use crate::mc::fixup;
@@ -33,7 +33,7 @@ mod tests {
     fn object(fix: Fix) -> Object {
         Object {
             name: "t.asm".into(),
-            arch: Arch::I386,
+            bits: 32,
             sections: vec![Section {
                 name: "_TEXT".into(),
                 role: Role::Text,

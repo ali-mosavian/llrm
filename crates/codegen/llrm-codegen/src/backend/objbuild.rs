@@ -62,9 +62,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use llrm_lir::registers::Regs;
-use llrm_object::{
-    Arch, Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target,
-};
+use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 
 use crate::backend::masm;
@@ -1252,10 +1250,10 @@ pub fn object_of(
     }
     Ok(Object {
         name: source.to_owned(),
-        arch: match model {
-            CodeModel::Flat64 => Arch::X8664,
-            CodeModel::Flat32 => Arch::I386,
-            CodeModel::Segmented16 => Arch::I8086,
+        bits: match model {
+            CodeModel::Flat64 => 64u8,
+            CodeModel::Flat32 => 32u8,
+            CodeModel::Segmented16 => 16u8,
         },
         sections,
         symbols: table,

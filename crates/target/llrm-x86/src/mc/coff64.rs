@@ -2,7 +2,7 @@
 //! container is `llrm-coff`'s.
 
 use llrm_coff::{Machine, Relocation};
-use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
+use llrm_object::{FixupKind, Object, Reloc, Unsupported};
 
 use super::fixup;
 
@@ -15,7 +15,7 @@ const SECREL: u16 = 0xB;
 struct X8664;
 
 impl Machine for X8664 {
-    const ARCH: Arch = Arch::X8664;
+    const BITS: u8 = 64;
     const NUMBER: u16 = 0x8664;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
@@ -70,7 +70,7 @@ mod tests {
     ) -> Object {
         Object {
             name: "a.c".into(),
-            arch: Arch::X8664,
+            bits: 64,
             sections,
             symbols,
             omf_groups: Vec::new(),

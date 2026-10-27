@@ -1,5 +1,5 @@
 use llrm_object::debug::{Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable};
-use llrm_object::{Arch, Binding, Object, Section, Symbol, Target};
+use llrm_object::{Binding, Object, Section, Symbol, Target};
 
 use super::*;
 
@@ -55,7 +55,7 @@ fn object(
     };
     Object {
         name: "f.c".into(),
-        arch: Arch::I386,
+        bits: 32,
         sections: vec![text],
         symbols: vec![Symbol {
             name: "_f".into(),
@@ -279,7 +279,7 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
     };
     let scratch = tempfile::tempdir().unwrap();
     // 32 and 64: ELF32 and ELF64; 0: Mach-O, which is 64-bit.
-    for (arch, bits) in [(Arch::I386, 32), (Arch::X8664, 64), (Arch::X8664, 0)] {
+    for (arch, bits) in [(32u8, 32), (64u8, 64), (64u8, 0)] {
         for version in [4u16, 5] {
             let types = vec![
                 int(),
@@ -331,7 +331,7 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
                 types,
                 Format::Dwarf { version },
             );
-            made.arch = arch;
+            made.bits = arch;
             let bytes = match bits {
                 32 => objects("elf", &made),
                 64 => objects("elf", &made),

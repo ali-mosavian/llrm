@@ -1,7 +1,5 @@
 use llrm_elf::{Machine, Relocation, write};
-use llrm_object::{
-    Arch, Binding, Definition, Fix, FixupKind, Object, Reloc, Role, Section, Symbol, Target, Unsupported,
-};
+use llrm_object::{Binding, Definition, Fix, FixupKind, Object, Reloc, Role, Section, Symbol, Target, Unsupported};
 
 /// A kind no crate here knows: `FIRST_TARGET + 99`.
 const MADE_UP: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 99);
@@ -9,7 +7,7 @@ const MADE_UP: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 99);
 struct MadeUp;
 
 impl Machine for MadeUp {
-    const ARCH: Arch = Arch::Arm64;
+    const BITS: u8 = 64;
     const WIDE: bool = true;
     const NUMBER: u16 = 183;
     const ADDEND: bool = true;
@@ -25,7 +23,7 @@ impl Machine for MadeUp {
 fn object(fix: Fix) -> Object {
     Object {
         name: "made.s".into(),
-        arch: Arch::Arm64,
+        bits: 64,
         sections: vec![Section {
             name: ".text".into(),
             role: Role::Text,

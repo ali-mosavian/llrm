@@ -3,7 +3,7 @@
 //! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
 //! machines.
 
-use llrm_object::{Arch, Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
 
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
@@ -33,7 +33,8 @@ pub struct Relocation {
 
 /// What a machine says of its COFF.
 pub trait Machine {
-    const ARCH: Arch;
+    /// The width of a near offset, in bits, of the objects this machine takes.
+    const BITS: u8;
     /// `IMAGE_FILE_MACHINE_*`.
     const NUMBER: u16;
     /// `@feat.00` bit 0: no exception handler is left unregistered. A 32-bit
@@ -175,8 +176,12 @@ fn pad(
 /// `object` as a COFF object file of machine `M`; its debug information, if
 /// any, is already C13 sections (`llrm_codeview::expanded`).
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    if object.arch != M::ARCH {
-        return Err(unsupported(format!("{:?} is not the {:?} this COFF writer is for", object.arch, M::ARCH)));
+    if object.bits != M::BITS {
+        return Err(unsupported(format!(
+            "a {}-bit object is not the {}-bit this COFF writer is for",
+            object.bits,
+            M::BITS
+        )));
     }
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));

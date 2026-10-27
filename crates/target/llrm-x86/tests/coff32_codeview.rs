@@ -7,7 +7,7 @@ use std::process::Command;
 use llrm_object::debug::{
     Enumerator, Field, File, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
 };
-use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
+use llrm_object::{Binding, Definition, Object, Role, Section, Symbol};
 
 fn llvm(tool: &str) -> Option<PathBuf> {
     let mut dirs: Vec<PathBuf> =
@@ -145,7 +145,7 @@ fn object() -> Object {
     };
     Object {
         name: "f.c".into(),
-        arch: Arch::I386,
+        bits: 32,
         sections: vec![text, data],
         symbols: vec![public("_f", 0, 0), public("_g", 1, 0)],
         omf_groups: Vec::new(),

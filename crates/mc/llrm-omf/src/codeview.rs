@@ -274,7 +274,7 @@ pub fn lines(
 #[cfg(test)]
 mod tests {
     use llrm_object::debug::{Function, Line, Range, Scalar as S, Type as T, Variable};
-    use llrm_object::{Arch, Binding, Definition, Symbol};
+    use llrm_object::{Binding, Definition, Symbol};
 
     use super::*;
     use crate::{cvinfo, omf, write};
@@ -323,7 +323,7 @@ mod tests {
         };
         Object {
             name: "f.c".into(),
-            arch: Arch::I8086,
+            bits: 16,
             sections: vec![text],
             symbols: vec![Symbol {
                 name: "_f".into(),

@@ -9,7 +9,16 @@ pub mod fixup;
 pub mod macho;
 pub mod omf;
 
-use llrm_object::{Arch, AsmInfo, Object, ObjectTarget, Unsupported};
+use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported};
+
+/// CodeView's machine number of x86 at `bits`.
+fn codeview_machine(bits: u8) -> Option<u16> {
+    match bits {
+        32 => Some(0x03),
+        64 => Some(0xD0),
+        _ => None,
+    }
+}
 
 /// x86's object writers: the ELF, COFF and Mach-O tables of i386 and x86-64.
 pub struct X86Objects;
@@ -29,18 +38,18 @@ impl ObjectTarget for X86Objects {
                 &expanded
             }
             ("coff", Some(_)) => {
-                expanded = llrm_codeview::expanded(object)?;
+                expanded = llrm_codeview::expanded(object, codeview_machine(object.bits))?;
                 &expanded
             }
             _ => object,
         };
-        match (format, object.arch) {
-            ("elf", Arch::I386) => elf32::write(object),
-            ("elf", Arch::X8664) => elf64::write(object),
-            ("macho", Arch::X8664) => llrm_macho::write(object, &macho::X8664MachO),
-            ("coff", Arch::I386) => coff32::write(object),
-            ("coff", Arch::X8664) => coff64::write(object),
-            _ => Err(Unsupported(format!("no {format} writer for {:?} yet", object.arch))),
+        match (format, object.bits) {
+            ("elf", 32) => elf32::write(object),
+            ("elf", 64) => elf64::write(object),
+            ("macho", 64) => llrm_macho::write(object, &macho::X8664MachO),
+            ("coff", 32) => coff32::write(object),
+            ("coff", 64) => coff64::write(object),
+            _ => Err(Unsupported(format!("no {format} writer for a {}-bit object yet", object.bits))),
         }
     }
 
@@ -56,5 +65,17 @@ impl ObjectTarget for X86Objects {
             "coff" => AsmInfo { pref_align: false, hosted: true, location_ranges: true, cfa_locations: false },
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Arch` told the CodeView machine apart; the width does now, and a width
+    /// x86 has no C13 machine for has none.
+    #[test]
+    fn codeview_names_the_machine_by_width() {
+        assert_eq!((codeview_machine(32), codeview_machine(64), codeview_machine(16)), (Some(0x03), Some(0xD0), None));
     }
 }

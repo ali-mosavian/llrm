@@ -4,7 +4,7 @@
 //! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
 //! `mc::elf` are the machines.
 
-use llrm_object::{Arch, Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -35,7 +35,8 @@ pub struct Relocation {
 
 /// What a machine says of its ELF.
 pub trait Machine {
-    const ARCH: Arch;
+    /// The width of a near offset, in bits, of the objects this machine takes.
+    const BITS: u8;
     /// ELFCLASS64 rather than ELFCLASS32.
     const WIDE: bool;
     /// `e_machine`.
@@ -156,8 +157,12 @@ fn fits(
 
 /// `object` as an ELF relocatable file of machine `M`.
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    if object.arch != M::ARCH {
-        return Err(unsupported(format!("{:?} is not the {:?} this ELF writer is for", object.arch, M::ARCH)));
+    if object.bits != M::BITS {
+        return Err(unsupported(format!(
+            "a {}-bit object is not the {}-bit this ELF writer is for",
+            object.bits,
+            M::BITS
+        )));
     }
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));

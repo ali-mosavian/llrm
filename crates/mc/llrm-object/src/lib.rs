@@ -3,31 +3,6 @@
 
 pub mod debug;
 
-/// The machine an object's code is for.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Arch {
-    /// 16-bit x86: real mode.
-    I8086,
-    /// 32-bit x86.
-    I386,
-    /// x86-64.
-    X8664,
-    /// arm64 (AArch64).
-    Arm64,
-}
-
-impl Arch {
-    /// The width of a near offset, in bits.
-    pub fn bits(self) -> u32 {
-        match self {
-            Arch::I8086 => 16,
-            Arch::I386 => 32,
-            Arch::X8664 | Arch::Arm64 => 64,
-        }
-    }
-}
-
 /// What a section holds, which each format spells its own way.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
@@ -276,7 +251,8 @@ pub struct OmfGroup {
 pub struct Object {
     /// The source's name.
     pub name: String,
-    pub arch: Arch,
+    /// The width of a near offset, in bits: 16 is real mode's segmented x86.
+    pub bits: u8,
     pub sections: Vec<Section>,
     /// Defined symbols in the order they were defined, then the undefined ones
     /// in the order they are declared.

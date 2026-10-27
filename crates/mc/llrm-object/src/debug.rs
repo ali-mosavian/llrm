@@ -122,19 +122,10 @@ pub struct DebugTarget {
 }
 
 impl DebugTarget {
-    /// What the architectures of today say; the target replaces it
+    /// What the width of a near offset says; the target adds what it knows
     /// (`Info::target`).
-    pub fn of(arch: crate::Arch) -> Self {
-        use crate::Arch;
-        Self {
-            address_bytes: (arch.bits() / 8) as u8,
-            segmented: arch == Arch::I8086,
-            codeview_machine: match arch {
-                Arch::I386 => Some(0x03),
-                Arch::X8664 => Some(0xD0),
-                _ => None,
-            },
-        }
+    pub fn of(bits: u8) -> Self {
+        Self { address_bytes: bits / 8, segmented: bits == 16, codeview_machine: None }
     }
 }
 
@@ -174,9 +165,9 @@ impl Info {
     /// The machine this information is written for.
     pub fn target_of(
         &self,
-        arch: crate::Arch,
+        bits: u8,
     ) -> DebugTarget {
-        self.target.unwrap_or_else(|| DebugTarget::of(arch))
+        self.target.unwrap_or_else(|| DebugTarget::of(bits))
     }
 }
 

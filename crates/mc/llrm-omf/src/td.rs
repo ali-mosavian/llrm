@@ -569,7 +569,7 @@ pub fn records(
     object: &Object,
     info: &Info,
 ) -> Result<Debug, Error> {
-    if !info.target_of(object.arch).segmented {
+    if !info.target_of(object.bits).segmented {
         return refused("its records are 16-bit: Borland's 32-bit information is another format");
     }
     let mut builder = Builder {
@@ -661,7 +661,7 @@ pub fn records(
 #[cfg(test)]
 mod tests {
     use llrm_object::debug::{Block, Field, File, Format, Function, Language, Range, Variable};
-    use llrm_object::{Arch, Section, Symbol};
+    use llrm_object::{Section, Symbol};
 
     use super::*;
     use crate::write;
@@ -738,7 +738,7 @@ mod tests {
         info(&mut made);
         Object {
             name: "t.c".into(),
-            arch: Arch::I8086,
+            bits: 16,
             sections: vec![text, data],
             symbols: vec![symbol("_f", 0, 0, Binding::Public), symbol("_g", 1, 2, Binding::Public)],
             omf_groups: Vec::new(),
@@ -918,7 +918,7 @@ mod tests {
         let basic = object(vec![int()], vec![kept], |info| info.language = Language::Basic);
         assert!(!all(&basic, LOCALS).is_empty(), "another language's information is written");
         let mut wide = object(vec![int()], Vec::new(), |_| {});
-        wide.arch = Arch::I386;
+        wide.bits = 32;
         assert!(write::write_generic(&wide).unwrap_err().to_string().contains("16-bit"));
     }
 

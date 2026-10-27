@@ -465,7 +465,7 @@ fn ledata(
     named: Option<&Named>,
     index: usize,
 ) -> Result<Vec<Rc<omf::Record>>, Error> {
-    let bits = object.arch.bits();
+    let bits = u32::from(object.bits);
     let section = &object.sections[index];
     let mut at_sorted: Vec<usize> = section.relocs.iter().map(|one| one.at).collect();
     at_sorted.sort_unstable();
@@ -624,7 +624,7 @@ pub fn write(
         }
     };
     let object = &*object;
-    let bits = object.arch.bits();
+    let bits = u32::from(object.bits);
     if !matches!(bits, 16 | 32) {
         return Err(unencodable(format!("OMF has no {bits}-bit records")));
     }
@@ -839,7 +839,7 @@ mod tests {
         }
     }
 
-    use llrm_object::{Arch, Binding, Reloc, Symbol};
+    use llrm_object::{Binding, Reloc, Symbol};
 
     use super::*;
 
@@ -864,13 +864,13 @@ mod tests {
     }
 
     fn object(
-        arch: Arch,
+        bits: u8,
         sections: Vec<Section>,
         symbols: Vec<Symbol>,
     ) -> Object {
         Object {
             name: "t.c".into(),
-            arch,
+            bits,
             sections,
             symbols,
             omf_groups: Vec::new(),
@@ -883,7 +883,7 @@ mod tests {
     /// as an object named `t.c`.
     fn with_helper(code: Vec<u8>) -> Object {
         let mut made = object(
-            Arch::I8086,
+            16u8,
             vec![section("T", code, Vec::new())],
             vec![Symbol {
                 name: "helper".into(),
@@ -944,8 +944,7 @@ mod tests {
         let size = CHUNK * 3;
         let starts = [CHUNK - 1, 2 * CHUNK - 2];
         let relocs = starts.iter().map(|&at| Reloc::new(at, Fix::FAR_POINTER, Target::Symbol(0), 0)).collect();
-        let made =
-            object(Arch::I8086, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
+        let made = object(16u8, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
         let bytes = write(&made).unwrap();
         let records = crate::omf::parse(&bytes).unwrap();
         let cuts: Vec<usize> = records
@@ -966,7 +965,7 @@ mod tests {
     fn a_call_is_a_self_relative_fixup_against_an_extern() {
         let call = Reloc::new(1, Fix::pc_rel(4, 4), Target::Symbol(0), -2);
         let made = object(
-            Arch::I386,
+            32u8,
             vec![section("T", vec![0xE8, 0, 0, 0, 0], vec![call])],
             vec![symbol("f", Definition::Undefined)],
         );
@@ -991,7 +990,7 @@ mod tests {
         let far = Reloc::new(2, Fix::FAR_POINTER, Target::Section(0), 0);
         let mut debug = section("$$SYMBOLS", vec![0; 8], vec![far]);
         debug.role = Role::Debug;
-        let mut made = object(Arch::I8086, vec![data, debug], vec![]);
+        let mut made = object(16u8, vec![data, debug], vec![]);
         made.omf_groups = vec![llrm_object::OmfGroup { name: "DGROUP".into(), members: vec![0] }];
         let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
         let fixupp = records.iter().filter(|one| one.r#type == omf::FIXUPP).last().unwrap();
@@ -1002,7 +1001,7 @@ mod tests {
     /// A 64-bit object was written with 16-bit records.
     #[test]
     fn a_64_bit_object_is_refused() {
-        let made = object(Arch::X8664, vec![section("T", vec![0xC3], vec![])], vec![]);
+        let made = object(64u8, vec![section("T", vec![0xC3], vec![])], vec![]);
         assert!(matches!(write(&made), Err(Error::Unencodable(text)) if text.contains("64-bit")));
     }
 
@@ -1010,7 +1009,7 @@ mod tests {
     /// one byte; the writer refuses it, and 64K exactly keeps the B bit.
     #[test]
     fn a_16_bit_segment_past_64k_is_refused() {
-        let big = |bytes: usize| object(Arch::I8086, vec![section("T", vec![0; bytes], vec![])], vec![]);
+        let big = |bytes: usize| object(16u8, vec![section("T", vec![0; bytes], vec![])], vec![]);
         assert!(matches!(write(&big(0x10001)), Err(Error::Unencodable(text)) if text.contains("holds 65536")));
         assert!(write(&big(0x10000)).is_ok());
     }
@@ -1020,8 +1019,7 @@ mod tests {
     #[test]
     fn a_pc_relative_field_omf_cannot_say_is_refused() {
         let jump = Reloc::new(1, Fix::pc_rel(4, 8), Target::Symbol(0), 0);
-        let made =
-            object(Arch::I386, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
+        let made = object(32u8, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
         assert!(matches!(write(&made), Err(Error::Unencodable(_))));
     }
 }

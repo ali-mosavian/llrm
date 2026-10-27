@@ -4,18 +4,17 @@ use std::path::Path;
 use std::process::Command;
 
 use llrm_macho::{MachTargetWriter, write as write_with};
-use llrm_object::{Arch, ObjectTarget};
+use llrm_object::ObjectTarget;
 use llrm_object::{Binding, Definition, Fix, Object, Role, Section, Target, Unsupported};
 use llrm_object::{Reloc, Symbol};
 
-/// `llrm_macho::write` with the writer of the object's architecture; any other
-/// has none.
+/// The x86-64 Mach-O writer; any other width has none.
 fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    match object.arch {
-        Arch::X8664 => llrm_x86::mc::X86Objects.write_object("macho", object),
-        Arch::Arm64 => llrm_arm64::mc::Arm64Objects.write_object("macho", object),
-        other => Err(Unsupported(format!("{other:?} has no Mach-O writer"))),
-    }
+    llrm_x86::mc::X86Objects.write_object("macho", object)
+}
+
+fn write_arm64(object: &Object) -> Result<Vec<u8>, Unsupported> {
+    llrm_arm64::mc::Arm64Objects.write_object("macho", object)
 }
 
 /// A target no one has written: its CPU type is made up.
@@ -46,7 +45,7 @@ impl MachTargetWriter for Made {
 #[test]
 fn a_target_the_writer_has_never_heard_of_writes_a_mach_o_with_its_cpu_type() {
     let mut made = program();
-    made.arch = Arch::I386;
+    made.bits = 32;
     made.sections[0].relocs.clear();
     let bytes = write_with(&made, &Made).unwrap();
     assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 0x0100_4242);
@@ -113,7 +112,7 @@ fn program() -> Object {
     ];
     Object {
         name: "ref.s".into(),
-        arch: Arch::X8664,
+        bits: 64,
         sections: vec![
             section("text", Role::Text, text, relocs),
             section("const", Role::ROData, b"hello\n".to_vec(), vec![]),
@@ -281,7 +280,7 @@ fn arm64_program() -> Object {
     let local = |name: &str, section, offset| Symbol { binding: Binding::Local, ..defined(name, section, offset) };
     Object {
         name: "m.s".into(),
-        arch: Arch::Arm64,
+        bits: 64,
         sections: vec![
             text,
             section("const", Role::ROData, b"hi\0".to_vec(), vec![]),
@@ -323,7 +322,7 @@ fn arm64_reads_as_llvm_mc_writes_the_same_program() {
     let scratch = tempfile::tempdir().unwrap();
     let (mine, theirs, source) =
         (scratch.path().join("mine.o"), scratch.path().join("theirs.o"), scratch.path().join("ref.s"));
-    std::fs::write(&mine, write(&arm64_program()).unwrap()).unwrap();
+    std::fs::write(&mine, write_arm64(&arm64_program()).unwrap()).unwrap();
     std::fs::write(&source, ARM64_REFERENCE).unwrap();
     let made = Command::new(mc)
         .args(["-triple", "arm64-apple-macos", "-filetype=obj"])
@@ -365,7 +364,7 @@ fn ld64_links_it_with_a_clang_object() {
     let text = vec![0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC3];
     let made = Object {
         name: "m.s".into(),
-        arch: Arch::X8664,
+        bits: 64,
         sections: vec![
             section(
                 "text",
@@ -468,8 +467,8 @@ fn what_mach_o_cannot_say_is_refused() {
     far.sections[1].near = false;
     assert!(write(&far).unwrap_err().0.contains("selector"));
     let mut other = program();
-    other.arch = Arch::I386;
-    assert!(write(&other).unwrap_err().0.contains("has no Mach-O writer"));
+    other.bits = 32;
+    assert!(write(&other).unwrap_err().0.contains("no macho writer for a 32-bit"));
 }
 
 /// An object that asks for CodeView or Turbo Debugger information is

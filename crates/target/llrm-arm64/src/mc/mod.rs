@@ -36,7 +36,7 @@ impl ObjectTarget for Arm64Objects {
         match format {
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),
             "elf" => elf::write(object),
-            _ => Err(Unsupported(format!("no {format} writer for {:?} yet", object.arch))),
+            _ => Err(Unsupported(format!("no {format} writer for arm64 yet"))),
         }
     }
 
