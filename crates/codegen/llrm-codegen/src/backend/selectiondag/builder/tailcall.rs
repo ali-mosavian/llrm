@@ -165,11 +165,13 @@ impl Builder<'_> {
                     .filter(|(full, pushed)| full == pushed)
                     .map(|(full, _)| regs.root(full))
                     .collect();
-                let free = eax_edx_ecx.iter().any(|reg| {
-                    !used.contains(reg)
-                        && !caller_kept.iter().any(|(whole, _)| whole == reg)
-                        && !native_kept.contains(&regs.root(*reg))
-                });
+                let free = eax_edx_ecx
+                    .iter()
+                    .any(
+                        |reg| !used.contains(reg)
+                            && !caller_kept.iter().any(|(whole, _)| whole == reg)
+                            && !native_kept.contains(&regs.root(*reg)),
+                    );
                 if !free {
                     return false;
                 }
