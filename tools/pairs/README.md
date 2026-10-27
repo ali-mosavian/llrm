@@ -7,6 +7,7 @@ Pair measurements: two builds of the compiler, the same rows, objects and runs o
 - `board.py`, `cbisect.py`, `firstbad.py`: the d_faces compile board, the compile-cost bisect, the first bad commit of a failure.
 - `voidpair.py`: refuses a pair whose premise is broken.
 - `pincount.py`: static instructions of llrm-c against the pin's `llc` on the same (our) IR, per program; totals and the programs furthest above the pin. The gap is the backend's. `--env LLRM_SRC_ORDER=1` for a flag.
+- `pindiff.py`: ours against the pin's `llc` on one IR (clang with llrm-cc's flags, then the pin's `opt`), per program: instructions and code bytes, m16 or m32, O1/O2/O3/Os; `irguard.py` refuses an IR whose `target-cpu` is not the CPU both llcs run with, `omfcode.py` counts an OMF object's code bytes without its data. Header names the llc's md5 and the pin.
 - `pin.py`: the one way to run the pin's `opt` or `llc` on llrm's IR: it takes an explicit `Target` (triple, CPU, datalayout from the target description, features, `optsize`), writes it into the module, refuses without one and prints a `target:` line. A module that went to the pin without it was priced for x86-64 with SSE; such numbers are void.
 
 A binary's md5 is not evidence that two builds are the same: embedded paths differ between worktrees. A claim that a change "cannot move" anything is made from the compared OBJECTS (`objsweep.py`); the md5 only proves that two arms are different binaries.
