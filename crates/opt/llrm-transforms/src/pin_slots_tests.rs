@@ -421,7 +421,7 @@ const ROWS: &[Disposition] = &[
         "interprocedural (states what each body does); not compared pass by pass",
         "",
     ),
-    row(Module, "rpo-function-attrs", Why::Missing, "no stage of ours is known to do it; unverified", "w-6, 11-09"),
+    row(Module, "rpo-function-attrs", Why::Executed, "rpo-function-attrs (norecurse only; nofpclass is not a MIR attribute)", ""),
     row(
         Module,
         "deadargelim",
