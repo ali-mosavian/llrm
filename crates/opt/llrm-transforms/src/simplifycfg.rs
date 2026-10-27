@@ -387,13 +387,12 @@ fn iteratively_simplified(
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     let headers = loop_headers(function);
-    // D7: with the option, a function with a loop only.
-    let form = if headers.is_empty() || !options.need_canonical_loop {
-        Default::default()
-    } else {
-        // The manager's loops, where the CFG is as they were found.
-        let held = known.filter(|one| one.cfg_epoch == function.epochs().cfg);
-        crate::decide::loop_form_blocks(function, held.map(|one| llrm_analysis::cfg::natural(function, &one.info)))
+    // D7: with the option, a function with a loop only; found at the first
+    // jump alone in a block, which most functions never have.
+    let form = LoopForm {
+        wanted: !headers.is_empty() && options.need_canonical_loop,
+        known,
+        cell: std::cell::OnceCell::new(),
     };
     let headers = if options.need_canonical_loop { headers } else { Default::default() };
     while local {
@@ -410,6 +409,43 @@ fn iteratively_simplified(
     changed
 }
 
+/// The blocks that hold a loop's simple form up (D7), found when first asked.
+struct LoopForm<'a> {
+    wanted: bool,
+    known: Option<&'a KnownLoops>,
+    cell: std::cell::OnceCell<std::collections::BTreeSet<i64>>,
+}
+
+impl LoopForm<'_> {
+    fn contains(
+        &self,
+        function: &Function,
+        block: i64,
+    ) -> bool {
+        self.wanted
+            && self
+                .cell
+                .get_or_init(|| {
+                    // The manager's loops, where the CFG is as they were found.
+                    let held = self.known.filter(|one| one.cfg_epoch == function.epochs().cfg);
+                    crate::decide::loop_form_blocks(
+                        function,
+                        held.map(|one| llrm_analysis::cfg::natural(function, &one.info)),
+                    )
+                })
+                .contains(&block)
+    }
+}
+
+/// `block` holds phis and a jump only, and is not the entry: the blocks
+/// `jump_simplified` can remove.
+fn only_phis_and_jump(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function.entry() != Some(block) && function.block(block).len() == edges::phis(function, block).len() + 1
+}
+
 /// One visit of `block`: LLVM's `SimplifyCFGOpt::simplifyOnce`, as far as it
 /// is ported (D2).
 fn block_simplified(
@@ -421,7 +457,7 @@ fn block_simplified(
     block: BlockId,
     folded: &mut bool,
     headers: &IdSet<BlockId>,
-    form: &std::collections::BTreeSet<i64>,
+    form: &LoopForm,
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
@@ -464,7 +500,8 @@ fn block_simplified(
         // did not go.
         Terminator::Jump => {
             function.is_placed(block)
-                && ((!form.contains(&llrm_analysis::cfg::id(block))
+                && ((only_phis_and_jump(function, block)
+                    && !form.contains(function, llrm_analysis::cfg::id(block))
                     && jump_simplified(context, function, block, headers))
                     || (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block)))
         }

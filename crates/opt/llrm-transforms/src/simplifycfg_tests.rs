@@ -1105,3 +1105,31 @@ fn test_a_ladder_of_conditional_blocks_builds_two_predecessor_lists_a_block() {
     let lists = super::PREDECESSOR_LISTS.with(std::cell::Cell::get);
     assert!((100..=250).contains(&lists), "100 blocks, {lists} predecessor lists: 4 a block would be 400");
 }
+
+/// The blocks that hold a loop's form up were found for every function with a
+/// loop (each loop's exits scanned: 197 scans, 1.5 M Ir in d_faces -O2, the
+/// pin has none); they are found when a jump alone in a block comes up.
+/// Seen to fail first with the set found at the start of every pass.
+#[test]
+fn test_a_loop_with_no_jump_alone_in_a_block_scans_no_exits() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "declare i1 @h(i16)
+define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  br label %b1
+b1:
+  %i = phi i16 [ %a, %b0 ], [ %n, %b1 ]
+  %n = add i16 %i, 1
+  %c = call i1 @h(i16 %n)
+  br i1 %c, label %b1, label %b2
+b2:
+  ret i16 %n
+}
+",
+    );
+    let before = get(Event::LoopExitScans);
+    simplify(&mut module);
+    assert_eq!(get(Event::LoopExitScans) - before, 0);
+}
