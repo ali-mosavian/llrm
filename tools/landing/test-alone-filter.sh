@@ -37,3 +37,10 @@ echo "12:09:00 STAGE squash #7" >> $w/log; sleep 1
 rm -f $w/ran; : > $w/log2; alone_warm_at_squash $w/log2 7 8; touch $w/log2.done; sleep 0.5; echo "STAGE squash" >> $w/log2; sleep 0.5
 [ ! -e $w/ran ] || { echo "FAIL: warm started after the batch ended without a squash"; exit 1; }
 echo PASS warm-at-squash
+
+# Regression: the cache warm was detached with no end of its own (3000 s per PR), so batches left alone processes that held all 6 alone slots for hours; it is bounded by ALONE_WARM_TIMEOUT.
+w=$(mktemp -d); printf '#!/bin/sh\necho $$ > %s/pid\nsleep 30\n' "$w" > $w/hang; chmod +x $w/hang
+ALONE_CMD="$w/hang alone"; ALONE_WARM_TIMEOUT=1; alone_warm 7; sleep 0.5; pid=$(cat $w/pid)
+kill -0 "$pid" 2>/dev/null || { echo "FAIL: warm ended before its timeout"; exit 1; }
+sleep 1.5; kill -0 "$pid" 2>/dev/null && { kill "$pid"; echo "FAIL: warm outlived ALONE_WARM_TIMEOUT"; exit 1; }
+echo PASS warm-timeout
