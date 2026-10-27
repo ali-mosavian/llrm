@@ -50,8 +50,10 @@
 //! 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 //! identical). The rule had bought -85 B of QCport -Os on the old allocator.
 //!
-//! DEVIATE M5 (#2903): in a build for size no edge is broken, except one that
-//! leaves the loop its instruction runs in (row M6, below). The block
+//! DEVIATE M5 (#2903): in a build for size at 16 bits no edge is broken, except
+//! one that leaves the loop its instruction runs in (row M6, below); at 32 bits
+//! the pin's rule holds (x_collatz -Os m32 kept `shr` ahead of its test, 7 and
+//! 8 instructions a trip against the pin's 6 and 7). The block
 //! costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 //! 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
 //! +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
@@ -819,9 +821,9 @@ impl Sinker {
     ) -> bool {
         // A block on an edge costs a jump the size build does not get back,
         // unless the edge leaves the loop the instruction runs in every trip
-        // of.
+        // of. Only at 16 bits: the pin breaks it at -Os (row M5).
         let leaves_loop = self.cycle[from].is_some() && self.cycle[to] != self.cycle[from];
-        if self.size && !leaves_loop {
+        if self.size && self.bits == 16 && !leaves_loop {
             return false;
         }
         // An edge already considered this walk: sink several cheap
