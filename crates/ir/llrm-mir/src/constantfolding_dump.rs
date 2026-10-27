@@ -65,6 +65,7 @@ fn show(
             Type::Float(FloatKind::Double) => format!("{t} 0x{bits:X}"),
             _ => format!("{t} fp"),
         },
+        ConstantKind::Float80(bits) => format!("{t} 0xK{bits:020X}"),
         ConstantKind::Null if context.types.int_bits(constant.ty).is_some() => format!("{t} 0"),
         ConstantKind::Null => format!("{t} null"),
         ConstantKind::Poison => format!("{t} poison"),

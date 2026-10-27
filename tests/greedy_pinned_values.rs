@@ -1,7 +1,7 @@
 //! The translated greedy allocator and the values an instruction requires in
 //! one register.
 
-use std::process::Command;
+mod common;
 
 const CENTROID: &str = "typedef struct { short x, y; } CPoint;\n\
 void centroid(const CPoint *points, unsigned short count, CPoint *out)\n\
@@ -16,7 +16,7 @@ void centroid(const CPoint *points, unsigned short count, CPoint *out)\n\
 fn a_value_an_instruction_requires_in_one_register_is_not_moved_by_the_greedy_allocator() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), CENTROID).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .env("LLRM_GREEDY_CHECK", "1")
         .args(["-O2", "-march=i486", "-mabi=watcom", "-S", "-o", "a.s", "a.c"])
