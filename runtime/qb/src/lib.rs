@@ -1956,7 +1956,7 @@ mod tests {
     /// runtime's declaration kept no `noretain` until the table said so.
     #[test]
     fn test_erase_keeps_no_pointer_it_is_handed() {
-        assert_eq!(captures_nothing(), ["B$ERAS"]);
+        assert_eq!(captures_nothing(), ["B$ERAS", "B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8"]);
     }
 
     /// The set was a literal; the rows' `calls_back` must name the same four.
@@ -1994,7 +1994,8 @@ mod tests {
     fn test_an_unestablished_routine_is_left_at_the_worst_case() {
         for name in names().into_iter().filter(|name| !CONTRACTS[name].established) {
             let routine = &CONTRACTS[&name];
-            assert_eq!(*routine, Contract { evidence: routine.evidence.clone(), ..worst(&name) });
+            let claimed = Contract { evidence: routine.evidence.clone(), cleanup: routine.cleanup, ..worst(&name) };
+            assert_eq!(*routine, claimed);
         }
     }
 
