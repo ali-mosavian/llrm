@@ -824,6 +824,21 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
 
 
+def docs_detail(names, root: Path = ROOT, base: str = BASE, stale=None) -> str:
+    """` [stale pages: <path> (batch tree <blob>, head <blob>); ...]` when `docs_in_sync` is among `names`: the refusal said which test failed and owners guessed which page (03:03 batch, four
+    refusals). The blob is the page as the batch tree has it and as the head has it; the page's source is the PR that changed the matching `//!` header."""
+    if not any("test_no_generated_page_is_stale" in name for name in names):
+        return ""
+
+    def blob(*args: str) -> str:
+        done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+        return done.stdout.strip()[:9] if done.returncode == 0 and done.stdout.strip() else "absent"
+
+    pages = sorted((stale or docs_stale)(root))
+    shown = [f"{page} (batch tree {blob('hash-object', page) if (root / page).exists() else 'absent'}, head {blob('rev-parse', '--verify', '-q', f'{base}:{page}')})" for page in pages[:5]]
+    return f" [stale pages: {'; '.join(shown)}{'; ...' if len(pages) > 5 else ''}]" if shown else ""
+
+
 def new_lib_failures(
     files: list[str],
     on_merged=None,
@@ -1419,24 +1434,24 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
                 stage("scanners-early")
                 if new := sorted(landing_scanner_failures(changed, False)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("scanners")
                 if new := sorted(new_scanner_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new)}")
                     failed_units.update(new)
                     blame(new)
                     return False
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new)}")
                 failed_units.update(new)
                 blame(new)
                 return False
