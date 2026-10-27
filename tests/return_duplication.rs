@@ -29,16 +29,27 @@ fn listing(flags: &[&str]) -> String {
 /// The early exit of the recursion jumped to the one return the loop's end also
 /// reached, so the two could not be told apart (no shrink-wrapping): one `ret`
 /// in hanoi, with a `jmp` to it from the entry test.
+///
+/// llrm-cc: gcc's `copy_bb_p` (two returns) was llrm-c's; the pin's `llc` on
+/// the same IR keeps one `ret` here (the return is a run of four pops), and so
+/// does this: the count is held to the pin's (pin-shape).
 #[test]
 fn test_the_early_exit_of_a_recursion_returns_in_a_block_of_its_own() {
-    let text = listing(&["-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions"]);
-    let body = text
-        .split("_hanoi proc")
-        .nth(1)
-        .and_then(|rest| rest.split("endp").next())
-        .unwrap_or_else(|| panic!("no hanoi: {text}"));
-    let returns = body.lines().filter(|line| line.trim() == "ret").count();
-    assert!(returns >= 2, "{returns} return: {body}");
+    let flags = ["-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions"];
+    let returns = |text: &str| {
+        common::pin::instructions(text, Some("hanoi")).iter().filter(|line| line.as_str() == "ret").count()
+    };
+    let text = listing(&flags);
+    let source = tempfile::tempdir().unwrap();
+    let path = source.path().join("a.c");
+    std::fs::write(&path, KERNEL).unwrap();
+    let pin = common::pin::listing(&path, &flags);
+    assert!(
+        returns(&pin) > 0 && returns(&text) == returns(&pin),
+        "{} returns, the pin's llc has {}: {text}",
+        returns(&text),
+        returns(&pin)
+    );
 }
 
 /// -Os keeps one return: the copy is for speed.
