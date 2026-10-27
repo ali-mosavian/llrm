@@ -376,7 +376,7 @@ fn pack_field(
     } else if kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
-        pack_into(buffer, at, value & 0xFFFF);
+        pack_into(buffer, at, i64::from(value as u16));
     }
 }
 
@@ -528,11 +528,12 @@ pub fn serialized(
 ) -> Result<Vec<u8>, Error> {
     match format {
         Format::Omf => {
+            let segment = usize::from(u16::MAX) + 1;
             if let Some(big) =
-                object.sections.iter().find(|section| section.image.len() > 0x10000 && object.arch == Arch::I8086)
+                object.sections.iter().find(|section| section.image.len() > segment && object.arch == Arch::I8086)
             {
                 return Err(Error::Unsupported(llrm_object::Unsupported(format!(
-                    "segment `{}` is {} bytes: a 16-bit segment holds 65536",
+                    "segment `{}` is {} bytes: a 16-bit segment holds {segment}",
                     big.name,
                     big.image.len()
                 ))));
@@ -857,7 +858,7 @@ pub fn _part(
             fixups: vec![Fixup::new(0, OFFSET32, name.clone())],
         }),
         masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" => Ok(Piece {
-            code: ((offset & 0xFFFF) as u16).to_le_bytes().to_vec(),
+            code: (*offset as u16).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET, name.clone())],
         }),
         masm::InlinePart::Fixup(kind, name, _) if kind == "segment" => {
