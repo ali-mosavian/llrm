@@ -304,6 +304,27 @@ impl CallConventions<'_> {
         contracts.abi.contract(&name, false, 0).ok()
     }
 
+    /// The convention a call of `callee` follows: its function's own, or, for
+    /// a variadic function, the one that entry names (`variadic = "cdecl32"`).
+    fn convention_of(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<&'static llrm_target::calling::Convention> {
+        let (number, variadic) = match callee {
+            Some(Callee::Global(id)) => self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(
+                (0, false),
+                |function| (function.calling_convention, self.module.signature(function.ty).2),
+            ),
+            _ => (0, false),
+        };
+        let calling = self.arch.calling();
+        let found = calling.by_number(number)?;
+        match found.variadic.as_deref().filter(|_| variadic) {
+            Some(name) => calling.named(name),
+            None => Some(found),
+        }
+    }
+
     fn contract_clobbers(
         &self,
         callee: Option<&Callee>,
@@ -341,13 +362,7 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
-        let number = match callee {
-            Some(Callee::Global(id)) => {
-                self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
-            }
-            _ => 0,
-        };
-        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_high(callee) };
+        let Some(found) = self.convention_of(callee) else { return self.contract_high(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         self.arch
             .convention_callee_saved(found)
@@ -395,15 +410,9 @@ impl super::emit::Conventions for CallConventions<'_> {
                 return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
             }
         }
-        let number = match callee {
-            Some(Callee::Global(id)) => {
-                self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
-            }
-            _ => 0,
-        };
         // BASIC's convention (and any other with no row in calling.toml) is
         // the ABI's contract of the routine, as the old selector reads it.
-        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_clobbers(callee) };
+        let Some(found) = self.convention_of(callee) else { return self.contract_clobbers(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         let mut out: std::collections::BTreeSet<_> = found
             .clobbered
