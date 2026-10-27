@@ -307,3 +307,13 @@ fn a_division_and_a_remainder_of_the_same_operands_share_one_divide() {
     let asm = driver::assembly(include_str!("data/div_rem_pair.ll"), Platform::Darwin, true).expect("lowers");
     assert_eq!(asm.matches("sdiv").count(), 1, "{asm}");
 }
+
+/// `llvm.experimental.memset.pattern` (the pin's idiom for an `i16` fill
+/// loop) reached selection unexpanded and failed the build: scroll,
+/// fill_nest and loop_fusion produced no object.
+#[test]
+fn a_memset_pattern_becomes_a_store_loop() {
+    let asm = driver::assembly(include_str!("data/memset_pattern.ll"), Platform::Darwin, true)
+        .expect("the intrinsic lowers");
+    assert!(asm.contains("strh"), "{asm}");
+}
