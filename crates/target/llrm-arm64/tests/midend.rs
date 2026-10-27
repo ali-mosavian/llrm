@@ -26,9 +26,17 @@ fn a_wide_constant_is_built_outside_the_loop_that_uses_it() {
     let text = include_str!("data/wide_constant_loop.ll");
     let asm = driver::assembly(text, Platform::Darwin, true).expect("the function lowers");
     let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-    let back = lines.iter().rposition(|l| l.starts_with("b.")).expect("a loop branch");
-    let target = lines[back].rsplit(' ').next().unwrap();
-    let start = lines.iter().position(|l| l.strip_suffix(':') == Some(target)).expect("the loop label");
+    // The loop's back edge: the last branch (`b.cond`, `cbnz`, `tbnz`...) to a label above it.
+    let (back, start) = (0..lines.len())
+        .rev()
+        .find_map(|at| {
+            let l = lines[at];
+            let branch = l.starts_with("b.") || l.starts_with("cb") || l.starts_with("tb") || l.starts_with("b ");
+            let target = l.rsplit(' ').next().filter(|_| branch)?;
+            let label = lines[..at].iter().position(|one| one.strip_suffix(':') == Some(target))?;
+            Some((at, label))
+        })
+        .expect("a loop branch");
     // Premise: the constant is built somewhere (not folded away).
     assert!(lines.iter().any(|l| l.starts_with("movk")), "{asm}");
     let inside: Vec<&&str> =
