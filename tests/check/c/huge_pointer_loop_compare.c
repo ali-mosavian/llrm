@@ -3,7 +3,7 @@
 long __huge big[20000];
 long walk(long __huge *p, long __huge *e) { long t = 0; while (p < e) { t += *p; p++; } return t; }
 // CHECK-LABEL: _walk proc
-// A split copies a stack-argument reload (not cheap as a move, `9479d4ba4a`), so a spill and moves may sit between the add and the setb. The compare of the two 32-bit pointers is the borrow of the offsets into the selectors (`cmp; sbb`), and the step's carry moves the selector: not `setae` and a select, nor a dword add and a shift.
+// Row AM-RA-2: a split copies a stack-argument reload (`9479d4ba4a`), so a spill and four moves sit between the add and the setb; tighten to CHECK-NEXT when the row closes. The compare of the two 32-bit pointers is the borrow of the offsets into the selectors (`cmp; sbb`), and the step's carry moves the selector: not `setae` and a select, nor a dword add and a shift.
 // CHECK: sbb {{[a-z][a-z]}}, {{[a-z][a-z]}}
 // CHECK: add eax, dword ptr es:
 // CHECK: add {{[a-z][a-z]}}, 4
