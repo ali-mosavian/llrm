@@ -46,7 +46,7 @@ TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stages import PREFIX, stage  # noqa: E402
+from stages import PREFIX, stage, summary as stage_summary  # noqa: E402
 import pidfile  # noqa: E402
 
 
@@ -853,6 +853,40 @@ def beside(background, foreground):
         return front, future.result()
 
 
+OVERLAP_MAX_LOAD = float(os.environ.get("OVERLAP_MAX_LOAD") or 60)  # 1-minute load above this: the two builds would only fight over the CPUs
+OVERLAP_OFF_SECONDS = 3600
+
+
+def overlap_flag() -> Path:
+    return Path(os.environ.get("LAND_TMP", "/tmp")) / "overlap-off"
+
+
+def check_beside_scanners(load=os.getloadavg, now=time.time, flag: Path | None = None) -> bool:
+    """Whether the workspace check and the scanner build run together: not at a load above OVERLAP_MAX_LOAD, nor for an hour after an overlapped run took longer than its two halves in a row."""
+    flag = flag or overlap_flag()
+    if flag.exists() and now() - flag.stat().st_mtime < OVERLAP_OFF_SECONDS:
+        return False
+    return load()[0] <= OVERLAP_MAX_LOAD
+
+
+def note_overlap(wall: float, serial: float, flag: Path | None = None) -> None:
+    """Prints the overlapped wall time against its halves' sum; an overlap slower than that turns itself off for an hour."""
+    print(f"check beside scanners: {wall:.0f} s against {serial:.0f} s in a row")
+    if wall > serial:
+        (flag or overlap_flag()).write_text(f"{wall:.0f} > {serial:.0f}\n")
+
+
+def timed(took: dict[str, float], name: str, call):
+    def run():
+        begun = time.monotonic()
+        try:
+            return call()
+        finally:
+            took[name] = time.monotonic() - begun
+
+    return run
+
+
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
@@ -960,7 +994,22 @@ def new_lib_failures(
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
 # without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
-ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts", "no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern")
+ALWAYS_SCANNERS = (
+    "block_list_ratchet",
+    "core_depends_on_no_target",
+    "core_fixtures_are_for_core_tests",
+    "descriptions_are_read",
+    "docs_in_sync",
+    "docs_links",
+    "dosbox_progress",
+    "no_kill_by_pattern",
+    "no_local_paths",
+    "no_partial_ecx_counts",
+    "no_todo",
+    "selectiondag_registry",
+    "target_facts",
+    "tracked_build_products",
+)
 
 
 BUILD_SCRIPT_INPUTS = ("crates/target/", "crates/backend/llrm-iselgen/", "crates/codegen/llrm-codegen/src/backend/peep/")
@@ -1829,10 +1878,13 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not kept:
             return True
         stage("workspace-check")
-        if broken := _workspace_check(ROOT):
+
+        def build_refused(broken: str) -> bool:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
+            failed_units.clear()  # a scanner run beside a tree that does not build says nothing; the build is the reason
             return False
+
         def blame(new: list[str]) -> None:
             if any(name.startswith("integration docs") for name in new):
                 keep_batch_evidence({number: infos[number]["headRefOid"] for number in group}, ROOT, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused", time.strftime("%H%M%S"))
@@ -1882,9 +1934,21 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return [], pre_merge_behavioural(files)
 
         if OVERLAP:
+            if broken := _workspace_check(ROOT):
+                return build_refused(broken)
             tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
         else:
-            tests_ok = tests_pass()
+            # the dev-profile check (its own target dir) and the release scanner build share nothing: 60 s + 100 s in a row in sqb-5342
+            if check_beside_scanners():
+                took: dict[str, float] = {}
+                begun = time.monotonic()
+                broken, tests_ok = beside(timed(took, "check", lambda: _workspace_check(ROOT)), timed(took, "scanners", tests_pass))
+                note_overlap(time.monotonic() - begun, took["check"] + took["scanners"])
+            else:
+                broken = _workspace_check(ROOT)
+                tests_ok = not broken and tests_pass()
+            if broken:
+                return build_refused(broken)
             unlinked, red = release_pass() if tests_ok else ([], [])
         if not tests_ok:
             return False
@@ -2080,6 +2144,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"batch older than {BATCH_MAX_SECONDS // 60} min: its heads and assembly are stale; back to the queue unlanded: {' '.join('#' + one for one in back) or '-'}")
     for line in hold_own_refusals(refused, {**left_out, **named}, {n: infos[n]["headRefOid"] for n in refused if n in infos}):
         print(line)
+    if times := stage_summary():
+        print(times)
     print(batch_summary(landed, refused, held, moved))
     return 1 if refused else 0
 

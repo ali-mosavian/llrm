@@ -1720,6 +1720,46 @@ def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
     assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
 
 
+def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
+    """sqb-5342 spent 60 s on cargo check and then 100 s on the scanner build, one after the other, though they share no target dir. The default path now runs them together;
+    when the tree does not build, the scanner result (taken on a tree that does not compile) is dropped and the build is the refusal."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    assert "beside(timed(took" in source and "check_beside_scanners()" in source
+    assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
+
+
+def test_the_overlap_falls_back_to_serial_at_a_high_load_and_after_a_slower_run(tmp_path):
+    """The host runs at a load near 60: two cargo builds at once could be slower than one after the other. Above OVERLAP_MAX_LOAD the checks run in a row, and an overlapped run
+    that took longer than its halves' sum turns the overlap off for an hour."""
+    flag = tmp_path / "overlap-off"
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag)
+    assert not ps.check_beside_scanners(load=lambda: (61.0, 0, 0), flag=flag)
+    ps.note_overlap(100, 160, flag=flag)
+    assert not flag.exists(), "a faster overlap stays on"
+    ps.note_overlap(170, 160, flag=flag)
+    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag)
+    later = flag.stat().st_mtime + ps.OVERLAP_OFF_SECONDS + 1
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag)
+
+
+def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
+    """The stage-times table was built by hand from the logs, and it blamed `log` (a one-line file append) for the next PR's work before its squash. The batch now ends with
+    `STAGES <total>s: ...`, biggest first, per-PR names without `#N`."""
+    import stages
+
+    stages._seen.clear()
+    for name, at in [("workspace-check", 0), ("scanners", 60), ("squash #1", 160), ("log #1", 166), ("squash #2", 170), ("log #2", 176)]:
+        stages.mark(name, at)
+    line = stages.summary(end=181)
+    assert line == "STAGES 181s: scanners 100s workspace-check 60s squash 12s pre-squash 9s", line
+    assert stages.summary() == "", "a summary starts the next batch afresh"
+    import inspect
+
+    assert "stage_summary()" in inspect.getsource(ps.merge_batch)
+
+
 def test_the_drift_prone_scanners_run_every_batch():
     """A red scanner outside the default scan hid on parity for hours (the SD registry, 12:03 on). no_todo, tracked_build_products, block_list_ratchet and no_kill_by_pattern read
     sources and the file list (0.02-5.6 s each on parity, all green) and are in the default scan."""
@@ -1739,4 +1779,12 @@ def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and
     asked.clear()
     ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "build_script_reruns" in asked[0]
+
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
 
