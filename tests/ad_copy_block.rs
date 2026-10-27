@@ -2,10 +2,12 @@
 //! PRESERVE): a block copy, not the byte loop the C source was. At -m32 it was
 //! `movzx eax, byte ptr [..]; mov byte ptr [..], al` per byte; at -m16, the
 //! same over two far pointers.
+//!
+//! llrm-cc: the sources are compiled with the `dev/` headers on the include
+//! path, and the m32 one declares `str_free_bytes` (clang rejects the implicit
+//! declaration Watcom took).
 
 mod common;
-
-use std::process::Command;
 
 fn listing(
     directory: &str,
@@ -18,7 +20,9 @@ fn listing(
         .args(flags)
         .args(["-O2", "-S", "-o", "ad.s"])
         .args(["-I", &format!("{root}/runtime/qb/dos/{directory}")])
+        .args(["-I", &format!("{root}/runtime/qb/dev/dos/{directory}")])
         .args(["-I", &format!("{root}/runtime/qb/dos"), "-I", &format!("{root}/runtime/qb")])
+        .args(["-I", &format!("{root}/runtime/qb/dev")])
         .arg(format!("{root}/runtime/qb/dos/{directory}/ad.c"))
         .output()
         .unwrap();

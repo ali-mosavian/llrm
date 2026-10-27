@@ -4,8 +4,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const SOURCE: &str = "int f(int x, int y, int n)
 {
     int k, s = 0;

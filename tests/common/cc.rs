@@ -16,8 +16,9 @@ use std::process::{Child, Command, Output, Stdio};
 #[derive(Default)]
 pub struct LlrmC {
     arguments: Vec<OsString>,
-    environment: Vec<(OsString, OsString)>,
-    removed: Vec<OsString>,
+    /// In the order asked: a later `env` or `env_remove` of a key wins, as on
+    /// `Command`.
+    environment: Vec<(OsString, Option<OsString>)>,
     directory: Option<PathBuf>,
     stdin: Option<Stdio>,
     stdout: Option<Stdio>,
@@ -54,7 +55,7 @@ impl LlrmC {
         key: impl AsRef<OsStr>,
         value: impl AsRef<OsStr>,
     ) -> &mut Self {
-        self.environment.push((key.as_ref().to_owned(), value.as_ref().to_owned()));
+        self.environment.push((key.as_ref().to_owned(), Some(value.as_ref().to_owned())));
         self
     }
 
@@ -62,7 +63,7 @@ impl LlrmC {
         &mut self,
         key: impl AsRef<OsStr>,
     ) -> &mut Self {
-        self.removed.push(key.as_ref().to_owned());
+        self.environment.push((key.as_ref().to_owned(), None));
         self
     }
 
@@ -117,10 +118,12 @@ impl LlrmC {
         command
             .env("LLRM_CC_TARGET", if wide { "x86_32-wat" } else { "x86_16-wat" })
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
-            .args(stop)
-            .envs(self.environment.iter().map(|(key, value)| (key, value)));
-        for key in &self.removed {
-            command.env_remove(key);
+            .args(stop);
+        for (key, value) in &self.environment {
+            match value {
+                Some(value) => command.env(key, value),
+                None => command.env_remove(key),
+            };
         }
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
