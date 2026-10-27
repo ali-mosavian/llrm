@@ -1,332 +1,256 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$data = internal global [28 x i8] zeroinitializer
-@$qb$statementTable = internal constant [0 x i8] zeroinitializer
-@"POSX&" = internal global [28 x i8] zeroinitializer
-@POSX$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"POSX&" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @"POSX&", [6 x i8] c"\04\00\07\00\00\00" }>
-@"POSY&" = internal global [28 x i8] zeroinitializer
-@POSY$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"POSY&" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @"POSY&", [6 x i8] c"\04\00\07\00\00\00" }>
-@"VELX&" = internal global [28 x i8] zeroinitializer
-@VELX$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"VELX&" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @"VELX&", [6 x i8] c"\04\00\07\00\00\00" }>
-@"VELY&" = internal global [28 x i8] zeroinitializer
-@VELY$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"VELY&" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @"VELY&", [6 x i8] c"\04\00\07\00\00\00" }>
-@"DELTAX&" = internal global [4 x i8] zeroinitializer
-@"DELTAY&" = internal global [4 x i8] zeroinitializer
-@"DIST2&" = internal global [4 x i8] zeroinitializer
-@"FALLOFF&" = internal global [4 x i8] zeroinitializer
-@"ACCX&" = internal global [4 x i8] zeroinitializer
-@"ACCY&" = internal global [4 x i8] zeroinitializer
-@"STEPCOUNT&" = internal global [4 x i8] zeroinitializer
-@"STEPNO&" = internal global [4 x i8] zeroinitializer
-@"BODY%" = internal global [2 x i8] zeroinitializer
-@"OTHER%" = internal global [2 x i8] zeroinitializer
+@"POSX&" = internal global [28 x i8] zeroinitializer, align 2
+@"POSY&" = internal global [28 x i8] zeroinitializer, align 2
+@"VELX&" = internal global [28 x i8] zeroinitializer, align 2
+@"VELY&" = internal global [28 x i8] zeroinitializer, align 2
 @TAG$ = internal global [4 x i8] zeroinitializer
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string7$payload to ptr addrspace(2))
-@$string7$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 4) to i16), [4 x i8] c"\02\00PX" }>
-@$string7$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string10$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string10$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string10$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string10$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string12$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string12$payload, i16 4) to i16), [4 x i8] c"\02\00PY" }>
-@$string12$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string12$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string14$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string14$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string14$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string14$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string16$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string16$payload, i16 4) to i16), [4 x i8] c"\02\00VX" }>
-@$string16$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string16$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string18$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string18$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string18$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string18$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string20$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string20$payload, i16 4) to i16), [4 x i8] c"\02\00VY" }>
-@$string20$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string20$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string22$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string22$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string22$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string22$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string24$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string24$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string24$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string24$payload, i16 2) to i16), ptr @$fslSegment }>
+@$string7 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string7, i16 4), [2 x i8] c"PX" }>
+@$string8 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string8, i16 4), [2 x i8] c"=\00" }>
+@$string9 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string9, i16 4), [2 x i8] c"PY" }>
+@$string10 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string10, i16 4), [2 x i8] c"=\00" }>
+@$string11 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string11, i16 4), [2 x i8] c"VX" }>
+@$string12 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string12, i16 4), [2 x i8] c"=\00" }>
+@$string13 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string13, i16 4), [2 x i8] c"VY" }>
+@$string14 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string14, i16 4), [2 x i8] c"=\00" }>
+@$string15 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string15, i16 4), [4 x i8] c"DONE" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn norecurse {
 b1:
-  %0 = call cc1000 addrspace(1) ptr @llrm.qb.B$FCMD()
-  %1 = call cc1000 addrspace(1) ptr @llrm.qb.B$FVAL(ptr %0)
+  %0 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$FCMD()
+  %1 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$FVAL(ptr %0)
   %2 = load double, ptr %1
-  %3 = call i32 @llvm.lrint.i32.f64(double %2)
-  store i32 %3, ptr @"STEPCOUNT&", !tbaa !2
-  %4 = icmp sle i32 %3, 0
-  br i1 %4, label %b2, label %b4
-
-b2:
-  store i32 100, ptr @"STEPCOUNT&", !tbaa !2
-  br label %b4
-
-b4:
-  store i16 0, ptr @"BODY%", !tbaa !2
-  store i16 5, ptr @$data, !tbaa !2
-  %5 = getelementptr i8, ptr @$data, i16 2
-  store i16 1, ptr %5, !tbaa !2
-  br label %b5
-
-b5:
-  %6 = load i16, ptr @"BODY%", !tbaa !2
-  %7 = icmp sle i16 %6, 5
-  br i1 %7, label %b8, label %b9
-
-b8:
-  %8 = mul i16 %6, 7
-  %9 = add i16 %8, -15
-  %10 = sext i16 %9 to i32
-  %11 = shl i32 %10, 9
-  %12 = getelementptr inbounds i32, ptr @"POSX&", i16 %6
-  store i32 %11, ptr %12, !tbaa !2
-  %13 = mul i16 %6, 5
-  %14 = add i16 %13, -12
-  %15 = sext i16 %14 to i32
-  %16 = shl i32 %15, 9
-  %17 = getelementptr inbounds i32, ptr @"POSY&", i16 %6
-  store i32 %16, ptr %17, !tbaa !2
-  %18 = getelementptr inbounds i32, ptr @"VELX&", i16 %6
-  store i32 0, ptr %18, !tbaa !2
-  %19 = getelementptr inbounds i32, ptr @"VELY&", i16 %6
-  store i32 0, ptr %19, !tbaa !2
-  %20 = add i16 %6, 1
-  store i16 %20, ptr @"BODY%", !tbaa !2
-  br label %b5
-
-b9:
-  store i32 1, ptr @"STEPNO&", !tbaa !2
-  %21 = load i32, ptr @"STEPCOUNT&", !tbaa !2
-  %22 = getelementptr i8, ptr @$data, i16 4
-  store i32 %21, ptr %22, !tbaa !2
-  %23 = getelementptr i8, ptr @$data, i16 8
-  store i32 1, ptr %23, !tbaa !2
-  %24 = getelementptr i8, ptr @$data, i16 12
-  %25 = getelementptr i8, ptr @$data, i16 14
-  %26 = getelementptr i8, ptr @$data, i16 16
-  %27 = getelementptr i8, ptr @$data, i16 18
-  %28 = getelementptr i8, ptr @$data, i16 20
-  %29 = getelementptr i8, ptr @$data, i16 22
-  br label %b11
-
-b11:
-  %30 = load i32, ptr @"STEPNO&", !tbaa !2
-  %31 = icmp sle i32 %30, %21
-  br i1 %31, label %b13, label %b14
+  %3 = tail call i32 @llvm.lrint.i32.f64(double %2)
+  %4 = icmp slt i32 %3, 1
+  %spec.store.select = select i1 %4, i32 100, i32 %3
+  tail call void @llvm.memset.p0.i16(ptr align 2 @"VELX&", i8 0, i16 24, i1 false)
+  tail call void @llvm.memset.p0.i16(ptr align 2 @"VELY&", i8 0, i16 24, i1 false)
+  store i32 -7680, ptr @"POSX&", !tbaa !2
+  store i32 -6144, ptr @"POSY&", !tbaa !2
+  store i32 -4096, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 4), !tbaa !2
+  store i32 -3584, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 4), !tbaa !2
+  store i32 -512, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 8), !tbaa !2
+  store i32 -1024, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 8), !tbaa !2
+  store i32 3072, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 12), !tbaa !2
+  store i32 1536, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 12), !tbaa !2
+  store i32 6656, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 16), !tbaa !2
+  store i32 4096, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 16), !tbaa !2
+  store i32 10240, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 20), !tbaa !2
+  store i32 6656, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 20), !tbaa !2
+  %5 = tail call i32 @llvm.smax.i32(i32 %spec.store.select, i32 1)
+  br label %b13
 
 b13:
-  store i16 0, ptr @"BODY%", !tbaa !2
-  store i16 5, ptr %24, !tbaa !2
-  store i16 1, ptr %25, !tbaa !2
-  br label %b15
+  %6 = phi i32 [ 6656, %b1 ], [ %44, %b19 ]
+  %7 = phi i32 [ 10240, %b1 ], [ %42, %b19 ]
+  %8 = phi i32 [ 4096, %b1 ], [ %40, %b19 ]
+  %9 = phi i32 [ 6656, %b1 ], [ %38, %b19 ]
+  %10 = phi i32 [ 1536, %b1 ], [ %36, %b19 ]
+  %11 = phi i32 [ 3072, %b1 ], [ %34, %b19 ]
+  %12 = phi i32 [ -1024, %b1 ], [ %32, %b19 ]
+  %13 = phi i32 [ -512, %b1 ], [ %30, %b19 ]
+  %14 = phi i32 [ -3584, %b1 ], [ %28, %b19 ]
+  %15 = phi i32 [ -4096, %b1 ], [ %26, %b19 ]
+  %16 = phi i32 [ 1, %b1 ], [ %45, %b19 ]
+  br label %b18
 
 b14:
-  store i16 0, ptr @"BODY%", !tbaa !2
-  %32 = getelementptr i8, ptr @$data, i16 24
-  store i16 5, ptr %32, !tbaa !2
-  %33 = getelementptr i8, ptr @$data, i16 26
-  store i16 1, ptr %33, !tbaa !2
-  br label %b33
-
-b15:
-  %34 = load i16, ptr @"BODY%", !tbaa !2
-  %35 = icmp sle i16 %34, 5
-  br i1 %35, label %b18, label %b19
+  br label %b43
 
 b18:
-  store i32 0, ptr @"ACCX&", !tbaa !2
-  store i32 0, ptr @"ACCY&", !tbaa !2
-  store i16 0, ptr @"OTHER%", !tbaa !2
-  store i16 5, ptr %26, !tbaa !2
-  store i16 1, ptr %27, !tbaa !2
-  %36 = getelementptr inbounds i32, ptr @"POSX&", i16 %34
-  %37 = getelementptr inbounds i32, ptr @"POSY&", i16 %34
-  br label %b21
+  %17 = phi i16 [ %63, %b24 ], [ 0, %b13 ]
+  %18 = phi i16 [ 0, %b13 ], [ %62, %b24 ]
+  br label %b23
 
 b19:
-  store i16 0, ptr @"BODY%", !tbaa !2
-  store i16 5, ptr %28, !tbaa !2
-  store i16 1, ptr %29, !tbaa !2
-  br label %b28
-
-b21:
-  %38 = load i16, ptr @"OTHER%", !tbaa !2
-  %39 = icmp sle i16 %38, 5
-  br i1 %39, label %b23, label %b24
+  %19 = load i32, ptr @"POSX&", !tbaa !2
+  %20 = load i32, ptr @"VELX&", !tbaa !2
+  %21 = add i32 %20, %19
+  store i32 %21, ptr @"POSX&", !tbaa !2
+  %22 = load i32, ptr @"POSY&", !tbaa !2
+  %23 = load i32, ptr @"VELY&", !tbaa !2
+  %24 = add i32 %23, %22
+  store i32 %24, ptr @"POSY&", !tbaa !2
+  %25 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELX&", i16 4), !tbaa !2
+  %26 = add i32 %25, %15
+  store i32 %26, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 4), !tbaa !2
+  %27 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELY&", i16 4), !tbaa !2
+  %28 = add i32 %27, %14
+  store i32 %28, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 4), !tbaa !2
+  %29 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELX&", i16 8), !tbaa !2
+  %30 = add i32 %29, %13
+  store i32 %30, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 8), !tbaa !2
+  %31 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELY&", i16 8), !tbaa !2
+  %32 = add i32 %31, %12
+  store i32 %32, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 8), !tbaa !2
+  %33 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELX&", i16 12), !tbaa !2
+  %34 = add i32 %33, %11
+  store i32 %34, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 12), !tbaa !2
+  %35 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELY&", i16 12), !tbaa !2
+  %36 = add i32 %35, %10
+  store i32 %36, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 12), !tbaa !2
+  %37 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELX&", i16 16), !tbaa !2
+  %38 = add i32 %37, %9
+  store i32 %38, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 16), !tbaa !2
+  %39 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELY&", i16 16), !tbaa !2
+  %40 = add i32 %39, %8
+  store i32 %40, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 16), !tbaa !2
+  %41 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELX&", i16 20), !tbaa !2
+  %42 = add i32 %41, %7
+  store i32 %42, ptr getelementptr inbounds nuw (i8, ptr @"POSX&", i16 20), !tbaa !2
+  %43 = load i32, ptr getelementptr inbounds nuw (i8, ptr @"VELY&", i16 20), !tbaa !2
+  %44 = add i32 %43, %6
+  store i32 %44, ptr getelementptr inbounds nuw (i8, ptr @"POSY&", i16 20), !tbaa !2
+  %45 = add nuw i32 %16, 1
+  %46 = icmp eq i32 %16, %5
+  br i1 %46, label %b14, label %b13
 
 b23:
-  %40 = icmp ne i16 %38, %34
-  br i1 %40, label %b25, label %b27
+  %47 = phi i16 [ %87, %b27 ], [ -24, %b18 ]
+  %48 = phi i32 [ 0, %b18 ], [ %86, %b27 ]
+  %49 = phi i32 [ 0, %b18 ], [ %85, %b27 ]
+  %50 = add i16 %17, %47
+  %51 = icmp eq i16 %50, -24
+  br i1 %51, label %b27, label %b25
 
 b24:
-  %41 = load i16, ptr @"BODY%", !tbaa !2
-  %42 = getelementptr inbounds i32, ptr @"VELX&", i16 %41
-  %43 = load i32, ptr %42, !tbaa !2
-  %44 = load i32, ptr @"ACCX&", !tbaa !2
-  %45 = add i32 %43, %44
-  store i32 %45, ptr %42, !tbaa !2
-  %46 = getelementptr inbounds i32, ptr @"VELY&", i16 %41
-  %47 = load i32, ptr %46, !tbaa !2
-  %48 = load i32, ptr @"ACCY&", !tbaa !2
-  %49 = add i32 %47, %48
-  store i32 %49, ptr %46, !tbaa !2
-  %50 = load i32, ptr %42, !tbaa !2
-  %51 = load i32, ptr %42, !tbaa !2
-  %52 = sdiv i32 %51, 16
-  %53 = sub i32 %50, %52
-  store i32 %53, ptr %42, !tbaa !2
-  %54 = load i32, ptr %46, !tbaa !2
-  %55 = load i32, ptr %46, !tbaa !2
-  %56 = sdiv i32 %55, 16
-  %57 = sub i32 %54, %56
-  store i32 %57, ptr %46, !tbaa !2
-  %58 = add i16 %41, 1
-  store i16 %58, ptr @"BODY%", !tbaa !2
-  br label %b15
+  %52 = getelementptr inbounds nuw [4 x i8], ptr @"VELX&", i16 %18
+  %53 = load i32, ptr %52, !tbaa !2
+  %54 = add i32 %53, %85
+  %55 = getelementptr inbounds nuw [4 x i8], ptr @"VELY&", i16 %18
+  %56 = load i32, ptr %55, !tbaa !2
+  %57 = add i32 %56, %86
+  %58 = sdiv i32 %54, -16
+  %59 = add i32 %58, %54
+  store i32 %59, ptr %52, !tbaa !2
+  %60 = sdiv i32 %57, -16
+  %61 = add i32 %60, %57
+  store i32 %61, ptr %55, !tbaa !2
+  %62 = add nuw nsw i16 %18, 1
+  %exitcond2 = icmp eq i16 %62, 6
+  %63 = add nsw i16 %17, -4
+  br i1 %exitcond2, label %b19, label %b18
 
 b25:
-  %59 = getelementptr inbounds i32, ptr @"POSX&", i16 %38
-  %60 = load i32, ptr %59, !tbaa !2
-  %61 = load i32, ptr %36, !tbaa !2
-  %62 = sub i32 %60, %61
-  store i32 %62, ptr @"DELTAX&", !tbaa !2
-  %63 = getelementptr inbounds i32, ptr @"POSY&", i16 %38
-  %64 = load i32, ptr %63, !tbaa !2
-  %65 = load i32, ptr %37, !tbaa !2
-  %66 = sub i32 %64, %65
-  store i32 %66, ptr @"DELTAY&", !tbaa !2
-  %67 = mul i32 %62, %62
-  %68 = mul i32 %66, %66
-  %69 = add i32 %67, %68
-  %70 = add i32 %69, 262144
-  store i32 %70, ptr @"DIST2&", !tbaa !2
-  %71 = sdiv i32 %70, 262144
-  %72 = add i32 %71, 1
-  %73 = sdiv i32 512, %72
-  store i32 %73, ptr @"FALLOFF&", !tbaa !2
-  %74 = load i32, ptr @"ACCX&", !tbaa !2
-  %75 = mul i32 %62, %73
-  %76 = sdiv i32 %75, 512
-  %77 = add i32 %74, %76
-  store i32 %77, ptr @"ACCX&", !tbaa !2
-  %78 = load i32, ptr @"ACCY&", !tbaa !2
-  %79 = mul i32 %66, %73
-  %80 = sdiv i32 %79, 512
-  %81 = add i32 %78, %80
-  store i32 %81, ptr @"ACCY&", !tbaa !2
-  br label %b27
+  %64 = getelementptr i8, ptr @"POSX&", i16 %47
+  %65 = getelementptr i8, ptr %64, i16 24
+  %66 = load i32, ptr %65, !tbaa !2
+  %67 = mul i16 %18, 4
+  %68 = getelementptr i8, ptr @"POSX&", i16 %67
+  %69 = load i32, ptr %68, !tbaa !2
+  %70 = sub i32 %66, %69
+  %71 = getelementptr i8, ptr @"POSY&", i16 %47
+  %72 = getelementptr i8, ptr %71, i16 24
+  %73 = load i32, ptr %72, !tbaa !2
+  %74 = mul i16 %18, 4
+  %75 = getelementptr i8, ptr @"POSY&", i16 %74
+  %76 = load i32, ptr %75, !tbaa !2
+  %77 = sub i32 %73, %76
+  %78 = mul i32 %70, %70
+  %79 = mul i32 %77, %77
+  %80 = add i32 %78, 262144
+  %81 = add i32 %80, %79
+  %82 = sdiv i32 %81, 262144
+  %83 = add nsw i32 %82, 1
+  %84 = icmp eq i32 %83, 0
+  br i1 %84, label %b33, label %b34
 
 b27:
-  %82 = load i16, ptr @"OTHER%", !tbaa !2
-  %83 = add i16 %82, 1
-  store i16 %83, ptr @"OTHER%", !tbaa !2
-  br label %b21
-
-b28:
-  %84 = load i16, ptr @"BODY%", !tbaa !2
-  %85 = icmp sle i16 %84, 5
-  br i1 %85, label %b31, label %b32
-
-b31:
-  %86 = getelementptr inbounds i32, ptr @"POSX&", i16 %84
-  %87 = load i32, ptr %86, !tbaa !2
-  %88 = getelementptr inbounds i32, ptr @"VELX&", i16 %84
-  %89 = load i32, ptr %88, !tbaa !2
-  %90 = add i32 %87, %89
-  store i32 %90, ptr %86, !tbaa !2
-  %91 = getelementptr inbounds i32, ptr @"POSY&", i16 %84
-  %92 = load i32, ptr %91, !tbaa !2
-  %93 = getelementptr inbounds i32, ptr @"VELY&", i16 %84
-  %94 = load i32, ptr %93, !tbaa !2
-  %95 = add i32 %92, %94
-  store i32 %95, ptr %91, !tbaa !2
-  %96 = add i16 %84, 1
-  store i16 %96, ptr @"BODY%", !tbaa !2
-  br label %b28
-
-b32:
-  %97 = load i32, ptr @"STEPNO&", !tbaa !2
-  %98 = add i32 %97, 1
-  store i32 %98, ptr @"STEPNO&", !tbaa !2
-  br label %b11
+  %85 = phi i32 [ %91, %b34 ], [ %49, %b23 ]
+  %86 = phi i32 [ %94, %b34 ], [ %48, %b23 ]
+  %87 = add nsw i16 %47, 4
+  %exitcond1 = icmp eq i16 %87, 0
+  br i1 %exitcond1, label %b24, label %b23
 
 b33:
-  %99 = load i16, ptr %33, !tbaa !2
-  %100 = icmp sge i16 %99, 0
-  br i1 %100, label %b34, label %b35
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 11) cold
+  unreachable
 
 b34:
-  %101 = load i16, ptr @"BODY%", !tbaa !2
-  %102 = load i16, ptr %32, !tbaa !2
-  %103 = icmp sle i16 %101, %102
-  br i1 %103, label %b36, label %b37
+  %.rhs.trunc = trunc nsw i32 %83 to i16
+  %88 = sdiv i16 512, %.rhs.trunc
+  %.sext = sext i16 %88 to i32
+  %89 = mul i32 %70, %.sext
+  %90 = sdiv i32 %89, 512
+  %91 = add i32 %90, %49
+  %92 = mul i32 %77, %.sext
+  %93 = sdiv i32 %92, 512
+  %94 = add i32 %93, %48
+  br label %b27
 
-b35:
-  %104 = load i16, ptr @"BODY%", !tbaa !2
-  %105 = load i16, ptr %32, !tbaa !2
-  %106 = icmp sge i16 %104, %105
-  br i1 %106, label %b36, label %b37
-
-b36:
-  %107 = load i16, ptr @"BODY%", !tbaa !2
-  %108 = call cc1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %107)
-  %109 = call cc1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %108)
-  call cc1000 addrspace(1) void @llrm.qb.B$SASS(ptr %109, ptr @TAG$)
-  %110 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string7$descriptor, ptr @TAG$)
-  %111 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %110, ptr @$string10$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr %111)
-  %112 = load i16, ptr @"BODY%", !tbaa !2
-  %113 = getelementptr inbounds i32, ptr @"POSX&", i16 %112
+b43:
+  %95 = phi i16 [ %121, %b43 ], [ -6, %b14 ]
+  %96 = phi i16 [ %120, %b43 ], [ -24, %b14 ]
+  %97 = add i16 %95, 6
+  %98 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$STI2(i16 %97)
+  %99 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %98)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$SASS(ptr %99, ptr @TAG$)
+  %100 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string7, ptr @TAG$)
+  %101 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %100, ptr @$string8)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr %101)
+  %102 = getelementptr i8, ptr @"POSX&", i16 %96
+  %103 = getelementptr i8, ptr %102, i16 24
+  %104 = load i32, ptr %103, !tbaa !2
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI4(i32 %104)
+  %105 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string9, ptr @TAG$)
+  %106 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %105, ptr @$string10)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr %106)
+  %107 = getelementptr i8, ptr @"POSY&", i16 %96
+  %108 = getelementptr i8, ptr %107, i16 24
+  %109 = load i32, ptr %108, !tbaa !2
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI4(i32 %109)
+  %110 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string11, ptr @TAG$)
+  %111 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %110, ptr @$string12)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr %111)
+  %112 = getelementptr i8, ptr @"VELX&", i16 %96
+  %113 = getelementptr i8, ptr %112, i16 24
   %114 = load i32, ptr %113, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %114)
-  %115 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string12$descriptor, ptr @TAG$)
-  %116 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %115, ptr @$string14$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr %116)
-  %117 = load i16, ptr @"BODY%", !tbaa !2
-  %118 = getelementptr inbounds i32, ptr @"POSY&", i16 %117
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI4(i32 %114)
+  %115 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string13, ptr @TAG$)
+  %116 = tail call cc 1005 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %115, ptr @$string14)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr %116)
+  %117 = getelementptr i8, ptr @"VELY&", i16 %96
+  %118 = getelementptr i8, ptr %117, i16 24
   %119 = load i32, ptr %118, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %119)
-  %120 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string16$descriptor, ptr @TAG$)
-  %121 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %120, ptr @$string18$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr %121)
-  %122 = load i16, ptr @"BODY%", !tbaa !2
-  %123 = getelementptr inbounds i32, ptr @"VELX&", i16 %122
-  %124 = load i32, ptr %123, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %124)
-  %125 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string20$descriptor, ptr @TAG$)
-  %126 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %125, ptr @$string22$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr %126)
-  %127 = load i16, ptr @"BODY%", !tbaa !2
-  %128 = getelementptr inbounds i32, ptr @"VELY&", i16 %127
-  %129 = load i32, ptr %128, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %129)
-  %130 = load i16, ptr @"BODY%", !tbaa !2
-  %131 = load i16, ptr %33, !tbaa !2
-  %132 = add i16 %130, %131
-  store i16 %132, ptr @"BODY%", !tbaa !2
-  br label %b33
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI4(i32 %119)
+  %120 = add nsw i16 %96, 4
+  %121 = add nsw i16 %95, 1
+  %exitcond5 = icmp eq i16 %120, 0
+  br i1 %exitcond5, label %b44, label %b43
 
-b37:
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string24$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+b44:
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PESD(ptr @$string15)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$CEND()
   unreachable
 }
 
-declare cc1000 ptr @llrm.qb.B$FCMD() addrspace(1)
+declare cc 1005 ptr @llrm.qb.B$FCMD() addrspace(1) nocallback
 
-declare cc1000 ptr @llrm.qb.B$FVAL(ptr) addrspace(1)
+declare cc 1005 ptr @llrm.qb.B$FVAL(ptr) addrspace(1) nocallback
 
 declare i32 @llvm.lrint.i32.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare cc1000 ptr @llrm.qb.B$STI2(i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$SERR(i16) addrspace(1) nocallback noreturn
 
-declare cc1000 ptr @llrm.qb.B$LTRM(ptr) addrspace(1)
+declare cc 1005 ptr @llrm.qb.B$STI2(i16) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$SASS(ptr, ptr) addrspace(1)
+declare cc 1005 ptr @llrm.qb.B$LTRM(ptr) addrspace(1) nocallback
 
-declare cc1000 ptr @llrm.qb.B$SCAT(ptr, ptr) addrspace(1)
+declare cc 1005 void @llrm.qb.B$SASS(ptr, ptr) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
+declare cc 1005 ptr @llrm.qb.B$SCAT(ptr, ptr) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PSSD(ptr) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$CEND() addrspace(1)
+declare cc 1005 void @llrm.qb.B$PESD(ptr) addrspace(1) nocallback
+
+declare cc 1005 void @llrm.qb.B$CEND() addrspace(1) nocallback nounwind noreturn
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+
+declare i32 @llvm.smax.i32(i32, i32) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

@@ -686,6 +686,10 @@ fn selected_in(
     };
     let Some(text) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(text).map_err(Unselected)?;
+    // The pin's combineMul declines only at `minsize`. Where a pointer is
+    // narrower than the widest native integer (m16), -Os keeps `imul` as well:
+    // the chains grow its objects (27 of 175 by 3550 B, tests/run/c -Os).
+    let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
@@ -730,7 +734,10 @@ fn selected_in(
         // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
         // only). Flipping it at --isel=dag grows m32 -Os +467 B over 126
         // programs and m16 -Os +763 B over 309; matmul gains 20/3 B. Exit:
-        // keep the divide unless the expansion forces spills.
+        // keep the divide unless the expansion forces spills (matmul's `urem
+        // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
+        // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
+        // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
@@ -919,7 +926,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },
