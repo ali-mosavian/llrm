@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loadstorepromoter.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loadstorepromoter.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loadstorepromoter.rs sha256:67f3d27e26c9af9a92c76cd91eb20b8f4096aa313c9ac54c9bd4746ffc76e365 -->
+<!-- src: crates/opt/llrm-analysis/src/loadstorepromoter.rs sha256:2b4483d311d6d640de56bc710e2b3b03afba9e530b74c8096cc068d5f0f29fdf -->
 
 # loadstorepromoter
 
@@ -32,3 +32,6 @@ load when the client says so; the stores stay when it does not.
 
 ## See also
 [`LoadAndStorePromoter::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SSAUpdater.cpp#L360).
+
+## Used by
+Named by `sroa`.

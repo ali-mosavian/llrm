@@ -4,10 +4,12 @@
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 export BUILDSLOT_BYPASS=1
 mkdir -p "${LAND_TMP:-/tmp/landing}"
+# every temp file of the batch (cargo, rustc, the linker, python tempfile) goes under LAND_TMP: /tmp is a tmpfs that sat at 98% of its inodes and failed links with "Cannot create temporary file"
+export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/runner-reload.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/rate-limit.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/pr-state.sh"; source "$HERE/runner-reload.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
@@ -16,6 +18,7 @@ while true; do
   [ "$(runner_scripts_sha "$HERE")" = "$SELF_SHA" ] || { echo "runner scripts changed: reloading"; exec "$0" "$@"; }
   # never run beside another landing (old runner's land.sh)
   while landing_busy; do sleep 20; done
+  rate_limit_pause
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
   # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
   git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
@@ -39,6 +42,7 @@ while true; do
     solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
     # PRs in $LAND_TMP/urgent.txt (landing fixes) are a batch of their own, in that order; the rest wait one cycle
     urgent=($(urgent_listed "${LAND_TMP:-/tmp/landing}/urgent.txt" "${cand[@]}")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
+    python3 "$HERE/pr_state.py" fill "${cand[@]:0:BATCH_CAP}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"  # one GraphQL call for the cycle's reads below
     cand=($(open_only "${cand[@]:0:BATCH_CAP}" 2>/dev/null)); cand=($(HEAD_MIN_AGE=$(batch_head_age $([ -z "$solo" ] && echo ${#urgent[@]} || echo 0)) aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
     # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
     tooling_current "$HERE/.." 2>>"${LAND_TMP:-/tmp/landing}/assemble.log" || echo "tooling not refreshed" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
@@ -57,7 +61,7 @@ while true; do
   echo "== $(date +%H:%M) landing ${batch[*]}"
   if [ ${#batch[@]} -eq 1 ]; then "$HERE/land.sh" "$n" 2>&1 | cut -c1-260; continue; fi
   for m in "${batch[@]}"; do
-    info=$(gh pr view $m --repo $R --json state,isDraft,baseRefName -q '"\(.state) \(.isDraft) \(.baseRefName)"'); set -- $info
+    info="$(cached_state $m state) $(cached_state $m isDraft) $(cached_state $m baseRefName)"; [[ $info =~ ^[A-Z]+\ (true|false)\  ]] || info=$(gh pr view $m --repo $R --json state,isDraft,baseRefName -q '"\(.state) \(.isDraft) \(.baseRefName)"'); set -- $info
     [ "$1" = OPEN ] || continue
     [ "$3" = feat/parity ] || gh pr edit $m --repo $R --base feat/parity >/dev/null
     [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Pass, analysis and backend headers: which source files have one, and what each lacks.
 
-    tools/passdocs.py --check [--require DIR...]   list files lacking a summary or a required section
+    tools/docs/passdocs.py --check [--require DIR...]   list files lacking a summary or a required section
 
 A header needs a summary line and `# How it works`, plus one of `# Runs` (a pass), `# Used by` (a helper) or `# Provides` (an analysis), and `# Example`.
 `--check` exits 1 on a gap in a `--require` directory; without `--require` it only reports.
-The pages are written from these headers by `tools/docsbuild/build.py --sync`.
+The pages are written from these headers by `tools/docs/docsbuild/build.py --sync`.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 REPO = "https://github.com/ali-mosavian/llrm"
 SKIP = {"lib", "mod", "testing"}
 
@@ -90,12 +90,61 @@ def section_line(lines: list[str], names: tuple[str, ...]) -> str:
     return ""
 
 
-def missing(lines: list[str], runs_or_provides: str) -> list[str]:
-    """What the header lacks: `summary`, `# How it works`, `# Runs`, `# Provides` or `# Example`."""
+def users_of(directory: Path, root: Path = ROOT) -> dict[str, list[str]]:
+    """For each source file stem of `directory`, the files of the repository's crates that name it as a path (`stem::`) or import it (`use stem`): other crates
+    through `llrm_x::stem::`. Tests and the crate roots, which only declare the module, do not count."""
+    stems = {p.stem for p in sources(directory)}
+    named = re.compile(r"\b(\w+)::")
+    imported = re.compile(r"\buse (\w+)\b")
+    found: dict[str, set[str]] = {stem: set() for stem in stems}
+    for p in sorted((root / "crates").rglob("*.rs")) if (root / "crates").is_dir() else []:
+        if p.stem.endswith("_tests") or p.stem in ("lib", "mod", "tests", "testing") or "/target/" in p.as_posix():
+            continue
+        text = p.read_text(encoding="utf-8", errors="replace")
+        for stem in (set(named.findall(text)) | set(imported.findall(text))) & stems:
+            if p.stem != stem:
+                found[stem].add(p.stem)
+    return {stem: sorted(users) for stem, users in found.items()}
+
+
+def with_users(lines: list[str], users: list[str]) -> list[str]:
+    """`lines`, and for a header that says neither where it runs nor what it provides, a `# Used by` section generated from the files that name it."""
+    if not users or any(name in sections(lines) for name in ("Runs", "Used by", "Provides")):
+        return lines
+    return [*lines, "", "# Used by", "Named by " + ", ".join(f"`{one}`" for one in users) + "."]
+
+
+def explained(lines: list[str]) -> bool:
+    """Whether the header says how the file works: a `# How it works` or `# LLVM structure` section, or a prose paragraph after the summary
+    (not a table, a code block or a list)."""
+    if sections(lines) & {"How it works", "LLVM structure"}:
+        return True
+    paragraphs, para, fenced = [], [], False
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if line.strip() and not line.startswith("#"):
+            para.append(line.strip())
+        elif para:
+            paragraphs.append(para)
+            para = []
+    if para:
+        paragraphs.append(para)
+    return any(not p[0].startswith(("|", "-", "*")) and len(" ".join(p)) > 60 for p in paragraphs[1:])
+
+
+def missing(lines: list[str], runs_or_provides: str, users: list[str] | None = None) -> list[str]:
+    """What the header lacks: `summary`, `# How it works`, `# Runs`, `# Provides` or `# Example`. Where it runs may be derived from the files that name it."""
     gaps = [] if summary(lines) else ["summary"]
     have = sections(lines)
-    gaps += [f"# {name}" for name in ("How it works", "Example") if name not in have]
-    if not any(name in have for name in ("Runs", "Used by", "Provides")):
+    if not explained(lines):
+        gaps.append("# How it works")
+    if "Example" not in have:
+        gaps.append("# Example")
+    if not users and not any(name in have for name in ("Runs", "Used by", "Provides")):
         gaps.append(f"# {runs_or_provides} (or # Used by)")
     return gaps
 
@@ -106,8 +155,9 @@ def check(required: list[str], root: Path) -> list[str]:
     for _, _, directory, kind in PAGES:
         if required and directory not in required:
             continue
+        users = users_of(root / directory, root)
         for path in sources(root / directory):
-            gaps = missing(header(path), kind)
+            gaps = missing(header(path), kind, users.get(path.stem))
             if gaps:
                 found.append(f"{directory}/{path.name}: missing {', '.join(gaps)}")
     return found
