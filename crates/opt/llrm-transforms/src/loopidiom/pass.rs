@@ -23,7 +23,6 @@
 
 use llrm_analysis::aa::AAResults;
 use llrm_analysis::basicaa::BasicAA;
-use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expander::Env;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
