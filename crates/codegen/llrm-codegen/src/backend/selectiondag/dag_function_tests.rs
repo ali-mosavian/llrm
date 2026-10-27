@@ -725,6 +725,31 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
     assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
+/// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
+/// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
+/// first): bench/mandel.nib m16 -Os, +8 B.
+#[test]
+fn at_os_a_multiply_by_a_constant_stays_one_imul() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 24
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let names = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
+    };
+    let count = |names: &[String], one: &str| names.iter().filter(|n| *n == one).count();
+    assert_eq!((count(&names(false), "imul"), count(&names(false), "shl")), (0, 1), "speed: lea and shift");
+    assert_eq!((count(&names(true), "imul"), count(&names(true), "shl")), (1, 0), "-Os: {:?}", names(true));
+}
+
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
 /// no byte divide): examples/dice.nib and easing.nib stopped compiling.
 #[test]

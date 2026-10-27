@@ -175,6 +175,7 @@ pub mod decide;
 pub mod dfajumpthreading;
 #[cfg(test)]
 mod dfajumpthreading_tests;
+pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;

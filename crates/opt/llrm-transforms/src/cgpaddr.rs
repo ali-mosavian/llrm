@@ -202,7 +202,13 @@ impl FunctionPass for CgpAddr {
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
         let sunk_casts = match analyses.outer().target().lowering() {
-            Some(lowering) => crate::sinkcast::casts_sunk(unit.context, unit.layout, &*lowering, unit.function),
+            Some(lowering) => crate::sinkcast::casts_sunk(
+                unit.context,
+                unit.layout,
+                &*lowering,
+                analyses.outer().target().spaces(),
+                unit.function,
+            ),
             None => false,
         };
         let extended = match analyses.outer().target().lowering() {

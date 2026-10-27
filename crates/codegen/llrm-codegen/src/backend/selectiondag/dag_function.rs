@@ -881,7 +881,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
             &selector,
             &mut hooks,
             &Info { source_order: bitness == 32 },
