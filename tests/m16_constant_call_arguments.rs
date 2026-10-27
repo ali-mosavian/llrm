@@ -1,6 +1,6 @@
 //! A constant pushed by two calls is pushed as an immediate each time at m16.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 extern void f(int a, int b, long c);
@@ -16,7 +16,7 @@ void g(int x) { f(257, 8, 3); f(x, 8, 3); }
 fn test_a_constant_argument_of_two_calls_is_pushed_as_an_immediate() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", "-mabi=cdecl", "--isel=dag", "-Os", "-S", "-o", "-", "a.c"])
         .output()
