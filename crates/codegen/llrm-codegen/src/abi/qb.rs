@@ -30,54 +30,6 @@ impl fmt::Display for AbiError {
 
 impl std::error::Error for AbiError {}
 
-// Normal-return stack cleanup read directly from the matching entry in all
-// three shipped Microsoft runtimes.  This is deliberately only a stack ABI
-// table: memory, clobber, allocation, error and alias effects remain those of
-// the conservative runtime contract.  BCOM45/BCL71ENR/VBDCL10E hashes are
-// 5b1c7a6f..., 873fde67..., and 59ad49b0...; tools/libdump.py records the
-// member, entry offset and RETF for every row.  SCAT is family-specific (the
-// VBDOS far-string entry consumes an extra word), so it is not generalized.
-static _AUDITED_STRING_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
-    IndexMap::from_iter([
-        ("B$ASSN", 12),
-        ("B$FASC", 2),
-        ("B$FCHR", 2),
-        ("B$FCVC", 2),
-        ("B$FCVD", 2),
-        ("B$FCVI", 2),
-        ("B$FCVL", 2),
-        ("B$FCVS", 2),
-        ("B$FHEX", 4),
-        ("B$FLEN", 2),
-        ("B$FMID", 6),
-        ("B$FMKC", 8),
-        ("B$FMKD", 8),
-        ("B$FMKI", 2),
-        ("B$FMKL", 4),
-        ("B$FMKS", 4),
-        ("B$FMDF", 8),
-        ("B$FMSF", 4),
-        ("B$FOCT", 4),
-        ("B$INS2", 4),
-        ("B$INS3", 6),
-        ("B$LCAS", 2),
-        ("B$LDFS", 6),
-        ("B$LEFT", 4),
-        ("B$LTRM", 2),
-        ("B$MCVD", 2),
-        ("B$MCVS", 2),
-        ("B$RGHT", 4),
-        ("B$RTRM", 2),
-        ("B$SASS", 4),
-        ("B$SCMP", 4),
-        ("B$SCPY", 2),
-        ("B$SPAC", 2),
-        ("B$STRI", 4),
-        ("B$STRS", 4),
-        ("B$UCAS", 2),
-    ])
-});
-
 // Stack widths read from actual QB 4.5 /A listings for the graphics forms,
 // then checked against their runtime RETF cleanup. Coordinate state is latched
 // by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
@@ -319,7 +271,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if _AUDITED_STRING_STACK.get(name) == Some(&pushed) {
+    if runtime::audited_pop("string", name) == Some(pushed) {
         return Ok(returns(
             pushed,
             format!(

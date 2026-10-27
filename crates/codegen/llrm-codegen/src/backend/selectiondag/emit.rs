@@ -1782,6 +1782,9 @@ impl Emitter<'_, '_> {
         if self.selectors.contains_key(&origin.node) {
             return false;
         }
+        if self.sp_values.contains(&origin) {
+            return false;
+        }
         let dgroup = self.ctx.globals.segment(None);
         let ISD::Machine(op) = self.dag.opcode(origin) else {
             return width_of(self.ctx.map.scalar_sse(), self.dag, origin) == 2;
@@ -1797,6 +1800,22 @@ impl Emitter<'_, '_> {
             ("OR32rr" | "ADD32rr" | "SHL32ri" | "ADD32rr_DB", _) => false,
             _ => width_of(self.ctx.map.scalar_sse(), self.dag, origin) == 2,
         }
+    }
+
+    /// Whether the pointer in `register` is the address of a frame object or
+    /// the stack pointer itself: into SS.
+    fn is_frame_pointer(
+        &self,
+        register: llrm_lir::registers::RegId,
+    ) -> bool {
+        let Some(&origin) = self.origins.get(&register) else { return false };
+        if self.sp_values.contains(&origin) {
+            return true;
+        }
+        let ISD::Machine(op) = self.dag.opcode(origin) else { return false };
+        let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
+        let first = self.dag.node(origin).ops.first().copied();
+        name == "LEA16r" && first.is_some_and(|op| matches!(self.dag.node(op).data, NodeData::FrameIndex(_)))
     }
 
     /// The selector of the segment the pointer in `register` is in, as a value:
@@ -1828,6 +1847,13 @@ impl Emitter<'_, '_> {
             let sixteen = Imm { value: 16, width: 1, address: None };
             self.push(Operation::Binary, "shr", vec![Loc::Held(shifted)], vec![Loc::Held(value), Loc::Imm(sixteen)]);
             return Ok(Held { width: 2, ..shifted });
+        }
+        // The stack pointer itself (a byval argument's address) is in SS.
+        if self.sp_values.contains(&origin) {
+            let held = self.fresh(2);
+            let ss = Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 });
+            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![ss]);
+            return Ok(held);
         }
         let held = self.fresh(2);
         let source = if let ISD::Machine(op) = self.dag.opcode(origin) {
@@ -2288,6 +2314,10 @@ impl Emitter<'_, '_> {
                 // segment to load and no override
                 let from = if self.is_dgroup_pointer(from_offset) {
                     Loc::Reg(Reg { register: from_segment, width: 2 })
+                } else if self.is_frame_pointer(from_offset) {
+                    // a frame object or the argument area: SS, read with an
+                    // override and no selector copied
+                    Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
                 } else {
                     Loc::Held(self.segment_of_pointer(from_offset)?)
                 };
@@ -3393,6 +3423,15 @@ impl Emitter<'_, '_> {
                 width: width_of(self.ctx.map.scalar_sse(), self.dag, value),
                 address: addr,
             }));
+        }
+        // The stack pointer itself as a value (`mov edi, esp`, the first byval
+        // argument's address): a copy of the register.
+        if self.sp_values.contains(&value) {
+            let width = width_of(self.ctx.map.scalar_sse(), self.dag, value);
+            let held = self.fresh(width);
+            let sp = Reg { register: self.ctx.stack_pointer, width };
+            self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Reg(sp)]);
+            return Ok(Loc::Held(held));
         }
         match self.values.get(&value) {
             Some(&v) => Ok(Loc::Held(Held { value: v, width: width_of(self.ctx.map.scalar_sse(), self.dag, value) })),
