@@ -182,6 +182,10 @@ pub struct Frame {
     /// (`backend::callframe::ReserveCallFrame`;
     /// the pin's `MaxCallFrameSize`). The lowest bytes of the frame.
     pub call_area: i64,
+    /// The homes of the selector's scratch temporaries (a rounded float's
+    /// cell): `slots_colored` shares them with each other, never with a spill
+    /// slot, which they would split and widen.
+    pub scratch: std::collections::BTreeSet<i64>,
 }
 
 impl Frame {
@@ -199,6 +203,7 @@ impl Frame {
             stacks: IndexMap::default(),
             align: WORD,
             call_area: 0,
+            scratch: Default::default(),
         }
     }
 

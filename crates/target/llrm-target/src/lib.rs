@@ -16,12 +16,26 @@ pub mod registers;
 pub mod routines;
 pub mod runtime;
 pub mod timings;
+pub mod tune;
 
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
+
+/// The registers a segmented target's string operation names: the count, the
+/// offsets it reads and writes through, and the segment its source defaults
+/// to.
+#[derive(Clone, Copy, Debug)]
+pub struct StringRegisters {
+    pub count: RegId,
+    pub source: RegId,
+    pub destination: RegId,
+    pub source_segment: RegId,
+    /// A data register a tail's byte count rides in.
+    pub tail: RegId,
+}
 
 /// A flat platform's foreign linear ranges, read when a constant address is
 /// first asked of: parsing a platform's description is not paid by a compile
@@ -416,6 +430,13 @@ pub trait Target {
 
     /// The register that holds the stack's top.
     fn stack_pointer(&self) -> RegId;
+
+    /// The registers a string operation names, where they are fixed (real
+    /// mode's, whose source segment defaults to DS); none where the target
+    /// has no segments to name.
+    fn string_registers(&self) -> Option<StringRegisters> {
+        None
+    }
 
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
