@@ -39,13 +39,10 @@
 //! the chains switched off by a probe, 71 vsgcc programs at m32: clocks with
 //! the chains are -5.1% / -5.9% / -6.0% at -O1 / -O2 / -O3, code
 //! +3072 / +720 / +688 B (the chains cost bytes), -Os identical (no chain is
-//! chosen; the DAG path since 2026-10-27 takes them at m32 -Os as the pin does:
-//! +3037 B over 58 objects of tests/run/c, histo and x_dct clocks equal the
-//! pin's, and keeps `imul` at m16 -Os, where they grow 27 of 175 by 3550 B);
-//! QCport m16 -38 B at -O1..-O3, 0 at -Os. Instructions against the pin on the
-//! same IR: lea +471 at -O2 (`docs/working/instruction-gap-vs-pin.md`). Exit:
-//! none while the clocks decide; reviewed with the tuning phase. Owner w-4,
-//! review 2026-12-01.
+//! chosen); QCport m16 -38 B at -O1..-O3, 0 at -Os. Instructions against the
+//! pin on the same IR: lea +471 at -O2
+//! (`docs/working/instruction-gap-vs-pin.md`). Exit: none while the clocks
+//! decide; reviewed with the tuning phase. Owner w-4, review 2026-12-01.
 //!
 //! # Example
 //! What the ranking answers on a 486 (`targets::tuned_for(M32, "486")`):
