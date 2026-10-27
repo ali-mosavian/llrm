@@ -109,6 +109,7 @@ pub mod bswap_combine;
 pub mod builder;
 mod chain_combine;
 pub mod combine_load;
+pub mod combine_funnel;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
 mod dag;

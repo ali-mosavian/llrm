@@ -33,7 +33,7 @@ const MAX_SEARCH_NODES: usize = 1024;
 
 /// What an address is relative to: `BaseIndexOffset`'s base.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Base {
+pub(super) enum Base {
     Global(u32),
     Frame(i32),
     Node(u32),
@@ -58,7 +58,7 @@ struct Link {
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// `BaseIndexOffset::match`: the base of `ptr` and its constant offset.
-    fn match_address(
+    pub(super) fn match_address(
         &self,
         ptr: SDValue,
     ) -> (Base, i64) {
