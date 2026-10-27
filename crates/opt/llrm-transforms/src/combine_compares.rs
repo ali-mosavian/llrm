@@ -212,13 +212,25 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    // OWED: foldSignBitTest.
+    // `if (auto *PN = dyn_cast<PHINode>(Op0|Op1)) foldOpIntoPhi(I, PN)`: a
+    // compare of a phi is a phi of the compares.
+    for op in [op0, op1] {
+        let phi = c.definition_of(op).filter(|&def| c.function.instruction(def).opcode == Opcode::Phi);
+        if let Some(phi) = phi {
+            match c.fold_op_into_phi(inst, phi, false) {
+                Visit::None => {}
+                found => return found,
+            }
+        }
+    }
     if let Some(r) = fold_icmp_with_ext_of_ext(c, inst, pred, op0, op1) {
         return r;
     }
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
         return r;
     }
-    // OWED: foldSignBitTest, foldOpIntoPhi, foldICmpInstWithConstantNotInt,
+    // OWED: foldICmpInstWithConstantNotInt,
     // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
     // the two-select fold.
     if changed { Visit::Changed } else { Visit::None }

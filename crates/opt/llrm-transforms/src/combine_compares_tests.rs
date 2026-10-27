@@ -205,3 +205,27 @@ fn a_compare_of_extensions_of_different_widths_extends_the_narrower_source() {
         "  %0 = sext i8 %y to i16\n  %1 = icmp slt i16 %x, %0\n  ret i1 %1\n",
     );
 }
+
+/// A compare of a phi of constants against a constant is a phi of the answers.
+/// `queens` -O1 kept `phi [1, 1, 0]; icmp eq 0; br` as a flag in a register
+/// and a test (the pin folds the compare into the phi, then SimplifyCFG
+/// threads the branch): +6.4% clocks on a 486.
+#[test]
+fn test_a_compare_of_a_phi_of_constants_is_a_phi_of_the_answers() {
+    let text = "define i1 @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %b1, label %b2
+b1:
+  br label %b3
+b2:
+  br i1 %d, label %b1, label %b3
+b3:
+  %p = phi i32 [ 1, %b1 ], [ 0, %b2 ]
+  %r = icmp eq i32 %p, 0
+  ret i1 %r
+}
+";
+    let after = combined(text);
+    assert!(!after.contains("icmp"), "{after}");
+    assert!(after.contains("phi i1"), "{after}");
+}
