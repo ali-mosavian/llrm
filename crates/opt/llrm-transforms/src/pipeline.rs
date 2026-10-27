@@ -801,6 +801,20 @@ pub(crate) fn llvm_order(
                     options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
+            // LoopUnrollPass (l.1476) with the full unroll the target allows
+            // (X86 sets no partial or runtime unrolling), then SROA (l.1494)
+            // on the allocas the unroll made constant-indexed. The loops the
+            // early unroll refused are looked at again after the combines.
+            slot(
+                "unroll@1476",
+                Box::new(loopunrollpass::LoopFullUnroll {
+                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_size: size,
+                    only_when_forced: !applied.options.loop_unrolling,
+                    created: Default::default(),
+                }),
+            ),
+            sroa("sroa@1494"),
             // LICMPass again (l.1508,
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1508,
             // `AllowSpeculation=true`), in a loop pass manager of its own after
