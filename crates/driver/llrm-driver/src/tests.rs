@@ -869,6 +869,56 @@ fn an_explicit_cdecl_stays_cdecl_when_regcall_is_the_default() {
     assert!(!listing.contains("__regcall3__"), "{listing}");
 }
 
+/// clang keeps the C convention on the library functions it knows, so under
+/// regcall `strlen` and `atan` were called as `_strlen` and `_atan` and the
+/// Watcom library (`strlen_`, `atan_`) did not link; a user's own declaration
+/// of another name stays what it says.
+#[test]
+fn a_known_library_function_is_called_in_the_default_convention() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}\
+         declare i32 @strlen(ptr)\n\
+         declare double @atan(double)\n\
+         declare i32 @mine(i32)\n\
+         define x86_regcallcc double @__regcall3__use(ptr %s, double %x) {{\n  \
+         %n = call i32 @strlen(ptr %s)\n  %a = call double @atan(double %x)\n  %m = call i32 @mine(i32 %n)\n  \
+         %f = sitofp i32 %m to double\n  %r = fadd double %a, %f\n  ret double %r\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom", "-mregcall-default"]), &text, "c").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("call strlen_") && listing.contains("call atan_"), "{listing}");
+    assert!(listing.contains("call _mine"), "{listing}");
+}
+
+/// A definition of a library function the pin knows (floatm.c's `sqrtf`) kept
+/// C's convention while its calls took the default: `sqrtf_` was called and
+/// `_sqrtf` defined, and the link failed with `sqrtf_` undefined.
+#[test]
+fn a_defined_library_function_takes_the_default_convention_too() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}\
+         define float @sqrtf(float %x) {{\n  ret float %x\n}}\n\
+         define x86_regcallcc float @__regcall3__use(float %x) {{\n  %r = call float @sqrtf(float %x)\n  ret float %r\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom", "-mregcall-default"]), &text, "c").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sqrtf_ proc"), "{listing}");
+    assert!(!listing.contains("_sqrtf proc"), "{listing}");
+}
+
+/// `-m32 -gcodeview -fobject-format=elf` wrote an ELF object with no CodeView
+/// in it and said nothing; a debug flavor the object format cannot carry is an
+/// error that says so.
+#[test]
+fn a_debug_flavor_the_object_format_cannot_carry_is_refused() {
+    let text = format!("{REGCALL_DATALAYOUT}define i32 @f(i32 %x) {{\n  ret i32 %x\n}}\n");
+    let refused = |arguments: &[&str]| crate::llc::compiled(&flags(arguments), &text, "c").map(|_| ()).unwrap_err();
+    assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
+    assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
+    assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));
+    assert!(crate::llc::compiled(&flags(&["-m32", "-g", "-fobject-format=elf"]), &text, "c").is_ok());
+}
+
 /// `__stdcall` and `__fastcall` reached the backend as "calling convention
 /// 64": no target here has them, and the message did not say which function or
 /// what to write instead.
@@ -880,20 +930,45 @@ fn stdcall_is_refused_by_name() {
 }
 
 /// At m16 an unmarked function takes the register-size convention (`_f@3`,
-/// callee clobbers CX and DX), as llrm-c's did, and `main` stays C's (`_main`).
+/// callee clobbers CX and DX), as llrm-c's did, and `main` is Watcom's `main_`.
 /// `-mabi=watcom` forced on the Watcom row made every function save BX, CX and
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
-fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
+fn m16_defaults_to_the_register_size_convention_with_a_watcom_main() {
     let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 define i16 @f(i16 %x) {\n  %d = sdiv i16 %x, 7\n  ret i16 %d\n}\n\
                 define i16 @main() {\n  ret i16 0\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-m16", "-Os"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("_f@3 proc") && listing.contains("_main proc"), "{listing}");
+    assert!(listing.contains("_f@3 proc") && listing.contains("main_ proc"), "{listing}");
     let body = listing.split("_f@3 proc").nth(1).unwrap().split("endp").next().unwrap();
     assert!(!body.contains("push cx") && !body.contains("push dx"), "{listing}");
+}
+
+/// At m16 the default is regparm3 (`_f@3`), but the Watcom library is the
+/// register convention (`atan2_`, `strlen_`, `printf_`): clang leaves the
+/// library functions it knows in C's convention and marks the headers'
+/// `__watcall` ones `regcall`, so every program that called the library
+/// linked against `_atan2@3`, which the library does not have.
+#[test]
+fn m16_library_calls_are_the_watcom_register_convention() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                declare double @atan2(double, double)\n\
+                declare i16 @strlen(ptr)\n\
+                declare i16 @printf(ptr, ...)\n\
+                declare x86_regcallcc i16 @__regcall3__getch()\n\
+                declare i16 @mine(i16)\n\
+                declare double @llvm.ceil.f64(double)\n\
+                define i16 @f(ptr %s) {\n  %n = call i16 @strlen(ptr %s)\n  %a = call double @atan2(double 1.0, double 2.0)\n  %c = call double @llvm.ceil.f64(double %a)\n  store double %c, ptr %s\n  \
+                %p = call i16 (ptr, ...) @printf(ptr %s, i16 %n)\n  %g = call i16 @__regcall3__getch()\n  %m = call i16 @mine(i16 %g)\n  ret i16 %m\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    for name in ["atan2_", "strlen_", "printf_", "getch_", "ceil_"] {
+        assert!(listing.contains(&format!("call {name}")), "{name}: {listing}");
+    }
+    assert!(listing.contains("call _mine@3"), "{listing}");
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,

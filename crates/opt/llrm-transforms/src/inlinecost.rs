@@ -118,7 +118,7 @@ use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{AtomicKind, Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::tti::{CastKind, CostKind, Ty};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::HashMap;
@@ -960,6 +960,13 @@ impl<'a> Analyzer<'a> {
             Opcode::FNeg => self.visit_fneg(inst),
             Opcode::Load { volatile, .. } => self.visit_load(inst, *volatile),
             Opcode::Store { volatile, .. } => self.visit_store(inst, *volatile),
+            // `LoadInst` and `StoreInst` that are not simple,
+            // then `visitInstruction`.
+            Opcode::Atomic(info) => match info.kind {
+                AtomicKind::Load => self.visit_load(inst, true),
+                AtomicKind::Store => self.visit_store(inst, true),
+                _ => self.visit_default(inst),
+            },
             Opcode::ExtractValue(_) | Opcode::InsertValue(_) => self.visit_aggregate(inst),
             Opcode::Call(_) | Opcode::Invoke(_) => self.visit_call(inst),
             Opcode::Ret => {
