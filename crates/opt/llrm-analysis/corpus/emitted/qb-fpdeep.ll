@@ -1,219 +1,207 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$data = internal global [16 x i8] zeroinitializer
+@$data = internal global [4 x i8] zeroinitializer
 @$qb$statementTable = internal constant [0 x i8] zeroinitializer
-@"P!" = internal global [12 x i8] zeroinitializer
+@"P!" = internal global [12 x i8] zeroinitializer, align 2
 @P$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"P!" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr getelementptr (i8, ptr @"P!", i16 -4), [6 x i8] c"\04\00\03\00\01\00" }>
 @"Q!" = internal global [4 x i8] zeroinitializer
 @"K!" = internal global [4 x i8] zeroinitializer
 @"D#" = internal global [8 x i8] zeroinitializer
 @"E#" = internal global [8 x i8] zeroinitializer
 @"I%" = internal global [2 x i8] zeroinitializer
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string4$payload to ptr addrspace(2))
-@$string4$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string4$payload, i16 4) to i16), [4 x i8] c"\02\00SQ" }>
-@$string4$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string4$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string7$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string7$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string9$payload = internal addrspace(1) constant <{ [2 x i8], i16, [8 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string9$payload, i16 4) to i16), [8 x i8] c"\05\00RATIO\00" }>
-@$string9$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string9$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string11$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string11$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string11$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string11$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string13$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string13$payload, i16 4) to i16), [6 x i8] c"\03\00MIX\00" }>
-@$string13$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string13$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string15$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string15$payload, i16 4) to i16), [4 x i8] c"\01\00=\00" }>
-@$string15$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string15$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string17$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string17$payload, i16 4) to i16), [6 x i8] c"\04\00DSQ=" }>
-@$string17$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string17$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string19$payload = internal addrspace(1) constant <{ [2 x i8], i16, [10 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string19$payload, i16 4) to i16), [10 x i8] c"\07\00DRATIO=\00" }>
-@$string19$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string19$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string21$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string21$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string21$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string21$payload, i16 2) to i16), ptr @$fslSegment }>
+@$arguments$8 = internal global [12 x i8] zeroinitializer
+@$string5 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string5, i16 4), [2 x i8] c"SQ" }>
+@$string6 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string6, i16 4), [2 x i8] c"=\00" }>
+@$string7 = internal constant <{ [2 x i8], ptr, [6 x i8] }> <{ [2 x i8] c"\05\00", ptr getelementptr (i8, ptr @$string7, i16 4), [6 x i8] c"RATIO\00" }>
+@$string8 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string8, i16 4), [2 x i8] c"=\00" }>
+@$string9 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\03\00", ptr getelementptr (i8, ptr @$string9, i16 4), [4 x i8] c"MIX\00" }>
+@$string10 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string10, i16 4), [2 x i8] c"=\00" }>
+@$string11 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string11, i16 4), [4 x i8] c"DSQ=" }>
+@$string12 = internal constant <{ [2 x i8], ptr, [8 x i8] }> <{ [2 x i8] c"\07\00", ptr getelementptr (i8, ptr @$string12, i16 4), [8 x i8] c"DRATIO=\00" }>
+@$string13 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string13, i16 4), [4 x i8] c"DONE" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
-  store i16 12, ptr @$data, !tbaa !2
-  %0 = load i16, ptr @$data, !tbaa !2
+  store i16 12, ptr @$arguments$8, !tbaa !2
+  %0 = load i16, ptr @$arguments$8, !tbaa !2
   %1 = sitofp i16 %0 to float
-  %2 = sub i16 1, 1
-  %3 = getelementptr inbounds float, ptr @"P!", i16 %2
-  store float %1, ptr %3, !tbaa !2
-  %4 = getelementptr i8, ptr @$data, i16 2
+  %2 = fpround float %1 to float
+  %3 = getelementptr inbounds float, ptr @"P!", i16 0
+  store float %2, ptr %3, !tbaa !2
+  %4 = getelementptr i8, ptr @$arguments$8, i16 2
   store i16 28, ptr %4, !tbaa !2
-  %5 = getelementptr i8, ptr @$data, i16 2
+  %5 = getelementptr i8, ptr @$arguments$8, i16 2
   %6 = load i16, ptr %5, !tbaa !2
   %7 = sitofp i16 %6 to float
-  %8 = sub i16 2, 1
-  %9 = getelementptr inbounds float, ptr @"P!", i16 %8
-  store float %7, ptr %9, !tbaa !2
-  %10 = getelementptr i8, ptr @$data, i16 4
+  %8 = fpround float %7 to float
+  %9 = getelementptr inbounds float, ptr @"P!", i16 1
+  store float %8, ptr %9, !tbaa !2
+  %10 = getelementptr i8, ptr @$arguments$8, i16 4
   store i16 60, ptr %10, !tbaa !2
-  %11 = getelementptr i8, ptr @$data, i16 4
+  %11 = getelementptr i8, ptr @$arguments$8, i16 4
   %12 = load i16, ptr %11, !tbaa !2
   %13 = sitofp i16 %12 to float
-  %14 = sub i16 3, 1
-  %15 = getelementptr inbounds float, ptr @"P!", i16 %14
-  store float %13, ptr %15, !tbaa !2
-  %16 = getelementptr i8, ptr @$data, i16 6
+  %14 = fpround float %13 to float
+  %15 = getelementptr inbounds float, ptr @"P!", i16 2
+  store float %14, ptr %15, !tbaa !2
+  %16 = getelementptr i8, ptr @$arguments$8, i16 6
   store i16 4, ptr %16, !tbaa !2
-  %17 = getelementptr i8, ptr @$data, i16 6
+  %17 = getelementptr i8, ptr @$arguments$8, i16 6
   %18 = load i16, ptr %17, !tbaa !2
   %19 = sitofp i16 %18 to float
-  store float %19, ptr @"K!", !tbaa !2
+  %20 = fpround float %19 to float
+  store float %20, ptr @"K!", !tbaa !2
   store i16 1, ptr @"I%", !tbaa !2
-  %20 = getelementptr i8, ptr @$data, i16 8
-  store i16 3, ptr %20, !tbaa !2
-  %21 = getelementptr i8, ptr @$data, i16 10
+  store i16 3, ptr @$data, !tbaa !2
+  %21 = getelementptr i8, ptr @$data, i16 2
   store i16 1, ptr %21, !tbaa !2
   br label %b2
 
 b2:
-  %22 = getelementptr i8, ptr @$data, i16 10
+  %22 = getelementptr i8, ptr @$data, i16 2
   %23 = load i16, ptr %22, !tbaa !2
   %24 = icmp sge i16 %23, 0
-  %25 = sext i1 %24 to i16
-  %26 = icmp ne i16 %25, 0
-  br i1 %26, label %b3, label %b4
+  br i1 %24, label %b3, label %b4
 
 b3:
-  %27 = load i16, ptr @"I%", !tbaa !2
-  %28 = getelementptr i8, ptr @$data, i16 8
-  %29 = load i16, ptr %28, !tbaa !2
-  %30 = icmp sle i16 %27, %29
-  %31 = sext i1 %30 to i16
-  %32 = icmp ne i16 %31, 0
-  br i1 %32, label %b5, label %b6
+  %25 = load i16, ptr @"I%", !tbaa !2
+  %26 = load i16, ptr @$data, !tbaa !2
+  %27 = icmp sle i16 %25, %26
+  br i1 %27, label %b5, label %b6
 
 b4:
-  %33 = load i16, ptr @"I%", !tbaa !2
-  %34 = getelementptr i8, ptr @$data, i16 8
-  %35 = load i16, ptr %34, !tbaa !2
-  %36 = icmp sge i16 %33, %35
-  %37 = sext i1 %36 to i16
-  %38 = icmp ne i16 %37, 0
-  br i1 %38, label %b5, label %b6
+  %28 = load i16, ptr @"I%", !tbaa !2
+  %29 = load i16, ptr @$data, !tbaa !2
+  %30 = icmp sge i16 %28, %29
+  br i1 %30, label %b5, label %b6
 
 b5:
-  %39 = load i16, ptr @"I%", !tbaa !2
-  %40 = sub i16 %39, 1
-  %41 = getelementptr inbounds float, ptr @"P!", i16 %40
-  %42 = load float, ptr %41, !tbaa !2
-  %43 = load i16, ptr @"I%", !tbaa !2
-  %44 = sub i16 %43, 1
-  %45 = getelementptr inbounds float, ptr @"P!", i16 %44
-  %46 = load float, ptr %45, !tbaa !2
-  %47 = fmul float %42, %46
-  store float %47, ptr @"Q!", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string4$descriptor)
+  %31 = load i16, ptr @"I%", !tbaa !2
+  %32 = sub i16 %31, 1
+  %33 = getelementptr inbounds float, ptr @"P!", i16 %32
+  %34 = load float, ptr %33, !tbaa !2
+  %35 = load i16, ptr @"I%", !tbaa !2
+  %36 = sub i16 %35, 1
+  %37 = getelementptr inbounds float, ptr @"P!", i16 %36
+  %38 = load float, ptr %37, !tbaa !2
+  %39 = fmul float %34, %38
+  %40 = fpround float %39 to float
+  store float %40, ptr @"Q!", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string5)
+  %41 = load i16, ptr @"I%", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSI2(i16 %41)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string6)
+  %42 = load float, ptr @"Q!", !tbaa !2
+  %43 = call i32 @llvm.lrint.i32.f32(float %42)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %43)
+  %44 = load i16, ptr @"I%", !tbaa !2
+  %45 = sub i16 %44, 1
+  %46 = getelementptr inbounds float, ptr @"P!", i16 %45
+  %47 = load float, ptr %46, !tbaa !2
   %48 = load i16, ptr @"I%", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSI2(i16 %48)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string7$descriptor)
-  %49 = load float, ptr @"Q!", !tbaa !2
-  %50 = call i32 @llvm.lrint.i32.f32(float %49)
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %50)
-  %51 = load i16, ptr @"I%", !tbaa !2
-  %52 = sub i16 %51, 1
-  %53 = getelementptr inbounds float, ptr @"P!", i16 %52
-  %54 = load float, ptr %53, !tbaa !2
-  %55 = load i16, ptr @"I%", !tbaa !2
-  %56 = sub i16 %55, 1
-  %57 = getelementptr inbounds float, ptr @"P!", i16 %56
-  %58 = load float, ptr %57, !tbaa !2
-  %59 = fmul float %54, %58
-  %60 = load i16, ptr @"I%", !tbaa !2
-  %61 = sub i16 %60, 1
-  %62 = getelementptr inbounds float, ptr @"P!", i16 %61
-  %63 = load float, ptr %62, !tbaa !2
+  %49 = sub i16 %48, 1
+  %50 = getelementptr inbounds float, ptr @"P!", i16 %49
+  %51 = load float, ptr %50, !tbaa !2
+  %52 = fmul float %47, %51
+  %53 = load i16, ptr @"I%", !tbaa !2
+  %54 = sub i16 %53, 1
+  %55 = getelementptr inbounds float, ptr @"P!", i16 %54
+  %56 = load float, ptr %55, !tbaa !2
+  %57 = load i16, ptr @"I%", !tbaa !2
+  %58 = sub i16 %57, 1
+  %59 = getelementptr inbounds float, ptr @"P!", i16 %58
+  %60 = load float, ptr %59, !tbaa !2
+  %61 = fadd float %56, %60
+  %62 = fdiv float %52, %61
+  %63 = fpround float %62 to float
+  store float %63, ptr @"Q!", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string7)
   %64 = load i16, ptr @"I%", !tbaa !2
-  %65 = sub i16 %64, 1
-  %66 = getelementptr inbounds float, ptr @"P!", i16 %65
-  %67 = load float, ptr %66, !tbaa !2
-  %68 = fadd float %63, %67
-  %69 = fdiv float %59, %68
-  store float %69, ptr @"Q!", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string9$descriptor)
-  %70 = load i16, ptr @"I%", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSI2(i16 %70)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string11$descriptor)
-  %71 = load float, ptr @"Q!", !tbaa !2
-  %72 = call i32 @llvm.lrint.i32.f32(float %71)
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %72)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSI2(i16 %64)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string8)
+  %65 = load float, ptr @"Q!", !tbaa !2
+  %66 = call i32 @llvm.lrint.i32.f32(float %65)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %66)
+  %67 = load i16, ptr @"I%", !tbaa !2
+  %68 = sub i16 %67, 1
+  %69 = getelementptr inbounds float, ptr @"P!", i16 %68
+  %70 = load float, ptr %69, !tbaa !2
+  %71 = load float, ptr @"K!", !tbaa !2
+  %72 = fsub float %70, %71
   %73 = load i16, ptr @"I%", !tbaa !2
   %74 = sub i16 %73, 1
   %75 = getelementptr inbounds float, ptr @"P!", i16 %74
   %76 = load float, ptr %75, !tbaa !2
   %77 = load float, ptr @"K!", !tbaa !2
-  %78 = fsub float %76, %77
-  %79 = load i16, ptr @"I%", !tbaa !2
-  %80 = sub i16 %79, 1
-  %81 = getelementptr inbounds float, ptr @"P!", i16 %80
-  %82 = load float, ptr %81, !tbaa !2
-  %83 = load float, ptr @"K!", !tbaa !2
-  %84 = fadd float %82, %83
-  %85 = fdiv float %78, %84
-  store float %85, ptr @"Q!", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string13$descriptor)
-  %86 = load i16, ptr @"I%", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSI2(i16 %86)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string15$descriptor)
-  %87 = load float, ptr @"Q!", !tbaa !2
-  %88 = getelementptr i8, ptr @$data, i16 12
-  store i16 1024, ptr %88, !tbaa !2
-  %89 = getelementptr i8, ptr @$data, i16 12
-  %90 = load i16, ptr %89, !tbaa !2
-  %91 = sitofp i16 %90 to float
-  %92 = fmul float %87, %91
-  %93 = call i32 @llvm.lrint.i32.f32(float %92)
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %93)
-  %94 = load i16, ptr @"I%", !tbaa !2
-  %95 = getelementptr i8, ptr @$data, i16 10
-  %96 = load i16, ptr %95, !tbaa !2
-  %97 = add i16 %94, %96
-  store i16 %97, ptr @"I%", !tbaa !2
+  %78 = fadd float %76, %77
+  %79 = fdiv float %72, %78
+  %80 = fpround float %79 to float
+  store float %80, ptr @"Q!", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string9)
+  %81 = load i16, ptr @"I%", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSI2(i16 %81)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string10)
+  %82 = load float, ptr @"Q!", !tbaa !2
+  %83 = getelementptr i8, ptr @$arguments$8, i16 8
+  store i16 1024, ptr %83, !tbaa !2
+  %84 = getelementptr i8, ptr @$arguments$8, i16 8
+  %85 = load i16, ptr %84, !tbaa !2
+  %86 = sitofp i16 %85 to float
+  %87 = fmul float %82, %86
+  %88 = call i32 @llvm.lrint.i32.f32(float %87)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %88)
+  %89 = load i16, ptr @"I%", !tbaa !2
+  %90 = getelementptr i8, ptr @$data, i16 2
+  %91 = load i16, ptr %90, !tbaa !2
+  %92 = add nsw i16 %89, %91
+  store i16 %92, ptr @"I%", !tbaa !2
   br label %b2
 
 b6:
-  %98 = getelementptr i8, ptr @$data, i16 14
-  store i16 12, ptr %98, !tbaa !2
-  %99 = getelementptr i8, ptr @$data, i16 14
-  %100 = load i16, ptr %99, !tbaa !2
-  %101 = sitofp i16 %100 to double
-  store double %101, ptr @"D#", !tbaa !2
+  %93 = getelementptr i8, ptr @$arguments$8, i16 10
+  store i16 12, ptr %93, !tbaa !2
+  %94 = getelementptr i8, ptr @$arguments$8, i16 10
+  %95 = load i16, ptr %94, !tbaa !2
+  %96 = sitofp i16 %95 to double
+  %97 = fpround double %96 to double
+  store double %97, ptr @"D#", !tbaa !2
+  %98 = load double, ptr @"D#", !tbaa !2
+  %99 = load double, ptr @"D#", !tbaa !2
+  %100 = fmul double %98, %99
+  %101 = load double, ptr @"D#", !tbaa !2
   %102 = load double, ptr @"D#", !tbaa !2
-  %103 = load double, ptr @"D#", !tbaa !2
-  %104 = fmul double %102, %103
-  %105 = load double, ptr @"D#", !tbaa !2
+  %103 = fadd double %101, %102
+  %104 = fdiv double %100, %103
+  %105 = fpround double %104 to double
+  store double %105, ptr @"E#", !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string11)
   %106 = load double, ptr @"D#", !tbaa !2
-  %107 = fadd double %105, %106
-  %108 = fdiv double %104, %107
-  store double %108, ptr @"E#", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string17$descriptor)
-  %109 = load double, ptr @"D#", !tbaa !2
-  %110 = load double, ptr @"D#", !tbaa !2
-  %111 = fmul double %109, %110
-  %112 = call i32 @llvm.lrint.i32.f64(double %111)
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %112)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string19$descriptor)
-  %113 = load double, ptr @"E#", !tbaa !2
-  %114 = call i32 @llvm.lrint.i32.f64(double %113)
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %114)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string21$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  %107 = load double, ptr @"D#", !tbaa !2
+  %108 = fmul double %106, %107
+  %109 = call i32 @llvm.lrint.i32.f64(double %108)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %109)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string12)
+  %110 = load double, ptr @"E#", !tbaa !2
+  %111 = call i32 @llvm.lrint.i32.f64(double %110)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %111)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string13)
+  call cc 1000 addrspace(1) void @llrm.qb.B$CEND()
   unreachable
 }
 
-declare cc1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PSI2(i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PSI2(i16) addrspace(1)
 
 declare i32 @llvm.lrint.i32.f32(float) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
 
 declare i32 @llvm.lrint.i32.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$CEND() addrspace(1)
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
