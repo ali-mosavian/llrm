@@ -3245,6 +3245,13 @@ impl Emitter<'_, '_> {
                 ),
                 _ => {
                     let disp = self.constant(group[3])?;
+                    // a bare offset in a 16-bit segment is unsigned:
+                    // `es:[36766]`, not `es:[-28770]`
+                    let disp = if base.is_none() && index.is_none() && self.ctx.address_mode == AddrMode::Real16 {
+                        disp & 0xFFFF
+                    } else {
+                        disp
+                    };
                     (
                         disp,
                         Addr {
