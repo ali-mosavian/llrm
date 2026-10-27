@@ -1490,6 +1490,81 @@ def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
     assert ps.pr_info("5290") == {"headRefOid": "abc"} and waits == [1]
 
 
+def _fake_docs_repo(tmp_path):
+    """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    def git(*args, cwd=tmp_path):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "tools/docsbuild/build.py").write_text(
+        "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
+        "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
+    )
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    return git
+
+
+def test_a_stale_generated_page_is_synced_and_committed_not_refused(tmp_path):
+    """Generated docs out of date refused #5129, #5131 and #5119 (27 PRs were conflicting after each tip move): the batch regenerates the page (build.py --sync) and commits it on top."""
+    git = _fake_docs_repo(tmp_path)
+    assert ps.docs_stale(tmp_path) == {"docs/a.md"}
+    assert ps.docs_sync_commit(tmp_path) == ""
+    assert (tmp_path / "docs/a.md").read_text() == "generated\n" and git("log", "--format=%s", "-1").startswith("docs: ")
+    assert ps.docs_stale(tmp_path) == set()
+    git("reset", "-q", "--hard", "HEAD~1")
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("5129") == "" and "5129" in gated.synced and ps.docs_stale(tmp_path) == set(), "synced in the batch tree, not refused"
+    git("reset", "-q", "--hard", "HEAD~1")
+    refused = ps.docs_gated(lambda number: "", set(), tmp_path, sync=lambda root: "docsbuild --sync failed")
+    assert "docs/a.md" in refused("5131") and ps.docs_stale(tmp_path) == {"docs/a.md"} and not refused.synced, "a failed sync still refuses and resets"
+
+
+def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_rows(tmp_path):
+    """Two PRs each adding a row at the end of docs/working/above-main-rows.md conflicted (#5282, #5156, #5242, #5294): the repo's .gitattributes says merge=union for it."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs/working").mkdir(parents=True)
+    (tmp_path / ".gitattributes").write_text((ps.ROOT / ".gitattributes").read_text())
+    table = tmp_path / "docs/working/above-main-rows.md"
+    table.write_text("| row | n |\n| a | 1 |\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    for name, row in (("one", "| b | 2 |\n"), ("two", "| c | 3 |\n")):
+        git("checkout", "-q", "-b", name, "main")
+        table.write_text(table.read_text() + row)
+        git("commit", "-qam", name)
+    git("checkout", "-q", "one")
+    merged = git("merge", "--no-edit", "two")
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    assert "| b | 2 |" in table.read_text() and "| c | 3 |" in table.read_text()
+
+
+def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squash(tmp_path):
+    """The batch tree was synced, but the squash lands the PR head: the same sync is pushed to the PR's branch (as the formatted head is), or the squash would land the stale page."""
+    work = tmp_path / "work"
+    work.mkdir()
+    git = _fake_docs_repo(work)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    git("remote", "add", "origin", str(origin))
+    git("branch", "-M", "feat/parity")
+    git("push", "-q", "origin", "feat/parity")
+    git("checkout", "-q", "-b", "pr")
+    (work / "pr.txt").write_text("x\n")
+    git("add", ".")
+    git("commit", "-qm", "pr")
+    head = git("rev-parse", "HEAD")
+    sha, why = ps.sync_docs_head(head, "pr", "origin/feat/parity", work)
+    assert why == "" and sha and sha != head, (sha, why)
+    assert git("--git-dir", str(origin), "rev-parse", "refs/heads/pr") == sha, "pushed to the PR's branch"
+    assert git("--git-dir", str(origin), "show", f"{sha}:docs/a.md") == "generated"
+
+
 def _repo_with_commit(path):
     path.mkdir(parents=True)
     for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):

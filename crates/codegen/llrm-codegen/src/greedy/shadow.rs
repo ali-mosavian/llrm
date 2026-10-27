@@ -420,7 +420,8 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         // `isAsCheapAsAMove`, and the split copies the register
         // instead.
         let _ = parent;
-        let load = matches!(what.op, Operation::Move | Operation::FloatLoad) && matches!(what.sources[0], Loc::Mem(_));
+        let load = matches!(what.op, Operation::Move | Operation::FloatLoad)
+            && matches!(what.sources.first(), Some(Loc::Mem(_)));
         if load || what.op == Operation::Address {
             return None;
         }

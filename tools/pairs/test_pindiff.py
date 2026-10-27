@@ -213,3 +213,17 @@ def test_a_new_compile_failure_outside_the_known_list_is_unexpected():
     other_level = ("m16", "O1", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40:")
     assert sweep.unexpected([*seen, new, other_level]) == [new, other_level]
     assert [entry.name for entry in sweep.fixed(seen[:1])] == ["x_ll_div", "x_ll_div", "lru"]
+
+
+def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
+    """An A/B of two builds was one-off awk and a scratch script (x_radix O2, 2026-10-27); it must read the table pindiff prints."""
+    pindiff = load("pindiff")
+    rowdelta = load("rowdelta")
+
+    def row(name, ins, free):
+        return {"name": name, "ins": ins, "pin_ins": 100, "bytes": free + 4, "free": free, "pin_bytes": 300, "pin_free": 296, "old_bytes": None, "old_free": None}
+
+    before = "\n".join(pindiff.table([row("a", 134, 462), row("b", 50, 100), row("gone", 1, 1)], old=False))
+    after = "\n".join(pindiff.table([row("a", 124, 379), row("b", 50, 100), row("new", 1, 1)], old=False))
+    assert rowdelta.parse(before)["a"] == (134, 100, 462, 296)
+    assert rowdelta.deltas(before, after) == ["a: ins 134->124 (pin 100), nopad 462->379 (pin 296)"]
