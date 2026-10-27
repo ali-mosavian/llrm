@@ -1,76 +1,52 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$data = internal global [4 x i8] zeroinitializer
-@$qb$statementTable = internal constant [0 x i8] zeroinitializer
-@"A%" = internal global [202 x i8] zeroinitializer
-@"A%$descriptor" = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"A%" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @"A%", [6 x i8] c"\02\00e\00\00\00" }>
-@"B&" = internal global [404 x i8] zeroinitializer
-@B$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"B&" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @"B&", [6 x i8] c"\04\00e\00\00\00" }>
-@"I%" = internal global [2 x i8] zeroinitializer
-@"T%" = internal global [2 x i8] zeroinitializer
-@"U&" = internal global [4 x i8] zeroinitializer
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string5$payload to ptr addrspace(2))
-@$string5$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string5$payload, i16 4) to i16), [4 x i8] c"\02\00T=" }>
-@$string5$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string5$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string8$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string8$payload, i16 4) to i16), [4 x i8] c"\02\00U=" }>
-@$string8$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string8$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string10$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string10$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string10$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string10$payload, i16 2) to i16), ptr @$fslSegment }>
+@"A%" = internal global [202 x i8] zeroinitializer, align 2
+@$string5 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string5, i16 4), [2 x i8] c"T=" }>
+@$string6 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string6, i16 4), [2 x i8] c"U=" }>
+@$string7 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string7, i16 4), [4 x i8] c"DONE" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
 b1:
-  store i16 0, ptr @"T%", !tbaa !2
-  store i32 0, ptr @"U&", !tbaa !2
-  store i16 1, ptr @"I%", !tbaa !2
-  store i16 20, ptr @$data, !tbaa !2
-  %0 = getelementptr i8, ptr @$data, i16 2
-  store i16 1, ptr %0, !tbaa !2
-  br label %b2
-
-b2:
-  %1 = load i16, ptr @"I%", !tbaa !2
-  %2 = icmp sle i16 %1, 20
-  br i1 %2, label %b5, label %b6
+  br label %b5
 
 b5:
-  %3 = getelementptr inbounds i16, ptr @"A%", i16 %1
-  store i16 %1, ptr %3, !tbaa !2
-  %4 = load i16, ptr @"T%", !tbaa !2
-  %5 = load i16, ptr %3, !tbaa !2
-  %6 = add i16 %4, %5
-  %7 = add i16 %1, 1
-  %8 = getelementptr inbounds i16, ptr @"A%", i16 %7
-  %9 = load i16, ptr %8, !tbaa !2
-  %10 = add i16 %6, %9
-  store i16 %10, ptr @"T%", !tbaa !2
-  %11 = sext i16 %1 to i32
-  %12 = getelementptr inbounds i32, ptr @"B&", i16 %1
-  store i32 %11, ptr %12, !tbaa !2
-  %13 = load i32, ptr @"U&", !tbaa !2
-  %14 = load i32, ptr %12, !tbaa !2
-  %15 = add i32 %13, %14
-  store i32 %15, ptr @"U&", !tbaa !2
-  store i16 %7, ptr @"I%", !tbaa !2
-  br label %b2
+  %0 = phi i16 [ %14, %b5 ], [ 0, %b1 ]
+  %1 = phi i16 [ %13, %b5 ], [ -40, %b1 ]
+  %2 = phi i16 [ 0, %b1 ], [ %11, %b5 ]
+  %3 = phi i16 [ 1, %b1 ], [ %12, %b5 ]
+  %4 = add i16 %0, 1
+  %5 = getelementptr i8, ptr @"A%", i16 %1
+  %6 = getelementptr i8, ptr %5, i16 42
+  store i16 %4, ptr %6, !tbaa !2
+  %7 = add i16 %2, %3
+  %8 = getelementptr i8, ptr @"A%", i16 %1
+  %9 = getelementptr i8, ptr %8, i16 44
+  %10 = load i16, ptr %9, !tbaa !2
+  %11 = add i16 %7, %10
+  %12 = add nuw nsw i16 %3, 1
+  %13 = add nsw i16 %1, 2
+  %14 = add nuw nsw i16 %0, 1
+  %exitcond = icmp eq i16 %13, 0
+  br i1 %exitcond, label %b6, label %b5
 
 b6:
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string5$descriptor)
-  %16 = load i16, ptr @"T%", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI2(i16 %16)
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string8$descriptor)
-  %17 = load i32, ptr @"U&", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %17)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string10$descriptor)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string5)
+  %15 = add i16 %2, %10
+  %16 = add i16 20, %15
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI2(i16 %16)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string6)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI4(i32 210)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PESD(ptr @$string7)
   ret void
 }
 
-declare cc1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PSSD(ptr) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PEI2(i16) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PEI2(i16) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PESD(ptr) addrspace(1) nocallback
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
