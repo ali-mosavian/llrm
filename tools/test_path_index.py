@@ -30,9 +30,7 @@ NOT_PATHS = {
 
 MACHINE_DOC = "docs/architecture/machine-description.md"
 MACHINE_NAMED = re.compile(r"(?<![A-Za-z0-9_./-])(machine/[A-Za-z0-9_./-]*[A-Za-z0-9_])")
-MACHINE_NOT_YET = {
-    "machine/tune": "tuning files arrive in M3",
-}
+MACHINE_NOT_YET: dict[str, str] = {}
 
 
 def exists(path: str) -> bool:

@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 typedef struct S { void (*a)(const struct S *, unsigned); void (*f)(const struct S *, unsigned, unsigned); } S;
 void g(S *p, unsigned x) { p->f(p, x, 1); }

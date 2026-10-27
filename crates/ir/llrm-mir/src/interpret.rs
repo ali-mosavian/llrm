@@ -236,6 +236,11 @@ impl<'m> Machine<'m> {
                 Type::Float(kind) => Val::Float(*kind, *bits),
                 _ => unreachable!("a floating constant"),
             },
+            // The interpreter evaluates an x87 value as a double.
+            ConstantKind::Float80(bits) => match types.get(constant.ty) {
+                Type::Float(kind) => Val::Float(*kind, crate::fp80::to_double_bits(*bits)),
+                _ => unreachable!("a floating constant"),
+            },
             ConstantKind::Null => Val::Ptr(0),
             ConstantKind::Poison => Val::Poison,
             // Any value is a legal undef; the interpreter picks zero.

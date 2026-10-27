@@ -5,8 +5,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const MACHINE: &str = "extern void report(long value);\n\
     static int step(int s, int c)\n\
     {\n\

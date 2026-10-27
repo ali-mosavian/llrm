@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 double f9(const double *a)
 {

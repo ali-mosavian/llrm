@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 double f(double p, double *q) { return p * q[0] + q[1]; }
 float g(float p, float *q) { return q[0] - p * q[1]; }

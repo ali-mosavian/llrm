@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// x_life's generation step: the 3 x 3 neighbour sum is two loops of three
 /// trips.
 const KERNEL: &str = "

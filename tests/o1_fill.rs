@@ -6,8 +6,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// bench/scroll's four row loops: up a row, blank the last, down a row, copy to
 /// a back buffer.
 const SCROLL: &str = "static short screen[2000];\nstatic short back[2000];\n\

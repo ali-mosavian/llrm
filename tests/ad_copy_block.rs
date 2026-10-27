@@ -5,8 +5,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn listing(
     directory: &str,
     flags: &[&str],

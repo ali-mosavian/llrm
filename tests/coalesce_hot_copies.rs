@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 static int a[512];
 long f(int key)

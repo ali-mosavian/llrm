@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// Nine shared spill slots end on a word (30 bytes): the hole was not a
 /// multiple of the 4-byte frame alignment, so the frame moved by it put the
 /// long array at 2 mod 4 and differed from the backend run again by 2 bytes

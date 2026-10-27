@@ -4,8 +4,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// bench/x_funcptr: four functions called through a table; at -Os it was 130
 /// bytes and 25,519 instructions against clang's 123 and 18,018.
 const FUNCPTR: &str = "static int f0(int x) { return x + 3; } static int f1(int x) { return x * 5; }\n\

@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 static int sum(const int *a, int n)
 {

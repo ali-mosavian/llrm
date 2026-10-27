@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// x87 `lrint` stores through a stack temporary; the result lives across a
 /// call.
 const SOURCE: &str = "extern void p(long);

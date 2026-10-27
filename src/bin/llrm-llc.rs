@@ -12,5 +12,13 @@ fn main() {
         eprintln!("llrm-llc: {why}");
         std::process::exit(2);
     }
-    std::process::exit(llrm_codegen::support::debug::run_main(|| llrm_driver::llc::main(&argv)));
+    if llrm_codegen::support::debug::enabled("counts") {
+        llrm_mir::counts::per_pass();
+    }
+    let code = llrm_codegen::support::debug::run_main(|| llrm_driver::llc::main(&argv));
+    if llrm_codegen::support::debug::enabled("counts") {
+        llrm_mir::counts::lines().iter().for_each(|line| eprintln!("{line}"));
+        llrm_transforms::parity::tally_lines().iter().for_each(|line| eprintln!("{line}"));
+    }
+    std::process::exit(code);
 }

@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// A self-recursive function whose copy loop becomes a memcpy call: the call's
 /// callee is a declaration the pass pipeline made after its table of globals
 /// was taken, and `tailrec` indexed that table by it: `index out of bounds: the
