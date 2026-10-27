@@ -1445,6 +1445,32 @@ impl<'a> TypeLegalizer<'a> {
         let (far, delta) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let (offset, selector) = self.expanded_integer(far);
         let dword = self.dag.value_type(delta);
+        // A step of less than one offset range, known at compile time, moves
+        // the selector by at most one stride, and the offset's carry (borrow)
+        // says whether: `add; sbb; and`, not the dword sum's high word.
+        if let Some(step) = self.dag.constant(delta).and_then(|bits| {
+            let (width, bits) = (dword.size_in_bits(), bits);
+            let half_bits = half.size_in_bits();
+            let range = 1u128 << half_bits;
+            let negative = bits >= (1u128 << width) - range;
+            (bits != 0 && (bits < range || negative))
+                .then(|| (negative, if negative { (1u128 << width) - bits } else { bits }))
+        }) {
+            let (negative, magnitude) = step;
+            let amount = self.dag.get_constant(magnitude, half);
+            let moved = self.dag.get_node(if negative { ISD::Sub } else { ISD::Add }, half, &[offset, amount]);
+            let bool_vt = self.tli.types.set_cc_result_type(half);
+            let wrapped = if negative {
+                self.dag.get_setcc(bool_vt, offset, amount, CondCode::SetULt)
+            } else {
+                self.dag.get_setcc(bool_vt, moved, offset, CondCode::SetULt)
+            };
+            let stride = self.dag.get_constant(1u128 << shift, half);
+            let zero = self.dag.get_constant(0, half);
+            let carry = self.dag.get_select(half, wrapped, stride, zero);
+            let op = if negative { ISD::Sub } else { ISD::Add };
+            return Ok((moved, self.dag.get_node(op, half, &[selector, carry])));
+        }
         let wide = self.dag.get_node(ISD::ZeroExtend, dword, &[offset]);
         let sum = self.dag.get_node(ISD::Add, dword, &[wide, delta]);
         let (width, stride_shift) = (

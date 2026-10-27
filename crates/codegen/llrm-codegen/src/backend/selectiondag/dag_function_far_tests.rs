@@ -897,3 +897,24 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
     let crate::model::ir::Loc::Held(destination) = &sources[2] else { panic!("{fill:?}") };
     assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
 }
+
+const HUGE_STEP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+define ptr addrspace(3) @f(ptr addrspace(3) %p) {
+entry:
+  %q = getelementptr i8, ptr addrspace(3) %p, i32 4
+  ret ptr addrspace(3) %q
+}
+";
+
+/// A constant step of a huge pointer moves the selector by at most one
+/// stride, and the offset's wrap says whether. It went through the dword sum
+/// and its high word (`add; sar 16; shl`, six instructions per step
+/// in `huge_array`) instead of the wrap of the 16-bit add.
+#[test]
+fn a_constant_step_of_a_huge_pointer_is_the_offset_wrap() {
+    let module = llrm_mir::parse::module(HUGE_STEP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names = mnemonics(&done);
+    assert!(!names.iter().any(|m| m == "sar"), "{names:?}");
+}
