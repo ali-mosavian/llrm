@@ -1,7 +1,7 @@
 use llrm_mir::interpret::{Val, run};
 use llrm_mir::module::Module;
 
-use super::expanded;
+use super::{expanded, expanded_for_dag};
 
 /// `@f(x, y, z)` calling `llvm.fshl` or `llvm.fshr`, `z` a parameter or the
 /// constant `by`.
@@ -105,4 +105,21 @@ fn a_constant_funnel_shift_is_two_shifts_and_an_or() {
     expanded(&mut module, |_| true).expect("expands");
     let after = llrm_mir::print::module(&module);
     assert!(after.contains("ret i16 %y"), "{after}");
+}
+
+/// The DAG selector takes a dword funnel shift as `shld`/`shrd` (the pin's
+/// `FSHL` is legal at i32 and `MaskedShlrdAmountPats` drops a count's `and
+/// 31`); the MIR expansion made `shl`, `shr` and `or` of it. A word or byte one
+/// has no such node here and is still expanded.
+#[test]
+fn a_dword_funnel_shift_is_left_to_the_dag_selector() {
+    for name in ["fshl", "fshr"] {
+        let mut dword = shifting(name, 32, None);
+        let before = llrm_mir::print::module(&dword);
+        expanded_for_dag(&mut dword, |_| true).expect("expands");
+        assert_eq!(llrm_mir::print::module(&dword), before, "{name}.i32 was expanded before selection");
+        let mut word = shifting(name, 16, None);
+        expanded_for_dag(&mut word, |_| true).expect("expands");
+        assert!(!llrm_mir::print::module(&word).contains("call i"), "{name}.i16 kept its call");
+    }
 }

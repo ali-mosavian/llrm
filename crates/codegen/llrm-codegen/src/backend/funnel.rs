@@ -45,6 +45,24 @@ pub fn expanded(
     module: &mut Module,
     expands: impl Fn(&str) -> bool,
 ) -> Result<(), String> {
+    expanded_with(module, expands, false)
+}
+
+/// [`expanded`], but a dword funnel shift stays a call: the DAG selector has
+/// the node (`FSHL` legal at i32, `X86ISelLowering.cpp#L230`) and selects
+/// `shld`/`shrd` with the count's `and` dropped.
+pub fn expanded_for_dag(
+    module: &mut Module,
+    expands: impl Fn(&str) -> bool,
+) -> Result<(), String> {
+    expanded_with(module, expands, true)
+}
+
+fn expanded_with(
+    module: &mut Module,
+    expands: impl Fn(&str) -> bool,
+    keep_dwords: bool,
+) -> Result<(), String> {
     let (left, right) = (expands("fshl"), expands("fshr"));
     expansion::expand_calls(
         module,
@@ -53,7 +71,12 @@ pub fn expanded(
             Intrinsic::FunnelShift { left: false } if right => Some(false),
             _ => None,
         },
-        expand,
+        |context, function, inst, left| {
+            if keep_dwords && context.types.int_bits(function.instruction(inst).ty) == Some(32) {
+                return Ok(());
+            }
+            expand(context, function, inst, left)
+        },
     )
 }
 

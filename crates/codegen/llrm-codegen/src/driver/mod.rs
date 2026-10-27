@@ -514,7 +514,14 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::funnel::expanded(module, |operation| options.arch.expands(operation)),
+                |module| {
+                    let expands = |operation: &str| options.arch.expands(operation);
+                    if options.isel == crate::backend::shadow::Selector::Dag {
+                        crate::backend::funnel::expanded_for_dag(module, expands)
+                    } else {
+                        crate::backend::funnel::expanded(module, expands)
+                    }
+                },
             )
     })?;
     timed("mir absolute values", || {

@@ -334,6 +334,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
+            // `visitFunnelShift`, its closing `SimplifyDemandedBits(N)`; the
+            // folds above it are not translated.
+            ISD::FShl | ISD::FShr => self.simplify_demanded(node),
             _ => None,
         }
     }
@@ -791,6 +794,25 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
             ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
+            // Narrow a suitable binary operation with a constant operand by
+            // moving it ahead of the truncate (`visitTRUNCATE`,
+            // DAGCombiner.cpp#L18075-L18107), before operations are legal:
+            // `trunc (and x, 31)` is `and (trunc x), 31`, which a shift's
+            // `shiftMask` pattern then drops. The `nuw` the pin gives a
+            // narrowed `sub` is not set: the node carries no flags here.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor
+                if self.level < CombineLevel::AfterLegalizeDag
+                    && self.dag.use_count(n0.node) == 1
+                    && vt.is_integer()
+                    && (self.dag.operand(n0, 0) == self.dag.operand(n0, 1)
+                        || self.dag.constant(self.dag.operand(n0, 0)).is_some()
+                        || self.dag.constant(self.dag.operand(n0, 1)).is_some()) =>
+            {
+                let (op, l, r) = (self.dag.opcode(n0), self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
+                let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
+                Some(self.dag.get_node(op, vt, &[narrow_l, narrow_r]))
+            }
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
                 let from = self.dag.value_type(x);
