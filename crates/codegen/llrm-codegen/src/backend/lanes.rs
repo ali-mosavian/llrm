@@ -39,6 +39,7 @@
 use std::fmt;
 use std::sync::LazyLock;
 
+use iced_x86::RflagsBits as F;
 use llrm_lir::registers::RegId;
 
 /// One byte of a register root, or one flag bit against `RegId::None`.
@@ -120,6 +121,13 @@ impl Lanes {
     pub const fn from_mask(mask: u128) -> Self {
         Self(mask)
     }
+
+    /// The five status flags a compare sets and a branch reads (`OF SF ZF CF
+    /// PF`), as an rflags mask; `AUXILIARY` is the sixth.
+    pub const STATUS: u32 = F::OF | F::SF | F::ZF | F::CF | F::PF;
+
+    /// `AF`, the sixth status flag.
+    pub const AUXILIARY: u32 = F::AF;
 
     /// The flag lanes of an rflags mask. `RegId::None` sorts first, so flag
     /// bit `i` is lane bit `i`.

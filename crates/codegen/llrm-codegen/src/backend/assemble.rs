@@ -94,8 +94,8 @@ use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
 /// A far object of more bytes than this is laid down in 64K segments.
-const HUGE_PIECE: i64 = 0xFFFF;
-const HUGE_PIECE_BYTES: i64 = 0x10000;
+const HUGE_PIECE: i64 = u16::MAX as i64;
+const HUGE_PIECE_BYTES: i64 = u16::MAX as i64 + 1;
 
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
