@@ -3807,11 +3807,11 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    // `BP` names the frame in every width: `bodyfacts`, `remat`
-                    // and
-                    // `floatassign` find a frame cell by it, and the prologue
-                    // resolves it to the target's frame register.
-                    through: RegId::BP,
+                    // `FRAME` names the frame in every
+                    // width: `bodyfacts`, `remat` and `floatassign` find a
+                    // frame cell by it, and the prologue resolves it to the
+                    // target's frame register.
+                    through: llrm_lir::registers::FRAME,
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
