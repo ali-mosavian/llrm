@@ -92,3 +92,33 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
     assert!(listing.matches("fstp dword").count() >= 10, "{listing}");
     assert_eq!(listing.matches("fstp qword").count(), 0, "{listing}");
 }
+
+/// The shared start-up called `_main` whatever the frontend: llrm-cc's Watcom
+/// `main_` was left unresolved. `LL_MAIN` names the entry, `_main` by default
+/// (llrm-nib, llrm-qb), `main_` for a program from llrm-cc.
+#[test]
+fn the_start_up_calls_the_entry_the_frontend_names() {
+    let Some(jwasm) = ["JWASM", "HOME"].iter().find_map(|_| {
+        let path = Path::new(&std::env::var_os("HOME")?).join(".local/bin/jwasm");
+        path.exists().then_some(path)
+    }) else {
+        eprintln!("skipped: no jwasm");
+        return;
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-start-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (model, extra) in [("m32", &["-DSTACK_BYTES=4096", "-DSTACK_RESERVE=512"][..]), ("m16", &["-DNEAR_CODE", "-DSTACK_BYTES=4096", "-DSTACK_RESERVE=512"][..])] {
+        for (define, name, absent) in [(None, "_main", "main_"), (Some("-DLL_MAIN=main_"), "main_", "_main")] {
+            let obj = dir.join(format!("{model}.obj"));
+            let mut assemble = Command::new(&jwasm);
+            assemble.args(["-q", "-c", "-Cp", "-Zg"]).args(if model == "m16" { ["-0"] } else { ["-3"] }).args(extra).args(define);
+            let done = assemble.arg(format!("-Fo{}", obj.display())).arg(root.join(format!("runtime/shared/dos/{model}/start.asm"))).output().unwrap();
+            assert!(done.status.success(), "{model}: {}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
+            let bytes = std::fs::read(&obj).unwrap();
+            let has = |text: &str| bytes.windows(text.len()).any(|w| w == text.as_bytes());
+            assert!(has(name) && !has(absent), "{model} {define:?}: expected {name} and not {absent}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
