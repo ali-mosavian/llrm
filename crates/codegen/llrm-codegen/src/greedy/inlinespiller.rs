@@ -356,11 +356,15 @@ impl<'a> InlineSpiller<'a> {
             // definition made again is the original's. Only a
             // definition that reads no register, so nothing has to
             // be available at the use.
-            let root = Arc::clone(self.tables.remat_roots.borrow().get(&self.original)?);
-            if plain_copy_source(&own).is_none() || !root.uses.is_empty() {
-                return None;
+            // A piece the split made around the definition itself is defined by
+            // it already.
+            if !(remat_shape(&own) && own.uses.is_empty()) {
+                let root = Arc::clone(self.tables.remat_roots.borrow().get(&self.original)?);
+                if plain_copy_source(&own).is_none() || !root.uses.is_empty() {
+                    return None;
+                }
+                def = root;
             }
-            def = root;
         }
         if !remat_shape(&def) || def.uses.contains(&reg) {
             return None;
