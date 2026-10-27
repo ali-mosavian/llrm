@@ -94,6 +94,8 @@ Metric: `clocks` (486 model, `tools/rows/`), `bytes` (object or LEDATA), `Ir` (c
 ## To add by their owners
 
 Named by the coordinator and not yet filled: QO-SIZE-1, r_bsp, x_bubble, lru m32, #3582 rows. A row goes in the table with its numbers, cause, owner and exit; nothing is estimated here.
+| BYVAL-TEMP-1 | regparm3_matrix_4 / _31 / _22 (llrm-cc m16) | Os | bytes | 14219 / 13344 / 12871 (llrm-c, derived: dag minus delta) | 18086 / 16173 / 15538 (`.obj`, dag) | +3867 / +2829 / +2667 | clang's IR fills a temp by plain stores and passes it `byval` (no memcpy, so `processByValArgument` cannot fire); the pin keeps the dead temp store too (pin llc `.text` 18653 on the matrix_4 `.ll`), llrm-c pushes from the source. Beyond the pin. Design (b): after byval lowering forwards the loads, a frame slot that is only stored to (never read, address not escaped) loses its stores and the slot; one pass, post-isel, O(stores) | w-9 | post-parity tuning; blocks merge to main under the per-program -Os m16 bar | |
+| MUL-MINSIZE-1 | mul_constants.c (llrm-cc m16, `-fno-inline-functions`) | Os | bytes | 2578 (old selector) | 2909 (dag) | +331 (+1 instruction) | `x*31`: dag `mov; shl 5; sub` where old has `imul r,r,31`. Pin-faithful: `combineMul` returns early only for `hasMinSize` (-Oz); clang -Os sets optsize. Needs an m16 cost (imul r,r,imm is 4 B at m16, the sequence 10 B: 3+4+3 with the 66 prefixes) | w-9 | post-parity tuning; blocks merge to main under the per-program -Os m16 bar | |
 
 ## D-row: expression-carrying debug records and `salvageDebugInfo` (AM-DBG-1)
 
