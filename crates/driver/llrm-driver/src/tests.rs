@@ -240,20 +240,18 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }
 
-/// A 64-bit function whose frame is one slot (the alignment of its call)
-/// adjusted the stack with `sub rsp, 8` / `add rsp, 8`, six bytes where the pin
-/// has `push rax` / `pop rcx`.
+/// An add of a constant to a dword that stays live is a three-address `lea` at
+/// m64 (`LEA64_32r`). It was off there, so each such add cost a `mov` and an
+/// `add`.
 #[test]
-fn a_one_slot_frame_at_m64_is_push_and_pop() {
+fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                declare void @g()\n\
-                define i32 @f() {\n  call void @g()\n  ret i32 0\n}\n";
+                @g = global i32 0\n@h = global i32 0\n\
+                define i32 @f() {\n  %a = load volatile i32, ptr @g\n  %r = add i32 %a, 5\n  store volatile i32 %r, ptr @h\n  %s = mul i32 %r, %a\n  ret i32 %s\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
-    assert!(lines.contains(&"push rax") && lines.contains(&"pop rcx"), "{listing}");
-    assert!(!lines.iter().any(|line| line.starts_with("sub rsp") || line.starts_with("add rsp")), "{listing}");
+    assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
 /// A call of a variadic function tells the callee in `al` how many vector
@@ -1011,4 +1009,20 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let source = built.debug.expect("debug info").source;
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
+}
+
+/// A 64-bit function whose frame is one slot (the alignment of its call)
+/// adjusted the stack with `sub rsp, 8` / `add rsp, 8`, six bytes where the pin
+/// has `push rax` / `pop rcx`.
+#[test]
+fn a_one_slot_frame_at_m64_is_push_and_pop() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @g()\n\
+                define i32 @f() {\n  call void @g()\n  ret i32 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(lines.contains(&"push rax") && lines.contains(&"pop rcx"), "{listing}");
+    assert!(!lines.iter().any(|line| line.starts_with("sub rsp") || line.starts_with("add rsp")), "{listing}");
 }

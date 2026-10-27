@@ -1032,8 +1032,13 @@ fn test_a_non_negative_dividend_by_a_constant_is_unsigned_unless_tuned_for_size(
         done.contains("urem") && done.contains("udiv") && !done.contains("srem") && !done.contains("sdiv"),
         "{done}"
     );
-    let (before, after) = simplified_in(text, true, FLAT);
+    // The size row is a 16-bit one: the pin's CVP converts at any size, and
+    // only the 16-bit targets keep the signed form for the byte.
+    const NEAR: &str = "e-p:16:16-n8:16:32";
+    let (before, after) = simplified_in(text, true, NEAR);
     assert_eq!(bare(&after), bare(&before));
+    let (_, after) = simplified_in(text, true, FLAT);
+    assert!(bare(&after).contains("udiv") && !bare(&after).contains("sdiv"), "{}", bare(&after));
     // Nor does a 16-bit segment's prefixes keep it signed: selection prices
     // them.
     let (_, after) = simplified_for(text, false);
@@ -1220,8 +1225,11 @@ fn test_a_constant_added_under_inttoptr_is_a_byte_offset_of_the_pointer() {
     let (_, after) = simplified_in(text, false, FLAT);
     let after = bare(&after);
     assert!(after.contains("getelementptr i8, ptr %0, i32 655360") && !after.contains("add i32"), "{after}");
-    // Not in a build for size: each access would carry the displacement.
+    // Not in a 16-bit build for size: each access would carry the displacement.
     let sized = bare(&simplified_in(text, true, FLAT).1);
+    assert!(sized.contains("getelementptr i8, ptr %0, i32 655360"), "{sized}");
+    let text16 = "define ptr @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr\n  ret ptr %p\n}\n";
+    let sized = bare(&simplified_in(text16, true, "e-p:16:16-n8:16:32").1);
     assert!(!sized.contains("getelementptr"), "{sized}");
     // The same on a near 16-bit pointer.
     let near = "define ptr @f(i16 %x) {\nb0:\n  %a = add i16 %x, 4\n  %p = inttoptr i16 %a to ptr\n  ret ptr %p\n}\n";
