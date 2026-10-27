@@ -1242,3 +1242,39 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
+    """docs_in_sync was refused four times on trees the next check reset and nobody could reproduce: no evidence was kept."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "x")
+    (tmp_path / "stray.txt").write_text("left over")
+    kept = tmp_path.parent / (tmp_path.name + "-refused")
+    ps.keep_refused_evidence("abcdef0123456789", tmp_path, ["scanner red alone: integration docs_in_sync::test_no_generated_page_is_stale"], kept)
+    out = kept / "abcdef012345"
+    assert (out / "head.txt").read_text().strip() == run("rev-parse", "HEAD") and "stray.txt" in (out / "status.txt").read_text() and "docs/a.md" in (out / "check.txt").read_text()
+    ps.keep_refused_evidence("1111111111111111", tmp_path, ["unit tests fail alone"], kept)
+    assert not (kept / "111111111111").exists(), "only a docs refusal keeps its tree's evidence"
+
+
+def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
+    """"Stale heads or the runner's tree" could not be answered at the 02:26 refusal: the batch kept no list of the heads it judged."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "x")
+    head = run("rev-parse", "HEAD")
+    kept = tmp_path.parent / (tmp_path.name + "-batch")
+    ps.keep_batch_evidence({"5085": head}, tmp_path, kept, "022633")
+    heads = (kept / "batch-022633" / "heads.txt").read_text()
+    assert f"#5085 {head} committed 20" in heads and "docs/a.md" in (kept / "batch-022633" / "check.txt").read_text()
