@@ -125,6 +125,8 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
+        strings: None,
+        registers: llrm_target::Target::registers(&machine),
         globals: &NoGlobals,
         block_at: &HashMap::default(),
         frame: &frame,
@@ -142,7 +144,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         let emitted = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false },
             &selector,
             &mut hooks(),
             &Info,
@@ -198,8 +200,13 @@ fn the_combiner_runs_between_the_legalizers() {
         build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
-        .expect("legalizes");
+    super::dag_select::legalized(
+        &mut built.dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false },
+        &machine,
+    )
+    .expect("legalizes");
     let root = built.dag.get_root();
     let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![root.node];

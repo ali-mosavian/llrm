@@ -144,6 +144,20 @@ fn test_a_call_that_may_throw_stays() {
     assert_eq!(decided(&call(" nounwind readnone")), ["v"]);
 }
 
+/// A libm call `InferFunctionAttrs` marked `memory(errnomem: write)` is hoisted
+/// from the header of a loop that touches no other memory, as the pin does
+/// (`onlyWritesMemory`, then `noConflictingReadWrites`).
+#[test]
+fn test_a_call_that_only_writes_errno_is_hoisted() {
+    let text = looped(
+        "declare i16 @lib(i16) nofree nosync nounwind willreturn memory(errnomem: write)\n\n",
+        ", i16 %a",
+        "  %v = call i16 @lib(i16 %a)\n",
+        "",
+    );
+    assert_eq!(decided(&text), ["v"]);
+}
+
 /// A speculatable call that is handed a `noundef` argument stayed in the loop:
 /// `isSafeToSpeculativelyExecute` ignores UB-implying attributes by default,
 /// and LICM strips them from a call it moves that was not certain to run.

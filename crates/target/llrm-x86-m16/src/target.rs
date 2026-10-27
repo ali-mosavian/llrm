@@ -124,6 +124,12 @@ impl Dos {
 }
 
 impl Machine for Dos {
+    /// Real mode's C: a 16-bit `int` and `size_t`, under C's decorated symbols
+    /// (`_sin@3`).
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        Some(std::rc::Rc::new(llrm_mir::libfunc::Cdecl { int_bits: 16, size_t_bits: 16 }))
+    }
+
     /// LLVM prices 16-bit code with the i386 X86 model (`-code16`: the same
     /// subtarget, operand-size prefixes), and every CPU the target accepts
     /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
@@ -149,6 +155,7 @@ impl Machine for Dos {
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
             inline_size_guard: true,
+            float_code_size_percent: 200,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)

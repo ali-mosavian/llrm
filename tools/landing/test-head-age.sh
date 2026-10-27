@@ -17,6 +17,14 @@ out=$(aged 1 2 3 4 2>/dev/null | tr '\n' ' ')
 [ "$out" = "1 3 " ] || { echo "FAIL: got '$out', want '1 3 ' (2 is 2 minutes old, 4 has no date)"; exit 1; }
 HEAD_MIN_AGE=60 out=$(aged 2 | tr '\n' ' ')
 [ "$out" = "2 " ] || { echo "FAIL: HEAD_MIN_AGE=60 should admit a 2-minute-old head: '$out'"; exit 1; }
+unset HEAD_MIN_AGE
+# a file the coordinator edits sets the age with no restart: 60 s admits the 2-minute head, junk falls back to the default
+echo 60 > $d/head-age.txt; out=$(LAND_TMP=$d aged 2 | tr '\n' ' ')
+[ "$out" = "2 " ] || { echo "FAIL: head-age.txt=60 should admit a 2-minute-old head: '$out'"; exit 1; }
+echo 3600 > $d/head-age.txt; out=$(LAND_TMP=$d aged 1 2>/dev/null | tr '\n' ' ')
+[ -z "$out" ] || { echo "FAIL: head-age.txt=3600 should hold a 30-minute-old head: '$out'"; exit 1; }
+echo soon > $d/head-age.txt; out=$(LAND_TMP=$d aged 1 2 2>/dev/null | tr '\n' ' ')
+[ "$out" = "1 " ] || { echo "FAIL: a junk head-age.txt should fall back to 900 s: '$out'"; exit 1; }
 cat > $d/gh <<'S'
 #!/bin/sh
 case "$3" in 7) echo OPEN;; 8) echo CLOSED;; esac

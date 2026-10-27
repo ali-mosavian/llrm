@@ -1,6 +1,6 @@
 //! A loop that decrements a counter and exits at -1 tests the add's carry.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 extern void use(int);
@@ -21,7 +21,7 @@ void g(int n, int a)
 fn test_a_loop_exit_at_minus_one_reads_the_carry_of_the_add() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["--isel=dag", "-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "-", "a.c"])
         .output()

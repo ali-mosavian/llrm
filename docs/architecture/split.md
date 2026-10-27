@@ -90,8 +90,8 @@ re-derived from machine form.
 
 | Concern | Owner |
 | --- | --- |
-| Object records and relocations | the object writers; for BC input, `llrm-omf`, `llrm-x86-bcmachine` |
-| Language semantics, runtime idioms | the frontend and `llrm_hir::mir::emit`; for BC objects, the lift in `llrm-x86-bc` |
+| Object records and relocations | the object writers; for BC input, `llrm-omf`, `llrm-bcobj` |
+| Language semantics, runtime idioms | the frontend and `llrm_hir::mir::emit`; for BC objects, the lift in `llrm-bcobj` |
 | Types, values, comparisons, memory objects and effects, control flow | MIR |
 | CSE, DSE, promotion, LICM, ranges, loop recurrences | `llrm-transforms`, `llrm-analysis` |
 | Runtime call effects (reads, writes, escape, return) | contracts in `llrm-qbruntime`, consumed by HIR emission and MIR |

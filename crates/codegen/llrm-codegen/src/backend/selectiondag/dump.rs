@@ -104,8 +104,11 @@ impl SelectionDAG {
             NodeData::ValueType(vt) => {
                 write!(text, ":{}", type_text(vt)).ok();
             }
-            NodeData::PoolIndex(index) => {
+            NodeData::PoolIndex(index, offset) => {
                 write!(text, "<{index}>").ok();
+                if offset != 0 {
+                    write!(text, "{offset:+}").ok();
+                }
             }
             NodeData::Symbol(id) => {
                 write!(text, "'{}'", self.symbol_names[id as usize]).ok();
@@ -137,6 +140,7 @@ impl SelectionDAG {
                     MemBase::Unknown => "unknown-address".to_string(),
                     MemBase::Global(id) => format!("@{}", self.global_names[id as usize]),
                     MemBase::Stack(index) => format!("%stack.{index}"),
+                    MemBase::CallArgument(offset) => format!("call-argument+{offset}"),
                     MemBase::ConstantPool(_) => "constant-pool".to_string(),
                     MemBase::JumpTable => "jump-table".to_string(),
                 };
