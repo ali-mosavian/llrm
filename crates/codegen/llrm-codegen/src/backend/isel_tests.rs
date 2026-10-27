@@ -7001,3 +7001,16 @@ define void @f() addrspace(1) {
     assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
 }
+
+/// `candidates` found each instruction's opcode, types and kinds by string
+/// compare down the generator's lists, 47,681 times (4.1 M Ir) on d_faces: an
+/// opcode is searched for once, whatever number of instructions use it.
+#[test]
+fn test_an_opcode_is_searched_for_once() {
+    let adds: String = (1..=40).map(|n| format!("  %t{n} = add i16 %t{}, 3\n", n - 1)).collect();
+    let text = format!("define i16 @f(i16 %t0) addrspace(1) {{\n{adds}  ret i16 %t40\n}}\n");
+    crate::backend::isel::OPCODE_SCANS.with(|one| one.set(0));
+    assembled(&text);
+    let scans = crate::backend::isel::OPCODE_SCANS.with(std::cell::Cell::get);
+    assert!(scans < 40, "{scans}");
+}
