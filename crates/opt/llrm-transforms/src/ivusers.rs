@@ -20,10 +20,10 @@
 //! DEVIATE IU1: users of a value are visited in descending program order, not
 //! use-list order. Use-list order is edit history; the pin's order on parsed
 //! IR is the only reproducible one, and it breaks ties in LSR's register
-//! choice. Cost (IU1-COST): one program-order map per loop, 26 builds and 1.21 M
-//! instructions on d_faces -O2, where the pin has no map; no per-function cache
-//! (it would go stale across edits). Exit: use lists keep LLVM's order. Owner:
-//! w-5. Review: 2026-11-19.
+//! choice. Cost (IU1-COST): one map of the layout per loop and a block's
+//! instruction numbers, where the pin has none (it was a map of every
+//! instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
+//! Owner: w-5. Review: 2026-11-19.
 //!
 //! DEVIATE: whether an instruction is safe to speculate and whether it is
 //! ephemeral are asked of the caller (`Env`), which holds what they need.
@@ -64,11 +64,13 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
-    /// Each instruction's place in program order, made once for the loop the
+    /// Each block's place in the layout, made once for the loop the
     /// first time a value has two users (IU1).
-    order: Option<IdMap<InstId, usize>>,
+    order: Option<IdMap<BlockId, usize>>,
     /// How many times `order` was made: 0 or 1.
     order_builds: u32,
+    /// How many users had their place worked out.
+    ordered: usize,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L52
@@ -154,7 +156,7 @@ impl IvUsers {
         l: BlockId,
         env: &Env,
     ) -> Self {
-        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0 };
+        let mut users = Self { l, uses: Vec::new(), processed: IdSet::new(), order: None, order_builds: 0, ordered: 0 };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -212,10 +214,15 @@ impl IvUsers {
         if users.len() > 1 {
             if self.order.is_none() {
                 self.order_builds += 1;
-                self.order = Some(cx.function.walk().enumerate().map(|(at, (_, id))| (id, at)).collect());
+                self.order = Some(cx.function.layout().iter().enumerate().map(|(at, &block)| (block, at)).collect());
             }
             let order = self.order.as_ref().expect("made above");
-            users.sort_by_key(|user| std::cmp::Reverse(order.get(user).copied()));
+            self.ordered += users.len();
+            let place = |user: &InstId| {
+                let block = cx.function.parent(*user)?;
+                Some((*order.get(&block)?, cx.function.number_in_block(*user)?))
+            };
+            users.sort_by_key(|user| std::cmp::Reverse(place(user)));
         }
         for user in users {
             if !unique.insert(user) {
@@ -261,6 +268,12 @@ impl IvUsers {
             self.uses.push(IvStrideUse { user, operand: value, post_inc_loops });
         }
         true
+    }
+
+    /// How many instructions had their place in program order worked out: the
+    /// users sorted, not the function.
+    pub fn ordered_instructions(&self) -> usize {
+        self.ordered
     }
 
     /// How many times the program-order map was made: once per loop at most.

@@ -86,13 +86,12 @@
 //! [`crate::cfg`], [`crate::fold`], [`crate::jumpthreading`]; LLVM
 //! JumpThreading, SimplifyCFG.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use llrm_analysis::alias;
 use llrm_analysis::cfg;
 use llrm_analysis::constant_cycles::{self, State};
 use llrm_analysis::consts::{self, Known, masked};
-use llrm_analysis::graph::loops;
 use llrm_analysis::guards;
 use llrm_analysis::induction::{self, Scev};
 use llrm_analysis::manager::Held;
@@ -164,8 +163,7 @@ fn _decided(
     // here decided none of 574 branches at d_faces -O2 and was a quarter of
     // the pass.
     let registers = constants.then(|| analyses.get::<llrm_analysis::manager::Registers>(context, layout, function));
-    let held =
-        Held::of_without_memory(context, layout, function, analyses).with_bounded(context, layout, function, analyses);
+    let held = Held::of_without_memory(context, layout, function, analyses);
     let outer = std::rc::Rc::clone(analyses.outer());
     let unit = held.unit(context, layout, function, &outer);
     let decisions = match registers.as_deref() {
@@ -435,72 +433,39 @@ pub fn _executable_successors(
 /// before the header (its one entry), the one latch, or an exit block only the
 /// loop reaches. A pass that takes them out meets `loopsimplify` putting them
 /// back, round after round.
-pub(crate) fn loop_form_blocks(function: &Function) -> BTreeSet<i64> {
-    let graph = cfg::graph(function);
-    // The answer reads the graph alone, and a function met again after passes
-    // that left its blocks and edges as they were is asked again (d_faces -O2:
-    // 34 asks, 188 K Ir each, 6.4 M of the 34 M of SimplifyCfg).
-    let shape: Vec<(i64, Vec<i64>)> = graph.iter().map(|block| (block.at, block.succ.to_vec())).collect();
-    if let Some(found) =
-        FORMS.with(|kept| kept.borrow().iter().find(|(seen, _)| *seen == shape).map(|(_, found)| found.clone()))
-    {
-        return found;
-    }
-    let found = loop_form_blocks_of(function, &graph);
-    FORMS.with(|kept| {
-        let mut kept = kept.borrow_mut();
-        if kept.len() >= FORMS_KEPT {
-            kept.remove(0);
-        }
-        kept.push((shape, found.clone()));
-    });
-    found
-}
-
-/// How many graphs `loop_form_blocks` remembers the answer for.
-const FORMS_KEPT: usize = 16;
-
-thread_local! {
-    static FORMS: std::cell::RefCell<Vec<(Vec<(i64, Vec<i64>)>, BTreeSet<i64>)>> = const { std::cell::RefCell::new(Vec::new()) };
-}
-
-fn loop_form_blocks_of(
+pub(crate) fn loop_form_blocks(
     function: &Function,
-    graph: &[cfg::Block],
+    loops: Option<Vec<llrm_analysis::graph::loops::Loop>>,
 ) -> BTreeSet<i64> {
-    let predecessors = loops::predecessors(graph);
-    let known = graph.iter().map(|block| (block.at, &block.succ)).collect::<BTreeMap<_, _>>();
-    let none: &[i64] = &[];
+    loop_form_blocks_of(loops.unwrap_or_else(|| cfg::loops_of(function)), function)
+}
+
+/// Each loop's blocks, asked one at a time (`Around`, `successors_of`,
+/// `predecessors_of`): a whole-body graph and predecessor map per ask cost
+/// 88 K Ir a function in d_faces -O2, 2.9 M over 33 asks.
+fn loop_form_blocks_of(
+    all_loops: Vec<llrm_analysis::graph::loops::Loop>,
+    function: &Function,
+) -> BTreeSet<i64> {
+    use llrm_analysis::cfg::{Around, predecessors_of, successors_of};
     let mut loop_edges = BTreeSet::new();
-    for loop_ in cfg::loops_of(function) {
-        let outside = predecessors
-            .get(&loop_.header)
-            .unwrap_or(none)
-            .iter()
-            .copied()
-            .filter(|at| !loop_.body.contains(at))
-            .collect::<Vec<_>>();
-        if let [parent] = outside[..]
-            && *known[&parent] == [loop_.header]
-        {
+    for loop_ in all_loops {
+        if let Some(parent) = loop_.preheader(function) {
             loop_edges.insert(parent);
         }
         if let Some(&latch) = loop_.latches.iter().next().filter(|_| loop_.latches.len() == 1)
-            && *known[&latch] == [loop_.header]
+            && successors_of(function, latch)[..] == [loop_.header]
         {
             loop_edges.insert(latch);
         }
-        // Only a successor of the body can have all its predecessors in it.
-        for &inside in &loop_.body {
-            for &exit in known[&inside].iter() {
-                let parents = predecessors.get(&exit).unwrap_or(none);
-                if !loop_.body.contains(&exit)
-                    && parents.iter().all(|at| loop_.body.contains(at))
-                    && known[&exit].len() == 1
-                    && !loop_.body.contains(&known[&exit][0])
-                {
-                    loop_edges.insert(exit);
-                }
+        // A successor of the body whose predecessors are all in it.
+        for (_, exit) in loop_.exits(function) {
+            let after = successors_of(function, exit);
+            if predecessors_of(function, exit).iter().all(|at| loop_.body.contains(at))
+                && after.len() == 1
+                && !loop_.body.contains(&after[0])
+            {
+                loop_edges.insert(exit);
             }
         }
     }

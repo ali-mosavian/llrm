@@ -800,7 +800,7 @@ fn phi_has_undef_constant_value(
 }
 
 /// `Type::isSized()`.
-fn is_sized(
+pub(crate) fn is_sized(
     q: &Query,
     ty: TypeId,
 ) -> bool {
@@ -1640,39 +1640,45 @@ pub fn compute_known_bits_into(
     known: &mut KnownBits,
     depth: u32,
 ) {
-    if let Some((bits, width)) = q.int_constant(v) {
-        *known = KnownBits::constant(width, bits);
-        return;
-    }
-    if let Operand::Constant(id) = v {
-        if matches!(
-            q.context().get(id).kind,
-            ConstantKind::Null | ConstantKind::Zero
-        ) {
-            known.set_all_zero();
-            return;
-        }
-    }
-
-    known.reset_all();
-
-    if let Operand::Constant(id) = v {
-        // We can't imply anything about undefs.
-        if matches!(
-            q.context().get(id).kind,
-            ConstantKind::Poison | ConstantKind::Undef
-        ) {
-            return;
-        }
-    }
-
-    if let Operand::Value(id) = v {
-        if let ValueDef::Argument(index) = q.function.value(id).def {
-            if let Some(range) = argument_range(q, index) {
-                *known = range.to_known_bits();
+    // The operand's kind is read once: a value is no constant, as an
+    // `isa<Constant>` costs C++ nothing.
+    let ty = match v {
+        Operand::Constant(id) => {
+            if let Some((bits, width)) = q.int_constant(v) {
+                *known = KnownBits::constant(width, bits);
+                return;
             }
+            let constant = q.context().get(id);
+            match constant.kind {
+                ConstantKind::Null | ConstantKind::Zero => {
+                    known.set_all_zero();
+                    return;
+                }
+                // We can't imply anything about undefs.
+                ConstantKind::Poison | ConstantKind::Undef => {
+                    known.reset_all();
+                    return;
+                }
+                _ => {}
+            }
+            known.reset_all();
+            Some(constant.ty)
         }
-    }
+        Operand::Value(id) => {
+            known.reset_all();
+            let value = q.function.value(id);
+            if let ValueDef::Argument(index) = value.def {
+                if let Some(range) = argument_range(q, index) {
+                    *known = range.to_known_bits();
+                }
+            }
+            Some(value.ty)
+        }
+        Operand::Block(_) => {
+            known.reset_all();
+            None
+        }
+    };
 
     if depth == MAX_ANALYSIS_RECURSION_DEPTH {
         return;
@@ -1684,7 +1690,7 @@ pub fn compute_known_bits_into(
         compute_known_bits_from_operator(q, None, &operator, known, depth);
     }
 
-    if q.is_pointer(v) {
+    if ty.is_some_and(|ty| matches!(q.context().types.get(ty), Type::Pointer(_))) {
         known.zero |= alignment_zero_bits(pointer_alignment(q, v), known.width);
     }
 

@@ -231,12 +231,12 @@ def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
     """`ratchet:docs` -> the generated pages that are out of date (or the figure problem) on the tree in `root`; none when `docsbuild --check` is clean. A header change
     that landed without `docsbuild --sync` (jumps.rs) refused every docs-touching PR after it (#2757, #2763, #2857, #2836) with nothing naming the page."""
     run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
-    done = run([sys.executable, "tools/docsbuild/build.py", "--check"])
+    done = run([sys.executable, "tools/docs/docsbuild/build.py", "--check"])
     if not done.returncode:
         return {}
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
     pages = [line for line in lines if line.startswith("docs/")]
-    why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
+    why = f"out of date: {', '.join(pages)}; run python3 tools/docs/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
     # one name per output line: docsbuild --check was red on the base with 23 lines, and a 24th hid behind the one `ratchet:docs`
     named = {f"ratchet:docs {line.replace(': ', ' - ').replace('; ', ' ')[:140]}": why[:300] for line in lines}
     return named or {"ratchet:docs": why[:300]}
@@ -255,6 +255,49 @@ def failed_tests(output: str) -> list[str]:
     tests' own prints, whose indented words are not tests."""
     block = output.split("\nfailures:\n")[-1].split("\ntest result")[0] if "\nfailures:\n" in output else ""
     return list(dict.fromkeys(line.strip() for line in block.splitlines() if re.fullmatch(r"    [\w:]+", line)))
+
+
+# `unit X::did-not-run` / `integration-did-not-run` -> why: the first error lines of the cargo output, else the exit status and its last 20 lines. A refusal that named only the
+# token left #4269's author (refused twice) with nothing to read.
+CAUSES: dict[str, str] = {}
+
+
+def did_not_run_cause(
+    output: str,
+    returncode: int,
+) -> str:
+    lines = [line.rstrip() for line in output.splitlines() if line.strip()]
+    first = next((at for at, line in enumerate(lines) if re.match(r"(error|thread .* panicked)", line.lstrip())), None)
+    shown = lines[first : first + 8] if first is not None else [f"exit status {returncode}", *lines[-20:]]
+    return " | ".join(shown)[:600]
+
+
+def causes_of(names) -> str:
+    """` [name: cause; ...]` for the did-not-run names among `names` that have a recorded cause, else an empty string."""
+    text = "; ".join(f"{name}: {CAUSES[name]}" for name in sorted(names) if name in CAUSES)
+    return f" [{text}]" if text else ""
+
+
+def panic_reasons(output: str, more: int = 0) -> dict[str, str]:
+    """Each test's first panic message from a `cargo test` output: `thread 'NAME' (id) panicked at FILE:L:C:` and the line after it, with a `left:`/`right:` pair appended. A refusal that
+    names only the test sent its author to rerun the runner's command to see what failed (#4172's `debug_assert_eq!`, which fires in the debug profile the runner uses and not in release)."""
+    found: dict[str, str] = {}
+    lines = output.splitlines()
+    for at, line in enumerate(lines):
+        if not (m := re.match(r"thread '(?P<name>[^']+)'(?: \(\d+\))? panicked at .*:$", line)) or at + 1 >= len(lines):
+            continue
+        reason = lines[at + 1].strip()
+        pair = [one.strip() for one in lines[at + 2 : at + 4] if re.match(r"\s*(left|right):", one)]
+        short = m["name"].rsplit("::", 1)[-1]
+        # `more` lines of the message that follow, up to a blank line or rustc's `note:`: docs_in_sync prints the stale pages' names there
+        extra = []
+        for one in lines[at + 2 : at + 2 + more]:
+            if not one.strip() or one.startswith("note:"):
+                break
+            extra.append(one.strip())
+        found.setdefault(short, reason + (f" ({', '.join(pair)})" if pair else "") + (f" [{'; '.join(extra)}]" if extra and not pair else ""))
+        found.setdefault(m["name"], found[short])
+    return found
 
 
 def selection() -> dict:
@@ -318,9 +361,12 @@ def oracle_env() -> dict[str, str]:
 
 
 def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
-    """None where the compile succeeded; else its first line of complaint."""
+    """None where the compile succeeded; else its first line of complaint. A `-o /dev/null` is an object in a scratch directory: llrm-c encodes only for an `.o` or
+    `.obj` output, so the null device never reached the encoder."""
     try:
-        done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
+        with tempfile.TemporaryDirectory(prefix="smoke-") as work:
+            command = [str(Path(work) / "out.obj") if after == "-o" and arg == os.devnull else arg for after, arg in zip(["", *command], command)]
+            done = cpulimit.run(command, 300, capture_output=True, text=True, env=env)
     except cpulimit.MemoryLimit as error:
         return f"memory limit: {error}"
     except subprocess.TimeoutExpired:
@@ -418,12 +464,12 @@ def failing_programs(output: str) -> list[str]:
 # A PR touching one of these changes what a BASIC (or any) program prints without a unit test saying so: log_exp_digits, pow_stack_depth and pow_unrolled went red on
 # parity for 12 results and the gate, which ran a dozen programs, did not see it. Such a PR runs every tests/run group (75 s of wall in all, the qb group 6 s).
 WHOLE_GROUP_TRIGGERS = (
-    "crates/frontends/llrm-qb/",
-    "crates/frontends/qbfront/",
-    "crates/frontends/llrm-qbruntime/",
+    "crates/frontends/qb/",
+    "crates/frontends/qb/",
+    "runtime/qb/",
     "runtime/qb/",
     "crates/target/llrm-x86/",
-    "crates/backend/llrm-core/",
+    "crates/codegen/llrm-codegen/",
 )
 
 
@@ -501,6 +547,9 @@ def dependants_lib_failures(
     import xfail  # noqa: PLC0415
 
     failed = set()
+    # A listed test that passed: its fix removes its entry, and the list says otherwise (17 entries of llrm-nib, qb and transforms stood after their tests passed or went).
+    stale = set()
+    listed = xfail.load_for(root)
     started = time.monotonic()
     passed, names = 0, []
     for package in sorted(packages):
@@ -509,7 +558,9 @@ def dependants_lib_failures(
         found = {f"unit {package}::{test}" for test in failed_tests(output)}
         if done.returncode and not found and "no library targets" not in output and "error: " in output:
             found = {f"unit {package}::did-not-run"}
+            CAUSES[f"unit {package}::did-not-run"] = did_not_run_cause(output, done.returncode)
         failed |= found
+        stale |= {f"xpass unit {package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. ok$", output, re.M) if f"unit {package}::{name}" in listed}
         passed += sum(int(count) for count in re.findall(r"test result: \w+\. (\d+) passed", output))
         names += [f"{package}::{name}" for name in re.findall(r"^test (\S+) \.\.\. (?:ok|FAILED)$", output, re.M)]
     # What ran, kept for the line the gate prints: a pass that says nothing cannot be told from a gate that never ran.
@@ -520,7 +571,7 @@ def dependants_lib_failures(
         names=hashlib.sha1("\n".join(sorted(names)).encode()).hexdigest()[:8],
         seconds=time.monotonic() - started,
     )
-    return failed - xfail.load().keys()
+    return (failed - listed.keys()) | stale
 
 
 # Root integration targets (tests/*.rs) the landing gate does not run per PR, with the reason: the nightly run (tools/gate/nightly_integration.py) does.
@@ -529,6 +580,19 @@ NIGHTLY_ONLY = {
     "cv4": "30 s of CodeView debug-info checks",
     "run": "every tests/run program: the tests/run groups run it on the PRs that matter",
 }
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
+}
+# Targets that build the runtime's C sources with cc and import no crate: run on a PR that changes runtime/ or tests/qbhost/.
+RUNTIME_C = {
+    "posix_os": "the POSIX os layer",
+    "qb_dev_interface": "the device interface headers",
+    "qb_sdl": "the SDL device",
+    "qb_dirty": "the dirty-line protocol under ThreadSanitizer (its child lifts testcap's soft data limit)",
+}
 # Targets that read files, not crates: scans of sources and docs, run on every PR (all together about 2 s).
 SCANNERS = {
     "block_list_ratchet": "counts a pattern in sources",
@@ -536,14 +600,30 @@ SCANNERS = {
     "core_depends_on_no_target": "reads crates' manifests",
     "core_fixtures_are_for_core_tests": "reads test fixtures",
     "descriptions_are_read": "reads the target descriptions",
+    "docs_in_sync": "regenerates the doc pages and compares",
     "docs_links": "reads markdown",
     "dosbox_progress": "reads the harness",
     "no_kill_by_pattern": "scans scripts",
+    "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
+    "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
+    "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }
 TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+
+
+def with_common(
+    text: str,
+    root: Path = ROOT,
+) -> str:
+    """`text` of a target and, if it says `mod common;`, the text of tests/common/mod.rs and of each `common::NAME` submodule it names: what a target reaches through the helper."""
+    if not re.search(r"^\s*(?:pub\s+)?mod common;", text, re.M):
+        return text
+    common = root / "tests" / "common"
+    files = [common / "mod.rs", *(common / f"{name}.rs" for name in set(re.findall(r"\bcommon::(\w+)", text)))]
+    return "\n".join([text, *(one.read_text(errors="replace") for one in files if one.is_file())])
 
 
 def integration_map(
@@ -561,10 +641,16 @@ def integration_map(
     bins = {target["name"]: named(Path(target["src_path"]).read_text()) for one in metadata["packages"] if one["name"] == "llrm" for target in one["targets"] if target["kind"] == ["bin"]}
     out = {}
     for source in sorted((root / "tests").glob("*.rs")):
-        text = source.read_text(errors="replace")
+        text = with_common(source.read_text(errors="replace"), root)
         used = named(text)
         for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
             used |= {name} & bins.keys() and bins[name]
+        if source.stem == "check":
+            # tests/check.rs runs whichever tool a file's RUN line names, from beside llrm-qb: the compilers of its RUN lines, not only the one CARGO_BIN_EXE names
+            # (copy_idioms.c, which drives llrm-c, went red on parity unseen: a change to llrm-c ran no check).
+            for case in (root / "tests" / "check").rglob("*"):
+                for tool in re.findall(r"RUN:\s*(?:not\s+)?([\w-]+)", case.read_text(errors="replace") if case.is_file() else ""):
+                    used |= bins.get(tool, set())
         if "tools/dosbatch" in text or "run_tests" in text:
             used |= set().union(*(bins.get(name, set()) for name in TOOL_COMPILERS))
         reach = set(used)
@@ -576,7 +662,7 @@ def integration_map(
 
 def unmapped_targets(mapping: dict[str, set[str]]) -> list[str]:
     """The targets with no crate behind them that SCANNERS and NIGHTLY_ONLY do not name."""
-    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY)
+    return sorted(name for name, reach in mapping.items() if not reach and name not in SCANNERS and name not in NIGHTLY_ONLY and name not in RUNTIME_C)
 
 
 def integration_targets_for(
@@ -587,7 +673,20 @@ def integration_targets_for(
     """The root integration targets a PR runs: those whose crates include a touched one, every scanner, and a target whose own tests/NAME.rs changed; never NIGHTLY_ONLY."""
     own = {Path(path).stem for path in files if path.startswith("tests/") and path.endswith(".rs") and "/" not in path[len("tests/"):]}
     chosen = {name for name, reach in mapping.items() if reach & touched} | set(SCANNERS) | own
+    if any(path.startswith(("runtime/", "tests/qbhost/")) for path in files):
+        chosen |= set(RUNTIME_C)
     return sorted(name for name in chosen if name in mapping and name not in NIGHTLY_ONLY)
+
+
+def test_outcomes(output: str, status: str) -> list[str]:
+    """`integration <target>::<test>` of each `test NAME ... STATUS` line, by the `Running tests/TARGET.rs` line above it."""
+    target, found = "?", []
+    for line in output.splitlines():
+        if match := re.match(r"\s+Running (?:unittests )?(?:tests/)?(\w+?)(?:\.rs)?\s", line):
+            target = match[1]
+        if match := re.match(rf"test (?!result:)(\S+) \.\.\. {status}", line):
+            found.append(f"integration {target}::{match[1]}")
+    return sorted(dict.fromkeys(found))
 
 
 def red_tests(output: str) -> list[str]:
@@ -619,7 +718,16 @@ def integration_failures(
     found = set(red_tests(done.stdout))
     if done.returncode and not found:
         found = {"integration-did-not-run"}
-    return found - xfail.load().keys()
+        CAUSES["integration-did-not-run"] = did_not_run_cause(done.stdout, done.returncode)
+    reasons = panic_reasons(done.stdout, more=8)
+    for one in found:
+        short = one.split("::", 1)[-1]
+        if short in reasons:
+            CAUSES[one] = reasons[short][:400]
+    listed = xfail.load_for(root).keys()
+    # a listed test that passes is as much a gate failure as an unlisted one that fails: its fix removes its entry
+    passing = {f"xpass {one}" for one in test_outcomes(done.stdout, "ok") if one in listed}
+    return (found - listed) | passing
 
 
 def qbrt_failures(
@@ -681,7 +789,7 @@ def unit_step(package: str, allowance: float):
         code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
-        listed = xfail.load()
+        listed = xfail.load_for(ROOT)
         failed = {f"unit {package}::{test}" for test in failed_tests(output)}
         ran = {f"unit {package}::{name}" for name in names} if names else {one for one in listed if one.startswith(f"unit {package}::")}
         unexpected, expected, passing = xfail.classify(failed, ran, listed)

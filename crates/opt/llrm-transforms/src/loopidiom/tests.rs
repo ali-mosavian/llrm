@@ -237,6 +237,7 @@ fn run_on_loop(
     let mut se = ScalarEvolution::new();
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let mut run = Run {
+        bytes: None,
         name,
         env: &env,
         context: &mut context,
@@ -245,6 +246,7 @@ fn run_on_loop(
         aa: &NoAa,
         declared: &mut declared,
         cur_loop,
+        tti: None,
     };
     LoopIdiomRecognize::new(Options::default(), LIBRARY).run_on_loop(&mut run)
 }
@@ -318,6 +320,45 @@ fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
     assert!(after.contains("%0 = call i32 @llvm.smax.i32(i32 %n, i32 1)"), "{after}");
     assert!(after.contains("%1 = zext nneg i32 %0 to i64"), "{after}");
     assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
+}
+
+/// A function with `"no-builtins"` has every library function disabled in the
+/// pin's `TargetLibraryInfo`: x_radix (Open Watcom, `-fno-builtin`) had its
+/// zeroing loop made a memset, which the pin leaves a loop, and the unroll
+/// after it then sized the enclosing loop differently (90 to 179 bytes).
+#[test]
+fn test_a_no_builtins_function_gets_no_memset() {
+    let text = FILL.replace("define void @f(ptr %p, i32 %n) {", "define void @f(ptr %p, i32 %n) \"no-builtins\" {");
+    let after = pass_output(&text);
+    assert!(!after.contains("llvm.memset"), "{after}");
+    assert!(pass_output(FILL).contains("llvm.memset"));
+}
+
+/// The trip counts `runs` loop-idiom passes in a row work out over `text`.
+fn idiom_trip_counts(
+    text: &str,
+    runs: usize,
+) -> usize {
+    let mut module = crate::testing::parsed(text);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for _ in 0..runs {
+        manager.add(super::pass::LoopIdiom::new());
+    }
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// Every run started a `ScalarEvolution` of its own, so a loop it left alone
+/// had its trip count worked out again by the next pass (53 of d_faces -O2's
+/// 226 counts were such repeats). A run that changes nothing hands its
+/// expressions on.
+#[test]
+fn test_a_loop_the_pass_leaves_alone_is_not_counted_again_by_the_next_run() {
+    let text = FILL.replace("  store i8 0, ptr %a\n", "  store i8 0, ptr %a\n  %l = load i8, ptr %a\n");
+    let (once, twice) = (idiom_trip_counts(&text, 1), idiom_trip_counts(&text, 2));
+    assert!(once > 0, "the pass asks for the count: {once}");
+    assert_eq!(twice, once, "one run {once} counts, two runs {twice}");
 }
 
 /// The load/store/default dispatch of `getModRefInfo(Instruction)`: BasicAA
@@ -397,7 +438,7 @@ fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
 /// tests/run/huge/copyw printed 732590080 for 427417504 once LoopRotate was on.
 #[test]
 fn test_a_copy_of_a_huge_pointer_is_not_a_memcpy() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 
 @a = addrspace(3) global [40000 x i16] zeroinitializer
 @b = addrspace(3) global [40000 x i16] zeroinitializer

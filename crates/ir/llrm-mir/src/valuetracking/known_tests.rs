@@ -133,3 +133,36 @@ fn test_undef_operands_match_llvm() {
         include_str!("../../tests/vt/known/undef.expected"),
     );
 }
+
+/// Each operand kind `computeKnownBits` reads before the operator: an integer
+/// constant, a null pointer, undef, poison, a `range` argument and an aligned
+/// pointer argument keep their bits when the kind is read once.
+#[test]
+fn test_operand_kinds_have_their_known_bits() {
+    let text = "declare void @use(i8, ptr, i8, i8, i8, ptr)\n\
+        define void @f(i8 range(i8 0, 16) %r, ptr align 8 %p) {\n  \
+        call void @use(i8 5, ptr null, i8 undef, i8 poison, i8 %r, ptr %p)\n  ret void\n}\n";
+    let module = parse::module(text).expect("parses");
+    let layout = DataLayout::default();
+    let function = module
+        .globals
+        .iter()
+        .find_map(|global| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => Some(function),
+            _ => None,
+        })
+        .expect("@f");
+    let q = Query::new(&module, function, &layout);
+    let (_, call) = function.walk().next().expect("the call");
+    let got: Vec<String> = function.instruction(call).operands[..6]
+        .iter()
+        .map(|&operand| super::known::compute_known_bits(&q, operand, 0).print())
+        .collect();
+    let pointer = |low: &str| format!("{}{low}", "?".repeat(got[1].len() - low.len()));
+    assert_eq!(got[0], "00000101");
+    assert_eq!(got[1], "0".repeat(got[1].len()));
+    assert_eq!(got[2], "????????");
+    assert_eq!(got[3], "????????");
+    assert_eq!(got[4], "0000????");
+    assert_eq!(got[5], pointer("000"));
+}

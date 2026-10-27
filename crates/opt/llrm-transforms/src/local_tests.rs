@@ -926,6 +926,36 @@ b1:
     assert_eq!(function.debug_records().len(), 1);
 }
 
+/// With instructions in the merged block the records before the old branch
+/// stand before the first of them, not after all of them: observed.c's `mix`
+/// at -O2 -g had every record of every variable past the last instruction, so
+/// gdb read `a`, `b`, `c` and `i` as optimised out where the pin says them.
+#[test]
+fn merging_keeps_the_records_of_the_old_branch_before_the_moved_instructions() {
+    let (merged, module) = merged(
+        "define i16 @f(i16 %x) {
+b0:
+  #dbg_value(i16 %x, !0)
+  br label %b1
+
+b1:
+  %b = mul i16 %x, 2
+  %c = add i16 %b, 1
+  ret i16 %c
+}
+
+!0 = !{!\"v\"}
+",
+        "b1",
+        false,
+    );
+    assert!(merged);
+    let (_, _, function) = module.functions().next().expect("@f");
+    let first = function.iter_block(function.entry().expect("entry")).next().expect("an instruction");
+    assert!(function.debug_records().iter().all(|one| one.before == first), "{:?}", function.debug_records());
+    assert_eq!(function.debug_records().len(), 1);
+}
+
 /// A block its predecessor alone enters joins it: the phi is its one value,
 /// the instructions follow the predecessor's, and the block is gone.
 #[test]
@@ -1466,4 +1496,36 @@ b3:
     let last = *function.layout().last().expect("b3");
     assert!(crate::transform::duplicate_phis_in(function, last).unwrap(), "b3's two phis are one");
     assert_eq!(walked() - before, 1);
+}
+
+/// `EliminateDuplicatePHINodes` compares the phis of a block pair by pair up to
+/// `PHICSENumPHISmallSize` (32) of them and hashes only a larger set; every
+/// block of two or more was hashed (d_faces -O2: 1,741 blocks, a map and a key
+/// vector each, 494 Ir a block against the pin's 141).
+#[test]
+fn a_block_of_few_phis_is_compared_pair_by_pair_and_a_block_of_many_is_hashed() {
+    let join = |phis: usize| {
+        let mut text = String::from(
+            "define i16 @f(i16 %x, i1 %c) {\nb0:\n  br i1 %c, label %b1, label %b2\n\nb1:\n  br label %b3\n\nb2:\n  br label %b3\n\nb3:\n",
+        );
+        for n in 0..phis {
+            // Every phi is the first one's twin except one that differs.
+            let other = if n == 1 { "2" } else { "1" };
+            text.push_str(&format!("  %p{n} = phi i16 [ %x, %b1 ], [ {other}, %b2 ]\n"));
+        }
+        text.push_str("  ret i16 %p0\n}\n");
+        text
+    };
+    let run = |phis: usize| {
+        let mut module = parsed(&join(phis));
+        let (_, function) = module.function_mut("f").expect("@f");
+        let last = *function.layout().last().expect("b3");
+        let before = crate::transform::HASHED.with(std::cell::Cell::get);
+        let changed = crate::transform::duplicate_phis_in(function, last).unwrap();
+        let left = crate::edges::phis(function, last).len();
+        (changed, left, crate::transform::HASHED.with(std::cell::Cell::get) - before)
+    };
+    assert_eq!(run(3), (true, 2, 0), "p0 and p2 are one; p1 stays; compared, not hashed");
+    assert_eq!(run(32), (true, 2, 0), "32 phis are still compared");
+    assert_eq!(run(33), (true, 2, 1), "33 phis are hashed, with the same result");
 }

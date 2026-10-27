@@ -56,6 +56,35 @@ impl Bits {
         }
     }
 
+    /// `self |= other`; whether `self` grew.
+    pub fn union_changed(
+        &mut self,
+        other: &Self,
+    ) -> bool {
+        let mut grew = false;
+        for (word, more) in self.words.iter_mut().zip(&other.words) {
+            let joined = *word | more;
+            grew |= joined != *word;
+            *word = joined;
+        }
+        grew
+    }
+
+    /// `self |= kept & !gone`; whether `self` grew.
+    pub fn union_difference(
+        &mut self,
+        kept: &Self,
+        gone: &Self,
+    ) -> bool {
+        let mut grew = false;
+        for ((word, keep), go) in self.words.iter_mut().zip(&kept.words).zip(&gone.words) {
+            let joined = *word | (keep & !go);
+            grew |= joined != *word;
+            *word = joined;
+        }
+        grew
+    }
+
     pub fn intersect_with(
         &mut self,
         other: &Self,

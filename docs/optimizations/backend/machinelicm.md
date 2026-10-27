@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinelicm.rs sha256:14448644d43b7dc2c95caf1cd038594eefaf6ec4a431071220c1b78386ee8cdc -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinelicm.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:186173ec318f999d707d5a09cff2bf8f0c9e7ea2bf3b79ac24158eee6c8b5050 -->
 
 # machinelicm
 
@@ -17,7 +17,11 @@ is walked in layout order, and again until nothing moves. An instruction
 moves to the end of the preheader, before its jump, when:
 
 - it is a pure operation on registers and constants with one result, no
-  pinned operand, no memory, no call, no x87 value (`candidate`);
+  pinned operand, no call, no x87 value (`candidate`), an `fld1`/`fldz` in a
+  loop with no call and a free stack slot, in a function that never writes
+  the control word (`constant_load`), or a load in a block that runs on
+  every trip of a loop with no store, call or volatile access
+  (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
 - every value it reads is defined outside the loop or was hoisted
   (`IsLoopInvariantInst`);
 - it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
@@ -29,9 +33,22 @@ moves to the end of the preheader, before its jump, when:
   the loop standing for the pressure: DEVIATE ML1, the pin tracks the live
   registers of each block of the loop).
 
-DEVIATE ML2: no preheader is made where a loop has none; no load of an
-invariant cell (`ExtractHoistableLoad`); no CSE of the hoisted value
-(`MayCSE`).
+DEVIATE ML2: no preheader is made where a loop has none; no load folded
+into its reader is taken apart (`ExtractHoistableLoad`); no CSE of the
+hoisted value (`MayCSE`).
+
+## Example
+A loop that adds `a[i] * k3` where `k3 := k + 3` is made inside it (the
+sum is made by instruction selection, after the IR's LICM has run). The
+sum is made once, ahead of the loop:
+
+```text
+  pre:                              pre:
+    jmp loop                          v9 := add k, 0x3
+  loop:                       =>      jmp loop
+    v9 := add k, 0x3                loop:
+    v10 := imul v8, v9                v10 := imul v8, v9
+```
 
 ## Runs
 A machine phase before `precse` (`flow::machine_with`), at every -O level

@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/loopclone_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/loopclone_tests.rs`, the port of
 //! `tests/test_loopclone.py`, each body now MIR text. `is None` is `Ok(None)`
 //! and the function unchanged.
 //!

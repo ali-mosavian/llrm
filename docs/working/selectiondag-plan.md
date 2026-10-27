@@ -20,7 +20,7 @@ Pin d1106deb71cc. Codegen slot row 28 ([codegen-slot-table](codegen-slot-table.m
 
 ## 2. What replaces each part today
 
-Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/backend/llrm-core/src/backend/isel.rs), [isel/matcher.rs](../../crates/backend/llrm-core/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
+Ours selects from MIR (LLVM-IR-shaped, SSA, typed) to LIR in one forward walk: `Selector::instruction` matches each instruction against a decision automaton that `llrm-iselgen` builds from `family.isel` + `patterns.isel` + `x86.instr` ([isel.rs](../../crates/codegen/llrm-codegen/src/backend/isel.rs), [isel/matcher.rs](../../crates/codegen/llrm-codegen/src/backend/isel/matcher.rs)). Patterns are our own, flat (an opcode and up to three operands, one nested defining instruction via `cover`), the rest is `hook_` Rust. No node graph, no legalizer, no combiner, no scheduler: selection order is MIR order, and the machine phases do the rest.
 
 | Pin part | Ours today | What is missing against the pin |
 |---|---|---|
@@ -51,7 +51,7 @@ m16 is real mode, and the pin has no model for it. What it keeps, as numbered DE
 Requirement: from the pin's `.td`, by a tool, nothing hand-copied. Two ways, and the choice:
 
 - Port `utils/TableGen/DAGISelEmitter` and `DAGISelMatcherGen` to Rust: a Rust `.td` reader, then `CodeGenDAGPatterns`' type inference. About 20k lines of C++ (`Common/CodeGenDAGPatterns.cpp` alone is 5k); the largest and riskiest piece of the plan, for an output the pin already makes.
-- **Chosen: read the pin's own table.** The pin's `llvm-tblgen -gen-dag-isel X86.td` (built from the pin; `~/scratch/llvm-build-assert/bin/llvm-tblgen` exists) writes `X86GenDAGISel.inc`. A Rust tool, `llrm-dagisel-gen` (crate beside `llrm-iselgen`), decodes the byte table into a tree (`Matcher` enum: `Scope`, `RecordNode`, `CheckOpcode`, `CheckType`, `CheckInteger`, `CheckPatternPredicate`, `CheckComplexPat`, `MoveChild`, `EmitNode`, `MorphNodeTo`, ...; the opcode list is `enum BuiltinOpcodes` in `SelectionDAGISel.h`), drops what the subset excludes, and writes a Rust `static` table plus the predicate and complex-pattern dispatch (`CheckPatternPredicate`, `CheckNodePredicate`, `CheckComplexPattern`: 292 pattern predicates in the pin's file, of which the subset keeps those over `Not64BitMode`, `HasX87`, `HasCMOV`, `FPStackf32/64`, `OptForSize`, `UseIncDec` and drops the vector, AVX, BMI and APX ones). The interpreter is a translation of `SelectCodeCommon` ([L3351][isel-common]) over the enum, with its `MatchScope` stack and `RecordedNodes`.
+- **Chosen: read the pin's own table.** The pin's `llvm-tblgen -gen-dag-isel X86.td` (built from the pin; `llvm-tblgen` exists) writes `X86GenDAGISel.inc`. A Rust tool, `llrm-dagisel-gen` (crate beside `llrm-iselgen`), decodes the byte table into a tree (`Matcher` enum: `Scope`, `RecordNode`, `CheckOpcode`, `CheckType`, `CheckInteger`, `CheckPatternPredicate`, `CheckComplexPat`, `MoveChild`, `EmitNode`, `MorphNodeTo`, ...; the opcode list is `enum BuiltinOpcodes` in `SelectionDAGISel.h`), drops what the subset excludes, and writes a Rust `static` table plus the predicate and complex-pattern dispatch (`CheckPatternPredicate`, `CheckNodePredicate`, `CheckComplexPattern`: 292 pattern predicates in the pin's file, of which the subset keeps those over `Not64BitMode`, `HasX87`, `HasCMOV`, `FPStackf32/64`, `OptForSize`, `UseIncDec` and drops the vector, AVX, BMI and APX ones). The interpreter is a translation of `SelectCodeCommon` ([L3351][isel-common]) over the enum, with its `MatchScope` stack and `RecordedNodes`.
 
 Subset by the target description, not by hand: the CPU's feature set (i486: no CMOV before P6, so `NoCMOV`; P5: cmpxchg8b, no CMOV) selects predicates; a record whose predicates all hold at that CPU stays, the rest is pruned. m16 is the same table with SD2..SD4 applied: `far` patterns and the 16-bit address matchers are added by the target's own `.td`-shaped file (`patterns.isel` shrinks to exactly those, in the pin's pattern syntax, read by the same tool).
 
@@ -175,7 +175,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD | Owner | What | Where |
 |---|---|---|---|
 | SD1 | plan | MIR, not LLVM IR, is the builder's input | §2 |
-| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `selectiondag/lowering.rs` |
+| SD2 | sdag-b | `far` is a value type, expanded into two `i16` | §2, `llrm-x86/src/dag/lowering.rs` |
 | SD3 | sdag-c | 16-bit real-mode address components | §2 |
 | SD4 | sdag-c | BX/SI/DI/BP address classes on virtual registers | §2 |
 | SD5 | sdag-a | calling conventions from `Convention::place` | §2 |
@@ -187,8 +187,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD11 | sdag-a | no FP constant folding | `selectiondag.rs` |
 | SD12 | sdag-a | folds needing known bits are the combiner's | `selectiondag.rs` |
 | SD13 | sdag-a | no vector types or nodes | `selectiondag.rs` |
-| SD14 | sdag-b | floating types always legal (no soften/expand) | `selectiondag/lowering.rs` |
-| SD15 | sdag-a | `FindMergedConditions` not ported | builder |
+| SD14 | sdag-b | floating types always legal (no soften/expand) | `llrm-x86/src/dag/lowering.rs` |
+| SD15 | sdag-a | `FindMergedConditions` ported without edge probabilities | builder |
 | SD16 | sdag-a | no `LiveOutRegInfo` | builder |
 | SD17 | sdag-a | vreg numbers differ from the pin's | builder |
 | SD18 | sdag-a | select patterns (abs, min, max) | builder |
@@ -199,26 +199,77 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD23 | sdag-c | vector immediate checks never match | `llrm-dagisel/src/interp.rs` |
 | SD30 | sdag-d | scheduler: no physical-register interference, `ClusterNodes`, vreg-cycle check | `selectiondag/schedule.rs` |
 | SD31 | sdag-d | scheduler: no IR order for the call tie break | `selectiondag/schedule.rs` |
-| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `selectiondag/actions.rs` |
+| SD32 | sdag-b | action tables keyed by `MVT`; `Far` has no entry | `llrm-x86/src/dag/actions.rs` |
 | SD33 | sdag-b | no `NodeUpdateListener`; RAUW returns what it did | `selectiondag/legalize_types.rs` |
 | SD34 | sdag-c | address folds not translated: BEXTR, x32 `any_extend`, sign/zero-extend re-association | `llrm-dagisel/src/x86_addr.rs` |
 | SD35 | sdag-c | no 64-bit, x32, RIP, TLS or vector address forms | `llrm-dagisel/src/x86_addr.rs` |
 | SD36 | sdag-c | tail-call, `def32` and absolute-symbol predicates answer false | `llrm-dagisel/src/x86_hooks.rs` |
-| SD37 | sdag-c | `hasNoCarryFlagUses` is false through `CopyToReg EFLAGS` | `llrm-dagisel/src/x86_hooks.rs` |
 | SD38 | sdag-c | `isUnneededShiftMask` without known bits | `llrm-dagisel/src/x86_hooks.rs` |
-| SD39 | sdag-d | emitter: no frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
+| SD39 | sdag-d | emitter: no local frame indices, globals, segment overrides, inline asm or custom inserters yet | `selectiondag/emit.rs` |
 | SD40 | sdag-c | `MaskedValueIsZero` is a structural subset of `computeKnownBits` | `llrm-dagisel/src/x86_addr.rs` |
 | SD41 | sdag-b | no `DAGNodeDeletedListener`, no dead-node deletion in LegalizeDAG | `selectiondag/legalize_dag.rs` |
 
-| SD200 | sdag-b | condition lowering without the bit-test, flag-reuse and carry folds | `selectiondag/x86_lowering.rs` |
+| SD200 | sdag-b | condition lowering without the reassociated/immediate bit-test forms and the carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
-| SD43 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
+| SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
+| SD403 | sdag-d | the DAG path (`--isel=dag`): no branch odds or counted-loop trip counts, calls, locals, register arguments, switch lowering or multi-register phis yet; exit D1e, review 2026-12-03 | `selectiondag/dag_function.rs` |
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
+| SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
+| SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form) | `selectiondag/div_combine.rs` |
+| SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
+| SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86/src/dag/x86isd.rs` |
+| SD209 | sdag-b | far access: `ES` set by a `CopyToReg` ordered by the chain only (no glue binds it to its access) | `selectiondag/legalize_types.rs` |
+| SD205 | sdag-b | ext-of-load fold: simple non-extending loads before operations are legal; every integer truncate is free (no `isTruncateFree`) | `selectiondag/dag_combiner.rs` |
+| SD210 | sdag-b | `visitADD`: no reassociation of constants into an `add` that feeds a memory access (no `reassociationCanBreakAddressingModePattern`) | `selectiondag/dag_combiner.rs` |
+| SD211 | sdag-b | `PromoteIntBinOp`/`ShiftOp`: a load operand is any-extended (the extend-of-load fold makes the extending load), no `AssertSext`/`AssertZext` look-through | `selectiondag/dag_combiner.rs` |
+| SD212 | sdag-b | `SimplifyDemandedBits`: and/or/xor, shifts by a constant, zext/anyext/trunc only; no `ShrinkDemandedOp`, no narrowing rewrites, no SRA/ADD/SUB/MUL/SELECT cases | `selectiondag/demanded_bits.rs` |
+| SD214 | sdag-b | `FLOG`/`FEXP`/`FLOG2`/`FEXP2`/`FSIN`/`FCOS`/`FATAN`/`FRINT` select as the x87 sequences the finalizer spells (`fln`, `fexp`, ...), not libm calls: no target has a libm (`Target::has_libm`); with one, the node is refused (the pin's libcall is not translated) | `llrm-dagisel/src/x86_llrm.rs` |
+| SD215 | sdag-b | `X86ISD::FIST` of an `i16` selects `IST_Fp16m32/64/80`, which the pin has no pattern for (its `lrint` of a short is promoted); QB's `CINT` needs a word `fistp` | `llrm-dagisel/src/x86_fcmp.rs` |
+| SD217 | sdag-b | `mergeConsecutiveStores` merges stores of constants and of loads: no vector-extract sources, no vector or truncating merged store, no rotate of two loads in reverse order; an address base is a frame index, a global or one node plus constant offsets (no index register); `allowsMemoryAccess` is true for every scalar the target holds | `selectiondag/combine_store_merge.rs` |
+| SD218 | sdag-b | `expandBITREVERSE` is the byte-swap and mask form only (no loop of single bits for a width that is not a power of two; none is legal here) | `selectiondag/legalize_dag.rs` |
+| SD219 | sdag-b | `combineAddOrSubToADCOrSBB` without the `ADOX` form (no ADX), the or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)`/`SUB(…, SBB)` folds | `selectiondag/x86_carry.rs` |
+| SD227 | sdag-b | `visitBSWAP`: no half-width `bswap (shl x, c)` form, no `bswap (bitreverse x)` canonicalisation | `selectiondag/bswap_combine.rs` |
+| SD237 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
+| SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
+| SD224 | sdag-b | w12, m16: tuned for size, the bytes past a copy's last dword are `movsw`/`movsb` glued after the `rep movs`, not a load and store from addresses made again (the pin's tail) | `selectiondag/builder/memops.rs`, `selectiondag/emit.rs` |
+| SD225 | sdag-b | w12, m16: tuned for size, a constant copy of more than four pieces (dwords, a word, a byte; no overlap) is string moves, not the pin's four overlapping pairs | `selectiondag/builder/memops.rs` |
+| SD223 | sdag-b | w12, m16: tuned for size, a constant memset whose stores take more bytes than a `rep stosb` fill is the fill; the pin counts stores (`MaxStoresPerMemsetOptSize`) | `selectiondag/builder/memops.rs` |
+| SD226 | sdag-b | w11: a store of an x87 `fp_round` that nothing else reads is one truncating `fst`; the pin keeps the stack round trip (`f64 -> f32` is Expand), the old selector stores once | `selectiondag/x86_preprocess.rs` |
+| SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
+| SD231 | sdag-b | the i64 divide routines are shared (one procedure per object) only where two or more sites call the same routine; one site pastes it inline. The pin has no such routine (a library call). Exit: a routine specialised per divisor | `backend/assemble.rs` |
+| SD232 | sdag-b | the signed i64 divide by a dword divisor has routines that fix the sign of only the result the caller reads (`div64_s32q`, `div64_s32r`); the other divides keep both. The sign is a mask (`add; sbb`), not a flag test. Exit: the same for the wide and unsigned routines | `llrm-x86/src/helpers.rs` |
+| SD230 | sdag-b | `visitSIGN_EXTEND_INREG` has no vector in-reg forms and no `reduceLoadWidth` narrowing of the load | `selectiondag/dag_combiner.rs` |
+| SD233 | sdag-b | tuned for size, a constant memset whose stores take more bytes than the `rep stosb` setup (`FILL_BYTES`, the old selector's rule) is a fill; the pin counts stores | `selectiondag/builder/memops.rs` |
+| SD229 | sdag-b | `visitBSWAP` has no half-width `shl` fold (no truncate-free query) and no `foldBitOrderCrossLogicOp` | `selectiondag/dag_combiner.rs` |
+| DIV-OPTSIZE-1 | sdag-b | deliberate, size-driven: at `-Os` a constant divide stays a `div` (`isIntDivCheap` is true for `optsize` as well as `minsize`; the pin: `minsize` only). Flipping it: m32 -Os +250 B, m16 -Os +301 B, only matmul -3 and x_life -18/-13 gain. Exit: keep the divide unless the expansion forces spills (matmul's `urem i16 %x,3` +59 B, 4 spill slots) | `selectiondag/dag_function.rs` |
+| SD222 | sdag-b | w12, QB: the entry block's `store 0` / `memset 0` to a local nothing has touched yet are not lowered when the runtime builds and zero-fills the frame (`B$ENRA`); the pin has no such runtime | `backend/prezeroed.rs` |
+| SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
+| SD228 | sdag-b | w11, m16: an argument area split from its call by a select's branches is made again at the call (stays `push`); the pin's scheduler keeps the select out of the call sequence | `selectiondag/emit.rs` |
+| SD238 | sdag-b | the vector registers' half of the variadic register save area (48..176) is left unwritten until floating point is selected at m64: a `double` passed to such a function is not read back | `selectiondag/builder.rs` |
+| SD239 | sdag-b | where the pointer is a word (m16) an `i16` select stays a word: widened to `i32` every move takes an operand-size prefix. Exit: none (machine fact) | `selectiondag/x86_lowering.rs` |
+| SD240 | sdag-b | `isMultiStoresCheaperThanBitsMerge` is true for two integer halves at m16 (the pin: a float and an integer half only): a far pointer or `long` is two word stores, not `shl; movzx; add`. Exit: none while the DAG keeps `BUILD_PAIR` | `x86/dag/actions.rs` |
+| SD241 | sdag-b | `ExpandShiftWithKnownAmountBit`: a clear amount bit without a legal or custom funnel shift stays a parts node (the pin shifts, subtracts and ors) | `selectiondag/legalize_types.rs` |
+| SD242 | sdag-b | `combineCarryThroughADD`: the `COND_A` form (a swapped `sub`) is not translated; nothing produces it at 32 bits yet. Exit: with `combineSBB`'s remaining folds | `selectiondag/x86_lowering.rs` |
+| SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
+| SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
+| SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
-| SD101 | sdag-a | switch case probabilities are `1/(cases+1)`, no BPI heuristics | `selectiondag/switchcg.rs` |
+| SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
+| SD302 | sdag-c | the i8 DIVREM remainder is `shr ax, 8` then `movzx` of the byte, not `movzx` of AH (the LIR has no AH) | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
+| SD303 | sdag-c | MUL_LOHI skips `orderRegForMul` (no live-in physical registers in the DAG) and handles i32 only | `crates/backend/llrm-dagisel/src/x86_mul.rs` |
+| SD304 | sdag-c | `isKnownNeverZero` is the known-bits part only (a known set bit); the cttz `cmov` stays for values the pin proves non-zero by other means | `selectiondag/x86_lowering.rs` |
+| SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |
+| SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/target/llrm-x86/src/dag/actions.rs` |
+| SD308 | sdag-c | the second half of a split access through a far pointer moves the offset word only (no carry into the selector); a huge pointer crossing a segment would wrap | `selectiondag/legalize_types.rs` |
+| SD234 | sdag-b | an x87 `fld1`/`fldz` is loaded once for its readers in a block until the next call or barrier (the pin: one `LD_F1`, `fadd st(1),st`); the old rule loaded it per reader | `selectiondag/emit.rs` |
+| SD235 | sdag-b | a same-type `fpround` read only by a store of its type in the block is not rounded through a stack temp: the pin folds `store (fp_round x)` into a truncating store (`visitSTORE`) | `selectiondag/builder.rs` |
+| SD236 | sdag-b | `visitBITREVERSE` has no `clmul` fold (no carry-less multiply node here) | `selectiondag/bitreverse_combine.rs` |
+| SD311 | sdag-c | a fill or copy through a huge pointer calls the target's stepped routine inline with its operands in the registers it reads (the pin has no huge pointers); a `memmove` of no proven direction, or a huge pointer beside a near one, is refused | `selectiondag/builder/memops.rs` |
+| SD310 | sdag-c | a QB runtime routine's answer in the flags is `LLRM_CALL_FLAGS(CopyFromReg EFLAGS)`, read only by a compare with zero; the pin's calls answer in registers | `llrm-x86/src/dag/x86isd.rs` |
+| SD305 | sdag-c | `llrm.ia16.*` nodes (`LLRM_ASM`/`_WINDOW`/`_CODE`) pass through selection as the pseudo opcode 30010, `SEGMENT_OF` as 30011 and `LLRM_FARCALL` (24584) as 30012 and `LLRM_CODE` (24582) as 30013; not the pin's `INLINEASM` | `crates/backend/llrm-dagisel/src/x86_llrm.rs` |
 
 Next free: SD44..SD99 closed; blocks: a SD100, b SD200, c SD300, d SD400 (next free per owner in their rows). A PR that takes a number adds its row in the owner's block; `tests/selectiondag_registry.rs` fails on a number declared twice, without a row, in the closed range or outside its owner's block.
 

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/liverangeshrink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/liverangeshrink.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/liverangeshrink.rs sha256:4abea52267a136a3b34704e0f42b52edad148bad7753dcdf6125c0886cede9b8 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs sha256:e3ff1a699aadf06674b751e4f2355f9ba5a51aaf47546c8d3134206d2f002ccc -->
 
 # liverangeshrink
 
@@ -42,6 +42,12 @@ instruction between the landing and its old place reads them before one
 writes them (the pin: `EFLAGS` is a physical register, so an instruction
 with a live flags def does not move), and one that reads them does not
 move. Exit: none; the register and flag model of the LIR.
+
+DEVIATE LRS2 (owner w-8, review 2026-11-14): the pin's `COPY` from a
+physical register is a value the entry delivers; a call's result is a `COPY`
+there too, and counted here as a definition that shortens a range. Not
+counting it grew recchop -O3 by 16 bytes. Exit: the allocation that makes
+the call result's copy coalesce.
 
 ## Example
 ```text

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/extload.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/extload.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/extload.rs sha256:5854f82e364f17771ac05e6d457924f9816c56007f03488c93762feea49504e0 -->
+<!-- src: crates/opt/llrm-transforms/src/extload.rs sha256:57f8b70a7e431d6d8b7903f633a2c7bbe969d16c0d899a1e59143998e293d735 -->
 
 # extload
 
@@ -55,7 +55,7 @@ From unit test `test_a_compare_of_a_loaded_byte_compares_its_extension` in
 `extload_tests.rs`.
 
 ## Runs
-Once per body, after `addresssink`, where the other passes that make the
+Once per body, after `cgpaddr`, where the other passes that make the
 forms isel sees run (the pin has none: its DAGCombiner does it). With
 `wanted("extload")`.
 

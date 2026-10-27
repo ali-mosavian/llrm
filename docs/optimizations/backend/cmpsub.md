@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/cmpsub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/cmpsub.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/cmpsub.rs sha256:258639a39e364a669ccd1ff0a88dfb86f53afa39913b11a5a56eaa507a8b4c08 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/cmpsub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/cmpsub.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/cmpsub.rs sha256:2884ea87db0e32fb485deeb0afa68067c92d301783507c5c4e00ab4df8f00b61 -->
 
 # cmpsub
 
@@ -19,6 +19,18 @@ condition) or to `K + 1` (`ja` is then `jae`, `jbe` `jb`, `jg` `jge`, `jle`
 flags. The subtract's own flags are not read by anything else, which is why
 the pin could not sink it past the branch (x_adler: `x >= 65521 ? x - 65521
 : x`, `sub; jae` against `cmp; jbe` around an `add`).
+
+## Example
+`unsigned h(unsigned x) { return x >= 65521u ? x - 65521u : x; }` on
+`-m32 -march=i486 -O2`. The compare goes; the subtract's carry is the
+branch (the pin also makes the difference once, then selects with `cmovb`):
+
+```text
+  mov ecx, eax                     mov ecx, eax
+  add ecx, -65521                  sub ecx, 65521
+  cmp eax, 65520          =>       jb  L_keep
+  jbe L_keep
+```
 
 ## Runs
 A machine phase ahead of the first SSA phase (`flow::machine_with`), at

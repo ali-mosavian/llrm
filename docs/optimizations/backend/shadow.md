@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/shadow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/shadow.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/shadow.rs sha256:c260374d283daa6face75d8c54ad37dbadba53b37190445a387b06c2f2cd7e14 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shadow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shadow.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/shadow.rs sha256:43e9f5cb9a3c086d688074f8d141f29b7117505d7b8abc7b33f192f1b0f0bb82 -->
 
 # shadow
 
@@ -16,8 +16,9 @@ harness counts refusals as it counts any other difference.
 `[isel] NAME selector=old instructions=21 copies=3 executed=40 memory=12`.
 `executed` and `memory` are `executed::executed`'s estimate (`-` where the
 body has no finite one); `copies` are register-to-register `mov`s.
-`ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after selection,
-before any machine phase.
+`LLRM_ISEL_REPORT=FILE` appends `NAME dag|old` per function: who selected
+it. `ISEL_DUMP=1` also prints `=== ISel old` (or `dag`) right after
+selection, before any machine phase.
 
 ## Example
 A function of 3 instructions holding one register copy:

@@ -46,7 +46,7 @@ fn widened(text: &str) -> String {
     let mut module = parsed(text);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[40]];
     let before = results(&module, inputs);
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     after
@@ -90,7 +90,7 @@ fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
     let text = clearing("zext", "ult", "0", "nsw").replace("e-p:32:32-n8:16:32", "e-p:16:16-n8:16:32");
     let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { lftr: true });
+    manager.add(IndVars { lftr: true, size: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi i32"), "{after}");

@@ -80,6 +80,7 @@ static void gfx_write(const char *text, unsigned count)
             } while (column % TAB_STOP);
             break;
         case BELL:
+            cn_bell();
             break;
         default:
             if (column == columns)

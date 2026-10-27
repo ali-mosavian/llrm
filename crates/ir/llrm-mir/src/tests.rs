@@ -105,7 +105,44 @@ fn floating_constants_print_as_llvm_does() {
         round(text),
         "@a = global double 1.500000e+00\n@b = global double 1.000000e-01\n@c = global double 0x3FD5555555555555\n@d = global float 0x3FB99999A0000000\n"
     );
-    assert_eq!(refusal("@d = global float 0.1\n"), "line 1: 0.1 is not exactly a float");
+}
+
+/// LLVM 24 (the pin) prints a float as its shortest decimal (`float
+/// 1.000000e-01`) and a hex float as `f0x` and the type's own digits; MIR
+/// refused both, so 14 vsgcc programs (floats, x_nbody_f, ...) were refused
+/// before selection.
+#[test]
+fn a_float_decimal_is_read_as_a_float_and_f0x_takes_the_types_width() {
+    // 0.1 as a float, not as a double that happens to be near one.
+    assert_eq!(round("@a = global float 0.1\n"), "@a = global float 0x3FB99999A0000000\n");
+    // Just above the midpoint of 1.0 and the next float: through a double it
+    // is the midpoint, and ties to even give 1.0; read as a float it rounds up.
+    assert_eq!(round("@a = global float 1.00000005960464477539062501\n"), "@a = global float 0x3FF0000020000000\n");
+    assert_eq!(round("@a = global double f0x3FF0040000000000\n"), round("@a = global double 0x3FF0040000000000\n"));
+    assert_eq!(round("@a = global float f0x3F800000\n"), round("@a = global float 1.0\n"));
+    assert_eq!(
+        refusal("@a = global float f0x3FF0040000000000\n"),
+        "line 1: f0x3FF0040000000000 is not a float's 8 hex digits"
+    );
+}
+
+/// The pin writes a `long double` as `f0x` and the 20 digits of x87's format
+/// (sign and exponent, then the 64-bit significand); MIR refused it ("expected
+/// a constant"), so `double_to_uint64.c` never compiled through `llrm-cc`. A
+/// constant of the type holds the double nearest its value.
+#[test]
+fn f0x_takes_the_twenty_digits_of_an_x86_fp80() {
+    // 2^64 - 2048 is a double; 1.0 is exponent 0x3FFF with the integer bit set.
+    assert_eq!(
+        round("@a = global x86_fp80 f0x403EFFFFFFFFFFFFF800\n"),
+        round("@a = global x86_fp80 0x43EFFFFFFFFFFFFF\n")
+    );
+    assert_eq!(round("@a = global x86_fp80 f0x3FFF8000000000000000\n"), round("@a = global x86_fp80 1.0\n"));
+    assert_eq!(round("@a = global x86_fp80 f0xC0008000000000000000\n"), round("@a = global x86_fp80 -2.0\n"));
+    assert_eq!(
+        refusal("@a = global double f0x3FFF8000000000000000\n"),
+        "line 1: f0x3FFF8000000000000000 is not a double's 16 hex digits"
+    );
 }
 
 #[test]
@@ -137,6 +174,16 @@ fn metadata_keeps_its_numbers_whatever_mentions_it_first() {
 fn initializes_is_read_and_printed_as_llvm_spells_it() {
     let text = "declare void @f(ptr initializes((0, 4), (8, 12)), ptr initializes((-2, 0)))\n";
     assert_eq!(round(text), text);
+}
+
+/// `appending` was refused: "expected `global` or `constant`, found
+/// `appending`" (every `__attribute__((constructor))` of the QB runtime).
+#[test]
+fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
+    let text = "@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @f, ptr null }]\n\ndefine void @f() {\n  ret void\n}\n";
+    let once = round(text);
+    assert!(once.contains("@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }]"), "{once}");
+    assert_eq!(round(&once), once);
 }
 
 #[test]

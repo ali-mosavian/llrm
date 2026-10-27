@@ -1,6 +1,6 @@
 //! The interpreter against the generated i486 table, on hand-built DAGs.
 
-use crate::dag::SDValue;
+use crate::dag::{Dag, SDValue};
 use crate::generated::ids::{isd, mvt};
 use crate::generated::x86_i486 as table;
 use crate::interp::{Outcome, Selector};
@@ -11,7 +11,10 @@ fn machine_name(opcode: u16) -> &'static str {
 }
 
 /// The machine opcode of the node `value` now is.
-fn selected(dag: &TestDag, node: u32) -> &'static str {
+fn selected(
+    dag: &TestDag,
+    node: u32,
+) -> &'static str {
     machine_name(dag.nodes[node as usize].machine.expect("not selected"))
 }
 
@@ -28,6 +31,21 @@ fn add_of_two_registers_is_add32rr() {
 
     assert_eq!(selected(&dag, add), "ADD32rr");
     assert_eq!(dag.nodes[add as usize].ops, [a, b]);
+}
+
+/// Each selection built its own node stack and match scopes (five allocations
+/// and their growth a node, 5,336 nodes in d_faces -O2); the buffers are kept
+/// for the next selection now.
+#[test]
+fn the_buffers_of_a_selection_are_kept_for_the_next() {
+    let mut dag = TestDag::new();
+    let a = dag.input(1, mvt::i32);
+    let b = dag.input(2, mvt::i32);
+    let add = dag.node(isd::ADD, &[mvt::i32], &[a, b]);
+    let selector = Selector::new(table::TABLE);
+    let mut hooks = TestHooks { address: None };
+    assert_eq!(selector.select(&mut dag, &mut hooks, add), Outcome::Selected);
+    assert!(crate::interp::kept_capacity() > 0, "nothing was kept");
 }
 
 #[test]
@@ -69,14 +87,18 @@ fn a_node_no_pattern_covers_cannot_be_selected() {
     assert_eq!(selector.select(&mut dag, &mut hooks, odd), Outcome::CannotSelect);
 }
 
-fn emits(opcodes: &[(u16, &str)], prefix: &str) -> bool {
+fn emits(
+    opcodes: &[(u16, &str)],
+    prefix: &str,
+) -> bool {
     opcodes.iter().any(|(_, name)| name.split('|').any(|n| n.starts_with(prefix)))
 }
 
 #[test]
 fn neither_cpu_emits_cmov_and_only_p5_emits_cmpxchg8b() {
     use crate::generated::x86_p5;
-    // `CMOV_GR32` and kin are the pseudos that become a branch; `CMOV32rr` is the instruction.
+    // `CMOV_GR32` and kin are the pseudos that become a branch; `CMOV32rr` is
+    // the instruction.
     for (cpu, opcodes) in [("i486", table::MACHINE_OPCODES), ("P5", x86_p5::MACHINE_OPCODES)] {
         assert!(emits(opcodes, "CMOV_GR32"), "{cpu}: select is the branch pseudo");
         assert!(!emits(opcodes, "CMOV32") && !emits(opcodes, "CMOV16"), "{cpu} has no CMOV instruction");
@@ -94,10 +116,20 @@ mod x86_addr {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks() -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 })
+        X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        })
     }
 
-    fn constant_of(dag: &TestDag, v: SDValue) -> Option<i64> {
+    fn constant_of(
+        dag: &TestDag,
+        v: SDValue,
+    ) -> Option<i64> {
         dag.nodes[v.node as usize].constant
     }
 
@@ -229,12 +261,23 @@ mod rmw {
     use crate::x86_rmw::fold_load_store_into_mem_operand;
 
     fn hooks() -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 })
+        X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        })
     }
 
-    /// `*p += rhs` as the DAG makes it: load, X86ISD::ADD, store. Returns the store, the load and
-    /// the arithmetic node.
-    fn add_to_memory(dag: &mut TestDag, rhs: SDValue, p: SDValue) -> (u32, u32, u32) {
+    /// `*p += rhs` as the DAG makes it: load, X86ISD::ADD, store. Returns the
+    /// store, the load and the arithmetic node.
+    fn add_to_memory(
+        dag: &mut TestDag,
+        rhs: SDValue,
+        p: SDValue,
+    ) -> (u32, u32, u32) {
         let off = SDValue::new(dag.node(isd::UNDEF, &[mvt::i32], &[]), 0);
         let entry = SDValue::new(0, 0);
         let load = dag.add(Node {
@@ -323,7 +366,14 @@ mod fold_load {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks(opt_none: bool) -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 })
+        X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        })
     }
 
     /// `add (load p), r` where the load has no other user.
@@ -369,7 +419,11 @@ mod address_folds {
         Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
     }
 
-    fn masked_shift(dag: &mut TestDag, amount: i64, mask: i64) -> (SDValue, SDValue) {
+    fn masked_shift(
+        dag: &mut TestDag,
+        amount: i64,
+        mask: i64,
+    ) -> (SDValue, SDValue) {
         let x = dag.input(1, mvt::i32);
         let count = dag.make_constant(amount, mvt::i8);
         let shifted = SDValue::new(dag.node(isd::SRL, &[mvt::i32], &[x, count]), 0);
@@ -394,7 +448,10 @@ mod address_folds {
         assert_eq!(constant_of_node(&dag, dag.nodes[srl.node as usize].ops[1]), Some(8));
     }
 
-    fn constant_of_node(dag: &TestDag, v: SDValue) -> Option<i64> {
+    fn constant_of_node(
+        dag: &TestDag,
+        v: SDValue,
+    ) -> Option<i64> {
         dag.nodes[v.node as usize].constant
     }
 
@@ -422,7 +479,8 @@ mod address_folds {
 
     #[test]
     fn a_shift_and_mask_that_drops_unknown_bits_is_left_alone() {
-        // `(x >> 1) & 0x3fc` with nothing known about x: the high bits of x may be set.
+        // `(x >> 1) & 0x3fc` with nothing known about x: the high bits of x may
+        // be set.
         let mut dag = TestDag::new();
         let (and, _) = masked_shift(&mut dag, 1, 0x3fc);
         let mut am = AddressMode::default();
@@ -462,7 +520,10 @@ mod select_without_cmov {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     /// `X86ISD::CMOV f, t, cc, (CMP a, b)` for a cpu without the instruction.
-    fn select(cpu: Cpu, vt: crate::matcher::Vt) -> (TestDag, u32) {
+    fn select(
+        cpu: Cpu,
+        vt: crate::matcher::Vt,
+    ) -> (TestDag, u32) {
         let mut dag = TestDag::new();
         let a = dag.input(1, vt);
         let b = dag.input(2, vt);
@@ -470,7 +531,14 @@ mod select_without_cmov {
         let flags = SDValue::new(dag.node(x86isd::CMP, &[mvt::i32], &[a, b]), 0);
         let cc = dag.target_constant(4, mvt::i8);
         let cmov = dag.node(x86isd::CMOV, &[vt, mvt::i32], &[f, t, cc, flags]);
-        let mut hooks = X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: crate::x86_addr::AddrMode::Flat32 });
+        let mut hooks = X86Hooks::new(Options {
+            cpu,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
         assert_eq!(Selector::new(table::TABLE).select(&mut dag, &mut hooks, cmov), Outcome::Selected);
         (dag, cmov)
     }
@@ -489,7 +557,10 @@ mod real_mode_addresses {
     use crate::testing::TestDag;
     use crate::x86_addr::{AddrMode, AddressMode, Matcher};
 
-    fn matcher(dag: &mut TestDag, mode: AddrMode) -> Matcher<'_, TestDag> {
+    fn matcher(
+        dag: &mut TestDag,
+        mode: AddrMode,
+    ) -> Matcher<'_, TestDag> {
         Matcher { dag, pointer_type: mvt::i16, mode }
     }
 
@@ -513,6 +584,26 @@ mod real_mode_addresses {
         let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i16], &[i, one]), 0);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[a, scaled]), 0);
         (address, a, i, scaled)
+    }
+
+    /// `frame - (i << 2) + 24` took the shift as a negated index with scale 4
+    /// at real mode, an address nothing encodes: `qb/bounds.bas` stopped in
+    /// `LOCALS` with "a scaled 16-bit index at m16".
+    #[test]
+    fn a_subtracted_shift_is_not_a_scaled_index_in_real_mode() {
+        let mut dag = TestDag::new();
+        let base = dag.input(1, mvt::i16);
+        let i = dag.input(2, mvt::i16);
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i16], &[i, two]), 0);
+        let difference = SDValue::new(dag.node(isd::SUB, &[mvt::i16], &[base, scaled]), 0);
+        let k = dag.make_constant(24, mvt::i16);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i16], &[difference, k]), 0);
+        let mut am = AddressMode::default();
+
+        assert!(!matcher(&mut dag, AddrMode::Real16).match_address(address, &mut am));
+
+        assert_eq!(am.scale, 1, "no scale in 16-bit addressing");
     }
 
     #[test]
@@ -571,7 +662,11 @@ mod instr_desc {
     use crate::instr::{desc, operand_type};
 
     fn opcode(name: &str) -> u16 {
-        table::MACHINE_OPCODES.iter().find(|(_, n)| n.split('|').any(|n| n == name)).unwrap_or_else(|| panic!("{name} is not emitted")).0
+        table::MACHINE_OPCODES
+            .iter()
+            .find(|(_, n)| n.split('|').any(|n| n == name))
+            .unwrap_or_else(|| panic!("{name} is not emitted"))
+            .0
     }
 
     #[test]
@@ -620,11 +715,22 @@ mod far_pointer_loads {
     use crate::x86_addr::AddrMode;
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
-    fn hooks(cpu: Cpu, mode: AddrMode) -> X86Hooks {
-        X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: mode })
+    fn hooks(
+        cpu: Cpu,
+        mode: AddrMode,
+    ) -> X86Hooks {
+        X86Hooks::new(Options {
+            cpu,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: mode,
+        })
     }
 
-    /// `X86ISD::LES chain, p`: the offset half of a far pointer loaded through `p`.
+    /// `X86ISD::LES chain, p`: the offset half of a far pointer loaded through
+    /// `p`.
     fn far_load(opcode: u16) -> (TestDag, u32, SDValue) {
         let mut dag = TestDag::new();
         let p = dag.input(1, mvt::i16);
@@ -638,7 +744,11 @@ mod far_pointer_loads {
         (dag, node, p)
     }
 
-    fn name_in(table: &[(u16, &'static str)], dag: &TestDag, node: u32) -> &'static str {
+    fn name_in(
+        table: &[(u16, &'static str)],
+        dag: &TestDag,
+        node: u32,
+    ) -> &'static str {
         let opcode = dag.nodes[node as usize].machine.expect("not selected");
         table.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
     }
@@ -664,6 +774,52 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), "LDS16rm");
     }
 
+    /// The pin's `lea32addr` is typed i32 and `LEA16r` has no pattern: a frame
+    /// object's address at m16 was `CannotSelect` (sieve's three
+    /// `FrameIndex` nodes).
+    #[test]
+    fn the_address_of_a_frame_object_is_lea16r() {
+        let mut dag = TestDag::new();
+        let frame = dag.frame_index(0, mvt::i16);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, frame.node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, frame.node), "LEA16r");
+    }
+
+    /// The pin moves a relocatable symbol into an i32 register; at m16 the
+    /// wrapped address of a global is an i16 and had no pattern (38
+    /// `GlobalAddress` nodes stopped the m16 corpus).
+    #[test]
+    fn the_address_of_a_global_is_mov16ri() {
+        let mut dag = TestDag::new();
+        let wrapped = dag.wrapped_global(1, 0, mvt::i16);
+        let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+        assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, wrapped.node), Outcome::Selected);
+
+        assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, wrapped.node), "MOV16ri");
+    }
+
+    /// Real mode has no scaled index, so `lea` cannot take a multiply by 3, 5
+    /// or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
+    /// functions).
+    #[test]
+    fn a_multiply_by_a_lea_constant_is_imul_when_lea_cannot_take_it() {
+        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "IMUL32rri")] {
+            let mut dag = TestDag::new();
+            let x = dag.input(1, vt);
+            let three = dag.make_constant(3, vt);
+            let node = dag.node(x86isd::MUL_IMM, &[vt], &[x, three]);
+            let mut hooks = hooks(Cpu::M16, AddrMode::Real16);
+
+            assert_eq!(Selector::new(x86_m16::TABLE).select(&mut dag, &mut hooks, node), Outcome::Selected);
+
+            assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, node), want);
+        }
+    }
+
     #[test]
     fn the_pins_own_table_has_no_pattern_for_a_far_load() {
         let (mut dag, node, _) = far_load(x86isd::LES);
@@ -677,10 +833,14 @@ mod pointer_classes {
     use super::*;
     use crate::instr::desc;
     use crate::x86_addr::AddrMode;
-    use crate::x86_classes::{class_tag, memory_reference, role_of, Role};
+    use crate::x86_classes::{Role, class_tag, memory_reference, role_of};
 
     fn opcode(name: &str) -> u16 {
-        table::MACHINE_OPCODES.iter().find(|(_, n)| n.split('|').any(|n| n == name)).unwrap_or_else(|| panic!("{name}")).0
+        table::MACHINE_OPCODES
+            .iter()
+            .find(|(_, n)| n.split('|').any(|n| n == name))
+            .unwrap_or_else(|| panic!("{name}"))
+            .0
     }
 
     #[test]
@@ -689,7 +849,10 @@ mod pointer_classes {
 
         assert_eq!(memory_reference(d), Some(1));
         assert_eq!(role_of(d, 0), None, "the destination is not part of it");
-        assert_eq!((role_of(d, 1), role_of(d, 3), role_of(d, 5)), (Some(Role::Base), Some(Role::Index), Some(Role::Segment)));
+        assert_eq!(
+            (role_of(d, 1), role_of(d, 3), role_of(d, 5)),
+            (Some(Role::Base), Some(Role::Index), Some(Role::Segment))
+        );
     }
 
     #[test]
@@ -724,11 +887,21 @@ mod string_instructions {
 
     fn hooks(cpu: Cpu) -> X86Hooks {
         let address_mode = if cpu == Cpu::M16 { AddrMode::Real16 } else { AddrMode::Flat32 };
-        X86Hooks::new(Options { cpu, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode })
+        X86Hooks::new(Options {
+            cpu,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode,
+        })
     }
 
     /// `rep movs` of `unit`-typed elements, after the count register is set.
-    fn rep(opcode: u16, unit: crate::matcher::Vt) -> (TestDag, u32) {
+    fn rep(
+        opcode: u16,
+        unit: crate::matcher::Vt,
+    ) -> (TestDag, u32) {
         let mut dag = TestDag::new();
         let count = dag.input(1, mvt::i16);
         let copy = dag.copy_to_reg(SDValue::new(0, 0), x86::CX, count, None);
@@ -737,7 +910,11 @@ mod string_instructions {
         (dag, node)
     }
 
-    fn name(table: &[(u16, &'static str)], dag: &TestDag, node: u32) -> &'static str {
+    fn name(
+        table: &[(u16, &'static str)],
+        dag: &TestDag,
+        node: u32,
+    ) -> &'static str {
         let opcode = dag.nodes[node as usize].machine.expect("not selected");
         table.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
     }
@@ -794,7 +971,10 @@ mod segment_overrides {
         (dag, load, p)
     }
 
-    fn select(dag: &mut TestDag, load: u32) {
+    fn select(
+        dag: &mut TestDag,
+        load: u32,
+    ) {
         let mut hooks = X86Hooks::new(Options {
             cpu: Cpu::M16,
             opt_none: false,
@@ -831,7 +1011,10 @@ mod shift_amount_mod {
     use crate::x86_shift::try_shift_amount_mod;
 
     /// `x << amount(n)`.
-    fn shl(dag: &mut TestDag, amount: impl FnOnce(&mut TestDag, SDValue) -> SDValue) -> (u32, SDValue) {
+    fn shl(
+        dag: &mut TestDag,
+        amount: impl FnOnce(&mut TestDag, SDValue) -> SDValue,
+    ) -> (u32, SDValue) {
         let x = dag.input(1, mvt::i32);
         let n = dag.input(2, mvt::i8);
         let count = amount(dag, n);
@@ -839,7 +1022,10 @@ mod shift_amount_mod {
     }
 
     /// The count of the shift after the rewrite: `(n' & 31)`; returns `n'`.
-    fn masked_source(dag: &TestDag, shift: u32) -> SDValue {
+    fn masked_source(
+        dag: &TestDag,
+        shift: u32,
+    ) -> SDValue {
         let count = dag.nodes[shift as usize].ops[1];
         assert_eq!(dag.nodes[count.node as usize].opcode, isd::AND, "the count is masked");
         assert_eq!(dag.nodes[dag.nodes[count.node as usize].ops[1].node as usize].constant, Some(31));
@@ -909,7 +1095,14 @@ mod x87_pseudos {
     use crate::x86_hooks::{Cpu, Options, X86Hooks};
 
     fn hooks() -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: AddrMode::Flat32 })
+        X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: AddrMode::Flat32,
+        })
     }
 
     #[test]
@@ -947,10 +1140,13 @@ mod x87_pseudos {
 
 #[test]
 fn a_machine_opcode_is_named_for_its_instruction_not_for_a_register_that_shares_the_number() {
-    // `X86::CS` (a register) and `SUBREG_TO_REG` (an instruction) are both 17; the name column once read
-    // `CS|SUBREG_TO_REG|VK2RegClassID`.
+    // `X86::CS` (a register) and `SUBREG_TO_REG` (an instruction) are both 17;
+    // the name column once read `CS|SUBREG_TO_REG|VK2RegClassID`.
     for (_, name) in table::MACHINE_OPCODES {
-        assert!(!name.contains("RegClassID") && name.split('|').all(|n| !["CS", "DS", "ES", "FS", "GS", "SS"].contains(&n)), "{name}");
+        assert!(
+            !name.contains("RegClassID") && name.split('|').all(|n| !["CS", "DS", "ES", "FS", "GS", "SS"].contains(&n)),
+            "{name}"
+        );
     }
 }
 
@@ -964,7 +1160,14 @@ mod select_loop {
     use crate::x86_select::select_node;
 
     fn hooks() -> X86Hooks {
-        X86Hooks::new(Options { cpu: Cpu::I486, opt_none: false, opt_for_size: false, min_size: false, has_frame_pointer: true, address_mode: AddrMode::Flat32 })
+        X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: AddrMode::Flat32,
+        })
     }
 
     #[test]
@@ -1010,7 +1213,798 @@ mod select_loop {
         let outcome = select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks(), shift);
 
         assert_eq!(outcome, Outcome::Selected);
-        let to_cl = dag.live().find(|(_, n)| n.opcode == isd::CopyToReg && dag.nodes[n.ops[1].node as usize].register == Some(x86::CL));
+        let to_cl = dag
+            .live()
+            .find(|(_, n)| n.opcode == isd::CopyToReg && dag.nodes[n.ops[1].node as usize].register == Some(x86::CL));
         assert_eq!(to_cl.expect("the count goes to CL").1.ops[2], n, "the +32 is gone");
+    }
+}
+
+mod nodes_before_the_table {
+    use super::*;
+    use crate::generated::ids::target_opcode;
+    use crate::testing::TestDag;
+
+    fn select(
+        dag: &mut TestDag,
+        node: u32,
+    ) -> Outcome {
+        Selector::new(table::TABLE).select(dag, &mut crate::testing::TestHooks { address: None }, node)
+    }
+
+    #[test]
+    fn undef_becomes_implicit_def_not_an_unselectable_node() {
+        let mut dag = TestDag::new();
+        let undef = dag.node(isd::UNDEF, &[mvt::i32], &[]);
+
+        assert_eq!(select(&mut dag, undef), Outcome::Selected);
+
+        assert_eq!(dag.nodes[undef as usize].machine, Some(target_opcode::IMPLICIT_DEF));
+    }
+
+    #[test]
+    fn freeze_becomes_a_copy_of_its_operand() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let freeze = dag.node(isd::FREEZE, &[mvt::i32], &[x]);
+
+        assert_eq!(select(&mut dag, freeze), Outcome::Selected);
+
+        assert_eq!(dag.nodes[freeze as usize].machine, Some(target_opcode::COPY));
+        assert_eq!(dag.nodes[freeze as usize].ops, [x]);
+    }
+
+    #[test]
+    fn an_assertion_is_replaced_by_the_value_it_asserts_about() {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let asserted = dag.node(isd::AssertZext, &[mvt::i32], &[x]);
+        let user = dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(asserted, 0), x]);
+
+        assert_eq!(select(&mut dag, asserted), Outcome::Selected);
+
+        assert_eq!(dag.nodes[user as usize].ops[0], x, "the add reads x, not the assertion");
+        assert!(dag.nodes[asserted as usize].dead);
+    }
+}
+
+#[test]
+fn an_x86isd_node_is_found_by_name_in_the_pins_numbers() {
+    // Builders spell their own target codes and name them; the pin's number
+    // comes from the name.
+    use crate::generated::ids::{x86isd, x86isd_id};
+    assert_eq!(x86isd_id("RET_GLUE"), Some(x86isd::RET_GLUE));
+    assert_eq!(x86isd_id("CMOV"), Some(x86isd::CMOV));
+    assert_eq!(x86isd_id("NO_SUCH_NODE"), None);
+}
+
+#[test]
+fn a_return_glue_node_is_selected_to_ret() {
+    use crate::generated::ids::x86isd;
+    let mut dag = crate::testing::TestDag::new();
+    let zero = dag.target_constant(0, mvt::i32);
+    let ret = dag.node(x86isd::RET_GLUE, &[mvt::Other], &[SDValue::new(0, 0), zero]);
+
+    let mut hooks = crate::x86_hooks::X86Hooks::new(crate::x86_hooks::Options {
+        cpu: crate::x86_hooks::Cpu::I486,
+        opt_none: false,
+        opt_for_size: false,
+        min_size: false,
+        has_frame_pointer: true,
+        address_mode: crate::x86_addr::AddrMode::Flat32,
+    });
+
+    assert_eq!(
+        crate::x86_select::select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, ret),
+        Outcome::Selected
+    );
+
+    assert_eq!(selected(&dag, ret), "RET");
+}
+
+mod symbol_plus_two_registers {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher, SymbolKind};
+
+    /// `@sym + x + (y << 2)`, associated either way.
+    fn address(
+        dag: &mut TestDag,
+        symbol_first: bool,
+    ) -> (SDValue, SDValue, SDValue) {
+        let sym = dag.wrapped_global(7, 0, mvt::i32);
+        let (x, y) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[y, two]), 0);
+        let address = if symbol_first {
+            let sym_x = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym, x]), 0);
+            SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym_x, scaled]), 0)
+        } else {
+            let x_scaled = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[x, scaled]), 0);
+            SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[sym, x_scaled]), 0)
+        };
+        (address, x, y)
+    }
+
+    #[test]
+    fn a_symbol_with_a_register_and_a_scaled_register_is_one_memory_operand() {
+        for symbol_first in [true, false] {
+            let mut dag = TestDag::new();
+            let (address, x, y) = address(&mut dag, symbol_first);
+            let mut am = AddressMode::default();
+
+            assert!(
+                !Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }
+                    .match_address(address, &mut am)
+            );
+
+            let symbol = am.symbol.expect("the symbol is the displacement");
+            assert_eq!((symbol.kind, symbol.id), (SymbolKind::Global, 7), "symbol_first={symbol_first}");
+            assert_eq!(
+                (am.base_reg, am.index_reg, am.scale),
+                (Some(x), Some(y), 4),
+                "[sym + x + y*4], symbol_first={symbol_first}"
+            );
+        }
+    }
+}
+
+mod divrem {
+    use super::*;
+    use crate::generated::ids::x86;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// `{q, r} = UDIVREM/SDIVREM a, b` (i32) with both results used; returns
+    /// the dag and the node.
+    fn divide(
+        opcode: u16,
+        a: SDValue,
+        b: SDValue,
+        dag: &mut TestDag,
+    ) -> u32 {
+        let node = dag.node(opcode, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        node
+    }
+
+    fn run(
+        dag: &mut TestDag,
+        node: u32,
+    ) -> Outcome {
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        select_node(&Selector::new(table::TABLE), dag, &mut hooks, node)
+    }
+
+    fn machine(dag: &TestDag) -> Vec<u16> {
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect()
+    }
+
+    /// Without the hand case the table has no pattern for DIVREM: a division
+    /// was `CannotSelect`.
+    #[test]
+    fn an_unsigned_divide_is_div_after_clearing_edx() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = divide(isd::UDIVREM, a, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::DIV32r) && !m.contains(&x86::CDQ), "{m:?}");
+    }
+
+    #[test]
+    fn a_signed_divide_sign_extends_with_cdq() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = divide(isd::SDIVREM, a, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::CDQ) && m.contains(&x86::IDIV32r) && !m.contains(&x86::MOV32r0), "{m:?}");
+    }
+
+    #[test]
+    fn a_signed_divide_of_a_non_negative_dividend_clears_edx() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let mask = dag.make_constant(0xff, mvt::i32);
+        let small = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[a, mask]), 0);
+        let node = divide(isd::SDIVREM, small, b, &mut dag);
+        assert_eq!(run(&mut dag, node), Outcome::Selected);
+        let m = machine(&dag);
+        assert!(m.contains(&x86::MOV32r0) && m.contains(&x86::IDIV32r) && !m.contains(&x86::CDQ), "{m:?}");
+    }
+}
+
+mod masked_operand_that_is_not_a_shift {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_addr::{AddrMode, AddressMode, Matcher};
+
+    /// `a + (zext(b) & 0xff)` in an address: the AND's first operand has one
+    /// operand, not a shift. The mask fold read operand 1 of that register
+    /// before checking it was a shift, and panicked (x_primes and x_rle
+    /// crashed the shadow).
+    #[test]
+    fn an_and_of_a_unary_node_does_not_read_a_shift_amount() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i8));
+        let x = SDValue::new(dag.node(isd::ZERO_EXTEND, &[mvt::i32], &[b]), 0);
+        let mask = dag.make_constant(0xff, mvt::i32);
+        let masked = SDValue::new(dag.node(isd::AND, &[mvt::i32], &[x, mask]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, masked]), 0);
+        let mut am = AddressMode::default();
+
+        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am);
+    }
+}
+
+mod mul_lohi {
+    use super::*;
+    use crate::generated::ids::x86;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn machine(dag: &TestDag) -> Vec<u16> {
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect()
+    }
+
+    /// `hi:lo = *MUL_LOHI a, b` (i32), both halves used, as the
+    /// division-by-constant combine makes.
+    fn multiply(opcode: u16) -> Vec<u16> {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let node = dag.node(opcode, &[mvt::i32, mvt::i32], &[a, b]);
+        dag.node(isd::ADD, &[mvt::i32], &[SDValue::new(node, 0), SDValue::new(node, 1)]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+        machine(&dag)
+    }
+
+    /// Without the hand case the table has no pattern for MUL_LOHI: it was
+    /// `CannotSelect`.
+    #[test]
+    fn an_unsigned_wide_multiply_is_mul32r() {
+        assert!(multiply(isd::UMUL_LOHI).contains(&x86::MUL32r));
+    }
+
+    #[test]
+    fn a_signed_wide_multiply_is_imul32r() {
+        assert!(multiply(isd::SMUL_LOHI).contains(&x86::IMUL32r));
+    }
+}
+
+mod llrm_intrinsics {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_llrm::{LLRM_ASM_OPCODE, LLRM_NODES, SEGMENT_OF, SEGMENT_OF_OPCODE};
+    use crate::x86_select::select_node;
+
+    /// No pattern covers `X86ISD::LLRM_ASM`: it was `CannotSelect` and stopped
+    /// every function that holds an `llrm.ia16.asm` call.
+    #[test]
+    fn an_asm_node_becomes_the_pseudo_with_its_operands() {
+        for opcode in LLRM_NODES {
+            let mut dag = TestDag::new();
+            let chain = dag.entry_node();
+            let reg = dag.input(1, mvt::i16);
+            let node = dag.node(opcode, &[mvt::Other, mvt::Glue], &[chain, reg]);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::M16,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                address_mode: crate::x86_addr::AddrMode::Real16,
+            });
+
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+            let n = &dag.nodes[node as usize];
+            assert_eq!(
+                (n.machine, n.ops.clone(), n.vts.clone()),
+                (Some(LLRM_ASM_OPCODE), vec![chain, reg], vec![mvt::Other, mvt::Glue])
+            );
+        }
+    }
+
+    /// `SEGMENT_OF` (id 24580 collided with `LLRM_CODE` in the first version)
+    /// is a segment value: it becomes its own pseudo, with the global as
+    /// operand or none for `DGROUP`.
+    #[test]
+    fn a_segment_of_a_global_and_of_dgroup_are_the_segment_pseudo() {
+        for with_global in [true, false] {
+            let mut dag = TestDag::new();
+            let ops: Vec<SDValue> = if with_global { vec![dag.wrapped_global(1, 0, mvt::i16)] } else { vec![] };
+            let node = dag.node(SEGMENT_OF, &[mvt::i16], &ops);
+            let mut hooks = X86Hooks::new(Options {
+                cpu: Cpu::M16,
+                opt_none: false,
+                opt_for_size: false,
+                min_size: false,
+                has_frame_pointer: true,
+                address_mode: crate::x86_addr::AddrMode::Real16,
+            });
+
+            assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+            let n = &dag.nodes[node as usize];
+            assert_eq!((n.machine, n.ops.clone(), n.vts.clone()), (Some(SEGMENT_OF_OPCODE), ops, vec![mvt::i16]));
+        }
+    }
+
+    /// `LLRM_FARCALL` is a target node with no pattern: it passes through as
+    /// its own pseudo, with the call's operands and its chain and glue
+    /// results.
+    #[test]
+    fn a_far_call_passes_through_as_its_pseudo() {
+        use crate::x86_llrm::{FARCALL_OPCODE, LLRM_FARCALL};
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let target = dag.wrapped_global(1, 0, mvt::i16);
+        let node = dag.node(LLRM_FARCALL, &[mvt::Other, mvt::Glue], &[chain, target]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::M16,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Real16,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+        let n = &dag.nodes[node as usize];
+        assert_eq!(
+            (n.machine, n.ops.clone(), n.vts.clone()),
+            (Some(FARCALL_OPCODE), vec![chain, target], vec![mvt::Other, mvt::Glue])
+        );
+    }
+
+    /// `LLRM_CODE` (24582, sdag-a's `llrm.ia16.code`) is its own pseudo, not
+    /// the asm one.
+    #[test]
+    fn a_code_node_is_the_code_pseudo() {
+        use crate::x86_llrm::{CODE_OPCODE, LLRM_CODE};
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let node = dag.node(LLRM_CODE, &[mvt::Other, mvt::Glue], &[chain]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::M16,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Real16,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+
+        assert_eq!(dag.nodes[node as usize].machine, Some(CODE_OPCODE));
+    }
+}
+
+mod instruction_names {
+    use crate::generated::ids::x86;
+
+    /// The hand matchers' opcodes (`CDQ`, `DIV32r`, `MUL32r`) were not in the
+    /// per-cpu name table, so the emitter refused 25 functions with "opcode
+    /// 1202".
+    #[test]
+    fn the_hand_matchers_instructions_have_names() {
+        let name = |opcode| x86::NAMES.iter().find(|(o, _)| *o == opcode).map(|(_, n)| *n);
+        assert_eq!(name(x86::CDQ), Some("CDQ"));
+        assert_eq!(name(x86::DIV32r), Some("DIV32r"));
+        assert_eq!(name(x86::MUL32r), Some("MUL32r"));
+        assert_eq!(name(x86::EAX), None, "a register is not an instruction");
+    }
+}
+
+mod fcmp_without_fcomi {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// `fucom; fnstsw ax; sahf`: the table's `UCOM_FpIr64` needs `fcomi`, so an
+    /// `FCMP` was `CannotSelect` on every CPU here (the qbq corpus: 4
+    /// functions).
+    #[test]
+    fn a_double_compare_is_fucom_fnstsw_sahf() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::f64), dag.input(2, mvt::f64));
+        let cmp = dag.node(x86isd::FCMP, &[mvt::i32], &[a, b]);
+        let user = dag.node(x86isd::SETCC, &[mvt::i8], &[SDValue::new(cmp, 0)]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, cmp), Outcome::Selected);
+
+        let flags = dag.nodes[user as usize].ops[0];
+        assert_eq!(dag.nodes[flags.node as usize].machine, Some(x86::SAHF));
+        let machine: Vec<u16> = dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).collect();
+        assert!(machine.contains(&x86::UCOM_Fpr64) && machine.contains(&x86::FNSTSW16r), "{machine:?}");
+    }
+}
+
+mod pop_from_x87 {
+    use super::*;
+    use crate::generated::ids::x86isd;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    /// A call's float result is `POP_FROM_X87_REG chain, $fp0, glue`: no
+    /// pattern, the pin's `Select` turns it into a `CopyFromReg` (7 m32
+    /// execution programs stopped at `CannotSelect`).
+    #[test]
+    fn a_float_call_result_becomes_a_copy_from_the_x87_register() {
+        let mut dag = TestDag::new();
+        let chain = dag.entry_node();
+        let fp0 = dag.input(9, mvt::f64);
+        let glue = dag.input(10, mvt::Glue);
+        let pop = dag.node(x86isd::POP_FROM_X87_REG, &[mvt::f64, mvt::Other, mvt::Glue], &[chain, fp0, glue]);
+        let user = dag.node(isd::FADD, &[mvt::f64], &[SDValue::new(pop, 0), fp0]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, pop), Outcome::Selected);
+
+        let read = dag.nodes[user as usize].ops[0];
+        let copy = &dag.nodes[read.node as usize];
+        assert_eq!((copy.opcode, copy.ops.clone()), (isd::CopyFromReg, vec![chain, fp0, glue]));
+        assert_eq!(copy.vts, vec![mvt::f64, mvt::Other, mvt::Glue]);
+    }
+}
+
+mod decrement_for_flags {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    const JCC_1: u16 = 2001;
+    const COND_NE: i64 = 5;
+    const COND_B: i64 = 2;
+
+    /// `add x, -1` whose flags reach a `jcc` through `CopyToReg EFLAGS`, as
+    /// selecting the branch first leaves them.
+    fn selected_with_branch_on(cond: i64) -> &'static str {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let minus_one = dag.make_constant(-1, mvt::i32);
+        let add = dag.node(x86isd::ADD, &[mvt::i32, mvt::i32], &[x, minus_one]);
+        let eflags = dag.register(x86::EFLAGS, mvt::i32);
+        let copy = dag.add(Node {
+            opcode: isd::CopyToReg,
+            vts: vec![mvt::Other, mvt::Glue],
+            ops: vec![SDValue::new(0, 0), eflags, SDValue::new(add, 1)],
+            ..Node::default()
+        });
+        let target = dag.input(3, mvt::Other);
+        let condition = dag.make_constant(cond, mvt::i8);
+        dag.add(Node {
+            opcode: !JCC_1,
+            machine: Some(JCC_1),
+            vts: vec![mvt::Other],
+            ops: vec![target, condition, SDValue::new(copy, 0), SDValue::new(copy, 1)],
+            ..Node::default()
+        });
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
+        selected(&dag, add)
+    }
+
+    /// The loop counter of `x_iir` was `add eax, -1; test eax, eax; jne`:
+    /// `hasNoCarryFlagUses` refused every use through `CopyToReg EFLAGS`
+    /// (SD37), so `DEC32r` was `ADD32ri8` plus a `test` (3 of the m32 shadow's
+    /// pin-only `DEC32r` rows).
+    #[test]
+    fn a_decrement_whose_flags_only_a_jne_reads_is_dec32r() {
+        assert_eq!(selected_with_branch_on(COND_NE), "DEC32r");
+    }
+
+    #[test]
+    fn a_decrement_whose_carry_a_jb_reads_stays_an_add() {
+        assert_ne!(selected_with_branch_on(COND_B), "DEC32r");
+    }
+}
+
+mod and_with_a_low_mask {
+    use super::*;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn selected_names(mask: i64) -> Vec<&'static str> {
+        let mut dag = TestDag::new();
+        let x = dag.input(1, mvt::i32);
+        let constant = dag.make_constant(mask, mvt::i32);
+        let and = dag.node(isd::AND, &[mvt::i32], &[x, constant]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, and), Outcome::Selected);
+        dag.nodes.iter().filter_map(|n| n.machine).map(machine_name).collect()
+    }
+
+    /// `x & 255` is `movzx` of the low byte, as the pin selects it. The hook
+    /// for `CheckAndImm` answered false, so `AND32ri` was made (x_dct: 8 of
+    /// them where the pin has `MOVZX32rr8`).
+    #[test]
+    fn and_255_is_a_zero_extension_of_the_low_byte() {
+        assert!(selected_names(255).contains(&"MOVZX32rr8"), "{:?}", selected_names(255));
+    }
+
+    #[test]
+    fn and_65535_is_a_zero_extension_of_the_low_word() {
+        assert!(selected_names(65535).contains(&"MOVZX32rr16"), "{:?}", selected_names(65535));
+    }
+
+    #[test]
+    fn and_with_another_mask_stays_an_and() {
+        assert_eq!(selected_names(4095), ["AND32ri"]);
+    }
+}
+
+mod setcc_carry {
+    use super::*;
+    use crate::generated::ids::{x86, x86isd};
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn selected_names(vt: crate::matcher::Vt) -> Vec<&'static str> {
+        let mut dag = TestDag::new();
+        let flags = dag.input(1, mvt::i32);
+        let cc = dag.make_constant(2, mvt::i8);
+        let node = dag.node(x86isd::SETCC_CARRY, &[vt], &[cc, flags]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::I486,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(table::TABLE), &mut dag, &mut hooks, node), Outcome::Selected);
+        dag.nodes.iter().filter(|n| !n.dead).filter_map(|n| n.machine).map(machine_name).collect()
+    }
+
+    /// The carry as all ones or zero is `sbb r, r` on the zeroed register
+    /// (the pin's `getSBBZero`): `CannotSelect(SETCC_CARRY)` left crc's seven
+    /// as a pin-only `SBB32rr` in the shadow diff.
+    #[test]
+    fn a_setcc_carry_is_sbb_of_a_zero() {
+        let names = selected_names(mvt::i32);
+        assert!(names.contains(&"SBB32rr") && names.contains(&"MOV32r0"), "{names:?}");
+        assert!(!names.contains(&"EXTRACT_SUBREG"), "{names:?}");
+    }
+
+    #[test]
+    fn a_byte_setcc_carry_takes_the_low_byte() {
+        let names = selected_names(mvt::i8);
+        assert!(names.contains(&"SBB32rr") && names.contains(&"EXTRACT_SUBREG"), "{names:?}");
+        let _ = x86::SBB32rr;
+    }
+}
+
+mod x64_table {
+    use super::*;
+    use crate::generated::x86_x64 as x64;
+    use crate::testing::TestDag;
+    use crate::x86_hooks::{Cpu, Options, X86Hooks};
+    use crate::x86_select::select_node;
+
+    fn names(opcode: u16) -> &'static str {
+        x64::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
+    }
+
+    fn selected_names(vt: crate::matcher::Vt) -> Vec<&'static str> {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, vt), dag.input(2, vt));
+        let add = dag.node(isd::ADD, &[vt], &[a, b]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
+        dag.nodes.iter().filter_map(|n| n.machine).map(names).collect()
+    }
+
+    /// The pin's table in 64-bit mode: an `i64` add is `ADD64rr`, and the
+    /// 32-bit add is still `ADD32rr`. There was no 64-bit table at all
+    /// (D64-0).
+    #[test]
+    fn an_i64_add_is_add64rr() {
+        assert_eq!(selected_names(mvt::i64), ["ADD64rr"]);
+    }
+
+    /// `base + index*4 + 8` at 64 bits: with only the 32-bit address arms it
+    /// matched no scale and came out as adds, not one `LEA64r` (D64-1).
+    #[test]
+    fn base_plus_scaled_index_plus_disp_is_lea64r() {
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i64), dag.input(2, mvt::i64));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i64], &[index, two]), 0);
+        let sum = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[base, scaled]), 0);
+        let eight = dag.make_constant(8, mvt::i64);
+        let address = dag.node(isd::ADD, &[mvt::i64], &[sum, eight]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(names, ["LEA64r"]);
+    }
+
+    /// In `Flat64` the shift was left as the index register (scale 1) because
+    /// the scale arms only ran for `Flat32` (D64-1).
+    #[test]
+    fn a_shifted_index_is_scaled_at_64_bits() {
+        use crate::x86_addr::{AddrMode, Matcher};
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i64), dag.input(2, mvt::i64));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i64], &[index, two]), 0);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[base, scaled]), 0);
+        let ops =
+            Matcher { dag: &mut dag, pointer_type: mvt::i64, mode: AddrMode::Flat64 }.select_addr(address).unwrap();
+        assert_eq!(dag.nodes[ops.scale.node as usize].constant, Some(4));
+    }
+
+    fn rip_matcher(dag: &mut TestDag) -> crate::x86_addr::Matcher<'_, TestDag> {
+        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64 }
+    }
+
+    /// A `WrapperRIP` global had no arm: it stayed a register operand, not
+    /// `[rip + sym + 12]` (D64-1).
+    #[test]
+    fn a_rip_wrapper_plus_a_constant_is_rip_based() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let twelve = dag.make_constant(12, mvt::i64);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, twelve]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert_eq!(am.disp, 12);
+        assert_eq!(dag.nodes[am.base_reg.unwrap().node as usize].register, Some(crate::generated::ids::x86::RIP));
+        assert!(am.index_reg.is_none());
+    }
+
+    /// `[rip + sym]` takes no register: adding `x` must not fold into it.
+    #[test]
+    fn a_register_is_not_folded_into_a_rip_address() {
+        let mut dag = TestDag::new();
+        let global = dag.wrapped_global_rip(7, 0, mvt::i64);
+        let x = dag.input(1, mvt::i64);
+        let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[global, x]), 0);
+        let mut am = crate::x86_addr::AddressMode::default();
+
+        assert!(!rip_matcher(&mut dag).match_address(address, &mut am));
+
+        assert!(am.symbol.is_none(), "the symbol stays in its register, not in a rip address");
+        let base = am.base_reg.unwrap();
+        assert_ne!(dag.nodes[base.node as usize].register, Some(crate::generated::ids::x86::RIP));
+    }
+
+    /// An `i32` address sum at 64 bits is `LEA64_32r`; there is no `LEA32r` in
+    /// 64-bit mode (D64-1).
+    #[test]
+    fn an_i32_address_sum_is_lea64_32r() {
+        let mut dag = TestDag::new();
+        let (base, index) = (dag.input(1, mvt::i32), dag.input(2, mvt::i32));
+        let two = dag.make_constant(2, mvt::i8);
+        let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i32], &[index, two]), 0);
+        let sum = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[base, scaled]), 0);
+        let eight = dag.make_constant(8, mvt::i32);
+        let address = dag.node(isd::ADD, &[mvt::i32], &[sum, eight]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, address), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(
+            names,
+            ["LEA64_32r", "IMPLICIT_DEF", "INSERT_SUBREG", "IMPLICIT_DEF", "INSERT_SUBREG"],
+            "base and index widened"
+        );
+    }
+
+    /// With SSE2 the x64 table selects scalar `double` arithmetic in `xmm`:
+    /// `fadd` was the x87 `ADD_Fp64` (D64-4).
+    #[test]
+    fn a_double_add_is_addsd() {
+        let mut dag = TestDag::new();
+        let (a, b) = (dag.input(1, mvt::f64), dag.input(2, mvt::f64));
+        let add = dag.node(isd::FADD, &[mvt::f64], &[a, b]);
+        let mut hooks = X86Hooks::new(Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat64,
+        });
+        assert_eq!(select_node(&Selector::new(x64::TABLE), &mut dag, &mut hooks, add), Outcome::Selected);
+        let names: Vec<_> = dag.nodes.iter().filter_map(|n| n.machine).map(names).collect();
+        assert_eq!(names, ["ADDSDrr"]);
+    }
+
+    #[test]
+    fn an_i32_add_is_still_add32rr() {
+        assert_eq!(selected_names(mvt::i32), ["ADD32rr"]);
+    }
+
+    #[test]
+    fn a_pointer_is_an_i64_in_64_bit_mode() {
+        let options = Options {
+            cpu: Cpu::X64,
+            opt_none: false,
+            opt_for_size: false,
+            min_size: false,
+            has_frame_pointer: true,
+            address_mode: crate::x86_addr::AddrMode::Flat32,
+        };
+        assert_eq!(options.pointer_type(), mvt::i64);
     }
 }

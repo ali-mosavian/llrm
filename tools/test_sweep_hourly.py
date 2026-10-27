@@ -147,3 +147,82 @@ def test_a_qcport_kind_is_asked_by_its_first_program_and_a_missing_job_is_not_ca
     assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "matrix.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is True
     assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "gone.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is None
     assert calls[0][1].endswith("tools/qcport_probe.py")
+
+
+def test_a_qbrt_probe_is_given_its_work_directory_and_a_usage_error_is_not_red(tmp_path, monkeypatch):
+    """The 15:00 sweep blamed a docs-only PR (#4021) for 35 wrong outputs: the qbrt probe ran `qbrt_run.py --only NAME` with no work directory, which is a usage
+    error (exit 2), every probe read red, and the bisect named the oldest merge of the range."""
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv)
+        return type("Done", (), {"returncode": 2 if argv[2].startswith("--") else 0, "stdout": "RESULT 1 of 1 pass", "stderr": ""})()
+
+    binaries = tmp_path / "sbp-abcdefghi" / "release"
+    binaries.mkdir(parents=True)
+    (binaries / "llrm-c").write_text("")
+    monkeypatch.setattr(s, "SCRATCH", tmp_path)
+    monkeypatch.setattr(s.subprocess, "run", run)
+    red = s.Red("qbrt:arena_type:x86-m32", s.WRONG, ["dosbatch/qbrt_run.py", "--only", "arena_type"])
+    assert s.ask_at(red, "abcdefghi" + "0" * 31) is False, "a passing probe is green"
+    assert not calls[0][2].startswith("--") and calls[0][3:] == ["--only", "arena_type"]
+
+
+def test_a_program_that_did_not_link_is_a_build_failure_not_wrong_output():
+    """qbrt 183/218 on 50387f114 was `jwlink: memcpy_ is an undefined reference` for 35 programs, reported as 35 WRONG OUTPUTs."""
+    text = "NOTPASS arena_type x86-m32 ok not built jwlink: Error! E2028: memcpy_ is an undefined reference\nNOTPASS bc_draw x86-m16 ok DIFF 3 lines\nRESULT 216 of 218 pass (program x target); 0 did not compile\n"
+    reds, _ = s.parse_qbrt(text)
+    assert [(one.name, one.kind) for one in reds] == [("qbrt:arena_type:x86-m32", s.BUILD), ("qbrt:bc_draw:x86-m16", s.WRONG)]
+    report = s.line("t" * 40, "t" * 40, "", {}, reds, reds, {})
+    assert "BUILD FAILURE qbrt:arena_type:x86-m32" in report and "WRONG OUTPUT qbrt:bc_draw:x86-m16" in report
+    assert "WRONG OUTPUT qbrt:arena_type" not in report
+
+
+def test_a_qbrt_step_that_died_before_its_count_is_a_red_with_the_reason():
+    """The 01:00 sweep of 2026-10-24 printed `qbrt ?` for a qbrt_run that died with "RuntimeError: DOSBox ran 19 of 20 jobs": the line read as unknown and the step as no red."""
+    text = "Traceback (most recent call last):\n  File x\nRuntimeError: DOSBox ran 19 of 20 jobs (/p/events.txt)\n"
+    reds, result = s.parse_qbrt(text)
+    assert result == "?" and [one.name for one in reds] == ["qbrt:no-result: RuntimeError: DOSBox ran 19 of 20 jobs (/p/events.txt)"]
+    assert s.parse_qbrt("RESULT 218 of 218 pass (program x target); 0 did not compile\n") == ([], "218/218")
+
+
+def test_a_sweep_records_its_pid_for_the_loop_that_waits_for_it(tmp_path, monkeypatch):
+    """The loop waited with `pgrep -f '^python3 tools/sweep_hourly'`, which also matches any session whose command line starts that way; it waits on this pid now."""
+    import os
+
+    seen = []
+    monkeypatch.setattr(s, "RUNNING", tmp_path / "running.pid")
+    monkeypatch.setattr(s, "sweep", lambda argv: seen.append((tmp_path / "running.pid").read_text().strip()) or 0)
+    assert s.main([]) == 0
+    assert seen == [str(os.getpid())] and not (tmp_path / "running.pid").exists()
+
+
+def test_a_program_that_did_not_link_is_a_build_failure_not_a_wrong_output():
+    """The 23:00 sweep of 2026-10-24 called `FAIL c/bench_io.c [-O2 -march=i486]: link: jwlink: Error! E2028: _llrm_os_close@3 is an undefined reference` a WRONG OUTPUT, and #4370 was blamed for a file race that was never reached."""
+    text = "[c] 430 programs: 429 pass, 0 known, 1 fail\nFAIL  c/bench_io.c [-O2 -march=i486]: link: jwlink: Error! E2028: _llrm_os_close@3 is an undefined reference\n"
+    reds, _ = s.parse_groups(text)
+    assert [(one.name, one.kind) for one in reds] == [("run:c/bench_io.c", s.BUILD)]
+    reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: compile: llrm-c: boom\n")
+    assert reds[0].kind == s.BUILD
+    reds, _ = s.parse_groups("[c] 1 programs: 0 pass, 0 known, 1 fail\nFAIL  c/x.c [-O2]: output differs at line 3\n")
+    assert reds[0].kind == s.WRONG
+
+
+def test_a_sweep_step_runs_under_a_build_slot():
+    """The sweep's test steps (run_groups, os_objects, llrmbin) ran beside four cargo builds at load 68 on 32 cores; every step now holds one of the shared slots."""
+    seen = []
+    real = s.subprocess.run
+    s.subprocess.run = lambda argv, **kw: seen.append(argv) or subprocess.CompletedProcess(argv, 0, "", "")
+    try:
+        import tempfile
+
+        s.run(["python3", "step.py"], {}, Path(tempfile.mkdtemp()) / "log", Path("."))
+    finally:
+        s.subprocess.run = real
+    assert Path(seen[0][seen[0].index("python3") - 1]).name == "buildslot" and seen[0][-2:] == ["python3", "step.py"]
+
+
+def test_a_red_unrun_test_target_is_a_red_of_the_sweep():
+    """greedy_inline sat red on parity for a day: the landing gate runs lib tests and scanners only, and no step of the sweep ran tests/*.rs."""
+    reds, count = s.parse_inventory("llrm/greedy_inline: 0.4 s, RED\nllrm/nearcalls: 0.0 s, ok\ninventory: 2 unrun targets run, 1 red\n")
+    assert [red.name for red in reds] == ["unrun:llrm/greedy_inline"] and count == "1/2"

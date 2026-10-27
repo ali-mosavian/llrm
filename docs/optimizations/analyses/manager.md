@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:9141b10e1fdb5d9db086ea26ad24d05c16f80ad1973a15ca535fe8f5b3926f9b -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:3d55a65f12b45c1c428da4261854c3839e861f760a2bb9cd0748367a0809616d -->
 
 # manager
 
@@ -22,9 +22,9 @@ here declare how, through the `Analysis` trait of `llrm_mir::passes`:
   pointers, aggregates and calls only, so a change to integer arithmetic
   leaves them standing.
 - `INCREMENTAL` with `update`: the entry is brought up to date from the
-  change log. `DominatedEdges`, `Bounded` and `Counted` redo only the blocks
-  or loops `Touched::reach` the changes (a change to a terminator or to the
-  CFG redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
+  change log. `DominatedEdges` and `Counted` redo only the blocks or loops
+  `Touched::reach` the changes (a change to a terminator or to the CFG
+  redoes all); `Accesses` in [`crate::memoryssa`](memoryssa.md) survives pure moves.
 - `LLRM_CHECK_REPLAY` asserts that every kept or updated result equals a
   fresh `run`.
 
@@ -69,8 +69,7 @@ most `AssumptionCache` and `ExposedFrames`, which are omitted):
  Followers        Registers
  Counted          Registers
  DominatedEdges   Registers
- Bounded          Registers, Counted, DominatedEdges
- Annotated        PointerValues, Registers, Counted, DominatedEdges, Bounded
+ Annotated        PointerValues, Registers, Counted, DominatedEdges
  Accesses         Annotated, CallFootprints, PointerValues (memoryssa)
  PlainAccesses    Writes, Annotated                       (the graph's structure, once)
  ThroughMemory    PlainAccesses, Writes, Annotated, Registers
@@ -90,7 +89,6 @@ all modules, each module's `Summaries` given the others'.
 module, target and program), carrying whichever cached results the caller
 holds. `Held` and `Ranges` bundle the cached results a pass passes on to a
 `Unit`, so the facts are the manager's and not a solve of the pass's own.
-`Bounded` is empty where `Outer::loop_intervals` is off (-O1).
 
 ## Example
 A pass replaces the uses of `%x` by `%a`, an integer edit:
@@ -139,8 +137,8 @@ with and without the seed.
 ## Provides
 The entries: `ExposedFrames`, `PointerValues`, `Pointers`, `Annotated`,
 `Writes`, `Registers`, `DemandedBits`, `AssumptionCache`,
-`Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`,
-`Bounded`; module entries `GlobalsAA`, `Summaries`; program
+`Followers`, `Counted`, `ThroughMemory`, `FloatFacts`, `DominatedEdges`;
+module entries `GlobalsAA`, `Summaries`; program
 entry `ProgramSummaries`; `Held`, `Ranges`, `Touched::reach`,
 `writes`. [`crate::cfg`](cfg.md)'s `Shape`, [`crate::memoryssa`](memoryssa.md)'s
 `Accesses` is an entry defined beside its analysis.

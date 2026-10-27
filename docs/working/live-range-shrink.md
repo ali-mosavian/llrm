@@ -4,7 +4,7 @@ The pin's `LiveRangeShrink` (LiveRangeShrink.cpp, x86 `addPreRegAlloc`, d1106deb
 
 ## Premise test (2026-10-23)
 
-The pin's `llc` with the pass off by a patched scratch copy (`LiveRangeShrink::runOnMachineFunction` returns at once under `LRS_OFF`; the assert build's object replaced and relinked, `~/scratch/w4-cgp/llc-abl`; same method as `docs/working/codegenprepare.md`), same IR as before.
+The pin's `llc` with the pass off by a patched scratch copy (`LiveRangeShrink::runOnMachineFunction` returns at once under `LRS_OFF`; the assert build's object replaced and relinked, `llc-abl`; same method as `docs/working/codegenprepare.md`), same IR as before.
 
 | input | pin with the pass | pin without it | functions that differ |
 |---|--:|--:|--:|
@@ -18,7 +18,7 @@ The pass changes the code of 12 of the 77 IRs (the slot table's count) but the s
 
 ## Pressure re-take (2026-10-23)
 
-LRS exists to cut register pressure, so bytes undersell it. Same patched `llc`, `-asm-verbose`, counted from the pin's asm (`~/scratch/w4-cgp/abl_lrs2.py`): instructions, `Spill`/`Reload` comments, register-to-register moves.
+LRS exists to cut register pressure, so bytes undersell it. Same patched `llc`, `-asm-verbose`, counted from the pin's asm (`abl_lrs2.py`): instructions, `Spill`/`Reload` comments, register-to-register moves.
 
 | input | instr | spills | reloads | copies | IRs that differ |
 |---|--:|--:|--:|--:|--:|
@@ -26,7 +26,7 @@ LRS exists to cut register pressure, so bytes undersell it. Same patched `llc`, 
 | 65 QCport IRs m16 -Os | +2 of 76280 | 0 of 1766 | -2 of 2536 | +7 of 1425 | 3 |
 | 12 IRs m32 -O2 / -Os | 0 | 0 | 0 | 0 | 0 |
 
-Without LRS the pin spills, reloads and copies the same, to within 7 instructions in 88 000. Clocks, 71 rows programs in the 486 clock model (`tools/pairs/pinclocks.sh` with the pin's clang IR through the patched `llc`, `~/scratch/w4-cgp/pinclocks_lrs.sh`), LRS on / off:
+Without LRS the pin spills, reloads and copies the same, to within 7 instructions in 88 000. Clocks, 71 rows programs in the 486 clock model (`tools/pairs/pinclocks.sh` with the pin's clang IR through the patched `llc`, `pinclocks_lrs.sh`), LRS on / off:
 
 | level | clocks on | clocks off | code B | programs that differ | spills / reloads / copies on, off |
 |---|--:|--:|--:|---|---|

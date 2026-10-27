@@ -2,7 +2,7 @@
 
 Audience: an engineer changing how a value that finds no register is cut instead of spilled whole. This page states the three ways a split is chosen, how the choice is priced, and how a piece is made.
 
-A split gives a region of a value's range a fresh value, the piece, joined to the rest by copies where control enters or leaves the region. The piece competes for a register on its own; the rest may only take a free register or spill. The code is LLVM's `SplitKit` and `SpillPlacement`: [`splitkit.rs`](../../optimizations/backend/splitkit.md) chooses and carves, [`spillplacement.rs`](../../optimizations/backend/spillplacement.md) decides register or stack per bundle.
+A split gives a region of a value's range a fresh value, the piece, joined to the rest by copies where control enters or leaves the region. The piece competes for a register on its own; the rest may only take a free register or spill. The code is LLVM's `SplitKit` and `SpillPlacement`: `greedy/splitkit.rs` chooses and carves, [`spillplacement.rs`](../../optimizations/backend/spillplacement.md) decides register or stack per bundle.
 
 ## Choosing regions
 

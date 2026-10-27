@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/postings.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/postings.rs sha256:e733958334c139022356ca8155c935ed36a3adbe2de05a3c605a09748f6a812a -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/postings.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/postings.rs sha256:d50c4e61d688bb4a8f90faa4aa7cc20768eb002d64e46726391430383f6afc14 -->
 
 # postings
 
@@ -54,5 +54,5 @@ None: the index is plumbing that changes no instruction, so there is no LIR
 to show before and after. Read `Postings::of` for what it holds.
 ## Used by
 [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),
-[`crate::backend::splitkit`](splitkit.md), [`crate::backend::spiller`](spiller.md) and
+`crate::backend::splitkit`, `crate::backend::spiller` and
 [`crate::backend::storedhomes`](storedhomes.md).

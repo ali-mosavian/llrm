@@ -187,6 +187,7 @@ pub fn block(at: i64) -> BlockId {
 
 /// `function`'s graph, in layout order.
 pub fn graph(function: &Function) -> Vec<Block> {
+    GRAPHS.with(|count| count.set(count.get() + 1));
     function
         .layout()
         .iter()
@@ -488,6 +489,39 @@ impl Dominance {
         found
     }
 
+    /// Whether `irreducible` is not empty, from one walk: some edge back to a
+    /// block on the walk's stack goes to one that does not dominate its source.
+    /// Only blocks the entry reaches count, as in `irreducible`.
+    pub fn is_irreducible(
+        &self,
+        function: &Function,
+    ) -> bool {
+        let Some(entry) = function.entry() else { return false };
+        const GREY: u8 = 1;
+        const BLACK: u8 = 2;
+        let mut colour = vec![0_u8; function.block_capacity()];
+        let mut stack = vec![(entry, function.successors(entry), 0_usize)];
+        colour[entry.0 as usize] = GREY;
+        while let Some((at, successors, next)) = stack.last_mut() {
+            let Some(&successor) = successors.get(*next) else {
+                colour[at.0 as usize] = BLACK;
+                stack.pop();
+                continue;
+            };
+            *next += 1;
+            let from = *at;
+            match colour[successor.0 as usize] {
+                GREY if !self.dominates(function, id(successor), id(from)) => return true,
+                0 => {
+                    colour[successor.0 as usize] = GREY;
+                    stack.push((successor, function.successors(successor), 0));
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     /// Blocks left in a cycle once every natural loop's back edge is cut.
     pub fn irreducible(
         &self,
@@ -557,6 +591,13 @@ pub struct Shape {
 
 thread_local! {
     static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static GRAPHS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many whole-body graphs `graph` has built on this thread, for a test
+/// that a pass asking about a few blocks builds none.
+pub fn graphs_built() -> usize {
+    GRAPHS.with(std::cell::Cell::get)
 }
 
 /// How many shapes (or loop sets, `loops_of`) this thread has derived, for a
@@ -611,7 +652,7 @@ impl Analysis for Shape {
 /// Blocks the entry does not reach, gone, and each phi's inputs from
 /// edges that no longer exist with them.
 ///
-/// Copied from llrm-core's `optimize/transform.rs` `_unreachable`. The old
+/// Copied from llrm-codegen's `optimize/transform.rs` `_unreachable`. The old
 /// MIR kept a dead block as an inert byte owner; the rich MIR owns no bytes.
 pub fn _unreachable(
     context: &Context,

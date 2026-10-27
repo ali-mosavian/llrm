@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ivusers.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ivusers.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ivusers.rs sha256:943d21bb74bedd01614c712346c7d61cb129b2acff65b05859a538c0a04e3ea5 -->
+<!-- src: crates/opt/llrm-transforms/src/ivusers.rs sha256:ac8b8f532fc2112fca4d2402f23dbec3ad77a5034a6227ea07752f572aa049bb -->
 
 # ivusers
 
@@ -25,7 +25,10 @@ Nothing runs it yet: stage 3 of the translation of LSR.
 DEVIATE IU1: users of a value are visited in descending program order, not
 use-list order. Use-list order is edit history; the pin's order on parsed
 IR is the only reproducible one, and it breaks ties in LSR's register
-choice. Exit: use lists keep LLVM's order. Owner: w-5. Review: 2026-11-19.
+choice. Cost (IU1-COST): one map of the layout per loop and a block's
+instruction numbers, where the pin has none (it was a map of every
+instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
+Owner: w-5. Review: 2026-11-19.
 
 DEVIATE: whether an instruction is safe to speculate and whether it is
 ephemeral are asked of the caller (`Env`), which holds what they need.

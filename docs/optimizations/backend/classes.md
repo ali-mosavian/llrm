@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/classes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/classes.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/classes.rs sha256:fd3fa7e7fac96b272b72e148c6150fcde4fc9858af1cd2c5cdcc996d020fe597 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/classes.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/classes.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/classes.rs sha256:8eb5d263b4de91f613d79e70b5d42d357062779f4c73cb0284215ff920a20268 -->
 
 # classes
 
@@ -38,7 +38,7 @@ From unit tests `m16_registers_are_its_description` and
 
 ## Used by
 `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller
-(`ssaspill.rs`), `pressuresink.rs`, `floatalloc.rs`, `sharedstores.rs`,
+(`ssaspill.rs`), `floatalloc.rs`, `sharedstores.rs`,
 `loopslots.rs` and `peephole.rs`. `assemble.rs` builds them per module and
 `flow.rs` hands them to each phase beside `Segments`; no pass reads
 another target's.

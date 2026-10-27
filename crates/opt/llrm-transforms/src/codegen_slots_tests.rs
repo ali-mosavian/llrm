@@ -174,7 +174,7 @@ const ROWS: &[Row] = &[
         Match,
         "lsr_*.rs (registry `lsr`)",
         "-disable-lsr",
-        "translated; runs at the end of the mid-end, the pin's runs after it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs; -disable-lsr -O2: -37 instr, +40 B, 61 IRs differ; -disable-lsr -Os: +283 instr, +876 B, 63 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 241 instr 1173 B, pin-with 255 instr 942 B, pin-without 251 instr 942 B (2 programs); -Os: ours 309 instr 959 B, pin-with 303 instr 925 B, pin-without 299 instr 922 B (3 programs)",
+        "translated; runs at the end of the mid-end, the pin's runs after it. Pin: changed code in 0 (-O2) and 0 (-Os) of 77 IRs; -disable-lsr -O2: -37 instr, +40 B, 61 IRs differ; -disable-lsr -Os: +283 instr, +876 B, 63 IRs differ",
     ),
     row(
         "Lower Garbage Collection Instructions",
@@ -251,9 +251,9 @@ const ROWS: &[Row] = &[
     row(
         "CodeGen Prepare",
         Executed,
-        "addresssink.rs (sinkCmpExpression, address-phi sink), cgpaddr.rs (optimizeMemoryInst), extload.rs (ext-load promotion)",
+        "cgpaddr.rs (sinkCmpExpression, sinkAndCmp0Expression, optimizeMemoryInst), extload.rs (ext-load promotion)",
         "-disable-cgp",
-        "w-4; 2026-10-23: address-mode sinking translated (cgpaddr.rs, DEVIATE CGP1: no promoted extensions, no phi/select combiner); compare sink in addresssink.rs; ext-load promotion in extload.rs; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1611 instr 6318 B, pin-with 1412 instr 5482 B, pin-without 1482 instr 5642 B (6 programs); -Os: ours 486 instr 1392 B, pin-with 463 instr 1378 B, pin-without 488 instr 1474 B (5 programs)",
+        "w-4; 2026-10-23: address-mode sinking translated (cgpaddr.rs, DEVIATE CGP1: no promoted extensions, no phi combiner); compare sink in cgpaddr.rs; ext-load promotion in extload.rs; the rest (select2branch, branch opts, despeculate, tail-call dup, store-extract) settled by the ablation. Pin: changed code in 73 (-O2) and 72 (-Os) of 77 IRs; -disable-cgp -O2: +4456 instr, +21337 B, 64 IRs differ; -disable-cgp -Os: +4061 instr, +19398 B, 63 IRs differ Landed: #3751 (optimizeMemoryInst); #3813 (addresssink retired into cgpaddr, select combiner). Not yet translated: promoted extensions [TypePromotionTransaction](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L3806), [optimizeExt](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7250) (w-4, 2026-11-13); the phi address combiner [AddressingModeCombiner](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L4180) (w-4, 2026-11-20); [combineToUSubWithOverflow](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L1781) and [combineToUAddWithOverflow](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L1747) (w-3, 2026-11-13, #3786); [optimizeSelectInst](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7766), [splitBranchCondition](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L9350), [despeculateCountZeros](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2629), [dupRetToEnableTailCallOpts](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L3014) (w-4, date per plan 10-28).",
     ),
     row(
         "Exception handling preparation",
@@ -332,7 +332,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "jumps/ (late tail duplication only)",
         "-disable-early-taildup",
-        "CG3: early tail duplication is not translated; reason: on our IR at m32 -O2 the pin's pass is worth 2431 of 32191215 clocks (0.008%), 559 taken branches and 912 instructions of 70 bench programs (-O3 the same); cost: that; exit: decide with the ret duplication of STRISTMP-1 (main duplicates `ret` into both arms, ours does not) and re-measure; owner w-3; review 2026-11-20. Registry slot early-tailduplication. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ",
+        "CG3: translated (backend/earlytaildup.rs, slot earlytaildup@1, directly after selection, before farcall): shouldTailDuplicate and isSimpleBB / canCompletelyDuplicateBB / canTailDuplicate pre-RA, tailDuplicate with the SSA update of what the tail defines (processPHI, updateSuccessorsPHIs, MachineSSAUpdater), duplicateSimpleBB; DEVIATE ET1 (none), ET2 (duplicable: group, barrier, data; no EH pads or INLINEASM_BR), ET3 (the pin's merge into the layout predecessor is the same result: the jump to the next block is explicit here); owner w-1. Slot earlytaildup@1 (Partial in the registry). On our IR at m32 -O2 the pin's pass is worth 2431 of 32191215 clocks (0.008%), 559 taken branches and 912 instructions of 70 bench programs. Pin: changed code in 23 (-O2) and 18 (-Os) of 77 IRs; -disable-early-taildup -O2: -34 instr, -131 B, 9 IRs differ; -disable-early-taildup -Os: +14 instr, -4 B, 8 IRs differ Layout-mode part: placement/taildup.rs (late, after allocation).",
     ),
     row(
         "Optimize machine instruction PHIs",
@@ -375,7 +375,7 @@ const ROWS: &[Row] = &[
         Match,
         "combiner.rs",
         "",
-        "translated (slot combiner@4, before leaopt): integer add/and/or/xor/imul reassociation only, the one pattern family i486 has; DEVIATE MC1 (trace is the block: no physical-register dependences, so call order is not a depth), MC2, MC3. Pin: changed code in 12 (-O2) and 6 (-Os) of 77 IRs. Ours on the 71 bench programs: 75 of 568 objects change; m32 32 objects (13 programs), 18 differ in size, net +1295 B",
+        "translated (slot combiner@4, before leaopt): integer add/and/or/xor/imul reassociation only, the one pattern family i486 has; DEVIATE MC1 (trace is the block: no physical-register dependences, so call order is not a depth), MC2, MC3. Pin: changed code in 12 (-O2) and 6 (-Os) of 77 IRs. Ours on the 71 bench programs: 75 of 568 objects change; m32 32 objects (13 programs), 18 differ in size, net +1295 B (#3781)",
     ),
     row(
         "X86 cmov Conversion",
@@ -386,31 +386,31 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Early Machine Loop Invariant Code Motion",
-        Deviate,
-        "licm (mid-end), loopslots.rs for reloads",
+        Match,
+        "machinelicm.rs",
         "-disable-machine-licm",
-        "CG2: the mid-end `licm` hoists, `loopslots.rs` hoists reloads, and no machine pass with a register-pressure gate follows; reason: the premise test (docs/working/early-machinelicm.md) shows the pin's pass worth 7 of 4190 (m32 -O2) and 12 of 2675 (m32 -Os) in-loop instructions, 754 of 47619 (1.6%) at m16 -O2 and 204 of 36905 at m16 -Os; cost: that m16 -O2 residual; attribution (tools/pairs/mlicm_kinds.py): the net 657 in mdl_ai, cmd, sc, ent and weapons is diffuse (moves 82, loads 80, push/add-esp/call 136, lea 23, x87 loads and stores 70): no kind the mid-end `licm` could take; exit: none planned; owner w-3; review 2026-11-13. Pin: changed code in 58 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-licm -O2: -242 instr, -1012 B, 38 IRs differ; -disable-machine-licm -Os: -304 instr, -1399 B, 42 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 584 instr 1788 B, pin-with 506 instr 1645 B, pin-without 504 instr 1645 B (3 programs); -Os: ours 188 instr 494 B, pin-with 180 instr 511 B, pin-without 177 instr 506 B (2 programs)",
+        "translated (slot machinelicm@4, ahead of MachineCSE; #3753, CG2 closes): a pure computation of values a loop does not change is made once in its preheader. DEVIATE ML1: the register-pressure gate is a proxy (w-3, review 2026-11-20). Numbered: QCport +150 B (-O1 +58, -O2 +47, -O3 +56, -Os -11; 22 of 260 modules). Pin: changed code in 58 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-licm -O2: -242 instr, -1012 B, 38 IRs differ; -disable-machine-licm -Os: -304 instr, -1399 B, 42 IRs differ",
     ),
     row(
         "Machine Common Subexpression Elimination",
         Executed,
-        "precse.rs (before phi elimination), machinecse.rs (after allocation)",
+        "precse.rs (before phi elimination)",
         "-disable-machine-cse",
-        "precse.rs translates MachineCSE with PerformSimplePRE and invariant-load CSE (DEVIATE CSE1-CSE4, #3734); machinecse.rs (after allocation) is ours alone, DEVIATE CSE5: removed, 10 of 568 objects grow (+15..+187 B), none shrinks. Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 897 instr 2780 B, pin-with 811 instr 2652 B, pin-without 832 instr 2716 B (4 programs)",
+        "precse.rs translates MachineCSE with PerformSimplePRE and invariant-load CSE (DEVIATE CSE1-CSE3, #3734); the post-allocation machinecse.rs is deleted (row CSE5: 7 of 568 objects grow, +22..+34 B, none shrinks; QCport +0.025..0.116%; d_faces -3.60 M Ir). Pin: changed code in 57 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-cse -O2: +342 instr, +1082 B, 53 IRs differ; -disable-machine-cse -Os: +377 instr, +1151 B, 55 IRs differ",
     ),
     row(
         "Machine code sinking",
         Missing,
         "machinesink.rs",
         "-disable-machine-sink",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry machinesink@4 is partial; store and load sinking, SinkAndFold. Pin: changed code in 67 (-O2) and 65 (-Os) of 77 IRs; -disable-machine-sink -O2: +699 instr, +2474 B, 64 IRs differ; -disable-machine-sink -Os: +1107 instr, +3707 B, 60 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1041 instr 3171 B, pin-with 943 instr 3059 B, pin-without 933 instr 3043 B (6 programs); -Os: ours 359 instr 973 B, pin-with 347 instr 964 B, pin-without 346 instr 966 B (5 programs)",
+        "w-2; 2026-11-13: registry machinesink@4 is partial; store and load sinking, SinkAndFold. Pin: changed code in 67 (-O2) and 65 (-Os) of 77 IRs; -disable-machine-sink -O2: +699 instr, +2474 B, 64 IRs differ; -disable-machine-sink -Os: +1107 instr, +3707 B, 60 IRs differ Translated: [FindSuccToSinkTo](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1413), [isProfitableToSinkTo](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1270), [isWorthBreakingCriticalEdge](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1040), [isLegalToBreakCriticalEdge](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1111), [SinkInstruction](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1845) (partial, remainder unaudited). Also translated (#3912, #3959): [hasStoreBetween](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1660), edge odds and block frequency from MBPI/MBFI. Not translated (w-2, 2026-11-06): [PerformSinkAndFold](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L407) (no-op on x86), [aggressivelySinkIntoCycle](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineSink.cpp#L1754).",
     ),
     row(
         "Peephole Optimizations",
         Missing,
         "peephole.rs and peep/",
         "-disable-peephole",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry peephole@14 is ours-own, not a translation. Pin: changed code in 72 (-O2) and 72 (-Os) of 77 IRs; -disable-peephole -O2: +2189 instr, +7527 B, 67 IRs differ; -disable-peephole -Os: +1763 instr, +6048 B, 69 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1923 instr 7289 B, pin-with 1728 instr 6478 B, pin-without 1788 instr 6654 B (11 programs); -Os: ours 806 instr 2220 B, pin-with 786 instr 2271 B, pin-without 831 instr 2382 B (11 programs)",
+        "w-2; 2026-11-13: registry peephole@14 is ours-own, not a translation. Pin: changed code in 72 (-O2) and 72 (-Os) of 77 IRs; -disable-peephole -O2: +2189 instr, +7527 B, 67 IRs differ; -disable-peephole -Os: +1763 instr, +6048 B, 69 IRs differ Landed piece: a mask only a branch reads is a test (#3743).",
     ),
     again(
         "Remove dead machine instructions",
@@ -425,7 +425,7 @@ const ROWS: &[Row] = &[
         Match,
         "liverangeshrink.rs",
         "",
-        "w-4; translated 2026-10-23, registry liverangeshrink@4, before phi elimination. DEVIATE LRS1 in the header (class test, flags). pressuresink.rs stays until the machine scheduler. Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs",
+        "w-4; translated 2026-10-23, registry liverangeshrink@4, before phi elimination. DEVIATE LRS1 in the header (class test, flags). Pin: changed code in 12 (-O2) and 12 (-Os) of 77 IRs (#3735)",
     ),
     row(
         "X86 Fixup SetCC",
@@ -446,7 +446,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "pushfold.rs",
         "",
-        "CG6: the pass's input, stores into a reserved call frame, is not made: llrm pushes at selection, and pushfold.rs is the pass's one effect left, a once-read load pushed from memory (canFoldIntoRegPush); owner w-8; exit: none, the form is not produced. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
+        "CG6: callframe.rs translates the pass function by function (registry callframe@5), tested on hand-built call frames against llc -run-pass=x86-cf-opt; its input, stores into a reserved call frame, is made by no selector yet (llrm pushes at selection), so it finds none; pushfold.rs keeps the load fold for selection's pushes (CF1); reason: the producer is the SelectionDAG call lowering (sdag-a) and the reserved frame is laid out by prologue insertion (row 80, 2026-11-13); cost: none; exit: both landed and pushfold.rs deleted; owner w-5; review 2026-11-13. Pin: changed code in 59 (-O2) and 60 (-Os) of 77 IRs",
     ),
     row(
         "X86 Avoid Store Forwarding Blocks",
@@ -474,7 +474,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "flagscopy.rs",
         "",
-        "CG9: translated (registry flagscopy@5) over an explicit flags copy, the pseudo pair standing for the pin's COPY $eflags search (R1 one block, R2); reason: isel makes no flags copy; cost: none; exit: an isel producer of a flags copy; owner w-5; review 2026-11-19. Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs",
+        "CG9: translated function by function (registry flagscopy@5) over the pseudo pair `flags_copy`/`flags_restore` that stands for the two COPYs of $eflags (R2: isel makes none; exit: an isel producer; owner w-5; review 2026-11-19); all of runOnMachineFunction (cross-block copies, live-in flags, test-position hoisting, splitBlock) as the pin, checked against llc -run-pass=x86-flags-copy-lowering on three shapes; NF variants and fcmov N/A (APX / none pre-RA). Pin: changed code in 2 (-O2) and 2 (-Os) of 77 IRs (#3744)",
     ),
     row(
         "X86 DynAlloca Expander",
@@ -507,10 +507,10 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Process Implicit Definitions",
-        Missing,
+        Deviate,
+        "processimpdefs.rs",
         "",
-        "",
-        "w-1; 2026-11-13: (premise below: start only where ours exceeds pin-with) tied to MIR undef (LIR has no IMPLICIT_DEF; uninitialized reads are zero). Pin: changed code in 62 (-O2) and 63 (-Os) of 77 IRs",
+        "CG10: translated and wired (processimpdefs.rs, slot processimpdefs@2; isel emits `implicit_def` for poison and undef in a register, #3737, #3768, 8e6979c6b7); a phi of `implicit_def`s is one here and its users read undef (`canTurnIntoImplicitDef`); a phi with an undef operand that is no `implicit_def` is PHIElimination's (P2, `allPhiOperandsUndefined`, `SrcUndef`, `ImpDefs`); not translated: `INSERT_SUBREG` and `REG_SEQUENCE` users (PI-3, LIR has none); exit: PI-3 by 2026-11-13; owner w-8; review 2026-11-27. Pin: changed code in 62 (-O2) and 63 (-Os) of 77 IRs",
     ),
     row(
         "Remove unreachable machine basic blocks",
@@ -521,24 +521,24 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Eliminate PHI nodes for register allocation",
-        Missing,
-        "phielim.rs, phielimination.rs",
+        Match,
+        "phielimination.rs, phielim.rs (edge splitting)",
         "",
-        "w-1; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry phielim@4 is ours-own. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "translated: `LowerPHINode`, `SplitPHIEdges`, `LoweredPHIs`, plain `findPHICopyInsertPoint`; a phi from a non-predecessor is an error (#3850); the old lowering and the non-RFP route (P1, P4) are deleted; `allPhiOperandsUndefined`, `ImpDefs`, `SrcUndef` (P2, done); DEVIATEs P3, P6, P7 (phielimination.rs header). P7: no EH-pad or INLINEASM_BR insert points: the unwind edge is the runtime's (not an LIR edge) and no front end emits callbr; exit: a front end that does. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Two-Address instruction pass",
         Missing,
-        "twoaddr.rs",
+        "twoaddr.rs, twoaddress.rs",
         "",
-        "w-1; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry twoaddr@9. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "w-1; 2026-11-20: partial translation of [TwoAddressInstructionPass.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TwoAddressInstructionPass.cpp): `tryInstructionCommute`/`isProfitableToCommute` (#3637), `convertInstTo3Addr` at m32 and m16 (#3680, #3729), kills as `isPlainlyKilled` on one `LiveIntervals` shared with the Coalescer (TA-6 retired), `rescheduleMIBelowKill` (#3830), `rescheduleKillAboveMI` (#3882, plan #3804); DEVIATEs TA-1 to TA-5, TA-7 and TA-8 (twoaddress.rs header). The maps (`processCopy`, `scanUses`, `removeClobberedSrcRegMap`, #4054), `collectTiedOperands`' undef rewrite (#4068), `processTiedPairs`' distance and map entry (#4100), `tryInstructionTransform`'s order and unfold (#4109) and `convertInstTo3Addr`'s map and distance update (this row's last PR) are translated; the pairs themselves are made by `_untied`. Not applicable: `eliminateRegSequence`, `processStatepoint`. The update-in-place `_reused` is ours; one `LiveIntervals` per function (the pin's), made lazily. Row 62b, `handleMove` translated and used by TwoAddress (#3916, liveness/liveintervals/handlemove.rs; no bundles, no regmask slots), the other incremental updates MISSING: [`LiveIntervals::handleMove`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LiveIntervals.cpp) and the incremental updates a pass makes (w-1; 2026-11-20 with the TwoAddress sharing: translated, not patched around; TwoAddress edits one `LiveIntervals` and hands it to the Coalescer; used by TwoAddress, the coalescer and the greedy allocator). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Register Coalescer",
         Missing,
         "coalesce.rs, coalescer/",
         "",
-        "splitkit; 2026-11-06 (C5 dead copies through eliminateDeadDefs), 2026-11-14 (C2 physical-register copies, fires: 3256 in 88 of 130 m16 runs of the pin), 2026-11-20 (C1 lanes and C6 undef flags, fire: 5316 sub-register copies in 88 of 130), C3 implicit defs after w-1 rows 59/61; C7 terminal rule and debug values cannot fire (off at the pin, no -g). Each untranslated function, its permalink and blocker: docs/working/row63-66-plan.md. (premise below: start only where ours exceeds pin-with) registry coalesce@10 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "splitkit; 2026-11-13: registry coalesce@10 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs Translated: setRegisters, flip, isCoalescable, adjustCopiesBackFrom, hasOtherReachingDefs, removeCopyByCommutingDef, removePartialRedundancy, reMaterializeDef, updateRegDefsUses, joinCopy, JoinVals, joinVirtRegs, joinIntervals, joinAllIntervals, run. Not translated (all owner splitkit-port; dates after 11-03 are proposals): C1 no sub-register lanes, exit none while values have no lanes: [computeWriteLanes](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2746), [usesLanes](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3206), [taintExtent](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3166), [pruneSubRegValues](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3416), [isDefInSubRange](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3487), [pruneMainSegments](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3496), [joinSubRegRanges](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3616), [mergeSubRangeInto](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3678), [copyValueUndefInPredecessors](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2011), [setUndefOnPrunedSubRegUses](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2025); C2 no physical-register copies: [canJoinPhys](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1993), [joinReservedPhysReg](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L2314); C3 no IMPLICIT_DEF in LIR (rows 59, 61 are w-1's): [eliminateUndefCopy](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1742), [removeImplicitDefs](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3510); C6 no undef flags: [addUndefFlag](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1865); C5 a dead copy is removed inline, not by LiveRangeEdit (2026-11-06: switch to greedy/liverangeedit.rs): [eliminateDeadDefs](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L613), [LRE_WillEraseInstruction](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L623); C7 terminal rule, off by default at the pin, no date: [isTerminalReg](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4142), [applyTerminalRule](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4152); debug info (LIR has no DBG_VALUE), no date: [buildVRegToDbgValueMap](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3908), [checkMergingChangesDbgValues](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L3952), [lateLiveIntervalUpdate](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L4096).",
     ),
     row(
         "Rename Disconnected Subregister Components",
@@ -550,9 +550,9 @@ const ROWS: &[Row] = &[
     row(
         "Machine Instruction Scheduler",
         Missing,
-        "pressuresink.rs stands in",
+        "machinesched.rs",
         "-enable-misched=0",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) changed code in 55 (-O2) and 54 (-Os) of 77 IRs; -enable-misched=0 -O2: +0 instr, +154 B, 31 IRs differ; -enable-misched=0 -Os: +93 instr, +557 B, 30 IRs differ",
+        "w-2; 2026-11-06: landed: the region graph (#3827, ScheduleDAGInstrs::buildSchedGraph); #3836 (bottom_up: [tryCandidate](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3965), [tryPressure](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3805), [initPolicy](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3688)) landed; the pass runs as machinesched@5 after phielim (DEVIATE MS3-MS4; re-landed with the scheduling boundaries of isSchedulingBoundary). Left: [GenericScheduler::pickNode](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4180), [pickNodeFromQueue](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4077), [schedNode](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L4285), [registerRoots](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3786), [checkAcyclicLatency](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3758), [initialize](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L3657); [ScheduleDAGMILive::schedule](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L1691), [initRegPressure](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L1477), [updatePressureDiffs](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L1583), [computeCyclicCriticalPath](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L1811); [RegPressureTracker::recede](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterPressure.cpp#L772), [closeRegion](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterPressure.cpp#L335); [SchedBoundary::bumpNode](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L2957), [releaseNode](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L2818), [checkHazard](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineScheduler.cpp#L2716) (MS2: resource model, a deviation); the pass wiring. Pin: changed code in 55 (-O2) and 54 (-Os) of 77 IRs; -enable-misched=0 -O2: +0 instr, +154 B, 31 IRs differ; -enable-misched=0 -Os: +93 instr, +557 B, 30 IRs differ",
     ),
     again(
         "Greedy Register Allocator",
@@ -560,7 +560,7 @@ const ROWS: &[Row] = &[
         Missing,
         "allocate.rs, greedy/, splitkit",
         "-regalloc=fast",
-        "splitkit; 2026-11-10 (trySplitAroundHintReg and hint recoloring: collectHintInfo, getBrokenHintFreq, tryHintRecoloring, tryHintsRecoloring, aboutToRemoveInterval), 2026-11-12 (callee-saved cost: tryAssignCSRFirstTime, initializeCSRCost, calcSpillCost); the rest of RegAllocGreedy.cpp is translated, statistics and pass plumbing excepted. Each function and permalink: docs/working/row63-66-plan.md. (premise below: start only where ours exceeds pin-with) registry allocate@11 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "splitkit; 2026-11-13: registry allocate@11 is partial. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs Translated: enqueue, dequeue, tryAssign, evictInterference, tryEvict, addSplitConstraints, addThroughConstraints, growRegion, calcCompactRegion, calcBlockSplitCost, calcGlobalSplitCost, splitAroundRegion, tryRegionSplit, doRegionSplit, tryBlockSplit, tryInstructionSplit, calcGapWeights, tryLocalSplit, trySplit, mayRecolorAllInterferences, tryLastChanceRecoloring, tryRecoloringCandidates, selectOrSplit, selectOrSplitImpl. Not translated (owner splitkit-port; dates after 11-03 are proposals; greedy.rs header, until S2): hint recoloring, 2026-11-10: [trySplitAroundHintReg](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L1376), [collectHintInfo](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2471), [getBrokenHintFreq](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2516), [tryHintRecoloring](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2534), [tryHintsRecoloring](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2643), [aboutToRemoveInterval](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2418); CSR cost (the target's register costs are zero here, so the path is dropped; shrink wrapping owns callee-saved cost), 2026-11-12 after checking x86's CSR cost against the pin: [tryAssignCSRFirstTime](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2384), [initializeCSRCost](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2423), [calcSpillCost](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2356); statistics only, no date: [computeStats](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2786), [reportStats](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2878), [report](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2757); pass plumbing, not translated by design (the pass runs inside RegAlloc): RAGreedy ctor, [getAnalysisUsage](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L341), [releaseMemory](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L413), [runOnMachineFunction](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L289), [run](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2942), [hasVirtRegAlloc](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L2930). The other files of row 66 (InlineSpiller, SplitKit, LiveRangeEdit, LiveRegMatrix, InterferenceCache, SpillPlacement, EdgeBundles, VirtRegMap) are modules under greedy/, not listed here.",
     ),
     row(
         "Tile Register Configure",
@@ -579,17 +579,17 @@ const ROWS: &[Row] = &[
     ),
     row(
         "Virtual Register Rewriter",
-        Missing,
-        "rewriter.rs, parcopy.rs",
+        Match,
+        "rewriter.rs",
         "",
-        "splitkit; 2026-11-20: rewriter.rs translates VirtRegRewriter::rewrite and handleIdentityCopy (DEVIATE W1-W4); sub-register operands (SuperKills, SuperDefs, readsUndefSubreg) wait for C1 lanes on 2026-11-20, kill/dead flags and block live-ins and expandCopyBundle have no LIR counterpart (parcopy sequences copies). (premise below: start only where ours exceeds pin-with). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
+        "translated (#3736, rewriter::rewrite); DEVIATE W1-W4: no sub-registers, no kill flags or live-ins, parcopy sequences parallel copies, x87 renamed by the stackifier (splitkit-port). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs",
     ),
     row(
         "Stack Slot Coloring",
         Executed,
         "slots.rs",
         "-disable-ssc",
-        "frame slots of spilled values share when never live together; matched at the ablation. Pin: changed code in 48 (-O2) and 47 (-Os) of 77 IRs; -disable-ssc -O2: +94 instr, +2880 B, 37 IRs differ; -disable-ssc -Os: +6 instr, +1765 B, 33 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -Os: ours 106 instr 343 B, pin-with 100 instr 289 B, pin-without 100 instr 291 B (1 programs)",
+        "frame slots of spilled values share when never live together; matched at the ablation. Pin: changed code in 48 (-O2) and 47 (-Os) of 77 IRs; -disable-ssc -O2: +94 instr, +2880 B, 37 IRs differ; -disable-ssc -Os: +6 instr, +1765 B, 33 IRs differ",
     ),
     again(
         "Machine Copy Propagation Pass",
@@ -653,7 +653,7 @@ const ROWS: &[Row] = &[
         Executed,
         "saverestore.rs, shrinkwrap.rs",
         "-enable-shrink-wrap=0",
-        "follows ShrinkWrapImpl; the registry says Missing: reconcile at the ablation. Pin: changed code in 4 (-O2) and 4 (-Os) of 77 IRs; -enable-shrink-wrap=0 -O2: -1 instr, -1 B, 2 IRs differ; -enable-shrink-wrap=0 -Os: +0 instr, +0 B, 0 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 29 instr 104 B, pin-with 32 instr 111 B, pin-without 33 instr 111 B (1 programs); -Os: ours 20 instr 48 B, pin-with 21 instr 61 B, pin-without 21 instr 62 B (1 programs)",
+        "follows ShrinkWrapImpl; the registry says Missing: reconcile at the ablation. Pin: changed code in 4 (-O2) and 4 (-Os) of 77 IRs; -enable-shrink-wrap=0 -O2: -1 instr, -1 B, 2 IRs differ; -enable-shrink-wrap=0 -Os: +0 instr, +0 B, 0 IRs differ",
     ),
     row(
         "Prologue/Epilogue Insertion & Frame Finalization",
@@ -674,22 +674,22 @@ const ROWS: &[Row] = &[
         Missing,
         "jumps/branchfold.rs",
         "-disable-branch-fold",
-        "w-3; 2026-11-13: (premise below: start only where ours exceeds pin-with) registry jumps@17 is partial. Pin: changed code in 75 (-O2) and 75 (-Os) of 77 IRs; -disable-branch-fold -O2: +140 instr, +394 B, 40 IRs differ; -disable-branch-fold -Os: +134 instr, +323 B, 32 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 114 instr 296 B, pin-with 94 instr 271 B, pin-without 95 instr 271 B (1 programs); -Os: ours 234 instr 573 B, pin-with 217 instr 604 B, pin-without 221 instr 612 B (3 programs)",
+        "w-3; 2026-11-13: registry jumps@17 is partial. Pin: changed code in 75 (-O2) and 75 (-Os) of 77 IRs; -disable-branch-fold -O2: +140 instr, +394 B, 40 IRs differ; -disable-branch-fold -Os: +134 instr, +323 B, 32 IRs differ Done: TailMergeBlocks, OptimizeBlock L1451/L1503/L1551/L1586/L1685. Not yet translated (w-3, 2026-11-13): OptimizeBlock's block moves moveAfter/moveBefore (D20) [OptimizeBlock](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1426); a no-successor block moved to the end [L1601](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1601); forwarding across a branch-only block [L1702](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1702); fall-through creating moves [L1803](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1803), [L1868](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1868); [HoistCommonCode](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L1910) in full (only the inserted-move case is done in hoist_common), [HoistCommonCodeInSuccs](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/BranchFolding.cpp#L2043).",
     ),
     row(
         "Tail Duplication",
         Deviate,
         "jumps/ ",
         "-disable-tail-duplicate",
-        "CG4: late tail duplication is not translated; reason: -disable-tail-duplicate changes no clock, instruction or branch of 70 bench programs at m32 -O2 and -O3 (m16 -O2: 220 of 46865 in-loop instructions); cost: none measured; exit: re-measure with the ret duplication of STRISTMP-1; owner w-3; review 2026-11-20. Registry jumps@17. Pin: changed code in 33 (-O2) and 20 (-Os) of 77 IRs; -disable-tail-duplicate -O2: -42 instr, -193 B, 17 IRs differ; -disable-tail-duplicate -Os: +0 instr, +0 B, 0 IRs differ",
+        "CG4: late tail duplication is not translated; reason: -disable-tail-duplicate changes no clock, instruction or branch of 70 bench programs at m32 -O2 and -O3 (m16 -O2: 220 of 46865 in-loop instructions); cost: none measured; exit: re-measure with the ret duplication of STRISTMP-1; owner w-3; review 2026-11-20. Registry jumps@17. Pin: changed code in 33 (-O2) and 20 (-Os) of 77 IRs; -disable-tail-duplicate -O2: -42 instr, -193 B, 17 IRs differ; -disable-tail-duplicate -Os: +0 instr, +0 B, 0 IRs differ Layout-mode part only (placement/taildup.rs). Not yet translated (w-3, review 2026-11-20): [tailDuplicateBlocks](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L274) (the stand-alone late pass, a slot before placement); early-pass SSA update: [processPHI](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L350), [updateSuccessorsPHIs](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L482), [addSSAUpdateEntry](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L335), [duplicateInstruction](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L388), [appendCopies](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L1067), [tailDuplicateAndUpdate](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L165), [removeDeadBlock](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L1081); [duplicateSimpleBB](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L753) ([isSimpleBB](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L717), [canCompletelyDuplicateBB](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L737)); the STRISTMP-1 ret-block rule in [shouldTailDuplicate](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/TailDuplicator.cpp#L562). #3762 closes STRISTMP-1 for an and of two compares kept as a value.",
     ),
     again(
         "Machine Copy Propagation Pass",
         2,
-        Missing,
-        "",
+        Match,
+        "machinecp.rs (flow.rs: after ControlFlow, slot copyprop@18)",
         "-disable-copyprop",
-        "w-2; 2026-11-13: (premise below: start only where ours exceeds pin-with) llrm runs it once; the pin runs it again after tail duplication. Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs; -disable-copyprop -O2: +122 instr, +403 B, 38 IRs differ; -disable-copyprop -Os: +115 instr, +353 B, 34 IRs differ",
+        "translated: the pass runs again after the control flow, as the pin after tail duplication (de8c6bc87; test in jumps_tests.rs). Pin: changed code in 77 (-O2) and 77 (-Os) of 77 IRs; -disable-copyprop -O2: +122 instr, +403 B, 38 IRs differ; -disable-copyprop -Os: +115 instr, +353 B, 34 IRs differ",
     ),
     row(
         "Post-RA pseudo instruction expansion pass",
@@ -731,7 +731,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "jumps/placement",
         "-disable-block-placement",
-        "CG5: placement is translated (jumps/placement, #2629; its deviations D3-D6, D20-D22 in jumps-placement-check.md); reason: m32 -O2 taken branches ours 798165 against the pin's 786616 (+1.5%), -O3 +1.1%; the loops behind the residual are not placement: nbody_single = LSR's induction variable (w-5), x_adler = the compare sharing the subtract's flags (cmpsub@1, #3773) and the EmitLoweredSelect orientation (measured +3509 B, not landed, tail-dup-placement.md); cost: the 1.5% of taken branches; exit: those two causes, then re-measure with tools/pairs/bench_pin.py; owner w-3; review 2026-11-20. Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ. Premise (the one IR llrm-c hands its backend, to both; m32, the programs the pin's switch changes): -O2: ours 1366 instr 4616 B, pin-with 1275 instr 4256 B, pin-without 1257 instr 4000 B (9 programs); -Os: ours 635 instr 1776 B, pin-with 612 instr 1779 B, pin-without 623 instr 1800 B (7 programs)",
+        "CG5: placement is translated (jumps/placement, #2629; its deviations D3-D6, D20-D22 in jumps-placement-check.md); reason: m32 -O2 taken branches ours 798165 against the pin's 786616 (+1.5%), -O3 +1.1%; the loops behind the residual are not placement: nbody_single = LSR's induction variable (w-5), x_adler = the compare sharing the subtract's flags (cmpsub@1, #3773) and the EmitLoweredSelect orientation (measured +3509 B, not landed, tail-dup-placement.md); cost: the 1.5% of taken branches; exit: those two causes, then re-measure with tools/pairs/bench_pin.py; owner w-3; review 2026-11-20. Pin: changed code in 74 (-O2) and 62 (-Os) of 77 IRs; -disable-block-placement -O2: +286 instr, +1995 B, 64 IRs differ; -disable-block-placement -Os: +729 instr, +2802 B, 57 IRs differ Translated with deviations D3 (duplication by bytes), D4 (loop headers after latches), D5 (merge before/after), D6 (Frequency vs MBFI), D20-D22 (jumps-placement-check.md): [buildCFGChains](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L2799), [buildChain](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L1920), [buildLoopChains](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L2706), [rotateLoop](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L2423), [optimizeBranches](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L2964), [alignBlocks](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineBlockPlacement.cpp#L3003) (D2 selectBestSuccessor L1665 is retired). Review 2026-11-20 (w-3).",
     ),
     row(
         "Insert fentry calls",
@@ -781,7 +781,7 @@ const ROWS: &[Row] = &[
         Deviate,
         "fixupbw.rs",
         "",
-        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with two deviations: W1 real mode rewrites only if not longer (the 0x66 prefix), W3 a movsx within one register is refused; reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs",
+        "CG8: a pass mirroring the pin's functions (fixupbw.rs) with one deviation, W1: real mode rewrites only if not longer (the 0x66 prefix); reason: encoding facts; cost: the real-mode words stay words; exit: none (W1 is a fact of the encoding); owner w-5; review 2026-11-19. Pin: changed code in 63 (-O2) and 62 (-Os) of 77 IRs (#3749, #3777)",
     ),
     row(
         "X86 Atom pad short functions",
@@ -793,9 +793,9 @@ const ROWS: &[Row] = &[
     row(
         "X86 LEA Fixup",
         Deviate,
-        "peephole.peep `lea_fixup`; peephole.rs (`lea_fixed`)",
+        "fixupleas.rs",
         "",
-        "CG6: `optTwoAddrLEA` cases 1 and 2 are translated (peephole.peep `lea_fixup`, permalinks in docs/working/lea-fixup-plan.md); case 3 (`optLEAALU`, an LEA before a `sub`) is not; reason: no site found yet; cost: none measured; exit: translate it by 2026-11-09; owner w-6; review 2026-11-09. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
+        "CG6: `optTwoAddrLEA` is translated in fixupleas.rs (permalinks in docs/working/lea-fixup-plan.md): cases 1 and 2 (add, inc, dec) for every spelling of the address, the pin's LEA32r rule applied to our word LEAs too, which the pin leaves alone; case 3 (`optLEAALU`) is translated in fixupleas.rs as the pin has it, the add or sub within five instructions (PR 3; the one-instruction peephole rule is gone); the objects it changes over the 71 bench programs x 2 targets x 4 levels are 5, -24 B in all (lru m16 O1 -2, nbody_fixed m16 O2 and O3 -10 each, x_list m16 O3 -2, matmul m32 O3 +0); owner w-8; review 2026-11-30. Pin: changed code in 37 (-O2) and 41 (-Os) of 77 IRs",
     ),
     row(
         "X86 Fixup Inst Tuning",
@@ -981,6 +981,31 @@ fn every_codegen_row_states_its_reason() {
         }
     }
     assert!(REGISTRY_OWNER.starts_with("lir"));
+}
+
+/// The table in docs/working/codegen-slot-table.md has each row once, in the
+/// order of `ROWS`, under its own name: rows 23, 80 and 98 appeared twice after
+/// merges of generated lines (23 as both EXECUTED and MISSING), and the board's
+/// grep counts were wrong for it.
+#[test]
+fn the_slot_table_document_has_every_row_number_once_under_its_name() {
+    let text = include_str!("../../../../docs/working/codegen-slot-table.md");
+    let mut seen: Vec<(usize, String)> = Vec::new();
+    for line in text.lines() {
+        let Some(rest) = line.strip_prefix("| ") else { continue };
+        let mut cells = rest.split(" | ");
+        let (Some(number), Some(name)) = (cells.next(), cells.next()) else { continue };
+        if let Ok(number) = number.parse::<usize>() {
+            seen.push((number, name.to_owned()));
+        }
+    }
+    let numbers: Vec<usize> = seen.iter().map(|(number, _)| *number).collect();
+    let expected: Vec<usize> = (1..=ROWS.len()).collect();
+    assert_eq!(numbers, expected, "a row is missing, repeated or out of order");
+    for ((number, name), row) in seen.iter().zip(ROWS) {
+        let run = if row.nth > 1 { format!(" (run {})", row.nth) } else { String::new() };
+        assert_eq!(name, &format!("{}{run}", row.pass), "row {number}");
+    }
 }
 
 #[test]

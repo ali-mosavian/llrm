@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/canonical_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/canonical_tests.rs`, the port of
 //! `tests/test_canonical.py`, each body now MIR text run by llrm-mir's
 //! interpreter.
 //!

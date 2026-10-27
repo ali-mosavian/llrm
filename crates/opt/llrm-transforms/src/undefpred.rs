@@ -61,6 +61,11 @@ pub fn removed(
         return false;
     }
     for phi in crate::edges::phis(function, block) {
+        // Only a constant is undefined on the edge: the pin's
+        // `passingValueIsAlwaysUndefined` returns on anything else first.
+        if !function.instruction(phi).operands.chunks(2).any(|arm| matches!(arm[0], Operand::Constant(_))) {
+            continue;
+        }
         for (value, pred) in llrm_analysis::occurrence::arms(function, phi) {
             if !crate::alwaysundef::always_undefined(context, spec, function, value, phi, false) {
                 continue;
