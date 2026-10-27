@@ -41,7 +41,7 @@ while true; do
     # a PR listed in solo.txt at the head of the queue is a batch of its own (the others wait one cycle)
     solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
     # PRs in $LAND_TMP/urgent.txt (landing fixes) are a batch of their own, in that order; the rest wait one cycle
-    urgent=($(urgent_listed "${LAND_TMP:-/tmp/landing}/urgent.txt" "${cand[@]}")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
+    urgent=($(urgent_from_queue "${LAND_TMP:-/tmp/landing}/urgent.txt" "$Q")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
     python3 "$HERE/pr_state.py" fill "${cand[@]:0:BATCH_CAP}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"  # one GraphQL call for the cycle's reads below
     cand=($(open_only "${cand[@]:0:BATCH_CAP}" 2>/dev/null)); cand=($(HEAD_MIN_AGE=$(batch_head_age $([ -z "$solo" ] && echo ${#urgent[@]} || echo 0)) aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
     # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
