@@ -19,7 +19,9 @@
 //! it to break the wait for the old register (`sbb r, r` after `MOV32r0`). A
 //! core that runs in order does not wait, so `v1 := mov 0; v2 := sbb v1, v1`
 //! is `v2 := sbb undef, undef`, and `v2` is free to be where it is wanted
-//! (`cmp ax, 1; sbb ax, ax`, not `sbb ecx, ecx; mov ax, cx`).
+//! (`cmp ax, 1; sbb ax, ax`, not `sbb ecx, ecx; mov ax, cx`). The pin does it
+//! after allocation: `X86InstrInfo::expandPostRAPseudo` expands `SETB_C32r`
+//! with `Expand2AddrUndef`, which marks the source undef.
 //!
 //! DEVIATE PI-3 (exit: none): only a full copy is turned into an
 //! `implicit_def`; the pin also turns `INSERT_SUBREG` and `REG_SEQUENCE`, which
@@ -133,13 +135,26 @@ fn ignored_inputs_undefined(body: LirBody) -> LirBody {
         .iter()
         .flat_map(|block| block.insns.iter())
         .filter(|one| ignores_its_input(one).is_none())
-        .flat_map(|one| one.uses.iter().chain(&one.requires.iter().map(|(held, _)| held.value).collect::<Vec<_>>()).copied().collect::<Vec<_>>())
-        .chain(body.blocks.iter().flat_map(|block| block.phis.iter()).flat_map(|phi| phi.incoming.iter().map(|&(_, value)| value)))
+        .flat_map(|one| {
+            one.uses
+                .iter()
+                .chain(&one.requires.iter().map(|(held, _)| held.value).collect::<Vec<_>>())
+                .copied()
+                .collect::<Vec<_>>()
+        })
+        .chain(
+            body.blocks
+                .iter()
+                .flat_map(|block| block.phis.iter())
+                .flat_map(|phi| phi.incoming.iter().map(|&(_, value)| value)),
+        )
         .collect();
     let constant = |one: &Insn| {
-        one.what.as_ref().is_some_and(|what| {
-            what.op == Operation::Move && what.sources.len() == 1 && matches!(what.sources[0], Loc::Imm(_))
-        })
+        one.what
+            .as_ref()
+            .is_some_and(
+                |what| what.op == Operation::Move && what.sources.len() == 1 && matches!(what.sources[0], Loc::Imm(_)),
+            )
     };
     let blocks: Vec<_> = body
         .blocks
