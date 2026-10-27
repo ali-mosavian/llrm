@@ -24,23 +24,25 @@ Reading: the structural gap is not one pass. Peephole redoes at post-RA what the
 
 d_faces -O2 m32, parity 59c834686, callgrind checked with `tools/callgrind-check.py` (0 false edges under `Peephole::once`). `Peephole::once` is 33.7 M Ir for 6 functions: one run per function, not six. The pin's post-RA equivalents are MachineCopyPropagation 3.4 + PeepholeOptimizer 1.0 + BranchFolder 3.0. The gap is content, not pass count: the sub-passes below do at post-RA what the pin does before register allocation. It shrinks as the DAG selector takes each over; each moves out of `once` when its row lands.
 
-Pin homes are from each sub-pass's name and header, not yet checked against the pin source: the owner who picks a row confirms the home first.
+Pin homes below are checked against the pin source (`d1106deb71cc`, file:line); a row marked "unchecked" has a home from the sub-pass's name only.
 
-| Sub-pass (peephole.rs `once`) | Pin home | Lane |
+| Sub-pass (peephole.rs `once`) | Pin home (file:line) | Lane |
 |---|---|---|
-| `extensions`, `zero_extensions`, `widened_moves`, `upperzero::hoisted` | X86 ISel zext/sext patterns, DAGCombiner known bits | DAG matcher, combiner |
-| `narrowed_arithmetic`, `narrowed_moves` | ISel width patterns, `reduceLoadWidth` | DAG matcher, combiner |
-| `fused`, `fused_calls`, `far_loads` (load folding) | ISel load/op patterns; PeepholeOptimizer `foldMemoryOperand` | DAG matcher |
-| `zeroes`, `zeroed_loads` | ISel `MOV32r0` and pseudo expansion | DAG matcher |
-| `zero_compares`, `tested`, `compares_again`, `stepped_after_compare` | PeepholeOptimizer `optimizeCmpInstr`; ISel `TEST` patterns | peephole (same place), matcher |
-| `addresses`, `_affine_address`, `loaded_addresses` | X86DAGToDAG `matchAddress`; X86FixupLEAs | DAG matcher |
-| `borrows`, `increments`, `doubled`, `commuted` | ISel adc/sbb/inc/dec/shl-as-add patterns; TwoAddress commute | DAG matcher, twoaddr |
-| `storecombine`, `sharedstores::shared` | DAGCombiner `MergeConsecutiveStores`; MachineCSE | DAG combiner |
-| `pushed_constants`, `pushes`, `popped_arguments` | ISel `PUSH32i` patterns; X86CallFrameOptimization | DAG matcher, frame |
-| `copysink::sunk`, `postrasink::sunk`, `latched` | MachineSink; PostRAMachineSinking | post-RA, same place |
-| `machinecp::propagated`, `forwarded_copies` | MachineCopyPropagation (twice per function, as ours) | same place |
-| `machinedce::eliminated` | DeadMachineInstructionElim | same place |
-| `slotcopies::merged`, `forwarded_reloads`, `unread_spill_stores` | InlineSpiller, StackSlotColoring | allocator |
+| `extensions`, `zero_extensions`, `widened_moves`, `upperzero::hoisted` | `X86InstrExtension.td:73-75` (`MOVZX32rr8` zext pattern); `DAGCombiner.cpp:1487` SimplifyDemandedBits | DAG matcher, combiner |
+| `narrowed_arithmetic`, `narrowed_moves` | `DAGCombiner.cpp:17095` reduceLoadWidth; `DAGCombiner.cpp:1487` | DAG combiner |
+| `fused`, `fused_calls`, `far_loads` (load folding) | `X86InstrInfo.cpp:7773` foldMemoryOperandImpl; `PeepholeOptimizer.cpp:1436` isLoadFoldable | DAG matcher, peephole |
+| `zeroes`, `zeroed_loads` | `X86InstrCompiler.td:321` `MOV32r0` | DAG matcher |
+| `zero_compares`, `tested`, `compares_again`, `stepped_after_compare` | `PeepholeOptimizer.cpp:948` optimizeCmpInstr; `X86InstrInfo.cpp:5473` optimizeCompareInstr | peephole (same place) |
+| `addresses`, `_affine_address`, `loaded_addresses` | `X86ISelDAGToDAG.cpp:2053` matchAddress; X86FixupLEAs unchecked | DAG matcher |
+| `increments` | `X86InstrArithmetic.td:393,425` (inc/dec on add-with-flag) | DAG matcher |
+| `borrows`, `doubled`, `commuted` | adc/sbb patterns, shl-as-add, TwoAddress commute: unchecked | DAG matcher, twoaddr |
+| `storecombine` | `DAGCombiner.cpp:24277` mergeConsecutiveStores | DAG combiner |
+| `sharedstores::shared` | MachineCSE: unchecked | machine CSE |
+| `pushed_constants`, `pushes`, `popped_arguments` | `X86InstrMisc.td:98,101` `PUSH32i8`/`PUSH32i`; `X86CallFrameOptimization.cpp:248` | DAG matcher, frame |
+| `copysink::sunk`, `postrasink::sunk`, `latched` | `MachineSink.cpp:840` MachineSinking; `MachineSink.cpp:2375` PostRAMachineSinking | same place |
+| `machinecp::propagated`, `forwarded_copies` | `MachineCopyPropagation.cpp:1619`, run twice per function: `TargetPassConfig.cpp:1546,1575` (ours: Peephole and the last phase) | same place |
+| `machinedce::eliminated` | `DeadMachineInstructionElim.cpp:79` | same place |
+| `slotcopies::merged`, `forwarded_reloads`, `unread_spill_stores` | `InlineSpiller.cpp:1460` spill; `StackSlotColoring.cpp:363,460` | allocator |
 | `loaded_segments`, `exact_addresses`, `phielim::unsplit` | none (segments, our phi form) | LLRM-only |
 
 Not a lever: re-scheduling the pass. The count is one run per function, as the pin's.
