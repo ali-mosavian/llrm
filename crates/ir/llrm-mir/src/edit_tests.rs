@@ -325,6 +325,8 @@ fn the_verifier_finds_a_record_before_an_erased_instruction() {
         before: x,
         variable: crate::MetadataId(0),
         what: crate::DebugWhat::Gone,
+        expression: None,
+        location: None,
     });
     let found = crate::verify::verify(&parsed);
     assert!(
@@ -479,6 +481,45 @@ fn erasing_branches_to_one_block_reads_none_of_its_other_uses() {
     assert!(f.check_uses().is_empty());
     // `sole_successor_start` looks at two entries of the list, never the whole.
     assert!(walked <= 2 * 200, "{walked} list entries read erasing 200 of 400 branches to one block");
+}
+
+/// A phi's incoming blocks were on the block's use list beside the
+/// terminators naming it: asking for the single predecessor of a block with 30
+/// phis walked 31 entries, the pin's `getSinglePredecessor` one or two
+/// (`isImpliedByDomCondition` 120 Ir a call against 7). A phi's edges are
+/// kept apart, as LLVM keeps them beside the phi.
+#[test]
+fn a_blocks_predecessors_do_not_walk_the_phis_that_name_it() {
+    let phis: String = (0..30).map(|i| format!("  %p{i} = phi i32 [ {i}, %entry ]\n")).collect();
+    let mut module = module(&format!("define void @f() {{\nentry:\n  br label %end\nend:\n{phis}  ret void\n}}\n"));
+    let f = function(&mut module);
+    let end = f.layout()[1];
+    crate::uselist::WALKED.with(|walked| walked.set(0));
+    let single = f.sole_predecessor(end);
+    let walked = crate::uselist::WALKED.with(|walked| walked.get());
+    assert_eq!(single, Some(f.layout()[0]));
+    assert!(walked <= 2, "{walked} list entries read for the one predecessor of a block named by 30 phis");
+    assert!(f.check_uses().is_empty());
+    assert_eq!(f.phi_block_users(end).iter().count(), 0);
+    assert_eq!(f.phi_block_users(f.layout()[0]).iter().count(), 30);
+}
+
+/// A branch's targets were read by the scan that serves a switch (a match, a
+/// scan for a repeat and a push for each operand: 101 Ir a call, 64 K calls in
+/// d_faces -O2). They are read straight into the list, a conditional branch to
+/// one block twice naming it once.
+#[test]
+fn successors_of_a_branch_take_no_scan() {
+    let mut module = module(
+        "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br i1 %c, label %b, label %b\nb:\n  br label %entry\n}\n",
+    );
+    let f = function(&mut module);
+    let layout = f.layout().to_vec();
+    crate::module::GENERIC_SUCCESSOR_SCANS.with(|scans| scans.set(0));
+    let found: Vec<Vec<_>> = layout.iter().map(|&at| f.successors(at).into_iter().collect()).collect();
+    let scans = crate::module::GENERIC_SUCCESSOR_SCANS.with(std::cell::Cell::get);
+    assert_eq!(found, [vec![layout[1], layout[2]], vec![layout[2]], vec![layout[0]]]);
+    assert_eq!(scans, 0, "branches read the long way");
 }
 
 /// The phis of its successor named a block in its list of uses, where LLVM

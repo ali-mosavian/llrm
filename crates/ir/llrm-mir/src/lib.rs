@@ -25,6 +25,7 @@ pub mod counts;
 pub mod cursor;
 pub mod cycleinfo;
 pub mod datalayout;
+pub mod dbgimport;
 pub mod debuginfo;
 pub mod dense;
 pub mod depends;

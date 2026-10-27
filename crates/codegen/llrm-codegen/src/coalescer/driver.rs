@@ -14,10 +14,14 @@
 //! enables). A copy that is `Deferred` stays for the next round; rounds repeat
 //! while one makes progress, since a join can make another possible.
 //!
-//! DEVIATE C7 (no number): the terminal rule (`applyTerminalRule`) is not
-//! translated: `-terminal-rule` is off by default at the pin. `ToBeUpdated`,
-//! `lateLiveIntervalUpdate`, `InflateRegs` and the debug-info maps belong to
-//! parts this coalescer lacks (DEVIATE C4, C1) or to debug info.
+//! The terminal rule (`applyTerminalRule`, `-terminal-rule`, on by default at
+//! the pin): a copy whose destination has no other copy and whose source also
+//! feeds a copy of a non-terminal value it overlaps goes to the end of the
+//! block's list, so the other copy is tried first.
+//!
+//! DEVIATE C7 (no number): `ToBeUpdated`, `lateLiveIntervalUpdate`,
+//! `InflateRegs` and the debug-info maps belong to parts this coalescer lacks
+//! (DEVIATE C4, C1) or to debug info.
 //!
 //! # Example
 //! `v2 := mov v1; v3 := mov v2; read v3`: both copies are tried in the one
@@ -80,6 +84,51 @@ fn is_local_copy(
     let Some((dst, src)) = full_copy(lis.instr(copy)) else { return false };
     let (src, dst) = (lis.interval_rc(src.value), lis.interval_rc(dst.value));
     lis.interval_is_in_one_mbb(&src).is_some() || lis.interval_is_in_one_mbb(&dst).is_some()
+}
+
+/// `isTerminalReg`: `reg` has no copy but `copy`.
+fn is_terminal_reg(
+    lis: &LiveIntervals,
+    reg: u32,
+    copy: InstrKey,
+) -> bool {
+    lis.operands(reg).iter().all(|one| one.instr == copy || full_copy(lis.instr(one.instr)).is_none())
+}
+
+/// `applyTerminalRule`.
+fn apply_terminal_rule(
+    lis: &mut LiveIntervals,
+    copy: InstrKey,
+    block: usize,
+) -> bool {
+    let Some((dst, src)) = full_copy(lis.instr(copy)) else { return false };
+    if !is_terminal_reg(lis, dst.value, copy) {
+        return false;
+    }
+    // DstReg is a terminal node: does it interfere with any other copy
+    // involving SrcReg in this block?
+    let dst_interval = lis.interval_rc(dst.value);
+    let others: Vec<InstrKey> = lis.operands(src.value).iter().map(|one| one.instr).collect();
+    for other in others {
+        if other == copy {
+            continue;
+        }
+        let Some((other_dst, other_src)) = full_copy(lis.instr(other)) else { continue };
+        let at = lis.indexes.get_instruction_index(other);
+        if lis.indexes.get_mbb_from_index(&at) != block {
+            continue;
+        }
+        let other_reg = if other_dst.value == src.value { other_src.value } else { other_dst.value };
+        // Check if OtherReg is a non-terminal.
+        if is_terminal_reg(lis, other_reg, other) {
+            continue;
+        }
+        // Check that OtherReg interferes with DstReg.
+        if lis.interval_rc(other_reg).overlaps(&dst_interval) {
+            return true;
+        }
+    }
+    false
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -164,13 +213,20 @@ impl Coalescer<'_> {
         let prev_size = self.work.len();
         let copies: Vec<InstrKey> =
             self.lis.block_insns(block).iter().filter(|one| full_copy(one).is_some()).map(|one| one.id()).collect();
+        let (mut local_terminals, mut global_terminals) = (Vec::new(), Vec::new());
         for copy in copies {
-            if is_local_copy(self.lis, copy) {
-                self.local.push(Some(copy));
-            } else {
-                self.work.push(Some(copy));
+            let terminal = apply_terminal_rule(self.lis, copy, block);
+            match (is_local_copy(self.lis, copy), terminal) {
+                (true, true) => local_terminals.push(Some(copy)),
+                (true, false) => self.local.push(Some(copy)),
+                (false, true) => global_terminals.push(Some(copy)),
+                (false, false) => self.work.push(Some(copy)),
             }
         }
+        // Append the copies evicted by the terminal rule at the end of the
+        // list.
+        self.local.append(&mut local_terminals);
+        self.work.append(&mut global_terminals);
         // Try coalescing the collected copies immediately, and remove the
         // nulls. This prevents the work list from getting too large since most
         // copies are joinable on the first attempt.

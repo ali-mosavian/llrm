@@ -325,14 +325,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FDiv => self.visit_fdiv(node),
             ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
+            ISD::BSwap => self.visit_bswap(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
-            ISD::BSwap => self.visit_bswap(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
+            ISD::SignExtendInReg => self.visit_sext_in_reg(node),
             _ => None,
         }
     }
@@ -725,11 +726,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let (lhs, rhs) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
         let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(n0, 2)).data else { return None };
-        let not_cc = if self.dag.value_type(lhs).is_integer() { cc.inverse_integer() } else { cc.inverse_float() };
+        // A far pointer is an integer to the pin (`i32`), not a float.
+        let is_float = self.dag.value_type(lhs).is_floating_point();
+        let not_cc = if is_float { cc.inverse_float() } else { cc.inverse_integer() };
         // `isCondCodeLegal`: x86 expands `oeq` and `une` (two flags), so once
         // operations are legal the fold must not make one.
         if self.level >= CombineLevel::AfterLegalizeVectorOps
-            && !self.dag.value_type(lhs).is_integer()
+            && is_float
             && matches!(not_cc, CondCode::SetOEq | CondCode::SetUNe)
         {
             return None;
@@ -1718,6 +1721,64 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.reassociate_ops(ISD::Mul, n0, n1)
+    }
+    /// `visitSIGN_EXTEND_INREG` ([pin][pin]): an operand that is already
+    /// sign-extended, nested in-regs, a `sext`/`aext`/`zext` of a value no
+    /// wider than the type, a clear sign bit; then the demanded bits.
+    /// SD313: not the vector in-reg forms, nor `reduceLoadWidth`.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17400
+    fn visit_sext_in_reg(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let super::dag::NodeData::ValueType(ext) = self.dag.node(n1).data else { return None };
+        let (bits, ext_bits) = (vt.size_in_bits(), ext.size_in_bits());
+        if self.dag.is_undef(n0) {
+            return Some(self.dag.get_constant(0, vt));
+        }
+        // already sign extended
+        if bits - super::known_bits::num_sign_bits(self.dag, n0) + 1 <= ext_bits {
+            return Some(n0);
+        }
+        if self.dag.opcode(n0) == ISD::SignExtendInReg {
+            if let super::dag::NodeData::ValueType(inner) = self.dag.node(self.dag.operand(n0, 1)).data {
+                if ext_bits < inner.size_in_bits() {
+                    let x = self.dag.operand(n0, 0);
+                    return Some(self.dag.get_node(ISD::SignExtendInReg, vt, &[x, n1]));
+                }
+            }
+        }
+        let sext_legal = !self.legal_operations() || self.fp_op_legal(ISD::SignExtend, vt);
+        let n00 = match self.dag.opcode(n0) {
+            ISD::SignExtend | ISD::AnyExtend | ISD::ZeroExtend => self.dag.operand(n0, 0),
+            _ => n0,
+        };
+        match self.dag.opcode(n0) {
+            ISD::SignExtend | ISD::AnyExtend if sext_legal => {
+                let small = self.dag.value_type(n00).size_in_bits();
+                if small <= ext_bits
+                    || self.dag.value_type(n00).size_in_bits() - super::known_bits::num_sign_bits(self.dag, n00) + 1
+                        <= ext_bits
+                {
+                    return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));
+                }
+            }
+            ISD::ZeroExtend if sext_legal && self.dag.value_type(n00).size_in_bits() == ext_bits => {
+                return Some(self.dag.get_node(ISD::SignExtend, vt, &[n00]));
+            }
+            _ => {}
+        }
+        // the sign bit is known clear: a zero-extend in register
+        let sign = 1u128 << (ext_bits - 1);
+        if super::known_bits::known_bits(self.dag, n0).zero & sign != 0 {
+            let mask = self.dag.get_constant(super::fold::mask(ext_bits), vt);
+            return Some(self.dag.get_node(ISD::And, vt, &[n0, mask]));
+        }
+        self.simplify_demanded(node)
     }
 }
 

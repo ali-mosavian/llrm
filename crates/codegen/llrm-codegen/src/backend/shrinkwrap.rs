@@ -131,6 +131,10 @@ pub struct Wrap {
     /// where it falls into it (the edge `tryToSplitRestore` puts the epilogue
     /// on), in that order.
     pub closes_after: BTreeMap<i64, Vec<Piece>>,
+    /// Taken back on the taken edge of the block's conditional branch to the
+    /// restore: `masm` makes the block `tryToSplitRestore` splits the edge
+    /// with, after the procedure's last.
+    pub closes_taken: BTreeMap<i64, Vec<Piece>>,
     pub wrapped: BTreeSet<Piece>,
 }
 
@@ -238,7 +242,9 @@ pub fn wrapped(
         if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
             continue;
         }
-        if !split.iter().all(|&one| ends_on_edge_into(body, one, placement.restore)) {
+        if !split.iter().all(|&one| {
+            ends_on_edge_into(body, one, placement.restore) || ends_on_taken_edge_into(body, one, placement.restore)
+        }) {
             continue;
         }
         let (save, restore) = (body.blocks[placement.save.0 as usize].at, body.blocks[placement.restore.0 as usize].at);
@@ -271,8 +277,18 @@ pub fn wrapped(
         }
         pieces.extend(kept.iter().map(|&register| Piece::Saved(register)));
         let closes: Vec<Piece> = pieces.iter().rev().copied().collect();
+        let mut closes_taken = BTreeMap::new();
         let (closes, closes_after) = if !split.is_empty() {
-            (BTreeMap::new(), split.iter().map(|one| (body.blocks[one.0 as usize].at, closes.clone())).collect())
+            let mut after = BTreeMap::new();
+            for &one in split {
+                let at = body.blocks[one.0 as usize].at;
+                if ends_on_taken_edge_into(body, one, placement.restore) {
+                    closes_taken.insert(at, closes.clone());
+                } else {
+                    after.insert(at, closes.clone());
+                }
+            }
+            (BTreeMap::new(), after)
         } else if returns {
             (BTreeMap::from([(restore, closes)]), BTreeMap::new())
         } else {
@@ -283,6 +299,7 @@ pub fn wrapped(
             opens: BTreeMap::from([(save, pieces)]),
             closes,
             closes_after,
+            closes_taken,
         });
     }
     None
@@ -313,6 +330,25 @@ fn ends_on_edge_into(
         ir::Operation::Return => false,
         _ => next && only,
     }
+}
+
+/// Whether `from` ends in a conditional branch that takes it to `to` and
+/// falls into another block: the edge `tryToSplitRestore` splits is the taken
+/// one.
+fn ends_on_taken_edge_into(
+    body: &LirBody,
+    from: BlockId,
+    to: BlockId,
+) -> bool {
+    let (Some(block), Some(restore)) = (body.blocks.get(from.0 as usize), body.blocks.get(to.0 as usize)) else {
+        return false;
+    };
+    let Some(what) =
+        block.insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| one.what.as_ref())
+    else {
+        return false;
+    };
+    what.op == ir::Operation::Branch && what.target == Some(restore.at) && from.0 + 1 != to.0
 }
 
 /// Whether `from` leaves by one jump, or falls out by none, and so can take the
@@ -616,18 +652,25 @@ mod tests {
         assert!(wrap.is_some_and(|wrap| wrap.closes_after.contains_key(&2)));
     }
 
-    /// A late path whose conditional branch takes it to the return has its
-    /// not-taken edge elsewhere: the end of the block is on neither edge alone,
-    /// and nothing is saved late.
+    /// A late path whose conditional branch takes it to the shared return
+    /// pops on that edge: the early exit still skips the prologue (x_mergesort
+    /// `msort` pushed four registers before its early `jl`).
     #[test]
-    fn test_a_late_path_that_branches_to_the_shared_return_keeps_the_save_at_the_entry() {
+    fn test_a_late_path_that_branches_to_the_shared_return_pops_on_the_taken_edge() {
+        let jump =
+            insn(42, Semantics { name: Some("jmp".into()), target: Some(3), ..Semantics::new(ir::Operation::Jump) });
         let blocks = vec![
             block(0, vec![branch(2, 3)], vec![3, 2]),
             block(2, vec![touch(20, RegId::ESI), branch(22, 3)], vec![3, 4]),
-            block(4, vec![touch(40, RegId::EBX), ret(42)], vec![]),
+            block(4, vec![touch(40, RegId::ESI), jump], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).is_none());
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).expect("a wrap");
+        assert!(
+            wrap.closes_after.contains_key(&4)
+                && wrap.closes_taken.contains_key(&2)
+                && !wrap.closes_after.contains_key(&2)
+        );
     }
 
     /// Two late paths that each use a register were saved and popped per exit

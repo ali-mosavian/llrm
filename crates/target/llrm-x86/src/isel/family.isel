@@ -448,6 +448,7 @@ pattern freeze
   emit mov r <- s
 end
 
+# Where an i64 is its halves, a frozen one is the same halves.
 pattern wide_freeze
   match freeze.i64
   when splits_i64

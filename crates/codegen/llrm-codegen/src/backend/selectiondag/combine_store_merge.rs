@@ -182,7 +182,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         stores: &[Link],
         root: SDValue,
     ) -> bool {
-        let mut visited = std::collections::HashSet::new();
+        let mut visited = crate::support::hash::HashSet::default();
         let mut worklist = vec![root.node];
         while let Some(node) = worklist.pop() {
             if !visited.insert(node) {
@@ -209,7 +209,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     fn has_predecessor(
         &self,
         target: u32,
-        visited: &mut std::collections::HashSet<u32>,
+        visited: &mut crate::support::hash::HashSet<u32>,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {

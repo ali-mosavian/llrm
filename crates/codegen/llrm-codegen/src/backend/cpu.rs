@@ -294,7 +294,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
-            private: private_convention(arch, llrm_support::env_set("LLRM_PRIVATE_WATCALL")),
+            private: private_convention(arch, llrm_support::env_flag!("LLRM_PRIVATE_WATCALL")),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
@@ -748,6 +748,23 @@ mod tests {
         let flat: &'static Profile = Box::leak(Box::new(Profile::new(&llrm_x86_m32::M32, "486", 1, true, 1, 0)));
         assert!(crate::abi::qb::LoweredTarget::of(flat, abi()).tti().is_some());
         assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_some());
+    }
+
+    /// The target every frontend lowers to states its C library: real mode's
+    /// `_sin@3`. `library` was not forwarded, so no declaration was a library
+    /// function's and viewfx called `sin` 13 times where the pin calls 4.
+    #[test]
+    fn test_the_lowered_target_forwards_its_library() {
+        use llrm_mir::target::Machine;
+        let abi = crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+            hosted: false,
+        };
+        let library = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi).library().expect("states one");
+        assert_eq!(library.standard("_sin@3"), "sin");
     }
 
     /// The target every frontend lowers to states X86's `TargetLowering`
