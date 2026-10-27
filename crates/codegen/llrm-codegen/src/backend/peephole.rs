@@ -641,7 +641,8 @@ pub fn high_extracts<'a>(
             })[&at]
                 .clone()
         };
-        let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
+        let sunk = _copies_sunk_to_high_shifts(regs, body.bits, &block.insns);
+        let insns = _code_windows(sunk.as_deref().unwrap_or(&block.insns), 3, |run| -> Result<_, String> {
             if run.len() == 3 {
                 if let Some(changed) =
                     _register_high_extract(regs, body.bits, run, &dead_after, &virtual_uses, profile)?
@@ -661,6 +662,68 @@ pub fn high_extracts<'a>(
         blocks.push(block.with_insns(insns));
     }
     Ok(body.with_blocks(blocks))
+}
+
+/// `mov dst, src` moved down to the `shr dst, 16` it feeds when the code
+/// between neither reads or writes `dst` nor writes `src` (an allocation can
+/// put a spill store of `src` in between), so the pair is adjacent for the high
+/// extract. `None` where nothing moved.
+fn _copies_sunk_to_high_shifts(
+    regs: Regs,
+    bits: u32,
+    insns: &[Arc<Insn>],
+) -> Option<Vec<Arc<Insn>>> {
+    const REACH: usize = 6;
+    let shifted = |one: &Insn| -> Option<Reg> {
+        let what = one.what.as_ref()?;
+        match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
+            (
+                Operation::Binary,
+                Some("shr"),
+                [Loc::Reg(dest @ Reg { width: 4, .. })],
+                [Loc::Reg(read), Loc::Imm(count)],
+            ) if dest == read && count.value == 16 => Some(*dest),
+            _ => None,
+        }
+    };
+    let mut out: Option<Vec<Arc<Insn>>> = None;
+    for shift_at in 0..insns.len() {
+        let list = out.as_deref().unwrap_or(insns);
+        let Some(dest) = shifted(&list[shift_at]) else { continue };
+        let dest_lanes = _lanes(regs, dest.register);
+        let mut between: Vec<&Arc<Insn>> = Vec::new();
+        for at in (0..shift_at).rev().take(REACH + 1) {
+            let one = &list[at];
+            if one.is_meta() {
+                continue;
+            }
+            let Some((copied, source)) = crate::backend::copysink::copy_of(one).filter(|(copied, _)| *copied == dest)
+            else {
+                between.push(one);
+                continue;
+            };
+            if ir::root(dest.register) != ir::root(source.register) && !between.is_empty() {
+                let source_lanes = _lanes(regs, source.register);
+                let clear = between
+                    .iter()
+                    .all(
+                        |other| other.what.is_some()
+                            && other.clobbers.is_empty()
+                            && !crate::backend::copysink::touches(regs, bits, other, &dest_lanes, true)
+                            && !crate::backend::copysink::touches(regs, bits, other, &dest_lanes, false)
+                            && !crate::backend::copysink::touches(regs, bits, other, &source_lanes, false),
+                    );
+                if clear {
+                    let mut moved = list.to_vec();
+                    let copy = moved.remove(at);
+                    moved.insert(shift_at - 1, copy);
+                    out = Some(moved);
+                }
+            }
+            break;
+        }
+    }
+    out
 }
 
 fn _register_high_extract(

@@ -3293,6 +3293,58 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
 }
 
 #[test]
+fn test_a_move_shift_high_extract_is_found_past_an_unrelated_instruction() {
+    // regparm3_matrix_4 (m16 -Os): a recolored allocation put the spill store
+    // of the return value between `mov esi, eax` and `shr esi, 16`, and the
+    // shift stayed (`mov` + `shr` for one `shld`, +8 bytes).
+    let (source, high) = (rl(RegId::ECX, 4), rl(RegId::EDX, 4));
+    let parts = vec![
+        Arc::new(insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])),
+            vec![3],
+            vec![1],
+        )),
+        Arc::new(insn(
+            11,
+            Some((11, 11)),
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::EBX, 4)], vec![source.clone()])),
+            vec![5],
+            vec![1],
+        )),
+        Arc::new(insn(
+            12,
+            Some((12, 12)),
+            Some(sem(Operation::Binary, "shr", vec![high.clone()], vec![high.clone(), im(16, 1)])),
+            vec![3],
+            vec![3],
+        )),
+        Arc::new(Insn {
+            reads_complete: true,
+            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            ..insn(
+                13,
+                Some((13, 13)),
+                Some(sem(
+                    Operation::Return,
+                    "retf",
+                    vec![],
+                    vec![rl(RegId::AX, 2), rl(RegId::DX, 2), rl(RegId::BX, 2)],
+                )),
+                vec![],
+                vec![4, 3, 5],
+            )
+        }),
+    ];
+    let input = body("c-return-high-apart", 10, vec![block(10, parts, vec![]).into()]);
+
+    let result = high_extracts(&input, "386").unwrap().insns();
+
+    assert_eq!(names(&result), ["mov", "shld", "retf"]);
+}
+
+#[test]
 fn test_register_high_extract_shifts_a_dying_return_root_in_place() {
     // Frontend-parity LOOP returned EDX through push/pop/pop.
     let source = rl(RegId::EDX, 4);
