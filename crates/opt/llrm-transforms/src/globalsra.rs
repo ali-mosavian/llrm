@@ -82,7 +82,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::facts::Facts;
 use llrm_mir::module::{GlobalKind, GlobalValue, GlobalVariable, InstId, Linkage, Module, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::types::TypeId;
+use llrm_mir::types::{Type, TypeId};
 use llrm_mir::valuetracking::pointer_base_with_constant_offset;
 
 use crate::globalopt::Reach;
@@ -536,7 +536,8 @@ fn rewrite(
     changed
 }
 
-/// The internal single-value variables a body of one function could keep on
+/// The internal single-value variables (`isSingleValueType`: integer, float,
+/// pointer, vector) a body of one function could keep on
 /// its stack: every use a direct load or store.
 fn locals(module: &Module) -> Vec<GlobalId> {
     let held = held(module);
@@ -547,7 +548,10 @@ fn locals(module: &Module) -> Vec<GlobalId> {
         .filter_map(|(at, global)| {
             let GlobalKind::Variable(variable) = &global.kind else { return None };
             let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
-            let single = piece_bytes(&module.context, variable.ty).is_some();
+            let single = matches!(
+                module.context.types.get(variable.ty),
+                Type::Int(_) | Type::Float(_) | Type::Pointer(_) | Type::Vector { .. }
+            );
             let id = GlobalId(at as u32);
             (internal
                 && single

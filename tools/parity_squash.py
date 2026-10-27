@@ -804,6 +804,10 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
     if not prs:
         return
     if passes(prs):
+        try:
+            land.group = list(prs)  # the members that land together: a rescan after a drop covers them once
+        except AttributeError:  # a builtin as `land` (tests) has no attributes
+            pass
         for pr in prs:
             land(pr)
         return
@@ -1051,6 +1055,37 @@ def rescan_alone(number: str, info: dict) -> set[str]:
     return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
 
 
+def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
+    """The new red always-on scanners of the tree `numbers` make together on the head as it is now (the members still to land, merged one after another; a conflict is the squash's to refuse)."""
+    git("fetch", "-q", "origin", "feat/parity")
+    clean_checkout(BASE)
+    for number in numbers:
+        git("fetch", "-q", "origin", infos[number]["headRefOid"])
+        if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+            subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+
+
+def make_rescan_check(rescan_group=rescan_group_alone, rescan_one=rescan_alone):
+    """`check(number, infos, late_drops, group) -> why`: after the batch dropped a PR whose scan had passed, the remaining members' tree is scanned ONCE per new drop, not once per PR (~30 s each:
+    10:48-10:50 squashes ran 35 s apart, 4 s of it the squash). Green: the rest land without a rescan until another PR is dropped. Red: each PR is rescanned alone, as before, to find the one."""
+    state = {"green": -1, "tried": -1}
+
+    def check(number: str, infos: dict[str, dict], late_drops: list[str], group: list[str]) -> str:
+        if not late_drops:
+            return ""
+        if state["green"] == len(late_drops):
+            return ""
+        if state["tried"] != len(late_drops):
+            state["tried"] = len(late_drops)
+            if not rescan_group(group, infos):
+                state["green"] = len(late_drops)
+                return ""
+        return rescanned_refusal(number, infos[number], late_drops, rescan=rescan_one)
+
+    return check
+
+
 def rescanned_refusal(number: str, info: dict, late_drops: list[str], rescan=rescan_alone) -> str:
     """Why PR `number` may not be pushed after the batch dropped `late_drops` (refused, held or failed at the squash) once its scan had passed: the tree it lands on was never scanned. The
     always-on scanners are run on it; "" when nothing was dropped or they pass."""
@@ -1228,16 +1263,21 @@ def _current_head(number: str) -> str:
     return git("rev-parse", "FETCH_HEAD").strip()
 
 
-def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None) -> tuple[list[str], dict[str, str]]:
+def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=None, cache: Path | None = None, jobs: int = 1, cap: float | None = None, current=None, recheck=None) -> tuple[list[str], dict[str, str]]:
     """(the numbers that pass alone, {number: why} for those that fail). The verdict is kept per head sha in `cache`, so a PR checked while the previous batch squashed is not
-    checked again. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
+    checked again, except for `recheck(head, base)` (seconds: the head merged with the base as it is now, the generated pages): a cached pass was made against an older base, and a page
+    a landing since made stale only shows on the merge. The uncached PRs run `jobs` at a time; the ones not finished `cap` seconds in are kept, unfiltered (a check of 40 PRs one after another took hours)."""
     verdicts: dict[str, str] = {}
     waiting: queue.Queue[str] = queue.Queue()
+    rechecked: set[str] = set()
     for number in numbers:
         stored = cache / heads[number] if cache else None
         if stored and stored.exists():
             HITS[0] += 1
             verdicts[number] = stored.read_text()
+            if recheck and not verdicts[number]:
+                rechecked.add(number)
+                waiting.put(number)
         else:
             waiting.put(number)
     slots: queue.Queue[int] = queue.Queue()
@@ -1252,12 +1292,15 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
                 return
             slot = slots.get()
             try:
-                why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
+                if number in rechecked:
+                    why = recheck(heads[number], base)
+                else:
+                    why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
             except BaseException as error:  # a thread drops SystemExit silently: #5008 was kept with no verdict, unchecked and counted as checked, and broke the 21:53 batch
                 why = f"alone check crashed: {type(error).__name__}: {str(error)[-200:]}"
             finally:
                 slots.put(slot)
-            if cache:
+            if cache and number not in rechecked:
                 cache.mkdir(parents=True, exist_ok=True)
                 (cache / heads[number]).write_text(why)
             verdicts[number] = why
@@ -1285,6 +1328,27 @@ def docs_stale(root: Path) -> set[str]:
     if not done.returncode:
         return set()
     return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+
+
+def docs_recheck(head: str, base: str, cwd: Path, base_docs: set[str]) -> str:
+    """"" or why: the pages stale once `head` is merged into the checkout of `base` in `cwd`, less `base_docs`. The merge and `build.py --check` take seconds; a verdict cached against
+    an older base missed #5062, #5085 and #5088, which passed alone and made lsr_solve.md, divrempairs.rs and sinkcast.md fail once merged with what landed after."""
+    sha, why = merged_result(head, base, cwd)
+    if sha is None:
+        return why
+    new = sorted(docs_stale(cwd) - base_docs)
+    return f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""
+
+
+def _alone_docs_recheck(head: str, base: str) -> str:
+    root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
+    slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
+    targets = root / f"alone-{slot}"
+    try:
+        _alone_checkout(targets / "w", base)
+        return docs_recheck(head, base, targets / "w", _alone_base_docs(base, targets))
+    finally:
+        lock.close()
 
 
 def crash_line(number: str, error: BaseException) -> str:
@@ -1721,6 +1785,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print("\n".join(f"REFUSED: {w}" for w in why))
         return not why
 
+    rescan_check = make_rescan_check()
+
     def land(number: str) -> None:
         if number in left_out:
             print(f"#{number}: REFUSED: left out: {left_out[number]}")
@@ -1731,7 +1797,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             held.append(number)
             late_drops.append(number)
             return
-        if why := rescanned_refusal(number, infos[number], late_drops):
+        group = [one for one in getattr(land, "group", [number]) if one not in landed and one not in refused and one not in held]
+        if why := rescan_check(number, infos, late_drops, group):
             print(f"#{number}: REFUSED: {why}")
             refused.append(number)
             late_drops.append(number)
@@ -2110,7 +2177,7 @@ def dispatch() -> int:
             heads[number] = git("rev-parse", "FETCH_HEAD").strip()
         # stdout is the survivors and nothing else: the scanners print their summary line, and the runner reads this output as PR numbers
         with contextlib.redirect_stdout(sys.stderr):
-            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
+            kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head, recheck=_alone_docs_recheck)
         for number, why in dropped.items():
             print(alone_refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0] - len(UNCHECKED)} checked, {len(UNCHECKED)} UNCHECKED at the cap{' (' + ' '.join(UNCHECKED) + ')' if UNCHECKED else ''}, {len(dropped)} dropped", file=sys.stderr)
