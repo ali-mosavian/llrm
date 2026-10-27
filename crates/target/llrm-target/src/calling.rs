@@ -92,6 +92,10 @@ pub struct Convention {
     pub arguments_clobbered: bool,
     /// The same for the registers a result leaves in.
     pub results_clobbered: bool,
+    /// Functions of this name that no function of the module calls and whose
+    /// address is not taken keep nothing for their caller: the run-time
+    /// start-up that calls them discards every register once they return.
+    pub entry_clobbers_all: Vec<String>,
     /// The convention a variadic call uses in place of this one: it moves the
     /// arguments, not the symbol.
     pub variadic: Option<String>,
@@ -203,6 +207,7 @@ const KEYS: &[&str] = &[
     "aggregate_arguments_in_memory",
     "arguments_clobbered",
     "results_clobbered",
+    "entry_clobbers_all",
     "variadic",
     "pops_as",
     "symbol",
@@ -628,6 +633,10 @@ impl Convention {
             aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,
             arguments_clobbered: flag("arguments_clobbered")?,
             results_clobbered: flag("results_clobbered")?,
+            entry_clobbers_all: match table.get("entry_clobbers_all") {
+                Some(_) => names(table.get("entry_clobbers_all"), "entry_clobbers_all")?,
+                None => Vec::new(),
+            },
             variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
             pops_as: table.contains_key("pops_as").then(|| text("pops_as")).transpose()?,
             symbol,
