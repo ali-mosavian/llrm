@@ -71,13 +71,33 @@ pub fn fold_memory_operand(
     if dests + sources != 1 && !tied {
         return None;
     }
+    // A value wider than its cell (C-LANE keeps a value read as a word in a
+    // word cell) writes or reads only the cell: a move stores its source's
+    // low part, any other form keeps the value in a register.
+    let wider = what
+        .dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |loc| matches!(
+                loc,
+                Loc::Held(held) if held.value == reg && held.width > cell.width
+            ),
+        );
+    if wider && !(dests == 1 && sources == 0 && what.op == Operation::Move && what.sources.len() == 1) {
+        return None;
+    }
     let swap = |loc: &Loc| match loc {
-        Loc::Held(held) if held.value == reg => Loc::Mem(Mem { width: held.width, ..cell.clone() }),
+        Loc::Held(held) if held.value == reg => Loc::Mem(Mem { width: held.width.min(cell.width), ..cell.clone() }),
+        _ => loc.clone(),
+    };
+    let narrow = |loc: &Loc| match loc {
+        Loc::Held(held) if wider && held.width > cell.width => Loc::Held(Held { width: cell.width, ..*held }),
         _ => loc.clone(),
     };
     let made = Semantics {
         dests: what.dests.iter().map(swap).collect(),
-        sources: what.sources.iter().map(swap).collect(),
+        sources: what.sources.iter().map(|loc| if wider { narrow(loc) } else { swap(loc) }).collect(),
         ..what.clone()
     };
     if !is_encodable(bits, &made, classes).ok()? {
