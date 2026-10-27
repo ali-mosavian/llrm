@@ -110,7 +110,7 @@ fn refused_legalize(
     dag: &SelectionDAG,
     why: &str,
 ) -> Refusal {
-    if llrm_support::env_set("LLRM_DAGDUMP") {
+    if llrm_support::env_flag!("LLRM_DAGDUMP") {
         eprintln!("legalize refused: {why}\n{}", dag.dump());
     }
     Refusal::Legalize(why.to_owned())

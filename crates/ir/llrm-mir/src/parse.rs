@@ -517,6 +517,7 @@ impl Parser {
             | Token::Float(..)
             | Token::FloatBits { .. }
             | Token::HexFloat(_)
+            | Token::Float80(_)
             | Token::Bytes(_)
             | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
@@ -913,13 +914,24 @@ impl Parser {
                 _ => self.float(&shape, value, line)?,
             },
             Token::FloatBits { bits, digits } => match shape {
-                Type::Float(FloatKind::Float) if digits == 8 => ConstantKind::Float(bits),
-                Type::Float(FloatKind::Double) if digits == 16 => ConstantKind::Float(bits),
+                Type::Float(FloatKind::Float) if digits == 8 => ConstantKind::Float(bits as u64),
+                Type::Float(FloatKind::Double) if digits == 16 => ConstantKind::Float(bits as u64),
+                Type::Float(FloatKind::X86Fp80) if digits == 20 => ConstantKind::Float(x86_fp80_to_f64(bits).to_bits()),
                 Type::Float(kind) => {
-                    let (name, width) = if kind == FloatKind::Float { ("float", 8) } else { ("double", 16) };
+                    let (name, width) = match kind {
+                        FloatKind::Float => ("float", 8),
+                        FloatKind::Double => ("double", 16),
+                        FloatKind::X86Fp80 => ("x86_fp80", 20),
+                    };
                     return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
                 }
                 _ => return self.fail_on(line, "a floating constant given a non-floating type"),
+            },
+            Token::Float80(bits) => match shape {
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
+                }
+                _ => return self.fail_on(line, "`0xK` is an x86_fp80"),
             },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {
@@ -1867,4 +1879,26 @@ pub fn display(name: &Name) -> String {
         Name::Named(text) => crate::print::quoted(text),
         Name::Numbered(number) => number.to_string(),
     }
+}
+
+/// The double nearest an x87 extended value (16 bits of sign and exponent, then
+/// the 64-bit significand with its integer bit explicit). The significand
+/// rounds to 53 bits once and the scaling is exact, so a result below the
+/// double normals is rounded twice.
+fn x86_fp80_to_f64(bits: u128) -> f64 {
+    let negative = bits >> 79 & 1 == 1;
+    let exponent = (bits >> 64 & 0x7FFF) as i32;
+    let significand = bits as u64;
+    let magnitude = match exponent {
+        0x7FFF if significand << 1 == 0 => f64::INFINITY,
+        0x7FFF => f64::NAN,
+        _ => {
+            // value = significand * 2^(exponent - 16383 - 63); a denormal has
+            // exponent 1's scale.
+            let scale = exponent.max(1) - 16383 - 63;
+            let (half, rest) = (scale / 2, scale - scale / 2);
+            significand as f64 * 2f64.powi(half) * 2f64.powi(rest)
+        }
+    };
+    if negative { -magnitude } else { magnitude }
 }

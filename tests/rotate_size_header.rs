@@ -1,7 +1,7 @@
 //! At -Os loop rotation copies a header only when it is four instructions at
 //! most (`looprotate::SIZE_MAX_HEADER`).
 
-use std::process::Command;
+mod common;
 
 fn rotate_size_listing(
     source: &str,
@@ -10,12 +10,8 @@ fn rotate_size_listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
