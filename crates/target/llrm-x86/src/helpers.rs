@@ -33,7 +33,7 @@ pub fn divide(
 }
 
 /// `divide` for a caller that reads only `used`: the signed routine by a dword
-/// divisor leaves the sign of the other result unfixed (SD315).
+/// divisor leaves the sign of the other result unfixed (SD232).
 pub fn divide_used(
     signed: bool,
     wide_divisor: bool,
