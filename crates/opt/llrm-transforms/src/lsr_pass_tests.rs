@@ -775,3 +775,31 @@ b4:
     let (stored, defined) = (exit.find("store").unwrap(), exit.find("urem").or(exit.find("udiv")).unwrap());
     assert!(defined < stored, "{after}");
 }
+
+/// The inner loop of an insertion sort, `for (j = i - 1; j >= 0 && a[j] > v;
+/// --j)` as the strength stage gets it: the countdown's `add nsw %j, -1` sits
+/// in the header beside the loads LSR rewrites. The pin moves the increment to
+/// the latch once those uses are gone (`ImplementSolution`: delete the dead
+/// instructions, then move the simple recurrences' increments), so the
+/// decrement and the compare share a block and isel emits `dec; cmp; jg`. Here
+/// the move ran before the deletion, saw the header gep as a user the latch
+/// does not dominate, and left `lea edi, [ebx-1]; cmp ebx, 1; mov ebx, edi`.
+#[test]
+fn a_countdown_loop_decrements_in_the_block_that_tests_it() {
+    let mut module = parsed(include_str!("lsr_insertion.ll"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    let block = after
+        .split("\n\n")
+        .find(|block| block.contains("add nsw i32") && block.contains(", -1"))
+        .unwrap_or_else(|| panic!("no decrement: {after}"));
+    assert!(
+        block.contains("icmp sgt i32") && block.contains(", 1\n"),
+        "the compare is in another block than the decrement: {after}"
+    );
+}
