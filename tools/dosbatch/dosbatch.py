@@ -106,7 +106,7 @@ _RUNTIME_LOCK = threading.Lock()
 def with_isel(command: list[str]) -> list[str]:
     """`command` with `--isel=$LLRM_ISEL` after `llrm-c`, `llrm-qb` or `llrm-nib`, when the variable is set: the same programs through the other instruction selector."""
     mode = os.environ.get("LLRM_ISEL")
-    if mode and Path(command[0]).name in ("llrm-c", "llrm-qb", "llrm-nib"):
+    if mode and Path(command[0]).name in ("llrm-c", "llrm-cc", "llrm-qb", "llrm-nib"):
         return [command[0], f"--isel={mode}", *command[1:]]
     return command
 
@@ -128,8 +128,8 @@ def isel_proof(report: Path, mode: str) -> tuple[int, int]:
     return dag, old
 
 
-def _host(command: list[str]) -> None:
-    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True)
+def _host(command: list[str], env: dict[str, str] | None = None) -> None:
+    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
@@ -167,6 +167,20 @@ def target_modes() -> dict[str, int]:
 def target_bits(target: str) -> int:
     """The bits of `target`'s code: its `-m` number."""
     return target_modes()[target]
+
+
+WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
+
+
+def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str]) -> tuple[list[str], dict[str, str]]:
+    """(command, environment) that builds the C `source` for `target`: llrm-c, or llrm-cc over clang where LLRM_C_FRONTEND=llrm-cc names it (the
+    target is then a row of its table, not a flag)."""
+    if os.environ.get("LLRM_C_FRONTEND") == "llrm-cc":
+        if target_bits(target) not in WATCOM_ROWS:
+            raise BuildError(f"llrm-cc has no row for {target}")
+        row = {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+        return [str(BIN / "llrm-cc"), level, "-c", "-I", str(include), *abi, str(source), "-o", str(obj)], row
+    return [str(BIN / "llrm-c"), str(source), "-I", str(include), m_flag(target), *abi, level, "-o", str(obj)], {}
 
 
 def m_flag(target: str) -> str:

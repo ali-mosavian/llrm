@@ -222,7 +222,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
-            dosbatch._host(dosbatch.with_isel([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), *abi, level, "-o", str(obj)]))
+            command, env = dosbatch.c_compile(source, obj, target, level, include, abi)
+            dosbatch._host(command, env)
         objects.append(obj)
     return tuple(objects)
 
@@ -275,7 +276,8 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 elif source.suffix == ".asm":
                     dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
                 else:
-                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
+                    command, env = dosbatch.c_compile(source, extra, target, level, dosbatch.c_include(target, work), [one for one in program.flags if one.startswith("-mabi=")])
+                    dosbatch._host(command, env)
                 others.append(extra)
             loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
             dosbatch.check_loads(exe)
