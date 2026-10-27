@@ -416,14 +416,19 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
         }
         let what = def.what.clone()?;
         // `SplitEditor::defFromParent` asks `canRematerializeAt(..,
-        // cheapAsAMove = true)`: a literal or an address is made again,
-        // a load (`MOV32rm` of a stack argument) or an `lea` is not
-        // `isAsCheapAsAMove`, and the split copies the register
-        // instead.
+        // cheapAsAMove = true)`: a literal is made again, a load (`MOV32rm`
+        // of a stack argument) is not `isAsCheapAsAMove` and the split
+        // copies the register instead.
+        // DEVIATE D-LEA1 (exit: `LEA32r` is `isAsCheapAsAMove` in the pin):
+        // an address is made again too, though the pin's `LEA32r` is only
+        // `isReMaterializable` (its `LEA16r` neither). The fact: `lea r,
+        // [bp-N]` is as short as `mov r, imm` and a register copy of it has
+        // to be spilled with six registers; --isel=dag -Os, 309 programs at
+        // m16 -220 B, 126 at m32 -397 B, particle.nib -58 B.
         let _ = parent;
         let load = matches!(what.op, Operation::Move | Operation::FloatLoad)
             && matches!(what.sources.first(), Some(Loc::Mem(_)));
-        if load || what.op == Operation::Address {
+        if load {
             return None;
         }
         let Loc::Held(defined) = what.dests[0] else { return None };
@@ -2046,6 +2051,35 @@ mod tests {
         };
         let load = Insn::new(0, None, Some(load), vec![1], vec![]);
         assert!(env.rematerialize(&load, 8, 1, None).is_none());
+    }
+
+    /// A split of a frame address copied it into a register that was then
+    /// stored to a slot: QCport-shaped particle.nib -Os m16 kept six
+    /// `lea ax, [bp-N]; mov [bp-M], ax` through an inner loop, +58 B over
+    /// making the `lea` again at each piece (D-LEA1).
+    #[test]
+    fn test_a_split_remakes_the_address_of_a_frame_cell() {
+        use crate::greedy::splitkit::SplitEnv as _;
+        use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
+        let lea = Semantics {
+            name: Some("lea".into()),
+            dests: vec![Loc::Held(Held { value: 1, width: 2 })],
+            sources: vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -20)), 2))],
+            ..Semantics::new(Operation::Address)
+        };
+        let def = Insn::new(0, None, Some(lea), vec![1], vec![]);
+        let body = LirBody::new(
+            "lea",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![Arc::new(def.clone())]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let tables = Rc::new(Tables::default());
+        let env =
+            BodySplitEnv::new(&body, Rc::clone(&tables), Regs(&llrm_x86_m16::REGISTER_INFO), None, Default::default());
+        let made = env.rematerialize(&def, 7, 1, None).expect("the address is made again");
+        assert_eq!(made.defines, [7]);
     }
 
     /// A reload made for a stored word got its parent's order, {BX}
