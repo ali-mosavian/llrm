@@ -1070,14 +1070,12 @@ fn fills_and_stores(name: &str) -> (usize, usize) {
     (fills, stores)
 }
 
-/// An 18-byte clear of a local at m16 -Os was five stores through BP
-/// (`sieve.bas` +44 B over the old selector, bench `sieve` 893 -> 937): the
-/// pin counts stores, but in 16-bit code they are longer than the fill. A
-/// clear at an absolute address stays stores: its register cost is not the
-/// model's.
+/// An 18-byte clear at m16 -Os was five stores through BP (`sieve.bas` +44 B
+/// over the old selector, bench `sieve` 893 -> 937): the pin counts stores, but
+/// in 16-bit code they are longer than the fill. `memset_stores_size` makes it
+/// a fill, for a local and for a global.
 #[test]
-fn at_os_an_18_byte_clear_of_a_local_is_a_fill_and_of_a_global_is_stores() {
+fn at_os_an_18_byte_clear_is_a_fill() {
     assert_eq!(fills_and_stores("f").0, 1, "a fill for the local");
-    let (fills, stores) = fills_and_stores("h");
-    assert_eq!((fills, stores > 1), (0, true), "stores for the global");
+    assert_eq!(fills_and_stores("h").0, 1, "a fill for the global");
 }
