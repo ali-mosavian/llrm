@@ -1408,7 +1408,10 @@ impl Emitter<'_, '_> {
         let memory = Arc::new(crate::model::lir::CallMemory {
             effects: llrm_mir::memory::Effects::ANY,
             private: Vec::new(),
-            disturbs: clobbers.clone(),
+            // A callee that pops its own arguments lists SP among what it
+            // disturbs; the pushes and the call account for that, and a
+            // disturbed SP makes the epilogue restore it (`moves_stack`).
+            disturbs: clobbers.iter().copied().filter(|register| *register != self.ctx.stack_pointer).collect(),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
