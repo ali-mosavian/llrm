@@ -71,7 +71,7 @@ def _with_stack_alignment(text: str, of: Target) -> str:
     Linux triple whatever the datalayout says, and with 16 it keeps a reserved call frame where, at 4, it pushes (pair csr, 2026-10-25:
     push + add esp counted 197 + 206 against the pin's 71 + 146, none of it ours to fix)."""
     align = stack_alignment(of)
-    if align is None:
+    if align is None or "override-stack-alignment" in text:
         return text
     node = f'!9999 = !{{i32 1, !"override-stack-alignment", i32 {align}}}'
     flags = re.search(r"^!llvm\.module\.flags = !\{([^}]*)\}$", text, re.M)
