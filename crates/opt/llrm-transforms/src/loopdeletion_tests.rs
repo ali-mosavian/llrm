@@ -293,3 +293,37 @@ fn the_debug_records_before_the_preheaders_branch_survive_a_deletion() {
     let after = deleted(&text, INPUTS);
     assert!(!after.contains("phi") && after.contains("#dbg_value(i16 %n"), "{after}");
 }
+
+/// A pass that only reads the dominator tree, as the pass before this one in
+/// the pipeline does.
+struct ReadsTree;
+
+impl llrm_mir::passes::FunctionPass for ReadsTree {
+    fn name(&self) -> &'static str {
+        "reads-tree"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_mir::passes::Dominators>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// The pass took a tree of its own (a build or a copy of the memoized one)
+/// where the manager held the tree already: two trees for a run that needs one.
+#[test]
+fn test_the_managers_dominator_tree_is_used_not_a_second_one() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(COUNTER);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(ReadsTree);
+    manager.add(LoopDeletion);
+    let trees = || get(Event::Dominators) + get(Event::DominatorsReused);
+    let before = trees();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    assert_eq!(trees() - before, 1);
+}
