@@ -217,6 +217,11 @@ fn constructors(
     out: &mut Vec<Datum>,
 ) -> Result<(), String> {
     let context = &module.context;
+    let bytes = layout.pointer(0).bits / 8;
+    if bytes < 4 {
+        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
+    }
+    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
     let entries = match &context.get(list).kind {
         ConstantKind::Aggregate(entries) => entries.clone(),
         _ => Vec::new(),
@@ -237,7 +242,7 @@ fn constructors(
     found.sort_by_key(|(priority, ..)| *priority);
     for (_, global, offset) in found {
         let name = names[&(space(module, global), i64::from(global.0))].clone();
-        out.push(Datum::Pointer(Pointer { name, offset, far: false, bytes: layout.pointer(0).bits / 8 }));
+        out.push(Datum::Pointer(Pointer { name, offset, far: false, bytes }));
     }
     Ok(())
 }

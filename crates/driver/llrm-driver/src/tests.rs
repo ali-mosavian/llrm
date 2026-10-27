@@ -696,5 +696,21 @@ fn global_ctors_become_init_function_pointers_at_x86_64_and_m32() {
             })
             .collect();
         assert_eq!(names, ["early", "late"], "{triple}");
+        let width = if triple.starts_with("x86_64") { 8 } else { 4 };
+        assert!(
+            matches!(items.first(), Some(llrm_codegen::backend::masm::Datum::Align(align)) if align.to == width),
+            "{triple}: entries are {width}-byte aligned: {items:?}"
+        );
     }
+}
+
+/// A 16-bit DOS start-up runs no constructor table: the list is refused, not
+/// emitted for nothing.
+#[test]
+fn global_ctors_are_refused_at_m16() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+                @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 1, ptr @f, ptr null }]\n\
+                define void @f() {\n  ret void\n}\n";
+    let error = crate::llc::compiled(&flags(&["-m16"]), text, "ctors").expect_err("refused");
+    assert!(error.contains("llvm.global_ctors") && error.contains("start-up"), "{error}");
 }
