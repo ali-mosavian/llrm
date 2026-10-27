@@ -297,7 +297,7 @@ struct Dse<'a> {
     leaves: std::cell::RefCell<HashMap<u32, bool>>,
     /// `loc_for_write` per instruction; a memset's is dropped when it is
     /// shortened.
-    written: std::cell::RefCell<HashMap<InstId, Option<Rc<Location>>>>,
+    written: std::cell::RefCell<IdMap<InstId, Option<Rc<Location>>>>,
 }
 
 impl<'a> Dse<'a> {

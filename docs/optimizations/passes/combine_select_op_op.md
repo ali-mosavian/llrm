@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_op_op.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_op_op.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_op_op.rs sha256:9daf6ef4cbc5fb69fc6c7019f7c3ef4fb50b21a258d1d659e1bdd6a1ba0fe716 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_op_op.rs sha256:5a83087efb9d334d8d0230777ff3ebb34e3d81199198eeed6b4ed0ddc2a2f4c4 -->
 
 # combine_select_op_op
 
@@ -30,3 +30,6 @@ found (MIR's `icmp` has none).
 %x2 = add i16 %x, %b            ==>   %r = add i16 %x, %v
 %r = select i1 %c, i16 %x1, i16 %x2
 ```
+
+## Used by
+Named by `combine_visit_select`.
