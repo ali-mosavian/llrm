@@ -1446,3 +1446,24 @@ def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
     whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
     assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
     assert len(groups) == 1 and ones == ["b", "c", "d"]
+
+
+def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
+    """11:04: the culprit probe ran `git diff origin/feat/parity...<head of #5183>`, a head pushed after the batch's fetch: 'Invalid symmetric difference', the merge-batch process died with no LANDED line."""
+    def sh(cwd, *a):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    origin, clone = tmp_path / "origin", tmp_path / "clone"
+    origin.mkdir()
+    sh(origin, "init", "-q", "-b", "main")
+    (origin / "a.txt").write_text("a\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "a")
+    sh(tmp_path, "clone", "-q", str(origin), str(clone))
+    (origin / "b.txt").write_text("b\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "b")
+    head = sh(origin, "rev-parse", "HEAD")
+    sh(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+    base = sh(clone, "rev-parse", "origin/main")
+    assert ps.head_files(head, base=base, cwd=clone) == ["b.txt"]
