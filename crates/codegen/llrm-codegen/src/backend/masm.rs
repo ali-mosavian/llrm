@@ -2299,6 +2299,11 @@ pub fn _instruction(
             vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
         }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
+        // `sqrtsd xmm0, xmm1`: a unary that reads a place other than the one it
+        // writes names both.
+        Operation::Unary if what.sources.len() == 1 && sources[0] != dests[0] => {
+            vec![format!("{name} {}, {}", dests[0], sources[0])]
+        }
         Operation::Unary => vec![format!("{name} {}", dests[0])],
         Operation::Compare if name.starts_with('f') => {
             let memory: Vec<&String> = sources
@@ -2323,7 +2328,9 @@ pub fn _instruction(
         }
         Operation::Multiply | Operation::Divide => vec![format!("{name} {}", last(&sources))],
         Operation::Extend => {
-            if matches!(name, "movsx" | "movzx") {
+            // `cvtss2sd xmm0, xmm1`, `cvtsi2sd xmm0, eax`: the SSE converts
+            // name their operands; `cwd` and `cdq` name theirs in the opcode.
+            if matches!(name, "movsx" | "movzx") || name.starts_with("cvt") {
                 vec![format!("{name} {}, {}", dests[0], sources[0])]
             } else {
                 vec![name.to_owned()]
@@ -2563,6 +2570,25 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         assert_eq!(_instruction(regs, &copy, &no_names(), 0).unwrap(), ["movaps xmm0, xmm2"]);
+    }
+
+    /// `cvtss2sd` and `sqrtsd` printed no source: `cvtss2sd` alone, `sqrtsd
+    /// xmm0`, which no assembler takes.
+    #[test]
+    fn test_an_sse_convert_and_square_root_print_their_sources() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let xmm = |register| Loc::Reg(ir::Reg { register, width: 16 });
+        let print = |op, name: &str| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: vec![xmm(RegId::XMM0)],
+                sources: vec![xmm(RegId::XMM1)],
+                ..Semantics::new(op)
+            };
+            _instruction(regs, &what, &no_names(), 0).unwrap()
+        };
+        assert_eq!(print(Operation::Extend, "cvtss2sd"), ["cvtss2sd xmm0, xmm1"]);
+        assert_eq!(print(Operation::Unary, "sqrtsd"), ["sqrtsd xmm0, xmm1"]);
     }
 
     /// A `bsf` marked `repeat` carries the pin's `rep` prefix, which JWasm
