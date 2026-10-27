@@ -685,6 +685,27 @@ fn a_fixed_point_multiply_is_a_widening_multiply_and_a_funnel_shift() {
     assert!(names.iter().any(|n| n == "shrd"), "{names:?}");
 }
 
+const ZEXT_PRODUCT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i32 %a, i32 %b) {
+entry:
+  %x = zext i32 %a to i64
+  %y = zext i32 %b to i64
+  %r = mul i64 %x, %y
+  ret i64 %r
+}
+";
+
+/// The product of two zero-extended 32-bit values is one `mul` (the pin's
+/// `mull`). The old selector added two `imul` by a zeroed register for the
+/// high cross products; parity/loop at bq32 -O2 ran 302 clocks against 170
+/// (indvars' closed form is this product). The DAG path keeps it one `mul`.
+#[test]
+fn a_product_of_two_zero_extended_words_is_one_mul() {
+    let names = names(ZEXT_PRODUCT).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(names.iter().filter(|n| *n == "mul").count(), 1, "{names:?}");
+    assert!(!names.iter().any(|n| n == "imul"), "{names:?}");
+}
+
 const ASM_TWO_OUTPUTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
 define i32 @f() addrspace(1) {
 entry:

@@ -846,7 +846,6 @@ pub(crate) fn llvm_order(
                         size: applied.options.prefers_size(),
                     }),
                 ));
-                list.extend(canonical("loopsimplify@728", "lcssa@728"));
             }
             list.extend([
                 licm("licm@730", true),

@@ -2328,6 +2328,20 @@ fn test_the_rotate_slot_runs_at_every_level() {
     }
 }
 
+/// LPM1 runs `loop-rotate` and then `licm`; the pin has no LoopSimplify or
+/// LCSSA between them (the loop adaptor runs them once, before LPM1). We ran
+/// both after the rotate: 1.7 M Ir at d_faces -O2, no object byte differed.
+#[test]
+fn test_no_loopsimplify_or_lcssa_runs_between_the_rotate_and_the_second_licm() {
+    for options in [pipeline::Options::default(), pipeline::Options::size(), pipeline::Options::speed()] {
+        let applied = Applied { options, ..Applied::default() };
+        let names: Vec<&str> =
+            pipeline::llvm_order(&applied, crate::parity::Phase::Simplify).iter().map(|one| one.name()).collect();
+        let at = names.iter().position(|one| *one == "rotate@728").expect("rotate@728 is in the order");
+        assert_eq!(names[at + 1], "licm@730", "{names:?}");
+    }
+}
+
 /// `llrm-pass --order` could not name a slot of LLVM's order: the oracle ran
 /// only the old pass names, so the translated SROA, promote and EarlyCSE slots
 /// were never compared with `opt`. A slot is selectable when the level builds
