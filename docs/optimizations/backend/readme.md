@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 133 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 1 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -73,6 +73,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 133 documen
 | layout | The pairs of branch conditions that are each other's inverse. | `jumps`, to invert a branch when it makes the other successor the | [layout](layout.md) |
 | leaopt | Two address computations that differ only in a displacement are one: LLVM's `X86OptimizeLEAs` ([X86OptimizeLEAs.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86OptimizeLEAs.cpp)). | A machine phase after `machinesink` and before `phielim` | [leaopt](leaopt.md) |
 | legalize | Promotes the integers of an odd width (i2..i63 but 8, 16 and 32) to the next machine width, in MIR before instruction selection. | Once per module in `driver::optimized`, after `minmax_expanded` and before | [legalize](legalize.md) |
+| libmcalls | Turns the rounding intrinsics x87 has no instruction for into calls of the C library: `llvm.floor.f64` is a call of `floor`. | Once per module in `driver::optimized`, after the pipeline: the optimizer | [libmcalls](libmcalls.md) |
 | lifetimes | Where a block local's bytes are live, from its lifetime markers, so that locals never live together can share a frame slot. | `isel` takes the intervals in its own instruction numbering; `slots` then | [lifetimes](lifetimes.md) |
 | lirtext | LIR as text, one stage at a time: what `ISEL_DUMP` prints after each machine phase. | `assemble` after each machine phase when `ISEL_DUMP` is set; the register | [lirtext](lirtext.md) |
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and | [live](live.md) |

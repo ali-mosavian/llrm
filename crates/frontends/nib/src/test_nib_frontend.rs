@@ -1636,7 +1636,7 @@ fn test_any_integer_operand_converts_to_a_float() {
     let widened = |pattern: &str| Regex::new(pattern).unwrap().is_match(mixed);
     assert!(
         widened(r"movzx [a-d]x, (?:[a-d]l|byte ptr \[bp\+\d+\])")
-            && widened(r"movzx e[a-d]x, (?:[a-d]x|word ptr \[bp\+\d+\])"),
+            && widened(r"movzx e[a-ds][xi], (?:[a-ds][xi]|word ptr \[bp\+\d+\])"),
         "{mixed}"
     );
     let qword = Regex::new(
@@ -2083,7 +2083,7 @@ fn test_a_byte_parameter_passed_on_to_a_call_compiles() {
     let main = between(&text, "_main proc", "_main endp");
     assert_eq!(main.matches("call far ptr _put").count(), 2, "{text}");
     // The byte's extension is of a constant, so it is pushed as the constant.
-    assert!(main.contains("mov ax, 28") && main.contains("mov ax, 29") && !main.contains("movzx"), "{text}");
+    assert!(main.contains("pushw 28") && main.contains("pushw 29") && !main.contains("movzx"), "{text}");
 }
 
 #[test]

@@ -30,49 +30,6 @@ impl fmt::Display for AbiError {
 
 impl std::error::Error for AbiError {}
 
-// Stack widths read from actual QB 4.5 /A listings for the graphics forms,
-// then checked against their runtime RETF cleanup. Coordinate state is latched
-// by N1/N2 before the drawing call; it is deliberately not hidden in MIR.
-static _AUDITED_GRAPHICS_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
-    IndexMap::from_iter([
-        ("B$PAL2", 6),
-        // gwpal.asm: parmD fpData, parmW pAd.
-        ("B$PALU", 6),
-        ("B$N1I2", 4),
-        ("B$N2I2", 4),
-        ("B$N1R4", 8),
-        ("B$N2R4", 8),
-        ("B$S1I2", 4),
-        ("B$S2I2", 4),
-        ("B$S1R4", 8),
-        ("B$S2R4", 8),
-        ("B$CSTT", 4),
-        ("B$CSTO", 4),
-        ("B$CASP", 4),
-        // circle.asm: parmD Radius, parmW Color.
-        ("B$CIRC", 6),
-        ("B$LINE", 6),
-        ("B$PAIN", 4),
-        // paint.asm: parmSD sdTile, parmW Border, parmSD sdBkgd (-1 for none).
-        ("B$PNTC", 6),
-        ("B$PSTC", 2),
-        // grpoint.asm: `void pascal B$PSET()` and B$PRST, no parameters.
-        ("B$PSET", 0),
-        ("B$PRST", 0),
-        ("B$PNI2", 4),
-        ("B$PNR4", 8),
-        ("B$GGET", 6),
-        ("B$GPUT", 8),
-        // grview.asm: seven Pascal words; `void pascal B$VEW0()`.
-        ("B$VIEW", 14),
-        ("B$VEW0", 0),
-        // grwindow.asm: four R4 and a word; `void pascal B$WIN0()`.
-        ("B$WIND", 18),
-        ("B$WIN0", 0),
-        ("B$FTAB", 2),
-    ])
-});
-
 static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
     IndexMap::from_iter([
         ("B$BEEP", 0),
@@ -261,7 +218,7 @@ fn _contract_keeping(
             ),
         ));
     }
-    if _AUDITED_GRAPHICS_STACK.get(name) == Some(&pushed) {
+    if runtime::audited_pop("graphics", name) == Some(pushed) {
         return Ok(returns(
             pushed,
             format!(
@@ -1014,6 +971,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
         self.machine.lowering()
+    }
+
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        self.machine.library()
     }
 
     fn registers(&self) -> i64 {

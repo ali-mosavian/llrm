@@ -12,7 +12,7 @@
 //!   `llvm.annotation`, `llvm.ptr.annotation`, `llvm.vscale` and
 //!   `llvm.loop.decrement.reg` are not MIR intrinsics (`Intrinsic::named` is
 //!   none for them, tested), so a call to one is an unknown, as any call is.
-//! * No `ptrtoaddr` instruction: `ptrtoint` is an unknown, as at the pin.
+//! * No separate `ptrtoaddr`: MIR's `ptrtoint` is modelled as one.
 //! * Constant expressions are in global initializers only, so a function
 //!   operand is never one; one that is is an unknown.
 //! * `PoisonValue::get(Ty)` as the SCEV of an unreachable instruction needs a
@@ -814,8 +814,17 @@ impl ScalarEvolution {
                 self.get_unknown(cx, v)
             }
 
-            // SCEV only models ptrtoaddr, and MIR has no such cast.
-            Opcode::Cast(CastOp::PtrToInt) => self.get_unknown(cx, v),
+            // MIR has one pointer-to-integer cast, which is the pin's
+            // `ptrtoaddr` (what its clang writes for a pointer difference).
+            Opcode::Cast(CastOp::PtrToInt) => {
+                let ty = self.operand_ty(cx, v);
+                let op = self.get_scev(cx, instruction.operands[0]);
+                let addr = self.get_ptr_to_addr_expr(cx, op);
+                if matches!(self.node(addr).kind, Kind::CouldNotCompute) || self.type_of(addr) != ty {
+                    return self.get_unknown(cx, v);
+                }
+                addr
+            }
 
             // Just don't deal with inttoptr casts.
             Opcode::Cast(CastOp::IntToPtr) => self.get_unknown(cx, v),

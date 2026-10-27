@@ -1965,6 +1965,8 @@ mod tests {
         assert_eq!(audited_pop("string", "B$ASSN"), Some(12));
         assert_eq!(audited_pop("string", "B$SCMP"), Some(4));
         assert_eq!(audited_pop("string", "B$SCAT"), None);
+        assert_eq!(audited_pop("graphics", "B$VIEW"), Some(14));
+        assert_eq!(audited_pop("graphics", "B$PSET"), Some(0));
         assert_eq!(audited_pop("nothing", "B$ASSN"), None);
     }
 
