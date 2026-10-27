@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchdead.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchdead.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchdead.rs sha256:9015de9d10b341ccf390e7408393c027ebfe11386e35441ec672d039cbe7cc32 -->
+<!-- src: crates/opt/llrm-transforms/src/switchdead.rs sha256:e9d36c38e0271b661a3a78f8ec16f6d47ca76694c7bbdd54a1c776acf8d20402 -->
 
 # switchdead
 

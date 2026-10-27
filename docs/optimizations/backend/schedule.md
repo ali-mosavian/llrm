@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/schedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/schedule.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/schedule.rs sha256:4f9f0fce3d7060dffa3ab92e58f77c9753b871c999eb2f105cb6b521c17a0b9c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/schedule.rs sha256:b4593bdb500fc62d98917a1669a3a01605195c53e821f34c153945e1d6e30540 -->
 
 # schedule
 

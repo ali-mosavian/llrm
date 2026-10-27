@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollruntime.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollruntime.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollruntime.rs sha256:5acb7de818f3f6500fee1775342ac7c9e73ae8b068eac8d617d61fb98c2efbdd -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollruntime.rs sha256:ffae9efb4cfbd1c0944193719b36e0d08f2cbe92b40c6c553d7578c40662c8ca -->
 
 # loopunrollruntime
 

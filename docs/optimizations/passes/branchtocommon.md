@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/branchtocommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/branchtocommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:93eaa1bb36818417251142c29563a611903b9fd53f297174a81d273a717816c7 -->
+<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:0271fed99723222cf277872bc598bc7c692dba4c5eb4f7935a31ea491c7477c9 -->
 
 # branchtocommon
 

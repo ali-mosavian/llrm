@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:3f64dc3c736da194e33d5ae5d8f5ce7f3c99984684bdcd1bb5b03f5de433d6ae -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:7c5eb40df012ffdbb7c8426842125c0081464e3307420832f2f27a9d6ee673f3 -->
 
 # sinkcommon
 

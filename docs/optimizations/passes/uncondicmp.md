@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/uncondicmp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/uncondicmp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/uncondicmp.rs sha256:dd51cf7f30861b45d61cc804ebd9898ccb22681a371dc0ae65b9a8540d874d1f -->
+<!-- src: crates/opt/llrm-transforms/src/uncondicmp.rs sha256:8955cd8d7389958c0bfb52f9a08b2c8513d7500ec983162b1c26306453513420 -->
 
 # uncondicmp
 

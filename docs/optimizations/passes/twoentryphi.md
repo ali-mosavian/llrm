@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:cfe82165dc405a4cfaffaa485f6e2576645f59bd0e9460a3afe426ce6e6492bb -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:a443fda08234a8abae20a1e0a2fa26c286772946474422f547a6c658f37dd483 -->
 
 # twoentryphi
 

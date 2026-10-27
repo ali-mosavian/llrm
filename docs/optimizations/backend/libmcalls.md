@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/libmcalls.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/libmcalls.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/libmcalls.rs sha256:6cc4f3c46e464c40f3809fe97073bac45189fd06d3c73f1cd2c24d5513968d62 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/libmcalls.rs sha256:49077cc1b9e9b42ccb4ab247c260547847c01e3b8695750de0581c0ef120643d -->
 
 # libmcalls
 

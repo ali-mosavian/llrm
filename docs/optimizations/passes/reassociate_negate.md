@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/reassociate_negate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/reassociate_negate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/reassociate_negate.rs sha256:34de230f9d4afd4f7e8f8aee0b5ec706d29d58a42c78ca62e36d88ad01bf2d9f -->
+<!-- src: crates/opt/llrm-transforms/src/reassociate_negate.rs sha256:d01f79a8b75170475775a88cb11dc81bf1b1e808b8f6b0ebb19041ee473b086a -->
 
 # reassociate_negate
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchphi.rs sha256:ff1a02300f47c3113e8369add3eff2b627842b73bce5cfb0736efbfbcb165257 -->
+<!-- src: crates/opt/llrm-transforms/src/switchphi.rs sha256:caf10e33d8f8b4a7bb286c826e9bfa6490ccffd063defa3e26a86afb951198d0 -->
 
 # switchphi
 

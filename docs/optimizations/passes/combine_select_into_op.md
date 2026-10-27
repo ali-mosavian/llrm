@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_into_op.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_into_op.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_into_op.rs sha256:fe781927cf238f615b58bfcac5f4dfed113c2d2d4f168c8c1a1fa28a09f1cd82 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_into_op.rs sha256:a99d0416e2d5e0bae65ecff46b309a09a9ddf58e423f46d2397938c417a863ec -->
 
 # combine_select_into_op
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/booleans.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/booleans.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/booleans.rs sha256:65780b56d68b2412aa79a86239d0cee7952344efb736b7af8865d689de19893b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/booleans.rs sha256:716fe212614343d35b14216f34bf56fce46cd4c0359aea6385e78b8972177688 -->
 
 # booleans
 

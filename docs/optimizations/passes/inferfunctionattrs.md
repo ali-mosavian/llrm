@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferfunctionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferfunctionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferfunctionattrs.rs sha256:36e83241d3a40d8d283690c703f52f4ee385897337c54c8c815f138239b6573a -->
+<!-- src: crates/opt/llrm-transforms/src/inferfunctionattrs.rs sha256:5c4025027d003bcfd331f44e5c2b497ab1add2406a345f2a40ee5f4f8ac82645 -->
 
 # inferfunctionattrs
 

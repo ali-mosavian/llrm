@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/phiconst.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/phiconst.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/phiconst.rs sha256:50df919002ef90de54243b22fe0c856fcae5ca3e056454b53bc41a4425881940 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/phiconst.rs sha256:8c2d5a88a73a8ff2f4b7915dbc2b18149f32fae89d44029fe3068853cd17e2c8 -->
 
 # phiconst
 

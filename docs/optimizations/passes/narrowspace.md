@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/narrowspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/narrowspace.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/narrowspace.rs sha256:8f568aeb453a3e6c4a0ba55b3604c9e0388b656a040d854d8df34800e9c91ad1 -->
+<!-- src: crates/opt/llrm-transforms/src/narrowspace.rs sha256:84d04824efa765db2bab7fd9963828b8099f06a7fffc38dad01d424325decd30 -->
 
 # narrowspace
 

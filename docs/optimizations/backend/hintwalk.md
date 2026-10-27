@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/hintwalk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/hintwalk.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/hintwalk.rs sha256:a96f92f9c58b9fa02bf2bc0cff0e7da82422b36477432cda3d53f02a26be0a00 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/hintwalk.rs sha256:3afc53ee473adc05c98c6493be6783a38128aa22995ba33860e04146320d6093 -->
 
 # hintwalk
 

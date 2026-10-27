@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_pass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_pass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_pass.rs sha256:923c5b9152b0af7e198b439ed290367e50b68b52628b8d35adfa022a912e73e3 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_pass.rs sha256:0fa0ee191a581a11d089e22e14a53a7d4eb6508a45ec5b223abf6190e2c6e5c9 -->
 
 # combine_pass
 

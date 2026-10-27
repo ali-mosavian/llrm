@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bodyfacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bodyfacts.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/bodyfacts.rs sha256:69fe23f447eb9296a0f700391e231554edf569ca0c545904748741d962239dfb -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/bodyfacts.rs sha256:378f8055ed9f29c20261a476591e86ed3cd0a16599f7918fd52e6b14c39fcea8 -->
 
 # bodyfacts
 

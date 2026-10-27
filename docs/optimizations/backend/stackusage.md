@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/stackusage.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/stackusage.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/stackusage.rs sha256:9cb2cb214060606d9e3f58c02c5a1212479c439a440060650d19e79ad368810f -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/stackusage.rs sha256:448e1795e1c65b1e3fe3a50424adf042f77ad581805c54d0446302ca1ae11a49 -->
 
 # stackusage
 

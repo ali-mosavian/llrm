@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/parity.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/parity.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/parity.rs sha256:dda13c22db90307da78ef555938bae3ca828ade0c6bc4d1f00bc8eea0d1f9233 -->
+<!-- src: crates/opt/llrm-transforms/src/parity.rs sha256:32b55775d7277289100e233154babf08c4ac2e108701f99673c4ac25c306d6cf -->
 
 # parity
 

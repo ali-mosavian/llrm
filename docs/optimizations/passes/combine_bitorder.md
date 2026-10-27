@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_bitorder.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_bitorder.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_bitorder.rs sha256:d1fde6711e5474c9b3c6eda0aaa2f34aec3e9ff29f18a8d4852df163b7609a57 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_bitorder.rs sha256:fbbd15d0beb6d96571e98cbd6de173d09c2f91283dda5b9fcb741c45bc5fb1af -->
 
 # combine_bitorder
 

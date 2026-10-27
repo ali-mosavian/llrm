@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:ed361ca41374374677a005673852f5c63746b268582917e53ae1ed445f877d95 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:a218c5192c8fcae7fcf0210f30c8d43f479e5a58a91ac6b92f2f3fff3f5c8b36 -->
 
 # inlinecost
 

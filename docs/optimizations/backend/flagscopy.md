@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/flagscopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/flagscopy.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/flagscopy.rs sha256:79c32d9e66ae9efe7f7ef3df058c547d3c963335a49cdec9387f9619489c0eda -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/flagscopy.rs sha256:ff118781fe5f523267d81c33e4691e1e94e91518d1d971029d4217d541a18525 -->
 
 # flagscopy
 

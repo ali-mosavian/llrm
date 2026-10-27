@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs sha256:718b034142d2fb8708a7ae47c71e91857c7b995c76220756f4595ecc0749c391 -->
+<!-- src: crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs sha256:a01e971d2f4893949bd541000ace9c500ca129f4aad6f8c89977623f99b902ae -->
 
 # lowerconstantintrinsics
 

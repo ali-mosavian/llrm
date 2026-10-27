@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs sha256:e3ff1a699aadf06674b751e4f2355f9ba5a51aaf47546c8d3134206d2f002ccc -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs sha256:7a8d7cda19329fe28cb3ebe586fba8623339e8d9051bb10168db11d1bcd5d078 -->
 
 # liverangeshrink
 

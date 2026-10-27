@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/runtimechecks.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/runtimechecks.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/runtimechecks.rs sha256:be2a3e32abbbf513d040533765b6c516f79247b08984b177bc880108335c2923 -->
+<!-- src: crates/opt/llrm-transforms/src/runtimechecks.rs sha256:7707ed6ddbe2f5ba4f8b2e72258f5c22bc3d7c4981ade4a161771542b3be6097 -->
 
 # runtimechecks
 

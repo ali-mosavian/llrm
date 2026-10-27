@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_binop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_binop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:c24c5085b62cf3e969e0ec7d29fa4e3a008d4268f066deb0ee7953b5cb34f0fe -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:fef1fb919b095bc696ed79943820932d5fd00fe1a5ee281d24281a716f60096c -->
 
 # combine_icmp_binop
 

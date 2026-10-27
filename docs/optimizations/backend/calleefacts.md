@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/calleefacts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/calleefacts.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/calleefacts.rs sha256:87f0c9723ced672d912f70cdd80b1bef77c6225a2126b4531372f6a936b517d0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/calleefacts.rs sha256:400190d1ae018a886afab646bc23c78559c11f2b19eba5fb9ade8706b7d4114c -->
 
 # calleefacts
 

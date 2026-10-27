@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_gep_phi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_gep_phi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_gep_phi.rs sha256:e2e07f29dca93a5e5e9a9c4e0572890f898147017817fda1a85e577ecae8df12 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_gep_phi.rs sha256:5465fbd2409389ff4a4e49be4e06de8b525267406976b8e3df4d39edbae45677 -->
 
 # combine_gep_phi
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Pass, analysis and backend headers: which source files have one, and what each lacks.
 
-    tools/passdocs.py --check [--require DIR...]   list files lacking a summary or a required section
+    tools/docs/passdocs.py --check [--require DIR...]   list files lacking a summary or a required section
 
 A header needs a summary line and `# How it works`, plus one of `# Runs` (a pass), `# Used by` (a helper) or `# Provides` (an analysis), and `# Example`.
 `--check` exits 1 on a gap in a `--require` directory; without `--require` it only reports.
-The pages are written from these headers by `tools/docsbuild/build.py --sync`.
+The pages are written from these headers by `tools/docs/docsbuild/build.py --sync`.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 REPO = "https://github.com/ali-mosavian/llrm"
 SKIP = {"lib", "mod", "testing"}
 

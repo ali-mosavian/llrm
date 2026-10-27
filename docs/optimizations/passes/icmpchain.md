@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/icmpchain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/icmpchain.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/icmpchain.rs sha256:ed76dc9f97004a14218a4ef628ea140b045aee113eb015fcc5f9d861c732c628 -->
+<!-- src: crates/opt/llrm-transforms/src/icmpchain.rs sha256:1d23e8d64207688689caafb8a896128956d88e3bb202543d524c3f292e20b37d -->
 
 # icmpchain
 

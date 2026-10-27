@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ivusers.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ivusers.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ivusers.rs sha256:ac8b8f532fc2112fca4d2402f23dbec3ad77a5034a6227ea07752f572aa049bb -->
+<!-- src: crates/opt/llrm-transforms/src/ivusers.rs sha256:f1c7a9d6049e5686173b37de2c2b0ad41387c89f91b6db7d8d31ad2802833a99 -->
 
 # ivusers
 

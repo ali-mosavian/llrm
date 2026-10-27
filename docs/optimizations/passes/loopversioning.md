@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopversioning.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopversioning.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopversioning.rs sha256:b6a2026a7e6c11a8873555bb2f71605c4b98446c0e624936b06aa5f1f60d346c -->
+<!-- src: crates/opt/llrm-transforms/src/loopversioning.rs sha256:e01e867bb283e3eb9de51dfc99d1964156bde4150fe58de1ba69448709fd2b34 -->
 
 # loopversioning
 

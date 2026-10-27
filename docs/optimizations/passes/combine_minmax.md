@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_minmax.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_minmax.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_minmax.rs sha256:6e992c1573165a5e3e1e1069ca88866e5d5becf09f091af5fda0ed6d4a5418c5 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_minmax.rs sha256:737a6825c62e3db7dc00a83003fa147927637ba8451601b43bb43cf439876a46 -->
 
 # combine_minmax
 

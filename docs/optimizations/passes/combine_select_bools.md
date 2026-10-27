@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_bools.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_bools.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_bools.rs sha256:b5c0e847ed09f938f51f5162d1ed4bf462c392a18a1dbd4129c1ad7f6c1c0c84 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_bools.rs sha256:73adc10be73cbfb04a46df3e53258a29b3dfda21b2d2e8e8daba305507e395a0 -->
 
 # combine_select_bools
 

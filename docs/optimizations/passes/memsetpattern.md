@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memsetpattern.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memsetpattern.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memsetpattern.rs sha256:4cd35c9ea6f87136997f10537202f11b06e1260e5c28d17e7a823914a7721778 -->
+<!-- src: crates/opt/llrm-transforms/src/memsetpattern.rs sha256:5582c40e6c89e8f41b8006faacd631e1d2628336620ebdc7c925ce92b5112e13 -->
 
 # memsetpattern
 

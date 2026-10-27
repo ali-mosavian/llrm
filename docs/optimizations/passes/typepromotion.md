@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/typepromotion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/typepromotion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/typepromotion.rs sha256:0d3cef400d2f278bbb9bc4ea075815c4e1c1825060ef4ca1675f49766e1b9a08 -->
+<!-- src: crates/opt/llrm-transforms/src/typepromotion.rs sha256:2c13ebaea9db96b703592f27d4c9d9e5658b46dc70dc4e9a70a88bde082d8cdc -->
 
 # typepromotion
 

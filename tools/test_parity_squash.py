@@ -365,10 +365,10 @@ elif "--check" in sys.argv and index.read_text() != want:
 
 def generated_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
-    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "tools/docs/docsbuild").mkdir(parents=True)
     (repo / "docs/optimizations/passes").mkdir(parents=True)
     sh(repo, "init", "-q", "-b", "main")
-    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "tools/docs/docsbuild/build.py").write_text(GENERATOR)
     (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
     sh(repo, "add", "-A")
     sh(repo, "commit", "-qm", "base")
@@ -1388,8 +1388,8 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys, pathlib\nheader = pathlib.Path('a.rs').read_text().strip()\npage = pathlib.Path('docs/a.md').read_text().strip()\n"
         "if header != page:\n    print('generated docs are out of date')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )
@@ -1408,7 +1408,7 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
     assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
 
 
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     (tmp_path / "stray.txt").write_text("left over")
@@ -1426,8 +1426,8 @@ def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('  docs/a.md')\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     head = run("rev-parse", "HEAD")
@@ -1492,20 +1492,20 @@ def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
 
 def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
     """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
-    tool = tmp_path / "tools/docsbuild/build.py"
+    tool = tmp_path / "tools/docs/docsbuild/build.py"
     tool.parent.mkdir(parents=True)
     tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
     assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
 
 
 def _fake_docs_repo(tmp_path):
-    """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    """A repo whose tools/docs/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
     def git(*args, cwd=tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
     (tmp_path / "docs").mkdir()
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
         "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )

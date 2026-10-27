@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regthrash.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regthrash.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regthrash.rs sha256:4db93eb5074677867bcb093fa8562f44e4b786c452545e39b6e0b1245f3257b6 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regthrash.rs sha256:2caa90c76d2e1c0d1b49f2262ef4f40c0e1e2ef767da63dce0ce184d47c93769 -->
 
 # regthrash
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/consts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/consts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:08ecdbaf394e116c9fa60a731af157f55f6bc37e797ed19fedeadc1c3decf038 -->
+<!-- src: crates/opt/llrm-analysis/src/consts.rs sha256:30bf72ff4a2a720a3e63e99903baea4502089df9738a4b161db8755604d80f78 -->
 
 # consts
 

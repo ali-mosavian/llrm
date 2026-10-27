@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_phi_args.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_phi_args.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:cfdd41e23f630bf04f0d42e3c094980c3b3044d91a932548e840d5a1045cad8b -->
+<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:142426083e873088b9a827a97733a03a4cca54f9ea58af984cebdd37d8220f90 -->
 
 # combine_phi_args
 

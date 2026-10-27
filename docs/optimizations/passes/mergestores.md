@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/mergestores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/mergestores.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/mergestores.rs sha256:08db72a05af3a19d0ef2fc5c359d551c63266981032d1542cf38af2d70ac975c -->
+<!-- src: crates/opt/llrm-transforms/src/mergestores.rs sha256:14f067921800992fb660cc1a1d040cadeeb5ebc02854dfec53d0cb11eea8926e -->
 
 # mergestores
 

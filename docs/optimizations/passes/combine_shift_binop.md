@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_shift_binop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_shift_binop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_shift_binop.rs sha256:024d76b6a402979dd54f9802699fd5efc730c7aefb8e25995bc407a89d2d4b82 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_shift_binop.rs sha256:cce313e2fd8e7887de47de26bd20c3b1df07330607a9bb657691b677595a7b1d -->
 
 # combine_shift_binop
 

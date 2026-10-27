@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/divrempairs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/divrempairs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:09e744c49de7de762fccab21ea8e57a1fa63dc6268f5473a16213ac51229260a -->
+<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:0745268c599f6bf701cf65a5000546a6e23c6d72630e748e387919f064623941 -->
 
 # divrempairs
 
