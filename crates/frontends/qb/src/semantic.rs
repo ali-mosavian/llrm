@@ -4722,10 +4722,13 @@ impl Compiler {
                         self.emit_runtime_call("B$SLEP", Vec::new(), vec![duration]);
                     }
                     "END" | "SYSTEM" => {
-                        if !arguments.is_empty() {
-                            return self.unsupported(&format!("{name} with a return code"));
+                        if let Some(argument) = arguments.first() {
+                            let (value, type_id) = self.expression(argument)?;
+                            let code = self.convert(value, type_id, INTEGER)?;
+                            self.emit_runtime_call("B$CENC", Vec::new(), vec![code]);
+                        } else {
+                            self.emit_runtime_call("B$CEND", Vec::new(), Vec::new());
                         }
-                        self.emit_runtime_call("B$CEND", Vec::new(), Vec::new());
                         // B$CEND does not return. Keep following labels as
                         // detached side entries (notably ON ERROR handlers)
                         // instead of inventing a fallthrough from END.
