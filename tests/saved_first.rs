@@ -38,7 +38,7 @@ fn instructions(text: &str) -> Vec<String> {
 /// the epilogue popped them before it released the locals.
 #[test]
 fn test_callee_saved_registers_are_pushed_before_the_locals_are_reserved() {
-    let text = listing(SOURCE, &["-O2", "-m32", "-mabi=sysv", "-march=i486"]);
+    let text = listing(SOURCE, &["-O2", "-m32", "-mabi=sysv", "-march=i486", "--isel=dag"]);
     let lines = instructions(&text);
     let entry = lines.iter().position(|line| line == "push ebp").expect("a frame");
     assert_eq!(lines[entry + 1], "mov ebp, esp");
