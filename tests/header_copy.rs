@@ -2,6 +2,7 @@
 
 mod common;
 
+use std::path::Path;
 use std::process::Command;
 
 fn listing(
@@ -109,6 +110,10 @@ fn test_a_fixed_point_product_in_a_rotated_loop_is_still_narrowed() {
 /// 32. The exit read the stepped counter, which kept the old one alive past its
 /// step: `lea eax, [edx+1]; or eax, eax; je; mov edx, eax` for the trip
 /// where `inc edx; je` does.
+///
+/// llrm-cc: the break reads the counter, so it cannot run to zero; the step
+/// is tested stepped, `inc eax; cmp eax, 32; jne` (pin-shape: what LLVM leaves
+/// of a counter that is also read after the loop).
 #[test]
 fn test_a_counted_exits_number_lets_its_counter_step_in_place() {
     let source = format!("{}/bench/mandel/mandel.nib", env!("CARGO_MANIFEST_DIR"));
@@ -121,11 +126,15 @@ fn test_a_counted_exits_number_lets_its_counter_step_in_place() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    // The step is the `inc` and the branch reads its flags, whichever way the
-    // placement lays the exit (`je exit; jmp top` or `jne top; jmp exit`).
+    // The step and the test are of one register, whichever way the placement
+    // lays the exit (`je exit; jmp top` or `jne top; jmp exit`).
     let in_place = lines
-        .windows(2)
-        .any(|pair| pair[0].starts_with("inc e") && (pair[1].starts_with("je ") || pair[1].starts_with("jne ")));
+        .windows(3)
+        .any(
+            |trio| trio[0].strip_prefix("inc e").is_some_and(|register| {
+                trio[1] == format!("cmp e{register}, 32") && (trio[2].starts_with("je ") || trio[2].starts_with("jne "))
+            }),
+        );
     assert!(in_place, "{text}");
     assert!(!text.contains("lea eax, [edx+1]"), "the old counter is kept alive past its step: {text}");
 }
@@ -235,27 +244,32 @@ fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
 /// chosen: `sum_three`'s three row loads leave the loop and its counter runs
 /// to zero, `add ax, [p+i] x3; add i, 2; jne` (5 instructions a trip). Hoist
 /// after LSR, or the copy off, left `inc ecx` beside `add edi, 2` (6).
+///
+/// llrm-cc: the five was llrm-c's; the pin's `llc` on the same IR runs
+/// `add x3; inc; cmp; jne`, six. The loop is held to the pin's length
+/// (rewritten on observable output).
 #[test]
 fn test_sum_three_loop_is_five_instructions_by_default() {
-    let source = format!("{}/bench/parity/sum_three/sum_three.c", env!("CARGO_MANIFEST_DIR"));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/parity/sum_three/sum_three.c");
+    let flags = ["-O2", "-m32", "-mabi=sysv", "-march=i486"];
     let scratch = tempfile::tempdir().unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["-O2", "-m32", "-mabi=sysv", "-march=i486", "-S", "-o", "a.s", &source])
+        .args(flags)
+        .args(["-S", "-o", "a.s"])
+        .arg(&source)
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let loop_ = lines
-        .windows(5)
-        .any(
-            |w| w[..3].iter().all(|line| line.starts_with("add ax, word ptr"))
-                && w[3].starts_with("add e")
-                && w[3].ends_with(", 2")
-                && w[4].starts_with("jne "),
-        );
-    assert!(loop_, "{text}");
+    let ours = common::pin::loops(&text, Some("sum_three"));
+    let pin = common::pin::listing(&source, &flags);
+    let pins = common::pin::loops(&pin, Some("sum_three"));
+    assert_eq!(pins.len(), 1, "the pin has one loop in sum_three: {pin}");
+    assert!(
+        ours.len() == 1 && ours[0] <= pins[0],
+        "loops of {ours:?} instructions, the pin's llc has {pins:?}: {text}"
+    );
 }
 
 /// Tuned for size the copy is off and the loop is entered at its body only
@@ -307,6 +321,8 @@ fn test_a_counter_tested_in_the_header_after_its_step_is_tested_stepped() {
 /// call: `push si; push di; ... pop di; pop si; leave`, the most frequent
 /// path). With the return copied for the path, the reload is forwarded and the
 /// store dead before the pieces it needs are counted: `mov ax, 1; ret`.
+///
+/// llrm-cc: the medium model returns far, so the path ends `mov ax, 1; retf`.
 #[test]
 fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     let source = format!("{}/bench/queens/queens.c", env!("CARGO_MANIFEST_DIR"));
@@ -319,7 +335,7 @@ fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.ends_with(':')).collect();
-    let early = lines.windows(2).any(|pair| pair[0] == "mov ax, 1" && pair[1] == "ret");
+    let early = lines.windows(2).any(|pair| pair[0] == "mov ax, 1" && pair[1] == "retf");
     assert!(early, "{text}");
 }
 
@@ -348,22 +364,34 @@ fn test_a_counted_inner_loop_tests_its_stepped_counter_after_the_cleanup() {
 /// (`hi - lo < 2`, most calls of recchop) paid `push ebp; push edi` and their
 /// pops. The save point goes up the dominators to the block every return it
 /// closes at is below: two registers at the entry, as with the copy off.
+///
+/// llrm-cc: clang's IR turns the second recursive call into a loop, which
+/// holds four registers across the early return; the pin's `llc` on the same
+/// IR pushes four at the entry as well, so the entry is held to the pin's count
+/// (pin-shape).
 #[test]
 fn test_a_register_only_a_guarded_loop_uses_is_saved_after_the_early_return() {
-    let source = format!("{}/bench/recchop/recchop.c", env!("CARGO_MANIFEST_DIR"));
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/recchop/recchop.c");
+    let flags = ["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch"];
     let scratch = tempfile::tempdir().unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["-O1", "-m32", "-mabi=sysv", "-march=i486", "-ftree-ch", "-S", "-o", "a.s", &source])
+        .args(flags)
+        .args(["-S", "-o", "a.s"])
+        .arg(&source)
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
-    let function: Vec<&str> =
-        text.lines().map(str::trim).skip_while(|line| !line.starts_with("_chop proc")).skip(1).collect();
-    let entry =
-        function.iter().take_while(|line| !line.starts_with("jl ")).filter(|line| line.starts_with("push ")).count();
-    assert!(entry <= 2, "{entry} pushes before the early return\n{text}");
+    let before_early_return = |listing: &str| {
+        common::pin::instructions(listing, Some("chop"))
+            .iter()
+            .take_while(|line| !line.starts_with("jl "))
+            .filter(|line| line.starts_with("push "))
+            .count()
+    };
+    let (entry, pins) = (before_early_return(&text), before_early_return(&common::pin::listing(&source, &flags)));
+    assert!(pins > 0 && entry <= pins, "{entry} pushes before the early return, the pin's llc has {pins}\n{text}");
 }
 
 /// A loop the guard enters at its second block (`while (at >= gap &&

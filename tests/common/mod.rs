@@ -6,6 +6,7 @@ use std::path::Path;
 
 pub mod cc;
 pub mod dosbox;
+pub mod pin;
 
 fn recipe() -> toml::Table {
     let target = llrm_driver::all()
