@@ -267,8 +267,9 @@ impl<'a> VirtRegAuxInfo<'a> {
                 // DEVIATE (no number): `%1 = COPY undef %1`, a copy whose
                 // source is not live at it, is a value no
                 // register carries. The pin's coalescer erases such copies
-                // before it joins them (`eliminateUndefCopy`,
-                // not ported); until then the value is not rematerializable.
+                // before it joins them (`eliminateUndefCopy`, ported in the
+                // coalescer); a copy that reaches here by another path is
+                // not rematerializable.
                 let Some(source_value) = src_q.value_in() else { return false };
                 vni = source_value;
                 if vni.is_phi_def() {
