@@ -3,13 +3,15 @@
 //! and the `and` of a word leaves the upper half zero, so no extension follows
 //! it.
 
+mod common;
+
 use std::process::Command;
 
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
         .output()
