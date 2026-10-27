@@ -39,6 +39,9 @@ fn test_on_local_error_registers_the_handlers_offset_at_the_pointers_width() {
         let flat = listing("-m32", level);
         assert!(flat.contains("push offset $QB$LANDING") && !flat.contains("movzx"), "{level}: {flat}");
         let real = listing("-m16", level);
-        assert!(real.contains("mov ax, offset $QB$LANDING"), "{level}: {real}");
+        // Optimized, `mov ax, offset X; push ax` is `push offset X` (#5135).
+        let pushed = real.contains("push offset $QB$LANDING");
+        assert_eq!(pushed, level == "-O2", "{level}: {real}");
+        assert!(pushed || real.contains("mov ax, offset $QB$LANDING"), "{level}: {real}");
     }
 }

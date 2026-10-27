@@ -13,7 +13,7 @@ int f(int *a, int n)
     return m * 100 + j;
 }
 // CHECK-LABEL: _f proc
+// CHECK: inc
 // CHECK: jg
 // CHECK-NOT: jg
-// CHECK: inc
 // CHECK: _f endp

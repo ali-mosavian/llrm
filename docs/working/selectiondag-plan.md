@@ -251,11 +251,14 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD240 | sdag-b | `isMultiStoresCheaperThanBitsMerge` is true for two integer halves at m16 (the pin: a float and an integer half only): a far pointer or `long` is two word stores, not `shl; movzx; add`. Exit: none while the DAG keeps `BUILD_PAIR` | `x86/dag/actions.rs` |
 | SD241 | sdag-b | `ExpandShiftWithKnownAmountBit`: a clear amount bit without a legal or custom funnel shift stays a parts node (the pin shifts, subtracts and ors) | `selectiondag/legalize_types.rs` |
 | SD242 | sdag-b | `combineCarryThroughADD`: the `COND_A` form (a swapped `sub`) is not translated; nothing produces it at 32 bits yet. Exit: with `combineSBB`'s remaining folds | `selectiondag/x86_lowering.rs` |
+| SD249 | sdag-b | `reduceLoadWidth` of a constant `srl`/`sra`/`and` of a load only; no `freeze` look-through, no `shl` opening; every x86 narrow access is taken as legal (`isLegalNarrowLdSt`). Exit: none while x86 loads stay unaligned-legal | `selectiondag/reduce_load_width.rs` |
+| SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD107 | sdag-a | `lowerFaddFsub` never forms a horizontal add (SSE3 `haddps` is not described); scalar `FADD`/`FSUB` stay as they are | `selectiondag/x86_lowering.rs` |
+| SD106 | sdag-a | `expandDIVREMByConstant` ports the unsigned forms; the sign-extended `MUL` shortcut of `expandMUL_LOHI` and the UDIVREM-decomposition of a missing UREM libcall are not ported | `selectiondag/expand_divrem_const.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | the i8 DIVREM remainder is `shr ax, 8` then `movzx` of the byte, not `movzx` of AH (the LIR has no AH) | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
@@ -267,6 +270,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD234 | sdag-b | an x87 `fld1`/`fldz` is loaded once for its readers in a block until the next call or barrier (the pin: one `LD_F1`, `fadd st(1),st`); the old rule loaded it per reader | `selectiondag/emit.rs` |
 | SD235 | sdag-b | a same-type `fpround` read only by a store of its type in the block is not rounded through a stack temp: the pin folds `store (fp_round x)` into a truncating store (`visitSTORE`) | `selectiondag/builder.rs` |
 | SD236 | sdag-b | `visitBITREVERSE` has no `clmul` fold (no carry-less multiply node here) | `selectiondag/bitreverse_combine.rs` |
+| SD312 | sdag-c | DIV-OPTSIZE-1: `isIntDivCheap` is `size \|\| minsize`, the pin's is `minsize`: a constant divide stays `div`/`idiv` at -Os (~40 clocks on a 486 against ~13 for the multiply; div_constants_long m32 -Os 5095 B against the pin's 5463) | `selectiondag/dag_function.rs` |
 | SD311 | sdag-c | a fill or copy through a huge pointer calls the target's stepped routine inline with its operands in the registers it reads (the pin has no huge pointers); a `memmove` of no proven direction, or a huge pointer beside a near one, is refused | `selectiondag/builder/memops.rs` |
 | SD310 | sdag-c | a QB runtime routine's answer in the flags is `LLRM_CALL_FLAGS(CopyFromReg EFLAGS)`, read only by a compare with zero; the pin's calls answer in registers | `llrm-x86/src/dag/x86isd.rs` |
 | SD305 | sdag-c | `llrm.ia16.*` nodes (`LLRM_ASM`/`_WINDOW`/`_CODE`) pass through selection as the pseudo opcode 30010, `SEGMENT_OF` as 30011 and `LLRM_FARCALL` (24584) as 30012 and `LLRM_CODE` (24582) as 30013; not the pin's `INLINEASM` | `crates/backend/llrm-dagisel/src/x86_llrm.rs` |
