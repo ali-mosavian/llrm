@@ -65,6 +65,15 @@ pub fn negate(
     Some(bits ^ (1u128 << sign))
 }
 
+/// `|x|` (`clearSign`).
+pub fn abs(
+    vt: EVT,
+    bits: u128,
+) -> Option<u128> {
+    let (sign, ..) = layout(vt)?;
+    Some(bits & !(1u128 << sign))
+}
+
 /// The positive integer `value` (`getConstantFP(2.0, ..)`).
 pub fn from_integer(
     vt: EVT,
@@ -123,6 +132,43 @@ pub fn fold(
         }
         _ => None,
     }
+}
+
+/// [`fold`], but only where the result is exact: what a function that
+/// evaluates at the x87's extended precision may fold (it rounds once, at the
+/// store).
+pub fn fold_exact(
+    opcode: ISD,
+    vt: EVT,
+    a: u128,
+    b: u128,
+) -> Option<u128> {
+    let bits = fold(opcode, vt, a, b)?;
+    let exact = match vt {
+        EVT::Simple(MVT::F32) => {
+            let (x, y) = (f64::from(f32::from_bits(a as u32)), f64::from(f32::from_bits(b as u32)));
+            let r = f64::from(f32::from_bits(bits as u32));
+            let wide = match opcode {
+                ISD::FAdd => x + y,
+                ISD::FSub => x - y,
+                ISD::FMul => x * y,
+                _ => x / y,
+            };
+            r == wide
+        }
+        EVT::Simple(MVT::F64) => {
+            let (x, y) = (f64::from_bits(a as u64), f64::from_bits(b as u64));
+            let r = f64::from_bits(bits as u64);
+            match opcode {
+                ISD::FAdd => (r - x) - y == 0.0 && (r - y) - x == 0.0,
+                ISD::FSub => (r - x) + y == 0.0 && (x - r) - y == 0.0,
+                ISD::FMul => (-x).mul_add(y, r) == 0.0 || x.mul_add(y, -r) == 0.0,
+                _ => (-r).mul_add(y, x) == 0.0,
+            }
+        }
+        _ => false,
+    };
+    exact.then_some(bits)
 }
 
 /// `1.0 / x` when it is a normal finite value; `exact` is `opOK` (a power of

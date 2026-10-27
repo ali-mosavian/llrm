@@ -795,7 +795,7 @@ pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     // 0 unseen, 1 on the walk's path, 2 done.
     let mut state: IdMap<BlockId, u8> = IdMap::new();
     state.insert(entry, 1);
-    let mut path = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];
+    let mut path = vec![(entry, function.successors(entry), 0usize)];
     while let Some((block, successors, next)) = path.last_mut() {
         let Some(&successor) = successors.get(*next) else {
             state.insert(*block, 2);
@@ -810,7 +810,7 @@ pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
             Some(_) => {}
             None => {
                 state.insert(successor, 1);
-                path.push((successor, function.successors(successor).into_iter().collect(), 0));
+                path.push((successor, function.successors(successor), 0));
             }
         }
     }

@@ -70,8 +70,8 @@ use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
-    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting_marked, roots, roots_here,
-    vouched,
+    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting, reporting_marked, roots,
+    roots_here, vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
@@ -101,6 +101,18 @@ impl ProgramPass for ModuleIpo {
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
             modules[at].changed(id);
             changed = true;
+        }
+        // `GlobalOptPass`, which LLVM runs here: a variable is split into the
+        // pieces its loads read, and one a body writes before it reads is that
+        // body's stack slot, while the loads are still there to be seen.
+        for at in 0..count {
+            let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
+                crate::globalsra::split(module, &program.layout)
+            });
+            changed |= !ids.is_empty();
+            for id in ids {
+                modules[at].changed(id);
+            }
         }
         let mut cloning = crate::ipacp::Cloning::default();
         for at in 0..count {
@@ -536,6 +548,7 @@ impl SelfInline {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
                         moved: false,
+                        last_call: false,
                         callee: None,
                         self_calls: None,
                         self_sites: 0,

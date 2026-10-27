@@ -67,7 +67,7 @@ fn a_call_of_far_code_is_marked_far() {
     assert_eq!(far, ["far"], "{sites:?} far={:?}", done.far);
 }
 
-const VARIABLE_MOVE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const VARIABLE_MOVE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
 define void @f(ptr %d, ptr %s, i16 %n) {
 entry:
@@ -91,7 +91,7 @@ fn a_runtime_routine_is_called_far_at_m16() {
     assert!(done.far.contains(sites[0].0), "{sites:?} far={:?}", done.far);
 }
 
-const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FAR_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 ptr addrspace(1) @g()
 declare cc 1005 void @use(ptr addrspace(1))
 define cc 1005 i16 @f(i16 %n) addrspace(1) {
@@ -134,7 +134,7 @@ fn every_part_of_a_far_phi_is_defined() {
     }
 }
 
-const M16_FAR_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FAR_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1005 i16 @f(ptr addrspace(1) %p) addrspace(1) {
 entry:
   %v = load i16, ptr addrspace(1) %p
@@ -173,7 +173,7 @@ fn a_far_load_reads_the_pointer_and_goes_through_its_selector() {
     );
 }
 
-const M16_ZERO_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_ZERO_16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @buf = global [16 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define cc 1005 void @f() addrspace(1) {
@@ -201,7 +201,7 @@ fn an_m16_zero_fill_of_sixteen_bytes_is_four_dword_stores() {
     assert_eq!(stores, 4);
 }
 
-const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FILL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @buf = global [100 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define cc 1005 void @f() addrspace(1) {
@@ -228,7 +228,7 @@ fn an_m16_fill_names_its_segment() {
     assert_eq!(fill.sources.len(), 4, "value, count, destination and its segment: {fill:?}");
 }
 
-const FAR_INDIRECT_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_INDIRECT_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define void @f(ptr addrspace(1) %p) {
 entry:
   call watcallcc addrspace(1) void %p(i32 7)
@@ -250,7 +250,7 @@ fn a_call_through_a_far_pointer_receives_its_arguments() {
     assert!(call.is_some_and(|call| !call.requires.is_empty()), "{insns:?}");
 }
 
-const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_GLOBAL_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @cells = addrspace(1) global [4 x i16] zeroinitializer
 define i16 @f() {
 entry:
@@ -271,7 +271,7 @@ fn an_element_of_a_far_global_is_a_cell_through_es() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const STRING_OP_ON_ELEMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @buf = global [64 x i8] zeroinitializer
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
 define void @f(i16 %i, i16 %n) {
@@ -293,7 +293,7 @@ fn a_string_operation_on_an_element_of_a_global_knows_its_segment() {
 }
 
 const M16_FAR_AND_DOUBLE: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 define double @f(ptr addrspace(1) %p, double %x) addrspace(1) {
 entry:
   store i16 1, ptr addrspace(1) %p
@@ -312,7 +312,7 @@ fn a_double_not_live_across_a_far_cell_is_selected() {
 }
 
 const M16_FAR_NULL: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 define i16 @f(ptr addrspace(1) %p) addrspace(1) {
 entry:
   %c = icmp eq ptr addrspace(1) %p, null
@@ -330,7 +330,7 @@ fn a_far_null_is_two_zero_words() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const M16_HUGE_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const M16_HUGE_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define cc 1005 void @f(ptr addrspace(3) %p, i32 %n) addrspace(1) {
 entry:
   call void @llvm.memset.p3.i32(ptr addrspace(3) %p, i8 1, i32 %n, i1 false)
@@ -346,7 +346,7 @@ fn huge_ir(
     metadata: &str,
 ) -> String {
     format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define cc 1005 void @f(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n) addrspace(1) {{
 entry:
   call void @llvm.{name}.p{dst}.p{src}.i32(ptr addrspace({dst}) %d, ptr addrspace({src}) %s, i32 %n, i1 false){metadata}
@@ -396,7 +396,7 @@ fn a_copy_through_huge_pointers_calls_the_stepped_routine() {
     assert!(refused.contains("near"), "{refused}");
 }
 
-const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const VARSEG: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @x = internal global i16 0
 define i16 @f() {
 entry:
@@ -427,7 +427,7 @@ fn a_near_pointer_cast_to_the_segment_space_is_its_segment_selector() {
     assert_eq!(spaces, [crate::model::ir::Space::Group], "{spaces:?}");
 }
 
-const FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define void @f(ptr %d, ptr addrspace(2) %s, i16 %i, i16 %n) addrspace(1) {
 entry:
   %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
@@ -462,7 +462,7 @@ fn a_copy_from_a_far_pointer_reads_through_its_selector() {
     assert!(!from_a_constant, "DS takes a constant (DGROUP), not the pointer's selector");
 }
 
-const SEGMENT_LOADED_IN_TWO_BLOCKS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const SEGMENT_LOADED_IN_TWO_BLOCKS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) {
 b1:
   %0 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
@@ -476,7 +476,7 @@ b4:
 }
 ";
 
-const M16_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @far = addrspace(1) global [100 x i16] zeroinitializer
 @near = global [100 x i16] zeroinitializer
 declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1)
@@ -519,7 +519,7 @@ fn a_copy_from_a_far_global_loads_the_globals_segment() {
     assert_ne!(group, Some(0), "DGROUP, not the global's own segment: {loaded:?}");
 }
 
-const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_MEMSET: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define void @f(ptr addrspace(2) %s, i16 %n) addrspace(1) {
 entry:
   %p = addrspacecast ptr addrspace(2) %s to ptr addrspace(4)
@@ -554,7 +554,7 @@ fn a_fill_through_a_far_pointer_stores_through_its_selector() {
     assert!(!from_a_constant, "ES takes a constant (DGROUP), not the pointer's selector");
 }
 
-const TWO_FAR_LOADS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const TWO_FAR_LOADS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 i32 @f(i16 %0, i16 %1) addrspace(1) {
 b1:
   %2 = inttoptr i16 %0 to ptr addrspace(2)
@@ -595,7 +595,7 @@ fn two_loads_through_es_read_their_own_selectors() {
 /// A far pointer made from a `long` call result (`(unsigned char far *)
 /// qglSfAccessWrEx(..)`), then cleared by a loop: QCport `part.c` stopped at
 /// "a string operation on a pointer of no known segment".
-const FAR_FROM_A_CALL_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_FROM_A_CALL_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define i16 @f(i32 %sf) addrspace(1) {
 b1:
   %r = call addrspace(1) i32 @acc(i32 %sf, i16 0, i16 1)
@@ -639,7 +639,7 @@ fn a_far_pointer_from_a_call_result_has_its_selector_for_a_fill() {
 /// `part.c` at -O3, `part_raster` inlined): the fill's address is `offset +
 /// (x & 0xFFFF0000)` for the dword `x` the call returned, and it stopped at
 /// "a string operation on a pointer of no known segment".
-const FILL_INTO_A_CALL_RESULT_IN_A_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FILL_INTO_A_CALL_RESULT_IN_A_LOOP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 
 define cc 1005 void @\"_frame@3\"(i32 noundef %0, i32 noundef %1, i16 noundef %2) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {
 b1:
@@ -787,7 +787,7 @@ fn a_fill_at_an_offset_into_a_call_result_has_the_results_selector() {
 /// A far pointer from a near one (`addrspacecast`) with a constant byte
 /// offset added: the offset was built as a constant of the far type, which
 /// has none (`nbody.bas`: "integer constant of Simple(Far)").
-const FAR_PLUS_A_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_PLUS_A_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 define void @f(ptr %p) addrspace(1) {
 b1:
   %w = load i16, ptr %p
@@ -811,7 +811,7 @@ fn a_constant_offset_from_a_far_pointer_is_an_offset_of_its_halves() {
 /// selector SS) read through after another far access had set ES: the cell is
 /// the frame's own. It stopped with "address component Reg(ES)" (bench
 /// `lru.nib`), reduced from its `main`.
-const FAR_FRAME_POINTER: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const FAR_FRAME_POINTER: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 
 @$var_bord = internal global [6 x i8] zeroinitializer, align 2
 @$var_bprev = internal global [6 x i8] zeroinitializer, align 2
@@ -896,4 +896,115 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
     let sources = &fill.what.as_ref().expect("semantics").sources;
     let crate::model::ir::Loc::Held(destination) = &sources[2] else { panic!("{fill:?}") };
     assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
+}
+
+/// `smin`, `smax`, `umin` and `umax` of an `i64` stopped the legalizer with
+/// `Unsupported { op: SMin, ty: I64, what: "expand result" }`.
+#[test]
+fn an_i64_min_or_max_expands_to_its_halves() {
+    for op in ["smin", "smax", "umin", "umax"] {
+        let ir = format!(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare i64 @llvm.{op}.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {{
+entry:
+  %r = call i64 @llvm.{op}.i64(i64 %a, i64 %b)
+  ret i64 %r
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&ir).expect("parses");
+        selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{op}: {}", e.0));
+    }
+}
+
+const SELECT_IN_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+@s = internal global [2 x i8] zeroinitializer
+declare cc 1000 void @g(i32) addrspace(1)
+declare cc 1000 void @h(ptr) addrspace(1)
+define cc 1000 void @f(i16 %k, i32 %a) addrspace(1) {
+  %c = icmp eq i16 %k, 1
+  %r = select i1 %c, i32 %a, i32 524246911
+  call cc 1000 addrspace(1) void @h(ptr @s)
+  call cc 1000 addrspace(1) void @g(i32 %r)
+  ret void
+}
+";
+
+/// A select that splits the block between an argument area and its call left
+/// the area open: `sub sp, 2; mov bx, sp; mov [bx], offset _s` where the
+/// old selector pushed (+42 B in `range_power_digits`, +45 in `jumps`). The
+/// area moves to the call and stays a push.
+#[test]
+fn a_select_between_an_argument_area_and_its_call_leaves_pushes() {
+    let done = select_f(SELECT_IN_CALL).unwrap_or_else(|why| panic!("{why}"));
+    let names = mnemonics(&done);
+    assert_eq!(names.iter().filter(|m| m.starts_with("push")).count(), 2, "{names:?}");
+}
+
+/// `freeze` of an `i64` at m16 stopped the legalizer with `Unsupported
+/// { op: Freeze, ty: I64, what: "expand result" }` (vsgcc `x_ll_div`).
+#[test]
+fn a_frozen_i64_expands_to_two_frozen_halves() {
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+define i64 @f(i64 %a) {
+entry:
+  %b = freeze i64 %a
+  ret i64 %b
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
+const HUGE_STEP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+define ptr addrspace(3) @f(ptr addrspace(3) %p) {
+entry:
+  %q = getelementptr i8, ptr addrspace(3) %p, i32 4
+  ret ptr addrspace(3) %q
+}
+";
+
+/// A constant step of a huge pointer moves the selector by at most one
+/// stride, and the offset's wrap says whether. It went through the dword sum
+/// and its high word (`add; sar 16; shl`, six instructions per step
+/// in `huge_array`) instead of the wrap of the 16-bit add.
+#[test]
+fn a_constant_step_of_a_huge_pointer_is_the_offset_wrap() {
+    let module = llrm_mir::parse::module(HUGE_STEP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names = mnemonics(&done);
+    assert!(!names.iter().any(|m| m == "sar"), "{names:?}");
+}
+
+/// The wrap of a constant step was a compare of the new offset against the
+/// old one (`sub`), which kept the old offset live across the step
+/// (`huge_copy.c` 54 -> 82 bytes); it is the carry flag of the add.
+#[test]
+fn a_constant_step_of_a_huge_pointer_wraps_by_the_carry_of_the_add() {
+    let module = llrm_mir::parse::module(HUGE_STEP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names = mnemonics(&done);
+    assert!(!names.iter().any(|m| m == "sub"), "{names:?}");
+}
+
+/// A load through a huge pointer plus a constant read ES from the old
+/// selector: the carry into it was computed and dropped (`hugelp.bas`
+/// 264 bytes against the old selector's 303), wrong once the offset wraps.
+#[test]
+fn a_load_through_a_stepped_huge_pointer_reads_the_carried_selector() {
+    let load = HUGE_STEP
+        .replace("define ptr addrspace(3) @f", "define i16 @f")
+        .replace("ret ptr addrspace(3) %q", "%v = load i16, ptr addrspace(3) %q\n  ret i16 %v");
+    let module = llrm_mir::parse::module(&load).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |what: &str| insns.iter().rposition(|i| i.what.as_ref().and_then(|w| w.name.as_deref()) == Some(what));
+    let (load, carried) = (named("mov").expect("the load"), named("add").expect("the selector sum"));
+    assert!(insns[load].uses.iter().any(|v| insns[carried].defines.contains(v)), "the load reads the old selector");
 }

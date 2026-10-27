@@ -205,3 +205,58 @@ fn a_compare_of_extensions_of_different_widths_extends_the_narrower_source() {
         "  %0 = sext i8 %y to i16\n  %1 = icmp slt i16 %x, %0\n  ret i1 %1\n",
     );
 }
+
+/// `foldSignBitTest`: the sign bit shifted down and compared with zero is a
+/// compare of the value with zero (a `shr` by the width less one, a `trunc` of
+/// it, or two shifts that add up to it).
+#[test]
+fn test_a_sign_bit_extraction_compared_with_zero_is_a_sign_test() {
+    check(
+        "i32 %x",
+        "  %s = lshr i32 %x, 31\n  %r = icmp eq i32 %s, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = ashr i32 %x, 31\n  %r = icmp ne i32 %s, 0\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = lshr i32 %x, 31\n  %t = trunc i32 %s to i8\n  %r = icmp eq i8 %t, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+}
+
+/// A compare of a phi of constants against a constant stayed a compare: the
+/// phi's block ended in `br (icmp eq (phi [1, 1, 0]), 0)` that SimplifyCFG
+/// cannot thread (its fold needs the phi itself as the condition), so queens
+/// -O1 kept a materialised flag through its inner loop, +16% where the pin
+/// exits straight to the two targets. `foldOpIntoPhi` makes it a phi of i1.
+#[test]
+fn a_compare_of_a_phi_of_constants_becomes_a_phi_of_the_answers() {
+    let text = "define i32 @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %a, label %m
+
+a:
+  br i1 %d, label %m, label %b
+
+b:
+  br label %m
+
+m:
+  %p = phi i32 [ 1, %b0 ], [ 1, %a ], [ 0, %b ]
+  %z = icmp eq i32 %p, 0
+  br i1 %z, label %x, label %y
+
+x:
+  ret i32 5
+
+y:
+  ret i32 6
+}
+";
+    let out = combined(text);
+    assert!(out.contains("phi i1") && !out.contains("icmp"), "{out}");
+}
