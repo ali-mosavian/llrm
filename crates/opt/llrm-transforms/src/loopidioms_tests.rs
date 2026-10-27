@@ -440,21 +440,23 @@ fn a_copy_loop_through_huge_pointers_stays_a_loop_under_size() {
     let text = "@a = addrspace(3) global [40000 x i16] zeroinitializer
 @b = addrspace(3) global [40000 x i16] zeroinitializer
 
-define i16 @f(i32 %n) {
+define i16 @f() {
 b0:
   br label %b1
 
 b1:
-  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
-  %c = icmp slt i32 %i, %n
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp ult i16 %i, -25536
   br i1 %c, label %b2, label %b3
 
 b2:
-  %p = getelementptr inbounds [40000 x i16], ptr addrspace(3) @a, i32 0, i32 %i
-  %q = getelementptr inbounds [40000 x i16], ptr addrspace(3) @b, i32 0, i32 %i
+  %z = zext i16 %i to i32
+  %o = shl nuw nsw i32 %z, 1
+  %p = getelementptr inbounds nuw i8, ptr addrspace(3) @a, i32 %o
   %v = load i16, ptr addrspace(3) %p
+  %q = getelementptr inbounds nuw i8, ptr addrspace(3) @b, i32 %o
   store i16 %v, ptr addrspace(3) %q
-  %next = add i32 %i, 1
+  %next = add nuw i16 %i, 1
   br label %b1
 
 b3:
@@ -469,10 +471,10 @@ b3:
         manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
         printed(&module)
     };
-    let after = on_dos(true);
-    assert!(!after.contains("llvm.memcpy"), "{after}");
     let speed = on_dos(false);
     assert!(speed.contains("call void @llvm.memcpy.p3.p3.i32("), "premise: speed copies it\n{speed}");
+    let after = on_dos(true);
+    assert!(!after.contains("llvm.memcpy"), "{after}");
 }
 
 /// Two arrays of 64 words, each cell its own number, and @f(n, q): `body`
