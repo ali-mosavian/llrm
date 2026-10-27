@@ -667,6 +667,55 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
     assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
 }
 
+/// `@llvm.global_ctors` panicked the x86 backends (`no entry found for key`: an
+/// intrinsic-named global has no symbol): each target now lays out the function
+/// pointers, lowest priority first, in an init-function segment.
+#[test]
+fn global_ctors_become_init_function_pointers_at_x86_64_and_m32() {
+    for (layout, triple) in [
+        ("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128", "x86_64-unknown-linux-gnu"),
+        ("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32", "i486-unknown-linux-gnu"),
+    ] {
+        let text = format!(
+            "target datalayout = \"{layout}\"\ntarget triple = \"{triple}\"\n\
+             @llvm.global_ctors = appending global [3 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 200, ptr @late, ptr null }}, \
+             {{ i32, ptr, ptr }} {{ i32 100, ptr @early, ptr null }}, {{ i32, ptr, ptr }} {{ i32 150, ptr null, ptr null }}]\n\
+             define void @early() {{\n  ret void\n}}\ndefine internal void @late() {{\n  ret void\n}}\n"
+        );
+        let (built, _) =
+            crate::llc::compiled(&flags(&[]), &text, "ctors").unwrap_or_else(|error| panic!("{triple}: {error}"));
+        let (_, items) = built
+            .data
+            .iter()
+            .find(|(name, _)| name == ".init_array")
+            .unwrap_or_else(|| panic!("{triple}: {:?}", built.data));
+        let names: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                llrm_codegen::backend::masm::Datum::Pointer(pointer) => Some(pointer.name.trim_matches('_')),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["early", "late"], "{triple}");
+        let width = if triple.starts_with("x86_64") { 8 } else { 4 };
+        assert!(
+            matches!(items.first(), Some(llrm_codegen::backend::masm::Datum::Align(align)) if align.to == width),
+            "{triple}: entries are {width}-byte aligned: {items:?}"
+        );
+    }
+}
+
+/// A 16-bit DOS start-up runs no constructor table: the list is refused, not
+/// emitted for nothing.
+#[test]
+fn global_ctors_are_refused_at_m16() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+                @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 1, ptr @f, ptr null }]\n\
+                define void @f() {\n  ret void\n}\n";
+    let error = crate::llc::compiled(&flags(&["-m16"]), text, "ctors").expect_err("refused");
+    assert!(error.contains("llvm.global_ctors") && error.contains("start-up"), "{error}");
+}
+
 /// `__builtin_constant_p(x)` of a parameter reached the backend as
 /// `llvm.is.constant.i32` and was refused (`@f_: @llvm.is.constant.i16`): it is
 /// false, and the branch on it is gone.
@@ -822,7 +871,7 @@ fn stdcall_is_refused_by_name() {
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
 fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 define i16 @f(i16 %x) {\n  %d = sdiv i16 %x, 7\n  ret i16 %d\n}\n\
                 define i16 @main() {\n  ret i16 0\n}\n";
@@ -839,7 +888,7 @@ fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
 /// whose address is taken stays far.
 #[test]
 fn a_static_function_is_entered_by_a_near_call() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @keep = global ptr addrspace(1) @taken\n\
                 define internal i16 @h(i16 %x) addrspace(1) {\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n\

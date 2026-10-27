@@ -1,7 +1,7 @@
 //! `visitBITREVERSE`: a `bitreverse` of a `bitreverse` is the value, and a
 //! shift of a `bitreverse` reversed again is the opposite shift of the value.
 //!
-//! DEVIATE SD320: the `clmul` fold is not ported (no carry-less multiply
+//! DEVIATE SD236: the `clmul` fold is not ported (no carry-less multiply
 //! here). Owner sdag-b.
 //!
 //! # See also

@@ -830,8 +830,9 @@ mod tests {
                 ("source".into(), 1, RegId::EAX)
             ]
         );
+        // The byte form (`div r/r,rm`, SD302) reads and writes `ax` only.
         let narrow = semantics(Operation::Divide, "div", vec![held(1)], vec![held(3), held(4)]);
-        assert!(pins(&narrow).is_empty(), "a divide into one register names no pair");
+        assert_eq!(pins(&narrow), [("dest".into(), 0, RegId::EAX), ("source".into(), 0, RegId::EAX)]);
     }
 
     /// `rep movs` reads its count in cx and the pointers in si and di, leaves

@@ -949,7 +949,7 @@ entry:
 /// (`mov dx, ax; shl edx, 16; add edx, ecx; push edx`, 11 bytes) and pushed;
 /// its two words are pushed as they are (`push es; push bx`). The pin keeps
 /// int halves merged (`isMultiStoresCheaperThanBitsMerge`); m16 deviates
-/// (SD312). QCport -Os: 131 stack arguments.
+/// (SD240). QCport -Os: 131 stack arguments.
 #[test]
 fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
@@ -1020,7 +1020,7 @@ entry:
 }
 ";
 
-const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @g = global i16 0
 declare void @h(ptr addrspace(2), ptr)
 define void @f(ptr %p) {
@@ -1031,7 +1031,7 @@ entry:
 }
 ";
 
-const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @g(ptr byval([40 x i8]) %p)
 define void @f(ptr %q) minsize {
 entry:
@@ -1074,7 +1074,7 @@ fn a_pushed_segment_of_a_global_is_an_immediate() {
     assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
 }
 
-const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
 @\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
 @$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c\"\\04\\00\", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c\"DONE\" }>

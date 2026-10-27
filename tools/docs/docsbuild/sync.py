@@ -27,7 +27,7 @@ sys.path.insert(0, str(HERE.parent))
 import passdocs  # noqa: E402
 
 OUT = "docs/optimizations"
-COMMAND = "python3 tools/docsbuild/build.py --sync"
+COMMAND = "python3 tools/docs/docsbuild/build.py --sync"
 URL = f"{passdocs.REPO}/blob/main"
 SECTIONS = ("Runs", "Used by", "Provides")
 KEY = re.compile(r"^<!-- src: (\S+) sha256:([0-9a-f]{64}) -->$")
@@ -49,13 +49,14 @@ def key_of(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
-@functools.lru_cache(maxsize=1)
+# What a page depends on besides its header and the names it links to: the layout the pages are written in. It was the hash of this file and
+# passdocs.py, so that moving or editing either rewrote every page (417 files by one digest). Bump it when the output format changes;
+# test_the_page_format_is_pinned fails until you do.
+FORMAT = "13c5cd8c082ae91fa3eeb4eb3de20ea1724b4ef50d18b17ea9b3fbd5891b1565"
+
+
 def tool_digest() -> str:
-    """What a page depends on besides its header and the names it links to."""
-    h = hashlib.sha256()
-    for f in (HERE / "sync.py", HERE.parent / "passdocs.py"):
-        h.update(f.name.encode() + b"\0" + f.read_bytes() + b"\0")
-    return h.hexdigest()
+    return FORMAT
 
 
 # ---------------------------------------------------------------- links
@@ -174,10 +175,11 @@ def plan(root: Path, force: bool = False) -> Plan:
     bare: dict[str, list[str]] = {}
     for name, _title, directory, _kind in passdocs.PAGES:
         headers[name], bare[name] = {}, []
+        users = passdocs.users_of(root / directory, root)
         for src in passdocs.sources(root / directory):
             lines = passdocs.header_of(src.read_text(encoding="utf-8"))
             if lines:
-                headers[name][src.stem] = lines
+                headers[name][src.stem] = passdocs.with_users(lines, users.get(src.stem, []))
             else:
                 bare[name].append(src.stem)
     names = names_of(root, {stem: n for n, hs in headers.items() for stem in hs})
