@@ -108,6 +108,56 @@ fn a_memset_overwritten_by_a_store_goes() {
     assert!(!after.contains("llvm.memset.p0.i16(ptr @g"), "{after}");
 }
 
+/// bench/scroll at -O3: the blank bottom row became `memset.pattern` (the loop
+/// idiom, which the pin does not form) and the `memmove` that follows covers
+/// it. The pin's unrolled stores were deleted; the fill stayed, `rep stosw`
+/// per pass (+5.5% clocks).
+#[test]
+fn a_memset_pattern_overwritten_by_a_memmove_goes() {
+    let after = eliminated(
+        "@g = global [2000 x i16] zeroinitializer
+declare void @llvm.experimental.memset.pattern.p0.i16.i32(ptr, i16, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+
+define void @f() {
+b0:
+  %row = getelementptr inbounds i8, ptr @g, i32 3840
+  call void @llvm.experimental.memset.pattern.p0.i16.i32(ptr %row, i16 1824, i32 80, i1 false)
+  %dst = getelementptr inbounds i8, ptr @g, i32 160
+  call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr @g, i32 3840, i1 false)
+  ret void
+}
+",
+        &[&[]],
+    );
+    assert!(!after.contains("call void @llvm.experimental.memset.pattern"), "{after}");
+    assert!(after.contains("call void @llvm.memmove"), "{after}");
+}
+
+/// A copy that reads the fill it covers needs it: the source is the blank row.
+#[test]
+fn a_memset_pattern_read_by_the_covering_memmove_stays() {
+    let after = eliminated(
+        "@g = global [2000 x i16] zeroinitializer
+declare void @llvm.experimental.memset.pattern.p0.i16.i32(ptr, i16, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+
+define void @f() {
+b0:
+  %row = getelementptr inbounds i8, ptr @g, i32 3840
+  call void @llvm.experimental.memset.pattern.p0.i16.i32(ptr %row, i16 1824, i32 80, i1 false)
+  %src = getelementptr inbounds i8, ptr @g, i32 3000
+  call void @llvm.memmove.p0.p0.i32(ptr @g, ptr %src, i32 1000, i1 false)
+  %dst = getelementptr inbounds i8, ptr @g, i32 160
+  call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr %row, i32 3840, i1 false)
+  ret void
+}
+",
+        &[&[]],
+    );
+    assert!(after.contains("call void @llvm.experimental.memset.pattern"), "{after}");
+}
+
 /// A chain of overwrites costs in proportion to its length.
 #[test]
 fn a_long_chain_of_overwrites_is_linear() {
