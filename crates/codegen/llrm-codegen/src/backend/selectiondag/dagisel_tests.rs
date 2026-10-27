@@ -446,11 +446,13 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
 
 /// `pin_opcode` built a `String` (`x86isd::name` and `format!`) for each target
 /// node, 16 K times on d_faces, and the use queries collected and sorted a
-/// `Vec` of the users on each call. A query answers from the use list without
+/// `Vec` of the users on each call (4 more did, at 512 statements 43 K calls
+/// on a node many read). A query answers from the use list without
 /// an allocation.
 #[test]
 fn pin_opcode_and_the_use_queries_allocate_nothing() {
     use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::x86_addr::AddrDag;
 
     let (_, made) = llrm_support::alloc_count::counted(|| {
         (0..1024u16)
@@ -472,10 +474,14 @@ fn pin_opcode_and_the_use_queries_allocate_nothing() {
             adapter.has_one_use(pin_a),
             adapter.is_only_user_of(twice.node, a.node),
             adapter.use_empty(twice.node),
+            adapter.node_has_one_use(a.node),
+            adapter.count_non_chain_uses(a.node, 3),
+            adapter.glued_user(a.node),
+            adapter.has_materializing_use(pin_a),
         )
     });
-    assert_eq!(answers, (true, true, false, true, true), "premise: the answers are the scan's");
-    assert_eq!(made, 0, "{made} allocations to ask five use questions");
+    assert_eq!(answers, (true, true, false, true, true, false, 2, None, false), "premise: the answers are the scan's");
+    assert_eq!(made, 0, "{made} allocations to ask nine use questions");
 }
 
 /// `hasPredecessorHelper` tested membership by scanning a `Vec`, so a walk
