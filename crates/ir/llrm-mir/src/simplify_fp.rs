@@ -17,9 +17,9 @@
 //! even): MIR has no constrained intrinsics, so `canIgnoreSNaN` is true and
 //! `canRoundingModeBe(TowardNegative)` false.
 //!
-//! DEVIATE 2: `computeKnownFPClass` and `cannotBeNegativeZero` of a value
-//! (#2209) are answered for constants alone; the `fadd X, 0.0` and `fmul X,
-//! 0.0` folds therefore find less than LLVM, never more.
+//! DEVIATE 2: `cannotBeNegativeZero` of a value (#2209) is answered for
+//! constants alone; the `fadd X, 0.0` fold therefore finds less than LLVM,
+//! never more.
 //!
 //! DEVIATE 3: `frem` of two constants is folded with the host's `fmod` (exact)
 //! where neither is a NaN: `APFloat` has no `mod` here.
@@ -32,8 +32,9 @@
 
 use super::*;
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem};
-use crate::fpclass::RoundingMode;
+use crate::fpclass::{FC_INF, FC_NAN, RoundingMode};
 use crate::types::{FloatKind, Type};
+use crate::valuetracking::fp::compute_known_fp_class;
 
 const NEAREST_EVEN: RoundingMode = RoundingMode::NearestTiesToEven;
 
@@ -570,17 +571,18 @@ fn simplify_fma_fmul(
         if flags.contains(Flags::NNAN) && flags.contains(Flags::NSZ) {
             return Some(zero_of(q, q.ty(op0), false));
         }
-        // computeKnownFPClass(Op0, fcInf | fcNan): a finite constant here
-        // (DEVIATE 2).
-        if let Some(x) = value(q, op0)
-            && x.is_finite()
-        {
+        let known = compute_known_fp_class(&q.tracking(), op0, FC_INF | FC_NAN, 0);
+        if known.is_known_never_inf_or_nan() {
             if flags.contains(Flags::NSZ) {
                 return Some(zero_of(q, q.ty(op0), false));
             }
             // +normal number * (-)0.0 --> (-)0.0
             // -normal number * (-)0.0 --> -(-)0.0
-            return if x.is_negative() { fold_fneg(q, op1) } else { Some(op1) };
+            match known.get_sign_bit() {
+                Some(false) => return Some(op1),
+                Some(true) => return fold_fneg(q, op1),
+                None => {}
+            }
         }
     }
     // sqrt(X) * sqrt(X) --> X, if the intermediate rounding may go (reassoc),

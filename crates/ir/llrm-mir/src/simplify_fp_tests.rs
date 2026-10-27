@@ -89,6 +89,17 @@ fn multiply_by_zero_wants_nnan_and_nsz() {
     check("  %r = fmul nnan float %x, 0.0\n", None);
 }
 
+/// `0.0 * (uitofp n)` was kept: x_horner's first Horner step stayed
+/// `fldz; fmul` in the unrolled loop, where the pin folds it to the constant.
+#[test]
+fn a_finite_non_negative_value_times_zero_is_the_zero() {
+    let value = "  %n = fptoui float %x to i32\n  %u = uitofp i32 %n to float\n";
+    check(&format!("{value}  %r = fmul float %u, 0.0\n"), Some("0.0"));
+    check(&format!("{value}  %r = fmul float 0.0, %u\n"), Some("0.0"));
+    check(&format!("{value}  %m = fsub float 0.0, %u\n  %r = fmul float %m, 0.0\n"), None);
+    check("  %r = fmul float %x, 0.0\n", None);
+}
+
 #[test]
 fn negations_cancel_under_nnan() {
     check("  %n = fneg float %x\n  %r = fadd nnan float %x, %n\n", Some("0.0"));
