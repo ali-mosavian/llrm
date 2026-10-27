@@ -424,6 +424,30 @@ fn test_a_wide_constant_pushed_narrow_is_the_pushes_immediate() {
     assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { value: 0, .. })]), "{push:?}");
 }
 
+/// `mov ax, DGROUP; push ax`: a segment address made only to be pushed stayed
+/// a register (4 bytes against 3 for `pushw DGROUP`; gvnjn.bas, and every
+/// runtime call that takes a far pointer: two per call under dag).
+#[test]
+fn test_a_segment_made_only_to_be_pushed_is_the_pushes_immediate() {
+    let segment =
+        Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }) });
+    let ax = rl(RegId::AX, 2);
+    let made = plain(0, Operation::Move, "mov", vec![ax.clone()], vec![segment], None);
+    let pushed = plain(1, Operation::Push, "push", vec![], vec![ax], None);
+    let finish = Arc::new(Insn {
+        reads_complete: true,
+        ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
+    });
+    let input = body("argument", 0, vec![block(0, vec![made, pushed, finish], vec![]).into()]);
+
+    let result = fused(rules(), &input).insns();
+
+    let whats: Vec<_> = result.iter().filter_map(|one| one.what.as_ref()).collect();
+    assert!(whats.iter().all(|what| what.name.as_deref() != Some("mov")), "{whats:?}");
+    let push = whats.iter().find(|what| what.op == Operation::Push).expect("the push stays");
+    assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { address: Some(_), .. })]), "{push:?}");
+}
+
 #[test]
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {

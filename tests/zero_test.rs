@@ -1,13 +1,13 @@
 //! A register compared with zero is `test r, r`, whatever else is around it.
 
-use std::process::Command;
+mod common;
 
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let source = concat!(env!("CARGO_MANIFEST_DIR"), "/bench/parity/sum_three/sum_three.c");
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
+    let output = common::cc::llrm_c()
         .args(flags)
+        .current_dir(scratch.path())
         .args(["-S", "-o", "a.s", source])
         .output()
         .unwrap();
