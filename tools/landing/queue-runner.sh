@@ -19,7 +19,9 @@ while true; do
   # never run beside another landing (old runner's land.sh)
   while landing_busy; do sleep 20; done
   rate_limit_pause
+  bq_start=$(date +%s)
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
+  echo "$(date +%H:%M:%S) build-queue $(( $(date +%s) - bq_start )) s" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
   # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
   git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
     grep -qxF "$l" "${LAND_TMP:-/tmp/landing}/unlogged.log" 2>/dev/null || { echo "UNLOGGED LANDING: $l"; echo "$l" >> "${LAND_TMP:-/tmp/landing}/unlogged.log"; }
