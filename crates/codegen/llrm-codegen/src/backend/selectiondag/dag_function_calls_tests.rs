@@ -194,10 +194,11 @@ entry:
 }
 ";
 
-/// A variadic call under watcall passes as cdecl does (`variadic = \"cdecl32\"`)
-/// and destroys what cdecl does. The DAG path used watcall's set (EAX alone), so
-/// a value held in ECX across `printf` or a variadic `sum` was destroyed:
-/// tests/llc/varargs.c printed `1604196 36` for `15 36` at x86_32-wat.
+/// A variadic call under watcall passes as cdecl does (`variadic =
+/// \"cdecl32\"`) and destroys what cdecl does. The DAG path used watcall's set
+/// (EAX alone), so a value held in ECX across `printf` or a variadic `sum` was
+/// destroyed: tests/llc/varargs.c printed `1604196 36` for `15 36` at
+/// x86_32-wat.
 #[test]
 fn a_variadic_call_destroys_what_the_variadic_convention_says() {
     use llrm_target::Target;
@@ -208,11 +209,7 @@ fn a_variadic_call_destroys_what_the_variadic_convention_says() {
     let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
     let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
     let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
-    assert!(
-        call.clobbers.contains(&named("ecx")) && call.clobbers.contains(&named("edx")),
-        "{:?}",
-        call.clobbers
-    );
+    assert!(call.clobbers.contains(&named("ecx")) && call.clobbers.contains(&named("edx")), "{:?}", call.clobbers);
 }
 
 const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"

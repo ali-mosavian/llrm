@@ -311,10 +311,11 @@ impl CallConventions<'_> {
         callee: Option<&Callee>,
     ) -> Option<&'static llrm_target::calling::Convention> {
         let (number, variadic) = match callee {
-            Some(Callee::Global(id)) => self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(
-                (0, false),
-                |function| (function.calling_convention, self.module.signature(function.ty).2),
-            ),
+            Some(Callee::Global(id)) => self
+                .module
+                .global(llrm_mir::context::GlobalId(*id))
+                .function()
+                .map_or((0, false), |function| (function.calling_convention, self.module.signature(function.ty).2)),
             _ => (0, false),
         };
         let calling = self.arch.calling();
