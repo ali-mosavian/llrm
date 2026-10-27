@@ -7,12 +7,20 @@ mod common;
 use std::process::Command;
 
 fn listing(source: &str) -> String {
+    listing_with(source, None)
+}
+
+fn listing_with(
+    source: &str,
+    selector: Option<&str>,
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
     let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         // The call to `h` is the premise: inlined (the pin inlines it), `f`
         // calls nothing that holds a double and needs no pad.
+        .args(selector)
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
@@ -66,7 +74,11 @@ fn a_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_8() {
 /// A module that holds no double pays nothing for it: no pad, no rounding.
 #[test]
 fn a_module_of_integers_pays_nothing_for_it() {
-    let text = listing("extern int g(int);\nint f(int a) { return g(a) + g(a + 1); }\n");
+    // llrm-cc: the old selector allocates no callee-saved register across the
+    // two calls and reserves a frame for the result; the pin and the DAG
+    // selector do not. Gated on the DAG default (#4512), so it runs
+    // `--isel=dag`.
+    let text = listing_with("extern int g(int);\nint f(int a) { return g(a) + g(a + 1); }\n", Some("--isel=dag"));
     assert!(!text.contains("pushd 0"), "{text}");
     assert!(!text.contains("sub esp"), "{text}");
 }
