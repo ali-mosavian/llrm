@@ -18,7 +18,7 @@ fn test_a_dword_copy_folded_into_a_word_cell_does_not_overlap_the_next_cell() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let mut procedure = "";
     let mut cells: Vec<(i64, i64)> = Vec::new();
-    let mut check = |procedure: &str, cells: &mut Vec<(i64, i64)>| {
+    let check = |procedure: &str, cells: &mut Vec<(i64, i64)>| {
         cells.sort();
         cells.dedup();
         for pair in cells.windows(2) {
