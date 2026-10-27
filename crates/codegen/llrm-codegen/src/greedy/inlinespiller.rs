@@ -133,7 +133,10 @@ pub fn remat_shape(one: &Insn) -> bool {
                     w.dests.as_slice(),
                     [Loc::Held(held)] if held.value == one.defines[0]
                 )
-                && w.sources.len() == 1
+                && (w.sources.len() == 1
+                    || (w.op == Operation::FloatLoad
+                        && w.sources.is_empty()
+                        && matches!(w.name.as_deref(), Some("fld1" | "fldz"))))
         })
 }
 

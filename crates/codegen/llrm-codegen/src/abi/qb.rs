@@ -5,7 +5,6 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
-use std::sync::LazyLock;
 
 use llrm_lir::registers::RegId;
 
@@ -29,52 +28,6 @@ impl fmt::Display for AbiError {
 }
 
 impl std::error::Error for AbiError {}
-
-static _AUDITED_STATEMENT_STACK: LazyLock<IndexMap<&str, i64>> = LazyLock::new(|| {
-    IndexMap::from_iter([
-        ("B$BEEP", 0),
-        ("B$LNIN", 10),
-        // `void B$LPRT(void)` and `void B$WRIT(void)`: QB45 rt/iolpt.asm and
-        // rt/prnval.asm, FAR, no arguments.
-        ("B$LPRT", 0),
-        ("B$WRIT", 0),
-        // Path descriptor, channel, record length -1 and mode; BCOM45
-        // dkopen.asm B$OPEN at 0224 returns with RETF 8 at 0252.
-        ("B$OPEN", 8),
-        ("B$SLEP", 4),
-        // Measured in BC output (QB 4.5, PDS 7.1, VBDOS): `call far B$STOP`
-        // and `call far B$REST`, nothing pushed.
-        ("B$STOP", 0),
-        ("B$REST", 0),
-        // QB45 rt/dkstmt.asm B$FILS(parmW fname): the pattern's descriptor.
-        ("B$FILS", 2),
-        // QB45 rt/osstmt.asm B$SSHL(parmSD sdExec): the command's descriptor.
-        ("B$SSHL", 2),
-        // QB45 rt/dvstmt.asm B$FATR(parmW channel, parmW fieldid).
-        ("B$FATR", 4),
-        // QB45 rt/osstmt.asm B$SENV(parmSD sdEnviron).
-        ("B$SENV", 2),
-        // QB45 rt/dkstmt.asm B$KILL(parmSD fname), B$NAME(parmSD oldname,
-        // parmSD newname); rt/directry.asm `pascal far B$MDIR(psdDirectory)`,
-        // B$CDIR and B$RDIR alike.
-        ("B$KILL", 2),
-        ("B$NAME", 4),
-        ("B$MDIR", 2),
-        ("B$CDIR", 2),
-        ("B$RDIR", 2),
-        // QB45 rt/rlset.asm: parmW psdSource, parmD psdDest, parmW cbDest.
-        ("B$LSET", 8),
-        ("B$RSET", 8),
-        ("B$SOND", 6),
-        ("B$DRAW", 2),
-        ("B$VARP", 4),
-        ("B$SADD", 2),
-        ("B$SDAT", 2),
-        ("B$STIM", 2),
-        ("B$FDAT", 0),
-        ("B$FTIM", 0),
-    ])
-});
 
 /// An inline block as a call: its declared registers are all it reads and
 /// changes.
@@ -208,7 +161,7 @@ fn _contract_keeping(
             ..found.clone()
         };
     let returns = |cleanup: i64, text: String| refined(&found, cleanup, Control::Returns, false, text);
-    if _AUDITED_STATEMENT_STACK.get(physical_name) == Some(&pushed) {
+    if runtime::audited_pop("statement", physical_name) == Some(pushed) {
         return Ok(returns(
             pushed,
             format!(

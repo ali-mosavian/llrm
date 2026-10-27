@@ -1447,6 +1447,107 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
 
 
+def _fake_docs_repo(tmp_path):
+    """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    def git(*args, cwd=tmp_path):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "tools/docsbuild/build.py").write_text(
+        "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
+        "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
+    )
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    return git
+
+
+def test_a_stale_generated_page_is_synced_and_committed_not_refused(tmp_path):
+    """Generated docs out of date refused #5129, #5131 and #5119 (27 PRs were conflicting after each tip move): the batch regenerates the page (build.py --sync) and commits it on top."""
+    git = _fake_docs_repo(tmp_path)
+    assert ps.docs_stale(tmp_path) == {"docs/a.md"}
+    assert ps.docs_sync_commit(tmp_path) == ""
+    assert (tmp_path / "docs/a.md").read_text() == "generated\n" and git("log", "--format=%s", "-1").startswith("docs: ")
+    assert ps.docs_stale(tmp_path) == set()
+    git("reset", "-q", "--hard", "HEAD~1")
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("5129") == "" and "5129" in gated.synced and ps.docs_stale(tmp_path) == set(), "synced in the batch tree, not refused"
+    git("reset", "-q", "--hard", "HEAD~1")
+    refused = ps.docs_gated(lambda number: "", set(), tmp_path, sync=lambda root: "docsbuild --sync failed")
+    assert "docs/a.md" in refused("5131") and ps.docs_stale(tmp_path) == {"docs/a.md"} and not refused.synced, "a failed sync still refuses and resets"
+
+
+def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_rows(tmp_path):
+    """Two PRs each adding a row at the end of docs/working/above-main-rows.md conflicted (#5282, #5156, #5242, #5294): the repo's .gitattributes says merge=union for it."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs/working").mkdir(parents=True)
+    (tmp_path / ".gitattributes").write_text((ps.ROOT / ".gitattributes").read_text())
+    table = tmp_path / "docs/working/above-main-rows.md"
+    table.write_text("| row | n |\n| a | 1 |\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    for name, row in (("one", "| b | 2 |\n"), ("two", "| c | 3 |\n")):
+        git("checkout", "-q", "-b", name, "main")
+        table.write_text(table.read_text() + row)
+        git("commit", "-qam", name)
+    git("checkout", "-q", "one")
+    merged = git("merge", "--no-edit", "two")
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    assert "| b | 2 |" in table.read_text() and "| c | 3 |" in table.read_text()
+
+
+def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squash(tmp_path):
+    """The batch tree was synced, but the squash lands the PR head: the same sync is pushed to the PR's branch (as the formatted head is), or the squash would land the stale page."""
+    work = tmp_path / "work"
+    work.mkdir()
+    git = _fake_docs_repo(work)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    git("remote", "add", "origin", str(origin))
+    git("branch", "-M", "feat/parity")
+    git("push", "-q", "origin", "feat/parity")
+    git("checkout", "-q", "-b", "pr")
+    (work / "pr.txt").write_text("x\n")
+    git("add", ".")
+    git("commit", "-qm", "pr")
+    head = git("rev-parse", "HEAD")
+    sha, why = ps.sync_docs_head(head, "pr", "origin/feat/parity", work)
+    assert why == "" and sha and sha != head, (sha, why)
+    assert git("--git-dir", str(origin), "rev-parse", "refs/heads/pr") == sha, "pushed to the PR's branch"
+    assert git("--git-dir", str(origin), "show", f"{sha}:docs/a.md") == "generated"
+
+
+def _repo_with_commit(path):
+    path.mkdir(parents=True)
+    for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):
+        subprocess.run(["git", *cmd], cwd=path, check=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=path, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_the_scanner_line_names_the_tree_it_scanned_not_the_runners_checkout(tmp_path, capsys):
+    """alone.log said `tree 09f5219f1` for 16 minutes after parity moved on: the line printed the tooling checkout's HEAD, not the scratch tree the scanners ran in."""
+    scratch = _repo_with_commit(tmp_path / "scratch")
+    ps.new_scanner_failures([], on_merged=lambda targets: set(), only=("docs_links",), root=tmp_path / "scratch")
+    assert f"(tree {scratch[:9]})" in capsys.readouterr().out
+
+
+def test_an_alone_slot_logs_the_base_it_checked_out(tmp_path, monkeypatch, capsys):
+    """The coordinator could not tell which parity an alone slot judged a PR against: the log named no base."""
+    monkeypatch.setenv("ALONE_TARGETS", str(tmp_path))
+    monkeypatch.setenv("ALONE_SLOTS", "1")
+    base = []
+    monkeypatch.setattr(ps, "_alone_checkout", lambda work, ref, repo=None: base.append(_repo_with_commit(work)))
+    monkeypatch.setattr(ps, "alone_refusals", lambda *a, **k: [])
+    monkeypatch.setattr(ps, "keep_refused_evidence", lambda *a, **k: None)
+    ps._alone_in_scratch("deadbeef", "origin/feat/parity")
+    assert f"alone: slot 0 base {base[0][:9]}" in capsys.readouterr().err
+
+
 def test_land_skip_link_skips_the_link_stage_for_a_runtime_change(monkeypatch, capsys):
     """The freeze break on feat/parity refused every batch that touched the runtime (09:42, 09:46, 09:48, 09:49); LAND_SKIP_LINK=1 is the user's way past it."""
     monkeypatch.setenv("LAND_SKIP_LINK", "1")
