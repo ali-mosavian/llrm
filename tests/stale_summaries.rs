@@ -8,8 +8,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const PROGRAMS: [&str; 8] = ["crc", "bintree", "matmul", "nbody", "sieve", "queens", "grep", "huge"];
 
 #[test]

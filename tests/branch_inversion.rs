@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// bench/hanoi at -O2 had `jne L0_11 / jmp L0_86 / L0_11:` at every inlined
 /// level (3601 jumps run of 99200 instructions).
 #[test]

@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const SOURCE: &str = r#"static long power(long b, int e)
 {
     if (e == 0) return 1;

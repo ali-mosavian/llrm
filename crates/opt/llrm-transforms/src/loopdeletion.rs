@@ -788,7 +788,7 @@ fn delete_dead_loop(
     // A phi outside the loop (in a block nothing reaches) may still name a
     // block of the loop.
     for &block in &blocks {
-        for user in run.function.block_users(block).snapshot() {
+        for user in run.function.phi_block_users(block).snapshot() {
             let outside = run.function.parent(user.user).is_some_and(|at| !inside.contains(&at));
             if outside && run.function.instruction(user.user).opcode == Opcode::Phi {
                 let phi = user.user;

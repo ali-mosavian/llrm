@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn os_copy_listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();

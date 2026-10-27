@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 extern void use(char *p);
 void walk(char far *p, int n)

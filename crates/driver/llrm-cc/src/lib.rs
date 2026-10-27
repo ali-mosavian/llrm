@@ -278,7 +278,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             build.level = match level {
                 "" => "1".into(),
                 "fast" => "3".into(),
-                "g" => "g".into(),
+                "g" => "1".into(),
                 other => other.to_owned(),
             };
             // clang has no -Omax: its top level is -O3.

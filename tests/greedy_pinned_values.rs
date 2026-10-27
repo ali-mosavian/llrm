@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const CENTROID: &str = "typedef struct { short x, y; } CPoint;\n\
 void centroid(const CPoint *points, unsigned short count, CPoint *out)\n\
 {\n    long x = 0, y = 0;\n    unsigned short i;\n    for (i = 0; i < count; ++i) {\n        x += points[i].x;\n        y += points[i].y;\n    }\n\

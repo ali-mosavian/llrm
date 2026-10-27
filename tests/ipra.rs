@@ -3,8 +3,6 @@
 //! register the callee did not write, and a function that is not private tells
 //! nothing.
 
-use std::process::Command;
-
 pub mod common;
 
 /// The listing of C `source` and the facts the compiler found
