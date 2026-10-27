@@ -142,9 +142,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
-    promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
+    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
+    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -380,10 +381,12 @@ impl Options {
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
     /// code, and the larger inline threshold; the copy budget is LLVM's -O3
-    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
+    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
+    /// clones: the pin makes none, and they grew recchop 1541 lines against
+    /// 171.
     pub fn speed() -> Self {
         Self {
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold::new(250),
             unswitch: true,
             unroll_and_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
@@ -1027,7 +1030,9 @@ pub fn recorded(
     }
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
-    // As LLVM's O2 runs GlobalOpt before the function pipeline.
+    // As LLVM's module pipeline starts with InferFunctionAttrs
+    // (PassBuilderPipelines.cpp#L1169), then GlobalOpt.
+    manager.add_module(inferfunctionattrs::InferFunctionAttrs);
     manager.add_module(globalopt::GlobalOpt);
     // Over every body first, so a caller's pipeline sees each callee's
     // port calls narrowed.
@@ -1235,7 +1240,9 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
     if applied.options.wanted("lsr") {
         passes.push(Box::new(loopsimplify::LoopSimplify));
-        passes.push(Box::new(lcssa::LoopClosedSSA));
+        // The pin's llc takes the IR after opt's closing InstSimplify (l.1662,
+        // "clean up LCSSA form before generating code").
+        passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
@@ -1442,18 +1449,18 @@ impl Fixed {
         }
         self.fixed(unit, analyses, run, "")?;
         if let Some(unswitch) = &mut self.unswitch {
-            run.step(unswitch, "unswitch", unit, analyses);
+            run.step(unswitch, &"unswitch", unit, analyses);
         }
         // The swapped nest is cleaned as a peeled loop is.
         if let Some(interchange) = &mut self.interchange {
-            if run.step(interchange, "interchange", unit, analyses) {
+            if run.step(interchange, &"interchange", unit, analyses) {
                 self.scalarized(unit, analyses, run, "interchanged");
                 self.fixed(unit, analyses, run, "interchanged-")?;
             }
         }
         for one in &mut self.last {
-            let stage = one.name();
-            run.step(&mut **one, stage, unit, analyses);
+            let name = one.name();
+            run.step(&mut **one, &name, unit, analyses);
         }
         Ok(run.settled(unit, analyses))
     }
@@ -1466,8 +1473,8 @@ impl Fixed {
         stage: &str,
     ) {
         for one in &mut self.boundary {
-            let stage = format!("{stage}-{}", one.name());
-            run.step(&mut **one, &stage, unit, analyses);
+            let name = one.name();
+            run.step(&mut **one, &format_args!("{stage}-{name}"), unit, analyses);
         }
     }
 
@@ -1518,7 +1525,8 @@ impl Fixed {
                         continue;
                     }
                 }
-                let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
+                let pass = one.name();
+                let name = format_args!("{prefix}r{:02}-{pass}", iteration + 1);
                 *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
             }
             if self.only || run.version == before {
@@ -1807,7 +1815,7 @@ impl Run {
     fn step(
         &mut self,
         pass: &mut dyn FunctionPass,
-        stage: &str,
+        stage: &dyn std::fmt::Display,
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> bool {
@@ -1921,13 +1929,13 @@ impl Run {
     ) {
         if cfg::_unreachable(unit.context, unit.function) {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
-            self.changed("unreachable", unit, analyses);
+            self.changed(&"unreachable", unit, analyses);
         }
     }
 
     fn changed(
         &mut self,
-        stage: &str,
+        stage: &dyn std::fmt::Display,
         unit: &Unit,
         analyses: &Analyses,
     ) {
@@ -1958,6 +1966,8 @@ impl Run {
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),
+            special: Default::default(),
+            global_metadata: Default::default(),
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))
