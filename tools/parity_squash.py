@@ -1736,6 +1736,14 @@ def added_names(head: str, base: str, cwd: Path) -> set[str]:
     return set(ADDED_ITEM.findall(diff))
 
 
+def needs_the_merge_driver(before: str, head: str, cwd: Path) -> list[str]:
+    """The files `head` conflicts in with `before` under plain git (the tests-append driver off): where it is not empty, the batch's merge joined the PR only through that driver and
+    GitHub's squash, which has none, will refuse it as conflicting (#5462, #5481, #5591 in one day)."""
+    env = {**os.environ, "GIT_CONFIG_COUNT": "0"}
+    done = subprocess.run(["git", "-c", "merge.tests-append.driver=false", "merge-tree", "--write-tree", "--name-only", "--no-messages", before, head], cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    return done.stdout.splitlines()[1:] if done.returncode == 1 else []
+
+
 def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: Path = ROOT, limit: int = 16) -> tuple[list[str], dict[str, str]]:
     """The first `limit` of `numbers`, in order, that merge into `base` one after another without a conflict (`fast_merge`'s own merge, in a scratch worktree), and why
     each other waits. A batch of these loses no PR to a conflict with an earlier member: 63 of 93 conflict refusals in a week were with a member that landed, and the run
@@ -1754,7 +1762,12 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                 if clash := sorted(name for name in names if name in claimed):
                     waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
                     continue
+                before = git("rev-parse", "HEAD", cwd=work).strip()
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
+                if not merge.returncode and (driven := needs_the_merge_driver(before, heads[number], work)):
+                    git("reset", "-q", "--hard", before, cwd=work)
+                    waits[number] = "needs owner parity merge: it conflicts without the tests-append driver in " + ", ".join(driven[:4])
+                    continue
                 if merge.returncode:
                     conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=work).split()
                     if conflicts and not regenerate(conflicts, work):
