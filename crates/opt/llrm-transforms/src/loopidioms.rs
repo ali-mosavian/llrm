@@ -522,13 +522,14 @@ fn _fill(
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
     }
-    // DEVIATE, for `loopidiom`: a fill through a huge pointer is a routine
-    // laid down at the fill (`isel/huge.rs`), which a one-store loop under
-    // -Os undercuts (fillw -Os 86 -> 176 bytes against main).
+    // DEVIATE, for `loopidiom`: a fill, copy or move through a huge pointer
+    // is a routine laid down at the site (`isel/huge.rs`), which a loop of a
+    // few instructions undercuts under -Os (fillw -Os 86 -> 176 bytes, copyw
+    // 321 -> 470, against main).
+    let routine = if matches!(stored, Stored::Fill(_)) { bytes_costs.huge_fill } else { bytes_costs.huge_copy };
     if size
-        && matches!(stored, Stored::Fill(_))
+        && routine > 0
         && unit.layout.carries(unit.space(pointer)?)
-        && bytes_costs.huge_fill > 0
         && trip_cost(
             unit.context,
             unit.layout,
@@ -537,7 +538,7 @@ fn _fill(
             std::iter::once(&header).chain(&chain),
             bytes_costs,
             true,
-        ) <= bytes_costs.huge_fill
+        ) <= routine
     {
         return None;
     }
