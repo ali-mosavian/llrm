@@ -7,9 +7,13 @@ DIR holds a built llrm-cc (default target/release). One row per program and conf
 
     ours Minstr  - user-space instructions of the whole `llrm-cc -c` run, clang front end and llrm-llc
                    included (`perf stat -e instructions:u`, children inherited)
-    pin Minstr   - the same count for `clang -cc1 ... -emit-obj` of the pinned clang (m32 only)
+    pin Minstr   - `clang -cc1 -O2 ... -emit-obj` of the pinned clang: the compile a user would run (m32 only). Its
+                   bytes are not printed: it optimises the C itself and inlines and folds differently from llrm-cc's IR.
+    pin B        - `.text` of the pin on llrm-cc's own IR: clang -S -emit-llvm -disable-llvm-passes (the front end
+                   llrm-cc runs, datalayout rewritten to llrm's table) -> pin `opt default<O2>` -> pin `llc -O2`.
+                   Its instruction count is not printed: it round-trips the IR through text twice.
     ratio        - ours / pin
-    ours B, pin B - `.text` bytes of the two objects (m32 ELF via `size -A`)
+    ours B, pin B - `.text` bytes of the two objects (m32 ELF via `size -A`), alignment padding included
 
 These are llrm-cc numbers: never mix them with llrm-c's (tools/compile-cost.py, tools/sizes.py). m16 has no pin
 column (the m16 pin is the separate clang build in LLRM_CLANG_M16) and no size column (OMF).
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -27,6 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path.home()
 PIN = Path(os.environ.get("LLRM_PIN_CLANG", HOME / "scratch/llvm-build/bin/clang"))
+DATALAYOUT = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"  # targets.toml [x86_32-linux]
 OW = os.environ.get("LLRM_OW", str(HOME / "scratch/ow-src"))
 
 # config -> (LLRM_CC_TARGET, -march, level)
@@ -53,6 +59,25 @@ def instructions(argv: list[str], env: dict[str, str]) -> int:
                     sys.exit("perf cannot count instructions here")
                 return int(fields[0])
     sys.exit("perf printed no instruction count")
+
+
+def pin_same_ir(src: Path, level: str, march: str, includes: list[str], tmp: Path, env: dict[str, str]) -> tuple[int, Path]:
+    """The pin on llrm-cc's IR: front end, `opt`, `llc`. Returns (instructions of the three, object)."""
+    stem = src.stem
+    ll, opt_ll, obj = tmp / f"{stem}.pin.ll", tmp / f"{stem}.pin.opt.ll", tmp / f"{stem}.pin.o"
+    bins = PIN.parent
+    total = instructions(
+        [str(PIN), "-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector",
+         "-fno-asynchronous-unwind-tables", level, "-fno-builtin", *includes, "-S", "-emit-llvm", "-Xclang",
+         "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o", str(ll), str(src)], env)
+    text = ll.read_text()
+    ll.write_text(re.sub(r'target datalayout = "[^"]*"', f'target datalayout = "{DATALAYOUT}"', text, count=1))
+    total += instructions(
+        [str(bins / "opt"), "-passes=default<O2>", "-S", "-o", str(opt_ll), str(ll)], env)
+    total += instructions(
+        [str(bins / "llc"), "-O2", "-mtriple=i486-unknown-linux-gnu", f"-mcpu={march}", "-filetype=obj", "-o", str(obj),
+         str(opt_ll)], env)
+    return total, obj
 
 
 def text_bytes(obj: Path) -> int:
@@ -85,12 +110,13 @@ def main() -> None:
                      "-c", str(src), "-o", str(ours_obj)], env)
                 pin = pin_bytes = None
                 if target == "x86_32-linux":
-                    pin_obj = Path(tmp) / f"{name}.{config}.pin.o"
+                    pin_obj = Path(tmp) / f"{name}.{config}.cc1.o"
                     pin = instructions(
-                        [str(PIN), "-cc1", "-triple", "i486-unknown-linux-gnu", "-target-cpu", "i486", level,
+                        [str(PIN), "-cc1", "-triple", "i486-unknown-linux-gnu", "-target-cpu", march, level,
                          "-fno-builtin", "-internal-isystem", str(isystem), "-I", str(posix), "-I", str(src.parent),
                          "-emit-obj", "-o", str(pin_obj), str(src)], env)
-                    pin_bytes = text_bytes(pin_obj)
+                    _, same_ir = pin_same_ir(src, level, march, ["-I", str(posix), "-I", str(src.parent)], Path(tmp), env)
+                    pin_bytes = text_bytes(same_ir)
                 ob = text_bytes(ours_obj) if target == "x86_32-linux" else None
                 fmt = lambda v, d=1: "-" if v is None else f"{v:.{d}f}"
                 print(f"{name:<12} {config:<7} {ours / 1e6:>9.1f} {fmt(pin and pin / 1e6):>9} "
