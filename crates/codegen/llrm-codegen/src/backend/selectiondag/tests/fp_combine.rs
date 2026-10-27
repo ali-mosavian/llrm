@@ -176,3 +176,28 @@ fn a_negated_constant_or_negation_and_an_abs_of_a_constant_fold() {
     let root = combined(&mut dag, abs);
     assert_eq!(bits(&dag, root), Some(2.0f64.to_bits().into()));
 }
+
+/// `visitFP_ROUND`, `visitFP_EXTEND` and the int conversions did not exist:
+/// `(float)(double)f` stayed a widen and a narrow, and `(double)3` a runtime
+/// conversion.
+#[test]
+fn a_round_of_an_extend_and_conversions_of_constants_fold() {
+    let mut dag = dag();
+    let f = load(&mut dag, F32, 1);
+    let wide = dag.get_node(ISD::FpExtend, F64, &[f]);
+    let zero = dag.get_constant_with(0, EVT::I32, true, false);
+    let narrow = dag.get_node(ISD::FpRound, F32, &[wide, zero]);
+    assert_eq!(combined(&mut dag, narrow), f);
+    let c = double(&mut dag, 0.1);
+    let round = dag.get_node(ISD::FpRound, F32, &[c, zero]);
+    let root = combined(&mut dag, round);
+    assert_eq!(bits(&dag, root), Some(u128::from(0.1f32.to_bits())));
+    let three = dag.get_constant(3, EVT::I32);
+    let conv = dag.get_node(ISD::SIntToFp, F64, &[three]);
+    let root = combined(&mut dag, conv);
+    assert_eq!(bits(&dag, root), Some(3.0f64.to_bits().into()));
+    let x = double(&mut dag, -2.75);
+    let conv = dag.get_node(ISD::FpToSInt, EVT::I32, &[x]);
+    let root = combined(&mut dag, conv);
+    assert_eq!(dag.node(root).data, NodeData::Const { bits: u128::from((-2i32) as u32), opaque: false });
+}

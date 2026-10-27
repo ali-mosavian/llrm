@@ -134,6 +134,60 @@ pub fn fold(
     }
 }
 
+/// `bits` of `from` as a value of `to` (`FP_ROUND` and `FP_EXTEND` of a
+/// constant), where both are `f32` or `f64` and the value is not a NaN.
+pub fn convert(
+    from: EVT,
+    to: EVT,
+    bits: u128,
+) -> Option<u128> {
+    let value = match from {
+        EVT::Simple(MVT::F32) => f64::from(f32::from_bits(bits as u32)),
+        EVT::Simple(MVT::F64) => f64::from_bits(bits as u64),
+        _ => return None,
+    };
+    if value.is_nan() {
+        return None;
+    }
+    match to {
+        EVT::Simple(MVT::F32) => Some(u128::from((value as f32).to_bits())),
+        EVT::Simple(MVT::F64) => Some(u128::from(value.to_bits())),
+        _ => None,
+    }
+}
+
+/// The signed integer `value` as a value of `vt` (`SINT_TO_FP` of a constant),
+/// rounded to nearest even.
+pub fn from_signed(
+    vt: EVT,
+    value: i64,
+) -> Option<u128> {
+    match vt {
+        EVT::Simple(MVT::F32) => Some(u128::from((value as f32).to_bits())),
+        EVT::Simple(MVT::F64) => Some((value as f64).to_bits() as u128),
+        _ => None,
+    }
+}
+
+/// `bits` of `vt` truncated to a signed integer of `width` bits, where it
+/// fits (`FP_TO_SINT` of a constant; `APFloat` reports an overflow or a NaN
+/// as invalid and the node stays).
+pub fn to_signed(
+    vt: EVT,
+    bits: u128,
+    width: u32,
+) -> Option<i64> {
+    let value = match vt {
+        EVT::Simple(MVT::F32) => f64::from(f32::from_bits(bits as u32)),
+        EVT::Simple(MVT::F64) => f64::from_bits(bits as u64),
+        _ => return None,
+    };
+    let limit = (width - 1).min(62);
+    let bound = (1i64 << limit) as f64;
+    (value.is_finite() && value.trunc() >= -bound && value.trunc() < bound && width <= 63)
+        .then_some(value.trunc() as i64)
+}
+
 /// The quiet NaN `getConstantFP(APFloat::getNaN(..))` makes.
 pub fn quiet_nan(vt: EVT) -> Option<u128> {
     match vt {
