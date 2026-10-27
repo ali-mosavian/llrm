@@ -86,7 +86,7 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 | Late | loop-rotate | -O1,-O2,-O3,-Os | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) |
 | Late | loop-deletion | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | loop-distribute | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
-| Late | infer-alignment | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
+| Late | infer-alignment | -O1,-O2,-O3,-Os | translated (inferalignment.rs); DEVIATE 1: globals not raised |
 | Late | instcombine | -O1,-O2,-O3,-Os | the three late runs; ours has no combine slot in the late list |
 | Late | loop-unroll | -O1,-O2,-O3,-Os | the late loop-unroll<O2>; ablation 0 of 12 IRs |
 | Late | sroa | -O1,-O2,-O3,-Os | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs |

@@ -133,6 +133,8 @@ impl Fact {
             | Fact::WriteOnly
             | Fact::NoReturn
             | Fact::NoUnwind
+            | Fact::NoFree
+            | Fact::NoSync
             | Fact::WillReturn
             | Fact::NoCallback
             | Fact::Cold
