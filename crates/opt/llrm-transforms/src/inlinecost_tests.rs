@@ -618,3 +618,29 @@ b0:
     };
     assert_eq!(price(false) - price(true), 15000);
 }
+
+/// The extension of a simple load is free on x86 (an extending load:
+/// `BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1298-1311), where the
+/// cast alone costs an instruction: scroll's `sext (load i16)` made the callee
+/// 125 against the pin's 120 (`opt`: cost=-15025 for this callee at i386).
+#[test]
+fn test_a_sext_of_a_load_is_free_on_x86() {
+    let text = "@h = global i16 0
+
+define internal i32 @callee() {
+b0:
+  %a = load i16, ptr @h
+  %b = sext i16 %a to i32
+  ret i32 %b
+}
+
+define i32 @f() {
+b0:
+  %r = call i32 @callee()
+  ret i32 %r
+}
+";
+    let flat = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (cost, _) = priced_with(text, 0, true, CallerSize::Speed, Some(&flat));
+    assert_eq!(cost, -15025, "the pin prices this callee at -15025");
+}

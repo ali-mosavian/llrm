@@ -842,6 +842,25 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
 
+    /// i8 and i16 extending loads are legal, and free when the result
+    /// legalizes to as many registers as the loaded type does.
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+    ) -> bool {
+        matches!(op, CastKind::ZExt | CastKind::SExt)
+            && matches!(
+                (src, dst),
+                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+            )
+            && matches!(
+                (legalized(src, self.native()), legalized(dst, self.native())),
+                (Some((one, _)), Some((same, _))) if one == same
+            )
+    }
+
     /// `X86TTIImpl::getCastInstrCost`, scalars:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L2772
     /// (T4: no instruction context, so the `zext` folded into a GEP index and
