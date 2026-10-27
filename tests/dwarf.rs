@@ -357,6 +357,28 @@ fn reads_the_same_as_at_o0(optimised: &str) {
     assert!(compared >= COMPARED_FLOOR, "only {compared} values were compared: -O2 says more of them than that");
 }
 
+/// `mix` of observed.c at -O2 keeps its parameter `n` in a register to its last
+/// use, yet every record of `n` had drifted past that use as the blocks merged
+/// and gdb read `n` as `<optimized out>` at every line. LLVM says a parameter
+/// whose records name its argument from the entry (`EmitFuncArgumentDbgValue`).
+#[test]
+fn a_parameter_the_optimiser_keeps_in_a_register_has_a_location_at_o2() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("observed.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/observed.c");
+    let made = compile(&source, &["-m32", "-O2", "-gdwarf", "-fobject-format=elf"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    let n = text.split("DW_AT_name\t(\"n\")").nth(1).expect("n is described");
+    let n = n.split("DW_TAG_").next().unwrap();
+    assert!(n.contains("DW_AT_location") && n.contains("DW_OP_reg"), "{n}");
+}
+
 /// How many (line, variable) values of `observed.c` -O2 says, and -O0 has:
 /// raised as the optimiser keeps more of them.
 const COMPARED_FLOOR: usize = 30;
