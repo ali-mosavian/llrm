@@ -195,8 +195,20 @@ impl FunctionPass for CgpAddr {
         let masks =
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
+        // `optimizeCallInst`'s memory intrinsics: their pointers' known
+        // alignment.
+        let aligned = {
+            let outer = std::rc::Rc::clone(analyses.outer());
+            crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
+        };
         let sunk_casts = match analyses.outer().target().lowering() {
-            Some(lowering) => crate::sinkcast::casts_sunk(unit.context, unit.layout, &*lowering, unit.function),
+            Some(lowering) => crate::sinkcast::casts_sunk(
+                unit.context,
+                unit.layout,
+                &*lowering,
+                analyses.outer().target().spaces(),
+                unit.function,
+            ),
             None => false,
         };
         let extended = match analyses.outer().target().lowering() {
@@ -233,6 +245,7 @@ impl FunctionPass for CgpAddr {
             // A block went: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis
+            || aligned
             || branched
             || sunk_compares
             || masks

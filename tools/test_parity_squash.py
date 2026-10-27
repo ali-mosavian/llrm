@@ -1221,6 +1221,38 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
 
 
+def test_a_page_a_pr_leaves_stale_is_named_even_when_the_head_already_has_stale_pages():
+    """#5031, #5049 and #4988 changed a `//!` header, passed alone and landed with six pages stale: the head's red docs_in_sync was excused, so no check saw a new one."""
+    why, now = ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: {"docs/a.md", "docs/b.md", "docs/c.md"})
+    assert "docs/b.md" in why and "docs/c.md" in why and "docs/a.md" not in why and now == {"docs/a.md", "docs/b.md", "docs/c.md"}
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: {"docs/a.md"})[0] == ""
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: set())[0] == "", "a PR that regenerates a page is not refused"
+
+
+def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others_stay(tmp_path):
+    """#5031, #5049 and #4988 each changed a `//!` header and landed with six pages stale: nothing refused the PR whose merge made a page new-stale."""
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+
+    def merge_one(number):
+        (tmp_path / f"pr{number}.txt").write_text(number)
+        run("add", ".")
+        run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"pr {number}")
+        return ""
+
+    stale_after = {"1": {"docs/old.md"}, "2": {"docs/old.md", "docs/new.md"}, "3": {"docs/old.md"}}
+    current = []
+    gated = ps.docs_gated(lambda number: (current.append(number), merge_one(number))[1], {"docs/old.md"}, tmp_path, docs=lambda root: stale_after[current[-1]])
+    assert gated("1") == ""
+    why = gated("2")
+    assert "docs/new.md" in why and "docs/old.md" not in why
+    assert not (tmp_path / "pr2.txt").exists() and run("log", "--format=%s").splitlines() == ["pr 1", "base"], "the merge of the refused PR is reset"
+    assert gated("3") == "" and (tmp_path / "pr3.txt").exists(), "a later PR still joins"
+
+
 def test_a_build_error_that_names_a_file_builds_only_the_prs_touching_it_alone():
     """The 00:49 batch of 8 failed at lsr_pass_tests.rs:816; the runner built all 8 alone (about 50 s each) to find the one PR that touched it."""
     built = []
@@ -1242,3 +1274,13 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names_the_exception(tmp_path):
+    """05:18: `docs_refusal` called `docs()` while the default `docs_stale` needs the root: every batch died with a TypeError and all 13 PRs were refused with an empty reason; #5073's tests mocked `docs`."""
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=tmp_path, check=True)
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
+    line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
+    assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
