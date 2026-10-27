@@ -6,6 +6,10 @@
 //! `%0 = load i16, ptr %p` as the function prints it is `%0 = load i16, ptr %p`
 //! here, and an argument `%p` is `ptr %p`, so a test can compare the pin's
 //! `print<access-info>` line with the pass's.
+//!
+//! # Used by
+//! The tests of the `loopaccessinfo` and `runtimecheck` analyses, which compare
+//! their output with the pin's `print<access-info>`.
 
 use llrm_mir::module::{Function, InstId, Module, Operand, ValueDef};
 use llrm_mir::types::Type;
