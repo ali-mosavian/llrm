@@ -361,7 +361,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "inferattrs",
         Why::Executed,
-        "stamp (interprocedural::Stamp): states what a body does, llrm's own form",
+        "inferattrs (inferfunctionattrs.rs, translated), the first module pass; the stamp (interprocedural::Stamp) states what a body does, llrm's own form",
         "",
     ),
     row(

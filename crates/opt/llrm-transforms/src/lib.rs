@@ -202,6 +202,7 @@ pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
 pub mod indvars;
+pub mod inferfunctionattrs;
 pub mod inferspace;
 #[cfg(test)]
 mod inferspace_tests;

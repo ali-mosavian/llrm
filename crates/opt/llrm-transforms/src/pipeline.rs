@@ -142,9 +142,10 @@ use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferspace, inline, lcssa, loopdeletion,
-    loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg, memcpyopt, ports,
-    promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim, trivialunswitch, window,
+    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
+    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
+    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -1026,7 +1027,9 @@ pub fn recorded(
     }
     manager.require::<Summaries>();
     manager.require_program::<ProgramSummaries>();
-    // As LLVM's O2 runs GlobalOpt before the function pipeline.
+    // As LLVM's module pipeline starts with InferFunctionAttrs
+    // (PassBuilderPipelines.cpp#L1169), then GlobalOpt.
+    manager.add_module(inferfunctionattrs::InferFunctionAttrs);
     manager.add_module(globalopt::GlobalOpt);
     // Over every body first, so a caller's pipeline sees each callee's
     // port calls narrowed.
