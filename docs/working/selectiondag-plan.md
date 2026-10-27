@@ -235,6 +235,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD226 | sdag-b | w11: a store of an x87 `fp_round` that nothing else reads is one truncating `fst`; the pin keeps the stack round trip (`f64 -> f32` is Expand), the old selector stores once | `selectiondag/x86_preprocess.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
 | SD312 | sdag-b | `visitBSWAP` has no half-width `shl` fold (no truncate-free query) and no `foldBitOrderCrossLogicOp` | `selectiondag/dag_combiner.rs` |
+| SD222 | sdag-b | w12, QB: the entry block's `store 0` / `memset 0` to a local nothing has touched yet are not lowered when the runtime builds and zero-fills the frame (`B$ENRA`); the pin has no such runtime | `backend/prezeroed.rs` |
 | SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
