@@ -872,3 +872,19 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
+
+/// An x86-64 target had no C runtime description, so no library routine: a
+/// `memmove` whose direction no pass proved was refused under `--isel=dag`
+/// ("memmove with no memmove in the runtime") and runtime/qb/dev/host/video.c
+/// (`gd_move_rows`) did not compile. The pin calls libc's.
+#[test]
+fn an_unproven_memmove_is_a_call_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @mv(ptr %d, ptr %s, i64 %n) {\n  \
+                call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "--isel=dag"]), text, "mv").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("memmove"), "{listing}");
+}

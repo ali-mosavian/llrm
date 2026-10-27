@@ -150,6 +150,20 @@ impl llrm_target::Target for M64 {
         &CONVENTIONS
     }
 
+    fn runtime(
+        &self,
+        language: &str,
+    ) -> Option<llrm_target::runtime::Description> {
+        match language {
+            "c" => Some(llrm_target::runtime::Description {
+                directory: concat!(env!("CARGO_MANIFEST_DIR"), "/../../../runtime/hosted/x86-m64"),
+                text: include_str!("../../../../runtime/hosted/x86-m64/c.toml"),
+                files: &[],
+            }),
+            _ => None,
+        }
+    }
+
     fn calling(&self) -> &'static llrm_target::calling::Calling {
         &CALLING
     }
