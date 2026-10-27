@@ -13,4 +13,5 @@ q=$(mktemp); (seq 5400 5457; echo 5558; seq 5458 5460; echo 5561) > $q; printf '
 [ -z "$(urgent_from_queue $f /nonexistent)" ] || { echo "FAIL: a missing queue made a PR urgent"; exit 1; }
 grep -q 'urgent_from_queue' "$here/queue-runner.sh" || { echo "FAIL: queue-runner reads the urgent list through the window"; exit 1; }
 rm -f $q
+grep -q 'urgent: ' "$here/queue-runner.sh" || { echo "FAIL: the assembly does not log its urgent list (the 22:06 batch left two out and nothing said why)"; exit 1; }
 echo PASS urgent
