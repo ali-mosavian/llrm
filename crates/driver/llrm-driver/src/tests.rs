@@ -872,3 +872,23 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
+
+/// An array of `long double` at m32 was laid out 10 bytes apart (the store
+/// size) while the code indexed it 12 apart (the alloc size): `table[1]` read
+/// the middle of the first two elements, and long_double_layout.c printed
+/// -2147483645 for 15.
+#[test]
+fn an_array_of_long_doubles_is_laid_out_at_the_alloc_size() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}@t = global [2 x x86_fp80] [x86_fp80 0xK3FFF8000000000000000, x86_fp80 0xK40008000000000000000], align 4\n\
+         define i32 @main() {{\n  %v = load x86_fp80, ptr getelementptr inbounds (i8, ptr @t, i32 12), align 4\n  %i = fptosi x86_fp80 %v to i32\n  ret i32 %i\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), &text, "t").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let data: usize = listing
+        .lines()
+        .filter(|line| line.starts_with("db "))
+        .map(|line| line.trim_start_matches("db ").split(',').count())
+        .sum();
+    assert_eq!(data, 24, "{listing}");
+}
