@@ -24,7 +24,7 @@ Lines are `wc -l`. "Callers" are non-test callers outside the file's own tests.
 | `llrm-x86-m{16,32,64}-select` crates, `llrm-driver/src/lib.rs:62-64`, `llrm-codegen/build.rs` selectors | - | bind `SELECTOR`; DAG never reads `Compiled`. `llrm-iselgen` stays: arm64 uses it (`llrm-arm64/Cargo.toml:24`, `tests/dialect.rs:34`) and the m16/m32/m64 `build.rs` call `build::forms` and `effect_rows` for `effects.rs` |
 | `switchlower` (`llrm-transforms`, 991 + 431 test) and `Pipeline::lower_switches` | 1422 | `pipeline.rs:186` says it is for the old selector; `driver/mod.rs:456` turns it off under dag. arm64 use: check |
 | `float_across_call` | - | no symbol of that name in `crates/`; readiness means a DAG refusal, not an old pass (check) |
-| `legalize.rs`, `bitcounts`, `funnel`, `compares`, `bytes`, `fpconvert` | - | run in `driver::optimized` for every selector, gated by `arch.expands`. Plan says they go once the DAG table covers them; **unverified** |
+| `legalize.rs` (skipped under `--isel=dag` since 2026-10-27: the DAG type legalizer promotes odd widths), `bitcounts`, `funnel`, `compares`, `bytes`, `fpconvert` | - | run in `driver::optimized` for every selector, gated by `arch.expands`. Plan says they go once the DAG table covers them; **unverified** |
 
 **What the DAG path uses from `isel.rs` and must move first** (to a `convention.rs` / `selected.rs`; a pure move):
 

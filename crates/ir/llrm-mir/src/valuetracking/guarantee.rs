@@ -385,7 +385,7 @@ fn has_poison_generating_metadata(instruction: &Instruction) -> bool {
 /// `Operator::hasPoisonGeneratingAnnotations()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Operator.cpp#L78>
-fn has_poison_generating_annotations(
+pub fn has_poison_generating_annotations(
     q: &Query,
     op: Operator,
 ) -> bool {

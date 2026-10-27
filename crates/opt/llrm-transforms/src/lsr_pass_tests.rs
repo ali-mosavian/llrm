@@ -361,6 +361,7 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         scaled_index_insns: 2,
         huge_space: None,
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
@@ -561,6 +562,7 @@ b3:
         scaled_index_insns: 2,
         huge_space: None,
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -620,6 +622,7 @@ b5:
         scaled_index_insns: 2,
         huge_space: Some(3),
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
