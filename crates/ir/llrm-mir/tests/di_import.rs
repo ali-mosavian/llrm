@@ -43,3 +43,25 @@ fn test_a_module_without_debug_nodes_gains_none() {
     let module = imported("define i32 @f() {\n  ret i32 0\n}\n");
     assert!(module.named_metadata.is_empty());
 }
+
+#[test]
+fn test_a_defined_function_becomes_a_procedure_and_its_declares_name_variables() {
+    let module = imported(include_str!("clang/dbg.ll"));
+    let functions = debuginfo::functions(&module);
+    let dist = functions.iter().find(|one| one.function == "dist").expect("dist");
+    assert_eq!(dist.name, "dist");
+    assert_eq!(
+        dist.parameters.iter().map(|(at, name, _)| (*at, name.as_str())).collect::<Vec<_>>(),
+        [(0, "p"), (1, "k")]
+    );
+    let (_, function) = module
+        .functions()
+        .find(|(_, global, _)| global.name.as_deref() == Some("dist"))
+        .map(|(i, _, f)| (i, f))
+        .unwrap();
+    let variables: Vec<_> =
+        function.debug_records().iter().filter_map(|one| debuginfo::read_variable(&module, one.variable)).collect();
+    assert_eq!(variables.len(), 4, "{variables:?}");
+    assert!(variables.iter().all(|one| one.scope == "dist"));
+    assert_eq!(variables.iter().filter(|one| one.parameter).count(), 2);
+}
