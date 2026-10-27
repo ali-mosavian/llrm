@@ -1319,13 +1319,42 @@ def _claim_slot(root: Path, count: int):
         time.sleep(2)
 
 
+def keep_refused_evidence(head: str, cwd: Path, why: list[str], directory: Path) -> None:
+    """For a generated-docs refusal, `HEAD`, `git status` and `build.py --check` of the tree that was judged, in `directory/<head>/`: the next PR's check resets the slot, and a refusal
+    that the same tree does not reproduce (docs_in_sync at 01:41, 01:44, 02:08, 02:26) left no evidence of what was stale."""
+    if not any("docs_in_sync" in one or "generated docs" in one for one in why):
+        return
+    out = directory / head[:12]
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "head.txt").write_text(f"tree {git('rev-parse', 'HEAD', cwd=cwd).strip()}\npr head {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}\n")
+    (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
+    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    (out / "check.txt").write_text(check.stdout + check.stderr)
+
+
+def keep_batch_evidence(heads: dict[str, str], cwd: Path, directory: Path, stamp: str) -> None:
+    """The batch tree's HEAD, status and `build.py --check`, and each member's head sha and commit time, in `directory/batch-<stamp>/`: "stale heads or the runner's tree" is answerable
+    from it at the next docs refusal."""
+    out = directory / f"batch-{stamp}"
+    out.mkdir(parents=True, exist_ok=True)
+    lines = [f"tree {git('rev-parse', 'HEAD', cwd=cwd).strip()}"]
+    for number, head in heads.items():
+        lines.append(f"#{number} {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}")
+    (out / "heads.txt").write_text("\n".join(lines) + "\n")
+    (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
+    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    (out / "check.txt").write_text(check.stdout + check.stderr)
+
+
 def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
     root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
     slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
     targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
         _alone_checkout(targets / "w", base)
-        return alone_refusals(head, base, targets / "w", target=targets)
+        why = alone_refusals(head, base, targets / "w", target=targets)
+        keep_refused_evidence(head, targets / "w", why, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused")
+        return why
     finally:
         lock.close()
 
@@ -1444,6 +1473,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return False
         def blame(new: list[str]) -> None:
             if any(name.startswith("integration docs") for name in new):
+                keep_batch_evidence({number: infos[number]["headRefOid"] for number in group}, ROOT, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused", time.strftime("%H%M%S"))
                 for line in batch_blame({number: infos[number]["headRefOid"] for number in group}, BASE):
                     print(line)
 
