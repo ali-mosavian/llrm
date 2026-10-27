@@ -176,7 +176,7 @@ def main() -> int:
     if not SRC.is_file() or not gen_libfunc.SRC.is_file():
         print(f"gen_libattrs: no {SRC}: skipped", file=sys.stderr)
         return 0 if "--check" in sys.argv else 1
-    text = render()
+    text = gen_libfunc.formatted(render(), OUT)
     if "--check" in sys.argv:
         if OUT.read_text() != text:
             print("gen_libattrs: crates/ir/llrm-mir/src/libfunc/attrs.rs is stale: run tools/gen/gen_libattrs.py", file=sys.stderr)
