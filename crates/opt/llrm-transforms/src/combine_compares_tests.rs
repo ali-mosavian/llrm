@@ -548,7 +548,8 @@ fn a_value_compared_with_its_negation_is_compared_with_zero() {
 
 /// `foldMultiplicationOverflowCheck`: `(-1 /u x) u< y` and `((x * y) / x) != y`
 /// were a division the target cannot do cheaply; the pin asks the multiply for
-/// its overflow bit (`opt`: `%mul.ov = extractvalue ... @llvm.umul.with.overflow.i32`).
+/// its overflow bit (`opt`: `%mul.ov = extractvalue ...
+/// @llvm.umul.with.overflow.i32`).
 #[test]
 fn a_division_overflow_check_is_a_multiply_with_overflow() {
     let wrap = |body: &str| {
@@ -565,11 +566,13 @@ fn a_division_overflow_check_is_a_multiply_with_overflow() {
     let out = combined(&wrap("  %d = udiv i32 -1, %x\n  %r = icmp uge i32 %d, %y\n  ret i1 %r\n"));
     assert!(out.contains("%2 = xor i1 %1, true\n  ret i1 %2"), "{out}");
 
-    let out = combined(&wrap("  %m = mul i32 %x, %y\n  %d = udiv i32 %m, %x\n  %r = icmp ne i32 %d, %y\n  ret i1 %r\n"));
+    let out =
+        combined(&wrap("  %m = mul i32 %x, %y\n  %d = udiv i32 %m, %x\n  %r = icmp ne i32 %d, %y\n  ret i1 %r\n"));
     assert!(out.contains("@llvm.umul.with.overflow.i32(i32 %x, i32 %y)") && !out.contains("udiv"), "{out}");
     assert!(out.contains("extractvalue { i32, i1 } %0, 1\n  ret i1 %1"), "{out}");
 
-    let out = combined(&wrap("  %m = mul i32 %y, %x\n  %d = sdiv i32 %m, %x\n  %r = icmp eq i32 %y, %d\n  ret i1 %r\n"));
+    let out =
+        combined(&wrap("  %m = mul i32 %y, %x\n  %d = sdiv i32 %m, %x\n  %r = icmp eq i32 %y, %d\n  ret i1 %r\n"));
     assert!(out.contains("@llvm.smul.with.overflow.i32") && out.contains("xor i1"), "{out}");
 
     // A multiply read elsewhere is replaced by the intrinsic's result.
