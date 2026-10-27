@@ -81,6 +81,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMulO => pin::SMULO,
         UAddOCarry => pin::UADDO_CARRY,
         USubOCarry => pin::USUBO_CARRY,
+        SetCCCarry => u16::MAX,
         SAddSat => pin::SADDSAT,
         UAddSat => pin::UADDSAT,
         SSubSat => pin::SSUBSAT,

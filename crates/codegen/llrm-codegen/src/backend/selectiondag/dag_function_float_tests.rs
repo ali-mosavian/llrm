@@ -685,6 +685,74 @@ define i32 @f() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
+const ROUNDED_DOUBLE_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(double %x, ptr %p) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  %r = fpround double %a to double
+  store double %r, ptr %p
+  ret void
+}
+";
+
+const PLAIN_DOUBLE_STORE: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(double %x, ptr %p) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  store double %a, ptr %p
+  ret void
+}
+";
+
+/// A double stored is rounded by the store: `fpround` read only by stores of
+/// its type went through a stack slot first (`fstp [slot]; fld [slot]; fstp
+/// [p]`), 112 bytes of frame and 267 bytes of code in nbody.bas under
+/// `--isel=dag` that the old selector's single `fstp` did not have.
+#[test]
+fn a_round_read_only_by_stores_is_not_stored_to_a_slot_first() {
+    let count = |text: &str| {
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().len()
+    };
+    assert_eq!(count(ROUNDED_DOUBLE_STORE), count(PLAIN_DOUBLE_STORE));
+}
+
+const ROUNDED_ARGUMENT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g(double)
+define void @f(double %x) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  %r = fpround double %a to double
+  call void @g(double %r)
+  ret void
+}
+";
+
+const PLAIN_ARGUMENT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g(double)
+define void @f(double %x) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  call void @g(double %a)
+  ret void
+}
+";
+
+/// A double passed on the stack is stored there, which rounds it: the same
+/// slot round trip came before `B$PER8`'s argument (range_power_digits.bas).
+#[test]
+fn a_round_read_only_as_a_call_argument_is_not_stored_to_a_slot_first() {
+    let count = |text: &str| {
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().len()
+    };
+    assert_eq!(count(ROUNDED_ARGUMENT), count(PLAIN_ARGUMENT));
+}
+
 const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
 define cc 1005 i32 @f(ptr addrspace(3) %0, ptr addrspace(3) %1) addrspace(1) {
