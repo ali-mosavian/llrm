@@ -1,6 +1,8 @@
 //! The pin unrolls in a late LoopUnrollPass too, after the combines that fold a
 //! constant into an address.
 
+mod common;
+
 use std::process::Command;
 
 /// clang's -O0 IR of tile.c's `bench_tile`: a 40-trip inner loop over `tile[(y
@@ -8,7 +10,8 @@ use std::process::Command;
 /// (162 against 150); once the constant is in the address it costs 5.
 /// `llrm-llc` had no late unroll and left the loop rolled: 8321 clocks against
 /// the pin's 4277.
-const TILE: &str = r#"target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
+fn tile() -> String {
+    r#"target datalayout = "@LAYOUT@"
 @tile = internal global [64 x [64 x i16]] zeroinitializer, align 2
 
 define i32 @bench_tile() {
@@ -88,12 +91,14 @@ define i32 @bench_tile() {
   %48 = load i32, ptr %5, align 4
   ret i32 %48
 }
-"#;
+"#
+    .replace("@LAYOUT@", &common::datalayout("x86-m32"))
+}
 
 #[test]
 fn test_a_loop_the_early_unroll_refused_is_unrolled_late_at_o2() {
     let scratch = tempfile::tempdir().unwrap();
-    std::fs::write(scratch.path().join("a.ll"), TILE).unwrap();
+    std::fs::write(scratch.path().join("a.ll"), tile()).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "-", "a.ll"])

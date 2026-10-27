@@ -10,6 +10,16 @@ use std::path::Path;
 pub mod cc;
 pub mod dosbox;
 
+/// A target's datalayout string, from its `datalayout.toml`, for the IR a test
+/// writes.
+pub fn datalayout(target: &str) -> String {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("crates/target/llrm-{target}/src/machines/datalayout.toml"));
+    let table: toml::Table =
+        std::fs::read_to_string(&path).expect("datalayout.toml reads").parse().expect("datalayout.toml parses");
+    table["datalayout"].as_str().expect("a datalayout").to_owned()
+}
+
 fn recipe() -> toml::Table {
     let target = llrm_driver::all()
         .into_iter()
