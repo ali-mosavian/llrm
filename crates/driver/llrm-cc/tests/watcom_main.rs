@@ -192,3 +192,31 @@ fn a_far_function_pointer_takes_a_far_function() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
+
+/// m16 `main` was `_main`, which Open Watcom's `cstrt086` does not call: every
+/// m16 program failed to link with `undefined symbol main_`.
+#[test]
+fn an_m16_program_links_against_watcoms_start_up() {
+    let ow = std::env::var_os("LLRM_OW").map(std::path::PathBuf::from);
+    if std::env::var_os("LLRM_PIN_CLANG").is_none()
+        || std::env::var_os("LLRM_CLANG_M16").is_none()
+        || !ow.as_ref().is_some_and(|ow| ow.join("bld/clib/library/msdos.086/mm/clibm.lib").exists())
+    {
+        eprintln!("skipped: needs LLRM_PIN_CLANG, LLRM_CLANG_M16 and a built Open Watcom C library");
+        return;
+    }
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-m16-link-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("m.c"), "int main(void) { return 3; }\n").unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_CC_BIN", env!("CARGO_BIN_EXE_llrm-cc"))
+        .args(["-O1", "-w", "-o"])
+        .arg(dir.join("m.exe"))
+        .arg(dir.join("m.c"))
+        .output()
+        .unwrap();
+    let linked = dir.join("m.exe").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success() && linked, "{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+}

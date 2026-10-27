@@ -222,9 +222,9 @@ fn with_default_convention(
         (true, 0) => variadic,
         _ => false,
     };
-    // Under the register-size convention `main` is C's: the start-up calls
-    // `_main`.
-    let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // Under the register-size convention `main` is Watcom's, `main_`: both
+    // its start-up and the repo's (`LL_MAIN`) call that.
+    let main_is_watcom = !regcall_default && default.cc.as_deref() == Some("regparm3");
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
@@ -259,14 +259,14 @@ fn with_default_convention(
         // A function the front end marked `regcall` where the default is not
         // is the Watcom register convention (`__watcall` of its headers).
         let watcom = !regcall_default
-            && (function.calling_convention == llrm_mir::opcode::REGCALL
+            && ((entry && main_is_watcom)
+                || function.calling_convention == llrm_mir::opcode::REGCALL
                 || library.contains(&llrm_mir::context::GlobalId(at as u32)));
         if watcom
-            || (!(entry && keeps_main)
-                && takes(
-                    function.calling_convention,
-                    is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
-                ))
+            || takes(
+                function.calling_convention,
+                is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
+            )
         {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
