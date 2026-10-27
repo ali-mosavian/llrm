@@ -240,3 +240,34 @@ def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
     after = "\n".join(pindiff.table([row("a", 124, 379), row("b", 50, 100), row("new", 1, 1)], old=False))
     assert rowdelta.parse(before)["a"] == (134, 100, 462, 296)
     assert rowdelta.deltas(before, after) == ["a: ins 134->124 (pin 100), nopad 462->379 (pin 296)"]
+
+
+def test_m32_clang_flags_do_not_default_every_function_to_regcall(monkeypatch):
+    """targets.toml gave m32 `-fdefault-calling-conv=regcall` for llrm-cc; pindiff ran ours with sysv, so all 71 m32 programs stopped at
+    `llrm-llc: @___regcall3__f: calling convention 92` and the table was empty."""
+    pindiff = load("pindiff")
+    monkeypatch.setenv("LLRM_OW", "/nonexistent")
+    _, flags = pindiff.clang_flags("m32")
+    assert "-fdefault-calling-conv=regcall" not in flags
+
+
+def test_an_os_row_is_not_the_o2_row():
+    """dyn/pindiff -Os rows were read as O2 when the IR handed to ours was the pin's, so a size gate of ours could not show. Raw IR through
+    ours: the division by 7 is a multiply at -O2 and stays a division at -Os (same program, same llc)."""
+    import os
+    import tempfile
+
+    llc = os.environ.get("LLRM_LLC")
+    if not llc or "LLRM_OW" not in os.environ or "LLRM_PIN_CLANG" not in os.environ:
+        pytest.skip("needs LLRM_LLC, LLRM_OW and LLRM_PIN_CLANG")
+    pindiff = load("pindiff")
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "d7.c"
+        src.write_text("int f(int x) { return x / 7; }\n")
+        asm = {}
+        for level in ("O2", "Os"):
+            work = Path(tmp) / level
+            work.mkdir()
+            assert isinstance(pindiff.one(src, "m32", level, llc, work, False), dict)
+            asm[level] = (work / "d7.ours.s").read_text()
+    assert "imul" in asm["O2"] and "idiv" in asm["Os"], asm
