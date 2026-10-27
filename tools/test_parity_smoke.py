@@ -669,3 +669,32 @@ assertion `left == right` failed: a node on the worklist is ready
 """
     reasons = ps.panic_reasons(output)
     assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"
+
+
+def test_a_failing_scanner_names_the_stale_pages_in_its_cause():
+    """docs_in_sync was refused at 01:41, 01:44 and 02:08 as a bare test name; w1 could not tell which page, and the scratch tree passed."""
+    output = """\
+     Running tests/docs_in_sync.rs (target/release/deps/docs_in_sync-abc)
+
+running 1 test
+test test_no_generated_page_is_stale ... FAILED
+
+failures:
+
+---- test_no_generated_page_is_stale stdout ----
+
+thread 'test_no_generated_page_is_stale' (123) panicked at tests/docs_in_sync.rs:24:5:
+run python3 tools/docsbuild/build.py --sync:
+  docs/optimizations/passes/lsr_solve.md
+  docs/optimizations/passes/sinkcast.md
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+"""
+    class Done:
+        returncode = 101
+        stdout = output
+
+    ps.CAUSES.clear()
+    failed = ps.integration_failures(["docs_in_sync"], run=lambda *a, **k: Done)
+    assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
+    cause = ps.causes_of(failed)
+    assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause

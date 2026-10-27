@@ -85,7 +85,8 @@ fn walk(
         return KnownBits::unknown(width);
     }
     let operand = |at: usize| walk(dag, dag.operand(value, at), depth + 1);
-    match dag.opcode(value) {
+    let opcode = dag.opcode(value);
+    match opcode {
         ISD::SetCC if value.res == 0 => {
             // A compare is 0 or 1 where the target's boolean contents say so.
             let zero_or_one = dag.config().boolean_contents == BooleanContents::ZeroOrOne && width > 1;
@@ -164,6 +165,14 @@ fn walk(
             }
             _ => KnownBits::unknown(width),
         },
+        ISD::BSwap | ISD::BitReverse => {
+            let inner = operand(0);
+            let flip = |v: u128| {
+                let flipped = if opcode == ISD::BSwap { v.swap_bytes() } else { v.reverse_bits() };
+                flipped >> (128 - width)
+            };
+            KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
+        }
         _ => KnownBits::unknown(width),
     }
 }
