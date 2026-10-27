@@ -3,7 +3,7 @@
 //! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
 //! machines.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
@@ -240,21 +240,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             // The linker adds S + field (- P - baked, if relative); the model
             // wants S + addend - (at + from).
             let field = if one.pc_rel { one.addend - (from as i64 - baked as i64) } else { one.addend };
-            let fits = match width {
-                8 => true,
-                4 => i32::try_from(field).is_ok() || (!one.pc_rel && u32::try_from(field).is_ok()),
-                _ => i16::try_from(field).is_ok() || (!one.pc_rel && u16::try_from(field).is_ok()),
-            };
-            if !fits {
-                return Err(unsupported(format!(
-                    "{}: a value of {field} does not fit its {width}-byte field",
-                    section.name
-                )));
-            }
+            apply_fixup(&mut image, one.at, width, one.pc_rel, field, &section.name)?;
             put32(&mut entries, one.at as u32);
             put32(&mut entries, coff_symbol[target]);
             put16(&mut entries, kind);
-            image[one.at..one.at + width].copy_from_slice(&field.to_le_bytes()[..width]);
         }
         reloc_counts.push(section.relocs.len());
         images.push(image);

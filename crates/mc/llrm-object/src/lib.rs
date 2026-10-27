@@ -162,6 +162,30 @@ impl Fix {
     }
 }
 
+/// Writes `value` into the `width`-byte field at `at` of a section's `image`
+/// (LLVM's `applyFixup` for a data fixup), and refuses what the field cannot
+/// hold: a pc-relative value is signed, any other may be signed or unsigned.
+pub fn apply_fixup(
+    image: &mut [u8],
+    at: usize,
+    width: usize,
+    pc_rel: bool,
+    value: i64,
+    section: &str,
+) -> Result<(), Unsupported> {
+    let fits = match width {
+        8 => true,
+        4 => i32::try_from(value).is_ok() || (!pc_rel && u32::try_from(value).is_ok()),
+        2 => i16::try_from(value).is_ok() || (!pc_rel && u16::try_from(value).is_ok()),
+        _ => i8::try_from(value).is_ok() || (!pc_rel && u8::try_from(value).is_ok()),
+    };
+    if !fits {
+        return Err(Unsupported(format!("{section}: a value of {value} does not fit its {width}-byte field")));
+    }
+    image[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Target {
     /// An index into `Object::symbols`.
@@ -335,6 +359,19 @@ impl std::error::Error for Unsupported {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Three containers each had their own range check, and Mach-O's refused a
+    /// negative absolute 32-bit field the others took: one check now,
+    /// signed where pc-relative, either where not.
+    #[test]
+    fn a_field_takes_what_its_width_holds() {
+        let mut image = [0u8; 8];
+        assert!(apply_fixup(&mut image, 0, 4, false, -2, "t").is_ok() && image[..4] == [0xFE, 0xFF, 0xFF, 0xFF]);
+        assert!(apply_fixup(&mut image, 0, 4, false, 0xFFFF_FFFF, "t").is_ok());
+        assert!(apply_fixup(&mut image, 0, 4, true, 0xFFFF_FFFF, "t").unwrap_err().0.contains("4-byte"));
+        assert!(apply_fixup(&mut image, 0, 2, false, 70_000, "t").is_err());
+        assert!(apply_fixup(&mut image, 0, 8, true, i64::MIN, "t").is_ok());
+    }
 
     /// A kind without a width entry patched zero bytes, so `Reloc::width` and
     /// the writers' field sizes were silently 0.

@@ -4,7 +4,7 @@
 //! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
 //! `mc::elf` are the machines.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -137,24 +137,6 @@ fn align(
     }
 }
 
-/// Whether `addend` is a value of a field of `width` bytes: signed where
-/// pc-relative.
-fn fits(
-    addend: i64,
-    width: usize,
-    pcrel: bool,
-) -> bool {
-    match (width, pcrel) {
-        (8, _) => true,
-        (4, true) => i32::try_from(addend).is_ok(),
-        (4, false) => i32::try_from(addend).is_ok() || u32::try_from(addend).is_ok(),
-        (2, true) => i16::try_from(addend).is_ok(),
-        (2, false) => i16::try_from(addend).is_ok() || u16::try_from(addend).is_ok(),
-        (_, true) => i8::try_from(addend).is_ok(),
-        _ => i8::try_from(addend).is_ok() || u8::try_from(addend).is_ok(),
-    }
-}
-
 /// `object` as an ELF relocatable file of machine `M`.
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     if object.bits != M::BITS {
@@ -257,12 +239,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             };
             // S + A - P, where the model's value is S + addend - (at + from).
             let addend = one.addend + own - from as i64;
-            if !fits(addend, width, one.pc_rel) {
-                return Err(unsupported(format!(
-                    "{}: an addend of {addend} does not fit its {width}-byte field",
-                    section.name
-                )));
-            }
+            // Checked for RELA too: the addend must fit the field the linker
+            // would have patched.
+            let mut field = [0u8; 8];
+            apply_fixup(&mut field, 0, width, one.pc_rel, addend, &section.name)?;
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
                 entries.extend((u64::from(symbol) << 32 | u64::from(kind)).to_le_bytes());
@@ -272,7 +252,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             if M::ADDEND {
                 entries.extend(addend.to_le_bytes());
             } else {
-                image[one.at..one.at + width].copy_from_slice(&addend.to_le_bytes()[..width]);
+                image[one.at..one.at + width].copy_from_slice(&field[..width]);
             }
         }
         images.push(image);

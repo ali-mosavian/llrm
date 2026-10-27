@@ -12,7 +12,7 @@
 //! one atom, so a call between two functions of it may be resolved where it is
 //! written.
 
-use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const MH_OBJECT: u32 = 1;
@@ -290,18 +290,7 @@ pub fn write<W: MachTargetWriter>(
                 ));
                 continue;
             }
-            let fits = match (width, pcrel) {
-                (8, _) => true,
-                (_, true) => i32::try_from(field).is_ok(),
-                (_, false) => u32::try_from(field).is_ok(),
-            };
-            if !fits {
-                return Err(unsupported(format!(
-                    "{}: a value of {field} does not fit its {width}-byte field",
-                    section.name
-                )));
-            }
-            image[one.at..one.at + width].copy_from_slice(&field.to_le_bytes()[..width]);
+            apply_fixup(&mut image, one.at, width, pcrel, field, &section.name)?;
             made.push((
                 one.at,
                 [
