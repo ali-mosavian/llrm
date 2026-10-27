@@ -1171,7 +1171,7 @@ impl LiveIntervals {
             let again = fresh.compute_virt_reg_interval(reg);
             let now = shape(&fresh, &again);
             if was != now {
-                if llrm_support::env_set("LLRM_AFRESH_DUMP") {
+                if llrm_support::env_flag!("LLRM_AFRESH_DUMP") {
                     eprintln!(
                         "  held interval of v{reg}: {:?}",
                         self.intervals[&reg].segments.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>()

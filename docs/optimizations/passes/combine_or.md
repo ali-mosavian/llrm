@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_or.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_or.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:3681fa11f93bec4cc867e7fd83a6ea2dcee9560224b5dd2b6081d46fede00fb7 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:bee95cc8e5c0df41858ee1f787388a6876d2ec50d1df19d4136ddc523221510f -->
 
 # combine_or
 
@@ -20,7 +20,7 @@ DEVIATE 2: the folds that call a helper not yet translated are left out,
 each named where it stood: `foldOrToXor`, `foldComplexAndOrPatterns`,
 `foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-`matchBSwapOrBitReverse`, `matchOrConcat`,
+`matchOrConcat`,
 `tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
 mask fold, `matchSelectFromAndOr` and everything after it.
 
