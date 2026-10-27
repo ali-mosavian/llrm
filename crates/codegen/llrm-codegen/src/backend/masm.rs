@@ -132,8 +132,9 @@ const FRAME: RegId = ir::FRAME;
 const STACK: RegId = ir::STACK;
 
 /// `SIZES`.
-pub static SIZES: LazyLock<IndexMap<u32, &'static str>> =
-    LazyLock::new(|| IndexMap::from_iter([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte")]));
+pub static SIZES: LazyLock<IndexMap<u32, &'static str>> = LazyLock::new(|| {
+    IndexMap::from_iter([(1, "byte"), (2, "word"), (4, "dword"), (8, "qword"), (10, "tbyte"), (16, "xmmword")])
+});
 /// `SEGMENTS`.
 pub static SEGMENTS: LazyLock<IndexMap<&'static str, &'static str>> =
     LazyLock::new(|| IndexMap::from_iter([("_DATA", ".data"), ("_BSS", ".data?"), ("CONST", ".const")]));

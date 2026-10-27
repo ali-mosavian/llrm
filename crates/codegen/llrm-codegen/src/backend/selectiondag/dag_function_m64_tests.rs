@@ -678,3 +678,43 @@ entry:
     let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
     assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
 }
+
+/// `fneg` and `fabs` of a `double` or `float` at m64 stopped at
+/// `CannotSelect(FXOR)`: the pin selects the sign mask's bitwise instruction
+/// with the 16-byte pool constant as its memory operand (`xorps`/`andps`).
+#[test]
+fn an_m64_fneg_and_fabs_are_a_bitwise_op_on_a_16_byte_mask() {
+    for (op, ty, name) in [
+        ("fneg double %x", "double", "xorps"),
+        ("call double @llvm.fabs.f64(double %x)", "double", "andps"),
+        ("fneg float %x", "float", "xorps"),
+        ("call float @llvm.fabs.f32(float %x)", "float", "andps"),
+    ] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare double @llvm.fabs.f64(double)
+declare float @llvm.fabs.f32(float)
+define {ty} @f({ty} %x) {{
+entry:
+  %r = {op}
+  ret {ty} %r
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{op}: {}", e.0));
+        let logic: Vec<_> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some(name))
+            .filter_map(|w| match w.sources.last() {
+                Some(crate::model::ir::Loc::Mem(m)) => Some(m.width),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(logic, [16], "{op}");
+    }
+}

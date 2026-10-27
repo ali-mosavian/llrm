@@ -27,6 +27,7 @@ use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::{select_fcmp, select_fist16, select_pop_from_x87, select_setcc_carry};
+use crate::x86_fplogic::select_fp_logic;
 use crate::x86_hooks::X86Hooks;
 use crate::x86_llrm::{
     FATAN_OPCODE, FCOS_OPCODE, FEXP_OPCODE, FEXP2_OPCODE, FLN_OPCODE, FLOG2_OPCODE, FRINT_OPCODE, FSIN_OPCODE,
@@ -89,6 +90,11 @@ pub fn select_node<D: AddrDag>(
         }
         x86isd::FCMP => {
             if select_fcmp(dag, node) {
+                return Outcome::Selected;
+            }
+        }
+        x86isd::FAND | x86isd::FOR | x86isd::FXOR => {
+            if select_fp_logic(dag, hooks, node) {
                 return Outcome::Selected;
             }
         }

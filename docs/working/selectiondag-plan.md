@@ -256,6 +256,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD107 | sdag-a | `lowerFaddFsub` never forms a horizontal add (SSE3 `haddps` is not described); scalar `FADD`/`FSUB` stay as they are | `selectiondag/x86_lowering.rs` |
+| SD108 | sdag-a | `FAND`/`FOR`/`FXOR` of a scalar float against its pool mask select `andps`/`orps`/`xorps` directly (no `SCALAR_TO_VECTOR` node); `double` takes the `ps` rows `x86.instr` has | `crates/backend/llrm-dagisel/src/x86_fplogic.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
 | SD302 | sdag-c | the i8 DIVREM remainder is `shr ax, 8` then `movzx` of the byte, not `movzx` of AH (the LIR has no AH) | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
