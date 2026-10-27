@@ -1375,6 +1375,41 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{names:?}");
     }
 
+    /// Finding the kill of a tied add's source walked the block from its end
+    /// back to the last reader (`(at + 1..len).rev().find`), for every tied
+    /// add: quadratic in a long straight-line block (jpeg-sized: 118 M of
+    /// 615 M instructions at 64 statements, 1.9 G of 5.6 G at 256). The pin
+    /// reads the kill from `LiveVariables`; the search is now the
+    /// instructions the reschedule may move across.
+    #[test]
+    fn test_finding_the_kill_does_not_walk_the_rest_of_the_block() {
+        use crate::twoaddress::KILL_SEARCHED;
+        let searched = |tail: i64| {
+            let mut insns = Vec::new();
+            for p in 0..20_i64 {
+                let (base, r) = (p * 5, 1000 + p as u32 * 10);
+                let what = Semantics {
+                    name: Some("add".into()),
+                    dests: vec![held(r + 1, 4)],
+                    sources: vec![held(r, 4), Loc::Mem(crate::model::ir::Mem::new(None, 4))],
+                    ..Semantics::new(Operation::Binary)
+                };
+                insns.push(imm_def(base, r));
+                insns.push(Arc::new(Insn::new(base + 1, Some((base + 1, base + 1)), Some(what), vec![r + 1], vec![r])));
+                insns.push(lea_of(base + 2, r + 2, r));
+                insns.push(read(base + 3, r + 1));
+                insns.push(read(base + 4, r + 2));
+            }
+            insns.extend((0..tail).map(|k| imm_def(1000 + k, 9000 + k as u32)));
+            KILL_SEARCHED.with(|n| n.set(0));
+            let _ = tied(&of(insns), Off);
+            KILL_SEARCHED.with(std::cell::Cell::get)
+        };
+        let (short, long) = (searched(50), searched(2000));
+        assert!(short > 0, "the premise: the reschedules search for a kill");
+        assert!(long <= 2 * short, "{long} instructions looked at behind a 2000-instruction tail, {short} behind 50");
+    }
+
     /// The pin's checks: a kill that is a copy, or a call between, leaves the
     /// add where it was.
     #[test]
