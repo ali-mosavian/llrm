@@ -89,6 +89,10 @@ pub struct Options {
     /// where it is named, the selector's `rep movs` where not; and the symbol
     /// the routine has in the object (Open Watcom's `memcpy_`, C's `_memcpy`).
     pub libcalls: Vec<(String, u32, String)>,
+    /// `-fsanitize=stack` on a module read from LLVM IR: the limit word and the
+    /// overflow routine a function marked `StackCheck` compares with and
+    /// enters.
+    pub stack_check: Option<crate::hir::model::StackCheck>,
 }
 
 impl Options {
@@ -117,6 +121,7 @@ impl Options {
             no_inline: Vec::new(),
             isel: Default::default(),
             libcalls: Vec::new(),
+            stack_check: None,
         }
     }
 
@@ -321,7 +326,7 @@ pub fn compiled_module(
     let assembled = timed("assemble", || {
         assemble::assembled_by(
             &program.modules[0],
-            &crate::abi::llvm::LlvmAbi,
+            &crate::abi::llvm::LlvmAbi { stack_check: options.stack_check.clone() },
             &format!("{}_TEXT", name.to_uppercase()),
             ProfileOrName::Profile(cpu),
             &segments,

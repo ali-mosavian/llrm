@@ -355,10 +355,14 @@ pub fn compiled_dumping(
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
+    if flags.sanitize.stack {
+        llrm_codegen::hir::mir::check_stack(&mut module);
+    }
     with_default_convention(&mut module, default, flags.regcall_default);
     llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let mut options = options_for(&bound, flags, machine, format.name(), default);
+    options.stack_check = flags.sanitize.stack.then(|| llrm_codegen::abi::llvm::stack_check(&*bound.target));
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
         options.dump = Some(dump.to_path_buf());

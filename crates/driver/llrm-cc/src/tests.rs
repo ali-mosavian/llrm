@@ -46,6 +46,16 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// `-fsanitize=stack` was refused as "not translated yet", so the C tests of
+/// the stack check could not leave llrm-c: the backend has it, clang does not
+/// know the sanitizer.
+#[test]
+fn the_stack_check_reaches_the_backend_and_not_clang() {
+    let one = built("-fsanitize=stack -c x.c");
+    assert_eq!(one.llc, words("-fsanitize=stack"));
+    assert!(one.clang.iter().all(|flag| !flag.contains("sanitize")), "{:?}", one.clang);
+}
+
 /// `-g` was refused ("debug info is not carried yet"), so no program could
 /// carry debug info: clang gets `-g`, the backend the flag that names the
 /// format.
