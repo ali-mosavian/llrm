@@ -173,7 +173,10 @@ fn breaks_no_free(
     inst: InstId,
     members: &BTreeSet<GlobalId>,
 ) -> bool {
-    if !matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+    if !matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    ) {
         return false;
     }
     !effects::states(context, declarations, function, inst, Fact::NoFree)
@@ -189,7 +192,10 @@ fn breaks_no_sync(
     inst: InstId,
     members: &BTreeSet<GlobalId>,
 ) -> bool {
-    if !matches!(function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+    if !matches!(
+        function.instruction(inst).opcode,
+        Opcode::Call(_) | Opcode::Invoke(_)
+    ) {
         return false;
     }
     !effects::states(context, declarations, function, inst, Fact::NoSync)
@@ -287,25 +293,26 @@ pub fn infer(
     // All or none, per attribute (`AttributeInferer`): one member that cannot
     // be scanned, or one instruction that breaks it, takes it from the SCC.
     let scc_states = |fact: Fact, breaks: &dyn Fn(&Function, InstId) -> bool| {
-        members.iter().all(|&id| {
-            let Some((linkage, function)) = body(id) else {
-                return module.global(id).function().is_some_and(|one| Facts::of(&one.attrs).contains(fact));
-            };
-            if Facts::of(&function.attrs).contains(fact) {
-                return true;
-            }
-            exact(linkage) && function.walk().all(|(_, inst)| !breaks(function, inst))
-        })
+        members
+            .iter()
+            .all(
+                |&id| {
+                    let Some((linkage, function)) = body(id) else {
+                        return module.global(id).function().is_some_and(|one| Facts::of(&one.attrs).contains(fact));
+                    };
+                    if Facts::of(&function.attrs).contains(fact) {
+                        return true;
+                    }
+                    exact(linkage) && function.walk().all(|(_, inst)| !breaks(function, inst))
+                },
+            )
     };
-    let unwinds = scc_states(Fact::NoUnwind, &|function, inst| {
-        breaks_non_throwing(context, declarations, function, inst, &set)
-    });
-    let frees_nothing = scc_states(Fact::NoFree, &|function, inst| {
-        breaks_no_free(context, declarations, function, inst, &set)
-    });
-    let syncs_nothing = scc_states(Fact::NoSync, &|function, inst| {
-        breaks_no_sync(context, declarations, function, inst, &set)
-    });
+    let unwinds =
+        scc_states(Fact::NoUnwind, &|function, inst| breaks_non_throwing(context, declarations, function, inst, &set));
+    let frees_nothing =
+        scc_states(Fact::NoFree, &|function, inst| breaks_no_free(context, declarations, function, inst, &set));
+    let syncs_nothing =
+        scc_states(Fact::NoSync, &|function, inst| breaks_no_sync(context, declarations, function, inst, &set));
     let no_recurse_scc = members.len() == 1;
     members
         .iter()
