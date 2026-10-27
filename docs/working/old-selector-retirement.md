@@ -61,13 +61,13 @@ Lines are `wc -l`. "Callers" are non-test callers outside the file's own tests.
 | Where | Row | Exits with the deletion? |
 |---|---|---|
 | `isel.rs:6942` (I1, AM-I1), `:6958` (I2), `:6986` (memmove) | `rep movs` past 128 B, `-Oz`, memmove refusal | I1 is priced and live (`memcpycall.rs:12`, `above-main-rows.md:45`): the DAG expansion must carry it first (check). I2 and memmove go with the file |
-| `isel/wide.rs:121` D-SB1 (`parity-pipeline.md:98`) | divisions keep the old sign-bit count | yes, if the DAG's own division lowering is the pin's |
+| `isel/wide.rs:121` D-SB1 (`parity-pipeline.md:98`) | divisions keep the old sign-bit count | yes, if the DAG's own division lowering is the pin's. Verified 2026-10-27: `long long f(long long a,int b){return a/b;}` at m16 -Os is two inline `div` in old and a `$div64_s` call in dag; the pin llc on the same IR calls `__divdi3`. |
 | `isel/huge.rs:20` | loop emitted inline, exit #2284 | yes; SD311 (`memops.rs:554`) stays but must stop citing `isel/huge.rs` |
 | `llrm-x86/src/isel/family.isel:275` F1 | `arithmetic_cell` guard | yes |
 | `precse.rs:55`, `precse.md:61` CSE3 | "both selectors", old reads args as memory operands | no: the DAG half stands; rewrite the text; its 2026-11-08 date may pass first |
 | `precse.md:48` CSE1 | "exit with isel.rs I2" | exit condition vanishes with I2; give it a new one |
 | `codegen-slot-table.md:4,30,34,87,88` (rows 2, 28, 32, 85, 86) | CG1 and "executed by isel.rs" | yes: row 28 becomes MATCH; the others cite `isel.rs` and need a DAG owner |
-| `pushfold.rs:24` CF1, `pushfold.md:33` | "ours pushes at selection already" | check: DAG emits `mov [esp+k]` stores (`callframe-translation-plan.md:33`) |
+| `pushfold.rs:24` CF1, `pushfold.md:33` | "ours pushes at selection already" | Verified 2026-10-27 at m16 -Os: `g(*p,h,*q,k,7)` pushes `pushw 7` and `push word ptr _k` from memory in both selectors, the same instructions; the DAG carries it. |
 
 ## 4. Order
 

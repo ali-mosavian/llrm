@@ -1653,6 +1653,42 @@ pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     out
 }
 
+/// The (value, width) each place an instruction reads is: what its definition
+/// writes does not count. A destination in memory reads its address; a
+/// destination the instruction also uses (a partial write) is read at its own
+/// width.
+pub(crate) fn _read_widths(one: &Insn) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    if let Some(what) = &one.what {
+        for place in what.sources.iter().flat_map(ir::values) {
+            out.push((place.value, place.width));
+        }
+        for dest in &what.dests {
+            for place in ir::values(dest) {
+                if !matches!(dest, Loc::Held(_)) || one.uses.contains(&place.value) {
+                    out.push((place.value, place.width));
+                }
+            }
+        }
+    }
+    out.extend(one.requires.iter().map(|(place, _)| (place.value, place.width)));
+    out.extend(one.widths.iter().copied());
+    out
+}
+
+/// The widest each value is read (bytes): a value no instruction reads wider
+/// than 2 bytes never needs its high half, however wide its definition is.
+pub fn _widest_read(body: &LirBody) -> IndexMap<u32, u32> {
+    let mut out: IndexMap<u32, u32> = IndexMap::default();
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for (value, width) in _read_widths(one) {
+            let widest = out.entry(value).or_insert(0);
+            *widest = (*widest).max(width);
+        }
+    }
+    out
+}
+
 /// Each (value, width) an instruction names.
 pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_ {
     one.what

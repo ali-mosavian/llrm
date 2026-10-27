@@ -527,18 +527,7 @@ pub fn serialized(
     format: Format,
 ) -> Result<Vec<u8>, Error> {
     match format {
-        Format::Omf => {
-            if let Some(big) =
-                object.sections.iter().find(|section| section.image.len() > 0x10000 && object.arch == Arch::I8086)
-            {
-                return Err(Error::Unsupported(llrm_object::Unsupported(format!(
-                    "segment `{}` is {} bytes: a 16-bit segment holds 65536",
-                    big.name,
-                    big.image.len()
-                ))));
-            }
-            Ok(llrm_omf::write::write(object)?)
-        }
+        Format::Omf => Ok(llrm_omf::write::write(object)?),
         Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(object)?),
         Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(object)?),
         Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(object)?),

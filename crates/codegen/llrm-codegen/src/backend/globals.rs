@@ -257,6 +257,7 @@ impl Initializer<'_> {
                 Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
+            ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes
@@ -365,6 +366,21 @@ pub fn absolute(
             }
             _ => None,
         },
+        // A far address read through a near pointer is its offset: the low
+        // bits, as the cast of a variable is.
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
+            let (Type::Pointer(from), Type::Pointer(to)) =
+                (context.types.get(context.get(*value).ty), context.types.get(context.get(id).ty))
+            else {
+                return None;
+            };
+            let (from_bits, to_bits) = (layout.pointer(*from).bits, layout.pointer(*to).bits);
+            if to_bits >= from_bits || layout.has_unstable_representation(*from) {
+                return None;
+            }
+            let bits = absolute(module, layout, *value)? as u64 & ((1u64 << to_bits) - 1);
+            Some(llrm_mir::context::signed(u128::from(bits), to_bits) as i64)
+        }
         // An offset from a huge pointer's bits is not their sum: the carry past
         // the offset goes into the selector, which the caller that knows the
         // stride adds.

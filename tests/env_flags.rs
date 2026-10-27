@@ -16,7 +16,7 @@ fn reached(
     let source = directory.path().join("t.c");
     std::fs::write(&source, "int f(int a) { int s = 0; while (a--) s += a * 3; return s; }\n")
         .expect("writes the source");
-    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")));
+    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-cc")));
     command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]).arg(&source);
     for (key, _) in std::env::vars_os().filter(|(key, _)| key.to_string_lossy().starts_with("LLRM_")) {
         command.env_remove(key);
