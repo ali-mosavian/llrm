@@ -24,6 +24,9 @@ impl Effects {
 /// effects on memory, and whether it always comes back.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Summary {
+    /// It has a body: `!isDeclaration()`, for a function pass that may not read
+    /// another function.
+    pub defined: bool,
     pub effects: Effects,
     /// Those of `effects` on memory the program can name: not
     /// `inaccessiblemem`.
@@ -90,6 +93,7 @@ pub fn global_summary(
 pub fn summary(function: &Function) -> Summary {
     let attrs = &function.attrs;
     Summary {
+        defined: !function.is_declaration(),
         effects: stated(attrs),
         accessible: stated_at(attrs, |location| location != Some("inaccessiblemem")),
         arguments_only: argument_memory_only(attrs),

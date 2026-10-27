@@ -104,6 +104,7 @@ pub mod combine_and;
 pub mod combine_and_select;
 pub mod combine_branch;
 pub mod combine_build;
+pub mod combine_castcall;
 pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
