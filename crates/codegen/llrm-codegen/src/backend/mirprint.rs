@@ -220,6 +220,25 @@ fn instruction(
     let eflags = "implicit-def dead $eflags";
     let dest = what.dests.first();
     match (name, dest, what.sources.as_slice()) {
+        // An anchor that names no value is nothing to print.
+        ("", None, []) if what.op == llrm_lir::Operation::Nothing => match (one.defines.as_slice(), one.uses.as_slice()) {
+            ([], []) => {}
+            // An anchor a coalesced copy left: the value it hands on.
+            ([to], [from]) => {
+                let width = |value: &u32| WIDEST.with(|w| w.borrow().get(value).copied());
+                let (Some(to_width), Some(from_width)) = (width(to), width(from)) else {
+                    return Err(format!("an anchor of values {from} and {to} of unknown width"));
+                };
+                writeln!(
+                    out,
+                    "    {} = COPY {}",
+                    vreg(&Held { value: *to, width: to_width })?,
+                    vreg(&Held { value: *from, width: from_width })?
+                )
+                .unwrap();
+            }
+            _ => return Err("an anchor of other than one value".to_owned()),
+        },
         ("", None, []) if what.op == llrm_lir::Operation::Return => {
             let used: Vec<String> =
                 one.requires.iter().map(|(_, r)| format!("implicit ${}", format!("{r:?}").to_lowercase())).collect();
@@ -484,7 +503,7 @@ fn instruction(
             vreg(a)?
         )
         .unwrap(),
-        _ => return Err(format!("`{name}` with {} destinations and {} sources: {:?} <- {:?}", what.dests.len(), what.sources.len(), what.dests, what.sources)),
+        _ => return Err(format!("`{name}` ({:?}) with {} destinations and {} sources: {:?} <- {:?}", what.op, what.dests.len(), what.sources.len(), what.dests, what.sources)),
     }
     Ok(())
 }
@@ -1125,6 +1144,33 @@ mod tests {
         use super::physical;
         assert_eq!(physical(RegId::AX, 2).as_deref(), Ok("ax"));
         assert_eq!(physical(RegId::EAX, 2).as_deref(), Ok("ax"));
+    }
+
+    /// An anchor a coalesced copy left (`d[2] u[1]`, no operation) was refused
+    /// ("`` with 0 destinations and 0 sources"), so frameless.c's `descend`
+    /// could not be allocated by the pin.
+    #[test]
+    fn test_an_anchor_that_hands_a_value_on_prints_as_a_copy() {
+        let anchor = Arc::new(Insn::new(
+            0,
+            None,
+            Some(Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }),
+            vec![2],
+            vec![1],
+        ));
+        let start =
+            insn("mov", Operation::Move, vec![held(1)], vec![Loc::Imm(Imm { value: 5, width: 4, address: None })]);
+        let step = insn(
+            "add",
+            Operation::Binary,
+            vec![held(2)],
+            vec![held(2), Loc::Imm(Imm { value: 1, width: 4, address: None })],
+        );
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![start, anchor, step, ret]))];
+        let body = LirBody::new("anchor", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("%2 = COPY %1"), "{text}");
     }
 
     #[test]
