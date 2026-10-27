@@ -394,7 +394,7 @@ impl MemorySsaView for Translated<'_> {
 
 /// One walk of a function.
 struct Walk<'a> {
-    context: &'a mut Context,
+    context: &'a Context,
     function: &'a mut Function,
     /// The function as it was, which `mssa` describes.
     view: &'a View<'a>,
@@ -1279,13 +1279,13 @@ impl FunctionPass for EarlyCse {
         let accesses = self.memory_ssa.then(|| std::rc::Rc::new(Accesses::lazy()));
         let tree = analyses.get::<Dominators>(unit.context, unit.layout, unit.function);
         // MemorySSA describes the function as it is now; the walk changes
-        // `unit.function`, which this copy and the context's copy do not
-        // follow.
+        // `unit.function`, which this copy does not follow. The context needs
+        // no copy: the walk only interns constants, which `Context::int` does
+        // through `&self`.
         let before = unit.function.fork();
-        let frozen = unit.context.clone();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
-        let simplifier = FunctionAnalyses::of(&frozen, view.globals, view.metadata, view.layout, &before);
+        let view = View::within(unit.context, unit.layout, &before, &outer).with_shape(&shape);
+        let simplifier = FunctionAnalyses::of(unit.context, view.globals, view.metadata, view.layout, &before);
         let shape = view.shape();
         // The manager's graph of this body, cloned: the removals below update
         // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
