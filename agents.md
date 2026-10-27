@@ -116,7 +116,7 @@ the first case either missed. Design by SRP, DRY, Open/Closed and separation of 
 
 ## The docs -- the eighth rule
 
-**A change updates the doc of the thing it changes, in the same PR.** A pass, analysis, flag, level, tool, target or runtime that changes behaviour changes its doc with it: a pass's `//!` header is its doc (purpose, how it works, example, where it runs), and `python3 tools/docsbuild/build.py --sync` output is committed with it (run `tools/fmt.sh` first: it rewraps header comments, and the page follows the final text). The stale-page and missing-section tests fail the PR where they can; where they cannot, the reviewer asks.
+**A change updates the doc of the thing it changes, in the same PR.** A pass, analysis, flag, level, tool, target or runtime that changes behaviour changes its doc with it: a pass's `//!` header is its doc (purpose, how it works, example, where it runs), and `python3 tools/docs/docsbuild/build.py --sync` output is committed with it (run `tools/fmt.sh` first: it rewraps header comments, and the page follows the final text). The stale-page and missing-section tests fail the PR where they can; where they cannot, the reviewer asks.
 
 ## The goal
 
@@ -149,7 +149,7 @@ A hand-derived optimal listing for each suite program is the target. Done means 
   tool, as `test_*.py`, written as pytest functions.
 - **Docs are committed as GitHub shows them.** Figures are inline `mermaid` fences in the shared style
   ([figures](docs/working/figures.md)). After editing a `//!` header, run
-  `python3 tools/docsbuild/build.py --sync` and commit what it writes.
+  `python3 tools/docs/docsbuild/build.py --sync` and commit what it writes.
 - **While working, run only the tests for the files being changed**: `cargo test --release <filter>`. See
   [testing](docs/working/testing.md).
 

@@ -4,6 +4,8 @@
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 export BUILDSLOT_BYPASS=1
 mkdir -p "${LAND_TMP:-/tmp/landing}"
+# every temp file of the batch (cargo, rustc, the linker, python tempfile) goes under LAND_TMP: /tmp is a tmpfs that sat at 98% of its inodes and failed links with "Cannot create temporary file"
+export TMPDIR="${LAND_TMPDIR:-${LAND_TMP:-/tmp/landing}/tmp}"; mkdir -p "$TMPDIR"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
