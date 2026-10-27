@@ -3386,14 +3386,10 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported(format!("frame index {index_of}")))?;
         // A displacement past the object (an index that makes up the rest,
         // `[ebp+ecx+126]` for 8192 bytes below) is a position of its own in the
-        // frame, where `home_of` would name the nearest slot: the cell says
+        // frame, where `home_of` would name the nearest slot; so is one exactly
+        // at its end, which is the next object's first byte: the cell says
         // which object it was made from, and the layout moves it with that.
-        let outside = self
-            .ctx
-            .frame
-            .extent(index_of)
-            .filter(|&(start, size)| !(start..=start + size).contains(&(start + disp)))
-            .map(|(start, _)| start);
+        let made_from = self.ctx.frame.extent(index_of).map(|(start, _)| start);
         // The object's place is its `addr`; the displacement moves that, as
         // `offset` of a cell with an `addr` is only how it is encoded.
         let addr = cell
@@ -3401,7 +3397,7 @@ impl Emitter<'_, '_> {
             .map(
                 |addr| {
                     let moved = Addr { disp: addr.disp + disp, ..addr };
-                    outside.map_or(moved, |home| moved.in_slot(home))
+                    made_from.map_or(moved, |home| moved.in_slot(home))
                 },
             );
         // With an index the frame register is the base of the address and,
