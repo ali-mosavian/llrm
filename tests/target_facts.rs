@@ -7,6 +7,10 @@
 //! shrink: a file over its count, or absent from it, fails; a file under its
 //! count fails too, until the baseline is lowered (`LLRM_BLESS=1`). The goal is
 //! an empty baseline.
+//!
+//! `tools/` take a target by name on their command line (`m16`, `-march=i486`,
+//! a CPU), so there the target names are not counted, nor are docstrings and
+//! comments: a machine fact (a register, a size, a decoder table) still is.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -39,21 +43,35 @@ fn number(value: u64) -> String {
 
 /// The pattern of every fact the descriptions state that shared code must not.
 fn facts() -> Regex {
+    facts_of(true)
+}
+
+/// The same for `tools/`, which take a target by name on their command line
+/// (`m16`, `-march=i486`, a CPU) and so name targets by design: what is
+/// counted there is a machine fact (a register, a size, the x86 decoder), not
+/// the name a user selects a target by.
+fn tool_facts() -> Regex {
+    facts_of(false)
+}
+
+fn facts_of(names: bool) -> Regex {
     let mut parts: Vec<String> = Vec::new();
     for target in llrm_driver::all() {
         let name = target.name();
-        parts.push(regex::escape(name));
-        parts.push(regex::escape(&name.replace('-', "_")));
+        if names {
+            parts.push(regex::escape(name));
+            parts.push(regex::escape(&name.replace('-', "_")));
+        }
         // The type (`M16`), what is named after the mode (`m16_options`,
         // `m16()`); not `-m16`, the flag.
-        if let Some(variant) = name.rsplit('-').next() {
+        if let Some(variant) = name.rsplit('-').next().filter(|_| names) {
             let mut type_name = variant.to_owned();
             type_name[..1].make_ascii_uppercase();
             parts.push(format!(r"(?-i:\b{}\b)", regex::escape(&type_name)));
             parts.push(format!(r"(?-i:\b{}_)", regex::escape(variant)));
             parts.push(format!(r"(?-i:(?:^|[^-\w]){}\b)", regex::escape(variant)));
         }
-        for cpu in target.cpus() {
+        for cpu in target.cpus().into_iter().filter(|_| names) {
             parts.push(format!(r#"["']{}["']"#, regex::escape(cpu)));
         }
         let registers = target
@@ -94,6 +112,12 @@ fn facts() -> Regex {
 /// The one place that names the targets built in, which is its job
 /// (docs/machine/targets.md, the first principle).
 const REGISTRY: &str = "crates/driver/llrm-driver/src/lib.rs";
+
+/// The BC object frontend decodes and lifts x86 machine code: the x86 ISA is
+/// its input format, not a copy of a target's description. It moved from
+/// `crates/target/` (outside this scan) in the layout step B2; its 300-odd
+/// matches are the input's, so it is not scanned.
+const X86_INPUT: &str = "crates/frontends/bcobj/";
 
 fn is_test_file(path: &Path) -> bool {
     // `path` is relative to the root: the root itself may sit under a
@@ -136,6 +160,7 @@ fn files(
         )
             && !is_test_file(path.strip_prefix(root).unwrap())
             && line != REGISTRY
+            && !line.starts_with(X86_INPUT)
         {
             into.push(path);
         }
@@ -147,7 +172,26 @@ fn files(
 fn code(path: &Path) -> Vec<String> {
     let text = fs::read_to_string(path).unwrap_or_default();
     let comment = if path.extension().is_some_and(|ext| ext == "rs") { "//" } else { "#" };
-    code_of(&text, comment)
+    let lines = code_of(&text, comment);
+    if path.extension().is_some_and(|ext| ext == "py") { without_docstrings(lines) } else { lines }
+}
+
+/// `lines` of Python without the text between triple quotes: a docstring is
+/// prose, not code.
+fn without_docstrings(lines: Vec<String>) -> Vec<String> {
+    let mut inside = false;
+    let mut kept = Vec::new();
+    for line in lines {
+        let quotes = line.matches("\"\"\"").count();
+        if inside || quotes > 0 {
+            if quotes % 2 == 1 {
+                inside = !inside;
+            }
+            continue;
+        }
+        kept.push(line);
+    }
+    kept
 }
 
 /// `code`, of the text. A `#[cfg(test)]` takes the item after it (a module, a
@@ -233,15 +277,27 @@ fn test_modules(all: &[PathBuf]) -> std::collections::BTreeSet<PathBuf> {
 }
 
 fn counts(root: &Path) -> BTreeMap<String, usize> {
-    let facts = facts();
+    let (facts, tool_facts) = (facts(), tool_facts());
     let mut all = Vec::new();
     for directory in SHARED {
         files(root, directory, &mut all);
     }
     let in_tests = test_modules(&all);
+    // `LLRM_SHOW_FACTS=a,b` prints the matching lines of the files whose path
+    // holds a or b.
+    let show = std::env::var("LLRM_SHOW_FACTS").ok();
     let mut found = BTreeMap::new();
     for path in all.into_iter().filter(|path| !in_tests.contains(path)) {
+        let facts =
+            if path.strip_prefix(root).is_ok_and(|one| one.starts_with("tools")) { &tool_facts } else { &facts };
         let n = code(&path).iter().map(|line| facts.find_iter(line).count()).sum();
+        if n > 0
+            && show.as_deref().is_some_and(|only| only.split(',').any(|part| path.to_string_lossy().contains(part)))
+        {
+            for line in code(&path).iter().filter(|line| facts.is_match(line)) {
+                eprintln!("{}: {}", path.display(), line.trim());
+            }
+        }
         if n > 0 {
             found.insert(path.strip_prefix(root).unwrap().to_string_lossy().into_owned(), n);
         }
@@ -562,4 +618,33 @@ fn runs_of_this_binary_side_by_side_do_not_share_a_tree() {
         .map(|one| String::from_utf8_lossy(&one.stdout).into_owned())
         .collect();
     assert!(failed.is_empty(), "{} of 6 runs failed:\n{}", failed.len(), failed.join("\n"));
+}
+
+/// `tools/` scripts select a target by name (`--targets m32,m16`,
+/// `-march=i486`, a CPU) and had every such word counted as a copy of a fact:
+/// 92 lines of `tools/pairs/*` and `wat_link.py` failed the test for that. A
+/// name is not a fact; a register, a size or the x86 decoder still is.
+#[test]
+fn tools_may_name_a_target_but_not_hold_its_facts() {
+    let tools = tool_facts();
+    for sample in [
+        r#"FLAGS = {"m32": ["-m32", "-march=i486"]}"#,
+        r#"parser.add_argument("--targets", default="m32,m16")"#,
+        r#"cpu = "486""#,
+        "of = pin.target(\"x86-m32\")",
+    ] {
+        assert!(!tools.is_match(sample), "{sample} is a name a user selects a target by");
+    }
+    for sample in ["\"ax\"", "from iced_x86 import Mnemonic", "SEGMENT = 0x10000", "Register::BX"] {
+        assert!(tools.is_match(sample), "{sample} is a machine fact and must still be counted in tools/");
+    }
+    // The shared code still counts the names.
+    assert!(facts().is_match(r#"cpu = "486""#) && facts().is_match("llrm_x86_m32::M32"));
+}
+
+/// A docstring that says "at m32" was counted as code.
+#[test]
+fn a_python_docstring_is_prose_not_code() {
+    let lines = code_of("\"\"\"Clocks at m32.\n\nand ax.\n\"\"\"\nx = 1\n\"\"\"one line\"\"\"\ny = 2\n", "#");
+    assert_eq!(without_docstrings(lines), ["x = 1", "y = 2"]);
 }

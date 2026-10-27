@@ -6,7 +6,8 @@ int bump(struct pt *p, int by)
     return p->x;
 }
 
-int mix(int n)
+/* noinline and an argument the optimiser cannot see: at -O2 the call folds to a constant and nothing is left to observe. */
+__attribute__((noinline)) int mix(int n)
 {
     int a = 1;
     int b = 2;
@@ -41,7 +42,9 @@ int mix(int n)
     return b + q.y + c + a;
 }
 
+volatile int seed = 3;
+
 int main(void)
 {
-    return mix(3);
+    return mix(seed);
 }

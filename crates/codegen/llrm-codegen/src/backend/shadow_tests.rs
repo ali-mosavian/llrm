@@ -3,7 +3,8 @@ use crate::backend::assemble;
 use crate::backend::cpu::ProfileOrName;
 use crate::backend::shadow::{self, Selector};
 
-const TEXT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+const TEXT: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 define i16 @f(i16 %n) addrspace(1) {
 entry:
   %r = add i16 %n, 1
@@ -24,7 +25,7 @@ fn qb() -> HirAbi {
 /// A copy from a near pointer to a huge one: the DAG path refuses it (the
 /// stepped routine takes two far pointers) while the old selector compiles it.
 const HUGE_COPY: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 declare void @llvm.memcpy.p3.p0.i16(ptr addrspace(3), ptr, i16, i1)
 define void @f(ptr addrspace(3) %a, ptr %b) addrspace(1) {
 entry:
@@ -138,7 +139,8 @@ fn test_isel_only_lists_the_functions_the_dag_path_selects() {
     assert!(!shadow::only_listed(Some(""), "f"));
 }
 
-const DIVIDES: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+const DIVIDES: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 define i64 @f(i64 %a, i64 %b) addrspace(1) {
 entry:
   %q = sdiv i64 %a, %b

@@ -289,7 +289,6 @@ const ROWS: &[Disposition] = &[
         "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
         "",
     ),
-    row(Late, "infer-alignment", Why::Missing, "ablation 0 of 12 IRs", "w-1, 11-09"),
     row(
         Late,
         "loop-unroll",
@@ -360,7 +359,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "inferattrs",
         Why::Executed,
-        "stamp (interprocedural::Stamp): states what a body does, llrm's own form",
+        "inferattrs (inferfunctionattrs.rs, translated), the first module pass; the stamp (interprocedural::Stamp) states what a body does, llrm's own form",
         "",
     ),
     row(
