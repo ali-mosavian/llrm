@@ -277,3 +277,15 @@ fn an_argument_passed_twice_stays_in_the_register_it_came_in() {
     let asm = driver::assembly(include_str!("data/same_argument_twice.ll"), Platform::Darwin, true).expect("lowers");
     assert_eq!(asm.lines().filter(|l| l.trim().starts_with("orr")).count(), 1, "{asm}");
 }
+
+/// `fprintf(F, "hi")`, `fprintf(F, "%c", x)`, `fprintf(F, "%s", s)`, `fputs("hi", F)` and
+/// `fwrite(s, 1, 1, F)` with the result unused stayed `fprintf`, `fputs` and `fwrite` calls the
+/// pin forms as `fwrite`, `fputc` and `fputs`; `fprintf(F, "%d", x)` is not one of them.
+#[test]
+fn an_unused_fprintf_fputs_or_fwrite_is_the_cheaper_routine() {
+    let asm = driver::assembly(include_str!("data/fprintf_fwrite.ll"), Platform::Darwin, true).expect("lowers");
+    assert_eq!(asm.matches("_fprintf").count(), 1, "{asm}");
+    assert_eq!(asm.matches("_fwrite").count(), 2, "{asm}");
+    assert_eq!(asm.matches("_fputc").count(), 2, "{asm}");
+    assert_eq!(asm.matches("_fputs").count(), 1, "{asm}");
+}
