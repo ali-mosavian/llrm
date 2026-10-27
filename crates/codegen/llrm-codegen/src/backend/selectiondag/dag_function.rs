@@ -352,6 +352,17 @@ impl super::emit::Conventions for CallConventions<'_> {
             .collect()
     }
 
+    fn disturbs(
+        &self,
+        callee: Option<&Callee>,
+        clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        match self.contract(callee) {
+            Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            _ => clobbers.clone(),
+        }
+    }
+
     fn clobbers(
         &self,
         callee: Option<&Callee>,
