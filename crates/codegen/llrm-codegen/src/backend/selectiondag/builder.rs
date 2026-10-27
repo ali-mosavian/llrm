@@ -1859,8 +1859,9 @@ impl Builder<'_> {
         Ok(())
     }
 
-    /// Whether every reader of `instruction`'s value is a store of it, as the
-    /// stored operand.
+    /// Whether every reader of `instruction`'s value stores it: a store's
+    /// value, or a call's argument (passed on the stack, so stored, at the
+    /// argument's own type).
     fn read_only_by_stores(
         &self,
         instruction: &llrm_mir::module::Instruction,
@@ -1868,12 +1869,14 @@ impl Builder<'_> {
         let Some(result) = instruction.result else { return false };
         let users = self.function.users(result);
         !users.is_empty()
-            && users
-                .iter()
-                .all(|one| one.index == 0 && matches!(
-                    self.function.instruction(one.user).opcode,
-                    Opcode::Store { .. }
-                ))
+            && users.iter().all(|one| {
+                let user = self.function.instruction(one.user);
+                match user.opcode {
+                    Opcode::Store { .. } => one.index == 0,
+                    Opcode::Call(_) => (one.index as usize) + 1 < user.operands.len(),
+                    _ => false,
+                }
+            })
     }
 
     /// `fpround`: the value stored to a stack slot of its own type and loaded

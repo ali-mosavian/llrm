@@ -665,3 +665,37 @@ fn a_round_read_only_by_stores_is_not_stored_to_a_slot_first() {
     };
     assert_eq!(count(ROUNDED_STORE), count(PLAIN_STORE));
 }
+
+const ROUNDED_ARGUMENT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g(double)
+define void @f(double %x) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  %r = fpround double %a to double
+  call void @g(double %r)
+  ret void
+}
+";
+
+const PLAIN_ARGUMENT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @g(double)
+define void @f(double %x) {
+entry:
+  %a = fadd double %x, 1.000000e+00
+  call void @g(double %a)
+  ret void
+}
+";
+
+/// A double passed on the stack is stored there, which rounds it: the same
+/// slot round trip came before `B$PER8`'s argument (range_power_digits.bas).
+#[test]
+fn a_round_read_only_as_a_call_argument_is_not_stored_to_a_slot_first() {
+    let count = |text: &str| {
+        let module = llrm_mir::parse::module(text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("{}", e.0));
+        done.body.insns().len()
+    };
+    assert_eq!(count(ROUNDED_ARGUMENT), count(PLAIN_ARGUMENT));
+}
