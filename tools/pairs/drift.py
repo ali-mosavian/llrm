@@ -10,6 +10,7 @@ Each commit's llrm-llc is `PAIRS/sbp-<sha>/dist/llrm-llc` (made by `pair_build.s
 from __future__ import annotations
 
 import argparse
+import hashlib
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -34,6 +35,14 @@ def grown(before: str, after: str) -> list[tuple[str, int, int, str]]:
             text = f"{name}: ins {ins0}->{ins1} ({ins1 - ins0:+d}, pin {pin}), nopad {free0}->{free1} ({free1 - free0:+d}, pin {pin_free})"
             found.append((name, ins1 - ins0, free1 - free0, text))
     return sorted(found, key=lambda row: (-row[1], -row[2], row[0]))
+
+
+def header(shas: list[str], llcs: list[Path]) -> list[str]:
+    """What produced the numbers: the pindiff path is llrm-llc on clang's un-optimised IR, not the product's llrm-c, and a row from it is not the product's."""
+    lines = ["# instrument: llrm-llc via pindiff (clang IR, no passes; ours = llrm-llc's own pipeline, pin = its opt + llc), NOT llrm-c: a row here is not the product path's"]
+    for side, (sha, llc) in zip(("before", "after"), zip(shas, llcs)):
+        lines.append(f"# {side}: {sha} llrm-llc md5 {hashlib.md5(llc.read_bytes()).hexdigest()[:12]}")
+    return lines
 
 
 def llc_of(sha: str, pairs: Path) -> Path:
@@ -74,6 +83,7 @@ def main(argv: list[str]) -> int:
     configs = args.configs.split(",")
     with ThreadPoolExecutor(args.jobs) as pool:
         tables = list(pool.map(lambda job: table_of(llcs[job[0]], job[1], args.work), [(side, config) for config in configs for side in (0, 1)]))
+    print("\n".join(header(args.shas, llcs)))
     any_grown = False
     for number, config in enumerate(configs):
         before, after = tables[2 * number], tables[2 * number + 1]

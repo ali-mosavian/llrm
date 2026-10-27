@@ -256,3 +256,16 @@ def test_drift_lists_only_rows_that_grew_the_most_instructions_first():
     assert [name for name, *_ in listed] == ["crc", "sort"]
     assert listed[0][1:3] == (59, 170)
     assert drift.grown(after, before) == [("gcd", 5, 20, "gcd: ins 45->50 (+5, pin 69), nopad 100->120 (+20, pin 191)")]
+
+
+def test_drift_header_names_the_binary_the_ir_and_the_md5s(tmp_path):
+    """crc read 129 instructions on the pindiff path and 72 on the product's (2026-10-27): the table must say which instrument made it."""
+    drift = load("drift")
+    before, after = tmp_path / "a", tmp_path / "b"
+    before.write_bytes(b"one")
+    after.write_bytes(b"two")
+    lines = drift.header(["aaa", "bbb"], [before, after])
+    assert "llrm-llc" in lines[0] and "NOT llrm-c" in lines[0] and "clang IR" in lines[0]
+    assert lines[1] == "# before: aaa llrm-llc md5 f97c5d29941b"
+    assert lines[2] == "# after: bbb llrm-llc md5 b8a9f715dbb6"
+
