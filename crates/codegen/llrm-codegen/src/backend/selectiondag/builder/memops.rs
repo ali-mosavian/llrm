@@ -661,7 +661,11 @@ impl Builder<'_> {
         }
         let chain = match which {
             Intrinsic::MemCpy | Intrinsic::MemMove => {
-                let limit = if opt_size { 4 } else { 8 };
+                let limit = match (opt_size, self.target.memcpy_moves_size) {
+                    (true, 1..) => self.target.memcpy_moves_size,
+                    (true, _) => 4,
+                    _ => 8,
+                };
                 // DEVIATE SD225 (real mode): tuned for size, a copy of more
                 // than `limit` pieces (dwords, then a word and
                 // a byte: no overlap) is string moves; the pin
@@ -730,7 +734,11 @@ impl Builder<'_> {
                 }
             }
             _ => {
-                let limit = if opt_size { 8 } else { 16 };
+                let limit = match (opt_size, self.target.memset_stores_size) {
+                    (true, 1..) => self.target.memset_stores_size,
+                    (true, _) => 8,
+                    _ => 16,
+                };
                 let inline = match constant {
                     Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
                     None => None,
