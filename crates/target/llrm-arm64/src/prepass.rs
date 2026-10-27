@@ -1,4 +1,5 @@
-//! Machine-level redundancy removal before registers are assigned: common
+//! Machine-level redundancy removal before registers are assigned: dead
+//! operations (`DeadMachineInstructionElim`), common
 //! subexpression elimination over the dominator tree (`MachineCSE`) and the
 //! hoisting of loop-invariant definitions to the loop's preheader
 //! (`MachineLICM`), for the values selection makes at each use: constants,
@@ -170,7 +171,62 @@ fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
     count
 }
 
+/// Whether `op` only computes registers, so that it can go when none is read.
+/// Loads stay (a volatile load is not told apart), and so does anything that
+/// sets the flags.
+fn removable(op: &Op) -> bool {
+    match op {
+        Op::Imm { .. } | Op::FrameAddress { .. } | Op::Copy { .. } => true,
+        Op::I(inst) => match inst {
+            Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. } => {
+                !op.set_flags
+            }
+            Inst::LogicImm { op, .. } | Inst::LogicShifted { op, .. } => *op != Logic::Ands,
+            Inst::MoveWide { op, .. } => *op != Wide::Keep,
+            Inst::AddPageOffset { .. }
+            | Inst::BitfieldMove { .. }
+            | Inst::Extract { .. }
+            | Inst::Divide { .. }
+            | Inst::OneSource { .. }
+            | Inst::ThreeSource { .. }
+            | Inst::CondSelect { .. }
+            | Inst::Adr { .. }
+            | Inst::FpUnary { .. }
+            | Inst::FpBinary { .. }
+            | Inst::FpFused { .. }
+            | Inst::FpSelect { .. }
+            | Inst::FpMoveImm { .. }
+            | Inst::FpToFp { .. }
+            | Inst::FpInt { .. } => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Operations whose every result is a virtual register nothing reads, until
+/// none is left.
+fn dead_code(function: &mut MFunc) {
+    loop {
+        let read: HashSet<Reg> =
+            function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
+        let mut changed = false;
+        for block in &mut function.blocks {
+            let before = block.ops.len();
+            block.ops.retain(|op| {
+                let (defs, _) = op.defs_and_uses();
+                !(removable(op) && !defs.is_empty() && defs.iter().all(|one| one.is_virtual() && !read.contains(one)))
+            });
+            changed |= block.ops.len() != before;
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
 pub fn run(function: &mut MFunc) {
+    dead_code(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
@@ -451,7 +507,14 @@ mod tests {
             })
         };
         let mut function = function();
-        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), branch_to("loop")];
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+            })
+        };
+        function.blocks[0].ops =
+            vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
         run(&mut function);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");

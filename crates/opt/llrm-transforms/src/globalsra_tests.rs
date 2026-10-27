@@ -172,3 +172,31 @@ b0:
     assert!(!after.contains("ptr @s"), "{after}");
     assert_eq!(after.matches("alloca i16").count(), 1, "{after}");
 }
+
+/// `processInternalGlobal` localizes any single-value type: a float or a
+/// pointer one body writes before it reads is a stack slot, not only an integer
+/// (mac2's float_in_memory_loop kept `acc` and `step` in memory).
+#[test]
+fn a_float_and_a_pointer_a_body_writes_before_it_reads_are_stack_slots() {
+    let (after, changed) = splitted(
+        "@acc = internal global float 0.0
+@p = internal global ptr null
+@buf = internal global [4 x i8] zeroinitializer
+
+define i8 @f() norecurse {
+b0:
+  store float 2.0, ptr @acc
+  store ptr @buf, ptr @p
+  %a = load float, ptr @acc
+  %q = load ptr, ptr @p
+  %b = load i8, ptr %q
+  %c = uitofp i8 %b to float
+  %r = fadd float %a, %c
+  %i = fptoui float %r to i8
+  ret i8 %i
+}
+",
+    );
+    assert!(changed, "{after}");
+    assert!(!after.contains("ptr @acc") && !after.contains("ptr @p,") && after.contains("alloca float"), "{after}");
+}

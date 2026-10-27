@@ -277,3 +277,97 @@ fn an_argument_passed_twice_stays_in_the_register_it_came_in() {
     let asm = driver::assembly(include_str!("data/same_argument_twice.ll"), Platform::Darwin, true).expect("lowers");
     assert_eq!(asm.lines().filter(|l| l.trim().starts_with("orr")).count(), 1, "{asm}");
 }
+
+/// `fprintf(F, "hi")`, `fprintf(F, "%c", x)`, `fprintf(F, "%s", s)`, `fputs("hi", F)` and
+/// `fwrite(s, 1, 1, F)` with the result unused stayed `fprintf`, `fputs` and `fwrite` calls the
+/// pin forms as `fwrite`, `fputc` and `fputs`; `fprintf(F, "%d", x)` is not one of them.
+#[test]
+fn an_unused_fprintf_fputs_or_fwrite_is_the_cheaper_routine() {
+    let asm = driver::assembly(include_str!("data/fprintf_fwrite.ll"), Platform::Darwin, true).expect("lowers");
+    assert_eq!(asm.matches("_fprintf").count(), 1, "{asm}");
+    assert_eq!(asm.matches("_fwrite").count(), 2, "{asm}");
+    assert_eq!(asm.matches("_fputc").count(), 2, "{asm}");
+    assert_eq!(asm.matches("_fputs").count(), 1, "{asm}");
+}
+
+/// `return fn(x + 1)` through a pointer was `blr` between a frame made and taken down; the pin
+/// jumps (`br`), its target held where the epilogue leaves it.
+#[test]
+fn a_tail_call_through_a_pointer_is_a_register_jump() {
+    let asm = driver::assembly(include_str!("data/tail_indirect.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.contains("br x") && !asm.contains("blr") && !asm.contains("stp"), "{asm}");
+}
+
+/// `x / y` and `x % y` in different blocks each divided: two `sdiv` where the pin hoists the
+/// division and takes the remainder as `x - (x / y) * y` (`div_constants`: 2228 instructions
+/// against 1424, -147 with the pass). Waits for DivRemPairs (#5085).
+#[test]
+#[ignore = "needs DivRemPairs (#5085)"]
+fn a_division_and_a_remainder_of_the_same_operands_share_one_divide() {
+    let asm = driver::assembly(include_str!("data/div_rem_pair.ll"), Platform::Darwin, true).expect("lowers");
+    assert_eq!(asm.matches("sdiv").count(), 1, "{asm}");
+}
+
+/// `llvm.experimental.memset.pattern` (the pin's idiom for an `i16` fill
+/// loop) reached selection unexpanded and failed the build: scroll,
+/// fill_nest and loop_fusion produced no object.
+#[test]
+fn a_memset_pattern_becomes_a_store_loop() {
+    let asm = driver::assembly(include_str!("data/memset_pattern.ll"), Platform::Darwin, true)
+        .expect("the intrinsic lowers");
+    assert!(asm.contains("strh"), "{asm}");
+}
+
+/// A constant several calls use was made once and kept in a callee-saved
+/// register (`movz x19, #0` and a save and restore of `x19`, a `mov` at each
+/// use); with every callee-saved register taken it went through a stack slot
+/// instead. The pin makes it again at each use: loop_fusion's `main` was 1.84x.
+#[test]
+fn a_constant_used_by_several_calls_is_made_at_each_use() {
+    let asm = driver::assembly(include_str!("data/constants_across_calls.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("x19"), "{asm}");
+    assert_eq!(asm.matches("movz x0, #0").count(), 2, "{asm}");
+}
+
+/// An add whose only reader the mid-end removed (a store to a write-only
+/// global) stayed in the machine code: loop_fusion's loops each computed
+/// `i + 200` for nothing.
+#[test]
+fn an_unread_result_is_not_computed() {
+    let asm = driver::assembly(include_str!("data/dead_after_writeonly.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("#200"), "{asm}");
+}
+
+/// The loads that fed a store to a write-only global stayed after the store
+/// was removed: byvalue_struct_address kept five `ldr` the pin does not have.
+#[test]
+fn the_operands_of_a_removed_store_go_with_it() {
+    let asm = driver::assembly(include_str!("data/loads_of_written_only_global.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("ldr"), "{asm}");
+}
+
+/// Two internal globals one function stores before it loads (`acc = 0.0`
+/// ahead of `acc += step`) stayed in memory: float_in_memory_loop kept the
+/// loads and stores of both, 1.59x the pin, which makes them stack slots and
+/// promotes them away.
+#[test]
+#[ignore = "LICM promotes acc before globalsra runs: a load of it precedes the dominating store (float_in_memory_loop, 108 B against the pin's 68)"]
+fn a_global_dead_on_entry_to_its_only_function_leaves_memory() {
+    let asm = driver::assembly(include_str!("data/global_dead_on_entry.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("adrp"), "{asm}");
+}
+
+/// The pin's clang writes `llvm.lifetime.start(ptr)`, without the size; the
+/// passes read `(size, ptr)`, so every marker looked like a call that keeps
+/// its object, and a 64 KB array nothing needed stayed on the stack:
+/// wide_frame was 824 bytes against the pin's 36.
+#[test]
+fn a_lifetime_marker_without_a_size_does_not_keep_its_object() {
+    let asm = driver::assembly(include_str!("data/lifetime_one_argument.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(asm.lines().count() < 40, "{asm}");
+}

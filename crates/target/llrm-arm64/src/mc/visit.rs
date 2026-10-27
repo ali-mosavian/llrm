@@ -155,7 +155,7 @@ impl Inst {
             }
             Inst::Adr { rd, .. } => f(G(rd), Role::Def),
             Inst::Prefetch { base, .. } => f(G(base), Role::Use),
-            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } => {
+            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } | Inst::VectorMov { rd, rn } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }

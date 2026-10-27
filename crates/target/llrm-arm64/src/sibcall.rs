@@ -7,11 +7,15 @@
 //! and the `Return`; the copies and the call become a `Return` that carries the
 //! callee and the argument registers.
 //!
-//! DEVIATE 1: the callee is a symbol and takes no stack arguments (the call is
-//! only marked then), so the caller's incoming argument area is never needed.
-//! Exit: stack arguments in the caller's own area and an indirect callee in
-//! `x16`/`x17`.
+//! An indirect callee is moved to `x9` first: the epilogue restores the
+//! callee-saved registers and uses `x16`/`x17` itself, and `x9` is neither
+//! (the pin uses `x16`/`x17` and keeps them free of its epilogue).
+//!
+//! DEVIATE 1: the call takes no stack arguments (it is only marked then), so
+//! the caller's incoming argument area is never needed. Exit: stack arguments
+//! in the caller's own area.
 
+use crate::mc::inst::Gpr;
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, MFunc, Op};
 
@@ -34,20 +38,28 @@ fn origin(
         .unwrap_or(register)
 }
 
+/// Where an indirect callee waits for the epilogue.
+const TARGET: Gpr = Gpr(9);
+
 pub fn run(function: &mut MFunc) {
     for block in &mut function.blocks {
         let Some(Op::Return { uses, tail: None }) = block.ops.last() else { continue };
         let last = block.ops.len() - 1;
         let Some(call) = block.ops[..last].iter().rposition(|op| !matches!(op, Op::Copy { .. })) else { continue };
-        let Op::Call { callee: Callee::Symbol(callee), uses: arguments, defs, tail: true } = &block.ops[call] else {
-            continue;
-        };
+        let Op::Call { callee, uses: arguments, defs, tail: true } = &block.ops[call] else { continue };
         if uses.len() != defs.len() || uses.iter().zip(defs).any(|(u, def)| origin(&block.ops, call + 1, last, *u) != *def) {
             continue;
         }
-        let jump = Op::Return { uses: arguments.clone(), tail: Some(Callee::Symbol(callee.clone())) };
+        let (callee, arguments) = (callee.clone(), arguments.clone());
         block.ops.truncate(call);
-        block.ops.push(jump);
+        let target = match callee {
+            Callee::Register(register) => {
+                block.ops.push(Op::Copy { dst: Reg::Gpr(TARGET), src: Reg::Gpr(register) });
+                Callee::Register(TARGET)
+            }
+            symbol => symbol,
+        };
+        block.ops.push(Op::Return { uses: arguments, tail: Some(target) });
     }
     function.calls = function.blocks.iter().flat_map(|block| &block.ops).any(|op| matches!(op, Op::Call { .. }));
 }

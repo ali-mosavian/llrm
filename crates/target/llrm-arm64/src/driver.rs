@@ -159,14 +159,14 @@ pub fn optimized_at(
     let mut options = level.options();
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
-    // The selector has no pattern store: it is a loop of single stores, as for the DAG selectors.
-    program.modules.iter_mut().try_for_each(llrm_codegen::backend::memsetpattern::expanded)
+    // The pin's PreISelIntrinsicLowering: the selector never sees the intrinsic.
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)
 }
 
 /// The routines the C link of this target resolves, by their IR names (the
 /// object writer decorates them): what `SimplifyLibCalls` may form.
 fn c_library() -> Vec<llrm_mir::libfunc::Routine> {
-    ["puts", "putchar"]
+    ["puts", "putchar", "fwrite", "fputc", "fputs"]
         .into_iter()
         .map(|name| llrm_mir::libfunc::Routine { standard: name, symbol: name.to_owned(), calling_convention: 0 })
         .collect()

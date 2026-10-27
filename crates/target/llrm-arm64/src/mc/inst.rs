@@ -544,6 +544,11 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
     },
+    /// `mov vd.16b, vn.16b` (`orr`): all 128 bits, where `FpUnary::Mov` copies 64.
+    VectorMov {
+        rd: Vreg,
+        rn: Vreg,
+    },
     FpBinary {
         op: FpBinary,
         size: FpSize,
