@@ -131,6 +131,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         block_at: &HashMap::default(),
         frame: &frame,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        opt_size: false,
         call_alignment: 1,
         map: &map,
         names: &names,

@@ -198,6 +198,10 @@ impl llrm_target::Target for M32 {
         CALLING.native().frame_enter
     }
 
+    fn frame_wrap_split_size(&self) -> bool {
+        CALLING.native().frame_wrap_split_size
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,

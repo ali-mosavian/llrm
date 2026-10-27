@@ -89,3 +89,15 @@ def test_codegen_names_only_the_format_crates_that_are_not_a_targets():
     codegen = next(p for p in workspace() if p["name"] == "llrm-codegen")
     formats = {d["name"] for d in codegen["dependencies"] if d["kind"] is None and d["name"].startswith(("llrm-elf", "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-omf", "llrm-dwarf"))}
     assert formats <= {"llrm-omf", "llrm-dwarf"}, sorted(formats)
+
+
+def test_the_workspace_members_follow_the_layer_glob():
+    """Members were `crates/*/llrm-*` plus three frontends and a runtime crate named one by one; a crate in a layer directory that matched none was silently outside the workspace."""
+    import tomllib
+
+    members = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]["members"]
+    assert members == [".", "crates/*/*", "runtime/qb"]
+    metadata = json.loads(subprocess.run(["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=ROOT, capture_output=True, text=True, check=True).stdout)
+    inside = {Path(p["manifest_path"]).parent.relative_to(ROOT).as_posix() for p in metadata["packages"]}
+    layers = {p.parent.relative_to(ROOT).as_posix() for p in (ROOT / "crates").glob("*/*/Cargo.toml")}
+    assert layers <= inside, sorted(layers - inside)
