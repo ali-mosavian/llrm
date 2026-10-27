@@ -926,6 +926,10 @@ impl llrm_mir::target::Machine for LoweredTarget {
         self.machine.lowering()
     }
 
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        self.machine.library()
+    }
+
     fn registers(&self) -> i64 {
         self.machine.registers()
     }

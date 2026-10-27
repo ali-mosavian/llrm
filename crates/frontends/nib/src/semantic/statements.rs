@@ -554,16 +554,10 @@ impl<'a> FunctionCompiler<'a> {
         else_branch: &[Statement],
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let condition = self.expression(condition, Some(TypeName::Bool))?;
-        self.drop_temporaries();
         let then_block = self.block();
         let else_block = self.block();
         let join_block = self.block();
-        self.terminate(hir::Terminator {
-            kind: "branch",
-            operands: vec![required(condition, span)?],
-            targets: vec![then_block, else_block],
-        });
+        self.branch_on(condition, then_block, else_block, span)?;
 
         self.current = then_block;
         self.scoped(then_branch)?;
@@ -586,6 +580,42 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Branches to `then_block` where `condition` holds and to `else_block`
+    /// where it does not. `and`, `or` and `not` branch on their operands
+    /// directly (clang's `EmitBranchOnBoolExpr`) instead of making a bool
+    /// to branch on, which leaves each test its own edge to weigh.
+    fn branch_on(
+        &mut self,
+        condition: &Expr,
+        then_block: u32,
+        else_block: u32,
+        span: Span,
+    ) -> Result<(), Diagnostic> {
+        match condition {
+            Expr::Binary { op: op @ (BinaryOp::And | BinaryOp::Or), left, right, .. } => {
+                let next = self.block();
+                if *op == BinaryOp::And {
+                    self.branch_on(left, next, else_block, span)?;
+                } else {
+                    self.branch_on(left, then_block, next, span)?;
+                }
+                self.current = next;
+                self.branch_on(right, then_block, else_block, span)
+            }
+            Expr::Unary { op: UnaryOp::Not, operand, .. } => self.branch_on(operand, else_block, then_block, span),
+            _ => {
+                let condition = self.expression(condition, Some(TypeName::Bool))?;
+                self.drop_temporaries();
+                self.terminate(hir::Terminator {
+                    kind: "branch",
+                    operands: vec![required(condition, span)?],
+                    targets: vec![then_block, else_block],
+                });
+                Ok(())
+            }
+        }
+    }
+
     pub(super) fn while_statement(
         &mut self,
         condition: &Expr,
@@ -604,13 +634,7 @@ impl<'a> FunctionCompiler<'a> {
         if endless {
             self.terminate(jump(body_block));
         } else {
-            let condition = self.expression(condition, Some(TypeName::Bool))?;
-            self.drop_temporaries();
-            self.terminate(hir::Terminator {
-                kind: "branch",
-                operands: vec![required(condition, span)?],
-                targets: vec![body_block, exit_block],
-            });
+            self.branch_on(condition, body_block, exit_block, span)?;
         }
 
         self.current = body_block;

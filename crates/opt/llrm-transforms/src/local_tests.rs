@@ -926,6 +926,36 @@ b1:
     assert_eq!(function.debug_records().len(), 1);
 }
 
+/// With instructions in the merged block the records before the old branch
+/// stand before the first of them, not after all of them: observed.c's `mix`
+/// at -O2 -g had every record of every variable past the last instruction, so
+/// gdb read `a`, `b`, `c` and `i` as optimised out where the pin says them.
+#[test]
+fn merging_keeps_the_records_of_the_old_branch_before_the_moved_instructions() {
+    let (merged, module) = merged(
+        "define i16 @f(i16 %x) {
+b0:
+  #dbg_value(i16 %x, !0)
+  br label %b1
+
+b1:
+  %b = mul i16 %x, 2
+  %c = add i16 %b, 1
+  ret i16 %c
+}
+
+!0 = !{!\"v\"}
+",
+        "b1",
+        false,
+    );
+    assert!(merged);
+    let (_, _, function) = module.functions().next().expect("@f");
+    let first = function.iter_block(function.entry().expect("entry")).next().expect("an instruction");
+    assert!(function.debug_records().iter().all(|one| one.before == first), "{:?}", function.debug_records());
+    assert_eq!(function.debug_records().len(), 1);
+}
+
 /// A block its predecessor alone enters joins it: the phi is its one value,
 /// the instructions follow the predecessor's, and the block is gone.
 #[test]
