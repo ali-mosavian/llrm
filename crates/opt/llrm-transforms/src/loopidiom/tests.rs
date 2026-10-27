@@ -411,7 +411,7 @@ fn test_a_loop_that_shifts_a_buffer_the_safe_way_is_a_memmove() {
 /// tests/run/huge/copyw printed 732590080 for 427417504 once LoopRotate was on.
 #[test]
 fn test_a_copy_of_a_huge_pointer_is_not_a_memcpy() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
 
 @a = addrspace(3) global [40000 x i16] zeroinitializer
 @b = addrspace(3) global [40000 x i16] zeroinitializer

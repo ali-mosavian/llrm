@@ -128,7 +128,7 @@ fn a_call_names_the_registers_it_takes_arguments_in() {
     assert!(call.requires.iter().all(|(held, _)| call.uses.contains(&held.value)));
 }
 
-const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1005 i16 @f(i16 %a, i16 %b) addrspace(1) {
 entry:
   %s = add i16 %a, %b
@@ -257,7 +257,7 @@ fn va_start_finds_the_first_variadic_argument() {
     assert!(why.is_none(), "{why:?}");
 }
 
-const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16)
 define cc 1005 i16 @f(i16 %a) addrspace(1) {
 entry:
@@ -491,7 +491,7 @@ fn a_runtime_call_answering_in_registers_says_so() {
     assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
-const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
   invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
@@ -526,7 +526,7 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
 }
 
-const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {
 entry:
@@ -552,7 +552,7 @@ fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
     assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
 }
 
-const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
 entry:
@@ -572,7 +572,7 @@ fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @g = internal global i16 0
 define cc 1000 void @f(i16 %x) addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
@@ -600,7 +600,7 @@ fn a_landing_pad_reading_an_entry_value_is_refused() {
 }
 
 const RUNTIME_CALL_MORE_ARGS_THAN_DECLARED: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f(i16 %a) addrspace(1) {
 entry:
   call cc 1000 addrspace(1) void (i16, i16, i16) @llrm.qb.B$RDIM(i16 %a, i16 1, i16 2)
@@ -688,7 +688,7 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
 
-const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i8 @llrm.ia16.in.i8(i16)
 declare void @llrm.ia16.out.i8(i16, i8)
 define i8 @f(i16 %p) {
@@ -717,7 +717,7 @@ fn port_writes_and_reads_stay_in_order() {
     assert_eq!(names, ["out", "in"]);
 }
 
-const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
   %0 = invoke cc 1000 addrspace(1) ptr @llrm.qb.B$FCHR(i16 65) to label %next unwind label %landing
@@ -765,7 +765,7 @@ fn a_fixed_point_divide_is_selected() {
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
 
-const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 
 @_inbuf = global [512 x i8] zeroinitializer
 @_inpos = global [2 x i8] zeroinitializer
@@ -824,7 +824,7 @@ fn a_long_result_truncated_to_an_int_does_not_read_dx() {
     }
 }
 
-const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 void @g(i16, i16, i16)
 define cc 1005 void @f(i16 %p) {
   %q = add i16 %p, 100
@@ -878,7 +878,7 @@ fn a_call_of_a_constant_expression_calls_its_value() {
 #[test]
 fn a_call_of_a_basic_routine_keeps_si_and_di() {
     use llrm_lir::registers::RegId;
-    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) {
 entry:
   call cc 1000 addrspace(1) void @user(i16 1)
@@ -934,7 +934,8 @@ declare cc 1000 void @user(i16) addrspace(1)
     assert!(high.contains(&RegId::ESI) && high.contains(&RegId::EDI), "{high:?}");
 }
 
-const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16, i16, i16, i32, i32) addrspace(1)
 define cc 1005 i16 @f(i16 %file, ptr addrspace(1) %p) addrspace(1) {
 entry:
@@ -959,7 +960,7 @@ fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     assert!(!names.contains(&"shl"), "no merge of the halves: {names:?}");
 }
 
-const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1002 i16 @w(i16)
 define i16 @f(i16 %a) {
 entry:

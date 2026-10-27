@@ -3785,7 +3785,7 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: RegId::BP,
+                    through: self.arch.frame_register(),
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -6499,10 +6499,10 @@ impl Selector<'_, '_, '_> {
                     // callee reads the next argument 12 bytes on.
                     let slot = (i64::from(size) + self.arch.stack_slot_bytes() - 1) / self.arch.stack_slot_bytes()
                         * self.arch.stack_slot_bytes();
-                    let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+                    let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
                     let count = Loc::Imm(Imm { value: slot, width: 2, address: None });
                     out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp, count])));
-                    let top = Mem { through: RegId::SP, disp_width: 0, ..Mem::new(None, size) };
+                    let top = Mem { through: self.arch.stack_pointer(), disp_width: 0, ..Mem::new(None, size) };
                     out.push(insn(
                         at,
                         semantics(Operation::FloatStore, "fstp", vec![Loc::Mem(top)], vec![Loc::Held(held)]),
@@ -6850,7 +6850,7 @@ impl Selector<'_, '_, '_> {
             Callee::Indirect(_) => {}
         }
         if contract.caller_cleanup > 0 {
-            let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+            let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
             let count = Loc::Imm(Imm { value: contract.caller_cleanup, width: 2, address: None });
             out.push(insn(at, semantics(Operation::Binary, "add", vec![sp.clone()], vec![sp, count])));
         }
@@ -6897,7 +6897,7 @@ impl Selector<'_, '_, '_> {
         let bytes = i64::from(byval_bytes(self.module, &self.layout, self.arch, aggregate)?);
         let copy = self.layout.alloc_size(self.types(), aggregate) as i64;
         let from = self.pointer(source)?;
-        let sp = Loc::Reg(Reg { register: RegId::SP, width: 2 });
+        let sp = Loc::Reg(Reg { register: self.arch.stack_pointer(), width: self.address_bytes() });
         let count = Loc::Imm(Imm { value: bytes, width: if bytes > 0x7FFF { 4 } else { 2 }, address: None });
         out.push(insn(at, semantics(Operation::Binary, "sub", vec![sp.clone()], vec![sp.clone(), count])));
         let base = self.fresh_held(self.address_bytes());
