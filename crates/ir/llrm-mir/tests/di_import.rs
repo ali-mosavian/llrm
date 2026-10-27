@@ -65,3 +65,14 @@ fn test_a_defined_function_becomes_a_procedure_and_its_declares_name_variables()
     assert!(variables.iter().all(|one| one.scope == "dist"));
     assert_eq!(variables.iter().filter(|one| one.parameter).count(), 2);
 }
+
+/// The unit's `!DIFile` was dropped: an object named its source after the
+/// `.ll` file it was built from (`dbgfix.ll`), with no checksum.
+#[test]
+fn test_the_units_file_name_and_md5_are_kept() {
+    let module = imported(include_str!("clang/dbg.ll"));
+    assert_eq!(
+        debuginfo::file(&module),
+        Some(("dbg.c".to_owned(), Some("edf9135163a14d7b5141ba381daf995b".to_owned())))
+    );
+}
