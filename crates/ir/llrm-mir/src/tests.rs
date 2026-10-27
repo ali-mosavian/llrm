@@ -176,8 +176,8 @@ fn initializes_is_read_and_printed_as_llvm_spells_it() {
     assert_eq!(round(text), text);
 }
 
-/// `appending` was refused: "expected `global` or `constant`, found `appending`"
-/// (every `__attribute__((constructor))` of the QB runtime).
+/// `appending` was refused: "expected `global` or `constant`, found
+/// `appending`" (every `__attribute__((constructor))` of the QB runtime).
 #[test]
 fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
     let text = "@llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 65535, ptr @f, ptr null }]\n\ndefine void @f() {\n  ret void\n}\n";

@@ -101,7 +101,8 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
         assert!(matches!(symbol.definition, llrm_object::Definition::Defined { .. }), "{name}");
     }
     assert!(object.symbols.iter().all(|symbol| !symbol.name.contains("llvm.global_ctors")));
-    // dyld runs a `__DATA,__mod_init_func` section (type S_MOD_INIT_FUNC_POINTERS, 9).
+    // dyld runs a `__DATA,__mod_init_func` section (type
+    // S_MOD_INIT_FUNC_POINTERS, 9).
     let file = driver::object_file(include_str!("data/global_ctors.ll"), Platform::Darwin, "ctors.o", true).unwrap();
     let at = file.windows(16).position(|w| w.starts_with(b"__mod_init_func\0")).expect("the section name");
     let flags = u32::from_le_bytes(file[at + 64..at + 68].try_into().unwrap());
