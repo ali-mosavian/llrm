@@ -239,13 +239,17 @@ pub(crate) fn _placed(
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
-    // A value read as undef has no register of its own: any one will do
+    // A value read as undef reads nothing, so the register it was given does
+    // not matter: it takes the one the instruction defines (`sbb r, r`, any
+    // tied read undef: `Expand2AddrUndef`), else any register of the class
     // (`VirtRegRewriter` gives an undef operand the first of its class).
     let undef_held;
-    let held = if one.undefs.iter().any(|value| !held.contains_key(value)) {
+    let ignored = |value: &u32| !one.uses.contains(value);
+    let held = if one.undefs.iter().any(|value| ignored(value)) {
         let mut more = held.clone();
-        for value in &one.undefs {
-            more.entry(*value).or_insert(classes.available[0]);
+        let own = one.defines.iter().find_map(|value| held.get(value)).copied();
+        for value in one.undefs.iter().filter(|value| ignored(value)) {
+            more.insert(*value, own.or_else(|| held.get(value).copied()).unwrap_or(classes.available[0]));
         }
         undef_held = more;
         &undef_held
