@@ -357,7 +357,7 @@ impl Selector<'_, '_, '_> {
             Operand::Constant(id) => match self.module.context.get(id).kind {
                 ConstantKind::Int(_) | ConstantKind::Null | ConstantKind::Zero => 2,
                 ConstantKind::Poison | ConstantKind::Undef => 3,
-                ConstantKind::Float(_) => 4,
+                ConstantKind::Float(_) | ConstantKind::Float80(_) => 4,
                 _ => 5,
             },
         }
@@ -1374,15 +1374,16 @@ impl Selector<'_, '_, '_> {
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
         // Poison is any value: +0.0.
-        let bits = match self.module.context.get(id).kind {
-            ConstantKind::Float(bits) => bits,
-            ConstantKind::Poison | ConstantKind::Undef => 0,
+        let (bits, extended) = match self.module.context.get(id).kind {
+            ConstantKind::Float(bits) => (bits, None),
+            ConstantKind::Float80(bits) => (0, Some(bits)),
+            ConstantKind::Poison | ConstantKind::Undef => (0, None),
             _ => return refuse("a float constant of no bits"),
         };
         // An extended float is its 10 bytes: a dword, a dword and a word, as a
         // global's initializer lays them down.
         if size == 10 {
-            let image = llrm_mir::types::x87_extended(bits);
+            let image = extended.map_or_else(|| llrm_mir::types::x87_extended(bits), llrm_mir::types::x87_image);
             for (by, width) in [(0_usize, 4_u32), (4, 4), (8, 2)] {
                 let value =
                     image[by..by + width as usize].iter().rev().fold(0_i64, |acc, byte| acc << 8 | i64::from(*byte));
