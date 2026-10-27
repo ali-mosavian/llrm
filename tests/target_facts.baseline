@@ -26,7 +26,7 @@
 2 crates/codegen/llrm-codegen/src/backend/debuginfo.rs
 2 crates/codegen/llrm-codegen/src/backend/fixupbw.rs
 3 crates/codegen/llrm-codegen/src/backend/fixupleas.rs
-3 crates/codegen/llrm-codegen/src/backend/floatassign.rs
+2 crates/codegen/llrm-codegen/src/backend/floatassign.rs
 1 crates/codegen/llrm-codegen/src/backend/frame.rs
 1 crates/codegen/llrm-codegen/src/backend/framefree.rs
 16 crates/codegen/llrm-codegen/src/backend/inline_asm.rs
@@ -46,7 +46,6 @@
 1 crates/codegen/llrm-codegen/src/backend/rewriter.rs
 16 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs
 14 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
-22 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/switch.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/tailcall.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs
@@ -68,7 +67,7 @@
 1 crates/codegen/llrm-codegen/src/greedy/remat.rs
 2 crates/codegen/llrm-codegen/src/hir/execute_qb.rs
 3 crates/driver/llrm-bcdriver/src/lib.rs
-16 crates/driver/llrm-cc/src/inline_asm.rs
+2 crates/driver/llrm-cc/src/inline_asm.rs
 3 crates/frontends/llrm-c/src/compile.rs
 6 crates/frontends/llrm-c/src/translate.rs
 1 crates/frontends/nib/src/declarations.rs
