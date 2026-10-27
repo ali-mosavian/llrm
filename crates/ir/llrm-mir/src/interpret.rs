@@ -614,6 +614,7 @@ impl<'m> Machine<'m> {
             Intrinsic::StackSave | Intrinsic::StackRestore => return unsupported("a stack pointer"),
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
+            Intrinsic::IsConstant => return unsupported("a test for a constant"),
         })
     }
 
