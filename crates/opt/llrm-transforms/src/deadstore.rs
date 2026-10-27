@@ -130,6 +130,16 @@ pub fn steps() -> usize {
     STEPS.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static LOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The locations this thread's walks have worked out, for a test that an
+/// instruction's place is worked out once, not once for each ask.
+pub fn locations() -> usize {
+    LOCATIONS.with(std::cell::Cell::get)
+}
+
 pub struct DeadStoreElimination;
 
 impl FunctionPass for DeadStoreElimination {
@@ -285,6 +295,9 @@ struct Dse<'a> {
     captured: std::cell::RefCell<HashMap<u32, bool>>,
     /// Per alloca value, whether its address leaves the function's scope.
     leaves: std::cell::RefCell<HashMap<u32, bool>>,
+    /// `loc_for_write` per instruction; a memset's is dropped when it is
+    /// shortened.
+    written: std::cell::RefCell<HashMap<InstId, Option<Rc<Location>>>>,
 }
 
 impl<'a> Dse<'a> {
@@ -322,6 +335,7 @@ impl<'a> Dse<'a> {
             shortened: IdMap::new(),
             captured: Default::default(),
             leaves: Default::default(),
+            written: Default::default(),
         };
         // Post-order numbers, and the defs that could kill.
         for (number, block) in post_order_of(function).into_iter().enumerate() {
@@ -397,6 +411,19 @@ impl<'a> Dse<'a> {
     /// `getLocForWrite`: a store's place, or a memset's destination of a
     /// constant length.
     fn loc_for_write(
+        &self,
+        inst: InstId,
+    ) -> Option<Rc<Location>> {
+        if let Some(found) = self.written.borrow().get(&inst) {
+            return found.clone();
+        }
+        LOCATIONS.with(|count| count.set(count.get() + 1));
+        let made = self.made_loc_for_write(inst);
+        self.written.borrow_mut().insert(inst, made.clone());
+        made
+    }
+
+    fn made_loc_for_write(
         &self,
         inst: InstId,
     ) -> Option<Rc<Location>> {
@@ -1387,6 +1414,7 @@ impl<'a> Dse<'a> {
             (killing_size - (*dead_start - killing_start) as u64, true)
         };
         let new_size = *dead_size - remove_size;
+        self.written.borrow_mut().remove(&dead);
         let entry = self.shortened.get_or_insert_with(dead, || (*dead_size as i64, 0));
         entry.0 = new_size as i64;
         if begin {
