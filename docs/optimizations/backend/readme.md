@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 133 documented, 1 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -25,7 +25,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
 | cmpsub | A compare of a value with a constant, where the same value minus (nearly) that constant is made just before it: the subtract's flags are the compare's. | A machine phase ahead of the first SSA phase (`flow::machine_with`), at | [cmpsub](cmpsub.md) |
-| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]), and the interference graph `twoaddr` and the spiller read. | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
+| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]). | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
 | combiner | A chain of one integer operation rebuilt so the operand that arrives last joins last: LLVM's `MachineCombiner` ([MachineCombiner.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCombiner.cpp)) with the generic reassociation patterns of `TargetInstrInfo`, the only ones i486 has. | On SSA, after `leaopt` and before `phielim` (the pin's `addILPOpts`, after | [combiner](combiner.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | compares | Expands `llvm.scmp` and `llvm.ucmp` into two compares and a subtract in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [compares](compares.md) |
@@ -94,7 +94,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
 | nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
 | needs | What a body contains that a peephole sub-pass could act on, so that `peephole` skips a sub-pass whose subject is absent. | `peephole`. | [needs](needs.md) |
-| neighbours | The values one value interferes with: a sorted set that turns into a bit vector once it is dense. | `coalesce`, for its interference graph. | [neighbours](neighbours.md) |
 | objbuild | Encodes a masm module as a format-neutral object: code and data laid out in sections, each name resolved, each reference to one a relocation. | Once per module, after `assemble` and `data layout` have produced the masm | [objbuild](objbuild.md) |
 | optimizephis | A phi cycle that carries one value is that value, and one nothing reads is gone: `OptimizePHIs` before MachineCSE. | After `FarIndirectCalls`, before [`crate::backend::phiconst`](phiconst.md). Every level. | [optimizephis](optimizephis.md) |
 | overlap | Whether two machine memory operands may overlap, read from their addresses alone. | `spiller`, `floatassign`, `storedhomes`. | [overlap](overlap.md) |

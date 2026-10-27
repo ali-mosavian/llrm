@@ -1209,7 +1209,7 @@ pub enum Stage {
 }
 
 use crate::backend::classes::RegisterClasses;
-use crate::backend::regclass::{Classes, classes};
+use crate::backend::regclass::classes;
 
 /// A plain move into one value; whether anything reads it is the caller's.
 pub fn _unread_move(one: &Insn) -> bool {
@@ -1354,35 +1354,6 @@ fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
         }
     }
     hints
-}
-
-/// `_copy_hints` of the body made from one whose hints are `held`, where only
-/// the values in `touched` are named by an instruction that is in one body
-/// alone: a copy between two values names both, so theirs are the only lists
-/// that can differ, and are worked out again from where they occur.
-fn _copy_hints_after(
-    held: IndexMap<u32, Vec<u32>>,
-    body: &LirBody,
-    touched: &crate::support::hash::HashSet<u32>,
-) -> IndexMap<u32, Vec<u32>> {
-    let mut out = held;
-    for value in touched {
-        out.swap_remove(value);
-    }
-    crate::backend::postings::following(body, |postings| {
-        for value in touched {
-            let partners: Vec<u32> = postings
-                .named_insns(*value, false)
-                .into_iter()
-                .filter_map(|(_, one)| _copy_pair(one))
-                .map(|(dest, source)| if dest == *value { source } else { dest })
-                .collect();
-            if !partners.is_empty() {
-                out.insert(*value, partners);
-            }
-        }
-    });
-    out
 }
 
 /// How many copies away a fixed register still reaches a value as its hint: the
@@ -1608,37 +1579,6 @@ fn _priority(
     }
 }
 
-/// Whether an address-class value should leave a 16-bit word base free.
-fn _reserves_word_base(
-    body: &LirBody,
-    value: u32,
-    confined: &Classes,
-    classes: &RegisterClasses,
-) -> bool {
-    let Some(choices) = confined.get(&value) else {
-        return false;
-    };
-    if choices.is_empty() || !choices.is_subset(&classes.addressing) {
-        return false;
-    }
-    body.blocks
-        .iter()
-        .flat_map(|block| &block.insns)
-        .any(
-            |one| one.what
-                .as_ref()
-                .is_some_and(
-                    |what| what.dests.iter().chain(&what.sources).any(|place| match place {
-                        Loc::Mem(cell) => match (cell.base, cell.index) {
-                            (Some(base), Some(index)) => base.value != value && index.value != value && cell.scale == 1,
-                            _ => false,
-                        },
-                        _ => false,
-                    }),
-                ),
-        )
-}
-
 /// How wide each value is anywhere it is read or written.
 pub fn _widest(body: &LirBody) -> IndexMap<u32, u32> {
     let mut out: IndexMap<u32, u32> = IndexMap::default();
@@ -1698,31 +1638,6 @@ pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_
         .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place))
         .map(|place| (place.value, place.width))
         .chain(one.widths.iter().copied())
-}
-
-/// `_widest` of the body made from one whose widths are `held`, where only the
-/// values in `touched` are named by an instruction that is in one body alone:
-/// theirs are worked out again from where they occur.
-fn _widest_after(
-    held: IndexMap<u32, u32>,
-    body: &LirBody,
-    touched: &crate::support::hash::HashSet<u32>,
-) -> IndexMap<u32, u32> {
-    let mut out = held;
-    for value in touched {
-        out.swap_remove(value);
-    }
-    crate::backend::postings::following(body, |postings| {
-        for value in touched {
-            for (_, one) in postings.named_insns(*value, true) {
-                for (named, width) in _named_widths(one).filter(|(named, _)| named == value) {
-                    let widest = out.entry(named).or_insert(0);
-                    *widest = (*widest).max(width);
-                }
-            }
-        }
-    });
-    out
 }
 
 /// A point that destroys registers without naming them: `during` the
@@ -2158,38 +2073,6 @@ fn _free(
         }
     }
     None
-}
-
-/// The last resort for a value that cannot be spilled: the register of its
-/// class whose holders it overlaps cost least to evict, and those holders.
-/// A holder that cannot be spilled either (`hard`) rules its register out; a
-/// protected holder may be evicted, and a trial that loses it is dropped;
-/// when every register is ruled out, one point of the body asks for more
-/// registers than the machine has.
-fn _forced(
-    one: &Interval,
-    order: &[RegId],
-    union: &LiveUnion,
-    live: &LiveRanges,
-    masks: &Masks,
-    hard: &dyn Fn(u32) -> bool,
-    width: u32,
-) -> Option<(RegId, Vec<u32>)> {
-    let mut best: Option<(f64, RegId, Vec<u32>)> = None;
-    for register in order {
-        if _clobbered(one, *register, masks, width) {
-            continue;
-        }
-        let victims: Vec<u32> = union.meeting(&_whole(*register), one, live);
-        if victims.iter().any(|other| hard(*other)) {
-            continue;
-        }
-        let bill: f64 = victims.iter().map(|other| live.weight(*other)).sum();
-        if best.as_ref().is_none_or(|found| bill < found.0) {
-            best = Some((bill, *register, victims));
-        }
-    }
-    best.map(|(_bill, register, victims)| (register, victims))
 }
 
 /// Blocks the pins were not worked out of again after a rewrite, on this
@@ -2762,40 +2645,6 @@ fn _min(
     if second < first { second } else { first }
 }
 
-/// The values an instruction makes impure.
-fn _impure_names(one: &Insn) -> Vec<u32> {
-    if crate::backend::bodyfacts::_plain_move(one).is_some() {
-        return Vec::new();
-    }
-    let in_place = one
-        .what
-        .as_ref()
-        .is_some_and(
-            |what| matches!(what.op, Operation::Binary | Operation::Unary)
-                && one.requires.is_empty()
-                && one.delivers.is_empty()
-                && !what.dests.iter().chain(&what.sources).any(|x| matches!(x, Loc::Mem(_))),
-        );
-    one.defines
-        .iter()
-        .chain(&one.uses)
-        .copied()
-        .filter(|value| !(in_place && one.defines.contains(value) && one.uses.contains(value)))
-        .collect()
-}
-
-fn _price_free(
-    live: &mut IndexMap<u32, Interval>,
-    free: &IndexMap<u32, f64>,
-    index: &Indexes,
-) {
-    for (value, found) in free {
-        if let Some(one) = live.get_mut(value) {
-            one.weight = _max(0.0, one.weight - found / one.spill_size(index) as f64);
-        }
-    }
-}
-
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
 /// reloads, stores and rematerializations, and the frame operands of x87 and
 /// other instructions. The allocator can reach only the first three.
@@ -2833,40 +2682,6 @@ pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static s
         }
     }
     out
-}
-
-/// The old per-instruction form of `FoldDiscounts`, which `LLRM_CHECK_FOLDS=1`
-/// holds it to.
-pub(crate) fn _fold_discount(
-    one: &Insn,
-    profile: &Profile,
-) -> f64 {
-    let Some(what) = &one.what else {
-        return 0.0;
-    };
-    let (register, memory) = match (what.op, what.name.as_deref(), what.sources.as_slice()) {
-        (Operation::Binary | Operation::Compare, name, _) => {
-            if !matches!(name, Some("add" | "sub" | "and" | "or" | "xor" | "cmp")) {
-                return 0.0;
-            }
-            ("alu_rr", "alu_rm")
-        }
-        (Operation::Multiply, Some("imul"), [Loc::Held(first), Loc::Held(second)])
-            if first.width == 4 && second.width == 4 =>
-        {
-            ("imul_r32", "imul_m32")
-        }
-        _ => return 0.0,
-    };
-    if ![register, memory, "mov_rm"].iter().all(|form| profile.prices(form)) {
-        return 0.0;
-    }
-    let load = profile.cost("mov_rm").expect("priced above");
-    if load <= 0 {
-        return 0.0;
-    }
-    let remainder = 0.max(profile.cost(memory).expect("priced above") - profile.cost(register).expect("priced above"));
-    _max(0.0, _min(1.0, 1.0 - remainder as f64 / load as f64))
 }
 
 /// Python `format(value, "g")`.
