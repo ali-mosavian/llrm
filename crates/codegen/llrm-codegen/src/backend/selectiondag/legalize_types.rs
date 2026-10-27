@@ -835,6 +835,11 @@ impl<'a> TypeLegalizer<'a> {
                 let high = self.dag.get_node(ISD::Srl, EVT::I32, &[dword, shift]);
                 (self.dag.get_node(ISD::Truncate, half, &[dword]), self.dag.get_node(ISD::Truncate, half, &[high]))
             }
+            ISD::Freeze => {
+                // `SplitRes_FREEZE`: each half frozen.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(value, 0));
+                (self.dag.get_node(ISD::Freeze, half, &[lo]), self.dag.get_node(ISD::Freeze, half, &[hi]))
+            }
             ISD::CtPop => self.expand_ctpop(value, half),
             // `ExpandIntRes_BITREVERSE`: each half reversed, and swapped.
             ISD::BitReverse => {
@@ -1476,6 +1481,22 @@ impl<'a> TypeLegalizer<'a> {
         let (far, delta) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let (offset, selector) = self.expanded_integer(far);
         let dword = self.dag.value_type(delta);
+        // A constant displacement past 64K from a symbol: the object is
+        // longer than a segment, so it is alone in its own and starts at
+        // offset 0 (`data.rs` `split`). The displacement is the symbol's
+        // offset plus its low word and the selector steps by its high word:
+        // `offset _big+14464`, `seg _big` + 4096, nothing computed.
+        if let (ISD::GlobalAddress, Some(bytes)) = (self.dag.opcode(offset), self.dag.constant(delta)) {
+            let half_bits = half.size_in_bits();
+            if bytes >> half_bits != 0 && bytes >> 32 == 0 {
+                let super::dag::NodeData::Global { symbol, offset: at } = self.dag.node(offset).data else {
+                    unreachable!("a global address")
+                };
+                let low = self.dag.get_global_address(half, symbol, at + (bytes & ((1 << half_bits) - 1)) as i64);
+                let steps = self.dag.get_constant((bytes >> half_bits) << shift & ((1 << half_bits) - 1), half);
+                return Ok((low, self.dag.get_node(ISD::Add, half, &[selector, steps])));
+            }
+        }
         // A step of less than one offset range, known at compile time, moves
         // the selector by at most one stride, and the offset's carry (borrow)
         // says whether: `add; sbb; and`, not the dword sum's high word.

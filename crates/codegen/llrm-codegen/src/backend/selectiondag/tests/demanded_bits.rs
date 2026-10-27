@@ -22,6 +22,11 @@ fn eval(
         ISD::Shl => arg(0).checked_shl(arg(1)).unwrap_or(0),
         ISD::Srl => arg(0).checked_shr(arg(1)).unwrap_or(0),
         ISD::Rotl => arg(0).rotate_left(arg(1)),
+        ISD::SignExtendInReg => {
+            let NodeData::ValueType(ext) = dag.node(dag.operand(v, 1)).data else { panic!("no type") };
+            let shift = 32 - ext.size_in_bits();
+            (((arg(0) << shift) as i32) >> shift) as u32
+        }
         other => panic!("unexpected {other:?}"),
     }
 }
@@ -124,4 +129,19 @@ fn a_rotate_read_in_its_low_bits_is_a_shift() {
         dag.get_node(ISD::And, EVT::I32, &[rot, low])
     });
     assert!(!has(&dag, root, ISD::Rotl));
+}
+
+/// `(sext_in_reg (or (shl hi, 16), lo), i16)` kept the `shl` and
+/// the `or`: no `SIGN_EXTEND_INREG` demanded-bits case. A call returning an
+/// `i32` in dx:ax and truncated to `i16` built `shl; movzx; or; movsx` before
+/// every multiply-high (recpow m16: +94 B).
+#[test]
+fn a_sext_in_reg_of_a_rebuilt_pair_reads_only_the_low_half() {
+    let (dag, root) = combined(!0, |dag, x, y| {
+        let high = shift(dag, ISD::Shl, y, 16);
+        let pair = dag.get_node(ISD::Or, EVT::I32, &[high, x]);
+        let ty = dag.get_value_type_node(EVT::I16);
+        dag.get_node(ISD::SignExtendInReg, EVT::I32, &[pair, ty])
+    });
+    assert!(!has(&dag, root, ISD::Shl) && !has(&dag, root, ISD::Or), "the high half is still read");
 }
