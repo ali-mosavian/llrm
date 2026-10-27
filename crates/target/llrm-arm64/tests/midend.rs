@@ -329,3 +329,13 @@ fn a_constant_used_by_several_calls_is_made_at_each_use() {
     assert!(!asm.contains("x19"), "{asm}");
     assert_eq!(asm.matches("movz x0, #0").count(), 2, "{asm}");
 }
+
+/// An add whose only reader the mid-end removed (a store to a write-only
+/// global) stayed in the machine code: loop_fusion's loops each computed
+/// `i + 200` for nothing.
+#[test]
+fn an_unread_result_is_not_computed() {
+    let asm = driver::assembly(include_str!("data/dead_after_writeonly.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("#200"), "{asm}");
+}
