@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -106,6 +106,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
+| prezeroed | The entry block's zero writes to a local nothing has touched yet, for a frame the runtime zero-fills (QB's `B$ENRA`): the frame already holds them. | The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`), | [prezeroed](prezeroed.md) |
 | prologue | Reserves the stack the spiller asked for (`sub sp, N`) and gives it back (`add sp, N`) at every exit. | A machine phase after `parcopy` and before `peephole`, in every machine | [prologue](prologue.md) |
 | pushfold | A value that a load made and nothing else reads is read from memory where it is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a commutative operation the load is. | Twice. As `LoadFold` first of the machine phases, after selection: the pin's | [pushfold](pushfold.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |

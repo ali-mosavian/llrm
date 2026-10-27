@@ -47,7 +47,7 @@ impl ScalarEvolution {
         }
 
         let q = cx.query(None);
-        let mut known_poison: llrm_mir::hash::HashSet<Operand> = llrm_mir::hash::HashSet::default();
+        let mut known_poison = guarantee::PoisonSet::default();
         let mut worklist: Vec<InstId> = Vec::new();
 
         // We start by assuming \c I, the post-inc add recurrence, is poison.
