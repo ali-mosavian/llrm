@@ -94,6 +94,7 @@ pub fn select_mul_flags<D: AddrDag>(
         (mvt::i8, false) => (x86::AL, x86::MUL8r, x86::MUL8m),
         (mvt::i16, false) => (x86::AX, x86::MUL16r, x86::MUL16m),
         (mvt::i32, false) => (x86::EAX, x86::MUL32r, x86::MUL32m),
+        (mvt::i64, false) if hooks.options.cpu == Cpu::X64 => (x86::RAX, x86::MUL64r, x86::MUL64m),
         _ => return false,
     };
     let (mut n0, mut n1) = (dag.operand(node, 0), dag.operand(node, 1));

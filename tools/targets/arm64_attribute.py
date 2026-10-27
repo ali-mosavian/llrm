@@ -2,7 +2,7 @@
 """Where llc's advantage comes from: the pinned `llc -O2` on clang's -O2 IR with one pass
 switched off at a time, executed instructions summed over tests/programs. A pass's
 contribution is how much worse llc gets without it; ours is the same IR through this
-backend. Usage: tools/arm64_attribute.py [programs-dir]"""
+backend. Usage: tools/targets/arm64_attribute.py [programs-dir]"""
 import sys
 import tempfile
 from pathlib import Path

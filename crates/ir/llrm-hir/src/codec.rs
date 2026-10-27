@@ -1433,6 +1433,7 @@ static DATA_OBJECT: _Record = _Record {
             linkage: _default(args, "linkage", model::DataLinkage::Internal)?,
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
+            exposed: false,
             segment: _default(args, "segment", None)?,
         })
     },

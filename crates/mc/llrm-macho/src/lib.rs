@@ -22,6 +22,7 @@ const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xB;
 const LC_SEGMENT_64: u32 = 0x19;
 const S_ZEROFILL: u32 = 1;
+const S_MOD_INIT_FUNC_POINTERS: u32 = 9;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 const S_ATTR_DEBUG: u32 = 0x0200_0000;
@@ -106,6 +107,7 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
             return Err(unsupported(format!("{}: an OMF stack segment has no Mach-O section", section.name)));
         }
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
+        Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
         Role::Debug => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
     })
 }
