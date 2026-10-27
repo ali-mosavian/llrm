@@ -929,14 +929,14 @@ impl AddrDag for DagisAdapter<'_> {
             NodeData::Symbol(id) => {
                 Some(Wrapped { symbol: Symbol { kind: SymbolKind::External, id }, offset: 0, flags: 0 })
             }
-            NodeData::PoolIndex(index) => {
+            NodeData::PoolIndex(index, offset) => {
                 // The alignment `getTargetConstantPool` is given: the entry's
                 // type size, by `ExpandConstantFP` (SD203).
                 let (_, vt) = self.dag.constant_pool[index as usize];
                 let align = (vt.size_in_bits() / 8).next_power_of_two().clamp(1, 16);
                 Some(Wrapped {
                     symbol: Symbol { kind: SymbolKind::ConstantPool { align }, id: index },
-                    offset: 0,
+                    offset: i64::from(offset),
                     flags: 0,
                 })
             }
@@ -1015,10 +1015,7 @@ impl AddrDag for DagisAdapter<'_> {
                 (ISD::TargetGlobalAddress, NodeData::Global { symbol: symbol.id, offset: i64::from(disp) })
             }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
-            SymbolKind::ConstantPool { .. } => {
-                assert_eq!(disp, 0, "a constant pool entry plus a displacement is not in our DAG");
-                (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id))
-            }
+            SymbolKind::ConstantPool { .. } => (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id, disp)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))

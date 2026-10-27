@@ -33,10 +33,10 @@
 //!   only under that option, which no `PassBuilder` pipeline sets.
 //! - R3 New blocks go at the end of the layout: `Function::insert_block` after
 //!   a block scans the layout. LLVM puts them next to their neighbours.
-//! - R4 No debug records, no `llvm.experimental.noalias.scope.decl` scope
-//!   cloning and no `llvm.coro` check: llrm's copies carry debug records
-//!   through `clone_instruction`, MIR has no local noalias scope declarations,
-//!   and no coroutines.
+//! - R4 No `llvm.experimental.noalias.scope.decl` scope cloning and no
+//!   `llvm.coro` check: MIR has no local noalias scope declarations, and no
+//!   coroutines. Debug records stand before an instruction and move with it, so
+//!   only the preheader's old terminator needs `flushTerminatorDbgRecords`.
 //! - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
 //!   sits in a preheader whose analyses the rotation is changing.
 //! - R6 A target with no cost model (`Machine::tti`) is priced by the generic
@@ -775,7 +775,13 @@ fn rotate_loop(
     }
 
     // Now that the preheader has a clone of the header's terminator, remove the
-    // preheader's old terminator (the original branch into the loop).
+    // preheader's old terminator (the original branch into the loop), the
+    // debug records before it kept before the new one
+    // (`flushTerminatorDbgRecords`).
+    let preheader_end = run.function.iter_block(orig_preheader).collect::<Vec<_>>();
+    if let [.., new_terminator, _] = preheader_end[..] {
+        run.function.move_records_before(loop_entry_branch, new_terminator);
+    }
     run.function.erase(loop_entry_branch).expect("a jump defines nothing");
 
     // If there were any uses of instructions in the duplicated block outside
@@ -831,8 +837,9 @@ fn rotate_loop(
         let void = run.function.instruction(guard).ty;
         let jump =
             run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(new_header)], Flags::default(), None);
-        run.function.erase(guard).expect("a branch defines nothing");
         run.function.insert(jump, Position::End(orig_preheader)).expect("a placed preheader");
+        run.function.move_records_before(guard, jump);
+        run.function.erase(guard).expect("a branch defines nothing");
     }
 
     // Now that the CFG is consistent again, try to merge the old header into

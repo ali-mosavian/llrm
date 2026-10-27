@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_phi_args.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_phi_args.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:57c3d2a9cdd3656d2c84458c8cfc0d250a53011cf9e3ac2a6a84484f00d9cc91 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:cfdd41e23f630bf04f0d42e3c094980c3b3044d91a932548e840d5a1045cad8b -->
 
 # combine_phi_args
 
@@ -35,7 +35,7 @@ DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP, load,
 `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
 `foldDeadPhiWeb`, `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`,
-`simplifyUsingControlFlow` and `foldDependentIVs`. Exit: later slices.
+and `foldDependentIVs`. Exit: later slices.
 
 DEVIATE 2: no check that the block's terminator is an EH pad, which MIR
 cannot have a phi before; no debug locations.

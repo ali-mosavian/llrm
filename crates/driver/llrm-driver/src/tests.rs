@@ -167,7 +167,8 @@ fn a_targets_pins_come_from_its_own_forms() {
     assert!(flat.is_empty(), "{flat:?}");
 }
 
-/// A flat target's registers are its own, not real mode's: six values, ebp the
+/// A flat target's registers are its own, not real mode's: six values in the
+/// pin's allocation order (`GR32`: ebx last, as the callee-saved one), ebp the
 /// frame.
 #[test]
 fn a_targets_registers_come_from_its_description() {
@@ -175,7 +176,7 @@ fn a_targets_registers_come_from_its_description() {
     use llrm_lir::registers::RegId;
 
     let flat = RegisterClasses::of(&llrm_x86_m32::M32);
-    assert_eq!(flat.available, [RegId::EAX, RegId::ECX, RegId::EDX, RegId::EBX, RegId::ESI, RegId::EDI]);
+    assert_eq!(flat.available, [RegId::EAX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBX]);
     assert_eq!(flat.frame, RegId::EBP);
 }
 
@@ -527,7 +528,7 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
 /// module that calls qgl compiled.
 #[test]
 fn clangs_pascal_number_is_llrms_basic_convention() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc232 i16 @QGL(i16) addrspace(1)\n\
                 define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n";
@@ -539,7 +540,7 @@ fn clangs_pascal_number_is_llrms_basic_convention() {
 /// asm block compiled.
 #[test]
 fn inline_code_intrinsics_keep_their_names() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)\n\
                 define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n";
@@ -551,7 +552,7 @@ fn inline_code_intrinsics_keep_their_names() {
 /// reference" (QCport).
 #[test]
 fn defined_globals_are_public_and_internal_ones_are_not() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @a = dso_local global i16 5\n\
                 @b = dso_local addrspace(1) constant i16 7\n\
@@ -571,7 +572,7 @@ fn defined_globals_are_public_and_internal_ones_are_not() {
 /// the `llrm.ia16.in`/`out` intrinsics.
 #[test]
 fn borlands_port_functions_are_the_port_intrinsics() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc1000 i8 @__outportb__(i16, i8) addrspace(1)\n\
                 declare i8 @__inportb__(i16) addrspace(1)\n\
@@ -664,6 +665,19 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
     assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
+}
+
+/// `floor(x)` of a C program reached the backend as `llvm.floor.f64` and was
+/// refused (`@f_: @llvm.floor.f64`): x87 has no instruction for it, the pin
+/// calls `floor`.
+#[test]
+fn a_floor_intrinsic_is_a_call_of_floor() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                declare double @llvm.floor.f64(double)\n\
+                define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("call ") && line.contains("floor")), "{listing}");
 }
 
 /// `__builtin_prefetch` is `llvm.prefetch`; the 386/486 have no instruction for
