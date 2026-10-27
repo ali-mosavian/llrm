@@ -40,10 +40,22 @@ fn preprocess_and_dependency_jobs_pass_through_without_the_target_flag() {
 
 #[test]
 fn untranslated_features_are_refused_not_dropped() {
-    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto", "-g", "-gdwarf-4"] {
+    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto"] {
         assert!(parse(&words(&format!("{flag} x.c"))).is_err(), "{flag}");
     }
     assert!(parse(&words("-g0 x.c")).is_ok());
+}
+
+/// `-g` was refused ("debug info is not carried yet"), so no program could
+/// carry debug info: clang gets `-g`, the backend the flag that names the
+/// format.
+#[test]
+fn debug_flags_reach_clang_and_the_backend() {
+    let one = built("-gcodeview -c x.c");
+    assert!(one.clang.iter().any(|flag| flag == "-g"), "{:?}", one.clang);
+    assert!(one.clang.iter().any(|flag| flag == "-fexperimental-assignment-tracking=disabled"), "{:?}", one.clang);
+    assert_eq!(one.llc, words("-gcodeview"));
+    assert!(built("-g0 -c x.c").clang.iter().all(|flag| flag != "-g"));
 }
 
 #[test]

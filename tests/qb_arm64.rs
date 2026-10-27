@@ -1,8 +1,8 @@
 //! The host runtime on arm64 Linux: the headless tests of tests/qb_headless.rs
 //! built with clang for aarch64 against a private sysroot
-//! (tools/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine without
-//! clang, lld or qemu fails here by name; it does not skip. An arm64 Mac runs
-//! the same C natively (docs/working/qb-host.md, "Mac session").
+//! (tools/targets/build-arm64-sysroot.sh) and run under qemu-aarch64. A machine
+//! without clang, lld or qemu fails here by name; it does not skip. An arm64
+//! Mac runs the same C natively (docs/working/qb-host.md, "Mac session").
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,8 +16,9 @@ fn root() -> &'static Path {
 }
 
 fn sysroot() -> PathBuf {
-    let made =
-        Command::new(root().join("tools/build-arm64-sysroot.sh")).output().expect("tools/build-arm64-sysroot.sh runs");
+    let made = Command::new(root().join("tools/targets/build-arm64-sysroot.sh"))
+        .output()
+        .expect("tools/targets/build-arm64-sysroot.sh runs");
     assert!(made.status.success(), "no arm64 sysroot: {}", String::from_utf8_lossy(&made.stderr));
     PathBuf::from(String::from_utf8_lossy(&made.stdout).trim())
 }
