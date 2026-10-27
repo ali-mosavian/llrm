@@ -46,6 +46,7 @@
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
+use llrm_mir::blockfrequency::BranchProbability;
 use llrm_mir::blockfrequency::frequency::BlockFrequency;
 
 use super::edgebundles::EdgeBundles;
@@ -128,6 +129,10 @@ impl GlobalSplitCandidate {
         self.live_bundles.iter().filter(|&&l| l).count()
     }
 }
+
+/// `-split-threshold-for-reg-with-hint`: the percentage of the broken copies'
+/// cost a split around the hint may cost.
+const SPLIT_THRESHOLD_FOR_REG_WITH_HINT: u32 = 75;
 
 /// What the splitting analyses keep for a function: built once from its CFG,
 /// frequencies and loops.
@@ -1019,6 +1024,65 @@ impl Splitter<'_> {
         // Perform the actual pre-splitting.
         self.do_region_split(virt, best_cand, false, new_vregs);
         false
+    }
+
+    /// `trySplitAroundHintReg` (RegAllocGreedy.cpp#L1376): `virt` missed its
+    /// hint `hint`; split it in the cold blocks when the copies the split can
+    /// delete cost enough. Whether it split.
+    pub fn try_split_around_hint_reg(
+        &mut self,
+        hint: RegId,
+        virt: &Rc<LiveInterval>,
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        // Split the VirtReg may generate COPY instructions in multiple cold
+        // basic blocks, and increase code size. So we avoid it when the
+        // function is optimized for size.
+        if self.env.has_opt_size() {
+            return false;
+        }
+        // Don't allow repeated splitting as a safe guard against looping.
+        if self.extra.get_stage(virt.reg()) >= LiveRangeStage::Split2 {
+            return false;
+        }
+        let reg = virt.reg();
+        // Compute the cost of assigning a non Hint physical register to
+        // VirtReg: the total frequency of broken COPY instructions to/from the
+        // Hint register, which can be deleted after the split.
+        let mut cost = 0u64;
+        for operand in self.lis.operands(reg).to_vec() {
+            let Some((into, from)) = self.lis.instr(operand.instr).copy_of() else { continue };
+            // Look for the other end of the copy.
+            let other = if operand.is_def { from } else { into };
+            if other == reg {
+                continue;
+            }
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            // Check if VirtReg interferes with OtherReg after this COPY
+            // instruction.
+            if !operand.is_def && virt.live_at(&at.get_reg_slot(false)) {
+                continue;
+            }
+            let other_phys = self.env.pinned(other).or_else(|| self.matrix.vrm.get_phys(other));
+            if other_phys == Some(hint) {
+                let block = self.lis.indexes.get_mbb_from_index(&at) as u32;
+                cost += self.block_freq(block).get_frequency();
+            }
+        }
+        // Decrease the cost so it will be split in colder blocks.
+        let mut cost = BlockFrequency(cost) * BranchProbability::new(SPLIT_THRESHOLD_FOR_REG_WITH_HINT, 100);
+        if cost == BlockFrequency(0) {
+            return false;
+        }
+        let mut num_cands = 0usize;
+        let mut best_cand = NO_CAND;
+        self.analyze(virt);
+        self.calculate_region_split_cost_around_reg(hint, &mut cost, &mut num_cands, &mut best_cand);
+        if best_cand == NO_CAND {
+            return false;
+        }
+        self.do_region_split(virt, best_cand, false, new_vregs);
+        true
     }
 
     /// `doRegionSplit`

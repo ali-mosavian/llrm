@@ -65,6 +65,8 @@ pub struct ShadowInputs<'a> {
     /// The callee-saved registers, whole (`getLastCalleeSavedAlias`): none
     /// turns the first-use cost of one off.
     pub saved: &'a [RegId],
+    /// `Function::hasOptSize` (-Os, -Oz).
+    pub opt_size: bool,
 }
 
 /// What the shadow allocator decided.
@@ -87,6 +89,7 @@ struct BodyEnv {
     freq: Vec<f32>,
     exiting: Vec<bool>,
     saved: Vec<RegId>,
+    opt_size: bool,
 }
 
 impl SpillWeightEnv for BodyEnv {
@@ -145,6 +148,10 @@ impl SpillWeightEnv for BodyEnv {
 }
 
 impl GreedyEnv for BodyEnv {
+    fn has_opt_size(&self) -> bool {
+        self.opt_size
+    }
+
     fn has_class(
         &self,
         virt: u32,
@@ -1111,6 +1118,7 @@ pub fn decide_with_split(
         freq,
         exiting,
         saved: inputs.saved.iter().map(|one| crate::model::ir::root(*one)).collect(),
+        opt_size: inputs.opt_size,
     };
     // The calls.
     let mut calls = Vec::new();
@@ -1429,6 +1437,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            opt_size: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = crate::backend::allocate::RFP;
@@ -1495,6 +1504,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            opt_size: false,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -1664,6 +1674,7 @@ mod tests {
                 sets: None,
                 stable_loads: true,
                 saved: &[],
+                opt_size: false,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -1718,6 +1729,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            opt_size: false,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -1849,6 +1861,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            opt_size: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -1895,6 +1908,7 @@ mod tests {
             sets: None,
             stable_loads: true,
             saved: &[],
+            opt_size: false,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
