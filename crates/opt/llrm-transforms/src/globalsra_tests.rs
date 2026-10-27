@@ -200,3 +200,35 @@ b0:
     assert!(changed, "{after}");
     assert!(!after.contains("ptr @acc") && !after.contains("ptr @p,") && after.contains("alloca float"), "{after}");
 }
+
+/// Two `float`s spelled as `[8 x i8]` (QB's `ACCX!`, `ACCY!`) were never
+/// split, because only integer pieces were: fpbench.bas m16 -Os kept both
+/// globals with a load and a store each, +33 B over the pin.
+#[test]
+fn floats_spelled_as_bytes_are_split_into_float_pieces() {
+    let (after, changed) = splitted(
+        "@c = internal global [8 x i8] zeroinitializer
+
+define void @g(float %x, float %y) {
+b0:
+  store float %x, ptr @c
+  %p = getelementptr i8, ptr @c, i64 4
+  store float %y, ptr %p
+  ret void
+}
+
+define float @f() {
+b0:
+  %a = load float, ptr @c
+  %p = getelementptr i8, ptr @c, i64 4
+  %b = load float, ptr %p
+  %s = fadd float %a, %b
+  ret float %s
+}
+",
+    );
+    assert!(
+        changed && after.contains("@c.0 = internal global float") && after.contains("@c.1 = internal global float"),
+        "{after}"
+    );
+}
