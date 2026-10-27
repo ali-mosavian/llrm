@@ -1199,3 +1199,28 @@ entry:
         .collect();
     assert!(!names.iter().any(|n| n == "shrd"), "{names:?}");
 }
+
+/// The same at m16, where an `i64` argument is two loads from two fixed
+/// objects: `f_lshr_16` kept `shrd` of them (8 instructions against the pin's
+/// 6) because the funnel's loads were compared by one base alone.
+#[test]
+fn a_funnel_of_two_argument_halves_is_one_load() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+define i64 @f(i64 %a) {
+entry:
+  %r = lshr i64 %a, 16
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n == "shrd"), "{names:?}");
+}

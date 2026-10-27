@@ -16,6 +16,7 @@
 //! `areNonVolatileConsecutiveLoads`
 //! ([L14396](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L14396)).
 
+use super::address_analysis::BaseIndexOffset;
 use super::dag::{MemInfo, NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
@@ -86,9 +87,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         {
             return None;
         }
-        let ((lhs_base, lhs_at), (rhs_base, rhs_at)) =
-            (self.match_address(self.dag.operand(n0, 1)), self.match_address(self.dag.operand(n1, 1)));
-        if lhs_base != rhs_base || lhs_at - rhs_at != bytes {
+        let (lhs_at, rhs_at) = (BaseIndexOffset::matching(self.dag, n0), BaseIndexOffset::matching(self.dag, n1));
+        if rhs_at.equal_base_index(&lhs_at, self.dag) != Some(bytes) {
             return None;
         }
         let offset = if is_fshl { ((u128::from(bits) - amount) % u128::from(bits)) / 8 } else { amount / 8 } as u32;
