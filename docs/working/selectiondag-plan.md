@@ -229,10 +229,12 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD215 | sdag-b | `X86ISD::FIST` of an `i16` selects `IST_Fp16m32/64/80`, which the pin has no pattern for (its `lrint` of a short is promoted); QB's `CINT` needs a word `fistp` | `llrm-dagisel/src/x86_fcmp.rs` |
 | SD217 | sdag-b | `mergeConsecutiveStores` merges stores of constants and of loads: no vector-extract sources, no vector or truncating merged store, no rotate of two loads in reverse order; an address base is a frame index, a global or one node plus constant offsets (no index register); `allowsMemoryAccess` is true for every scalar the target holds | `selectiondag/combine_store_merge.rs` |
 | SD218 | sdag-b | `expandBITREVERSE` is the byte-swap and mask form only (no loop of single bits for a width that is not a power of two; none is legal here) | `selectiondag/legalize_dag.rs` |
+| SD227 | sdag-b | `visitBSWAP`: no half-width `bswap (shl x, c)` form, no `bswap (bitreverse x)` canonicalisation | `selectiondag/bswap_combine.rs` |
 | SD219 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
 | SD226 | sdag-b | w11: a store of an x87 `fp_round` that nothing else reads is one truncating `fst`; the pin keeps the stack round trip (`f64 -> f32` is Expand), the old selector stores once | `selectiondag/x86_preprocess.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
+| SD222 | sdag-b | w12, QB: the entry block's `store 0` / `memset 0` to a local nothing has touched yet are not lowered when the runtime builds and zero-fills the frame (`B$ENRA`); the pin has no such runtime | `backend/prezeroed.rs` |
 | SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
@@ -240,7 +242,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
-| SD302 | sdag-c | DIVREM selects i16 and i32 only; i8 (AL/AH) and i64 (RAX/CQO) stay unselected | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
+| SD302 | sdag-c | the i8 DIVREM remainder is `shr ax, 8` then `movzx` of the byte, not `movzx` of AH (the LIR has no AH) | `crates/backend/llrm-dagisel/src/x86_divrem.rs` |
 | SD303 | sdag-c | MUL_LOHI skips `orderRegForMul` (no live-in physical registers in the DAG) and handles i32 only | `crates/backend/llrm-dagisel/src/x86_mul.rs` |
 | SD304 | sdag-c | `isKnownNeverZero` is the known-bits part only (a known set bit); the cttz `cmov` stays for values the pin proves non-zero by other means | `selectiondag/x86_lowering.rs` |
 | SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |

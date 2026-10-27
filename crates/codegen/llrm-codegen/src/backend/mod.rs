@@ -242,6 +242,7 @@ pub mod phielim;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;
+pub mod prezeroed;
 pub mod prologue;
 pub mod pushfold;
 pub mod regpressure;
