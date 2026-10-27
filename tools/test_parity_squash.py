@@ -1363,3 +1363,22 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def test_land_skip_link_skips_the_link_stage_for_a_runtime_change(monkeypatch, capsys):
+    """The freeze break on feat/parity refused every batch that touched the runtime (09:42, 09:46, 09:48, 09:49); LAND_SKIP_LINK=1 is the user's way past it."""
+    monkeypatch.setenv("LAND_SKIP_LINK", "1")
+
+    def build():
+        raise AssertionError("the link stage built the release bins")
+
+    assert ps.new_link_failures(["runtime/qb/src/lib.rs"], build=build, check=lambda: ["qb x: freeze"], inputs=lambda: []) == []
+    assert "link: skipped (LAND_SKIP_LINK=1)" in capsys.readouterr().out
+    monkeypatch.delenv("LAND_SKIP_LINK")
+    assert ps.new_link_failures(["runtime/qb/src/lib.rs"], build=lambda: None, check=lambda: ["qb x: freeze"], inputs=lambda: []) == ["qb x: freeze"]
+
+
+def test_the_batch_age_limit_is_read_from_the_environment():
+    """The 20-minute cap ended the 48-PR batches the user asked for; BATCH_MAX_SECONDS sets it per batch (the runner's env), 1200 by default."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.BATCH_MAX_SECONDS)"], cwd=Path(__file__).parent, env={**os.environ, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"BATCH_MAX_SECONDS": "2400"}) == "2400"
