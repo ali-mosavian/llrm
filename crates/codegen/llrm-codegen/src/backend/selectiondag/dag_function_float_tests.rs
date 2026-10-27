@@ -517,6 +517,32 @@ fn a_rounded_float_has_its_slot_in_the_frame() {
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
+const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+define cc 1000 void @h(ptr %0, ptr %1, ptr %2) addrspace(1) {
+b1:
+  %3 = load double, ptr %0
+  %4 = load double, ptr %1
+  %5 = fmul double %3, %4
+  %6 = fptrunc double %5 to float
+  store float %6, ptr %2
+  ret void
+}
+";
+
+/// A double rounded to a float and stored is one `fstp dword`: the store
+/// rounds. Store, reload and store again left a 4-byte frame temporary and two
+/// more instructions per rounded store (ACTIONS3D: 25 round trips).
+#[test]
+fn a_rounded_float_stored_is_one_truncating_store() {
+    use crate::model::ir::Operation;
+    let module = llrm_mir::parse::module(ROUNDED_STORE).expect("parses");
+    let done = selected(&module, "h", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|why| panic!("{}", why.0));
+    let stores =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == Operation::FloatStore).count();
+    assert_eq!(stores, 1);
+}
+
 const LRINT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(double %x) {
 entry:

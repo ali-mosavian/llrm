@@ -225,6 +225,8 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
+#[cfg(test)]
+pub(crate) use matcher::OPCODE_SCANS;
 pub(crate) use matcher::reads_invariant_memory;
 #[cfg(feature = "fixtures")]
 pub use matcher::selector;
@@ -757,6 +759,20 @@ fn dword_halves(bits: i64) -> [i64; 2] {
 }
 
 impl TypeClass {
+    pub(super) const ALL: [Self; 11] = [
+        Self::None,
+        Self::Void,
+        Self::I1,
+        Self::I8,
+        Self::I16,
+        Self::I32,
+        Self::I64,
+        Self::Ptr,
+        Self::Far,
+        Self::Float,
+        Self::Other,
+    ];
+
     pub(super) fn of(
         types: &Types,
         layout: &DataLayout,
@@ -1103,6 +1119,9 @@ pub fn selected_with<'c>(
         private: Vec::new(),
         cpu,
         compiled,
+        opcodes: Default::default(),
+        type_at: TypeClass::ALL.map(|one| matcher::position(compiled.types, one.name())),
+        kind_at: matcher::KINDS.map(|one| matcher::position(compiled.kinds, one)),
         segments,
         exact,
         registers,
@@ -1739,6 +1758,11 @@ pub struct Selector<'m, 'c, 'p> {
     /// What each instruction costs, where a choice depends on it.
     cpu: &'c Profile,
     compiled: &'static Compiled,
+    /// Where each opcode, type class and operand kind stands in the domains of
+    /// `compiled`: the opcodes by the address of their mnemonic, as found.
+    opcodes: std::cell::RefCell<llrm_mir::hash::HashMap<usize, u16>>,
+    type_at: [u16; TypeClass::ALL.len()],
+    kind_at: [u16; 6],
     /// Which segment registers the machine's program model leaves free.
     segments: &'c Segments,
     /// Index values every access names exactly at any wider width.
