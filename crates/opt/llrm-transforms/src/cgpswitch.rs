@@ -40,13 +40,6 @@ fn widened(
     function: &mut Function,
     switch: InstId,
 ) -> bool {
-    // DEVIATE SW2: the 16-bit target keeps its switch narrow (a 32-bit compare
-    // there costs an operand-size prefix per case); m16 has no 32-bit
-    // pointer, as `is_desirable_to_promote_op` reads it. Exit: none.
-    let pointer_bits = layout.pointer(0).bits;
-    if pointer_bits < 32 {
-        return false;
-    }
     let condition = function.instruction(switch).operands[0];
     if matches!(condition, Operand::Constant(_)) {
         return false;
@@ -54,7 +47,10 @@ fn widened(
     let Some(old_ty) = function.operand_type(context, condition) else { return false };
     let Some(old_bits) = context.types.int_bits(old_ty) else { return false };
     let wide_bits = lowering.preferred_switch_condition_bits(old_bits);
-    if wide_bits <= old_bits {
+    // DEVIATE SW2: a switch is not widened past the pointer: the 16-bit target
+    // keeps its switch narrow (a 32-bit compare there costs an operand-size
+    // prefix per case), as `is_desirable_to_promote_op` reads it. Exit: none.
+    if wide_bits <= old_bits || wide_bits > layout.pointer(0).bits {
         return false;
     }
     let mut kind = CastOp::ZExt;

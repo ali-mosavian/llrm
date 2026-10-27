@@ -1444,18 +1444,18 @@ impl Fixed {
         }
         self.fixed(unit, analyses, run, "")?;
         if let Some(unswitch) = &mut self.unswitch {
-            run.step(unswitch, "unswitch", unit, analyses);
+            run.step(unswitch, &"unswitch", unit, analyses);
         }
         // The swapped nest is cleaned as a peeled loop is.
         if let Some(interchange) = &mut self.interchange {
-            if run.step(interchange, "interchange", unit, analyses) {
+            if run.step(interchange, &"interchange", unit, analyses) {
                 self.scalarized(unit, analyses, run, "interchanged");
                 self.fixed(unit, analyses, run, "interchanged-")?;
             }
         }
         for one in &mut self.last {
-            let stage = one.name();
-            run.step(&mut **one, stage, unit, analyses);
+            let name = one.name();
+            run.step(&mut **one, &name, unit, analyses);
         }
         Ok(run.settled(unit, analyses))
     }
@@ -1468,8 +1468,8 @@ impl Fixed {
         stage: &str,
     ) {
         for one in &mut self.boundary {
-            let stage = format!("{stage}-{}", one.name());
-            run.step(&mut **one, &stage, unit, analyses);
+            let name = one.name();
+            run.step(&mut **one, &format_args!("{stage}-{name}"), unit, analyses);
         }
     }
 
@@ -1520,7 +1520,8 @@ impl Fixed {
                         continue;
                     }
                 }
-                let name = format!("{prefix}r{:02}-{}", iteration + 1, one.name());
+                let pass = one.name();
+                let name = format_args!("{prefix}r{:02}-{pass}", iteration + 1);
                 *settled = (!run.step(&mut **one, &name, unit, analyses)).then(|| (run.version, run.stretches.len()));
             }
             if self.only || run.version == before {
@@ -1809,7 +1810,7 @@ impl Run {
     fn step(
         &mut self,
         pass: &mut dyn FunctionPass,
-        stage: &str,
+        stage: &dyn std::fmt::Display,
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> bool {
@@ -1923,13 +1924,13 @@ impl Run {
     ) {
         if cfg::_unreachable(unit.context, unit.function) {
             analyses.invalidate(unit.function, &PreservedAnalyses::none());
-            self.changed("unreachable", unit, analyses);
+            self.changed(&"unreachable", unit, analyses);
         }
     }
 
     fn changed(
         &mut self,
-        stage: &str,
+        stage: &dyn std::fmt::Display,
         unit: &Unit,
         analyses: &Analyses,
     ) {
