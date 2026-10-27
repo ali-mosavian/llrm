@@ -133,6 +133,7 @@ pub mod libcall;
 pub mod logic_setcc;
 pub mod opcodes;
 mod reassociate;
+pub mod reduce_load_width;
 pub mod schedule;
 pub mod switchcg;
 pub mod x86_carry;
