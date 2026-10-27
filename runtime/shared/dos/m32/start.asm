@@ -14,7 +14,11 @@
 .386
 .model flat
 
+ifdef MAIN_WATCOM
+extrn main_:near
+else
 extrn _main:near
+endif
 extrn LL$STACK_LOW:dword
 extrn LL$EXIT:near
 extrn LL$PSP:word
@@ -41,7 +45,11 @@ start:
 ifdef LANG_INIT
                 call    LANG_INIT
 endif
+ifdef MAIN_WATCOM
+                call    main_
+else
                 call    _main
+endif
                 push    eax
                 call    LL$EXIT
 

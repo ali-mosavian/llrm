@@ -157,6 +157,11 @@ def first_difference(want: list[str], got: list[str]) -> str:
     return ""
 
 
+def start_defines(target: str, flags: list[str]) -> tuple[str, ...]:
+    """The OS layer's defines for a C program's link, plus `MAIN_WATCOM=1` under `-mabi=watcom`: the program's `main` is `main_`, which the start-up calls."""
+    return (*dosbatch.os_defines(target, "c"), *(("MAIN_WATCOM=1",) if "-mabi=watcom" in flags else ()))
+
+
 def compile_command(program: Program, obj: Path) -> list[str]:
     """The compiler's command for `program`; a C program goes through $LLRM_ISEL (see dosbatch.with_isel)."""
     tool, *rest = COMPILERS[program.source.suffix]
@@ -277,7 +282,7 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 else:
                     dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
                 others.append(extra)
-            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others), defines=start_defines(target, program.flags))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"

@@ -16,10 +16,15 @@ endif
 ;; No .dosseg: its order puts every segment outside DGROUP before it, and a far one the image does
 ;; not store would then have its zeros stored. The order here is the linker's, by the first
 ;; appearance of each class: code, DGROUP (data, bss, stack), far data, far bss.
-ifdef NEAR_CODE
-extrn _main:near
+ifdef MAIN_WATCOM
+MAIN_SYMBOL equ <main_>
 else
-extrn _main:far
+MAIN_SYMBOL equ <_main>
+endif
+ifdef NEAR_CODE
+extrn MAIN_SYMBOL:near
+else
+extrn MAIN_SYMBOL:far
 endif
 extrn BSS_LAST:byte
 extrn FBSS_LAST:byte
@@ -120,9 +125,9 @@ ifdef LANG_INIT
                 call    far ptr LANG_INIT
 endif
 ifdef NEAR_CODE
-                call    _main
+                call    MAIN_SYMBOL
 else
-                call    far ptr _main
+                call    far ptr MAIN_SYMBOL
 endif
                 push    ax
                 call    far ptr LL$EXIT

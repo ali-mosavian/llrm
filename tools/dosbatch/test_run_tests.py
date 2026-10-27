@@ -144,3 +144,20 @@ def test_jobs_are_dealt_round_robin_over_the_launches_with_none_lost_or_empty():
     shares = run_tests.dealt(jobs, 8)
     assert sorted(sum(shares, [])) == jobs and all(shares) and len(shares) == 8
     assert run_tests.dealt([1, 2], 8) == [[1], [2]] and run_tests.dealt([], 8) == [[]]
+
+
+def test_a_watcom_program_links_the_start_up_that_calls_main_(tmp_path, monkeypatch):
+    """-mabi=watcom spells `main` as `main_`; the shared start-up called `_main`, so watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed
+    failed to link ('_main is an undefined reference')."""
+    monkeypatch.setattr(dosbatch, "os_defines", lambda target, language: ("STACK_BYTES=4096", "STACK_RESERVE=256"))
+    for target in ("x86-m16", "x86-m32"):
+        plain = run_tests.start_defines(target, ["-O2"])
+        watcom = run_tests.start_defines(target, ["-O2", "-mabi=watcom"])
+        assert "MAIN_WATCOM=1" not in plain and "MAIN_WATCOM=1" in watcom
+        symbols = {}
+        for name, defines in (("plain", plain), ("watcom", watcom)):
+            obj = tmp_path / f"{target}-{name}.obj"
+            dosbatch.assemble(dosbatch.ROOT / "runtime" / "shared" / "dos" / target.split("-")[1] / "start.asm", obj, *defines)
+            symbols[name] = obj.read_bytes()
+        assert b"\x05_main" in symbols["plain"] and b"\x05main_" not in symbols["plain"], target
+        assert b"\x05main_" in symbols["watcom"] and b"\x05_main" not in symbols["watcom"], target
