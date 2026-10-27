@@ -1602,11 +1602,12 @@ impl Builder<'_> {
                 Ok(self.dag.get_node(ISD::BuildPair, vt, &[zero, zero]))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
-            // MIR holds an `x86_fp80` constant as the double nearest its value;
-            // the DAG's is the 80-bit encoding.
+            // MIR holds an `x86_fp80` constant a double holds exactly as that
+            // double; the DAG's is the 80-bit encoding.
             ConstantKind::Float(bits) if vt == EVT::Simple(MVT::F80) => {
                 Ok(self.dag.get_constant_fp(f80_from_double_bits(*bits), vt))
             }
+            ConstantKind::Float80(bits) => Ok(self.dag.get_constant_fp(*bits, vt)),
             ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
             ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
