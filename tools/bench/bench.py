@@ -18,6 +18,8 @@ import sys
 import json
 import math
 import shutil
+import tempfile
+import functools
 import argparse
 import subprocess
 import tomllib
@@ -167,13 +169,28 @@ def c_include_arguments(work: Path) -> list[str]:
     return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
 
 
+@functools.cache
+def reads_noinline_attribute(compiler: str) -> bool:
+    """False where `compiler` rejects `__attribute__((noinline))` (a build before the native C front end hands the source to wccq, which reads it as
+    `__declspec`): all 48 C rows of the main dist were then "wccq failed", and the C kernels went uncompared. True where it cannot be run."""
+    if not Path(compiler).is_file():
+        return True
+    with tempfile.TemporaryDirectory() as directory:
+        probe = Path(directory) / "probe.c"
+        probe.write_text("__attribute__((noinline)) int f(int a) { return a; }\nint main(void) { return f(0); }\n")
+        done = subprocess.run([compiler, str(probe), "-O2", "-o", f"{directory}/probe.obj"], capture_output=True, text=True)
+        return done.returncode == 0 or "__declspec" not in done.stderr
+
+
 def kept_a_call(variant: Variant, work: Path, stem: str) -> tuple[Path, Path] | None:
     """A C kernel's sources that keep it a call without `-fno-inline-functions`, which also kept a recursive function from inlining
     itself, as gcc and clang do (`rectwo` ran 4.2x gcc's clocks, 2.6x with it on): `main` calling it through a volatile pointer
     (vsgcc's `wrap.py`, which a kernel of constants cannot be folded out of), to run and count, and the kernel `noinline` with `main` as
     it was, whose object is the one sized: the pointer is 18 bytes of code and 4 of data no reference compiler's object has. The
     attribute is added to what llrm-c reads; the reference compilers read the source as it is. None where the source has no such kernel
-    (the build then keeps the flag)."""
+    (the build then keeps the flag), and where the compiler cannot read the attribute."""
+    if not reads_noinline_attribute(str(BIN / "llrm-c")):
+        return None
     text = variant.source.read_text()
     found = re.search(rf"^([a-z][a-z ]*[ *]){re.escape(variant.region)}\(", text, re.M)
     if found is None:
@@ -198,9 +215,21 @@ def compile_flags(variant: Variant, opt: str, kept: bool = False) -> list[str]:
     return flags
 
 
-def nib_flags() -> list[str]:
+FLOAT_FLAG = "-fexcess-precision=standard"
+
+
+def float_flags(variant: "Variant") -> list[str]:
+    """The flag a float row is measured with: Nib's f32 is C's fast mode (only memory stores round), so a program's result may differ by an ulp with what stays in an x87
+    register across a loop (nbody_single printed 86015 for 86016 once LoopRotate was on, #3218); a row against a reference is measured with the rounding on, and records it
+    (docs/architecture/redesign-plan.md, floats)."""
+    if variant.language == "nib" and re.search(r"\bf(?:32|64)\b", variant.source.read_text()):
+        return [FLOAT_FLAG]
+    return []
+
+
+def nib_flags(variant: "Variant | None" = None) -> list[str]:
     """What nib-build.sh is given for a Nib benchmark's compile."""
-    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
+    return ["-fno-inline-functions", "-fno-inline-functions-called-once", *(float_flags(variant) if variant else []), *os.environ.get("LLRM_BENCH_FLAGS", "").split()]
 
 
 def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[str, list[str], Path]]:
@@ -209,7 +238,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     nib-build.sh gives llrm-nib; its runtime and foreign parts do not depend on the program."""
     obj = work / f"{stem}.obj"
     if variant.language == "nib":
-        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags()], obj)]
+        return [("llrm-nib", [str(variant.source), "-o", str(obj), f"-{opt}", "--procedure-segments", *nib_flags(variant)], obj)]
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
@@ -243,7 +272,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             exe = work / f"{stem}.exe"
             extras = nib_extras(variant.source)
             done = cpulimit.run([str(ROOT / "tools" / "nib-build.sh"), str(variant.source), str(exe), f"-{opt}", *extras], 300, capture_output=True, text=True,
-                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags())})
+                                env={**os.environ, "LLRM_BIN": str(BIN), "TOOLCHAIN": str(BIN), "NIB_MAP": str(listing), "NIB_OBJ": str(obj), "NIB_FLAGS": " ".join(nib_flags(variant))})
             return (exe, listing) if done.returncode == 0 and exe.exists() else "build: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == FLAT:
             # -g: the function's length, from the image's CodeView, is where the kernel's count ends (the map has none); the code is the same
@@ -306,12 +335,14 @@ def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     if entry is None:
         return {"error": f"unmeasured: kernel folded away: {region} is not in the map, and main does not call one function of its own"}
     result = icount.run(exe, entry, exe.parent)
-    if result.error:
-        return {"error": result.error}
     got = run_tests.lines(result.output.decode("latin1"))
+    if result.error and not (result.error == icount.NEVER_ENTERED and got == want):
+        return {"error": result.error}
     if got != want:
         return {"error": f"prints {got}, want {want}"}
     data, bss = sizes.data_bytes(obj)
+    if result.region is None:  # main prints the kernel's value without calling it (the call folded to a constant): a folded row, not a failed one
+        return {"instructions": 0, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
     return {"instructions": result.region.instructions, "memory_operands": result.region.memory_operands, "clocks": result.region.clocks, "code_bytes": sizes.code_bytes(obj), "data_bytes": data, "bss_bytes": bss}
 
 
@@ -568,6 +599,9 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
         counted = [(key, job) for key, job in jobs if job is not None]
         for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
             out[key] = counts
+    for (_, variant), key in ((one, (one[1].name, one[1].language, opt)) for one in todo):
+        if key in out and (flags := float_flags(variant)) and "skip" not in out[key]:
+            out[key] = {**out[key], "flags": flags}
     out |= measure_flat(flat, folder / "flat")
     jobs = [(key, job if job is not None else (flat[key][0], flat[key][1], None, None, None, None)) for key, job in jobs]
     exes = {key: job[1] for key, job in jobs if "error" not in out[key]} | plain
@@ -776,6 +810,8 @@ def judge(measured: dict, selected: list[str], opts: list[str], base: dict | Non
                     problems.append(f"{label}: works; remove its known mark ({got['xpass']})")
                 elif "error" in got:
                     problems.append(f"{label}: {got['error']}")
+                elif float_flags(variant) and got.get("flags") != float_flags(variant):
+                    problems.append(f"{label}: a float row is measured with {FLOAT_FLAG} and records it in the row; this one records {got.get('flags')}")
                 else:
                     if variant.language == "bq32" and got.get("instructions", 0) >= qb32.BENCH_RATE * 55:
                         problems.append(f"{label}: {got['instructions']} instructions run long enough for a timer tick (55 ms at the flat rate): the extender's handler lands inside the count")

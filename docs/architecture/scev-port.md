@@ -18,7 +18,7 @@ Pinned: LLVM `d1106deb71cc` (clang 24.0.0git), the pinned source and build tree,
 |---|---|---|
 | `graph::loops::{Loop, loops, depth, ...}` in `llrm-analysis` (flat `Vec<Loop>` of `i64` ids, `Body` = forest view) via `cfg::Shape.loops` | the live MIR optimizer: 41 `llrm-transforms` files read `.loops` (lsr, indvars, loopexit, unroll, rotate, lcssa, loopsimplify, hoist, decide, ...); 47 `llrm-transforms` and 18 `llrm-analysis` files import `graph::loops` | `LoopInfo` (stage L1). `graph::loops` keeps the CFG-generic walks that do not know loops (`back_edges`, `irreducible`, `immediate_dominators`, `frontiers`) |
 | `llrm_mir::loops::{LoopInfo, Loop}` over `BlockId` (`loops.rs`, 228 lines), the `Loops` analysis `Shape::of` converts into the flat form | `cfg.rs`, `argpromotion`, `interprocedural`, `llrm-mir` binary | deleted: it is `LoopInfo` with a different name and half the API |
-| `llrm-core::analysis::loops` (`Shaped` per-CFG-shape cache from 479131558, `LirBlock` nodes) | the LIR back end (17 files: `loopslots`, allocation) | stays on `Forest`; its per-shape cache is kept and its test (cache still hits) is the gate for L1 |
+| `llrm-codegen::analysis::loops` (`Shaped` per-CFG-shape cache from 479131558, `LirBlock` nodes) | the LIR back end (17 files: `loopslots`, allocation) | stays on `Forest`; its per-shape cache is kept and its test (cache still hits) is the gate for L1 |
 
 `Forest` already has LoopInfo's tree; it lacks LoopInfo's API (header/latch/preheader/exiting/exit blocks, invariance, mutators) and the identity LoopInfo gives a loop (a `Loop` object that survives edits, which SCEV keys `AddRec`s and dispositions on).
 

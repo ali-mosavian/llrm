@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/runtimecheck.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/runtimecheck.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/runtimecheck.rs sha256:f6d0bcfbb56144bdb2b601ecad7e19164f106541c8040d2b5c10fa73fc6644df -->
+<!-- src: crates/opt/llrm-analysis/src/runtimecheck.rs sha256:b032fdfab45b497d9daf0eb039b8318f7b4d2b97e98d567b6ed8e765bc92104c -->
 
 # runtimecheck
 
@@ -30,3 +30,6 @@ dereferenceable bytes are the value's own. Exit: operand bundles in MIR.
 `insert` takes the loop's backedge-taken counts where LLVM takes a
 `PredicatedScalarEvolution`, which here adds no predicate (D1: SCEV has
 none). Exit: PredicatedScalarEvolution, with `replaceSymbolicStrideSCEV`.
+
+## Used by
+Named by `accessanalysis`, `laa_testing`, `loopaccessinfo`, `looploadelim`, `loopversioning`, `memdepchecker`, `runtimechecks`.

@@ -128,8 +128,7 @@ pub fn merged_into_predecessor(
     block: llrm_mir::module::BlockId,
 ) -> bool {
     let Some(entry) = function.entry() else { return false };
-    let predecessors = function.predecessors(block);
-    let [first] = predecessors[..] else { return false };
+    let Some(first) = function.sole_predecessor(block) else { return false };
     merged_into(function, first, entry) == Some(block)
 }
 

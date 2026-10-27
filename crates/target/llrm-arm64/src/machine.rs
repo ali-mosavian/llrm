@@ -42,6 +42,22 @@ impl Platform {
         }
     }
 
+    /// The platform's data layout description (`machines/datalayout*.toml`).
+    pub fn layout_description(self) -> &'static str {
+        match self {
+            Platform::Darwin => include_str!("machines/datalayout-darwin.toml"),
+            Platform::Linux => include_str!("machines/datalayout.toml"),
+        }
+    }
+
+    /// The platform's object format description (`machines/object*.toml`).
+    pub fn object_description(self) -> &'static str {
+        match self {
+            Platform::Darwin => include_str!("machines/object-darwin.toml"),
+            Platform::Linux => include_str!("machines/object.toml"),
+        }
+    }
+
     /// The `-mcpu` the platform's cost model is for: Apple's M1 on Darwin, the
     /// generic cpu elsewhere.
     pub fn cpu(self) -> &'static str {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/canonexit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/canonexit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/canonexit.rs sha256:caa7a1228e253b6a5155be56027cd23444e8301c35ccb4fa401c1cad89b52663 -->
+<!-- src: crates/opt/llrm-transforms/src/canonexit.rs sha256:50a649fdf8c5dc177fcdeb34468b6f731f1b873b60eda28050c1f9a40e6f4b81 -->
 
 # canonexit
 

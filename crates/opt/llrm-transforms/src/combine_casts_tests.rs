@@ -227,13 +227,14 @@ fn a_trunc_to_bool_is_a_compare() {
 }
 
 /// A trunc learns `nuw` when the high bits are zero and `nsw` when they are
-/// sign copies (`opt` agrees on `nuw`; it rewrites the `ashr` for `nsw`).
+/// sign copies (`opt` agrees on `nuw`; it rewrites an `ashr` to `lshr`, since
+/// SimplifyDemandedInstructionBits sees only the low byte demanded).
 #[test]
 fn a_trunc_learns_its_wrap_flags() {
     let same = "define i8 @f(i32 %x) {\nb0:\n  %s = lshr i32 %x, 24\n  %r = trunc nuw i32 %s to i8\n  ret i8 %r\n}\n";
     assert_eq!(combined_under("n8:16:32:64", &same.replace("trunc nuw", "trunc")), same);
-    let signed = "define i8 @f(i32 %x) {\nb0:\n  %s = ashr i32 %x, 24\n  %r = trunc nsw i32 %s to i8\n  ret i8 %r\n}\n";
-    assert_eq!(combined_under("n8:16:32:64", &signed.replace("trunc nsw", "trunc")), signed);
+    let signed = "define i8 @f(i32 %x) {\nb0:\n  %s = ashr i32 %x, 24\n  %r = trunc i32 %s to i8\n  ret i8 %r\n}\n";
+    assert_eq!(combined_under("n8:16:32:64", signed), same.replace("%s = lshr", "%0 = lshr").replace("%s to", "%0 to"));
 }
 
 /// `canEvaluateZExtd`: `zext (trunc x + 1)` is the wide add under a mask

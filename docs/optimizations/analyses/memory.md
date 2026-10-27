@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memory.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memory.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:045d227923d6cb769fa4cd73ca695467bae89d3a7ef9b404ab4354c9b200cee3 -->
+<!-- src: crates/opt/llrm-analysis/src/memory.rs sha256:ddebe503ca1a4e52c1fe0415cdf067f270a23ed4d55ea325fb88a306f4e9a8a1 -->
 
 # memory
 
@@ -56,7 +56,7 @@ every object it may reach is `constant`.
 `Unit` is what the analyses read: the function, its module's types,
 constants, layout, metadata and globals, the program's target and segment
 layout, and optional facts handed in with `with_*` (shape, registers,
-pointers, annotated references, assumptions, counted loops, bounds, edges,
+pointers, annotated references, assumptions, counted loops, edges,
 exposed frames, GlobalsAA, callbacks). A fact not handed in is derived on
 demand, which is correct but repeats work; [`crate::manager`](manager.md)'s
 `Unit::within` fills them from cached analyses. `Standing` holds the

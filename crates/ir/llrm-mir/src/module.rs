@@ -165,6 +165,31 @@ impl Block {
     }
 }
 
+/// `Function::iter_block`: the links from the head, its size hint the block's
+/// `len`, so a collect allocates once.
+struct BlockIter<'f> {
+    function: &'f Function,
+    at: u32,
+    left: usize,
+}
+
+impl Iterator for BlockIter<'_> {
+    type Item = InstId;
+
+    fn next(&mut self) -> Option<InstId> {
+        (self.at != 0).then(|| {
+            let inst = InstId(self.at - 1);
+            self.at = self.function.instructions[inst.0 as usize].link.1;
+            self.left = self.left.saturating_sub(1);
+            inst
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, None)
+    }
+}
+
 /// Each instruction's place in its block, numbered lazily like LLVM's
 /// `Instruction::Order` (`BasicBlock::renumberInstructions`): an edit of a
 /// block invalidates it, the next ask renumbers the block once. Not part of
@@ -245,6 +270,10 @@ pub struct DebugRecord {
     pub before: InstId,
     pub variable: MetadataId,
     pub what: DebugWhat,
+    /// Of clang's `#dbg_declare(ptr %x, !var, !DIExpression(), !loc)`: the
+    /// expression and the location it was written with.
+    pub expression: Option<MetadataId>,
+    pub location: Option<MetadataId>,
 }
 
 /// An operand slot: which instruction, and which of its operands.
@@ -428,6 +457,8 @@ pub struct Function {
     pub parameter_attrs: Vec<Vec<Attribute>>,
     pub return_attrs: Vec<Attribute>,
     pub attrs: Vec<Attribute>,
+    /// `define ... !dbg !10 {`: the function's metadata attachments.
+    pub metadata: Vec<(String, MetadataId)>,
     pub personality: Option<ConstantId>,
     /// LLVM's calling convention number; 0 is C's.
     pub calling_convention: u32,
@@ -497,6 +528,7 @@ impl Function {
             parameter_attrs: Vec::new(),
             return_attrs: Vec::new(),
             attrs: Vec::new(),
+            metadata: Vec::new(),
             personality: None,
             calling_convention: 0,
             void,
@@ -536,6 +568,15 @@ impl Function {
 
     pub fn is_declaration(&self) -> bool {
         self.layout.is_empty()
+    }
+
+    /// The body is one `unreachable`: what the inliner leaves of a private
+    /// function at its last inlined call, in place of the deletion the pin's
+    /// CGSCC walk makes (`removeDeadFunctions`). No pass has a use for it.
+    pub fn is_deleted(&self) -> bool {
+        let mut body = self.walk();
+        body.next().is_some_and(|(_, inst)| self.instruction(inst).opcode == Opcode::Unreachable)
+            && body.next().is_none()
     }
 
     /// Its declaration: type, attributes and unnamed parameters, no body.
@@ -604,9 +645,21 @@ impl Function {
         self.instructions.len()
     }
 
+    /// How many instructions the function holds room for before it grows.
+    pub fn instruction_capacity(&self) -> usize {
+        self.instructions.capacity()
+    }
+
+    /// The instructions in the layout (`Function::getInstructionCount`): the
+    /// erased and unplaced are not counted.
+    pub fn live_instructions(&self) -> usize {
+        self.layout.iter().map(|&block| self.iter_block(block).count()).sum()
+    }
+
     /// Each instruction's index in its block, by id; erased and unplaced ones
     /// are zero.
     pub fn positions(&self) -> Vec<u32> {
+        crate::counts::bump(crate::counts::Event::Positions);
         let mut positions = vec![0; self.instructions.len()];
         for &block in self.layout() {
             for (index, inst) in self.iter_block(block).enumerate() {
@@ -635,14 +688,8 @@ impl Function {
         &self,
         id: BlockId,
     ) -> impl Iterator<Item = InstId> + '_ {
-        let mut at = self.blocks[id.0 as usize].head;
-        std::iter::from_fn(move || {
-            (at != 0).then(|| {
-                let inst = InstId(at - 1);
-                at = self.instructions[inst.0 as usize].link.1;
-                inst
-            })
-        })
+        let block = &self.blocks[id.0 as usize];
+        BlockIter { function: self, at: block.head, left: block.len as usize }
     }
 
     /// `inst`'s number in its block, the block renumbered if an edit made its
@@ -666,6 +713,16 @@ impl Function {
             numbers.valid[block.0 as usize] = true;
         }
         Some((block, numbers.at[inst.0 as usize]))
+    }
+
+    /// `inst`'s index in its block, a block's numbers made once and kept until
+    /// an edit of it: with the block's place in the layout, `inst`'s place in
+    /// program order, without walking the function (`positions`).
+    pub fn number_in_block(
+        &self,
+        inst: InstId,
+    ) -> Option<u32> {
+        self.number_of(inst).map(|(_, number)| number)
     }
 
     /// `Instruction::getNextNode`: what follows `inst` in its block.
@@ -748,7 +805,7 @@ impl Function {
         self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
-    /// The operand slots naming `block`: terminators' and phis'.
+    /// The operand slots naming `block`: terminators'.
     pub fn block_users(
         &self,
         block: BlockId,
@@ -756,10 +813,20 @@ impl Function {
         self.uses.users(crate::uselist::Held::Block(block.0))
     }
 
+    /// The incoming-block slots of phis naming `block`.
+    pub fn phi_block_users(
+        &self,
+        block: BlockId,
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::PhiBlock(block.0))
+    }
+
     pub fn terminator(
         &self,
         block: BlockId,
     ) -> Option<InstId> {
+        #[cfg(test)]
+        TERMINATOR_LOOKUPS.with(|count| count.set(count.get() + 1));
         self.blocks[block.0 as usize].last().filter(|&last| self.instruction(last).opcode.is_terminator())
     }
 
@@ -768,7 +835,30 @@ impl Function {
         &self,
         block: BlockId,
     ) -> crate::blocklist::BlockList {
-        let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
+        let Some(last) = self.terminator(block) else { return crate::blocklist::BlockList::new() };
+        let instruction = self.instruction(last);
+        // The branches are nearly every terminator: their targets go straight
+        // into the list, with no scan for a repeat.
+        if instruction.opcode == Opcode::Br {
+            let mut out = crate::blocklist::BlockList::new();
+            match instruction.operands[..] {
+                [Operand::Block(only)] => {
+                    out.push(only);
+                    return out;
+                }
+                [_, Operand::Block(taken), Operand::Block(other)] => {
+                    out.push(taken);
+                    if other != taken {
+                        out.push(other);
+                    }
+                    return out;
+                }
+                _ => {}
+            }
+        }
+        #[cfg(test)]
+        GENERIC_SUCCESSOR_SCANS.with(|count| count.set(count.get() + 1));
+        let operands = instruction.operands.as_slice();
         if operands.len() > SCAN {
             return Self::listed_once(operands);
         }
@@ -873,7 +963,23 @@ impl Function {
 
     /// Instructions in layout order, with their block.
     pub fn walk(&self) -> impl Iterator<Item = (BlockId, InstId)> + '_ {
-        self.layout.iter().flat_map(move |&block| self.iter_block(block).map(move |one| (block, one)))
+        self.layout.iter().flat_map(move |&block| self.links_of(block).map(move |one| (block, one)))
+    }
+
+    /// `iter_block` without its size: a walk of every block that collects none
+    /// pays no count per instruction.
+    fn links_of(
+        &self,
+        id: BlockId,
+    ) -> impl Iterator<Item = InstId> + '_ {
+        let mut at = self.blocks[id.0 as usize].head;
+        std::iter::from_fn(move || {
+            (at != 0).then(|| {
+                let inst = InstId(at - 1);
+                at = self.instructions[inst.0 as usize].link.1;
+                inst
+            })
+        })
     }
 
     /// The log of changes since the last `take_changes`. They stay in the log,
@@ -916,7 +1022,7 @@ impl Function {
     pub fn attributes_stamp(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         STAMPS.with(|count| count.set(count.get() + 1));
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = crate::hash::Fx::default();
         self.ty.hash(&mut hasher);
         self.parameter_attrs.hash(&mut hasher);
         self.return_attrs.hash(&mut hasher);
@@ -999,9 +1105,12 @@ pub enum Linkage {
     Common,
     ExternWeak,
     AvailableExternally,
+    /// A global array that linking concatenates with the others of its name
+    /// (`llvm.global_ctors`, `llvm.used`).
+    Appending,
 }
 
-pub const LINKAGE: [(Linkage, &str); 9] = [
+pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Internal, "internal"),
     (Linkage::Private, "private"),
     (Linkage::Weak, "weak"),
@@ -1011,6 +1120,7 @@ pub const LINKAGE: [(Linkage, &str); 9] = [
     (Linkage::Common, "common"),
     (Linkage::ExternWeak, "extern_weak"),
     (Linkage::AvailableExternally, "available_externally"),
+    (Linkage::Appending, "appending"),
 ];
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -1046,12 +1156,16 @@ pub enum GlobalKind {
 pub struct GlobalName {
     text: Option<String>,
     intrinsic: Option<crate::intrinsics::Intrinsic>,
+    /// `pattern::intrinsic_id_of_name` of the text, found once with it: the
+    /// combiner asked it of every call it visited.
+    intrinsic_id: Option<crate::valuetracking::pattern::IntrinsicId>,
 }
 
 impl From<Option<String>> for GlobalName {
     fn from(text: Option<String>) -> Self {
         let intrinsic = text.as_deref().and_then(crate::intrinsics::Intrinsic::named);
-        GlobalName { text, intrinsic }
+        let intrinsic_id = text.as_deref().and_then(crate::valuetracking::pattern::intrinsic_id_of_name);
+        GlobalName { text, intrinsic, intrinsic_id }
     }
 }
 
@@ -1065,6 +1179,11 @@ impl GlobalName {
     /// The name as an owned `Option<String>`.
     pub fn owned(&self) -> Option<String> {
         self.text.clone()
+    }
+
+    /// `Function::getIntrinsicID` for the intrinsics of `pattern::IntrinsicId`.
+    pub fn intrinsic_id(&self) -> Option<crate::valuetracking::pattern::IntrinsicId> {
+        self.intrinsic_id
     }
 }
 
@@ -1137,12 +1256,25 @@ pub enum MetadataOperand {
     Node(MetadataId),
     String(String),
     Constant(ConstantId),
+    /// A bare word of a [`Special`] node, as written: an enumerator
+    /// (`DW_ATE_signed`), a flag set (`DIFlagA | DIFlagB`), `true`.
+    Ident(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MetadataNode {
     pub distinct: bool,
     pub operands: Vec<MetadataOperand>,
+}
+
+/// What a node written `!Kind(field: value, ...)` is (LLVM's specialized
+/// metadata, `DILocation`, `DISubprogram`...): its operands are the values in
+/// order, `fields` their names, empty for one given by position
+/// (`!DIExpression(DW_OP_plus_uconst, 4)`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Special {
+    pub kind: String,
+    pub fields: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1153,6 +1285,14 @@ pub struct Module {
     pub globals: Vec<GlobalValue>,
     pub metadata: Vec<MetadataNode>,
     pub named_metadata: Vec<(String, Vec<MetadataId>)>,
+    /// The nodes of `metadata` written as specialized metadata.
+    pub special: std::collections::BTreeMap<MetadataId, Special>,
+    /// The attachments of a variable (`@g = global i32 3, !dbg !0`), by the
+    /// global's index in `globals`.
+    pub global_metadata: std::collections::BTreeMap<u32, Vec<(String, MetadataId)>>,
+    /// The `section "NAME"` of a global, by its name (`#pragma data_seg`,
+    /// `#pragma code_seg`). Printing does not carry it.
+    pub sections: std::collections::BTreeMap<String, String>,
 }
 
 impl Module {
@@ -1230,3 +1370,12 @@ impl Module {
 
 /// Operands scanned for a repeat before a set is used.
 const SCAN: usize = 16;
+
+#[cfg(test)]
+thread_local! {
+    /// `Function::terminator` calls, for the tests that count them.
+    pub(crate) static TERMINATOR_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// `Function::successors` calls that read a terminator's operands the long
+    /// way.
+    pub(crate) static GENERIC_SUCCESSOR_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

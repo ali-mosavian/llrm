@@ -190,8 +190,18 @@ impl ScalarEvolution {
         out.push('\n');
         if exiting.len() > 1 {
             for &block in &exiting {
-                let ec = self.get_exit_count(cx, header, block, ExitCountKind::Exact);
-                out += &format!("  exit count for {}: {}\n", unnamed(block), hint(self, ec));
+                let mut ec = self.get_exit_count(cx, header, block, ExitCountKind::Exact);
+                out += &format!("  exit count for {}: {}", unnamed(block), hint(self, ec));
+                if ec == cnc {
+                    // Retry with predicates.
+                    let mut predicates = Vec::new();
+                    ec = self.get_predicated_exit_count(cx, header, block, &mut predicates, ExitCountKind::Exact);
+                    if ec != cnc {
+                        out += &format!("\n  predicated exit count for {}: {}", unnamed(block), hint(self, ec));
+                        out += &self.print_predicates(cx, labels, "\n   Predicates:\n", &predicates);
+                    }
+                }
+                out.push('\n');
             }
         }
         out += &name;
@@ -219,13 +229,115 @@ impl ScalarEvolution {
         out.push('\n');
         if exiting.len() > 1 {
             for &block in &exiting {
-                let ec = self.get_exit_count(cx, header, block, ExitCountKind::SymbolicMaximum);
-                out += &format!("  symbolic max exit count for {}: {}\n", unnamed(block), hint(self, ec));
+                let mut ec = self.get_exit_count(cx, header, block, ExitCountKind::SymbolicMaximum);
+                out += &format!("  symbolic max exit count for {}: {}", unnamed(block), hint(self, ec));
+                if ec == cnc {
+                    // Retry with predicates.
+                    let mut predicates = Vec::new();
+                    ec = self.get_predicated_exit_count(
+                        cx,
+                        header,
+                        block,
+                        &mut predicates,
+                        ExitCountKind::SymbolicMaximum,
+                    );
+                    if ec != cnc {
+                        out += &format!(
+                            "\n  predicated symbolic max exit count for {}: {}",
+                            unnamed(block),
+                            hint(self, ec)
+                        );
+                        out += &self.print_predicates(cx, labels, "\n   Predicates:\n", &predicates);
+                    }
+                }
+                out.push('\n');
             }
+        }
+
+        let mut preds = Vec::new();
+        let pbt = self.get_predicated_backedge_taken_count(cx, header, &mut preds);
+        if pbt != btc {
+            out += &name;
+            if pbt != cnc {
+                out += &format!("Predicated backedge-taken count is {}", hint(self, pbt));
+            } else {
+                out += "Unpredictable predicated backedge-taken count.";
+            }
+            out.push('\n');
+            out += &self.print_predicates(cx, labels, " Predicates:\n", &preds);
+        }
+        preds.clear();
+
+        let pred_constant_max = self.get_predicated_constant_max_backedge_taken_count(cx, header, &mut preds);
+        if pred_constant_max != constant_max {
+            out += &name;
+            if pred_constant_max != cnc {
+                out += &format!("Predicated constant max backedge-taken count is {}", hint(self, pred_constant_max));
+            } else {
+                out += "Unpredictable predicated constant max backedge-taken count.";
+            }
+            out.push('\n');
+            out += &self.print_predicates(cx, labels, " Predicates:\n", &preds);
+        }
+        preds.clear();
+
+        let pred_symbolic_max = self.get_predicated_symbolic_max_backedge_taken_count(cx, header, &mut preds);
+        if symbolic != pred_symbolic_max {
+            out += &name;
+            if pred_symbolic_max != cnc {
+                out += &format!("Predicated symbolic max backedge-taken count is {}", hint(self, pred_symbolic_max));
+            } else {
+                out += "Unpredictable predicated symbolic max backedge-taken count.";
+            }
+            out.push('\n');
+            out += &self.print_predicates(cx, labels, " Predicates:\n", &preds);
         }
         if self.has_loop_invariant_backedge_taken_count(cx, header) {
             out += &name;
             out += &format!("Trip multiple is {}\n", self.get_small_constant_trip_multiple(cx, header));
+        }
+        out
+    }
+
+    /// `head`, then each predicate printed at depth 4.
+    fn print_predicates(
+        &mut self,
+        cx: &Cx,
+        labels: &Labels,
+        head: &str,
+        predicates: &[super::wrap_predicate::Predicate],
+    ) -> String {
+        use super::wrap_predicate::{IncrementWrapFlags, Predicate};
+        let mut out = head.to_owned();
+        for one in predicates {
+            out += "    ";
+            match one {
+                Predicate::Compare(compare) if compare.pred == llrm_mir::opcode::IntPredicate::Eq => {
+                    out += &format!(
+                        "Equal predicate: {} == {}\n",
+                        self.print(cx, labels, compare.lhs),
+                        self.print(cx, labels, compare.rhs)
+                    );
+                }
+                Predicate::Compare(compare) => {
+                    out += &format!(
+                        "Compare predicate: {} {}) {}\n",
+                        self.print(cx, labels, compare.lhs),
+                        crate::depanalysis::predicate_name(compare.pred),
+                        self.print(cx, labels, compare.rhs)
+                    );
+                }
+                Predicate::Wrap(wrap) => {
+                    out += &format!("{} Added Flags: ", self.print(cx, labels, wrap.ar));
+                    if wrap.flags.0 & IncrementWrapFlags::NUSW.0 != 0 {
+                        out += "<nusw>";
+                    }
+                    if wrap.flags.0 & IncrementWrapFlags::NSSW.0 != 0 {
+                        out += "<nssw>";
+                    }
+                    out.push('\n');
+                }
+            }
         }
         out
     }

@@ -34,6 +34,8 @@ pub struct DataLayout {
     /// The preferred alignment of an aggregate, in bytes: `a:0:64`.
     aggregate_pref: u64,
     pub alloca_space: u32,
+    /// The natural stack alignment in bytes: `S32`.
+    pub stack_align: Option<u64>,
 }
 
 impl Default for DataLayout {
@@ -53,6 +55,7 @@ impl Default for DataLayout {
             aggregate_align: 1,
             aggregate_pref: 8,
             alloca_space: 0,
+            stack_align: None,
         }
     }
 }
@@ -86,7 +89,8 @@ impl DataLayout {
                         layout.pointers.insert(space as u32, one);
                     }
                 }
-                "m" | "S" | "F" | "G" | "P" | "Fi" | "Fn" => {}
+                "S" => layout.stack_align = numbers(rest)?.first().map(|&bits| bytes(bits)).filter(|&one| one > 0),
+                "m" | "F" | "G" | "P" | "Fi" | "Fn" => {}
                 "A" => layout.alloca_space = numbers(rest)?.first().copied().unwrap_or(0) as u32,
                 "p" => {
                     let (space, fields) = match rest.split_once(':') {
@@ -614,5 +618,23 @@ mod tests {
             1,
             "a target of 64K segments does not raise a large global"
         );
+    }
+
+    /// The m16 datalayout names `f80:16` since the fork's clang does; the
+    /// string without it meant the same (a long double of 10 bytes, 2-aligned),
+    /// so no object of the Watcom front end changes.
+    #[test]
+    fn f80_16_states_what_a_layout_without_f80_already_meant() {
+        let old = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
+        let new = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32";
+        let (old, new) = (DataLayout::parse(old).unwrap(), DataLayout::parse(new).unwrap());
+        use crate::types::FloatKind;
+        for kind in [FloatKind::Float, FloatKind::Double, FloatKind::X86Fp80] {
+            assert_eq!(
+                (old.float_align(kind), old.float_alloc_size(kind)),
+                (new.float_align(kind), new.float_alloc_size(kind))
+            );
+        }
+        assert_eq!(new.float_alloc_size(FloatKind::X86Fp80), 10);
     }
 }

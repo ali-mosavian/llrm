@@ -20,13 +20,9 @@
 //!   `BinomialCoefficient` computes at `W + T` bits (`T` the factors of two in
 //!   `K!`, plus one), and `Ap` holds 128: past that the coefficient is
 //!   CouldNotCompute.
-//! - D-T2 (temporary,
-//!   [#2326](https://github.com/ali-mosavian/llrm/issues/2326)): quadratic
-//!   recurrences. `SolveQuadraticAddRecExact` and
-//!   `SolveQuadraticAddRecRange` need `SolveQuadraticEquationWrap` over
-//!   integers three times as wide as the coefficients, which `Ap` does not
-//!   hold. A quadratic recurrence's count is CouldNotCompute, as LLVM's is
-//!   where its solver finds no root.
+//! - Quadratic recurrences (`quadratic.rs`, DEVIATE Q1): coefficients up to 41
+//!   bits; wider, the count is CouldNotCompute, as LLVM's is where its solver
+//!   finds no root.
 //!
 //! # Example
 //! `{0,+,1} < %n` is taken `(-1 + %n)` times.
@@ -242,6 +238,7 @@ impl ScalarEvolution {
         a: Ap,
         b: Scev,
         header: BlockId,
+        predicates: Option<&mut Vec<super::wrap_predicate::Predicate>>,
     ) -> Scev {
         let bw = a.width;
         debug_assert!(bw == self.get_type_size_in_bits(cx, self.type_of(b)));
@@ -277,8 +274,13 @@ impl ScalarEvolution {
             let zero = self.get_zero(cx, self.type_of(b));
             if !self.is_known_predicate_scev(cx, IntPredicate::Eq, urem, zero) {
                 // Try to add a predicate ensuring B is a multiple of
-                // 1 << Mult2: predicates are DEVIATE 1.
-                return self.get_could_not_compute();
+                // 1 << Mult2.
+                let Some(predicates) = predicates else { return self.get_could_not_compute() };
+                // Avoid adding a predicate that is known to be false.
+                if self.is_known_predicate_scev(cx, IntPredicate::Ne, urem, zero) {
+                    return self.get_could_not_compute();
+                }
+                predicates.push(self.get_equal_predicate(urem, zero));
             }
         }
 
@@ -310,6 +312,7 @@ impl ScalarEvolution {
         v: Scev,
         header: BlockId,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
         // This is only used for loops with a "x != y" exit test. The exit
         // condition is now expressed as a single expression, V = x-y. So the
@@ -328,14 +331,30 @@ impl ScalarEvolution {
             return ExitLimit::could_not_compute(self);
         }
 
-        let add_rec = self.strip_injective_functions(v);
+        let mut predicates: Vec<super::wrap_predicate::Predicate> = Vec::new();
+        let mut add_rec = self.strip_injective_functions(v);
+        if !self.is_add_rec_of(add_rec, header) && allow_predicates {
+            // Try to make this an AddRec using runtime tests, in the first X
+            // iterations of this loop, where X is the SCEV expression found by
+            // the algorithm below.
+            if let Some(converted) = self.convert_scev_to_add_rec_with_predicates(cx, v, header, &mut predicates) {
+                add_rec = converted;
+            }
+        }
         if !self.is_add_rec_of(add_rec, header) {
             return ExitLimit::could_not_compute(self);
         }
 
         // If this is a quadratic (3-term) AddRec {L,+,M,+,N}, find the roots
-        // of the quadratic equation to solve it (D-T2: not translated).
+        // of the quadratic equation to solve it.
         if self.is_quadratic(add_rec) && self.type_of(add_rec).is_integer() {
+            // We can only use this value if the chrec ends up with an exact
+            // zero value at this index. When solving for "X*X != 5", for
+            // example, we should not accept a root of 2.
+            if let Some((root, width)) = self.solve_quadratic_add_rec_exact(cx, add_rec) {
+                let r = self.get_constant(Ap::new(width, root as u128));
+                return ExitLimit::new(self, r, r, r, false);
+            }
             return ExitLimit::could_not_compute(self);
         }
 
@@ -415,7 +434,7 @@ impl ScalarEvolution {
                 max_be_count = max_be_count.umin(max.sub(Ap::one(max.width)));
             }
             let constant_max = self.get_constant(max_be_count);
-            return ExitLimit::new(self, distance, constant_max, distance, false);
+            return ExitLimit::new(self, distance, constant_max, distance, false).with_predicates(predicates);
         }
 
         // If the condition controls loop exit (the loop exits only if the
@@ -447,7 +466,7 @@ impl ScalarEvolution {
                 constant_max = self.get_constant(max_int.umin(exact_max));
             }
             let symbolic_max = if exact == self.get_could_not_compute() { constant_max } else { exact };
-            return ExitLimit::new(self, exact, constant_max, symbolic_max, false);
+            return ExitLimit::new(self, exact, constant_max, symbolic_max, false).with_predicates(predicates);
         }
 
         // Solve the general equation.
@@ -456,7 +475,13 @@ impl ScalarEvolution {
             return ExitLimit::could_not_compute(self);
         }
         let negative_start = self.get_negative_scev(cx, start, 0);
-        let e = self.solve_lin_equation_with_overflow(cx, step_c, negative_start, header);
+        let e = self.solve_lin_equation_with_overflow(
+            cx,
+            step_c,
+            negative_start,
+            header,
+            allow_predicates.then_some(&mut predicates),
+        );
 
         let mut m = e;
         if e != self.get_could_not_compute() {
@@ -466,7 +491,7 @@ impl ScalarEvolution {
             m = self.get_constant(max_with_guards.umin(e_max));
         }
         let s = if e == self.get_could_not_compute() { m } else { e };
-        ExitLimit::new(self, e, m, s, false)
+        ExitLimit::new(self, e, m, s, false).with_predicates(predicates)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10921
@@ -510,7 +535,10 @@ impl ScalarEvolution {
         header: BlockId,
         is_signed: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
+        let mut predicates: Vec<super::wrap_predicate::Predicate> = Vec::new();
+        let mut predicated_iv = false;
         let mut iv = self.is_add_rec_of(lhs, header).then_some(lhs);
         if iv.is_none()
             && let Kind::ZeroExtend(zext) = self.node(lhs).kind
@@ -572,6 +600,14 @@ impl ScalarEvolution {
                     iv = self.is_add_rec_of(s, header).then_some(s);
                 }
             }
+        }
+
+        if iv.is_none() && allow_predicates {
+            // Try to make this an AddRec using runtime tests, in the first X
+            // iterations of this loop, where X is the SCEV expression found by
+            // the algorithm below.
+            iv = self.convert_scev_to_add_rec_with_predicates(cx, lhs, header, &mut predicates);
+            predicated_iv = true;
         }
 
         // Avoid weird loops
@@ -649,7 +685,8 @@ impl ScalarEvolution {
             //
             // The positive stride case is the same as isKnownPositive(Stride)
             // returning true (original behavior of the function).
-            if !no_wrap
+            if predicated_iv
+                || !no_wrap
                 || !self.loop_is_finite_by_assumption(cx, header)
                 || !self.loop_has_no_abnormal_exits(cx, header)
             {
@@ -954,6 +991,7 @@ impl ScalarEvolution {
 
         let symbolic_max_be_count = if be_count == unknown { constant_max_be_count } else { be_count };
         ExitLimit::new(self, be_count, constant_max_be_count, symbolic_max_be_count, max_or_zero)
+            .with_predicates(predicates)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L13849
@@ -967,17 +1005,26 @@ impl ScalarEvolution {
         header: BlockId,
         is_signed: bool,
         controls_only_exit: bool,
+        allow_predicates: bool,
     ) -> ExitLimit {
+        let mut predicates: Vec<super::wrap_predicate::Predicate> = Vec::new();
         // We handle only IV > Invariant
         if !self.is_loop_invariant(cx, rhs, Some(header)) {
             return ExitLimit::could_not_compute(self);
         }
 
-        // Avoid weird loops
-        if !self.is_add_rec_of(lhs, header) || !self.is_affine(lhs) {
-            return ExitLimit::could_not_compute(self);
+        let mut iv = self.is_add_rec_of(lhs, header).then_some(lhs);
+        if iv.is_none() && allow_predicates {
+            // Try to make this an AddRec using runtime tests, in the first X
+            // iterations of this loop, where X is the SCEV expression found by
+            // the algorithm below.
+            iv = self.convert_scev_to_add_rec_with_predicates(cx, lhs, header, &mut predicates);
         }
-        let iv = lhs;
+
+        // Avoid weird loops
+        let Some(iv) = iv.filter(|&iv| self.is_add_rec_of(iv, header) && self.is_affine(iv)) else {
+            return ExitLimit::could_not_compute(self);
+        };
 
         let wrap_type = if is_signed { flags::NSW } else { flags::NUW };
         let no_wrap = controls_only_exit && self.get_no_wrap_flags(iv, wrap_type) != 0;
@@ -1076,7 +1123,7 @@ impl ScalarEvolution {
         let symbolic_max_be_count =
             if be_count == self.get_could_not_compute() { constant_max_be_count } else { be_count };
 
-        ExitLimit::new(self, be_count, constant_max_be_count, symbolic_max_be_count, false)
+        ExitLimit::new(self, be_count, constant_max_be_count, symbolic_max_be_count, false).with_predicates(predicates)
     }
 }
 
@@ -1113,7 +1160,7 @@ impl ScalarEvolution {
     /// `getStrengthenedNoWrapFlagsFromBinOp`: the `(nuw, nsw)` the no-wrap
     /// proofs give the add, sub, mul or shl by a constant `inst`, with the ones
     /// it has; none if it gains none. (`UseContextForNoWrapFlagInference` is
-    /// off, its `cl::opt` default, so no context instruction.)
+    /// on, its `cl::opt` default: `inst` is the context.)
     pub fn get_strengthened_no_wrap_flags_from_bin_op(
         &mut self,
         cx: &Cx,
@@ -1153,11 +1200,11 @@ impl ScalarEvolution {
             return None;
         }
 
-        if !has_nuw && self.will_not_overflow(cx, opcode, false, lhs, rhs, None) {
+        if !has_nuw && self.will_not_overflow(cx, opcode, false, lhs, rhs, Some(inst)) {
             nuw = true;
             deduced = true;
         }
-        if can_use_nsw && !has_nsw && self.will_not_overflow(cx, opcode, true, lhs, rhs, None) {
+        if can_use_nsw && !has_nsw && self.will_not_overflow(cx, opcode, true, lhs, rhs, Some(inst)) {
             nsw = true;
             deduced = true;
         }
@@ -1443,7 +1490,119 @@ impl ScalarEvolution {
             return exit_value;
         }
 
-        // D-T2: a quadratic recurrence's iterations in range are not solved.
+        if operands.len() == 3
+            && let Some((x, width)) = self.solve_quadratic_add_rec_range(cx, add_rec, range)
+        {
+            return self.get_constant(Ap::new(width, x as u128));
+        }
+
         self.get_could_not_compute()
+    }
+
+    /// `evaluateAtIteration` of `add_rec` at the constant `x` (of `width`
+    /// bits), as a number, if it folds to one.
+    fn evaluate_chrec_at_constant(
+        &mut self,
+        cx: &Cx,
+        add_rec: Scev,
+        x: i128,
+        width: u32,
+    ) -> Option<Ap> {
+        let it = self.get_constant(Ap::new(width, x as u128));
+        let value = self.evaluate_at_iteration(cx, add_rec, it);
+        self.as_constant(value)
+    }
+
+    /// `GetQuadraticEquation` of `{L,+,M,+,N}`: the equation, the multiplier
+    /// and the coefficients' bit width, if all are constants.
+    fn quadratic_equation_of(
+        &self,
+        cx: &Cx,
+        add_rec: Scev,
+    ) -> Option<(i128, i128, i128, i128, u32)> {
+        let operands = self.operands(add_rec);
+        let (l, m, n) = (
+            self.as_constant(operands[0].scev)?,
+            self.as_constant(operands[1].scev)?,
+            self.as_constant(operands[2].scev)?,
+        );
+        let bit_width = l.width;
+        let _ = cx;
+        let (a, b, c, t) =
+            super::quadratic::quadratic_equation(l.sext_value(), m.sext_value(), n.sext_value(), bit_width)?;
+        Some((a, b, c, t, bit_width))
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10603
+    /// `SolveQuadraticAddRecExact`: the least `n >= 0` at which the quadratic
+    /// recurrence is exactly zero, with the width of the solution.
+    fn solve_quadratic_add_rec_exact(
+        &mut self,
+        cx: &Cx,
+        add_rec: Scev,
+    ) -> Option<(i128, u32)> {
+        let (a, b, c, _, bit_width) = self.quadratic_equation_of(cx, add_rec)?;
+        let (x, width) = super::quadratic::solve_quadratic_equation_wrap(a, b, c, bit_width + 1, bit_width + 1)?;
+        let value = self.evaluate_chrec_at_constant(cx, add_rec, x, width)?;
+        if !value.is_zero() {
+            return None;
+        }
+        super::quadratic::trunc_if_possible(Some((x, width)), bit_width)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10636
+    /// `SolveQuadraticAddRecRange`: the least `n` at which the quadratic
+    /// recurrence `{0,+,M,+,N}` leaves `range` while `n - 1` is in it.
+    fn solve_quadratic_add_rec_range(
+        &mut self,
+        cx: &Cx,
+        add_rec: Scev,
+        range: &ConstantRange,
+    ) -> Option<(i128, u32)> {
+        use super::quadratic::{min_optional, solve_quadratic_equation_wrap as solve, trunc_if_possible};
+        let (a, b, _, m, bit_width) = self.quadratic_equation_of(cx, add_rec)?;
+
+        // The solution is "unknown" (no answer yet) or known, possibly absent.
+        let solve_for_boundary = |this: &mut Self, bound: i128| -> (Option<(i128, u32)>, bool) {
+            // The quadratic equation's multiplier.
+            let Some(bound) = bound.checked_mul(m) else { return (None, false) };
+            // Signed overflow and unsigned overflow: pick the lower solution.
+            let so = if bit_width > 1 { solve(a, b, -bound, bit_width + 1, bit_width) } else { None };
+            let uo = solve(a, b, -bound, bit_width + 1, bit_width + 1);
+            let leaves_range = |this: &mut Self, (x, width): (i128, u32)| -> Option<bool> {
+                let v0 = this.evaluate_chrec_at_constant(cx, add_rec, x, width)?;
+                if range.contains(v0.bits) {
+                    return Some(false);
+                }
+                // X should be at least 1, so X-1 is non-negative.
+                let v1 = this.evaluate_chrec_at_constant(cx, add_rec, x - 1, width)?;
+                Some(range.contains(v1.bits))
+            };
+            // No solution found does not mean none exists.
+            let (Some(so), Some(uo)) = (so, uo) else { return (None, false) };
+            // Check the smaller value first to see if it leaves the range.
+            let min = min_optional(Some(so), Some(uo)).expect("both exist");
+            if leaves_range(this, min) == Some(true) {
+                return (Some(min), true);
+            }
+            let max = if min == so { uo } else { so };
+            if leaves_range(this, max) == Some(true) {
+                return (Some(max), true);
+            }
+            // Solutions were found, but were eliminated.
+            (None, true)
+        };
+
+        // The lower bound is inclusive: subtract 1 to represent the exiting
+        // value.
+        let lower = Ap::new(bit_width, range.lower).sext_value() - 1;
+        let upper = Ap::new(bit_width, range.upper).sext_value();
+        let (sl, sl_known) = solve_for_boundary(self, lower);
+        let (su, su_known) = solve_for_boundary(self, upper);
+        // If any of the solutions was unknown, no meaningful conclusion.
+        if !sl_known || !su_known {
+            return None;
+        }
+        trunc_if_possible(min_optional(sl, su), bit_width)
     }
 }

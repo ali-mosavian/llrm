@@ -134,7 +134,7 @@ impl Rule<'_> {
         let fresh = |op: &str, name: String, dests: usize| -> Result<String, String> {
             let (dests, sources) = split(dests)?;
             Ok(format!(
-                "Semantics {{ op: Operation::{op}, name: Some({name}.to_owned()), dests: vec![{dests}], sources: vec![{sources}], target: None, indirect: false, table: Vec::new() }}"
+                "Semantics {{ op: Operation::{op}, name: Some({name}.into()), dests: vec![{dests}], sources: vec![{sources}], target: None, indirect: false, table: Vec::new(), repeat: false }}"
             ))
         };
         match head {
@@ -345,6 +345,23 @@ fn reachable(
     }
 }
 
+/// The operations a rule's first instruction may have, over the group's rules:
+/// `head` answers no state for any other.
+fn first_operations(group: &RGroup) -> String {
+    let mut ops: Vec<&str> = Vec::new();
+    for rule in &group.rules {
+        let Some(first) = rule.insns.first().filter(|insn| !insn.ops.is_empty()) else {
+            return String::new();
+        };
+        for op in &first.ops {
+            if !ops.contains(&op.as_str()) {
+                ops.push(op);
+            }
+        }
+    }
+    ops.iter().map(|op| format!("Operation::{op}")).collect::<Vec<_>>().join(", ")
+}
+
 fn emit_group(
     program: &Program,
     table: &Table,
@@ -358,8 +375,9 @@ fn emit_group(
     let _ = writeln!(out, "pub mod {name} {{\n    use super::*;\n");
     let _ = writeln!(
         out,
-        "    pub static MATCHER: Matcher = Matcher {{ width: {}, head, tail, cross: {} }};\n",
+        "    pub static MATCHER: Matcher = Matcher {{ width: {}, first: &[{}], head, tail, cross: {} }};\n",
         group.width,
+        first_operations(group),
         if gap { "Some(cross)" } else { "None" }
     );
 

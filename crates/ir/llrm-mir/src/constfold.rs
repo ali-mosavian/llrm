@@ -27,9 +27,14 @@
 //! `build::Builder::{binary, icmp, fcmp, cast, select}`; `constantfolding` for
 //! `FCmp`.
 
+use std::cmp::Ordering;
+
+use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_SINGLE};
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
+use crate::fp80;
+use crate::fpclass::RoundingMode;
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
-use crate::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate};
+use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
 use crate::types::{FloatKind, Type, TypeId};
 
 /// A number and its width: `ConstantInt`, and the zero a `Null` or `Zero` is.
@@ -251,6 +256,17 @@ fn binary_with_undef(
     }
 }
 
+/// Whether `id` is of type `x86_fp80`.
+fn is_x87(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    matches!(
+        context.types.get(context.get(id).ty),
+        Type::Float(FloatKind::X86Fp80)
+    )
+}
+
 /// A floating constant's value as a double and its kind: `Float` bits are IEEE
 /// single in the low 32, `Double` IEEE double, `X86Fp80` the double nearest its
 /// value (MIR holds an 80-bit constant that way), and a zero is +0.0.
@@ -331,12 +347,45 @@ pub fn cast(
             };
             (float == width).then(|| context.constant(Constant { ty: to, kind: ConstantKind::Int(u128::from(bits)) }))
         }
+        (CastOp::FPTrunc | CastOp::FPRound, Type::Float(kind @ (FloatKind::Float | FloatKind::Double)))
+            if is_x87(context, c) =>
+        {
+            let mut number = fp80::value(&context.get(c).kind)?;
+            if !number.is_finite() {
+                return None;
+            }
+            let semantics = if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE };
+            number.convert(semantics, RoundingMode::NearestTiesToEven);
+            (number.is_finite())
+                .then(|| context.constant(Constant { ty: to, kind: ConstantKind::Float(number.to_bits() as u64) }))
+        }
+        (CastOp::FPToSI | CastOp::FPToUI, Type::Int(width)) if width <= 127 && is_x87(context, c) => {
+            let number = fp80::value(&context.get(c).kind)?;
+            // Out of range or not a number is poison, as for the other formats.
+            let Some(value) = fp80::to_integer(&number, RoundingMode::TowardZero, width, op == CastOp::FPToSI) else {
+                return Some(poison(context, to));
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(value as u128 & mask(width)) }))
+        }
+        (CastOp::SIToFP | CastOp::UIToFP, Type::Float(FloatKind::X86Fp80)) => {
+            let (x, from) = number(context, c)?;
+            let (magnitude, negative) = if op == CastOp::SIToFP && signed(x, from) < 0 {
+                (signed(x, from).unsigned_abs(), true)
+            } else if op == CastOp::SIToFP {
+                (signed(x, from) as u128, false)
+            } else {
+                (x, false)
+            };
+            let magnitude = u64::try_from(magnitude).ok()?;
+            Some(fp80::constant(context, to, &fp80::from_integer(magnitude, negative)))
+        }
         (CastOp::FPTrunc | CastOp::FPExt | CastOp::FPRound, Type::Float(kind)) => {
             let (from, value) = float_number(context, c)?;
             // An x87 constant is held as a double, and a NaN's payload and
-            // quiet bit are `APFloat::convert`'s: neither is
-            // folded.
-            if from == FloatKind::X86Fp80 || kind == FloatKind::X86Fp80 || value.is_nan() {
+            // quiet bit are `APFloat::convert`'s: neither is folded. Widening a
+            // float or a double to x86_fp80 is exact, and held as the double.
+            let widened = op == CastOp::FPExt && kind == FloatKind::X86Fp80;
+            if from == FloatKind::X86Fp80 || (kind == FloatKind::X86Fp80 && !widened) || value.is_nan() {
                 return None;
             }
             Some(float_constant(context, to, kind, value))
@@ -419,11 +468,102 @@ pub fn compare_float(
     if is_undef(context, c1) || is_undef(context, c2) {
         return Some(result(predicate.holds(None)));
     }
+    if is_x87(context, c1) {
+        let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
+        let order = match a.compare(&b) {
+            CmpResult::LessThan => Some(Ordering::Less),
+            CmpResult::Equal => Some(Ordering::Equal),
+            CmpResult::GreaterThan => Some(Ordering::Greater),
+            CmpResult::Unordered => None,
+        };
+        return Some(result(predicate.holds(order)));
+    }
     let ((kind, x), (_, y)) = (float_number(context, c1)?, float_number(context, c2)?);
     if kind == FloatKind::X86Fp80 {
         return None;
     }
     Some(result(predicate.holds(x.partial_cmp(&y))))
+}
+
+/// `ConstantFoldFPInstOperands`' arithmetic
+/// ([ConstantFolding.cpp:1574](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/ConstantFolding.cpp#L1574)):
+/// `fadd`, `fsub`, `fmul`, `fdiv` and `frem` of two numbers of one format.
+///
+/// DEVIATE (narrower than the pin, docs/working/fp-constant-fold-plan.md): the
+/// pin rounds to the format; QB, Nib and C on an x87 target evaluate wider, so
+/// an inexact fold could change a printed value. This folds only when the
+/// result is exact in the format, which every evaluation width at least the
+/// format's reproduces. It refuses a non-finite operand or result, an
+/// `x86_fp80`, an inexact result, and (as the pin does when non-deterministic
+/// results are not allowed) `nsz`, `reassoc`, `contract` and `arcp`. Exit: a
+/// "strict float width" fact in the profile, true only under the
+/// standard-precision flag (every assignment rounded), where the pin's fold in
+/// the format is faithful.
+pub fn float_binary(
+    context: &Context,
+    op: BinaryOp,
+    flags: Flags,
+    c1: ConstantId,
+    c2: ConstantId,
+) -> Option<ConstantId> {
+    if flags.contains(Flags::NSZ)
+        || flags.contains(Flags::REASSOC)
+        || flags.contains(Flags::CONTRACT)
+        || flags.contains(Flags::ARCP)
+    {
+        return None;
+    }
+    if is_x87(context, c1) {
+        let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
+        let ty = context.get(c1).ty;
+        return Some(fp80::constant(context, ty, &fp80::binary(op, &a, &b)?));
+    }
+    let ((kind, x), (kind2, y)) = (float_number(context, c1)?, float_number(context, c2)?);
+    if kind != kind2 || kind == FloatKind::X86Fp80 || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    // Operands of an f32 are exact in f64; an f32 result must also be exact.
+    let r = match op {
+        BinaryOp::FAdd | BinaryOp::FSub => {
+            let y = if op == BinaryOp::FSub { -y } else { y };
+            let s = x + y;
+            let bb = s - x;
+            let err = (x - (s - bb)) + (y - bb);
+            if err != 0.0 {
+                return None;
+            }
+            s
+        }
+        BinaryOp::FMul => {
+            let p = x * y;
+            if x.mul_add(y, -p) != 0.0 {
+                return None;
+            }
+            p
+        }
+        BinaryOp::FDiv => {
+            if y == 0.0 {
+                return None;
+            }
+            let q = x / y;
+            if q.mul_add(y, -x) != 0.0 {
+                return None;
+            }
+            q
+        }
+        BinaryOp::FRem => {
+            if y == 0.0 {
+                return None;
+            }
+            x % y
+        }
+        _ => return None,
+    };
+    if !r.is_finite() || (kind == FloatKind::Float && f64::from(r as f32) != r) {
+        return None;
+    }
+    let ty = context.get(c1).ty;
+    Some(float_constant(context, ty, kind, r))
 }
 
 /// What `evaluateICmpRelation` finds of two pointer constants (an

@@ -1,3 +1,4 @@
+'$FORM frmCompat
 option explicit
 
 sub tmrCompat_Timer ()

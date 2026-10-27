@@ -44,7 +44,9 @@ impl Mssa {
         // arguments or users of globals, where the memory they use is
         // defined before the beginning of the function.
         let mut mssa = Self {
-            accesses: Vec::new(),
+            // About one in three instructions touches memory (d_faces -O2),
+            // plus a phi or two a block: the vector grew 9 times a build.
+            accesses: Vec::with_capacity(function.instruction_count() / 3 + function.layout().len() + 1),
             per_block: IdMap::new(),
             value_to_access: IdMap::new(),
             dominance: dominance.clone(),

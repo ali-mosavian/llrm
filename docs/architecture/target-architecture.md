@@ -161,7 +161,7 @@ The registry in `parity.rs` (`crates/opt/llrm-transforms`) is the source of trut
 |---|---|
 | Translated | `earlycse` (both slots), `floatalloc` (X86FloatingPoint.cpp) |
 | Partial | `allocate` (greedy by default under LLVM's order, [#2312]; exit: SplitKit translated, rows at or below the old allocator) |
-| Missing | constraint-elimination, loop-instsimplify, loop-simplifycfg, sccp and bdce, dfa-jump-threading, vector-combine, early-tailduplication, stack-coloring and shrink-wrap (Backend) |
+| Missing | loop-instsimplify, loop-simplifycfg, sccp and bdce, dfa-jump-threading, vector-combine, early-tailduplication, stack-coloring and shrink-wrap (Backend) |
 | Old | everything else: simplifycfg, instcombine, sroa, mem2reg, gvn, licm, loop passes, indvars, dse and the machine passes, each naming the translation that replaces it |
 
 Translations written and not yet joined (SROA, mem2reg, GVN, InstSimplify, DomTree, LVI, BackedgeTakenInfo, DSE) are in the road in [parity-pipeline.md](parity-pipeline.md). A box turns from Old to Translated only when its slot joins with its oracle passing. The count is part of each status report: regenerate it from `parity.rs` every time.

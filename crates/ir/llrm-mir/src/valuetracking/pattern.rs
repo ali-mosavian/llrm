@@ -405,7 +405,7 @@ macro_rules! intrinsics {
             $($variant,)*
         }
 
-        const INTRINSIC_NAMES: &[(&str, IntrinsicId)] = &[$(($name, IntrinsicId::$variant),)*];
+        pub(crate) const INTRINSIC_NAMES: &[(&str, IntrinsicId)] = &[$(($name, IntrinsicId::$variant),)*];
     };
 }
 
@@ -450,6 +450,7 @@ intrinsics! {
     UshlSat => "ushl.sat",
     SmulFix => "smul.fix",
     SmulFixSat => "smul.fix.sat",
+    SdivFix => "sdiv.fix",
     UmulFix => "umul.fix",
     UmulFixSat => "umul.fix.sat",
     Pow => "pow",
@@ -521,12 +522,25 @@ intrinsics! {
 /// for the intrinsics of [`IntrinsicId`]: the longest name that is the callee's
 /// before its type suffix.
 pub fn intrinsic_id_of_name(name: &str) -> Option<IntrinsicId> {
+    static BY_BASE: std::sync::OnceLock<crate::hash::HashMap<&'static str, IntrinsicId>> = std::sync::OnceLock::new();
     let name = name.strip_prefix("llvm.")?;
-    INTRINSIC_NAMES
-        .iter()
-        .filter(|(base, _)| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-        .max_by_key(|(base, _)| base.len())
-        .map(|(_, id)| *id)
+    let by_base = BY_BASE.get_or_init(|| INTRINSIC_NAMES.iter().copied().collect());
+    // A base is the whole name or what stands before a `.`: the longest one
+    // found wins.
+    let mut end = name.len();
+    loop {
+        #[cfg(test)]
+        NAME_PROBES.with(|one| one.set(one.get() + 1));
+        if let Some(&id) = by_base.get(&name[..end]) {
+            return Some(id);
+        }
+        end = name[..end].rfind('.')?;
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static NAME_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `IntrinsicInst::getIntrinsicID` of a call: `inst` calls one of
@@ -535,7 +549,7 @@ pub fn intrinsic_id(
     q: &Query,
     inst: InstId,
 ) -> Option<IntrinsicId> {
-    intrinsic_id_of_name(q.callee_name(inst)?)
+    q.callee_intrinsic_id(inst)
 }
 
 // ---- nonzero.rs ----

@@ -125,6 +125,8 @@ keep32_ proc
     ret
 keep32_ endp
 
+include ../../shared/dos/m32/memfuncs.inc
+
 ; The same routines for a program in the stack convention (-mabi=sysv): arguments on the stack, which the caller removes.
 public _report
 _report proc
@@ -150,5 +152,7 @@ _keep32 proc
     mov eax, dword ptr [esp+4]
     ret
 _keep32 endp
+
+
 
 end

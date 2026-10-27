@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/adce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/adce.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/adce.rs sha256:af7067dd93940f49f6dc0e956d217876057d22ee1040e1aa9b7e22da9946a178 -->
+<!-- src: crates/opt/llrm-transforms/src/adce.rs sha256:af853b5346c8f25c7e03f2d7bf077a5e5af377b47c08bacadfd66aa066d65968 -->
 
 # adce
 

@@ -572,7 +572,7 @@ pub fn compute_known_bits_from_context(
     let Some(cxt) = q.cxt else { return };
     if let (Some(conditions), Some(_)) = (q.dom_conditions, q.dt) {
         let cxt_block = q.block_of(cxt);
-        for &branch in conditions.conditions_for(v) {
+        for &branch in conditions.conditions_for(v).iter() {
             let instruction = q.function.instruction(branch);
             let (Some(start), Some(cxt_block), Operand::Block(taken), Operand::Block(otherwise)) =
                 (q.block_of(branch), cxt_block, instruction.operands[1], instruction.operands[2])
@@ -1178,6 +1178,33 @@ fn is_argument(
     )
 }
 
+/// `SmallPtrSet<Value *, 8>`: the first eight values in a scanned array on the
+/// stack, the rest in a set.
+#[derive(Default)]
+struct SmallVisited {
+    small: [Option<Operand>; 8],
+    len: usize,
+    rest: HashMap<Operand, ()>,
+}
+
+impl SmallVisited {
+    /// Whether `v` is new.
+    fn insert(
+        &mut self,
+        v: Operand,
+    ) -> bool {
+        if self.small[..self.len].contains(&Some(v)) {
+            return false;
+        }
+        if self.len < self.small.len() {
+            self.small[self.len] = Some(v);
+            self.len += 1;
+            return true;
+        }
+        self.rest.insert(v, ()).is_none()
+    }
+}
+
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L10875>
 fn add_value_affected_by_condition(
     q: &Query,
@@ -1235,9 +1262,9 @@ pub fn find_values_affected_by_condition(
     }
 
     let mut worklist = vec![cond];
-    let mut visited: HashMap<Operand, ()> = HashMap::default();
+    let mut visited = SmallVisited::default();
     while let Some(v) = worklist.pop() {
-        if visited.insert(v, ()).is_some() {
+        if !visited.insert(v) {
             continue;
         }
         if is_assume {

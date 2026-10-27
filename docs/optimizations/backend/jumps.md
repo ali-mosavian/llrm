@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/jumps.rs sha256:70b81fb1c3bba34e510ee081d6e88a35a2ca9c5a0c1348facf2868bf4d23f9ef -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/jumps.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/jumps.rs sha256:bad7966f81d555b13211ccda2c6d027000686abff0387b833a41cefd2383600c -->
 
 # jumps
 
@@ -24,9 +24,9 @@ steps on the body.
    `L` is next becomes `j!cc M`. Unreachable blocks go.
 4. `tailmerge::merged` (LLVM's `BranchFolder::TailMergeBlocks`) gives the
    blocks that share the last instructions one copy of them, splitting a
-   block where no one holds only the tail; `machinedce::eliminated` then
-   removes what the merge made dead (a compare nothing selects on), and the
-   body is threaded again. Both repeat until nothing merges.
+   block where no one holds only the tail, and the body is threaded again; a
+   compare the merge left nothing to select on stays, as in LLVM. Both
+   repeat until nothing merges.
 5. `inverted` flips each `jcc L; jmp M` the copying left where `L` is next;
    where neither way is next, it makes the likelier way the conditional
    jump, so the trip that goes on pays one taken branch, not a branch not

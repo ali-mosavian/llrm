@@ -1999,7 +1999,7 @@ fn _unsigned_divisions(
             lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
         })
         .collect();
-    let held = Ranges::of(context, layout, function, analyses, true);
+    let held = Ranges::of(context, layout, function, analyses);
     let unit = held.unit(context, layout, function, outer);
     let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, BinaryOp)> = candidates

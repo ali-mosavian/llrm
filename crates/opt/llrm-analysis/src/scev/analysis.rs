@@ -49,6 +49,23 @@ impl std::fmt::Debug for ScevCache {
     }
 }
 
+impl ScevCache {
+    /// The expressions out of the entry, which is left empty: a pass that
+    /// keeps them current while it edits holds them for its run and `put`s
+    /// them back before it says it kept `Scevs`.
+    pub fn take(&self) -> ScalarEvolution {
+        std::mem::replace(&mut *self.0.borrow_mut(), ScalarEvolution::new())
+    }
+
+    /// `scev` as the entry's expressions again.
+    pub fn put(
+        &self,
+        scev: ScalarEvolution,
+    ) {
+        *self.0.borrow_mut() = scev;
+    }
+}
+
 /// LLVM's `ScalarEvolutionAnalysis`.
 pub struct Scevs;
 
@@ -63,6 +80,33 @@ impl Analysis for Scevs {
         _: &mut Analyses,
     ) -> ScevCache {
         ScevCache(RefCell::new(ScalarEvolution::new()))
+    }
+
+    /// `ScalarEvolution::verify`: the result equals every other, so the
+    /// expressions it holds are checked against the function as it stands.
+    fn consistent(
+        old: &ScevCache,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        function: &Function,
+        analyses: &mut Analyses,
+    ) -> bool {
+        let loops = analyses.get::<Loops>(context, layout, function);
+        let tree = analyses.get::<Dominators>(context, layout, function);
+        let assumptions = analyses.get::<Assumes>(context, layout, function);
+        let outer = Rc::clone(analyses.outer());
+        let cx = Cx {
+            context,
+            globals: &outer.globals,
+            metadata: &outer.metadata,
+            function,
+            layout,
+            loops: &loops,
+            tree: &tree,
+            assumptions: &assumptions,
+        };
+        let held = old.0.borrow();
+        held.verify(&cx).is_ok() && held.verify_same(&cx).is_ok()
     }
 }
 
@@ -192,6 +236,20 @@ impl ScevSession {
         Self { tree, loops, assumptions, scev: ScalarEvolution::new() }
     }
 
+    /// `scev` as the session's expressions, for a session that carries on the
+    /// work of an earlier pass (`Scevs`).
+    pub fn adopt(
+        &mut self,
+        scev: ScalarEvolution,
+    ) {
+        self.scev = scev;
+    }
+
+    /// The expressions, to hand back to the manager.
+    pub fn into_scev(self) -> ScalarEvolution {
+        self.scev
+    }
+
     /// The expressions dropped: after the function changed in ways that leave
     /// the CFG, and so the tree and loops, as they were.
     pub fn forget_expressions(&mut self) {
@@ -210,11 +268,30 @@ impl ScevSession {
         function: &Function,
         mark: llrm_mir::module::Mark,
     ) {
+        self.forget_since_keeping(context, layout, globals, metadata, function, mark, false);
+    }
+
+    /// [`Self::forget_since`], where `keep_counts` the trip counts and the
+    /// expressions of values whose operands were replaced stay
+    /// (`forget_touched_keeping`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn forget_since_keeping(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        mark: llrm_mir::module::Mark,
+        keep_counts: bool,
+    ) {
         match function.touched_since(mark) {
             Some(touched)
                 if touched.cfg.is_empty() && touched.blocks_created.is_empty() && touched.blocks_erased.is_empty() =>
             {
-                self.ask_within(context, layout, globals, metadata, function, |se, cx| se.forget_touched(cx, &touched));
+                self.ask_within(context, layout, globals, metadata, function, |se, cx| {
+                    se.forget_touched_keeping(cx, &touched, keep_counts)
+                });
             }
             _ => self.forget_expressions(),
         }

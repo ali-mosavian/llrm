@@ -140,10 +140,80 @@ impl ScalarEvolution {
         }
         Ok(())
     }
+
+    /// Whether each expression `self` holds prints, flags aside, as a new
+    /// `ScalarEvolution` prints the value's: a held expression of a value whose
+    /// operands changed since is stale, though `verify` lets a difference that
+    /// is not a constant pass (the pin's check). The oracle of a kept SE
+    /// (`Scevs::consistent`), not a translation of anything.
+    pub fn verify_same(
+        &self,
+        cx: &Cx,
+    ) -> Result<(), String> {
+        let labels = Labels::of(cx.function);
+        let mut fresh = ScalarEvolution::new();
+        let bare =
+            |text: String| ["<nuw>", "<nsw>", "<nusw>", "<nw>"].iter().fold(text, |text, flag| text.replace(flag, ""));
+        let mut cached: Vec<(ValueId, Scev)> = self.value_expr_map.iter().map(|(value, s)| (value, *s)).collect();
+        cached.sort_by_key(|(value, _)| value.0);
+        for (value, kept) in cached {
+            let ValueDef::Instruction(inst) = cx.function.value(value).def else { continue };
+            if cx.function.parent(inst).is_none() {
+                continue;
+            }
+            let was = bare(self.print(cx, &labels, kept));
+            let new = fresh.get_scev(cx, Operand::Value(value));
+            let now = bare(fresh.print(cx, &labels, new));
+            if was != now && !weaker(&was, &now) {
+                return Err(format!(
+                    "{}: kept {was}, now {now}",
+                    self.print_value_name(&labels, Operand::Value(value))
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Whether `was` is `now` with some `umin_seq` that a fresh SE proved not
+/// poison made a plain `umin`: the same value in the weaker form, which
+/// lazily inferred flags make by when the expression was first made (the
+/// pin's `insertValueToMap`, ScalarEvolution.cpp:4547: "It should be
+/// equivalent, but may not necessarily be exactly the same"). The operators
+/// and operands are compared as a bag, as `umin` reorders them.
+fn weaker(
+    was: &str,
+    now: &str,
+) -> bool {
+    let seqs = |text: &str| text.matches(" umin_seq ").count();
+    let bag = |text: &str| {
+        let mut tokens: Vec<String> = text
+            .replace(" umin_seq ", " umin ")
+            .split_whitespace()
+            .map(|token| token.trim_matches(['(', ')']).to_owned())
+            .collect();
+        tokens.sort_unstable();
+        tokens
+    };
+    seqs(was) > seqs(now) && bag(was) == bag(now)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::weaker;
+
+    /// The oracle read a kept `umin_seq` that a fresh SE made `umin` as stale
+    /// (queens -O3 under `LLRM_CHECK_PRESERVED`); the other way round, and
+    /// any other difference, still is.
+    #[test]
+    fn test_only_a_kept_sequential_min_may_be_plain_now() {
+        let seq = "(true + ((true + %32) umin_seq (true + %33) umin_seq (true + %35)))";
+        let plain = "(true + (((true + %32) umin (true + %33)) umin_seq (true + %35)))";
+        assert!(weaker(seq, plain));
+        assert!(!weaker(plain, seq));
+        assert!(!weaker(seq, seq));
+        assert!(!weaker(seq, "(true + (((true + %32) umin (true + %34)) umin_seq (true + %35)))"));
+    }
     use llrm_mir::datalayout::DataLayout;
     use llrm_mir::domtree::DomTree;
     use llrm_mir::loopinfo::LoopInfo;

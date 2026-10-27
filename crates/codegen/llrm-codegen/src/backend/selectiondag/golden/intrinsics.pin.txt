@@ -1,0 +1,98 @@
+Initial selection DAG: %bb.0 'funnel:'
+SelectionDAG has 14 nodes:
+  t0: ch,glue = EntryToken
+  t7: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-3>, poison:i32
+        t3: i32,ch = load<(load (s32) from %fixed-stack.2)> t0, FrameIndex:i32<-1>, poison:i32
+        t5: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-2>, poison:i32
+      t8: i32 = fshl t3, t5, t7
+    t9: i32 = rotr t8, t7
+  t12: ch,glue = CopyToReg t0, Register:i32 $eax, t9
+  t13: ch = X86ISD::RET_GLUE t12, TargetConstant:i32<0>, Register:i32 $eax, t12:1
+
+
+
+Initial selection DAG: %bb.0 'life:'
+SelectionDAG has 19 nodes:
+  t3: i32 = GlobalAddress<ptr @use> 0
+      t0: ch,glue = EntryToken
+    t2: ch = lifetime.start t0, TargetFrameIndex:i32<0>
+  t7: ch,glue = callseq_start t2, TargetConstant:i32<4>, TargetConstant:i32<0>
+  t10: i32 = Constant<0>
+      t9: i32,ch = CopyFromReg t7, Register:i32 $esp
+    t12: ch = store<(store (s32) into stack)> t7, FrameIndex:i32<0>, t9, poison:i32
+  t15: ch,glue = X86ISD::CALL t12, TargetGlobalAddress:i32<ptr @use> 0 [TF=7], RegisterMask:Untyped
+      t16: ch,glue = callseq_end t15, TargetConstant:i32<4>, TargetConstant:i32<0>, t15:1
+    t17: ch = lifetime.end t16, TargetFrameIndex:i32<0>
+  t18: ch = X86ISD::RET_GLUE t17, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.0 'move16:'
+SelectionDAG has 29 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-1>, poison:i32
+  t5: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-2>, poison:i32
+  t6: i32 = Constant<16>
+  t7: i32 = Constant<0>
+  t8: i32,ch = load<(load (s32) from %ir.s, align 1)> t0, t5, poison:i32
+    t10: i32 = add nuw t5, Constant:i32<4>
+  t11: i32,ch = load<(load (s32) from %ir.s + 4, align 1)> t0, t10, poison:i32
+    t13: i32 = add nuw t5, Constant:i32<8>
+  t14: i32,ch = load<(load (s32) from %ir.s + 8, align 1)> t0, t13, poison:i32
+    t16: i32 = add nuw t5, Constant:i32<12>
+  t17: i32,ch = load<(load (s32) from %ir.s + 12, align 1)> t0, t16, poison:i32
+  t18: ch = TokenFactor t8:1, t11:1, t14:1, t17:1
+      t19: ch = store<(store (s32) into %ir.d, align 1)> t18, t8, t3, poison:i32
+        t20: i32 = add nuw t3, Constant:i32<4>
+      t21: ch = store<(store (s32) into %ir.d + 4, align 1)> t18, t11, t20, poison:i32
+        t22: i32 = add nuw t3, Constant:i32<8>
+      t23: ch = store<(store (s32) into %ir.d + 8, align 1)> t18, t14, t22, poison:i32
+        t24: i32 = add nuw t3, Constant:i32<12>
+      t25: ch = store<(store (s32) into %ir.d + 12, align 1)> t18, t17, t24, poison:i32
+    t26: ch = TokenFactor t19, t21, t23, t25
+  t28: ch = X86ISD::RET_GLUE t26, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.0 'move7:'
+SelectionDAG has 19 nodes:
+  t0: ch,glue = EntryToken
+  t3: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-1>, poison:i32
+  t5: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-2>, poison:i32
+  t6: i32 = Constant<7>
+  t7: i32 = Constant<0>
+  t8: i32,ch = load<(load (s32) from %ir.s, align 1)> t0, t5, poison:i32
+    t10: i32 = add nuw t5, Constant:i32<3>
+  t11: i32,ch = load<(load (s32) from %ir.s + 3, align 1)> t0, t10, poison:i32
+  t12: ch = TokenFactor t8:1, t11:1
+      t13: ch = store<(store (s32) into %ir.d, align 1)> t12, t8, t3, poison:i32
+        t14: i32 = add nuw t3, Constant:i32<3>
+      t15: ch = store<(store (s32) into %ir.d + 3, align 1)> t12, t11, t14, poison:i32
+    t16: ch = TokenFactor t13, t15
+  t18: ch = X86ISD::RET_GLUE t16, TargetConstant:i32<0>
+
+
+
+Initial selection DAG: %bb.0 'movevar:'
+SelectionDAG has 30 nodes:
+  t0: ch,glue = EntryToken
+  t8: i32 = ExternalSymbol'memmove'
+  t11: ch,glue = callseq_start t0, TargetConstant:i32<12>, TargetConstant:i32<0>
+  t13: i32,ch = CopyFromReg t11, Register:i32 $esp
+  t14: i32 = Constant<0>
+        t3: i32,ch = load<(load (s32) from %fixed-stack.2)> t0, FrameIndex:i32<-1>, poison:i32
+      t15: ch = store<(store (s32) into stack)> t11, t3, t13, poison:i32
+        t5: i32,ch = load<(load (s32) from %fixed-stack.1)> t0, FrameIndex:i32<-2>, poison:i32
+        t17: i32 = add t13, Constant:i32<4>
+      t18: ch = store<(store (s32) into stack + 4)> t11, t5, t17, poison:i32
+        t7: i32,ch = load<(load (s32) from %fixed-stack.0)> t0, FrameIndex:i32<-3>, poison:i32
+        t20: i32 = add t13, Constant:i32<8>
+      t21: ch = store<(store (s32) into stack + 8)> t11, t7, t20, poison:i32
+    t22: ch = TokenFactor t15, t18, t21
+  t25: ch,glue = X86ISD::CALL t22, TargetExternalSymbol:i32'memmove', RegisterMask:Untyped
+  t26: ch,glue = callseq_end t25, TargetConstant:i32<12>, TargetConstant:i32<0>, t25:1
+    t28: i32,ch,glue = CopyFromReg t26, Register:i32 $eax, t26:1
+  t29: ch = X86ISD::RET_GLUE t28:1, TargetConstant:i32<0>
+
+
+
