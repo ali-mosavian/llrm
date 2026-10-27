@@ -3610,6 +3610,21 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
     }
 }
 
+/// `END n` and `SYSTEM n` (PDS 7.1, VBDOS) were refused ("END with a return
+/// code"). BC pushes the code as a word and calls `B$CENC` (measured in BC 7.1
+/// and VBDOS objects), which never returns.
+#[test]
+fn end_and_system_with_a_code_call_b_cenc() {
+    for (statement, dialect) in [("END 3", "pds71"), ("SYSTEM 3", "vbdos")] {
+        let directory = tempfile::tempdir().expect("creates a directory");
+        let source = format!("DEFINT A-Z\r\nINPUT a\r\nIF a THEN {statement}\r\nPRINT 1\r\n");
+        let path = written(&directory, "endn.bas", source.as_bytes());
+        let text = listing(&parsed_as(&path, dialect, dialect));
+        assert!(text.contains("pushw 3") && text.contains("call far ptr B$CENC"), "{statement}:\n{text}");
+        assert!(!text.contains("B$CEND"), "{statement}:\n{text}");
+    }
+}
+
 /// The listing of `source` under one dialect and its runtime.
 fn listing_in(
     dialect: &str,
