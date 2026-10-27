@@ -1244,6 +1244,19 @@ impl Selector<'_, '_, '_> {
         self.wide_cast(self.cast(m), m.inst, m.at, out)
     }
 
+    /// A frozen i64 is its halves (LLVM selects `FREEZE` as a copy).
+    pub fn hook_wide_freeze(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let (operand, result) = (instruction.operands[0], instruction.result.expect("a freeze has a result"));
+        let pair = self.wide(operand, m.at, out)?;
+        self.wides.insert(result, pair);
+        Ok(())
+    }
+
     pub fn hook_wide_binary(
         &mut self,
         m: &Match,
