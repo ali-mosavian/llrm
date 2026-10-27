@@ -1219,3 +1219,26 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert 0 <= early < lib, (early, lib)
     assert "landing_scanner_failures(changed, False)" in source[early:lib]
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
+
+
+def test_a_build_error_that_names_a_file_builds_only_the_prs_touching_it_alone():
+    """The 00:49 batch of 8 failed at lsr_pass_tests.rs:816; the runner built all 8 alone (about 50 s each) to find the one PR that touched it."""
+    built = []
+    group = [str(number) for number in range(1, 9)]
+    culprits = ps.build_offenders(group, lambda number: built.append(number) or True, lambda: "error" if built[-1] == "8" else "", {}, suspects=["8"])
+    assert culprits == ["8"] and built == ["8"], "one suspect at fault: one alone-build"
+    built.clear()
+    culprits = ps.build_offenders(group, lambda number: built.append(number) or True, lambda: "error" if built[-1] == "5" else "", {}, suspects=["8"])
+    assert culprits == ["5"] and built[0] == "8" and len(built) == 8, "no suspect at fault: every other PR is built alone, as before"
+    assert ps.error_files("crates/opt/llrm-transforms/src/lsr_pass_tests.rs:816:16: error[E0063]") == {"crates/opt/llrm-transforms/src/lsr_pass_tests.rs"}
+
+def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_refused(capsys):
+    """#5039 was REFUSED with `GraphQL: Something went wrong` (00:14, request A186:1A8971): GitHub's own error, the PR open, mergeable and unchanged; it cost a batch cycle."""
+    run, calls = _gh(["GraphQL: Something went wrong while executing your query.", ""])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("5039", info, "body", run=run, settle=0, retry_wait=0) is True
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2
+    run, calls = _gh(["GraphQL: Something went wrong.", "GraphQL: Something went wrong."])
+    assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
+    assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")

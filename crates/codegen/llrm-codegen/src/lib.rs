@@ -6,7 +6,6 @@ pub mod backend;
 pub mod coalescer;
 pub mod driver;
 pub mod flow;
-pub mod frontends;
 pub mod greedy;
 pub mod hir;
 pub mod liveness;

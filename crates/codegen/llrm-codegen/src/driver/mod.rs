@@ -530,7 +530,9 @@ pub fn optimized(
                 |module| crate::backend::compares::expanded(module, |operation| options.arch.expands(operation)),
             )
     })?;
-    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    if options.isel != crate::backend::shadow::Selector::Dag {
+        timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    }
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
