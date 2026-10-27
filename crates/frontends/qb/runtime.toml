@@ -1248,6 +1248,7 @@ evidence = "runtime/qb/events.c: PEN(n) of a machine with no joystick or light p
 ["B$SCMP"]
 cleanup = 4
 control = "returns"
+flags_result = true
 enters_user_code = false
 raises_error = false
 error_handling = false

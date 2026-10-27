@@ -34,6 +34,7 @@ fn main() {
         } else {
             "None".to_owned()
         };
+        let flags_result = row.get("flags_result").is_some_and(|one| one.as_bool().expect("flags_result is a bool"));
         let optional_str = |key: &str| {
             option(row, key, if row.contains_key(key) { format!("{:?}", string(row, key)) } else { String::new() })
         };
@@ -41,7 +42,7 @@ fn main() {
             |key: &str| option(row, key, if row.contains_key(key) { list(row, key) } else { String::new() });
         writeln!(
             out,
-            "    Row {{ name: {name:?}, cleanup: {}, control: {:?}, enters_user_code: {}, raises_error: {}, error_handling: {}, writes: {:?}, reads: {:?}, clobbers: {}, established: {}, evidence: {:?}, documented: {}, inputs: {}, direct_writes: {}, direct_reads: {}, captures: {captures} }},",
+            "    Row {{ name: {name:?}, cleanup: {}, control: {:?}, enters_user_code: {}, raises_error: {}, error_handling: {}, writes: {:?}, reads: {:?}, clobbers: {}, established: {}, evidence: {:?}, documented: {}, inputs: {}, direct_writes: {}, direct_reads: {}, captures: {captures}, flags_result: {flags_result} }},",
             row["cleanup"].as_integer().expect("cleanup is an int"),
             string(row, "control"),
             flag("enters_user_code"),
