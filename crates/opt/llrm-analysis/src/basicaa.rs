@@ -2073,6 +2073,43 @@ b0:
         assert_eq!(alias("far", "next"), AliasResult::NoAlias);
     }
 
+    /// `stripPointerCastsForAliasAnalysis` strips a zero-index `getelementptr`
+    /// (instruction or constant expression), a single-arm phi and a far cast
+    /// constant: each pointer is the object it came from.
+    #[test]
+    fn pointers_the_pin_strips_are_must_alias_with_their_source() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@c = internal global [48 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %p = getelementptr i8, ptr @c, i16 %n
+  %zero = getelementptr i8, ptr %p, i16 0
+  %zeroc = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 0), i16 0
+  br label %b1
+b1:
+  %one = phi ptr [ %p, %b0 ]
+  %far = getelementptr i8, ptr addrspace(1) addrspacecast (ptr @c to ptr addrspace(1)), i16 0
+  %base = getelementptr i8, ptr @c, i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(4));
+        let alias =
+            |a: &str, b: &str| BasicAA::new(&unit).alias(&location(a), &location(b), &mut AAQueryInfo::default(), None);
+        assert_eq!(alias("zero", "p"), AliasResult::MustAlias);
+        assert_eq!(alias("one", "p"), AliasResult::MustAlias);
+        assert_eq!(alias("zeroc", "base"), AliasResult::MustAlias);
+        assert_eq!(alias("far", "base"), AliasResult::MustAlias);
+    }
+
     /// bintree.bas: an array element's far pointer is a segment word loaded
     /// from its descriptor, made a pointer by `inttoptr`. The pin takes it
     /// for a pointer that cannot be a local whose address never escaped; the
