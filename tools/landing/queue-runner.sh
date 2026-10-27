@@ -64,7 +64,6 @@ while true; do
     info="$(cached_state $m state) $(cached_state $m isDraft) $(cached_state $m baseRefName)"; [[ $info =~ ^[A-Z]+\ (true|false)\  ]] || info=$(gh pr view $m --repo $R --json state,isDraft,baseRefName -q '"\(.state) \(.isDraft) \(.baseRefName)"'); set -- $info
     [ "$1" = OPEN ] || continue
     [ "$3" = feat/parity ] || gh pr edit $m --repo $R --base feat/parity >/dev/null
-    [ "$2" = true ] && gh pr ready $m --repo $R >/dev/null
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
   rm -f "$log.done"
