@@ -42,6 +42,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::domtree::DomTree;
+use llrm_mir::facts::Fact;
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, MetadataNode, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
@@ -367,7 +368,7 @@ impl State<'_> {
                 .iter()
                 .any(
                     |one| match one {
-                        Attribute::Flag(name) => name == "noundef",
+                        Attribute::Flag(_) if Fact::of_attribute(one) == Some(Fact::NoUndef) => true,
                         Attribute::Int(name, _) => name == "dereferenceable" || name == "dereferenceable_or_null",
                         _ => false,
                     },
