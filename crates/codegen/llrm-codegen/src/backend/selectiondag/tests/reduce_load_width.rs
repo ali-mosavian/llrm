@@ -1,6 +1,7 @@
 //! `(x >> 8) & 255` of a loaded word stayed `load; shr; movzx` (x_radix, +2
 //! instructions); it is one byte `zextload` at `p + 1`.
 
+use super::super::actions::LoadExt;
 use super::super::dag_combiner::{CombineLevel, DagCombiner};
 use super::super::x86_lowering::X86Lowering;
 use super::*;
@@ -40,4 +41,16 @@ fn a_masked_load_is_a_byte_zextload() {
     });
     let NodeData::Mem(info) = &dag.node(root).data else { panic!("{:?}", dag.opcode(root)) };
     assert_eq!((info.mem_vt, info.base), (EVT::I8, MemBase::Stack(0)));
+}
+
+/// m16 `f_lshr_16`'s high half: a dword load shifted right by 16 is a word
+/// `zextload` at `p + 2`.
+#[test]
+fn a_dword_load_shifted_by_sixteen_is_a_word_zextload_at_plus_two() {
+    let (dag, root) = combined(|dag, load| {
+        let sixteen = dag.get_constant(16, EVT::I32);
+        dag.get_node(ISD::Srl, EVT::I32, &[load, sixteen])
+    });
+    let NodeData::Mem(info) = &dag.node(root).data else { panic!("{:?}", dag.opcode(root)) };
+    assert_eq!((info.mem_vt, info.base, info.ext), (EVT::I16, MemBase::Stack(2), Some(LoadExt::ZExtLoad)));
 }

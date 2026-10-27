@@ -83,7 +83,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // `Opc == SRL || N0 is SRL`: the shift is the node itself here.
         let mut load = n0;
         if op == ISD::Srl {
-            if self.dag.users(node).count() != 1 {
+            if self.dag.users(node).count() > 1 {
                 return None;
             }
             let info = self.load_info(load)?;
@@ -100,8 +100,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             // The shift read only through a masking `and`: the load takes the
             // mask's width.
-            let user = self.dag.users(node).next().map(|u| SDValue { node: u, res: 0 })?;
-            if self.dag.opcode(user) == ISD::And {
+            let user = self.dag.users(node).next().map(|u| SDValue { node: u, res: 0 });
+            if let Some(user) = user.filter(|&u| self.dag.opcode(u) == ISD::And) {
                 if let Some(m) = self.dag.constant(self.dag.operand(user, 1)) {
                     if is_mask(m) {
                         let masked = EVT::integer(m.count_ones());
