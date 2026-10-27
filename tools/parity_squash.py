@@ -942,6 +942,28 @@ def new_link_failures(
 _BUILT: set[str] = set()
 
 
+def alone_behavioural_red(files: list[str], cwd: Path, target: Path | None, run=subprocess.run) -> list[str]:
+    """The call-shaped programs that are wrong on the scratch tree `cwd` (the PR merged alone onto the base), when the PR changes backend source (`behavioural.touches`); none, and nothing built, otherwise.
+    The release bins are built under `target/link`, where an alone link check builds them too; the DOSBox is ALONE_DOSBOX, else the one the batch checkout links."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import behavioural  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    if not behavioural.touches(files):
+        return []
+    out = (target or cwd / "target") / "link"
+    env = {**os.environ, "CARGO_TARGET_DIR": str(out)}
+    built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    if built.returncode:
+        return [f"release does not build: {' '.join((built.stdout + built.stderr).split()[-12:])}"]
+    for one in (out / "release").iterdir():
+        if one.is_file():
+            one.touch()  # the runners refuse a binary older than its sources
+    dosbox = os.environ.get("ALONE_DOSBOX") or str(Path.home() / "scratch/coord-ps-target/release/dosbox-x")
+    done = run([sys.executable, "tools/dosbatch/run_tests.py", *behavioural.PROGRAMS], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release"), "DOSBOX_BIN": dosbox}, capture_output=True, text=True, errors="replace", timeout=1800)
+    return behavioural.red_programs(done.stdout + done.stderr)
+
+
 def _build_release() -> None:
     """Release bins of the checkout, once per tree: the link layer and the behavioural gate share the build."""
     from buildslot import slotted  # noqa: PLC0415
@@ -1108,7 +1130,7 @@ def own_test_targets(files: list[str], root: Path) -> set[str]:
     return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None) -> list[str]:
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None, behave=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1146,6 +1168,9 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
         if new:
             return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
+    # the call-shaped programs (tools/behavioural.py) on the PR merged alone, for a backend PR: #5094 was found red by three per-PR builds inside the batch (196 s) and cost the batch a second round (~175 s)
+    if red := (behave or alone_behavioural_red)(files, cwd, target):
+        return [f"behavioural red alone: {', '.join(red[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)

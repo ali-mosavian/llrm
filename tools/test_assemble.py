@@ -532,3 +532,33 @@ def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
     assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed
+
+
+def test_a_backend_pr_whose_call_shaped_program_is_wrong_alone_is_refused_and_a_doc_pr_pays_nothing(tmp_path):
+    """#5094 was found red (regparm3_matrix_22, regparm3_matrix_4) by three per-PR builds inside the batch, 196 s, and a second round of ~175 s; the alone layer never ran the programs."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    kw = dict(base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda _: set(), docs=lambda root: set())
+    why = ps.alone_refusals(head, behave=lambda files, cwd, target: ["regparm3_matrix_22", "regparm3_matrix_4"], **kw)
+    assert why == ["behavioural red alone: regparm3_matrix_22, regparm3_matrix_4"], why
+    assert ps.alone_refusals(head, behave=lambda files, cwd, target: [], **kw) == []
+
+    def never(*args, **kwargs):
+        raise AssertionError("a PR outside the backend built and ran the programs")
+
+    assert ps.alone_behavioural_red(["docs/a.md", "crates/opt/llrm-transforms/src/x.rs"], tmp_path, None, run=never) == []
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(command[1] if len(command) > 1 else command[0])
+        (tmp_path / "link" / "release").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "link" / "release" / "llrm-c").write_text("")
+        return type("Done", (), {"returncode": 0, "stdout": "FAIL  c/regparm3_matrix_4.c [-O2]: wrong\nok c/call_keeps.c\n", "stderr": ""})()
+
+    assert ps.alone_behavioural_red(["crates/codegen/llrm-codegen/src/backend/frame.rs"], tmp_path, tmp_path, run=run) == ["regparm3_matrix_4"]
+    assert len(seen) == 2, seen
