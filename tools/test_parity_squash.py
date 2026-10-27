@@ -1094,10 +1094,10 @@ def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
 def test_a_squash_github_refuses_prints_the_reason(capsys):
     """`4108: REFUSED: #4108 ` named no reason: the log held GitHub's message on a line the summary does not carry, and the only REFUSED text left was the batch's summary."""
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
-    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n")  # noqa: E731
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request is not mergeable (mergePullRequest)\n")  # noqa: E731
     assert ps.squash("4108", info, "body", run=refuse) is False
     out = capsys.readouterr().out
-    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Head branch was modified" in out and "(mergePullRequest)" in out
+    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Pull Request is not mergeable" in out and "(mergePullRequest)" in out
 
 
 def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_lib_tests_switch():
@@ -1242,3 +1242,15 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_squash_github_declines_for_a_moved_head_is_left_out_not_refused(capsys):
+    """#5087's squash was declined with `Head branch was modified` (its owner pushed during the batch) and counted as a REFUSAL in the summary and the exit code; the PR is left out and re-queued."""
+    run, calls = _gh(["GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)"])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    ps.HEAD_MOVED.clear()
+    assert ps.squash("5087", info, "body", run=run, settle=0, retry_wait=0) is False
+    out = capsys.readouterr().out
+    assert "#5087: LEFT OUT (head moved)" in out and "REFUSED" not in out and "5087" in ps.HEAD_MOVED
+    assert ps.batch_summary(["1"], ["2"], [], ["5087"]) == "LANDED: #1  REFUSED: #2  LEFT OUT (head moved): #5087"
+    assert ps.batch_summary([], [], [], ["5087"]) == "LANDED: -  REFUSED: -  LEFT OUT (head moved): #5087"
