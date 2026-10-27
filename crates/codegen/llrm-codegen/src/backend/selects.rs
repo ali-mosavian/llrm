@@ -18,7 +18,7 @@
 //! ```
 //!
 //! DEVIATE S3 (no number): `llvm.usub.sat` is expanded here, before selection,
-//! to `a > b ? a - b : 0`. The pin expands it in the DAG legalizer
+//! to `umax(a, b) - b`. The pin expands it in the DAG legalizer
 //! (`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
 //! and a conditional move. Exit: the legalizer's expansion lands.
 //!
@@ -87,7 +87,7 @@
 //! LLVM's CodeGenPrepare (`optimizeSelectInst`) makes the same change where the
 //! target prices a branch below a conditional move.
 
-use llrm_mir::context::{Constant, ConstantKind};
+use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Module, Operand};
@@ -96,7 +96,7 @@ use llrm_mir::tti::Tti;
 
 /// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
 /// as LLVM expands ISD::SMAX where the target has no such instruction, and
-/// every `llvm.usub.sat` a subtraction and a select of zero (ISD::USUBSAT).
+/// every `llvm.usub.sat` a `umax` and a subtraction (ISD::USUBSAT).
 pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
     let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     let context = &mut module.context;
@@ -131,14 +131,17 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 function.insert(made, Position::Before(inst))?;
                 Ok(Operand::Value(function.instruction(made).result.expect("a value")))
             };
+            // The subtrahend first for `usub.sat`: `umax(b, a) - b` is the form
+            // InstCombine had before the fold, and the selector keeps the
+            // loaded operand in its register.
+            let (a, b, minuend) = if minmax.is_none() { (b, a, b) } else { (a, b, b) };
             let beats = before(function, Opcode::ICmp(predicate), bit, vec![a, b])?;
-            // `usub.sat` is `a > b ? a - b : 0`.
+            let chosen = before(function, Opcode::Select, call.ty, vec![beats, a, b])?;
+            // `usub.sat(a, b)` is `umax(b, a) - b`.
             let chosen = if minmax.is_none() {
-                let difference = before(function, Opcode::Binary(BinaryOp::Sub), call.ty, vec![a, b])?;
-                let zero = Operand::Constant(context.constant(Constant { ty: call.ty, kind: ConstantKind::Int(0) }));
-                before(function, Opcode::Select, call.ty, vec![beats, difference, zero])?
+                before(function, Opcode::Binary(BinaryOp::Sub), call.ty, vec![chosen, minuend])?
             } else {
-                before(function, Opcode::Select, call.ty, vec![beats, a, b])?
+                chosen
             };
             function.replace_all_uses_with(call.result.ok_or("a min or max value")?, chosen);
             function.erase(inst)?;
