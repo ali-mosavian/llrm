@@ -1157,6 +1157,24 @@ impl<'a> TypeLegalizer<'a> {
             let by = self.dag.get_constant(u128::from(lhs_shift), EVT::I8);
             lhs = self.dag.get_node(ISD::Shl, vt, &[lhs, by]);
         }
+        // DEVIATE: a denominator that is a positive power of two divides by
+        // an arithmetic shift, which already rounds toward negative infinity.
+        // The pin leaves a divide and a remainder, which the type legalizer
+        // turns into two 64-bit library calls before the combiner can fold
+        // them (`sdiv.fix.i32(x, 1024, 9)`: 2 calls against a `sar`).
+        // Owner sdag-c (w11).
+        let power = self
+            .dag
+            .constant(rhs)
+            .filter(|bits| *bits != 0 && bits.count_ones() == 1 && *bits < 1u128 << (vt.size_in_bits() - 1));
+        if let Some(bits) = power {
+            let shift = bits.trailing_zeros() - rhs_shift;
+            if shift == 0 {
+                return Some(lhs);
+            }
+            let by = self.dag.get_constant(u128::from(shift), EVT::I8);
+            return Some(self.dag.get_node(ISD::Sra, vt, &[lhs, by]));
+        }
         if rhs_shift != 0 {
             let by = self.dag.get_constant(u128::from(rhs_shift), EVT::I8);
             rhs = self.dag.get_node(ISD::Sra, vt, &[rhs, by]);

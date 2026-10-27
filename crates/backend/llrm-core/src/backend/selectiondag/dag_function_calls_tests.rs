@@ -737,6 +737,26 @@ fn a_fixed_point_divide_is_selected() {
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
 
+const SDIV_FIX_POWER_OF_TWO: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  %r = call i32 @llvm.sdiv.fix.i32(i32 %a, i32 1024, i32 9)
+  ret i32 %r
+}
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
+";
+
+/// A fixed-point divide by a constant power of two was a 64-bit divide and a
+/// remainder, two library calls (the pin's own result): every `stft_fixed`
+/// and `nbody_fixed` divide cost a ~90-byte routine at m16, +1617 B and
+/// +1030 B at -Os over the old selector. It is an arithmetic shift.
+#[test]
+fn a_fixed_point_divide_by_a_power_of_two_is_a_shift() {
+    let made = names(SDIV_FIX_POWER_OF_TWO).unwrap_or_else(|why| panic!("{why}"));
+    assert!(made.iter().all(|name| name != "call"), "{made:?}");
+    assert!(made.iter().any(|name| name == "sar" || name == "shrd"), "{made:?}");
+}
+
 const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"
 
 @_inbuf = global [512 x i8] zeroinitializer
