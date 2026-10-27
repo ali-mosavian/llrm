@@ -279,3 +279,9 @@ def test_the_libgcc_members_a_pin_object_calls_are_pulled_once_with_their_own_ne
     needs = {"_divdi3.o": {"__udivmoddi4"}, "_udivdi3.o": {"__udivmoddi4"}, "_udivmoddi4.o": set()}
     pulled = pindiff.linked_members({"__divdi3", "__udivdi3", "memcpy"}, defined, lambda member: needs[member])
     assert sorted(pulled) == ["_divdi3.o", "_udivdi3.o", "_udivmoddi4.o"]
+def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
+    """After llrm-cc's m32 default became regcall every m32 row read `no figures`: ours was run with -mabi=sysv ('calling convention 92')."""
+    pindiff = load("pindiff")
+    cfg = pindiff.MACHINES["m32"]
+    assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
+    assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
