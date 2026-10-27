@@ -2299,9 +2299,12 @@ pub fn _instruction(
             vec!["db 0F3h".to_owned(), format!("bsf {}, {}", dests[0], sources[1])]
         }
         Operation::Binary | Operation::Select => vec![format!("{name} {}, {}", dests[0], sources[1])],
-        // `sqrtsd xmm0, xmm1`: a unary that reads a place other than the one it
-        // writes names both.
-        Operation::Unary if what.sources.len() == 1 && sources[0] != dests[0] => {
+        // `sqrtsd xmm0, xmm0`: an xmm unary reads a source of its own, and a
+        // unary that reads a place other than the one it writes names both.
+        Operation::Unary
+            if what.sources.len() == 1
+                && (sources[0] != dests[0] || matches!(&what.dests[0], Loc::Reg(one) if one.register.is_xmm())) =>
+        {
             vec![format!("{name} {}, {}", dests[0], sources[0])]
         }
         Operation::Unary => vec![format!("{name} {}", dests[0])],
@@ -2589,6 +2592,13 @@ mod tests {
         };
         assert_eq!(print(Operation::Extend, "cvtss2sd"), ["cvtss2sd xmm0, xmm1"]);
         assert_eq!(print(Operation::Unary, "sqrtsd"), ["sqrtsd xmm0, xmm1"]);
+        let same = Semantics {
+            name: Some("sqrtsd".into()),
+            dests: vec![xmm(RegId::XMM0)],
+            sources: vec![xmm(RegId::XMM0)],
+            ..Semantics::new(Operation::Unary)
+        };
+        assert_eq!(_instruction(regs, &same, &no_names(), 0).unwrap(), ["sqrtsd xmm0, xmm0"]);
     }
 
     /// A `bsf` marked `repeat` carries the pin's `rep` prefix, which JWasm
