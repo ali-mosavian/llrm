@@ -107,7 +107,9 @@ b0:
     assert!(changed && !after.contains("alloca"), "{after}");
 }
 
-/// Loads of one offset at two types are not split, as `collectSRATypes`.
+/// Loads of one offset at two types are not split, as `collectSRATypes`; the
+/// load of the stored type is still the stored constant
+/// (`forwardStoredOnceStore`).
 #[test]
 fn loads_of_one_offset_at_two_types_leave_the_global_alone() {
     let (after, changed) = splitted(
@@ -124,7 +126,8 @@ b0:
 }
 ",
     );
-    assert!(!changed && after.contains("@c = internal global [2 x i16]") && !after.contains("alloca"), "{after}");
+    assert!(changed && after.contains("@c = internal global [2 x i16]") && !after.contains("alloca"), "{after}");
+    assert!(!after.contains("%a = load") && after.contains("%w = load i32"), "{after}");
 }
 
 /// A scalar the frontend spelled as bytes is one piece that is all of it: no
@@ -171,6 +174,59 @@ b0:
     assert!(changed, "{after}");
     assert!(!after.contains("ptr @s"), "{after}");
     assert_eq!(after.matches("alloca i16").count(), 1, "{after}");
+}
+
+/// `forwardStoredOnceStore`: a global stored once with a constant gives that
+/// constant to the loads in the storing function the store dominates. `scores`
+/// kept `mov word ptr G$25, 6 ... mov cx, word ptr G$25` after its `$data` was
+/// split into pieces (+75 B at m16 -Os): the load is the constant.
+#[test]
+fn a_load_the_one_store_dominates_reads_the_stored_constant() {
+    let (after, changed) = splitted(
+        "@g = internal global i16 0
+
+define i16 @f() {
+b0:
+  %early = load i16, ptr @g
+  store i16 6, ptr @g
+  %a = load i16, ptr @g
+  %s = add i16 %a, %early
+  ret i16 %s
+}
+
+define i16 @h() {
+b0:
+  %b = load i16, ptr @g
+  ret i16 %b
+}
+",
+    );
+    assert!(changed, "{after}");
+    assert!(after.contains("%early = load i16, ptr @g"), "the load before the store stays: {after}");
+    assert!(!after.contains("%a = load"), "{after}");
+    assert!(after.contains("%b = load i16, ptr @g"), "another function's load stays: {after}");
+}
+
+/// Two stores, or a store of the initializer, are not a store of one value.
+#[test]
+fn a_global_stored_twice_or_with_its_initializer_forwards_nothing() {
+    let (after, _) = splitted(
+        "@g = internal global i16 0
+@k = internal global i16 3
+
+define i16 @f() {
+b0:
+  store i16 6, ptr @g
+  store i16 7, ptr @g
+  store i16 3, ptr @k
+  %a = load i16, ptr @g
+  %c = load i16, ptr @k
+  %s = add i16 %a, %c
+  ret i16 %s
+}
+",
+    );
+    assert!(after.contains("%a = load") && after.contains("%c = load"), "{after}");
 }
 
 /// Two `float`s spelled as `[8 x i8]` (QB's `ACCX!`, `ACCY!`) were never
