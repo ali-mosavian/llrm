@@ -69,9 +69,9 @@ def test_a_pr_whose_build_fails_alone_is_dropped_before_assembly_and_checked_onc
         return ["does not build as a whole: error[E0425]"] if head == bad else []
 
     heads = {"1": good, "2": bad}
-    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache", base_sha="b" * 40)
     assert kept == ["1"] and "E0425" in dropped["2"] and "2" not in kept
-    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache", base_sha="b" * 40)
     assert built == [good, bad], built
 
 
@@ -120,7 +120,7 @@ def test_a_refusal_of_a_head_the_pr_has_moved_off_does_not_drop_it(tmp_path):
 def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
     """#4993 was refused for `4 problem(s)`: the baseline `no # Example` hits, with every page current."""
     lint = "crates/x/remidiom.rs: no # Example\n4 problem(s)\n"
-    stale = "generated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
+    stale = "generated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/a.md\n"
     assert ps.docs_stale_lines(lint) == [] and ps.docs_stale_lines(stale) == ["docs/optimizations/backend/a.md"]
 
 

@@ -58,3 +58,21 @@ def test_section_line_is_the_first_line_under_the_first_of_the_headings():
     assert passdocs.section_line(lines, ("Used by",)) == "the loop passes"
     assert passdocs.section_line(lines, ("Provides",)) == ""
     assert passdocs.section_line(["# Runs", "```text", "# Provides", "```", "x"], ("Runs",)) == "x"
+
+
+def test_a_file_named_by_others_has_a_generated_used_by_and_a_prose_paragraph_explains_it(tmp_path):
+    """78 files of the pass directories failed the header check: they had no `# Runs` or `# How it works` heading, though other files named them and their headers explained the pass."""
+    src = tmp_path / "crates/x/src"
+    src.mkdir(parents=True)
+    header = "//! A pass that does one thing.\n//!\n//! It looks at every branch in a function and rewrites the ones whose condition it has already seen.\n//!\n//! # Example\n//! `br %c` is `br true`.\n"
+    (src / "pass.rs").write_text(header + "pub fn run() {}\n")
+    (src / "driver.rs").write_text("//! d\nuse crate::pass; fn f() { pass::run() }\n")
+    users = passdocs.users_of(src, tmp_path)
+    assert users["pass"] == ["driver"]
+    lines = passdocs.header(src / "pass.rs")
+    assert passdocs.missing(lines, "Runs") == ["# Runs (or # Used by)"]
+    assert passdocs.missing(lines, "Runs", users["pass"]) == []
+    assert passdocs.with_users(lines, users["pass"])[-1] == "Named by `driver`."
+    assert passdocs.with_users(lines, []) == lines
+    bare = passdocs.header_of("//! A pass.\n//!\n//! # Example\n//! x\n")
+    assert "# How it works" in passdocs.missing(bare, "Runs", ["driver"])

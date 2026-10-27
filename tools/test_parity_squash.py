@@ -365,10 +365,10 @@ elif "--check" in sys.argv and index.read_text() != want:
 
 def generated_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
-    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "tools/docs/docsbuild").mkdir(parents=True)
     (repo / "docs/optimizations/passes").mkdir(parents=True)
     sh(repo, "init", "-q", "-b", "main")
-    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "tools/docs/docsbuild/build.py").write_text(GENERATOR)
     (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
     sh(repo, "add", "-A")
     sh(repo, "commit", "-qm", "base")
@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [list(ps.ALWAYS_SCANNERS)] and asked[0][:3] == ["docs_in_sync", "docs_links", "no_local_paths"]
+    assert asked == [sorted(ps.ALWAYS_SCANNERS)] and {"docs_in_sync", "docs_links", "no_local_paths"} <= set(asked[0])
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1388,8 +1388,8 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys, pathlib\nheader = pathlib.Path('a.rs').read_text().strip()\npage = pathlib.Path('docs/a.md').read_text().strip()\n"
         "if header != page:\n    print('generated docs are out of date')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )
@@ -1408,7 +1408,7 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
     assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
 
 
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     (tmp_path / "stray.txt").write_text("left over")
@@ -1426,8 +1426,8 @@ def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('  docs/a.md')\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     head = run("rev-parse", "HEAD")
@@ -1492,20 +1492,20 @@ def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
 
 def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
     """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
-    tool = tmp_path / "tools/docsbuild/build.py"
+    tool = tmp_path / "tools/docs/docsbuild/build.py"
     tool.parent.mkdir(parents=True)
     tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
     assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
 
 
 def _fake_docs_repo(tmp_path):
-    """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    """A repo whose tools/docs/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
     def git(*args, cwd=tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
     (tmp_path / "docs").mkdir()
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
         "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )
@@ -1707,3 +1707,106 @@ def test_the_head_red_limit_is_read_from_the_environment():
     """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"
+
+
+def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
+    """Ten batches showed `workspace-check 58%`, but the scanners (a cargo test build of the integration targets) ran inside it with no stage line, so its split was a guess.
+    The default path now prints `STAGE scanners` after the build check."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
+    assert gate in source, "the default path has a scanners stage"
+    assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
+
+
+def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
+    """sqb-5342 spent 60 s on cargo check and then 100 s on the scanner build, one after the other, though they share no target dir. The default path now runs them together;
+    when the tree does not build, the scanner result (taken on a tree that does not compile) is dropped and the build is the refusal."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    assert "check_and_scan(" in source and "overlap_verdict()" in source
+    assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
+
+
+def test_the_overlap_falls_back_to_serial_at_a_high_load_and_after_a_slower_run(tmp_path):
+    """The host runs at a load near 60: two cargo builds at once could be slower than one after the other. Above OVERLAP_MAX_LOAD the checks run in a row, and an overlapped run
+    that took longer than its halves' sum turns the overlap off for an hour."""
+    flag = tmp_path / "overlap-off"
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    assert not ps.check_beside_scanners(load=lambda: (ps.OVERLAP_MAX_LOAD + 1, 0, 0), flag=flag, free=lambda: 64)
+    ps.note_overlap(100, 160, flag=flag)
+    assert not flag.exists(), "a faster overlap stays on"
+    ps.note_overlap(170, 160, flag=flag)
+    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    later = flag.stat().st_mtime + ps.OVERLAP_OFF_SECONDS + 1
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag, free=lambda: 64)
+
+
+def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
+    """The stage-times table was built by hand from the logs, and it blamed `log` (a one-line file append) for the next PR's work before its squash. The batch now ends with
+    `STAGES <total>s: ...`, biggest first, per-PR names without `#N`."""
+    import stages
+
+    stages._seen.clear()
+    for name, at in [("workspace-check", 0), ("scanners", 60), ("squash #1", 160), ("log #1", 166), ("squash #2", 170), ("log #2", 176)]:
+        stages.mark(name, at)
+    line = stages.summary(end=181)
+    assert line == "STAGES 181s: scanners 100s workspace-check 60s squash 12s pre-squash 9s", line
+    assert stages.summary() == "", "a summary starts the next batch afresh"
+    import inspect
+
+    assert "stage_summary()" in inspect.getsource(ps.merge_batch)
+
+
+def test_the_drift_prone_scanners_run_every_batch():
+    """A red scanner outside the default scan hid on parity for hours (the SD registry, 12:03 on). no_todo, tracked_build_products, block_list_ratchet and no_kill_by_pattern read
+    sources and the file list (0.02-5.6 s each on parity, all green) and are in the default scan."""
+    assert {"no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern"} <= set(ps.ALWAYS_SCANNERS)
+
+
+def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and_not_otherwise():
+    """It runs three release bin builds (67 s at load 80) and was in no default scan; it now runs on a diff that touches a build.rs, a Cargo.toml/lock or a selector-generator input,
+    and the full scan (tests=True) always runs it."""
+    assert "build_script_reruns" not in ps.scanners_for(["docs/a.md", "crates/opt/llrm-transforms/src/x.rs"])
+    for touched in ["crates/codegen/llrm-codegen/build.rs", "Cargo.lock", "crates/opt/llrm-x/Cargo.toml", "crates/target/llrm-x86/src/isel/patterns.isel", "crates/backend/llrm-iselgen/src/build.rs"]:
+        assert "build_script_reruns" in ps.scanners_for([touched]), touched
+    asked = []
+    ps.landing_scanner_failures(["crates/codegen/llrm-codegen/build.rs"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    ps.landing_scanner_failures(["docs/a.md"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0] and "build_script_reruns" not in asked[1]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0]
+
+
+def test_the_overlap_says_why_it_is_serial_and_keeps_to_memory_and_the_core_count(tmp_path):
+    """The audit of five landings showed check then scanners: the overlap never engaged (load 78 on 32 cores against a limit of 60) and nothing in the log said so. The limit is 3 x cores,
+    the verdict names its reason, and under 8 GB free (oomd kills sessions) the builds run in a row."""
+    flag = tmp_path / "overlap-off"
+    assert ps.OVERLAP_MAX_LOAD == 3 * (os.cpu_count() or 1) or "OVERLAP_MAX_LOAD" in os.environ
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD, 0, 0), flag=flag, free=lambda: 64) == "", "a load at the limit overlaps"
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD + 5, 0, 0), flag=flag, free=lambda: 64).startswith("load ")
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 3.0) == "3 GB free is under 8"
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 64) == ""
+    import inspect
+
+    assert "check beside scanners: {" in inspect.getsource(ps.merge_batch), "the decision is logged either way"
+
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_each_others(tmp_path, monkeypatch):
+    """sq-5420.log 15:14: `broken` held the scan's True and the build's text was lost (`True[:300]` TypeError); #5420 was refused for a crash, and every later PR whose check failed would have been."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
+    assert ps.check_and_scan(lambda: "error[E0425]: cannot find value", lambda: True) == ("error[E0425]: cannot find value", True)
+    assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
+    assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
+
