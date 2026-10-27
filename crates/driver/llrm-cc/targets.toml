@@ -21,7 +21,7 @@ link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
 triple = "i486-unknown-linux-gnu"
 datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-ffreestanding", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables",
-  "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1"]
+  "-U__linux__", "-U__linux", "-U__gnu_linux__", "-Ulinux", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-include", "{root}/toolchain/clang/flat.h"]
 llc = ["-fobject-format=omf", "-mabi=sysv"]
 object = "omf"
 link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "x86-m32", "{output}", "{objects}"]

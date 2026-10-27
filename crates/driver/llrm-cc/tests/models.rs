@@ -209,3 +209,29 @@ fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     let said = String::from_utf8_lossy(&ran.stdout).replace("\r\n", "\n");
     assert_eq!(said.trim().replace('\n', " "), "12748993 249 0 89 9");
 }
+
+/// tests/run/c programs written for llrm-c use `__far`/`__huge` at m32 (one
+/// address space: they name nothing) and the OS header's
+/// `PHYSICAL_TEXT_SCREEN`; the x86_32-dos row had neither, so 8 of them
+/// stopped at "expected ';' after top level declarator".
+#[test]
+fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-flat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.c"),
+        "short __far a[4];\nlong __huge *p;\nint f(void) { volatile unsigned char *s = (unsigned char *)PHYSICAL_TEXT_SCREEN; return a[1] + (p != 0) + *s; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-dos")
+        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .args(["-O1", "-w", "-S", "-o"])
+        .arg(dir.join("a.s"))
+        .arg(dir.join("a.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
