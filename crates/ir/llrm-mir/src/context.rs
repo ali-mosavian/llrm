@@ -25,8 +25,12 @@ pub struct GlobalId(pub u32);
 pub enum ConstantKind {
     /// Bits, modulo the type's width.
     Int(u128),
-    /// IEEE bits: a `float`'s in the low 32.
+    /// IEEE bits: a `float`'s in the low 32. An `x86_fp80` whose value a
+    /// double holds exactly is held as that double.
     Float(u64),
+    /// An `x86_fp80` no double holds exactly: the 80 bits, the sign and 15-bit
+    /// exponent above a 64-bit significand with its integer bit.
+    Float80(u128),
     Null,
     /// `UndefValue`: any value, chosen per use.
     Undef,
