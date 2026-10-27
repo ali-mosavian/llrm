@@ -146,7 +146,7 @@ mod x86_addr {
     }
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32, size: false }
     }
 
     #[test]
@@ -416,7 +416,7 @@ mod address_folds {
     use crate::x86_addr::{AddressMode, Matcher};
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32, size: false }
     }
 
     fn masked_shift(
@@ -561,7 +561,7 @@ mod real_mode_addresses {
         dag: &mut TestDag,
         mode: AddrMode,
     ) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i16, mode }
+        Matcher { dag, pointer_type: mvt::i16, mode, size: false }
     }
 
     #[test]
@@ -1334,7 +1334,7 @@ mod symbol_plus_two_registers {
             let mut am = AddressMode::default();
 
             assert!(
-                !Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }
+                !Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32, size: false }
                     .match_address(address, &mut am)
             );
 
@@ -1442,7 +1442,8 @@ mod masked_operand_that_is_not_a_shift {
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, masked]), 0);
         let mut am = AddressMode::default();
 
-        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am);
+        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32, size: false }
+            .match_address(address, &mut am);
     }
 }
 
@@ -1900,13 +1901,14 @@ mod x64_table {
         let two = dag.make_constant(2, mvt::i8);
         let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i64], &[index, two]), 0);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[base, scaled]), 0);
-        let ops =
-            Matcher { dag: &mut dag, pointer_type: mvt::i64, mode: AddrMode::Flat64 }.select_addr(address).unwrap();
+        let ops = Matcher { dag: &mut dag, pointer_type: mvt::i64, mode: AddrMode::Flat64, size: false }
+            .select_addr(address)
+            .unwrap();
         assert_eq!(dag.nodes[ops.scale.node as usize].constant, Some(4));
     }
 
     fn rip_matcher(dag: &mut TestDag) -> crate::x86_addr::Matcher<'_, TestDag> {
-        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64 }
+        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64, size: false }
     }
 
     /// A `WrapperRIP` global had no arm: it stayed a register operand, not

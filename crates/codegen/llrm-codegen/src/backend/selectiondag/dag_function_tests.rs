@@ -964,3 +964,23 @@ define i64 @f(i64 %a) {
     assert_eq!(seen.iter().filter(|n| n.starts_with("lea")).count(), 2, "{seen:?}");
     assert!(!seen.iter().any(|n| n.starts_with("add") || n.starts_with("imul")), "{seen:?}");
 }
+
+/// The m16 dword `lea` with a scaled index carries the 0x66 and 0x67
+/// prefixes: at `-Os` it grew the corpus by 214 bytes (SD250), so the
+/// multiply by five stays an `imul` there.
+#[test]
+fn at_m16_os_a_multiply_by_five_stays_an_imul() {
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+define i32 @f(i32 %a) {
+  %r = mul i32 %a, 5
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.iter().any(|n| n.starts_with("imul")) && !seen.iter().any(|n| n.starts_with("lea")), "{seen:?}");
+}

@@ -286,6 +286,8 @@ pub struct Matcher<'a, D: AddrDag> {
     pub dag: &'a mut D,
     pub pointer_type: Vt,
     pub mode: AddrMode,
+    /// Optimizing for size (`shouldOptForSize`).
+    pub size: bool,
 }
 
 impl<D: AddrDag> Matcher<'_, D> {
@@ -690,12 +692,16 @@ impl<D: AddrDag> Matcher<'_, D> {
 
     /// Whether the address may carry a scale: real mode has none, except in a
     /// dword `lea`, which takes the 386's 32-bit form.
+    ///
+    /// DEVIATE SD250 (m16): not when optimizing for size; that `lea` carries
+    /// both the 0x66 and 0x67 prefixes and is longer than the `imul` or the
+    /// `shl; add` it replaces (+214 bytes over the corpus at -Os).
     fn takes_scale(
         &self,
         n: SDValue,
         am: &AddressMode,
     ) -> bool {
-        self.mode != AddrMode::Real16 || (am.is_for_lea && vt_bits(self.dag.value_type(n)) == 32)
+        self.mode != AddrMode::Real16 || (am.is_for_lea && !self.size && vt_bits(self.dag.value_type(n)) == 32)
     }
 
     /// `matchAddressRecursively` ([L2677][rec]).
