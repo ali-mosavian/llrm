@@ -15,13 +15,16 @@ CELL = re.compile(r"^\s*mov\s+(.*?)\s*(?:,|$)", re.M)
 
 
 def dword_zero_into_word_slot(asm: str) -> list[int]:
-    """Frame offsets that get `mov dword [bp-N], imm` while every other access of N is a word (a long's slot is read as a dword)."""
-    seen: dict[int, set[str]] = {}
-    for line in asm.splitlines():
-        for width, off in re.findall(r"(byte|word|dword) ptr \[bp-(\d+)\]", line):
-            kind = "imm" if re.search(r"ptr \[bp-\d+\], -?\d+\s*$", line) else "reg"
-            seen.setdefault(int(off), set()).add(f"{width}-{kind}")
-    return sorted(off for off, uses in seen.items() if "dword-imm" in uses and "dword-reg" not in uses and any(use.startswith("word") for use in uses))
+    """Frame offsets that get `mov dword [bp-N], imm` while every other access of N in that function is a word (a long's slot is read as a dword)."""
+    found: list[int] = []
+    for body in re.split(r"(?m)^.*\bendp\b.*$", asm):
+        seen: dict[int, set[str]] = {}
+        for line in body.splitlines():
+            for width, off in re.findall(r"(byte|word|dword) ptr \[bp-(\d+)\]", line):
+                kind = "imm" if re.search(r"ptr \[bp-\d+\], -?\d+\s*$", line) else "reg"
+                seen.setdefault(int(off), set()).add(f"{width}-{kind}")
+        found += sorted(off for off, uses in seen.items() if "dword-imm" in uses and "dword-reg" not in uses and any(use.startswith("word") for use in uses))
+    return found
 
 
 def test_a_dword_zero_into_a_word_slot_is_found_in_the_asm():
