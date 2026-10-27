@@ -9,7 +9,7 @@
 //! one `String` token holding the statement's raw text.
 
 use crate::front::kw::{self, Kw};
-use crate::front::lexer::logical_lines;
+use crate::front::lines::logical_lines;
 use crate::front::token::{Token, TokenKind};
 use crate::front::words::Word;
 use crate::syntax::{Binary, Span};
