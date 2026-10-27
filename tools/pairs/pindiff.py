@@ -69,7 +69,10 @@ def clang_flags(machine: str) -> tuple[str, list[str]]:
         return re.sub(r"\{env:(\w+)\}", lambda found: os.environ[found.group(1)], word)
 
     binary = os.environ.get(entry.get("clang_env", ""), "") or os.environ.get("LLRM_PIN_CLANG", "") or str(pin.PINNED_BIN / "clang")
-    return binary, [fill(word) for word in entry["clang"]]
+    words = [fill(word) for word in entry["clang"]]
+    # llc runs `-mabi=sysv`/cdecl here: Watcom's regcall default would put cc 92 in every function.
+    keep = [i for i, word in enumerate(words) if not word.startswith("-fdefault-calling-conv") and not (word == "-Xclang" and words[i + 1].startswith("-fdefault-calling-conv"))]
+    return binary, [words[i] for i in keep]
 
 
 def pin_text_size(obj: Path) -> int:

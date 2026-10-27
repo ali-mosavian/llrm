@@ -240,3 +240,12 @@ def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
     after = "\n".join(pindiff.table([row("a", 124, 379), row("b", 50, 100), row("new", 1, 1)], old=False))
     assert rowdelta.parse(before)["a"] == (134, 100, 462, 296)
     assert rowdelta.deltas(before, after) == ["a: ins 134->124 (pin 100), nopad 462->379 (pin 296)"]
+
+
+def test_the_m32_clang_flags_leave_out_the_watcom_regcall_default():
+    """The m32 flags came from the Watcom target, whose `-fdefault-calling-conv=regcall` put cc 92 in every function while llc ran `-mabi=sysv`:
+    llrm-llc refused all 71 programs ("calling convention 92") and the table was empty."""
+    pindiff = load("pindiff")
+    _, flags = pindiff.clang_flags("m32")
+    assert not any("regcall" in flag for flag in flags), flags
+    assert not any(flag == "-Xclang" and flags[i + 1].startswith("-fdefault-calling-conv") for i, flag in enumerate(flags[:-1])), flags
