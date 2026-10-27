@@ -16,7 +16,7 @@
 //! `foldICmpTruncWithTruncOrExt`,
 //! `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 //! `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
-//! `foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
+//! `foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
 //! `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 //! `dyn_castNegVal` select fold.
@@ -49,7 +49,7 @@
 
 use llrm_mir::context::{mask, signed};
 use llrm_mir::knownbits::KnownBits;
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
@@ -221,6 +221,17 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    for operand in [op0, op1] {
+        if let Operand::Value(value) = operand
+            && let ValueDef::Instruction(phi) = c.function.value(value).def
+            && c.function.instruction(phi).opcode == Opcode::Phi
+        {
+            match c.fold_op_into_phi(inst, phi, false) {
+                Visit::None => {}
+                found => return found,
+            }
+        }
+    }
     // foldICmpCommutative, its GEP step: both orders.
     if let Some(r) = fold_gep_icmp(c, inst, pred, op0, op1) {
         return r;
@@ -228,9 +239,8 @@ pub fn visit_icmp(
     if let Some(r) = fold_gep_icmp(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
-    // OWED: foldOpIntoPhi, foldICmpInstWithConstantNotInt,
-    // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
-    // the two-select fold.
+    // OWED: foldICmpInstWithConstantNotInt, foldICmpCommutative,
+    // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
 }
 

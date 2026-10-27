@@ -2362,7 +2362,7 @@ fn bits_signed(
 /// The linear address of a flat pointer `root` an integer constant makes: a
 /// target with one address space has no selector, and its pointer's integer is
 /// the address.
-fn flat_constant(
+pub(crate) fn flat_constant(
     unit: &Unit,
     root: Operand,
 ) -> Option<i64> {

@@ -405,6 +405,19 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// The GPRs were ordered eax ecx edx ebx esi edi, so the callee-saved ebx
+    /// was the first of them taken; the pin's GR32 order
+    /// (X86RegisterInfo.td) is eax ecx edx esi edi ebx.
+    #[test]
+    fn test_general_registers_are_allocated_in_the_pins_order() {
+        let order: Vec<&str> = super::REGISTERS
+            .iter()
+            .map(|r| r.name.as_str())
+            .filter(|n| ["eax", "ecx", "edx", "esi", "edi", "ebx"].contains(n))
+            .collect();
+        assert_eq!(order, ["eax", "ecx", "edx", "esi", "edi", "ebx"]);
+    }
+
     /// The limits the pin's `computePSetLimit` gives the x86-32 sets with the
     /// six general registers allocatable, worked by hand from the table:
     /// set 35 (GR16) is 66 - 2 * (34 - 6) of its largest class,
