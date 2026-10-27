@@ -119,3 +119,37 @@ entry:
     );
     assert!(text.contains("srem i16 %x, 10") && !text.contains("sdiv"), "{text}");
 }
+
+/// `(i % 251) + 1`: LSR makes the counter `i + 1` and writes `(i + 1) - (i /
+/// 251) * 251`.
+const OFFSET: &str = "define void @f(ptr %p) {
+entry:
+  br label %loop
+
+loop:
+  %x = phi i32 [ 0, %entry ], [ %xn, %loop ]
+  %y = phi i32 [ 1, %entry ], [ %yn, %loop ]
+  %q = udiv i32 %x, 251
+  %m = mul nuw nsw i32 %q, 251
+  %r = sub i32 %y, %m
+  store i32 %r, ptr %p
+  %xn = add nuw nsw i32 %x, 1
+  %yn = add nuw i32 %y, 1
+  %c = icmp ult i32 %xn, 40200
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret void
+}
+";
+
+/// `huge_runs.c`'s `around()` at m16 -Os kept `div; imul; sub` and two spills
+/// in the loop where main ran `div; inc`: +19.5% clocks (+31.8 M). The counter
+/// beside the dividend is `x + 1`, which is a remainder plus 1.
+#[test]
+fn test_a_counter_one_past_the_dividend_is_a_remainder_plus_one() {
+    let text = after(OFFSET, true);
+    assert!(text.contains("urem i32 %x, 251"), "{text}");
+    assert!(text.contains("add i32 %") && text.contains(", 1"), "{text}");
+    assert!(!text.contains("udiv") && !text.contains("mul"), "{text}");
+}

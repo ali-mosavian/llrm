@@ -3,11 +3,11 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use llrm_core::hir::model::Operand;
-use llrm_core::hir::{self};
-use llrm_core::objectfile::module::CALL_FAR;
-use llrm_core::objectfile::omf;
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::hir::model::Operand;
+use llrm_codegen::hir::{self};
+use llrm_codegen::objectfile::module::CALL_FAR;
+use llrm_codegen::objectfile::omf;
+use llrm_codegen::support::hash::IndexMap;
 
 use super::driver as qb_driver;
 use super::test_hir::*;
@@ -891,7 +891,9 @@ fn test_on_error_registrations_follow_source_order() {
         .filter_map(|line| line.strip_prefix("mov word ptr $QB$FRAME, "))
         .map(|state| state.parse().expect("a statement number"))
         .collect();
-    assert!(states.len() == 3 && states.windows(2).all(|pair| pair[0] < pair[1]), "{main}");
+    // Sites are numbered from 0 among the statements that raise; the first
+    // registration's 0 is the frame cell's initial value, so it is not stored.
+    assert_eq!(states, [1, 2], "{main}");
     let last = before.rsplit_once("\n    call far ptr B$OEGA").expect("a registration").0;
     assert!(last.ends_with("pushd 0"), "{main}");
 }

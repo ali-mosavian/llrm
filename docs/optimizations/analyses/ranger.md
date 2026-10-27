@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ranger.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ranger.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:f92a71d0899ddf7e6a3feadf8810e0d7fbee3d064aeb29b6b1781048f325d1fe -->
+<!-- src: crates/opt/llrm-analysis/src/ranger.rs sha256:b4f04e7494f2179d1d4c0eb54d17ec0d432b334a1d075a9248f1021374f060cb -->
 
 # ranger
 

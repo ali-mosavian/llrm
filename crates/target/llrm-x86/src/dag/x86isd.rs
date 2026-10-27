@@ -13,7 +13,7 @@ pub const POP_FROM_X87_REG: ISD = ISD::Target(5);
 /// the block's end (it returns by the callee's `ret`).
 pub const TC_RETURN: ISD = ISD::Target(6);
 /// A `llrm.ia16.asm.*` block (`tools/dagisel/own_ids.txt`); see
-/// `selectiondag::inline_asm` in llrm-core.
+/// `selectiondag::inline_asm` in llrm-codegen.
 pub const LLRM_ASM: ISD = ISD::Target(24578);
 /// The selector of the segment a global lives in, an `i16`: a far global is
 /// `build_pair(GlobalAddress, SEGMENT_OF)`. Carries `NodeData::Global`.

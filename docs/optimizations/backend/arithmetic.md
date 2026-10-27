@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/arithmetic.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/arithmetic.rs sha256:4073be466136816692aa2989badd8258ca7abe4e5aa233e5551116ee67e6be88 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/arithmetic.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:16856d58db510b8db57b930e16b7e49118920b7e4adec3a0d6a8cf289c4d6a32 -->
 
 # arithmetic
 

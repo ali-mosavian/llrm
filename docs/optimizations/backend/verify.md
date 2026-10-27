@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/verify.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/verify.rs sha256:8c1dccac6257c3e4ef76e1b6877bb7f73513f08394b3e86a1454b19655911d86 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/verify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/verify.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/verify.rs sha256:de9adea2dca65431b0f74873a8fd3ffca332be67f36d95abef35222166566524 -->
 
 # verify
 

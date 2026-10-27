@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipsccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipsccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:ee7ea95e7144c19a9012cbf1359afc3e29d6a50684e36a30bc7456f1a31c3813 -->
+<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:635982baa28934dce19db220c5e055f9637b995d7a79fa9dc875e5b36195e576 -->
 
 # ipsccp
 

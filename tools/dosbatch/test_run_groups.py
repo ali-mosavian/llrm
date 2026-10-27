@@ -32,3 +32,12 @@ def test_a_clean_run_exits_zero(monkeypatch, capsys):
     monkeypatch.setattr(subprocess, "run", fake({"c": "5 programs: 5 pass, 0 known, 0 fail\n"}))
     monkeypatch.setattr(sys, "argv", ["run_groups.py", "c"])
     assert run_groups.main() == 0
+
+
+def test_the_isel_proof_line_of_each_group_is_printed(monkeypatch, capsys):
+    """A DAG run showed no proof line, so nothing said the DAG path had selected the functions."""
+    out = {"c": "isel proof (x.txt): LLRM_ISEL=dag: 12 functions selected by the DAG path, 0 by the old selector\n5 programs: 5 pass, 0 known, 0 fail\n"}
+    monkeypatch.setattr(subprocess, "run", fake(out))
+    monkeypatch.setattr(sys, "argv", ["run_groups.py", "c"])
+    run_groups.main()
+    assert "12 functions selected by the DAG path" in capsys.readouterr().out

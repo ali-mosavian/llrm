@@ -206,6 +206,12 @@ def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path
     return path
 
 
+def object_name(name: str) -> str:
+    """The object of runtime file `name`, unique across directories: a platform's start.asm and the OS layer's share a stem."""
+    source = Path(name)
+    return "_".join([*(part for part in source.parent.parts if part != "runtime"), source.stem]).upper() + ".OBJ"
+
+
 C_RUNTIME = "@c-runtime"
 
 
@@ -237,7 +243,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:
-        return [runtime_object(name, made / (Path(name).stem.upper() + ".OBJ"), defines) for name in names]
+        return [runtime_object(name, made / object_name(name), defines) for name in names]
 
     first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
@@ -301,7 +307,7 @@ def c_support(target: str, work: Path) -> list[Path]:
     `work`: for a build with another compiler's start-up, which brings neither."""
     link = target_link(target)
     defines = os_defines(target, "c")
-    return [runtime_object(name, work / (Path(name).stem.upper() + ".OBJ"), defines) for name in (*link["last"], *link["final"])]
+    return [runtime_object(name, work / object_name(name), defines) for name in (*link["last"], *link["final"])]
 
 
 def os_objects(target: str, language: str, work: Path) -> dict[str, Path]:
@@ -320,7 +326,7 @@ def link_nib(target: str, source: Path, obj: Path, exe: Path, work: Path, level:
     """A Nib program for `target`: its object, `runtime.nib` cut to what the program and the OS layer (`os_objects`) name, linked as the target says."""
     runtime = work / (obj.stem + "R.obj")
     used = [word for one in (obj, *foreign, *os_objects(target, "nib", work).values()) for word in ("--used-by", str(one))]
-    _host(with_isel([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/llrm-nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used]))
+    _host(with_isel([str(BIN / "llrm-nib"), str(ROOT / "crates/frontends/nib/src/runtime/runtime.nib"), m_flag(target), *abi, "-o", str(runtime), level, "--procedure-segments", "-Wno-target-width", *used]))
     return link_target(target, obj, exe, work, runtime=(os_start(target, "nib"), []), objects_after=(runtime, *foreign), defines=os_defines(target, "nib"))
 
 

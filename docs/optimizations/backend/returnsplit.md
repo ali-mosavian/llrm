@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/returnsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/returnsplit.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/returnsplit.rs sha256:09173702eff52d60627eddb020775bf3b20f42a55659b6bd99a976f61c990e9e -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/returnsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/returnsplit.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/returnsplit.rs sha256:aa4809a5c62f3d2ccdb48fbacdc2c4c39795d90b7179e9bc20e62fad88beb538 -->
 
 # returnsplit
 
@@ -16,6 +16,23 @@ the store and the end that touches memory or a call, the edge goes to a copy
 the cell before writing it. The edges are kept only when shrink wrapping
 then sets the frame up after the source (`shrinkwrap::wrapped`): a copy of a
 return whose epilogue still runs is a size cost with nothing skipped.
+
+## Example
+`place` of `bench/queens/queens.c` at m16 -O2 (abridged; the left column is
+`LLRM_NO_RETSPLIT=1`):
+
+```text
+ without                           with
+ mov word ptr [bp-6], 1            cmp dx, cx
+ cmp dx, cx                        je early
+ je ret                            ...
+ ...                               early:
+ ret: mov ax, [bp-6]                 mov ax, 1
+      ...                            ret
+```
+
+The store of 1 and the reload are gone, and the frame is set up after the
+test.
 
 ## Runs
 In `assemble`, ahead of `jumps::duplicated_returns`, at -O1 and above.

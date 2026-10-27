@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/attrsummary.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/attrsummary.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/attrsummary.rs sha256:bd4c2c0c3591e7697ffb039e50976b4aa690008de21d7e61dac6361c0c3b559a -->
+<!-- src: crates/opt/llrm-analysis/src/attrsummary.rs sha256:a2767a0c730e211eee8a4ea55f0efe9152589f4e22eefaf224114d7a0d124050 -->
 
 # attrsummary
 
@@ -34,3 +34,6 @@ A tracked global (`GlobalsModRef::is_non_address_taken`) of a function that
 has a `FunctionInfo` is a whole-object slice in `reads` or `writes` as
 `mod_ref_for_global` says, and `globals_listed` keeps the unknown access
 from reaching it. Without a `FunctionInfo` the unknown access reaches it.
+
+## Used by
+Named by `manager`.

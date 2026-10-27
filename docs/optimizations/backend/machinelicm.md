@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/machinelicm.rs sha256:40d6ed5149f0519794883d2ac01b4bf9881fae57eee550d05f8fb596346897c0 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinelicm.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:186173ec318f999d707d5a09cff2bf8f0c9e7ea2bf3b79ac24158eee6c8b5050 -->
 
 # machinelicm
 
@@ -17,8 +17,10 @@ is walked in layout order, and again until nothing moves. An instruction
 moves to the end of the preheader, before its jump, when:
 
 - it is a pure operation on registers and constants with one result, no
-  pinned operand, no call, no x87 value (`candidate`), or a load in a block
-  that runs on every trip of a loop with no store, call or volatile access
+  pinned operand, no call, no x87 value (`candidate`), an `fld1`/`fldz` in a
+  loop with no call and a free stack slot, in a function that never writes
+  the control word (`constant_load`), or a load in a block that runs on
+  every trip of a loop with no store, call or volatile access
   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
 - every value it reads is defined outside the loop or was hoisted
   (`IsLoopInvariantInst`);

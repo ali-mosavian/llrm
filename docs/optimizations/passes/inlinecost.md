@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:02fa4b23ce7573e8af906e844fb2b51b2639abafa625d5fea360bd94fe66548a -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:ed361ca41374374677a005673852f5c63746b268582917e53ae1ed445f877d95 -->
 
 # inlinecost
 
@@ -82,8 +82,9 @@ each site's cost and threshold beside the existing decision; with
   simplified again with the call inlined, is smaller by the target's size
   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
   private callee that dies with its last call are tried together, its body
-  credited). The pin's cost does not follow a load through a pointer
-  argument, so it never sees the loop or the arithmetic fold.
+  credited; so are the sites of a private callee called only from this
+  caller, whatever they pass). The pin's cost does not follow a load through
+  a pointer argument, so it never sees the loop or the arithmetic fold.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not

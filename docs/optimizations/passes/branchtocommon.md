@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/branchtocommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/branchtocommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:c7fd7daa61a8e91d3e075612e2deebf453e3b788358238428097537fe508db3a -->
+<!-- src: crates/opt/llrm-transforms/src/branchtocommon.rs sha256:a21ae900929f68fdf3ee49404552cfe6e4450675fff77dd32e2d11c39c3a74fd -->
 
 # branchtocommon
 
@@ -44,3 +44,6 @@ The block's comparison runs in the predecessor:
 - D3. No debug locations. The bonus instructions lose the metadata that can
   make a speculated instruction undefined, as in
   [`twoentryphi`](twoentryphi.md) (D4 there).
+
+## Used by
+Named by `condtocond`, `simplifycfg`, `switchvalue`.

@@ -13,7 +13,7 @@ use llrm_target::CostModel;
 use llrm_target::machine::Machine;
 
 /// A Linux user program: flat, no ports.
-pub const LINUX64: &str = include_str!("machines/linux64.toml");
+pub const LINUX64: &str = include_str!("../../../../machine/platform/linux/flat64.toml");
 
 /// The processors flat code is priced for: the columns of `timings.times`.
 pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
@@ -52,7 +52,8 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
 
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
-    llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
+    llrm_target::timings::Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86)
+        .expect("timings.times parses")
 });
 
 static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {

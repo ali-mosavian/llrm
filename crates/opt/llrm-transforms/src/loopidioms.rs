@@ -284,6 +284,15 @@ pub fn filled_with(
     standing: &mut llrm_analysis::memory::Standing,
     wanted: &dyn Fn(&Loop) -> bool,
 ) -> bool {
+    // `"no-builtins"` turns every library function off in the pin's TLI.
+    if function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::opcode::Attribute::Str(key, _) if key == "no-builtins"
+        )
+    }) {
+        return false;
+    }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;
@@ -775,6 +784,43 @@ pub(crate) fn variable_copy_pays(
     costs: &OperationCosts,
 ) -> bool {
     trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
+}
+
+/// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
+/// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
+/// store is always filled; of several, each fill is a `rep stos` with ES set
+/// around it, and the stores of one object with one value merge into one.
+pub(crate) fn fills_pay(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+    stores: i64,
+    fills: i64,
+    kept: i64,
+) -> bool {
+    // The loop stays for the stores of computed values: a fill saves one
+    // store, less than itself.
+    if kept > 0 {
+        return false;
+    }
+    // The table doubles an operation that becomes more than one instruction;
+    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
+    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    stores < 2
+        || fills_cheaper(trip_cost(context, layout, function, callees, blocks.iter(), costs, true), fills, costs.fill)
+}
+
+/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
+/// the table, three quarters of which is their real size.
+fn fills_cheaper(
+    loop_bytes: i64,
+    fills: i64,
+    fill: i64,
+) -> bool {
+    4 * loop_bytes > 3 * fills * fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to

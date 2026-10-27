@@ -49,6 +49,17 @@
 //! here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
 //! scalar alloca has no count operand, so a count of 1 is dropping the operand.
 //!
+//! `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
+//! instructions before it in its block stored (`FindAvailableLoadedValue`) is
+//! that value, cast to the load's type.
+//!
+//! DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
+//! of `FindAvailableLoadedValue` (an earlier load of the address) is left to
+//! GVN: the combine holds no metadata to merge (`combineMetadataForCSE`).
+//! The alias analysis is BasicAA with its dominator tree off, not the
+//! pipeline's chain; the stores skipped are those it proves disjoint. Exit:
+//! the rest of `visitLoadInst`.
+//!
 //! # Used by
 //! `combine` (its `visit`).
 //!
@@ -60,6 +71,10 @@
 //! ```
 //! After, one store: `store i16 2, ptr %p`.
 
+use llrm_analysis::aa::BatchAAResults;
+use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::loads::{Available, DEF_MAX_INSTS_TO_SCAN, find_available_loaded_value_before};
+use llrm_analysis::memory::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
@@ -112,6 +127,39 @@ impl Combiner<'_> {
             Opcode::Binary(_) | Opcode::Cast(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
         )
             && a.is_identical_to_when_defined(b)
+    }
+
+    /// `visitLoadInst`, the store-to-load forwarding only: DEVIATE 8.
+    pub fn visit_load(
+        &mut self,
+        load: InstId,
+    ) -> Visit {
+        let available = {
+            let context: &llrm_mir::context::Context = &*self.context;
+            let function = &*self.function;
+            let unit = Unit::over(context, self.env.layout, &[], self.env.globals, function);
+            let mut basic = BasicAA::new(&unit);
+            let mut batch = BatchAAResults::new(&mut basic);
+            batch.disable_dominator_tree();
+            find_available_loaded_value_before(&unit, load, &mut batch, DEF_MAX_INSTS_TO_SCAN)
+        };
+        let Some(Available { value, is_load_cse: false }) = available else { return Visit::None };
+        let ty = self.function.instruction(load).ty;
+        // The load itself only in a dead loop.
+        if self.function.instruction(load).result.is_some_and(|result| value == Operand::Value(result)) {
+            return Visit::Replace(self.poison(ty));
+        }
+        let from = self.type_of(value);
+        if from == ty {
+            return Visit::Replace(value);
+        }
+        let op = match (self.context.types.get(from), self.context.types.get(ty)) {
+            (Type::Pointer(_), Type::Int(_)) => CastOp::PtrToInt,
+            (Type::Int(_), Type::Pointer(_)) => CastOp::IntToPtr,
+            (Type::Pointer(_), Type::Pointer(_)) => CastOp::AddrSpaceCast,
+            _ => CastOp::BitCast,
+        };
+        Visit::Replace(self.create_cast(load, op, value, ty, Flags::default()))
     }
 
     /// `canSimplifyNullStoreOrGEP`: the address is null, or a GEP of null, and

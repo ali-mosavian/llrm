@@ -118,7 +118,7 @@ fn every_error_has_words_and_a_place() {
 fn every_error_the_corpus_raises_is_worded() {
     // The 12,898 programs are generated (corpus/programs.py), not kept.
     let directory = tempfile::tempdir().expect("creates a directory");
-    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../lalrspike/corpus/programs.py");
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lalrspike/corpus/programs.py");
     let made = std::process::Command::new("python3").arg(&script).arg(directory.path()).status().expect("runs python3");
     assert!(made.success(), "programs.py failed");
     let entries = std::fs::read_dir(directory.path()).expect("the generated programs");

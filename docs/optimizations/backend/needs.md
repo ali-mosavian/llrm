@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/needs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:abfbf7d1d8ac78dde62368761b999346598614e727df970510135c70d5c7c16b -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/needs.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/needs.rs sha256:b25f7d9cc7df0af1d7d8a184ecb271eab95da151b27cfa5c5f7637f00c2ec4cd -->
 
 # needs
 

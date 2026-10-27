@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod isa;
 pub mod layout;
 pub mod machine;
 pub mod object;
@@ -15,12 +16,29 @@ pub mod registers;
 pub mod routines;
 pub mod runtime;
 pub mod timings;
+pub mod tune;
 
 use std::rc::Rc;
 
 use llrm_lir::registers::RegId;
 use llrm_mir::target::{AddressForm, OperationCosts};
 use machine::Machine;
+
+/// The registers a segmented target's string operation names: the count, the
+/// offsets it reads and writes through, and the segment its source defaults
+/// to.
+#[derive(Clone, Copy, Debug)]
+pub struct StringRegisters {
+    pub count: RegId,
+    pub source: RegId,
+    pub destination: RegId,
+    pub source_segment: RegId,
+    /// The segment a destination is written through, which a string move
+    /// leaves loaded with the source's.
+    pub destination_segment: RegId,
+    /// A data register a tail's byte count rides in.
+    pub tail: RegId,
+}
 
 /// A flat platform's foreign linear ranges, read when a constant address is
 /// first asked of: parsing a platform's description is not paid by a compile
@@ -383,6 +401,12 @@ pub trait Target {
     /// The register a frame's cells are addressed through.
     fn frame_register(&self) -> RegId;
 
+    /// The pressure sets of the register classes and each set's limit, for a
+    /// target that has them (the pre-RA scheduler tracks pressure per set).
+    fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
+        None
+    }
+
     /// Where the first argument lies from the frame register: past the saved
     /// frame register and the return address, which a far call makes longer.
     fn first_argument_offset(
@@ -409,6 +433,13 @@ pub trait Target {
 
     /// The register that holds the stack's top.
     fn stack_pointer(&self) -> RegId;
+
+    /// The registers a string operation names, where they are fixed (real
+    /// mode's, whose source segment defaults to DS); none where the target
+    /// has no segments to name.
+    fn string_registers(&self) -> Option<StringRegisters> {
+        None
+    }
 
     /// The registers a callee keeps for its caller that an allocator may hold
     /// a value in: each by its full register and by the one a prologue pushes.
@@ -482,6 +513,17 @@ pub trait Target {
         signed: bool,
         wide_divisor: bool,
     ) -> Result<routines::Divide, String>;
+
+    /// `divide_routine` for a caller that reads only `used` of the results: a
+    /// target may have a shorter routine that leaves the rest unfixed.
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        _used: routines::Used,
+    ) -> Result<routines::Divide, String> {
+        self.divide_routine(signed, wide_divisor)
+    }
 
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
@@ -665,4 +707,4 @@ impl FrameRegisters {
 
 /// The I/O ports of a PC: a `[[ports]]`-only description that a platform
 /// appends to its own text.
-pub const PC_PORTS: &str = include_str!("machines/pc-ports.toml");
+pub const PC_PORTS: &str = include_str!("../../../../machine/platform/dos/ports.toml");

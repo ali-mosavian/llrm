@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:ff512ba43a7e756580242a92d667e32778bcc0e3f9d45891de958f5a18018206 -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:a80b9a4f1647968fdfc8064c40080c1e4fe05824eb347f3b3f5d0d76d0f7cc68 -->
 
 # inline
 
@@ -52,7 +52,8 @@ returns, it is not recursive, not `noinline`, and does not call
 A copy is allowed (`fits_with`) only where
 
 - the call's function type is the callee's and the callee is not variadic;
-- no body that allocates is copied into a recursive caller;
+- no body that allocates is copied into a recursive caller, except the last
+  call of a private callee;
 - a parameter the callee `releases` is passed an object the caller owns.
 
 Which sites are copied is `inlinecost::decide`'s (the walk's).

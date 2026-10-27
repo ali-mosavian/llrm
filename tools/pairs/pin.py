@@ -20,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# Where `ld` places the code of an ELF object linked against the pin's stub (the stub sits below it): any address above the stub.
+LINK_TEXT_BASE = 1 << 16
 sys.path.insert(0, str(HERE.parent))
 import targetdesc  # noqa: E402
 
@@ -69,7 +71,7 @@ def _with_stack_alignment(text: str, of: Target) -> str:
     Linux triple whatever the datalayout says, and with 16 it keeps a reserved call frame where, at 4, it pushes (pair csr, 2026-10-25:
     push + add esp counted 197 + 206 against the pin's 71 + 146, none of it ours to fix)."""
     align = stack_alignment(of)
-    if align is None:
+    if align is None or "override-stack-alignment" in text:
         return text
     node = f'!9999 = !{{i32 1, !"override-stack-alignment", i32 {align}}}'
     flags = re.search(r"^!llvm\.module\.flags = !\{([^}]*)\}$", text, re.M)
@@ -114,6 +116,12 @@ def opt(passes: str, text: str, of: Target | None = None, extra: list[str] | Non
     done = subprocess.run([_tool("opt", bin_dir), f"-passes={passes}", "-S", *(extra or []), "-"], input=retarget(text, of), capture_output=True, text=True)
     done.stdout = f"; {header(of)}\n" + done.stdout
     return done
+
+
+def backend_ir(dump: Path) -> Path | None:
+    """The IR a `--dump` hands to the backend: the `switchconv` stage, whatever number the pipeline gives it."""
+    found = sorted(dump.glob("*-switchconv.ll"))
+    return found[-1] if found else None
 
 
 def llc(args: list[str], text: str, of: Target | None = None, bin_dir: Path | None = None) -> subprocess.CompletedProcess:

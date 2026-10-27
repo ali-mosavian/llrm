@@ -1,4 +1,4 @@
-//! `loopidioms` had no tests of its own in llrm-core; these are behaviour
+//! `loopidioms` had no tests of its own in llrm-codegen; these are behaviour
 //! tests, each body MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_analysis::testing::{DOS, layout};
@@ -110,6 +110,17 @@ fn a_byte_loop_is_one_memset() {
             && text.contains("  br label %b3\n\nb3:\n  %e = phi i16 [ 0, %b1 ], [ %2, %b2 ]\n"),
         "{text}"
     );
+}
+
+/// A `"no-builtins"` function has every library function off in the pin's TLI,
+/// so no fill or copy loop becomes a call: x_radix's zero and copy loops were
+/// 3 memsets and 3 memcpys where the pin keeps the loops.
+#[test]
+fn a_no_builtins_function_keeps_its_fill_loop() {
+    let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
+    let text = looped("i8", "%n", body, "%e").replacen(") {", ") \"no-builtins\" {", 1);
+    assert!(text.contains("no-builtins"), "{text}");
+    kept(&text, TRIPS);
 }
 
 /// A known positive count enters without a test; a word of one repeated
@@ -960,4 +971,14 @@ fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_
             assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
         }
     }
+}
+
+/// QCport m16 -Os, loop and fill bytes as the model sums them: mod_tex's two
+/// fills (loop 28) beat its loop, which grew the module 8 bytes at the
+/// table's 18 a fill; snd_mix's (24) and lru's four (42) lose to theirs.
+#[test]
+fn a_fill_is_priced_at_three_quarters_of_the_table() {
+    assert!(super::fills_cheaper(28, 2, 18));
+    assert!(!super::fills_cheaper(24, 2, 18));
+    assert!(!super::fills_cheaper(42, 4, 18));
 }

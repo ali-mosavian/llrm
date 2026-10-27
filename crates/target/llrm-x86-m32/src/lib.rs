@@ -13,8 +13,10 @@ use llrm_target::CostModel;
 use llrm_target::machine::Machine;
 
 /// Flat DOS under an extender, and the PC ports it shares.
-pub const DOS32: &str =
-    concat!(include_str!("machines/dos32.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
+pub const DOS32: &str = concat!(
+    include_str!("../../../../machine/platform/dos/flat32.toml"),
+    include_str!("../../../../machine/platform/dos/ports.toml")
+);
 
 /// The processors flat code is priced for: the columns of `timings.times`.
 pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
@@ -53,7 +55,8 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
 
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
-    llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
+    llrm_target::timings::Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86)
+        .expect("timings.times parses")
 });
 
 /// The pin's register pressure sets for the registers described above:
@@ -91,6 +94,24 @@ impl llrm_target::Target for M32 {
 
     fn name(&self) -> &'static str {
         "x86-m32"
+    }
+
+    fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
+        Some((
+            M32::pressure_sets(),
+            (0..PRESSURE.sets.len())
+                // A set whose largest class the table leaves out holds no value
+                // here (a class is described when a register of the target is
+                // in it): its raw limit stands.
+                .map(|set| {
+                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
+                        M32::pressure_limit(set)
+                    } else {
+                        PRESSURE.sets[set].limit
+                    }
+                })
+                .collect(),
+        ))
     }
 
     fn machine(&self) -> Machine {
@@ -281,6 +302,15 @@ impl llrm_target::Target for M32 {
         llrm_x86::helpers::divide(signed, wide_divisor, 32).map_err(|refused| refused.message)
     }
 
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
+    }
+
     fn float_width(
         &self,
         _: u32,
@@ -384,6 +414,19 @@ impl llrm_target::Target for M32 {
 
 #[cfg(test)]
 mod tests {
+    /// The GPRs were ordered eax ecx edx ebx esi edi, so the callee-saved ebx
+    /// was the first of them taken; the pin's GR32 order
+    /// (X86RegisterInfo.td) is eax ecx edx esi edi ebx.
+    #[test]
+    fn test_general_registers_are_allocated_in_the_pins_order() {
+        let order: Vec<&str> = super::REGISTERS
+            .iter()
+            .map(|r| r.name.as_str())
+            .filter(|n| ["eax", "ecx", "edx", "esi", "edi", "ebx"].contains(n))
+            .collect();
+        assert_eq!(order, ["eax", "ecx", "edx", "esi", "edi", "ebx"]);
+    }
+
     /// The limits the pin's `computePSetLimit` gives the x86-32 sets with the
     /// six general registers allocatable, worked by hand from the table:
     /// set 35 (GR16) is 66 - 2 * (34 - 6) of its largest class,
@@ -396,6 +439,18 @@ mod tests {
         let limits: Vec<(usize, u32)> =
             [35, 1, 3, 13, 26].iter().map(|&set| (set, super::M32::pressure_limit(set))).collect();
         assert_eq!(limits, [(35, 10), (1, 6), (3, 6), (13, 10), (26, 10)]);
+    }
+
+    /// `Target::pressure()` panicked ("the largest class of a set is
+    /// described") on the sets whose largest class the table leaves out, so
+    /// every m32 compile with a tracked region failed. It gives one limit
+    /// per set.
+    #[test]
+    fn pressure_gives_a_limit_to_every_set() {
+        use llrm_target::Target;
+        let (sets, limits) = super::M32.pressure().expect("m32 has pressure sets");
+        assert_eq!(limits.len(), sets.sets.len());
+        assert_eq!(limits[35], 10);
     }
 
     /// `object()` and the runtime tables are parsed once and kept; each must

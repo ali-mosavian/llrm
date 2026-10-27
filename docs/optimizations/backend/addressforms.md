@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/addressforms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/addressforms.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/addressforms.rs sha256:b7987ec8b2d4b75b443b83f87afc3ebb776c02c499f6a661750f3918cefdc12f -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/addressforms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/addressforms.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/addressforms.rs sha256:bc17362a87896e2afc57c6f704d9d83472f66d848da6258f46e79b4581389c88 -->
 
 # addressforms
 

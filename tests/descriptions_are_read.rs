@@ -24,10 +24,10 @@ const NAMED: &[(&str, &str)] = &[
     ("calling.toml", "*.result.*"),
     ("platform.toml", "physical.*"),
     ("datalayout.toml", "pointers.*"),
-    ("pc-ports.toml", "port.*"),
-    ("dos.toml", "port.*"),
-    ("pc-ports.toml", "ports.*"),
-    ("dos.toml", "foreign.*"),
+    ("ports.toml", "port.*"),
+    ("real16.toml", "port.*"),
+    ("ports.toml", "ports.*"),
+    ("real16.toml", "foreign.*"),
     // Every integer of an OS facts file is defined for the assembler
     // as -DDOS_<KEY>: the mechanism reads them all.
     ("facts.toml", "*"),
@@ -42,7 +42,13 @@ const NAMED: &[(&str, &str)] = &[
     // A dialect's flags are a table the instruction reader and the rule
     // generator map over by the names rows and rules give.
     ("dialect.toml", "flags.*"),
+    // An instruction-set catalog is a table keyed by feature name.
+    ("features.toml", "*"),
 ];
+
+/// A tune file names its instruction forms: `Timings::parse_tuned` looks each
+/// one up by the form a target's `timings.times` row names.
+const TUNE_NAMED: &[&str] = &["clocks.*", "latency.*"];
 
 /// The files git tracks under `directories` of `root`: what the repository
 /// holds, not what a build, a virtualenv or an editor left beside it (a
@@ -64,16 +70,13 @@ fn tracked(
 }
 
 fn descriptions() -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target", "runtime"])
+    let mut found: Vec<PathBuf> = tracked(Path::new(ROOT), &["crates/target", "runtime", "machine"])
         .into_iter()
         .filter(|path| {
             let name = path.file_name().unwrap().to_string_lossy();
-            // The QB runtime's own routine table, rows named by routine; its
-            // crate reads it whole, as the frontend crate did before it moved.
-            if path.ends_with("runtime/qb/src/runtime.toml") {
-                return false;
-            }
-            let in_src = path.components().any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime")
+            let in_src = path
+                .components()
+                .any(|one| one.as_os_str() == "src" || one.as_os_str() == "runtime" || one.as_os_str() == "machine")
                 || name == "platform.toml";
             in_src
                 && (matches!(
@@ -188,7 +191,9 @@ fn every_toml_key_has_a_reader() {
         let mut all = Vec::new();
         keys("", &toml::Value::Table(value), &mut all);
         for (at, key) in all {
-            let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at));
+            let named = NAMED.iter().any(|(file, pattern)| *file == name && matches(pattern, &at))
+                || (path.to_string_lossy().contains("/machine/tune/")
+                    && TUNE_NAMED.iter().any(|pattern| matches(pattern, &at)));
             // A reader that takes the key through a closure or a helper:
             // `name("code")`, `number("fixed")`.
             let called = regex::Regex::new(&format!(r#"(?:\w\(|,\s*)"{}"\s*[,)]"#, regex::escape(&key))).unwrap();

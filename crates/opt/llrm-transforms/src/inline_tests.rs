@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/inline_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/inline_tests.rs`, the port of
 //! `tests/test_inline.py`, each body now MIR text.
 //!
 //! Skipped: `test_inline_refuses_a_live_unmodelled_call_result`, since a call
@@ -75,6 +75,7 @@ fn every_body(
                     body: std::rc::Rc::new(function.clone()),
                     frame: grown(&module.context, layout, function),
                     moved: false,
+                    last_call: false,
                     callee: None,
                     self_calls: None,
                     self_sites: 0,
@@ -603,6 +604,7 @@ fn self_inlined(ops: usize) -> (usize, i64) {
             body: std::rc::Rc::new(function.clone()),
             frame: grown(context, &layout, function),
             moved: false,
+            last_call: false,
             callee: None,
             self_calls: None,
             self_sites: 0,

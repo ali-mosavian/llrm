@@ -652,7 +652,7 @@ impl Analysis for Shape {
 /// Blocks the entry does not reach, gone, and each phi's inputs from
 /// edges that no longer exist with them.
 ///
-/// Copied from llrm-core's `optimize/transform.rs` `_unreachable`. The old
+/// Copied from llrm-codegen's `optimize/transform.rs` `_unreachable`. The old
 /// MIR kept a dead block as an inert byte owner; the rich MIR owns no bytes.
 pub fn _unreachable(
     context: &Context,

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/assemble.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/assemble.rs sha256:9a5c0070283c48364a51e9d98e8b40fca0faf6c05985c548a5caf5914ff81121 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/assemble.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/assemble.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/assemble.rs sha256:b86558cd3f1666a001cae8afa450bbc2a6017d21928a9c84a7c0d1fb1a55d2ef -->
 
 # assemble
 

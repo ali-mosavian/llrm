@@ -247,9 +247,16 @@ b3:
 }
 
 fn with_exit_values(text: &str) -> String {
+    with_exit_values_sized(text, false)
+}
+
+fn with_exit_values_sized(
+    text: &str,
+    size: bool,
+) -> String {
     let mut module = crate::testing::parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { lftr: true, size: false });
+    manager.add(super::IndVars { lftr: true, size });
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     crate::testing::printed(&module)
 }
@@ -288,6 +295,54 @@ b4:
 ",
     );
     assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
+}
+
+/// lcexit.bas (`FOR`/`EXIT` over an `INTEGER` counter read as `LONG`): the
+/// counter is widened, and the loop's exit count, worked out before that, is
+/// still the one in `i16`. LLVM tells ScalarEvolution nothing of the compares
+/// the widening rewrote in place, so LFTR tests the wide counter against
+/// `zext` of a limit built in `i16`. The port forgot the count and built the
+/// limit in `i32`: two copies of `umin(zext n - 1, 9) + 1`.
+#[test]
+fn test_a_widened_counters_limit_is_built_in_the_narrow_type_and_extended() {
+    let text = with_exit_values(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %n) {
+b0:
+  %none = icmp eq i16 %n, 0
+  br i1 %none, label %b4, label %b2
+
+b2:
+  br label %b7
+
+b7:
+  %i = phi i16 [ 0, %b2 ], [ %next, %b7 ]
+  %acc = phi i32 [ 0, %b2 ], [ %sum, %b7 ]
+  %w = zext nneg i16 %i to i32
+  %sum = add i32 %acc, %w
+  %next = add nuw nsw i16 %i, 1
+  %big = icmp ugt i16 %i, 8
+  %hit = icmp eq i16 %next, %n
+  %stop = select i1 %big, i1 true, i1 %hit
+  br i1 %stop, label %x, label %b7
+
+x:
+  %sum.out = phi i32 [ %sum, %b7 ]
+  %i.out = phi i16 [ %next, %b7 ]
+  br label %b4
+
+b4:
+  %total = phi i32 [ 0, %b0 ], [ %sum.out, %x ]
+  %last = phi i16 [ 0, %b0 ], [ %i.out, %x ]
+  %wide = zext i16 %last to i32
+  %r = add i32 %total, %wide
+  ret i32 %r
+}
+",
+    );
+    assert!(text.contains("%wide.trip.count = zext i16"), "{text}");
+    assert!(text.contains("llvm.umin.i16") && !text.contains("llvm.umin.i32"), "{text}");
 }
 
 /// An exit whose count is not a number is written from the count, as
@@ -901,4 +956,37 @@ fn a_run_that_edits_a_loop_does_not_sweep_the_function_for_dead_code() {
     managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     assert_eq!(crate::dead::SCANNED.with(std::cell::Cell::get), 0);
+}
+
+/// pressx at m16 -Os (+15 B in the early-GlobalOpt sweep): ten additions of a
+/// loop invariant stayed a loop, because the formula's price (an add and a
+/// multiply, 5) was set against the loop's four bodies alone (DEVIATE 15). The
+/// loop is its two counters and its branch too; the formula is smaller.
+#[test]
+fn test_under_size_a_ten_trip_sum_of_an_invariant_is_its_product() {
+    let text = with_exit_values_sized(
+        "declare void @sink(i16)
+define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {
+entry:
+  %m = mul i16 %a, %b
+  %k = mul i16 %c, %d
+  %p = add i16 %m, %k
+  br label %loop
+loop:
+  %i = phi i16 [ 1, %entry ], [ %inc, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s2, %loop ]
+  %s1 = add i16 %s, %p
+  %s2 = add i16 %s1, %k
+  %inc = add nuw nsw i16 %i, 1
+  %c2 = icmp ne i16 %inc, 11
+  br i1 %c2, label %loop, label %exit
+exit:
+  %out = phi i16 [ %s2, %loop ]
+  call void @sink(i16 %out)
+  ret i16 %out
+}
+",
+        true,
+    );
+    assert!(!text.contains("%s2 = add"), "the loop is gone: {text}");
 }

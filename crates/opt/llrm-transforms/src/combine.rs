@@ -448,6 +448,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
+        Opcode::Load { .. } => &[|c, inst| c.visit_load(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
@@ -533,8 +534,10 @@ pub fn visit(
     {
         return Visit::None;
     }
-    let opcode = c.function.instruction(inst).opcode.clone();
-    visitors(&opcode).iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
+    // The table is 'static: the opcode (a clone per visit, a Box for calls) is
+    // not held.
+    let table = visitors(&c.function.instruction(inst).opcode);
+    table.iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
 }
 
 /// `InstCombinerImpl::run` (:5780): drain the worklist. Whether anything

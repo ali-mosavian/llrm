@@ -38,6 +38,8 @@ Clocks / bytes of the kernel, i486 model, `tools/rows/row.sh`; main is `854bb7ef
 | recpow | -O3 | 430457 / 888 | 434368 / 315 > | 424974 / 427 |
 | recsum | -O3 | 77291 / 83 | 79296 / 91 > | 79296 / 91 > |
 
+ipa-cp clones are off at -O3 (on at -Omax and under `-fipa-cp-clone`): the pin makes none. recchop -O3 is 101 lines of assembly with three procs where the clones made 1378 and eleven; the recchop -O3 row above predates this and its clocks and bytes are not re-measured.
+
 No row is above base in clocks at any level (34 below, 10 equal of the 44 rows of the recursion programs at -O1/-O2/-O3/-Os); recchop -O3 is under main (5932 against 5946). Clocks go down and bytes go up on the rows that gain: fib 537 to 392 bytes is both, x_hanoi2 and recchop trade 4-7x bytes for clocks, and the three loop-bearing rows (bintree, quicksort, x_mergesort) pay 3-5x main's bytes for 0-8% clocks against base.
 
 Limits, depth 3 (before the move above): budget 60 / 100 / 150 / 450 `gcc_insns` give fib 207179 / 132006 / 132006 / 132006 and rectwo 1489763 / 876030 / 530081 / 530081, so 150 is the smallest that keeps both under main. gcc's depth 8 and 450 give fib 227940 / 1736 B and bintree 2876 B. Differences from gcc: the copies are made depth first, gcc's by a heap of edges ordered by badness; gcc's `peeling` and cold-edge checks are not translated.
@@ -72,3 +74,7 @@ Not covered by the flag: nothing. A call with a constant argument was inlined ag
 
 - **REC-2, owner w-6, closed:** `int main(void){ report(fib(30)); }`, `-m32 -march=i486 -O2`: the pin's clang (24.0.0git d1106deb71cc) leaves 1 call of `fib` in `main` and 1 in `fib` (2 and 2 with the default PIC base thunks counted). llrm inlined `fib` once, tail-call elimination had made it a loop, and the loop was unrolled: 15 calls in `main`. The walk's cost model now refuses a callee that calls itself unless `-finline-recursive` (`InlineParams::allow_recursive_call`); `walk::tests::test_a_callee_that_calls_itself_is_not_inlined_unless_recursion_is_on` pins it. Effect (pair, 15 recursion programs): code bytes -O2 geomean 1.1959 -> 0.9115 of min(gcc, clang), clocks within 0.02%.
 - **REC-3, owner w-6, closed by REC-2:** `recchop` -O2 code was 1048 bytes by default against the pin's 191; with the callee refused it is 184.
+
+## Tail-recursion elimination at m16 -Os (w9, 2026-10-26)
+
+`recchop` is 158 B on main, 169 B on parity `19a593cf2`, 153 B with `-fno-optimize-sibling-calls`: the pin's `TailCallElim` makes the last `chop` a loop and three values (`lo`, `mid`, the sum) cross the other call. Over the whole c/nib/qb corpus at -Os m16 (`sz4.py`, with and without the flag): the pass shrinks 33 program variants by 1725 B and grows 24 by 390 B, net -1335 B. Its growers are `recchop` (+16), `idiv_loop_os` (+27), `flat_arith` (+22), `tail_calls` (+13), `frames` (+7), `rectwo`, `fib`, `quicksort.nib`; no single property separates them from the winners (`bintree`, `recsum`, `recgcd`, `recfloat`, `quicksort.c`). A gate on the pass would give up the wins; the growth is spill code in the loop it makes, which the allocation rows own. Not a DEVIATE.

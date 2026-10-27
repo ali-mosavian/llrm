@@ -60,6 +60,8 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [flip-ambt-table](flip-ambt-table.md) | The 22 AM-BT rows by dag/old and dag/pin at m32 -O2: verdict, cause and owner per row (2026-10-25) |
 | [flip-ambt-rows-8-14](flip-ambt-rows-8-14.md) | Rows 8-14 re-run on tip c76f9a6a5 with the pin's i486 triple: old, dag and pin llc clocks, instructions and code bytes (2026-10-26) |
 | [bsf-bsr-cost-row](bsf-bsr-cost-row.md) | BSF/BSR cost row and the pin's `rep` prefix rule on BSF (2026-10-26) |
+| [combine-forward-load-rows.md](combine-forward-load-rows.md) | m16 -Os growers of the load forwarding in combine (#5008) |
+| [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
 | [above-main-rows](above-main-rows.md) | Rows above main |
@@ -93,6 +95,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [algebraic-696-note](algebraic-696-note.md) | algebraic@696 deleted: the pair by bucket, the costs and what is owed |
 | [qcport-o2-size](qcport-o2-size.md) | AM-QC-1: QCport -O2 size by cause (unrolling, inlining) and module |
 | [cleanup-bucket-by-pass](cleanup-bucket-by-pass.md) | The machine clean-up bucket (172.3 M vs the pin's 49.4) one row per pass, with a proposed owner |
+| [gap-like-for-like](gap-like-for-like.md) | The d_faces m32 -O2 gap to the pin by group, with the isel and combine work counted once, and an owner per row |
 | [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |
 | [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [emit-plan](emit-plan.md) | Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC |
@@ -106,6 +109,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lsr-callees](lsr-callees.md) | LSR callees against the pin, same IR — w-3, 2026-10-22 |
 | [machine-scheduler-plan](machine-scheduler-plan.md) | Machine Instruction Scheduler (codegen row 65) |
 | [machine-cleanup-compile-plan](machine-cleanup-compile-plan.md) | Machine clean-up compile time: plan to 1.0x of the pin |
+| [shared-liveness-poc](shared-liveness-poc.md) | Shared liveness across the scheduler and allocator: worth under 0.5% of the compile |
 | [machinecombiner-translation-plan](machinecombiner-translation-plan.md) | Translating MachineCombiner (slot 40) |
 | [old-allocator-modules](old-allocator-modules.md) | Old allocator modules: last callers and the PR that deletes each |
 | [peephole-vs-pin](peephole-vs-pin.md) | Peephole cost by sub-pass against the pin on d_faces -O2 (2026-10-25) |
@@ -138,6 +142,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-switch-plan](selectiondag-switch-plan.md) | SelectionDAG switch plan, revised 2026-10-22 |
 | [selectiondag-builder-gaps](selectiondag-builder-gaps.md) | What the pin's `visit*` has that the DAG builder lacks (sdag-a) |
 | [selectiondag-far-builder](selectiondag-far-builder.md) | Far and huge pointers in the DAG builder (sdag-a) |
+| [old-selector-reds](old-selector-reds.md) | The 11 old-selector tests ignored since #4992, with the delta and m16 size of each |
 | [old-selector-retirement](old-selector-retirement.md) | What the old selector leaves to retire after the DAG flip, surveyed by reading |
 | [selectiondag-default-readiness](selectiondag-default-readiness.md) | What must be true to make `--isel=dag` the default (sdag-a) |
 | [jumps-profile-d_faces](jumps-profile-d_faces.md) | Line profile of ControlFlow (`jumps`) on d_faces -O2 against the pin's BranchFolder (2026-10-25) |
@@ -157,7 +162,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 ## Docs with the change
 
-A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
+A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docs/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docs/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docs/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
 | [selectiondag-plan](selectiondag-plan.md) | Translating SelectionDAG selection (slot row 28): the pin's structure, what replaces each part, the generated matcher, shadow mode then switch then delete, with owners and dates |
 | [regalloc-matrix-profile](regalloc-matrix-profile.md) | LiveRegMatrix cost on d_faces m32 -O2 against the pin: ~10.8 M of the 77.6 M allocator, ~4.5 M over the pin |
 | [regpressure-plan](regpressure-plan.md) | Per-set register pressure for the pre-RA scheduler: tracker, limits, deltas; the half w2 calls |
