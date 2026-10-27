@@ -522,12 +522,16 @@ intrinsics! {
 /// for the intrinsics of [`IntrinsicId`]: the longest name that is the callee's
 /// before its type suffix.
 pub fn intrinsic_id_of_name(name: &str) -> Option<IntrinsicId> {
-    let name = name.strip_prefix("llvm.")?;
-    INTRINSIC_NAMES
-        .iter()
-        .filter(|(base, _)| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-        .max_by_key(|(base, _)| base.len())
-        .map(|(_, id)| *id)
+    static BY_NAME: std::sync::OnceLock<crate::hash::HashMap<&'static str, IntrinsicId>> = std::sync::OnceLock::new();
+    let by_name = BY_NAME.get_or_init(|| INTRINSIC_NAMES.iter().copied().collect());
+    // The longest base the name is, or continues past a dot.
+    let mut prefix = name.strip_prefix("llvm.")?;
+    loop {
+        if let Some(&id) = by_name.get(prefix) {
+            return Some(id);
+        }
+        prefix = prefix.rsplit_once('.')?.0;
+    }
 }
 
 /// `IntrinsicInst::getIntrinsicID` of a call: `inst` calls one of
@@ -1083,4 +1087,39 @@ pub fn neg(
 ) -> Option<(InstId, Operand, Flags)> {
     let (inst, instruction, a, b) = binary(q, v, BinaryOp::Sub)?;
     zero(q, a).then_some((inst, b, instruction.flags))
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    /// The by-name table replaced a scan of every base: for each base, bare,
+    /// with a type suffix, glued to a letter, and without the `llvm.`
+    /// prefix, the id is the longest base the name continues past a dot.
+    #[test]
+    fn an_intrinsic_name_finds_the_longest_base_it_continues_past_a_dot() {
+        let scanned = |text: &str| {
+            let name = text.strip_prefix("llvm.")?;
+            INTRINSIC_NAMES
+                .iter()
+                .filter(|(base, _)| {
+                    name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+                })
+                .max_by_key(|(base, _)| base.len())
+                .map(|(_, id)| *id)
+        };
+        for (base, _) in INTRINSIC_NAMES {
+            for text in [
+                format!("llvm.{base}"),
+                format!("llvm.{base}.i32"),
+                format!("llvm.{base}.p0.p0.i32"),
+                format!("llvm.{base}x"),
+                base.to_string(),
+            ] {
+                assert_eq!(intrinsic_id_of_name(&text), scanned(&text), "{text}");
+            }
+        }
+        assert_eq!(intrinsic_id_of_name("llvm.smax.i32"), Some(IntrinsicId::Smax));
+        assert_eq!(intrinsic_id_of_name("llvm.nosuch.i8"), None);
+    }
 }
