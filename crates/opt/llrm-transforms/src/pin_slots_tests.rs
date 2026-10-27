@@ -241,7 +241,6 @@ const ROWS: &[Disposition] = &[
         "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
         "",
     ),
-    row(Simplify, "mldst-motion", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
     row(
         Simplify,
         "move-auto-init",
@@ -326,8 +325,20 @@ const ROWS: &[Disposition] = &[
         "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
         "w4",
     ),
-    row(Late, "mergeicmps", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
-    row(Late, "expand-memcmp", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
+    row(
+        Late,
+        "mergeicmps",
+        Why::Missing,
+        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
+        "w-4, 11-09",
+    ),
+    row(
+        Late,
+        "expand-memcmp",
+        Why::Missing,
+        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
+        "w-4, 11-09",
+    ),
     row(
         Late,
         "vector-combine",
@@ -467,13 +478,7 @@ const ROWS: &[Disposition] = &[
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
-    row(
-        Module,
-        "constmerge",
-        Why::Missing,
-        "merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight",
-        "w-6, 11-09",
-    ),
+    row(Module, "constmerge", Why::Executed, "constmerge.rs, the last module pass (llvm_order, optimizing)", ""),
     row(
         Module,
         "alloc-token",

@@ -25,14 +25,13 @@
 //! `foldBitwiseLogicWithIntrinsics` (:2956, after folds not yet translated)
 //! are not. In `visitAnd` and `visitXor` it runs after the folds translated.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::passes::Declared;
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
+use llrm_support::hash::HashMap;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{has_one_use, query};
@@ -311,7 +310,7 @@ pub fn match_bswap_or_bitreverse(
             q: &q,
             declared: &*c.declared,
             bitreversals: match_bitreversals,
-            parts: HashMap::new(),
+            parts: HashMap::default(),
             found_root: false,
         };
         let res = collect.run(value, 0)?;
