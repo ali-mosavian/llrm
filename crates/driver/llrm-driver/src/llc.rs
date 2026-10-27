@@ -346,7 +346,7 @@ pub fn compiled_dumping(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
-    refuse_debug_format(flags, format.name(), bound.target.name())?;
+    refuse_debug_format(flags, format.name(), bound.target.object().bitness)?;
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
@@ -394,7 +394,7 @@ fn libm_calls(
 fn refuse_debug_format(
     flags: &Flags,
     format: &str,
-    target: &str,
+    bitness: u32,
 ) -> Result<(), String> {
     use llrm_object::debug::Format;
     if !flags.debug {
@@ -407,7 +407,7 @@ fn refuse_debug_format(
         Format::TurboDebugger if format != "omf" => {
             Err(format!("-gtd: the {format} object format cannot carry Turbo Debugger's information"))
         }
-        Format::TurboDebugger if !target.ends_with("m16") => {
+        Format::TurboDebugger if bitness != 16 => {
             Err("-gtd: Borland's records are 16-bit; use a 16-bit target".to_owned())
         }
         _ => Ok(()),
