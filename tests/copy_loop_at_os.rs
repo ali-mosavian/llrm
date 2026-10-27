@@ -1,7 +1,7 @@
 //! At -Os a copy loop of a length known at run time stays a loop where the
 //! `rep movs` that would replace it is more bytes.
 
-use std::process::Command;
+mod common;
 
 fn os_copy_listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
@@ -11,7 +11,7 @@ fn os_copy_listing(flags: &[&str]) -> String {
         "extern int a[], b[];\nvoid copy(int lo, int mid, int hi)\n{\n    int i = mid, k = lo;\n    while (i < hi) b[k++] = a[i++];\n}\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(flags)
         .args(["-m16", "-march=i386", "-S", "-o", "a.s", "a.c"])

@@ -1407,15 +1407,19 @@ impl<'d> SplitEditor<'d> {
         extend_ranges: bool,
     ) {
         let parent_reg = self.edit().get_reg();
-        // (instruction, reads, defines) in order of first mention.
+        // (instruction, reads, defines) in order of first mention. An operand
+        // flagged undef reads nothing and goes where the def does (`<undef>`
+        // operands "don't really read the register ... When the use operand is
+        // tied to a def, we must use the same register as the def").
         let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
         for op in cx.lis.operands(parent_reg) {
+            let (read, define) = (op.reads_reg, op.is_def || !op.reads_reg);
             match seen.iter_mut().find(|(k, ..)| *k == op.instr) {
                 Some(entry) => {
-                    entry.1 |= !op.is_def;
-                    entry.2 |= op.is_def;
+                    entry.1 |= read;
+                    entry.2 |= define;
                 }
-                None => seen.push((op.instr, !op.is_def, op.is_def)),
+                None => seen.push((op.instr, read, define)),
             }
         }
 
