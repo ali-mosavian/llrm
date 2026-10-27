@@ -10,7 +10,7 @@ use std::process::Command;
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 const DIRS: [&str; 3] =
-    ["crates/opt/llrm-analysis/src", "crates/opt/llrm-transforms/src", "crates/backend/llrm-core/src/backend"];
+    ["crates/opt/llrm-analysis/src", "crates/opt/llrm-transforms/src", "crates/codegen/llrm-codegen/src/backend"];
 
 struct Block {
     file: String,

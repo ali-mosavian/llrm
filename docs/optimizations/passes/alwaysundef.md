@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/alwaysundef.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/alwaysundef.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/alwaysundef.rs sha256:3fa1186b07d040823e116f93fb06499cc97d711baeb5812c05bff489b0195e58 -->
+<!-- src: crates/opt/llrm-transforms/src/alwaysundef.rs sha256:2e14013ec7ffe4a4d08894ba4d21251c03fce884ee12519c2e3bce36871213af -->
 
 # alwaysundef
 
@@ -33,3 +33,6 @@ A null the block loads through makes its way in undefined:
   attribute for every address space.
 - D2. `isPassingUndefUB` is the `noundef` attribute of the call's argument;
   the callee's own parameter attributes are not read.
+
+## Used by
+Named by `hoistcommon`, `speculate`, `undefpred`.

@@ -56,7 +56,16 @@ pub fn removed(
     function: &mut Function,
     block: BlockId,
 ) -> bool {
+    // A block with no phi has no input to be undefined.
+    if function.iter_block(block).next().is_none_or(|first| function.instruction(first).opcode != Opcode::Phi) {
+        return false;
+    }
     for phi in crate::edges::phis(function, block) {
+        // Only a constant is undefined on the edge: the pin's
+        // `passingValueIsAlwaysUndefined` returns on anything else first.
+        if !function.instruction(phi).operands.chunks(2).any(|arm| matches!(arm[0], Operand::Constant(_))) {
+            continue;
+        }
         for (value, pred) in llrm_analysis::occurrence::arms(function, phi) {
             if !crate::alwaysundef::always_undefined(context, spec, function, value, phi, false) {
                 continue;

@@ -3,7 +3,7 @@
 Owed item 7 of `constantfolding.rs` (#2246): `ConstantFoldFPInstOperands` (ConstantFolding.cpp L1574, d1106deb71cc). Today `fadd/fsub/fmul/fdiv/frem` of two constants never fold there.
 
 ## Evidence it matters
-w-8's `client` repro (`~/scratch/foldexp/client-nonum/12-pipeline.ll`, `_pl_death_selftest@3`): the pin's `print<scalar-evolution>` gives the float exit `i32 12`; ours `COULDNOTCOMPUTE`. `compute_exit_count_exhaustively` (scev/exit_value.rs) is a faithful translation and runs, but `evaluate_expression` reaches `fadd float 1.1, 0.1`, `constant_fold_inst_operands_at` answers none, and the exhaustive run stops.
+w-8's `client` repro (`12-pipeline.ll`, `_pl_death_selftest@3`): the pin's `print<scalar-evolution>` gives the float exit `i32 12`; ours `COULDNOTCOMPUTE`. `compute_exit_count_exhaustively` (scev/exit_value.rs) is a faithful translation and runs, but `evaluate_expression` reaches `fadd float 1.1, 0.1`, `constant_fold_inst_operands_at` answers none, and the exhaustive run stops.
 
 ## The rule (a numbered DEVIATE, narrower than the pin)
 The pin folds `fadd float` in f32 with round-to-nearest. QB, Nib and C on an x87 target evaluate temporaries wider (80-bit, spilled at 80, D-RFP5), so an f32 or f64 fold can change a printed value.

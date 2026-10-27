@@ -6,6 +6,11 @@ const LSNEUTRAL = 120
 declare function lsScaleByte% (raw as integer, sval as integer)
 declare function BenchQlight& ()
 
+' Read from DATA so no build folds the kernel to a constant.
+dim shared inRaw as integer, inLow as integer, inS1 as integer, inS2 as integer, inS3 as integer
+read inRaw, inLow, inS1, inS2, inS3
+data 200, -20, 120, 60, 240
+
 print ltrim$(str$(BenchQlight&))
 end
 
@@ -20,7 +25,7 @@ function lsScaleByte% (raw as integer, sval as integer)
 end function
 
 function BenchQlight&
-    BenchQlight& = clng(lsScaleByte%(200, 120)) * 1000000 + _
-                     clng(lsScaleByte%(200, 60)) * 1000 + _
-                     lsScaleByte%(200, 240) + lsScaleByte%(-20, 120)
+    BenchQlight& = clng(lsScaleByte%(inRaw, inS1)) * 1000000 + _
+                     clng(lsScaleByte%(inRaw, inS2)) * 1000 + _
+                     lsScaleByte%(inRaw, inS3) + lsScaleByte%(inLow, inS1)
 end function

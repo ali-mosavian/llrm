@@ -140,6 +140,15 @@ rule transferred
             same_length(@0, $0)
     rewrite @0: =@0 r, r, l ; anchor @1
 
+// The same for a cell: `A = op(A, [C]); [C] = A` is `[C] = op([C], A)` when A
+// dies at the store. The spiller folds the reload into the operation and
+// leaves the store, where the pin's spill folding makes one read-modify-write.
+rule transferred_cell
+    match   op=commutative_alu l:reg, l, c:mem ; mov c2:mem, l
+    when    free(@0, exact), free(@1, dropped), same_width(l, c), !addresses(c, l), same_cell(c2, c),
+            dead(@1, lanes(l)), encodable($0)
+    rewrite @0: op c, c, l ; anchor @1
+
 
 // Remove a synthetic save/restore when the source survives between them:
 // nothing between writes the source or touches the temporary, and the
@@ -152,6 +161,35 @@ rule restored_copy
     when    free(@0, synthetic), free(@1, synthetic), same_width(t, s), width_in(t, [8, 16, 32]),
             disjoint(lanes(t), lanes(s)), !empty(lanes(t)), !empty(lanes(s)), dead(@1, lanes(t))
     rewrite anchor @0 ; anchor @1
+
+
+// A reload of the cell a store just filled, into the register that filled it,
+// reads what the register still holds: nothing between writes the register,
+// the cell or what addresses it, and no call, volatile access or barrier
+// stands between. The pin's allocator never leaves the pair; the real-mode
+// register classes do (DEVIATE: no pin reference for them). The store stays:
+// the cell may be read later.
+meta forwarded = clobbers requires delivers spread group symbol frame_adjust volatile
+group forwarded_reloads
+    walk gap
+
+rule forwarded_reload
+    match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov r, c
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), width_in(r, [8, 16, 32])
+    rewrite @0 ; anchor @1
+
+
+// The same reload into another register is a copy of the register that
+// filled the cell: it still holds the value, and a register copy is shorter
+// and faster than the load.
+group forwarded_copies
+    walk gap
+
+rule forwarded_copy
+    match   mov c:mem, r:reg ; ... holds_after(@0, *) ; mov d:reg, c
+    when    free(@0, forwarded), free(@1, forwarded), same_width(r, c), same_width(d, c), width_in(d, [8, 16, 32]),
+            !same_root(r, d)
+    rewrite @0 ; @1: mov d, r
 
 
 // `T = S; T = op(T); S = T` is `S = op(S); T = S`: the same registers and
@@ -210,6 +248,32 @@ rule fused_push
     when    free(@0, dropped), free(@1, settled), same_width(r, c), width_in(c, [16, 32]), dead(@1, lanes(r)), encodable($1)
     rewrite anchor @0 ; @1: push c
 
+// A constant whose only reader is a push is the push's immediate: `mov cx,8;
+// push cx` is `push 8` (4 bytes to 2). The selector hoists a constant of
+// several uses into a register, as the pin does at -Os, and a call between
+// the uses makes the register be made again for each.
+rule fused_immediate_push
+    match   mov r:reg, lit:imm ; ... delays(@0, *) ; push r
+    when    free(@0, dropped), free(@1, settled), same_width(r, lit), width_in(lit, [16, 32]), dead(@1, lanes(r)),
+            encodable($1)
+    rewrite anchor @0 ; @1: push lit
+
+// The same for a segment or offset symbol: `mov ax, DGROUP; push ax` is
+// `pushw DGROUP`.
+rule fused_symbol_push
+    match   mov r:reg, sym:sym ; ... delays(@0, *) ; push r
+    when    free(@0, dropped), free(@1, settled), same_width(r, sym), width_in(sym, [16, 32]), dead(@1, lanes(r)),
+            encodable($1)
+    rewrite anchor @0 ; @1: push sym
+
+// The same when the constant is made wide and pushed narrow: `mov eax, 0`
+// then `push ax`.
+rule fused_immediate_push_narrow
+    match   mov r:reg, lit:imm ; ... delays(@0, *) ; push p:reg
+    when    free(@0, dropped), free(@1, settled), same_root(r, p), narrower(p, r), width_in(p, [16]),
+            dead(@1, lanes(r)), encodable($1)
+    rewrite anchor @0 ; @1: push low_word(lit)
+
 rule fused_unary
     match   mov r:reg, c:mem ; ... delays(@0, *) ; op=unary_rmw r, r ; mov c2:mem, r
     when    free(@0, dropped), free(@1, settled), free(@2, dropped), same_width(r, c),
@@ -236,22 +300,6 @@ rule step_after_compare
             operand(o, t), dead(@2, lanes(t)), encodable($1)
     rewrite @1 ; @0: =@0 x, a ; drop @2
 
-
-// X86FixupLEAs `optTwoAddrLEA` (X86FixupLEAs.cpp#L564), the two cases i486
-// reaches: an LEA that is a two-address add, where no flag is read after it.
-// A step of one is the INC or DEC `increments` then makes, as the pin's case 2.
-group lea_fixup
-    walk each
-
-rule lea_sum_as_add
-    match   lea d:reg, a:any
-    when    free(@0, exact), flags_dead(@0), sums_into(a, d)
-    rewrite @0: add d, d, other_term(a, d)
-
-rule lea_step_as_add
-    match   lea d:reg, a:any
-    when    free(@0, exact), flags_dead(@0), steps_in_place(a, d)
-    rewrite @0: add d, d, step(a, d)
 
 // Select compact INC/DEC for a unit add whose carry result is dead: they
 // differ from it only in keeping CF.
@@ -320,30 +368,6 @@ rule zero_compare_before_a_jump
     rewrite @0: test r, r ; @1 ; @2
 
 
-// A mask only a branch reads is a `test`, as X86 selects `(brcond (and x, m))`: the
-// `and` sets the flags `test` does and writes a register nothing reads, and the copy
-// that kept its source is not needed (x_collatz: `mov dl, cl; and dl, 1; jne` is
-// `test cl, 1; jne`). `test r, imm` has no sign-extended imm8 form: a word or dword
-// `and r, imm8` is shorter, so only a byte register is tested alone, and a copy is
-// dropped only when that pays for it (byte and word).
-group tested_masks
-    walk gap skip nothing resume past
-
-rule test_of_masked_copy
-    match   mov d:reg, s:reg ; ... delays(@0, *) ; and d, d, m:any
-    when    free(@0, dropped), free(@1, settled), same_width(d, s), width_in(d, [8, 16]), operand(m, d), dead(@1, lanes(d)),
-            encodable($1)
-    rewrite anchor @0 ; @1: test s, m
-
-group tested_lone_masks
-    walk each
-
-rule test_of_mask
-    match   and d:reg, d, m:any
-    when    free(@0, settled), width_in(d, [8]), dead(@0, lanes(d)), encodable($0)
-    rewrite @0: test d, m
-
-
 // Selection across instructions before allocation (isel::combined), on
 // held values: `def v: ...` matches the nearest instruction before the
 // window that defines v, and `drop` of it takes it out of the block once
@@ -383,55 +407,3 @@ rule immediate_argument
     when    free(@0, held_copy), free(@1, pushed_held), same_width(v, i), width_in(v, [16, 32]),
             used_once(v), defines_only(@0, v), uses_only(@1, v)
     rewrite @0: =@1 i {defines: [], uses: []} ; drop @1
-
-
-// X86FixupBWInsts (X86FixupBWInsts.cpp L165): after allocation, a byte or word load, copy or
-// extension whose register's other bytes are dead after it is the dword form. A zero
-// extending load needs no merge with the old upper bytes, and a dword copy has no
-// partial-register write. `mov al,[m]` is not widened for size (it takes a byte more);
-// `ah` is never the destination (the pin's `sub_8bit_hi`); `movsx ax,al` stays `cbw`.
-// DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66 prefix, so the pin's claim
-// that code size is the same is false there; the rewrite is made only if it is no longer. Exit: none
-// (a fact of the encoding); cost: the real-mode words the pin would widen stay words.
-group byte_word_fixup
-    walk each
-
-rule loaded_byte
-    match   mov d:reg8, src:mem8
-    when    !for_size(), !segment(d), low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: movzx dword_of(d), src
-
-rule loaded_word
-    match   mov d:reg16, src:mem16
-    when    !segment(d), low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: movzx dword_of(d), src
-
-rule copied_byte
-    match   mov d:reg8, s:reg8
-    when    !segment(d), !segment(s), low_view(d), low_view(s), free(@0, widening), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: mov dword_of(d), dword_of(s)
-
-rule copied_word
-    match   mov d:reg16, s:reg16
-    when    !segment(d), !segment(s), low_view(d), low_view(s), free(@0, widening), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: mov dword_of(d), dword_of(s)
-
-rule sign_extended_byte
-    match   movsx d:reg16, s:reg8
-    when    !segment(d), !segment(s), low_view(d), low_view(s), !same_root(d, s), free(@0, widening), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: movsx dword_of(d), s
-
-rule sign_extended_byte_cell
-    match   movsx d:reg16, s:mem8
-    when    !segment(d), low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: movsx dword_of(d), s
-
-rule zero_extended_byte
-    match   movzx d:reg16, s:reg8
-    when    !segment(d), !segment(s), low_view(d), low_view(s), free(@0, widening), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: movzx dword_of(d), s
-
-rule zero_extended_byte_cell
-    match   movzx d:reg16, s:mem8
-    when    !segment(d), low_view(d), free(@0, widening_load), dead(@0, rest_of_root(d)), short_in_real_mode(@0, $0)
-    rewrite @0: movzx dword_of(d), s

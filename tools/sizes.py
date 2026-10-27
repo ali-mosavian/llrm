@@ -39,6 +39,12 @@ def dialect(basic: bool, source: str) -> list[str]:
     return ["--dialect", "qb45", "--runtime", "qb45"] if basic and "dialect" not in header(Path(source)) else []
 
 
+def excess(basic: bool) -> list[str]:
+    """`-fexcess-precision=` of $SIZES_EXCESS (standard or fast) for a BASIC program: main compiled SINGLE as fast and the tip as standard, so a pair run
+    on the defaults reads the deliberate rounding as growth. Set it on both sides."""
+    return [f"-fexcess-precision={environ['SIZES_EXCESS']}"] if basic and environ.get("SIZES_EXCESS") else []
+
+
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
     out = []
@@ -48,7 +54,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for files, tool in ((sorted(glob.glob(str(ROOT / "tests/run/qb/*.bas"))), qb), (benchlist.sources(".bas", ROOT / "bench"), qb), (benchlist.sources(".c", ROOT / "bench"), cc),
                         (benchlist.sources(".nib", ROOT / "bench"), nib), (sorted(glob.glob(str(ROOT / "examples/*.nib"))), nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file))]) for file in files]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb)]) for file in files]
     return out
 
 
@@ -162,11 +168,17 @@ def data_bytes(obj: Path) -> tuple[int, int]:
     return sum(one.loaded for one in kept), sum(one.size - one.loaded for one in kept)
 
 
+def selected(command: list[str]) -> list[str]:
+    """`command` with `--isel=$LLRM_ISEL` after the compiler when the variable is set: without it the dag selector was never measured."""
+    mode = environ.get("LLRM_ISEL")
+    return [command[0], f"--isel={mode}", *command[1:]] if mode else command
+
+
 def measure(command: list[str], level: str) -> int | None:
     """The code bytes of the program's object, or None where it does not compile."""
     with tempfile.TemporaryDirectory() as directory:
         obj = f"{directory}/x.obj"
-        cpulimit.run([*command, level, "-o", obj], 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, "-o", obj]), 300, capture_output=True, text=True)
         return code_bytes(Path(obj)) if Path(obj).exists() else None
 
 
@@ -177,7 +189,7 @@ def frame(command: list[str], level: str) -> int | None:
     """Bytes the program's procedures reserve below BP: every `sub sp, N` of its listing."""
     with tempfile.TemporaryDirectory() as directory:
         listing = f"{directory}/x.s"
-        cpulimit.run([*command, level, "-S", "-o", listing], 300, capture_output=True, text=True)
+        cpulimit.run(selected([*command, level, "-S", "-o", listing]), 300, capture_output=True, text=True)
         return sum(int(one) for one in SUB_SP.findall(Path(listing).read_text())) if Path(listing).exists() else None
 
 

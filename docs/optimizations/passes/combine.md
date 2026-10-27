@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:0dd295b23fe9adbcca70207c29b5b11a3cc5e166c05f8b6eb18023d9825e1852 -->
+<!-- src: crates/opt/llrm-transforms/src/combine.rs sha256:260b9644ad9fba34e8078867a7894a0517f5c405113c7bcb5bed29b014aa59b8 -->
 
 # combine
 
@@ -29,12 +29,6 @@ does not write); `visit` runs only the families translated so
 far (`visitors`: add, mul, and, or, xor, div, rem, shifts,
 trunc, zext, sext, icmp, getelementptr, select, store): the other `visit*`
 rewrites are `algebraic`'s, to move in as they are translated.
-
-DEVIATE (flags result): a comparison of a `flagsresult` routine's value
-(QB's B$SCMP: its result is the machine flags) and what reads that comparison
-are not visited: `sext (icmp slt v, 0)` to `ashr v, 15` would give the call
-a user instruction selection cannot read. The rule is
-`llrm_mir::facts::result_read_only_by_comparison`; the verifier states it.
 
 ## Used by
 `combine_pass::Combine`, the `combine@N` slots of LLVM's order.

@@ -1,6 +1,6 @@
 """Where a compile's container cost is, by site.
 
-    valgrind --tool=callgrind --callgrind-out-file=cg.out llrm-c -m32 -O2 -o /dev/null file.c
+    valgrind --tool=callgrind --callgrind-out-file=cg.out llrm-c -m32 -O2 -o file.obj file.c
     python3 tools/leaf_sites.py cg.out [N]
 
 Callgrind's exclusive cost of the container code (allocator, memcpy, B-trees, Vec growth, hash tables, drop glue) is pushed up the call

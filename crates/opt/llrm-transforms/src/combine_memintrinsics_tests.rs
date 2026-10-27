@@ -76,3 +76,40 @@ fn a_volatile_transfer_is_a_volatile_load_and_store() {
     let after = combined(&transfer("memcpy", 4, "true"));
     assert!(after.contains("load volatile i32") && after.contains("store volatile i32"), "{after}");
 }
+
+/// A copy of 100 bytes between two aligned globals kept `align 1` on both
+/// pointers, so m32 called `memcpy` where the pin's InstCombine raised them and
+/// the selector moved dwords.
+#[test]
+fn a_transfer_gets_the_alignment_known_of_its_pointers() {
+    let after = combined(
+        "@a = global [100 x i8] zeroinitializer, align 4
+@b = global [100 x i8] zeroinitializer, align 8
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define void @f() {
+b0:
+  call void @llvm.memcpy.p0.p0.i16(ptr @b, ptr @a, i16 100, i1 false)
+  ret void
+}
+",
+    );
+    assert!(after.contains("ptr align 8 @b, ptr align 4 @a"), "{after}");
+}
+
+/// A `memset` raises its destination's alignment too.
+#[test]
+fn a_memset_gets_the_alignment_known_of_its_destination() {
+    let after = combined(
+        "@b = global [100 x i8] zeroinitializer, align 8
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+
+define void @f() {
+b0:
+  call void @llvm.memset.p0.i16(ptr @b, i8 0, i16 100, i1 false)
+  ret void
+}
+",
+    );
+    assert!(after.contains("ptr align 8 @b"), "{after}");
+}

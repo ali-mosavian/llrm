@@ -21,7 +21,7 @@ Every pin slot is in exactly one state (the test refuses a row without one; `non
 | -O3 | 50 | 26 | 10 | 6 | 29 | 0 | 121 |
 | -Os | 50 | 25 | 10 | 5 | 27 | 0 | 117 |
 
-At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 3 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
+At -O2 the 66 slots the first table called `none` are 10 EXECUTED + 29 MISSING + 25 N/A + 2 DEVIATE (ipsccp, deadargelim); its 2 `ours-only` are DEVIATE rows; 48 + 5 + 10 + 29 + 25 = 117 slots. -Os is the -O2 list. (-O1: the one ORDER slot is memcpyopt.) MISSING counts slots, not passes: the three late `instcombine` runs are three rows of one pass.
 
 ## MISSING rows ranked by effect
 
@@ -80,14 +80,13 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 |---|---|---|---|
 | Early | lower-expect | -O1,-O2,-O3,-Os | llvm.expect reaches MIR (hir/mir.rs) and nothing lowers it; ablation 0 of 12 IRs |
 | Simplify | libcalls-shrinkwrap | -O1,-O2,-O3,-Os | errno-setting libm calls; ablation 0 of 12 IRs |
-| Simplify | loop-instsimplify | -O1,-O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
-| Simplify | loop-simplifycfg | -O1,-O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
+| Simplify (inside instcombine) | SimplifyLibCalls (`LibCallSimplifier`) | -O1,-O2,-O3,-Os | MISSING, priority after the m16 -Os growers. `copysign`, `fabs`, `floor`, `ceil`, `trunc`, `rint` calls become `llvm.*` intrinsics and `sqrt` one without errno; ours keeps the call (`double copysign(double,double)` at m16 -O2 --isel=dag: `jmp copysign`). Evidence for low weight: 0 of the c corpus calls libm, and x86 expands FSIN/FREM/FCOPYSIGN back to the same libcalls, so the DAG builder's `visitUnaryFloatCall`/`visitBinaryFloatCall` rows (selectiondag-builder-gaps.md) change nothing until this pass exists. Owner: unassigned |
 | Late | drop-unnecessary-assumes | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | lower-constant-intrinsics | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | loop-rotate | -O1,-O2,-O3,-Os | the late loop nest's rotate; ablation 0 of 12 IRs (the early one: +51 instructions, matched) |
 | Late | loop-deletion | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
 | Late | loop-distribute | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
-| Late | infer-alignment | -O1,-O2,-O3,-Os | ablation 0 of 12 IRs |
+| Late | infer-alignment | -O1,-O2,-O3,-Os | translated (inferalignment.rs); DEVIATE 1: globals not raised |
 | Late | instcombine | -O1,-O2,-O3,-Os | the three late runs; ours has no combine slot in the late list |
 | Late | loop-unroll | -O1,-O2,-O3,-Os | the late loop-unroll<O2>; ablation 0 of 12 IRs |
 | Late | sroa | -O1,-O2,-O3,-Os | the late sroa<preserve-cfg;aggregate-to-vector>; ablation 0 of 12 IRs |
@@ -101,7 +100,6 @@ and the user's ruling of 10-20 (no vector MIR until 32-bit parity) is what keeps
 | Module | rpo-function-attrs | -O1,-O2,-O3,-Os | no stage of ours is known to do it; unverified |
 | Module | constmerge | -O1,-O2,-O3,-Os | merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight |
 | Simplify | jump-table-to-switch | -O2,-O3,-Os | x_funcptr: pin -O2 i486 makes 3 switches, none with -enable-jump-table-to-switch=false; the 12-IR ablation (0 differ) has no function-pointer table |
-| Simplify | constraint-elimination | -O2,-O3,-Os | registry Missing entry; ablation 0 of 12 IRs |
 | Simplify | extra-simple-loop-unswitch-passes | -O2,-O3,-Os | ablation 0 of 12 IRs |
 | Simplify | mldst-motion | -O2,-O3,-Os | ablation 0 of 12 IRs |
 | Early | callsite-splitting | -O3 | -O3 only; not measured |
@@ -118,20 +116,20 @@ The metric is the pin's output instruction count, not object bytes. The instance
 
 | pass (instance) | -O2: IRs changed, delta instructions | -Os | what it is |
 |---|---|---|---|
-| constraint-elimination | 5 of 65, +11 | 4 of 65, +13 | Simplify list (MISSING, w-4) |
+| constraint-elimination | 5 of 65, +11 | 4 of 65, +13 | Simplify list (translated, slot 699: w-5) |
 | mldst-motion | 4, +11 | 4, +9 | Simplify list (MISSING, w-4) |
 | late instcombine (the last of the Late list) | 3, +17 | none | Late list (MISSING, w-4) |
 | late loop-unroll<O2> | 3, -95 (the unroll adds 95) | none | Late list (MISSING, w-3) |
 | late loop-rotate | 3, -3 | 4, -2 | Late loop nest (MISSING, w-3) |
 | late sroa<preserve-cfg;aggregate-to-vector> | 1, -1 | 1, -1 | Late list (MISSING, w-4) |
 | infer-alignment | 1, +2 | none | Late list (MISSING, w-1) |
-| loop-instsimplify | 1, -1 | 1, -1 | loop-mssa nest (MISSING, w-3) |
+| loop-instsimplify | 1, -1 | 1, -1 | loop-mssa nest (translated, slot 715: w-5) |
 
 Nothing reaches 0.05% of the baseline except the late `loop-unroll` at -O2 (95 instructions, 0.15%: it makes code bigger, for speed):
 the next most is `constraint-elimination` at -Os, 13 of 51432 (0.025%). The ranking of the first table stands, with these eight as
 the ones that move anything on QCport; every other MISSING pass changes 0 of 65 IRs at both levels. Instances our slots already
 match (`tailcallelim`, the early `loop-rotate`, `sroa`, `instcombine`) move code, as expected; they are in the raw output
-(`~/scratch/fa/qcablate_O2.txt`, `qcablate_Os.txt`).
+(`qcablate_O2.txt`, `qcablate_Os.txt`).
 
 ## Order structure
 
@@ -290,8 +288,7 @@ module
   ports                          target I/O ports                 pin: -
   stamp                          interprocedural::Stamp           pin: inferattrs
   function  Early list           per body, all bodies             pin: function(Early)
-  ModuleIpo                      ipa-args, ipa-range, deadargelim pin: ipsccp, deadargelim (W1: before the Simplify list; the pin runs it after the CGSCC block)
-  sccp                           ipsccp's per-body half
+  ModuleIpo                      ipsccp, ipa-cp, deadargelim      pin: ipsccp, deadargelim (W1: before the Simplify list; the pin runs it after the CGSCC block)
   function  Cleanup list         GlobalCleanup                    pin: function(mem2reg, instcombine, simplifycfg)
   Walk (program pass)            callees first, per function: inline sites (inlinecost::sites), then the Simplify list over it, once
   function  Late list            DEVIATE: before the interprocedural step; the pin runs it after the module passes below
@@ -321,23 +318,23 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O1 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O1 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O1 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O1 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O1 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O1 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O1 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
-| -O1 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -O1 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -O1 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O1 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
+| -O1 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -O1 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -O1 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
-| -O1 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
+| -O1 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated |  |  |
 | -O1 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O1 | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O1 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O1 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O1 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O1 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O1 | Simplify | loop-deletion | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopdeletion@749:Translated |  |  |
@@ -355,7 +352,6 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Simplify |  |  | DEVIATE | 764: loopsimplify@764 + lcssa@764 | llrm's loop-simplify/lcssa stand-ins that LLVM's loop pass adaptor makes implicit (parity.rs RUN_COUNTS_OPEN) |  |
 | -O1 | Simplify |  |  | DEVIATE | 772: loopsimplify@772 + lcssa@772 | as 764 |  |
 | -O1 | Simplify |  |  | DEVIATE | 787: inferspace@787 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
-| -O1 | Simplify |  |  | DEVIATE | 809: decide@809 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 810: cvp@810 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 820: dse@820 | -O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot) |  |
 | -O1 | Simplify |  |  | DEVIATE | 823: loopsimplify@823 + lcssa@823 + licm@823 | -O1 only, as 669 (unverified slot by slot) |  |
@@ -390,14 +386,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O1 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O1 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O1 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O1 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -O1 | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O1 | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O1 | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -O1 | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -O1 | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -O1 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O1 | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |
@@ -425,7 +420,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -O2 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O2 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O2 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O2 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O2 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O2 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -434,21 +429,21 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
 | -O2 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O2 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -O2 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O2 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
-| -O2 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
-| -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O2 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
+| -O2 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
+| -O2 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -O2 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -O2 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
-| -O2 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
+| -O2 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated |  |  |
 | -O2 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O2 | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O2 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O2 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O2 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O2 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -462,7 +457,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -O2 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -O2 | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -O2 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -O2 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -O2 | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -O2 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -506,14 +501,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O2 | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -O2 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O2 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O2 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -O2 | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O2 | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O2 | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -O2 | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -O2 | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -O2 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O2 | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |
@@ -543,7 +537,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -O3 | Early | callsite-splitting | function<eager-inv> | MISSING |  | -O3 only; not measured | funcattrs-port, 11-09 |
 | -O3 | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -O3 | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -O3 | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -O3 | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -O3 | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -552,21 +546,21 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
 | -O3 | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -O3 | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -O3 | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -O3 | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
-| -O3 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
-| -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -O3 | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
+| -O3 | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
+| -O3 | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -O3 | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -O3 | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
-| -O3 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
+| -O3 | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated |  |  |
 | -O3 | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -O3 | Simplify | simple-loop-unswitch<nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -O3 | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -O3 | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -O3 | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -O3 | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -580,7 +574,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -O3 | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -O3 | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -O3 | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -O3 | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -O3 | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -O3 | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -626,14 +620,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -O3 | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -O3 | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Late |  |  | DEVIATE | 1474: loop-unroll-and-jam@1474 | -O3: the pin's printed list has no unroll-and-jam in this fixture; unverified |  |
-| -O3 | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -O3 | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -O3 | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -O3 | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -O3 | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -O3 | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -O3 | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -O3 | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -O3 | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |
@@ -663,7 +656,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Early | sroa<modify-cfg> | function<eager-inv> | MATCH | sroa@1179:Translated |  |  |
 | -Os | Early | early-cse<> | function<eager-inv> | MATCH | earlycse@1180:Translated |  |  |
 | -Os | Cleanup | mem2reg | function<eager-inv> | MATCH | promote@1241:Translated |  |  |
-| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + fold@1242:Old + dead@1242:Old |  |  |
+| -Os | Cleanup | instcombine<max-iterations=1;no-verify-fixpoint> | function<eager-inv> | MATCH | combine@1242:Partial + dead@1242:Old |  |  |
 | -Os | Cleanup | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | function<eager-inv> | MATCH | decide@1244:Partial |  |  |
 | -Os | Simplify | sroa<modify-cfg> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | sroa@646:Translated |  |  |
 | -Os | Simplify | early-cse<memssa> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | earlycse@649:Translated |  |  |
@@ -672,21 +665,21 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@669:Translated |  |  |
 | -Os | Simplify | jump-table-to-switch | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumptableswitch@672:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@675:Partial |  |  |
-| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + fold@677:Old + dead@677:Old |  |  |
+| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@677:Partial + dead@677:Old |  |  |
 | -Os | Simplify | aggressive-instcombine | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | aggressive-instcombine@678:Partial |  |  |
 | -Os | Simplify | libcalls-shrinkwrap | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | errno-setting libm calls; ablation 0 of 12 IRs | funcattrs-port, 11-09 |
 | -Os | Simplify | tailcallelim | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | tailrec@688:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@690:Partial |  |  |
-| -Os | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated + algebraic@696:Old |  |  |
-| -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-4, 11-09 |
-| -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
-| -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MISSING |  | registry Missing entry; ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
+| -Os | Simplify | reassociate | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | reassociate@696:Translated |  |  |
+| -Os | Simplify | constraint-elimination | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | constraint-elimination@699:Translated |  |  |
+| -Os | Simplify | loop-instsimplify | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-instsimplify@715:Translated |  |  |
+| -Os | Simplify | loop-simplifycfg | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | loop-simplifycfg@716:Translated |  |  |
 | -Os | Simplify | licm<no-allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | floatloop@724:Old + licm@724:Translated |  |  |
-| -Os | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated + loopsimplify@728:Old + lcssa@728:Old |  |  |
+| -Os | Simplify | loop-rotate<header-duplication;no-prepare-for-lto;no-check-exit-count> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | rotate@728:Translated |  |  |
 | -Os | Simplify | licm<allowspeculation> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | licm@730:Translated |  |  |
 | -Os | Simplify | simple-loop-unswitch<no-nontrivial;trivial> | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop-mssa | MATCH | trivialunswitch@732:Translated |  |  |
 | -Os | Simplify | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;no-switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;no-hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;no-speculate-unpredictables> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | decide@766:Partial |  |  |
-| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + fold@768:Old + dead@768:Old |  |  |
+| -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@768:Partial + dead@768:Old |  |  |
 | -Os | Simplify | loop-idiom | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | loopidiom@737:Translated + loopidioms@737:Old |  |  |
 | -Os | Simplify | indvars | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MATCH | indvars@738:Partial |  |  |
 | -Os | Simplify | extra-simple-loop-unswitch-passes | cgscc/devirt<4>/function<eager-inv;no-rerun>/loop | MISSING |  | ablation 0 of 12 IRs | w-3 (w-5 if silent at 09:00), 11-09 |
@@ -700,7 +693,7 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Simplify | bdce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | bdce@797:Translated |  |  |
 | -Os | Simplify | instcombine<max-iterations=1;no-verify-fixpoint> | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | combine@801:Partial + fold@801:Old + dead@801:Old |  |  |
 | -Os | Simplify | dfa-jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | dfajumpthreading@806:Translated |  |  |
-| -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated + decide@809:Old |  |  |
+| -Os | Simplify | jump-threading | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | jumpthreading@809:Translated |  |  |
 | -Os | Simplify | correlated-propagation | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | cvp@810:Translated |  |  |
 | -Os | Simplify | adce | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | adce@815:Translated |  |  |
 | -Os | Simplify | memcpyopt | cgscc/devirt<4>/function<eager-inv;no-rerun> | MATCH | memcpyopt@818:Translated + merge@818:Partial |  |  |
@@ -744,14 +737,13 @@ Differences, by order and contents (each a row of the table or of the list below
 | -Os | Late | tailcallelim | function<eager-inv> | MATCH | tailrec@1677:Translated |  |  |
 | -Os | Late | simplifycfg<bonus-inst-threshold=1;no-forward-switch-cond;switch-range-to-icmp;switch-to-arithmetic;no-switch-to-lookup;keep-loops;no-hoist-common-insts;hoist-loads-stores-with-cond-faulting;no-sink-common-insts;speculate-blocks;simplify-cond-branch;speculate-unpredictables> | function<eager-inv> | MATCH | simplifycfg@1682:Partial |  |  |
 | -Os | Late | annotation-remarks | function | N/A |  | remarks off Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Late |  |  | DEVIATE | 2376: simplifycfg@2376 | registry Partial: its position in the Late list is not the pin's (unverified which pin simplifycfg it is) |  |
 | -Os | Module | memprof-remove-attributes |  | N/A |  | memprof: no profile Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | annotation2metadata |  | N/A |  | no source annotations Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | forceattrs |  | N/A |  | command-line forced attributes: none given Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | inferattrs |  | EXECUTED |  | stamp (interprocedural::Stamp): states what a body does, llrm's own form |  |
 | -Os | Module | coro-early |  | N/A |  | coroutines: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
 | -Os | Module | openmp-opt |  | N/A |  | OpenMP: no frontend Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang). |  |
-| -Os | Module | ipsccp |  | DEVIATE |  | DEVIATE (pipeline.rs): ipo-early (walk::ModuleIpo: ipa-args, ipa-range) + sccp; what flows between bodies is ModuleIpo's, not the solver's; exit: ModuleIpo runs the solver over the program |  |
+| -Os | Module | ipsccp |  | DEVIATE |  | DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1) |  |
 | -Os | Module | called-value-propagation |  | MISSING |  | indirect calls only; not measured | w-6, 11-09 |
 | -Os | Module | globalopt |  | EXECUTED |  | globalopt (first), writeonly, calleepop: a subset of GlobalOpt |  |
 | -Os | Module | always-inline |  | EXECUTED |  | walk (the CGSCC walk's inliner) |  |

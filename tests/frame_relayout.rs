@@ -4,13 +4,13 @@
 //! whole backend (a quarter to a third of the backend's time on QCport); it is
 //! made from the first run's frame now (docs/optimizations/second-frame.md).
 
-use std::process::Command;
+mod common;
 
 /// (program, flags) whose frames reach past one-byte displacements and spill.
 // shellsort -m32 left the list: with EBP a value register (no frame pointer) it
-// no longer spills.
-const FAR: [(&str, &[&str]); 4] =
-    [("matmul", &["-m32", "-march=i486"]), ("matmul", &[]), ("nbody", &[]), ("sieve", &["-m32", "-march=i486"])];
+// no longer spills. sieve -m32 -march=i486 left it with the translated
+// coalescer (#2480): its frame no longer reaches past [bp-128].
+const FAR: [(&str, &[&str]); 3] = [("matmul", &["-m32", "-march=i486"]), ("matmul", &[]), ("nbody", &[])];
 
 fn compiled(
     program: &str,
@@ -20,7 +20,7 @@ fn compiled(
 ) -> (Vec<u8>, String) {
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let mut command = common::cc::llrm_c();
     command
         .current_dir(scratch.path())
         .args(flags)

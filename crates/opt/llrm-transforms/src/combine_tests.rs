@@ -220,3 +220,128 @@ fn a_switch_on_poison_has_no_live_successor() {
         "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  switch i16 poison, label %d [\n    i16 1, label %c\n  ]\n\nc:\n  br label %j\n\nd:\n  br label %j\n\nj:\n  ret i16 poison\n}\n",
     );
 }
+
+/// `visit` asked the generic simplifier about every instruction with a value,
+/// and the visitor of an add, a shift or a compare asked again as its first
+/// step: the same question twice (d_faces -O2: 9,931 generic asks, 9.6 M Ir of
+/// them on compares). Those opcodes are asked once; a cast, whose visitor has
+/// tests before its own, is still asked by `visit`.
+#[test]
+fn an_instruction_whose_visitor_simplifies_is_not_simplified_before_it() {
+    let asks = |text: &str| {
+        let mut module = parsed(text);
+        super::GENERIC_SIMPLIFIES.with(|one| one.set(0));
+        combined(&mut module);
+        super::GENERIC_SIMPLIFIES.with(std::cell::Cell::get)
+    };
+    let own = "define i1 @f(i32 %x, i32 %y) {
+b0:
+  %a = add i32 %x, %y
+  %s = shl i32 %a, 3
+  %c = icmp slt i32 %s, %y
+  ret i1 %c
+}
+";
+    let cast = "define i64 @f(i32 %x) {
+b0:
+  %e = zext i32 %x to i64
+  ret i64 %e
+}
+";
+    assert_eq!(asks(own), 0, "an add, a shift and a compare ask for themselves");
+    assert_eq!(asks(cast), 1, "a cast is asked by `visit`");
+}
+
+/// scroll.nib's descending copy loop tests `j - 1 > -1` at the bottom after
+/// `j <u 1920` (the bounds check) dominates it. `foldICmpWithDominatingICmp`
+/// makes that `j != 0` (the compares' ranges leave one value out); the pin
+/// then canonicalizes it to `j == 0` with the arms swapped
+/// (`canonicalizeICmpPredicate`).
+#[test]
+fn a_signed_bound_on_a_value_a_dominating_compare_keeps_below_a_limit_is_an_equality() {
+    let mut module = parsed(
+        "define void @f(ptr %a) {
+entry:
+  br label %body
+
+body:
+  %j = phi i16 [ 1919, %entry ], [ %jm, %do ]
+  %ok = icmp samesign ult i16 %j, 1920
+  br i1 %ok, label %do, label %trap
+
+do:
+  %p = getelementptr inbounds nuw [2 x i8], ptr %a, i16 %j
+  %v = load i16, ptr %p, align 2
+  store i16 %v, ptr %a, align 2
+  %jm = add nsw i16 %j, -1
+  %c = icmp sgt i16 %jm, -1
+  br i1 %c, label %body, label %exit
+
+trap:
+  unreachable
+
+exit:
+  ret void
+}
+",
+    );
+    combined(&mut module);
+    let after = printed(&module);
+    assert!(after.contains("icmp eq i16 %j, 0"), "{after}");
+    assert!(after.contains("label %exit, label %body"), "{after}");
+}
+
+/// A loop that tests `i != n` at its latch leaves the pin as `i == n` with the
+/// arms swapped (`canonicalizeICmpPredicate`: `ne` is not canonical, and a
+/// branch takes the inversion for free). It stayed `ne`, so JumpThreading read
+/// x_list's list-sum loop another way round and kept two pointer phis.
+#[test]
+fn a_branch_on_a_non_canonical_compare_is_the_inverse_compare_with_the_arms_swapped() {
+    let mut module = parsed(
+        "define void @f(i16 %n) {
+entry:
+  br label %body
+
+body:
+  %i = phi i16 [ 0, %entry ], [ %next, %body ]
+  %next = add i16 %i, 1
+  %more = icmp ne i16 %next, %n
+  br i1 %more, label %body, label %exit
+
+exit:
+  ret void
+}
+",
+    );
+    combined(&mut module);
+    let after = printed(&module);
+    assert!(after.contains("icmp eq i16 %next, %n"), "{after}");
+    assert!(after.contains("label %exit, label %body"), "{after}");
+}
+
+/// `canonicalizeICmpBool`: `icmp eq i1 %x, false` is `not %x`, and a branch on
+/// a `not` takes the arms swapped. With `canonicalizeICmpPredicate` the nib
+/// zip loop's `icmp ne i1 %c, false` became `icmp eq` with swapped arms and
+/// stayed so: ConstraintElimination then found no `%c` to read and three
+/// bounds checks of the loop stayed.
+#[test]
+fn a_branch_on_an_i1_equal_to_false_is_a_branch_on_it_with_the_arms_swapped() {
+    let mut module = parsed(
+        "define void @f(i1 %x) {
+entry:
+  %c = icmp eq i1 %x, false
+  br i1 %c, label %a, label %b
+
+a:
+  ret void
+
+b:
+  ret void
+}
+",
+    );
+    combined(&mut module);
+    let after = printed(&module);
+    assert!(after.contains("br i1 %x, label %b, label %a"), "{after}");
+    assert!(!after.contains("icmp"), "{after}");
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumptableswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumptableswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:573dab0343ec64bb802fa9fb2f7c8d75be77acd6d05d67cc629baa498c8133ec -->
+<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:836a495d4d310f6182cf9a361b51b8812bc295f03a5b244708db0f151eaad9c3 -->
 
 # jumptableswitch
 
@@ -40,6 +40,7 @@ The unit test `a_call_through_a_table_is_a_switch_of_direct_calls`.
 ## Runs
 Slot `jumptableswitch@672`, after `cvp@669`. The pin reads
 `getInstructionCount` of each callee, which a function pass cannot see
-here: `Declared::size_of` answers `Unknown` and the manager counts those
-functions, then runs the pass over this function again. A function with no
-call through a table asks nothing, so nothing is counted.
+here: the pass `wants_sizes`, and the manager counts the functions a global
+initializer names (a table's entries, the only ones asked about) before the
+pass runs, and again for each it changes. A program with no function in a
+constant counts nothing.

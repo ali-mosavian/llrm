@@ -3,7 +3,7 @@ name = "llrm-analysis"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "Facts about the MIR, adapted from llrm-core's analyses"
+description = "Facts about the MIR, adapted from llrm-codegen's analyses"
 
 [dependencies]
 llrm-mir = { workspace = true }

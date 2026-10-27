@@ -5,17 +5,18 @@
 //! `llrm.ia16.in` and `out` intrinsic calls with no `memory` attribute are
 //! candidates. A call whose port range the target says reaches no memory
 //! (`Machine::port_touches_memory`; every target answers from its platform's
-//! port table, `pc-ports.toml` for the PC, so the 16-bit and the flat DOS
+//! port table, `ports.toml` for the PC, so the 16-bit and the flat DOS
 //! targets alike) gets `memory(inaccessiblemem: readwrite)`: it touches
 //! only its own state, so alias and dead-store passes may move memory
 //! operations across it, and port calls still keep their order among
 //! themselves. A call to a port that may reach memory (a DMA controller, say)
 //! keeps the unknown effect, so a store before it stays.
 //!
-//! The port is a constant (masked to 16 bits), or else an interval the
-//! manager's `Bounded` ranges give at the call's block (a branch guarding the
-//! VGA's 960..975 bounds it); an interval that wraps through 8000h gives
-//! nothing.
+//! The port is a constant (masked to 16 bits), or else the interval
+//! ValueTracking gives it at the call (`computeConstantRange` and known bits,
+//! with the dominator tree and the assumptions; a `range` attribute or an
+//! assume bounds it, a branch guarding it does not); an interval that wraps
+//! through 8000h gives nothing.
 //!
 //! ```text
 //!  out 968, v    ; the DAC's write index
@@ -23,6 +24,11 @@
 //!  out 11, v     ; the 8237's mode: may start DMA
 //!    => unchanged
 //! ```
+//!
+//! DEVIATE LP-1 (no pin pass: LLVM states what an I/O port reaches on the
+//! intrinsic definition, ours asks the target per call; exit: the frontends
+//! declare the memory attribute on the `in`/`out` intrinsics and this pass is
+//! deleted; owner w-6; review 2026-11-13).
 //!
 //! # Example
 //! Before:
@@ -86,18 +92,19 @@
 //! port call does to memory. On at every level above -O0.
 //!
 //! # Needs
-//! The target's port description, `Registers`, `Bounded`.
+//! The target's port description, `Registers`, `Shape`.
 //!
 //! # Keeps
 //! `Dominators` and `Loops`: only call attributes change.
 
 use llrm_analysis::memory::Unit;
 use llrm_analysis::num::Num as BigInt;
-use llrm_analysis::{cfg, ranges};
+use llrm_analysis::ranges;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::InstId;
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
+use llrm_mir::valuetracking::AssumptionCache;
 
 pub struct Ports;
 
@@ -151,26 +158,21 @@ fn silent(
             _ => false,
         })
         .collect();
-    let mut bounded = None;
     let target = outer.target();
+    let tree = shape.dominance.tree(unit.function);
+    let assumptions = std::cell::OnceCell::new();
     calls
         .into_iter()
-        .filter(|&(block, inst)| {
+        .filter(|&(_, inst)| {
             let port = unit.function.instruction(inst).operands[0];
             let ports = match memory.int_constant(port) {
                 Some(bits) => Some(((bits & 0xFFFF) as i64, (bits & 0xFFFF) as i64)),
                 None => {
-                    // What the counted loops bound is the manager's, asked when
-                    // first needed.
-                    let facts = bounded.get_or_insert_with(|| {
-                        analyses.get::<llrm_analysis::manager::Bounded>(unit.context, unit.layout, unit.function)
+                    let assumptions = assumptions.get_or_init(|| {
+                        AssumptionCache::of(unit.context, &outer.globals, &outer.metadata, unit.function)
                     });
-                    let scope = facts.as_ref().as_ref().ok().map(|facts| facts.scope(&memory, cfg::id(block)));
-                    match &scope {
-                        Some(scope) => ranges::_operand(&memory, port, scope, &held),
-                        None => ranges::_operand(&memory, port, &ranges::Intervals::default(), &held),
-                    }
-                    .and_then(|interval| unsigned(&interval.low, &interval.high))
+                    ranges::value_tracking_at(&memory, Some(tree), Some(assumptions), inst, port)
+                        .and_then(|interval| unsigned(&interval.low, &interval.high))
                 }
             };
             ports.is_some_and(|ports| !target.port_touches_memory(ports))

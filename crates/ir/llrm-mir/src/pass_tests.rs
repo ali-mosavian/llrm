@@ -580,7 +580,8 @@ fn a_required_module_analysis_is_computed_again_only_after_a_pass_drops_it() {
 }
 
 /// `-verify-analysis-invalidation` of a module analysis: a pass claiming
-/// to keep `Bodies` while it empties a body.
+/// to keep `Bodies` while it empties a body (which `CalleeEffects` reads as
+/// `defined`, so it is stale too).
 #[test]
 fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     struct Empty;
@@ -605,7 +606,7 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     passes.add(Empty);
     assert_eq!(
         passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(),
-        Some("empty claims to preserve bodies but changed them")
+        Some("empty claims to preserve bodies, callee-effects but changed them")
     );
 }
 
@@ -838,32 +839,122 @@ fn a_frozen_module_analysis_is_held_past_passes_that_add_no_memory_operation() {
     assert_eq!(SUMMED.get(), 2, "a pass that may add one did not drop it");
 }
 
-/// GlobalsAA was computed 9 times for one compile of d_faces -O2: every
-/// function pass that may add a memory operation dropped it and the next pass
-/// made it again. LLVM keeps it past every function pass
-/// (`GlobalsAAResult::invalidate` drops it only when a pass abandons it), so a
-/// held analysis stands whatever a function pass may add.
-#[test]
-fn a_held_module_analysis_is_kept_past_function_passes_that_may_add_memory_operations() {
-    SUMMED.set(0);
-    let mut passes = PassManager::default();
-    passes.require::<Bodies>();
-    passes.hold::<Bodies>();
-    passes.add(Retarget(PreservedAnalyses::none()));
-    passes.add(Retarget(PreservedAnalyses::none()));
-    passes.add(Counts(PreservedAnalyses::all()));
-    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
-    assert_eq!(SUMMED.get(), 1, "a function pass that may add a memory operation dropped the held analysis");
+thread_local! {
+    static PEEKED: RefCell<Vec<Option<usize>>> = const { RefCell::new(Vec::new()) };
+}
 
+/// Notes what the outer proxy holds of `Bodies`.
+struct Peek;
+
+impl FunctionPass for Peek {
+    fn name(&self) -> &'static str {
+        "peek"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        PEEKED.with_borrow_mut(|seen| seen.push(analyses.outer().cached::<Bodies>().as_deref().copied()));
+        PreservedAnalyses::all()
+    }
+}
+
+/// Reports @f changed: the manager drops what it does not keep.
+struct Touch;
+
+impl ModulePass for Touch {
+    fn name(&self) -> &'static str {
+        "touch"
+    }
+
+    fn run(
+        &mut self,
+        module: &mut Module,
+        _: &mut ModuleAnalyses,
+    ) -> Vec<GlobalId> {
+        vec![module.named("f").unwrap()]
+    }
+}
+
+/// Abandons `Bodies`, as GlobalDCE does once it renumbers the globals.
+struct Abandon;
+
+impl crate::program::ProgramPass for Abandon {
+    fn name(&self) -> &'static str {
+        "abandon"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut crate::program::Program,
+        analyses: &mut crate::program::ProgramAnalyses,
+    ) -> Result<(), String> {
+        analyses.abandon::<Bodies>();
+        Ok(())
+    }
+}
+
+/// Makes a table, as SimplifyCFG's lookup tables are made.
+struct Tabulate;
+
+impl FunctionPass for Tabulate {
+    fn name(&self) -> &'static str {
+        "tabulate"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let ty = unit.context.types.int(16);
+        unit.declared.table("t", ty, unit.context.int(ty, 0));
+        PreservedAnalyses::none()
+    }
+}
+
+/// A table's initializer may hold a tracked global's address: GlobalsAA held
+/// past r_portal.c's lookup table of `@_dg_push`, `@_dg_pop` and `@_dg_proj`
+/// still had them reached by name only (`LLRM_CHECK_STALE` failed).
+#[test]
+fn a_pass_that_adds_a_table_abandons_a_cached_module_analysis() {
     SUMMED.set(0);
+    PEEKED.with_borrow_mut(Vec::clear);
     let mut passes = PassManager::default();
-    passes.require::<Bodies>();
-    passes.freeze::<Bodies>();
-    passes.add(Retarget(PreservedAnalyses::none()));
-    passes.add(Retarget(PreservedAnalyses::none()));
-    passes.add(Counts(PreservedAnalyses::all()));
+    passes.require_cached::<Bodies>();
+    passes.compute::<Bodies>();
+    passes.add(Peek);
+    passes.add(Tabulate);
+    passes.add(Peek);
     passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
-    assert_eq!(SUMMED.get(), 3, "premise: a frozen one is dropped by each such pass");
+    assert_eq!(PEEKED.take(), [Some(1), None], "held past a pass that added a table");
+}
+
+/// GlobalsAA was computed 9 times for one compile of d_faces -O2, LLVM's twice:
+/// at `RequireAnalysisPass<GlobalsAA>` and `RecomputeGlobalsAAPass`. A cached
+/// analysis is made at its points alone, read only once made, and kept past
+/// every pass until one abandons it.
+#[test]
+fn a_cached_module_analysis_is_computed_at_its_points_alone() {
+    SUMMED.set(0);
+    PEEKED.with_borrow_mut(Vec::clear);
+    let mut passes = PassManager::default();
+    passes.require_cached::<Bodies>();
+    passes.add(Peek);
+    passes.compute::<Bodies>();
+    passes.add(Retarget(PreservedAnalyses::none()));
+    passes.add_module(Touch);
+    passes.add_program(Nothing);
+    passes.add(Peek);
+    passes.recompute::<Bodies>();
+    passes.add(Peek);
+    passes.add_program(Abandon);
+    passes.add(Peek);
+    passes.run_module(&mut module(), Rc::new(Neutral)).unwrap();
+    assert_eq!(SUMMED.get(), 2, "computed other than at its two points");
+    assert_eq!(PEEKED.take(), [None, Some(1), Some(1), None]);
 }
 
 /// What a body holds, as a number: a summary that can only be an upper bound.
@@ -1505,4 +1596,39 @@ fn a_manager_with_n_passes_writes_n_input_dumps_and_n_manifest_lines() {
     let manifest = std::fs::read_to_string(directory.join("manifest.txt")).expect("a manifest");
     assert_eq!((files, manifest.lines().count()), (5, 5), "{manifest}");
     let _ = std::fs::remove_dir_all(directory);
+}
+
+/// RunsOver the bodies it is run over.
+struct RunsOver(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl FunctionPass for RunsOver {
+    fn name(&self) -> &'static str {
+        "runs-over"
+    }
+
+    fn run(
+        &mut self,
+        _: &mut Unit,
+        _: &mut Analyses,
+    ) -> PreservedAnalyses {
+        self.0.set(self.0.get() + 1);
+        PreservedAnalyses::all()
+    }
+}
+
+/// A private function whose last call was inlined has a body of one
+/// `unreachable` (`bare`): the pin's CGSCC walk deletes it, so no function pass
+/// runs over it. The late slots ran on four such leaves of d_faces, in every
+/// slot.
+#[test]
+fn a_function_the_inliner_deleted_is_not_run_over() {
+    let mut module = parse::module(
+        "define internal i16 @gone() {\nb1:\n  unreachable\n}\n\ndefine i16 @kept(i16 %x) {\nb1:\n  ret i16 %x\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut passes = PassManager::default();
+    passes.add(RunsOver(std::rc::Rc::clone(&runs)));
+    passes.run_module(&mut module, std::rc::Rc::new(crate::target::Neutral)).expect("a run");
+    assert_eq!(runs.get(), 1, "only @kept is run over");
 }

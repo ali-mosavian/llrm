@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/congruentiv.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/congruentiv.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/congruentiv.rs sha256:4a51f852dd36ef69b9404695b4aab26f82a27d83ce3263d12c114756d3b10f0f -->
+<!-- src: crates/opt/llrm-transforms/src/congruentiv.rs sha256:e51c5b2ec36465a130c09a21a4527508a49026702f92a4b60637316aee93cf14 -->
 
 # congruentiv
 

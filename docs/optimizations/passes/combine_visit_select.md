@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:872c156989378b526e1de7586c22bdddf535735e3761f5255d361c3f30720543 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:1c5936de54c3ecfed1f7e4ba13d32aae4b94b19bd8183ea2ced58bea65cc0908 -->
 
 # combine_visit_select
 
@@ -20,12 +20,13 @@ DEVIATE 2 (temporary): the folds that call a helper not yet translated are
 left out, each named where it stood: `foldSelectOfBools`,
 `foldSelectNegNot`, `foldSelectAndOrPowerOfTwo`, the floating-point folds
 (`fabs`, `minnum`, `canonicalize`...: need #2209),
-`foldSelectValueEquivalence`, `foldSelectInstWithICmp`,
+`foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
+(its `canonicalizeSPF` step is `combine_select_spf`),
 `foldSelectICmpAndAnd`, `foldSelectBitTest`, `foldAddSubSelect`,
 `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 `foldSelectWithSRem`, the
-min/max (`matchSelectPattern`) folds, and everything after the not-condition
+`foldSPFofSPF`, and everything after the not-condition
 (`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
 
 DEVIATE 3: `replaceInInstruction` (the arms' instructions that read the
@@ -40,3 +41,6 @@ are dropped, not swapped.
 ```text
 %r = select i1 %c, i16 1, i16 0        %r = zext i1 %c to i16
 ```
+
+## Used by
+Named by `combine_select_bools`, `combine_select_ext_const`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`.

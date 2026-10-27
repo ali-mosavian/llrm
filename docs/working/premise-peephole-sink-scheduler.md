@@ -39,3 +39,13 @@ Ours against the pin on the programs the sink moves (clocks, our build 49a8d96bf
 ## Not measured
 
 P5, m16, and the pin's sub-features inside Peephole (`--disable-peephole` is the whole pass). Per-function spill/reload of ours: its listing does not mark spill slots, so ours is compared in clocks and instructions only.
+
+## Peephole: per-function `mov` (2026-10-23, `tools/pairs/premise_mov.py`, -O2, m32 i486, 71 programs, 158 functions matched)
+
+Ours is 72 movs above the pin over all functions (39 above, 98 below, 21 equal). The pin's pass removes 312 movs
+(without minus with). The largest gaps are `recchop:chop` +38, `matmul:bench_matmul` +37, `x_mergesort:msort` +33, `quicksort:sort` +28, `x_radix` +24, `nbody` +23; their `mov` counts include spill and reload moves, so a gap there is allocation first. No function shows a copy the pass's rewriters would remove and ours keeps; the next check is the listing of `chop` and `msort` against the pin's (copy or spill).
+
+## Scheduler: the pin's own clocks, per row (2026-10-25, pinned clang, m32 i486, 71 programs, 486 clock model; `pinclocks.sh`-style run with and without `-mllvm -enable-misched=false`)
+
+-O2: clocks 40,423,086 with the scheduler, 40,430,356 without (+0.02%), code 25,674 / 25,690 B; 14 of 71 rows change. -O3: 40,361,309 / 40,282,931 (-0.19%: off is better), code 30,874 / 30,922 B; 17 rows change. The largest effects: sieve +4.9% without it, x_list +2.4% (-O2) and +7.1% (-O3), matmul +3.6% (-O3); against x_dct -1.7%, fpbench -1.9% (without it better). So the pin's pre-RA scheduler is worth about nothing on this corpus in total clocks; a handful of rows gain 2..7% and a handful lose as much. Consequence for row 65: our nearly inert pass (the region count, #4391) is not far from the pin's value here, and a latency-driven `limit/2` policy is a per-row gamble the pin's own numbers do not support. The reason to keep the pass is register pressure (its `tryCandidate` order), and it earns that only where a region exceeds the limit. DEVIATE MS3 (regions at or under `limit / 2` keep source order) stays, priced here: the pin still orders those by latency, which is worth the rows above and nothing in total.
+

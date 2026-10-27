@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/globalsmodref.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/globalsmodref.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/globalsmodref.rs sha256:2070ce989436f1aeaa7ce1a373cae98150bf26cde89f728b4df174456bf997a6 -->
+<!-- src: crates/opt/llrm-analysis/src/globalsmodref.rs sha256:ea6639b476c55a5edd1fb13d2a893b029e8d6a94aa88782c6ea48ec4a5a7ddc9 -->
 
 # globalsmodref
 

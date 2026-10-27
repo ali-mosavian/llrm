@@ -191,3 +191,14 @@ def test_nbody_executes_no_misaligned_operand_at_any_level(built):
     With the entry right, a hole of 12 bytes for spills moved the arrays of -O1/-O2/-Os to 4 mod 8: 18,404 operands, +55,212 clocks."""
     for variant in ("llrmO1", "llrm", "llrmO3", "llrmOs"):
         assert harness.run("nbody", variant)["misaligned"] == 0, variant
+
+
+def test_code_bytes_counts_text_only_not_the_unwind_tables_the_pin_emits(tmp_path, monkeypatch):
+    """The pin's llc object carries .eh_frame (56 B on x_switch) and ours none: summing sections read 419 against ours 379, where the code was 363 against 379 (w12)."""
+    import subprocess
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t.s").write_text(".text\n.fill 100,1,0x90\n.section .eh_frame,\"a\"\n.fill 56,1,0\n.data\n.long 1\n")
+    done = subprocess.run(["gcc", "-m32", "-c", str(tmp_path / "t.s"), "-o", str(tmp_path / "b" / "p.pinllc.o")], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    monkeypatch.setattr(harness, "OUT", tmp_path)
+    assert harness.code_bytes("p", "pinllc") == 100

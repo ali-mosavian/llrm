@@ -7,7 +7,7 @@ set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 dir=$root/crates/target/llrm-arm64/tests/darwin
 cargo build --release -p llrm-arm64 --bin llrm-arm64-llc || exit 1
-llc=$root/target/release/llrm-arm64-llc
+llc=$(python3 "$root/tools/llrmbin.py" bin)/llrm-arm64-llc
 tmp=$(mktemp -d)
 failed=0
 for ir in "$dir"/*.ll; do

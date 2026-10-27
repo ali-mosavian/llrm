@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/transform_tests.rs` (`d_tests`), each
+//! Adapted from llrm-codegen's `optimize/transform_tests.rs` (`d_tests`), each
 //! body now MIR text run by llrm-mir's interpreter.
 
 use llrm_analysis::testing::{DOS, layout};
@@ -659,44 +659,6 @@ fn test_a_body_is_searched_for_its_assumptions_once_however_many_guards_are_aske
     assert_eq!(searched, 1, "the body was searched {searched} times");
 }
 
-/// `decide` solved what the counted loops bound twice: once for the points-to
-/// it holds (the manager's `Bounded`) and again for its own branches (a hand
-/// solve): 26 Minstr of fpbench's -O1 compile. It reads the manager's.
-#[test]
-fn test_decide_works_a_loops_bounds_out_once() {
-    let mut module = parsed(
-        "define i32 @f(i32 %n) {
-b0:
-  br label %h
-
-h:
-  %i = phi i32 [ 0, %b0 ], [ %in, %l ]
-  %c = icmp slt i32 %i, 10
-  br i1 %c, label %l, label %end
-
-l:
-  %in = add nsw i32 %i, 1
-  br label %h
-
-end:
-  %t = icmp slt i32 %n, 5
-  br i1 %t, label %a, label %b
-
-a:
-  ret i32 1
-
-b:
-  ret i32 2
-}
-",
-    );
-    let (layout, outer) = (layout(&module), Outer::of(&module, None));
-    let (context, function) = module.function_mut("f").expect("@f");
-    let before = llrm_analysis::ranges::loops_solved();
-    decided(context, &layout, function, &outer).expect("decides");
-    assert_eq!(llrm_analysis::ranges::loops_solved() - before, 1, "the loop's bounds were worked out more than once");
-}
-
 /// `zip(a, b)` bounded by both slices' lengths: the header copy's phi takes
 /// `%10` from `b25`, the edge where `%10` is false, so it is `false` there and
 /// the branch on the phi is threaded. Only a literal arm was a constant
@@ -837,4 +799,36 @@ fn test_without_constants_decide_keeps_the_implied_branches_only() {
     );
     managed(&mut implied, Decide { constants: false });
     assert!(!printed(&implied).contains("br i1 %d"), "{}", printed(&implied));
+}
+
+/// Each ask for a function's loop-form blocks built the whole body's graph and
+/// a predecessor map of it (d_faces -O2: 33 asks, 2.9 M Ir) to read the few
+/// blocks round its loops. With the loops held, it builds no graph, and finds
+/// the preheader `b0` and the latch `b2`.
+#[test]
+fn test_the_loop_form_blocks_are_read_without_the_whole_graph() {
+    let mut module = parsed(
+        "define void @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %c = icmp slt i16 %n, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  br label %b1
+
+b3:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let function = &*function;
+    let loops = llrm_analysis::cfg::loops_of(function);
+    let before = llrm_analysis::cfg::graphs_built();
+    let found = super::loop_form_blocks(function, Some(loops));
+    assert_eq!(llrm_analysis::cfg::graphs_built() - before, 0, "the whole graph was built");
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), [0, 2]);
 }

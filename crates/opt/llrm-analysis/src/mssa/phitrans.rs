@@ -25,10 +25,13 @@
 //!    takes the layout; there is no TLI.
 //!
 //! DEVIATE, stated facts:
-//! 3. A constant has no use list, so the scans of a base's users end at once
-//!    where the base is a constant (C++ scans a global's users in the
-//!    function): a rebuilt GEP of a global base is found only when it
-//!    simplifies. `test_a_gep_off_a_global_base_is_not_found_among_users`.
+//! 3. A constant has no use list, so the scan of a base's users for an equal
+//!    GEP is a scan of the blocks that dominate the predecessor (the users the
+//!    C++ keeps are those in this function in such a block): the same GEPs,
+//!    found by walking the dominator chain, the newest (the highest instruction
+//!    id, a stand-in for use-list order) returned. The scan of a cast's users
+//!    ends at once for a constant (it folds first). Exit: a use-list model for
+//!    constants. `test_a_gep_off_a_global_base_is_found_in_a_dominating_block`.
 //! 4. Users come newest first, as LLVM's use list does; any match is an equal
 //!    value and the newest is returned.
 //!    `test_the_newest_of_two_equal_casts_is_returned`.
@@ -409,8 +412,32 @@ impl PhiTransAddr {
                     }
                     return Some(self.add_as_input(function, simplified));
                 }
-                // Is this GEP available? (DEVIATE 3 for a constant base.)
-                let Operand::Value(base) = translated[0] else { return None };
+                // Is this GEP available? A constant base has no use list here
+                // (DEVIATE 3): its users that the C++ keeps are the GEPs of
+                // this function in a block that dominates `pred`, the blocks
+                // of `pred`'s dominator chain; the newest is returned, as from
+                // a use list.
+                let Operand::Value(base) = translated[0] else {
+                    let dt = env.dt?;
+                    let mut newest: Option<InstId> = None;
+                    let mut block = Some(pred);
+                    while let Some(here) = block {
+                        for candidate_id in function.iter_block(here) {
+                            let candidate = function.instruction(candidate_id);
+                            if matches!(
+                                candidate.opcode,
+                                Opcode::GetElementPtr { source: other } if other == source
+                            ) && candidate.ty == ty
+                                && candidate.operands == translated
+                                && newest.is_none_or(|best| candidate_id.0 > best.0)
+                            {
+                                newest = Some(candidate_id);
+                            }
+                        }
+                        block = dt.immediate_dominator(here);
+                    }
+                    return newest.map(|found| result_of(function, found));
+                };
                 function
                     .users(base)
                     .iter()

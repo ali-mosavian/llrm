@@ -7,12 +7,20 @@
 ;; chng: oct/26 restyled, symbols renamed to LL$ [ali]
 ;; obs.: The language's start-up hook runs before `main` when its description names one.
 
+ifdef NEAR_CODE
+.model small
+else
 .model medium
+endif
 .386
 ;; No .dosseg: its order puts every segment outside DGROUP before it, and a far one the image does
 ;; not store would then have its zeros stored. The order here is the linker's, by the first
 ;; appearance of each class: code, DGROUP (data, bss, stack), far data, far bss.
+ifdef NEAR_CODE
+extrn _main:near
+else
 extrn _main:far
+endif
 extrn BSS_LAST:byte
 extrn FBSS_LAST:byte
 extrn LL$TOP:word
@@ -111,7 +119,11 @@ endif
 ifdef LANG_INIT
                 call    far ptr LANG_INIT
 endif
+ifdef NEAR_CODE
+                call    _main
+else
                 call    far ptr _main
+endif
                 push    ax
                 call    far ptr LL$EXIT
 
