@@ -2,7 +2,7 @@
 """Static mnemonic histogram of this backend's code against the pinned llc -O2 on the same
 clang -O2 IR, per directory of programs. The
 differences, biggest first, are the isel patterns this backend lacks.
-Usage: tools/arm64_diff.py [programs-dir ...]"""
+Usage: tools/targets/arm64_diff.py [programs-dir ...]"""
 import collections
 import re
 import sys

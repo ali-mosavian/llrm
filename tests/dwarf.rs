@@ -932,7 +932,7 @@ fn dwarf_in_a_16_bit_omf_object_links_into_an_mz_image_that_wdump_reads() {
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let linked = Command::new(&jwlink)
         .args(["format", "dos", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
-        .args(["option", "quiet,start=_main,nodefaultlibs,map=known.map"])
+        .args(["option", "quiet,start=main_,nodefaultlibs,map=known.map"])
         .current_dir(dir)
         .output()
         .unwrap();
@@ -1086,7 +1086,7 @@ fn a_far_16_bit_functions_cells_are_found_from_its_longer_frame_address() {
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     Command::new(&jwlink)
         .args(["format", "dos", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
-        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .args(["option", "quiet,start=main_,nodefaultlibs"])
         .current_dir(dir)
         .output()
         .unwrap();
