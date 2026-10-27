@@ -269,3 +269,11 @@ fn a_tail_call_whose_result_is_returned_is_a_jump() {
     assert!(of("_plain").contains("bl _g"), "{asm}");
     assert!(of("_changed").contains("bl _g"), "{asm}");
 }
+
+/// `paths(n, n)` copied `n` to `x1` and then `x1` back to `x0` (`x0 <- v` came first and ended
+/// `n`'s stay in `x0`), where the pin has the one `mov x1, x0` (`rectwo`).
+#[test]
+fn an_argument_passed_twice_stays_in_the_register_it_came_in() {
+    let asm = driver::assembly(include_str!("data/same_argument_twice.ll"), Platform::Darwin, true).expect("lowers");
+    assert_eq!(asm.lines().filter(|l| l.trim().starts_with("orr")).count(), 1, "{asm}");
+}

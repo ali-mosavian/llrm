@@ -473,3 +473,39 @@ mod tests {
         assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
     }
 }
+
+/// Argument and result copies are a parallel copy (`x0 <- v`, `x1 <- v`), and
+/// any order is correct when no source is a register the run writes; the
+/// order decides which of them the allocator can make a no-op. A value that
+/// came in on a register (`v <- x0`) stays there when the copy into that
+/// register is the run's last for it, so it goes last: `x1 <- v; x0 <- v`
+/// is one move, `x0 <- v; x1 <- v` two (the register coalescer's answer, by
+/// ordering).
+pub fn order_copies(function: &mut MFunc) {
+    let mut home: HashMap<Reg, Reg> = HashMap::new();
+    for block in &function.blocks {
+        for op in &block.ops {
+            if let Op::Copy { dst, src } = op
+                && dst.is_virtual()
+                && !src.is_virtual()
+            {
+                home.entry(*dst).or_insert(*src);
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.ops.len() {
+            let end = block.ops[at..]
+                .iter()
+                .position(|op| !matches!(op, Op::Copy { dst, src } if !dst.is_virtual() && src.is_virtual()))
+                .map_or(block.ops.len(), |n| at + n);
+            // Stable: a copy into its source's home register moves behind the others.
+            block.ops[at..end].sort_by_key(|op| match op {
+                Op::Copy { dst, src } => home.get(src) == Some(dst),
+                _ => false,
+            });
+            at = end.max(at + 1);
+        }
+    }
+}
