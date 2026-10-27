@@ -352,7 +352,7 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
 
 GENERATOR = """import sys
 from pathlib import Path
-root = Path(__file__).resolve().parents[2]
+root = Path(__file__).resolve().parents[3]
 pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
 want = "".join(f"- {name}\\n" for name in ["a", *pages])
 index = root / "docs/optimizations/passes/readme.md"
