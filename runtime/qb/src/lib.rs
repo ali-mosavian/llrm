@@ -24,7 +24,8 @@ use llrm_support::pyrepr::{self, Repr};
 // So an entry is a two-byte offset into this same segment, the count is one
 // byte in front of them. Selectors 0 or count+1..255 fall through; values
 // above 255 enter B$FrameFC instead. These are normal CFG successors only.
-pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| BTreeSet::from(["B$OGTA"]));
+pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> =
+    LazyLock::new(|| ROWS.iter().filter(|row| row.control == "inline-table").map(|row| row.name).collect());
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Reg {
@@ -1624,6 +1625,8 @@ pub struct Row {
     direct_writes: Option<&'static str>,
     direct_reads: Option<&'static str>,
     pub captures: Option<&'static str>,
+    /// The routine hands control back to the program (`calls_back = true`).
+    calls_back: bool,
 }
 
 include!(concat!(env!("OUT_DIR"), "/rows.rs"));
@@ -1645,7 +1648,7 @@ impl Row {
             names.iter().map(|one| Reg::from_value(one).expect("a register of the table")).collect()
         };
         let memory = |name: &str| Memory::from_name(name).expect("a memory of the table");
-        let one = Contract {
+        Contract {
             name: self.name.to_owned(),
             cleanup: (self.cleanup >= 0).then_some(self.cleanup),
             control: Control::from_value(self.control).expect("a control of the table"),
@@ -1666,8 +1669,7 @@ impl Row {
             direct_writes: self.direct_writes.map(memory),
             flags_result: flags_result(self.name),
             direct_reads: self.direct_reads.map(memory),
-        };
-        if INLINE_TABLE.contains(self.name) { Contract { control: Control::InlineTable, ..one } } else { one }
+        }
     }
 }
 
@@ -1727,10 +1729,7 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
                 None
             },
         };
-        out.insert(
-            name.clone(),
-            if INLINE_TABLE.contains(name.as_str()) { Contract { control: Control::InlineTable, ..one } } else { one },
-        );
+        out.insert(name.clone(), one);
     }
     Ok(out)
 }
@@ -1738,13 +1737,13 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
 pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
     LazyLock::new(|| _contracts(None).expect("runtime.toml loads"));
 
-// Routines that hand control back to the program. What they write is what
-// the code they call writes, which is anything -- GCC's modref gives up on
-// an indirect call for the same reason. B$CENP ends the program, B$EVCK
-// polls for an event and may run an event GOSUB, B$OEGA and B$RESN are the
-// ON ERROR machinery.
+// Routines that hand control back to the program: their rows say
+// `calls_back = true`. What they write is what the code they call writes,
+// which is anything -- GCC's modref gives up on an indirect call for the same
+// reason. B$CENP ends the program, B$EVCK polls for an event and may run an
+// event GOSUB, B$OEGA and B$RESN are the ON ERROR machinery.
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
-    LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
+    LazyLock::new(|| ROWS.iter().filter(|row| row.calls_back).map(|row| row.name).collect());
 
 /// The bytes a call of `name` pops, where runtime.toml's `[pops.<group>]`
 /// audits them.
@@ -1983,6 +1982,12 @@ mod tests {
         assert_eq!(audited_pop("nothing", "B$ASSN"), None);
     }
 
+    /// The set was a literal; the rows' `calls_back` must name the same four.
+    #[test]
+    fn test_the_routines_that_enter_user_code_are_the_rows_that_say_so() {
+        assert_eq!(ENTERS_USER_CODE.iter().copied().collect::<Vec<_>>(), ["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]);
+    }
+
     #[test]
     fn test_the_worst_case_concedes_nothing() {
         let blank = worst("");
@@ -2058,6 +2063,7 @@ mod tests {
             .map(|(name, _)| name.as_str())
             .collect();
         assert_eq!(reflected, *INLINE_TABLE);
+        assert_eq!(reflected, BTreeSet::from(["B$OGTA"]));
     }
 
     #[test]
