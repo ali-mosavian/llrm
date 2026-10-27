@@ -1258,7 +1258,10 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(algebraic::Differences));
         // The remainder LSR wrote out as a quotient and a product, back to one
         // where the divide stays.
-        passes.push(Box::new(crate::remidiom::RemainderIdiom { size: applied.options.prefers_size() }));
+        passes.push(Box::new(crate::remidiom::RemainderIdiom {
+            size: applied.options.prefers_size(),
+            min_size: applied.options.has_min_size,
+        }));
     }
     passes
 }

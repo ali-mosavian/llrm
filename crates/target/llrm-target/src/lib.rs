@@ -290,9 +290,10 @@ impl llrm_mir::target::Machine for Described {
     fn keeps_division(
         &self,
         bits: u32,
-        size: bool,
+        _size: bool,
+        min_size: bool,
     ) -> bool {
-        keeps_division(i64::from(bits / 8), size)
+        keeps_division(i64::from(bits / 8), min_size)
     }
 
     fn registers(&self) -> i64 {
@@ -317,16 +318,17 @@ impl llrm_mir::target::Machine for Described {
 }
 
 /// Whether a division by a constant of `bytes`-byte values stays a
-/// `div`/`idiv`: a word (no multiply-high), or any size when the build is for
-/// size. The pin's `isIntDivCheap` is `minsize` only (DEVIATE: main keeps the
-/// divide at -Os, which the size bar holds to). The one answer both the
-/// instruction selector's reciprocal (`backend::division`) and the IR's
-/// remainder fold read.
+/// `div`/`idiv`: a word (no multiply-high), or any size when `kept`. The pin's
+/// `X86TargetLowering::isIntDivCheap` (X86ISelLowering.cpp) is `minsize` only,
+/// so `kept` is -Oz; m16 alone adds -Os (DEVIATE: the -Os m16 size bar,
+/// `llrm_x86_m16::M16::keeps_division`). The one answer both the instruction
+/// selector's reciprocal (`backend::division`) and the IR's remainder fold
+/// read.
 pub fn keeps_division(
     bytes: i64,
-    size: bool,
+    kept: bool,
 ) -> bool {
-    bytes != 4 || size
+    bytes != 4 || kept
 }
 
 /// A target's cost model, built from a CPU's prices: what the passes ask of it.

@@ -53,16 +53,17 @@ pub trait Machine {
     }
 
     /// Whether a division by a constant stays a divide instruction on
-    /// `bits`-bit values, `size` saying the build is for size
-    /// (`isIntDivCheap`, read the other way): the remainder is then the
-    /// divide's own, not `x - (x / c) * c`. By default no: a division is a
-    /// multiply.
+    /// `bits`-bit values, `size` saying the build is for size (-Os, -Oz) and
+    /// `min_size` for minimum size (-Oz) (`isIntDivCheap`, read the other
+    /// way): the remainder is then the divide's own, not `x - (x / c) * c`.
+    /// By default no: a division is a multiply.
     fn keeps_division(
         &self,
         bits: u32,
         size: bool,
+        min_size: bool,
     ) -> bool {
-        let _ = (bits, size);
+        let _ = (bits, size, min_size);
         false
     }
 

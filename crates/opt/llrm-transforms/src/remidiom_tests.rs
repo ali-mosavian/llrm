@@ -12,7 +12,7 @@ fn after(
 ) -> String {
     let mut module = parsed(&format!("{HEAD}{text}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(RemainderIdiom { size });
+    manager.add(RemainderIdiom { size, min_size: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     printed(&module)
 }

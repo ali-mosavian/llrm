@@ -722,7 +722,7 @@ fn selected_in(
         // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
         // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
         // +59 B in 4 spill slots).
-        .with_int_div_cheap(cpu.size || cpu.min_size)
+        .with_int_div_cheap(cpu.divides_kept())
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
         .with_min_size(cpu.min_size)

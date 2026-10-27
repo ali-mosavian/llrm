@@ -287,7 +287,7 @@ fn positive_reciprocal<'a>(
     if divisor & (divisor - 1) == 0 {
         return Ok(Some(power_of_two(dividend, divisor, results, fresh, remainder)));
     }
-    if llrm_target::keeps_division(i64::from(width), cpu.size) {
+    if llrm_target::keeps_division(i64::from(width), cpu.divides_kept()) {
         return Ok(None);
     }
     // The magic is in the accumulator and the dividend where the early-out
@@ -490,7 +490,7 @@ pub fn unsigned_reciprocal<'a>(
     let width = dividend.width;
     if !(2 < divisor && divisor < 1 << 31)
         || (divisor & (divisor - 1)) == 0
-        || llrm_target::keeps_division(i64::from(width), cpu.size)
+        || llrm_target::keeps_division(i64::from(width), cpu.divides_kept())
     {
         return Ok(None);
     }
@@ -632,6 +632,7 @@ pub fn unsigned_reciprocal<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::cpu::Profile;
     use crate::support::hash::HashMap;
 
     fn signed(value: i64) -> i64 {
@@ -728,19 +729,25 @@ mod tests {
 
     /// recsum -Os grew from 64 to 78 bytes and recmany -Os from 167 to 200 when
     /// every `x % n` took the reciprocal for its clocks: the magic number
-    /// alone is 5 bytes against `cdq; idiv`'s 3. Tuned for size the division
-    /// stays.
+    /// alone is 5 bytes against `cdq; idiv`'s 3. Tuned for size at m16 the
+    /// division stays (the -Os m16 size bar); at m32 only -Oz keeps it, as the
+    /// pin's `X86TargetLowering::isIntDivCheap` (`minsize`): x_strlen -Os m32
+    /// kept three `div`s (`% 400`, `% 100`, `% 26`) where the pin multiplies.
     #[test]
-    fn test_tuned_for_size_a_division_by_a_constant_stays_a_division() {
+    fn test_tuned_for_size_a_division_by_a_constant_stays_a_division_at_m16_and_oz() {
+        let m16 = crate::backend::cpu::tuned_for(&llrm_x86_m16::M16, "486", true).unwrap();
         let m32 = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", true).unwrap();
+        let oz = Profile { min_size: true, ..m32.clone() };
         let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
-        let mut count = 4..;
-        let mut fresh = || count.next().unwrap();
-        assert_eq!(reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None), Ok(None));
-        assert_eq!(
-            unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 7, &results, &mut fresh, m32, true, None),
-            Ok(None)
-        );
+        let kept = |cpu: &Profile| {
+            let mut count = 4..;
+            let mut fresh = || count.next().unwrap();
+            let unsigned =
+                unsigned_reciprocal(ir::Held { value: 1, width: 4 }, 400, &results, &mut fresh, cpu, true, None);
+            let signed = reciprocal(ir::Held { value: 1, width: 4 }, 400, &results, &mut fresh, cpu, true, None);
+            (unsigned == Ok(None), signed == Ok(None))
+        };
+        assert_eq!((kept(m16), kept(m32), kept(&oz)), ((true, true), (false, false), (true, true)));
     }
 
     /// Tuned for size a power of two is still shifts (the pin's `visitSDIVLike`

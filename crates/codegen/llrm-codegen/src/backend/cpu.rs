@@ -244,6 +244,13 @@ impl std::hash::Hash for MultiplyChains {
 }
 
 impl Profile {
+    /// `isIntDivCheap`: a division by a constant stays a divide. The pin's is
+    /// `minsize` only (X86ISelLowering.cpp); DEVIATE: a 16-bit target keeps it
+    /// at -Os too, the -Os m16 size bar.
+    pub fn divides_kept(&self) -> bool {
+        self.min_size || (self.size && self.operand_bytes == 2)
+    }
+
     /// What the CPU prices, as a target builds its cost model from.
     pub fn cpu_prices(&self) -> llrm_target::CpuPrices {
         llrm_target::CpuPrices {

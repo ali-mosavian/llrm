@@ -619,8 +619,9 @@ impl llrm_mir::target::Machine for LoweredTarget {
         &self,
         bits: u32,
         size: bool,
+        min_size: bool,
     ) -> bool {
-        self.machine.keeps_division(bits, size)
+        self.machine.keeps_division(bits, size, min_size)
     }
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {

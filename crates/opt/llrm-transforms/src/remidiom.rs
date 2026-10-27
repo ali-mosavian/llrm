@@ -57,6 +57,8 @@ use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, PreservedAnaly
 pub struct RemainderIdiom {
     /// The build is for size (-Os, -Oz).
     pub size: bool,
+    /// The build is for minimum size (-Oz).
+    pub min_size: bool,
 }
 
 /// What was matched: the instructions to go and the operands of the remainder.
@@ -225,7 +227,7 @@ impl FunctionPass for RemainderIdiom {
         let mut session = None;
         let mut changed = false;
         for idiom in idioms {
-            if !outer.target().keeps_division(idiom.wide, self.size) {
+            if !outer.target().keeps_division(idiom.wide, self.size, self.min_size) {
                 continue;
             }
             let Some(offset) = offset_of(unit.context, unit.function, &idiom, &mut session, unit.layout, &outer) else {

@@ -212,8 +212,9 @@ impl Machine for Dos {
         &self,
         bits: u32,
         size: bool,
+        min_size: bool,
     ) -> bool {
-        llrm_target::keeps_division(i64::from(bits / 8), size)
+        llrm_target::keeps_division(i64::from(bits / 8), size || min_size)
     }
 
     fn size_costs(&self) -> OperationCosts {
