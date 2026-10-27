@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_bitorder.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_bitorder.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_bitorder.rs sha256:d1fde6711e5474c9b3c6eda0aaa2f34aec3e9ff29f18a8d4852df163b7609a57 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_bitorder.rs sha256:0352911785fb6eceeac8f8dcd2d37de987a50cad3074508e6ba2ff2461e4cb0d -->
 
 # combine_bitorder
 
@@ -29,3 +29,6 @@ DEVIATE 2: only `visitOr` asks; the calls of `bswap` and `bitreverse`
 (`visitCallInst`, :2619 and :2748) and `visitAnd`'s place of
 `foldBitwiseLogicWithIntrinsics` (:2956, after folds not yet translated)
 are not. In `visitAnd` and `visitXor` it runs after the folds translated.
+
+## Used by
+Named by `combine_and`, `combine_or`, `combine_xor`.

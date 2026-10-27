@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:cfe82165dc405a4cfaffaa485f6e2576645f59bd0e9460a3afe426ce6e6492bb -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:5b8ff752bd70ba836d3ed522590a25b0444a4103fbb0ad3232a1afbf3dcb7eee -->
 
 # twoentryphi
 
@@ -43,3 +43,6 @@ then:  br label %end
 end:   %p = phi i32 [ 1, %then ], [ 2, %entry ]
 ; becomes, in entry: %p = select i1 %c, i32 1, i32 2
 ```
+
+## Used by
+Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`.
