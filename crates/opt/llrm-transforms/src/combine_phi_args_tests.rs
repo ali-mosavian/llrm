@@ -130,3 +130,69 @@ m:
     assert!(after.contains("phi i32 [ %x, %l ], [ %y, %r ]") && after.contains("add i32 %"), "{after}");
     assert!(after.matches("add i32").count() == 1, "{after}");
 }
+
+/// mandel -O1: `phi i1 [ false, %b0 ], [ true, %a ]` under `br i1 %c, %j, %a`
+/// stayed a phi, materialised in a register and tested again; the pin reads
+/// `xor %c, true`.
+#[test]
+fn a_phi_of_booleans_under_a_branch_is_the_negated_condition() {
+    let after = combined(
+        "define i1 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %j, label %a
+a:
+  call void @g(i16 %x)
+  br label %j
+j:
+  %p = phi i1 [ false, %b0 ], [ true, %a ]
+  ret i1 %p
+}
+declare void @g(i16)
+",
+    );
+    assert!(!after.contains("phi"), "{after}");
+    assert!(after.contains("xor i1 %c, true"), "{after}");
+}
+
+/// The same phi with the arms the branch's own way is the condition.
+#[test]
+fn a_phi_of_booleans_the_branch_orders_is_the_condition() {
+    let after = combined(
+        "define i1 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %j, label %a
+a:
+  call void @g(i16 %x)
+  br label %j
+j:
+  %p = phi i1 [ true, %b0 ], [ false, %a ]
+  ret i1 %p
+}
+declare void @g(i16)
+",
+    );
+    assert!(!after.contains("phi") && after.contains("ret i1 %c"), "{after}");
+}
+
+/// `simplifyUsingControlFlow`'s switch form: a phi of the case values, each
+/// from its own case's block, is the switch's condition.
+#[test]
+fn a_phi_of_case_values_is_the_switch_condition() {
+    let after = combined(
+        "define i8 @f(i8 %s) {
+b0:
+  switch i8 %s, label %d [ i8 1, label %a i8 2, label %b ]
+a:
+  br label %j
+b:
+  br label %j
+d:
+  ret i8 0
+j:
+  %p = phi i8 [ 1, %a ], [ 2, %b ]
+  ret i8 %p
+}
+",
+    );
+    assert!(!after.contains("phi") && after.contains("ret i8 %s"), "{after}");
+}

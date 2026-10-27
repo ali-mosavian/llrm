@@ -427,7 +427,7 @@ b0:
     // call captured included; `memset` writes its destination alone.
     let far = |call: &str| {
         format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare void @cap(ptr)
 declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)

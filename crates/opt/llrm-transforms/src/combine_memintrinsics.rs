@@ -24,8 +24,7 @@
 //! DEVIATE 1: MIR gives a transfer's pointers no `align` attribute, so the
 //! alignments are `pointer_alignment` of each side
 //! (`Value::getPointerAlignment`), not `getKnownAlignment` with the assumption
-//! cache and the dominator tree, and the pin's step that first raises the
-//! transfer's own alignments is not made. DEVIATE 2: no
+//! cache and the dominator tree. DEVIATE 2: no
 //! `isModSet(AA->getModRefInfoMask(Dest))` constant-memory test, and no atomic
 //! transfers (MIR has none); no TBAA or loop metadata to carry (MIR transfers
 //! have none).
@@ -36,7 +35,7 @@
 use llrm_mir::context::ConstantKind;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::opcode::{Attribute, Flags, Opcode};
 use llrm_mir::valuetracking::known::pointer_alignment;
 
 use crate::combine::{Combiner, Visit};
@@ -50,9 +49,42 @@ impl Combiner<'_> {
     ) -> Visit {
         match self.intrinsic_of(call) {
             Some(Intrinsic::MemCpy | Intrinsic::MemMove) => self.simplify_any_mem_transfer(call),
+            Some(Intrinsic::MemSet) => self.raise_alignments(call, 1),
             Some(Intrinsic::MinMax { signed, max }) => self.narrow_min_max(call, signed, max),
+            None => self.transform_const_expr_cast_call(call),
             _ => Visit::None,
         }
+    }
+
+    /// The first step of `SimplifyAnyMemTransfer` and `SimplifyAnyMemSet`: the
+    /// transfer's own destination (and, with `pointers` 2, source) alignment
+    /// is raised to what is known of the pointer.
+    fn raise_alignments(
+        &mut self,
+        call: InstId,
+        pointers: usize,
+    ) -> Visit {
+        let operands = self.function.instruction(call).operands.clone();
+        let mut changed = false;
+        for index in 0..pointers.min(operands.len()) {
+            let known = pointer_alignment(&query(self, Some(call)), operands[index]);
+            let Opcode::Call(info) = &self.function.instruction(call).opcode else { return Visit::None };
+            let current = info
+                .argument_attrs
+                .get(index)
+                .into_iter()
+                .flatten()
+                .find_map(|attr| match attr {
+                    Attribute::Int(name, value) if name == "align" => Some(*value),
+                    _ => None,
+                })
+                .unwrap_or(1);
+            if known > current {
+                self.function.set_argument_align(call, index, known);
+                changed = true;
+            }
+        }
+        if changed { Visit::Changed } else { Visit::None }
     }
 
     /// `SimplifyAnyMemTransfer`.
@@ -60,6 +92,9 @@ impl Combiner<'_> {
         &mut self,
         call: InstId,
     ) -> Visit {
+        if self.raise_alignments(call, 2) == Visit::Changed {
+            return Visit::Changed;
+        }
         let operands = self.function.instruction(call).operands.clone();
         let [destination, source, length, volatile, ..] = operands[..] else { return Visit::None };
         let constant = |operand: Operand| match operand {

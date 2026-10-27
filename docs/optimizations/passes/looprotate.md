@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looprotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looprotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:9df766e483bc354f33b20871460de136131a2ac3a08e5d0aa7098edb08fd26ad -->
+<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:c3b723d22e7e43ea7576bd1d95fd21dc73cf72de74971009596e72855a9832c1 -->
 
 # looprotate
 
@@ -38,10 +38,10 @@ latch if they are joined by a jump.
   only under that option, which no `PassBuilder` pipeline sets.
 - R3 New blocks go at the end of the layout: `Function::insert_block` after
   a block scans the layout. LLVM puts them next to their neighbours.
-- R4 No debug records, no `llvm.experimental.noalias.scope.decl` scope
-  cloning and no `llvm.coro` check: llrm's copies carry debug records
-  through `clone_instruction`, MIR has no local noalias scope declarations,
-  and no coroutines.
+- R4 No `llvm.experimental.noalias.scope.decl` scope cloning and no
+  `llvm.coro` check: MIR has no local noalias scope declarations, and no
+  coroutines. Debug records stand before an instruction and move with it, so
+  only the preheader's old terminator needs `flushTerminatorDbgRecords`.
 - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
   sits in a preheader whose analyses the rotation is changing.
 - R6 A target with no cost model (`Machine::tti`) is priced by the generic

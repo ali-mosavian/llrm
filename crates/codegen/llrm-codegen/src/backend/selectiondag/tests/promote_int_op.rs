@@ -59,7 +59,7 @@ fn promoted(
     dag.set_root(root);
     let pairs = || SAMPLES.iter().flat_map(|&p| SAMPLES.iter().map(move |&q| (p & 0xFFFF, q & 0xFFFF)));
     let before: Vec<u32> = pairs().map(|pair| eval(&dag, root, pair)).collect();
-    let mut hooks = X86Lowering { cmov: true, sse2: false };
+    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     let root = dag.get_root();
     let after: Vec<u32> = pairs().map(|pair| eval(&dag, root, pair)).collect();
@@ -83,11 +83,11 @@ fn a_word_operation_is_done_in_a_dword() {
 /// A right shift needs the high bits right: `srl` zero-extends the operand
 /// (the pin's `srl (zero_extend x), 3`: X86 keeps the `and 0xFFFF` a `movzx`
 /// matches instead of trimming it to the bits the shift reads, 0xFFF8, which
-/// #4399's demanded bits did), `sra` sign-extends it in register; a left shift
-/// needs neither.
+/// #4399's demanded bits did), `sra` sign-extends it (`sext_in_reg (aext x)`
+/// folds to `sext x`, `visitSIGN_EXTEND_INREG`); a left shift needs neither.
 #[test]
 fn a_word_shift_extends_its_operand_by_its_kind() {
-    for (op, extend) in [(ISD::Srl, ISD::ZeroExtend), (ISD::Sra, ISD::SignExtendInReg), (ISD::Shl, ISD::AnyExtend)] {
+    for (op, extend) in [(ISD::Srl, ISD::ZeroExtend), (ISD::Sra, ISD::SignExtend), (ISD::Shl, ISD::AnyExtend)] {
         let (dag, root) = promoted(false, |dag, x, _| {
             let by = dag.get_constant(3, EVT::I8);
             dag.get_node(op, EVT::I16, &[x, by])
@@ -108,7 +108,7 @@ fn only_words_and_byte_multiplies_are_promoted_and_not_at_m16() {
     let mul = dag.get_node(ISD::Mul, EVT::I8, &[x, c]);
     let add = dag.get_node(ISD::Add, EVT::I8, &[mul, y]);
     dag.set_root(add);
-    let mut hooks = X86Lowering { cmov: true, sse2: false };
+    let mut hooks = X86Lowering { cmov: true, sse2: false, min_size: false };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Add, "a byte add stays");

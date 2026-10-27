@@ -435,6 +435,11 @@ pub fn asks() -> [usize; 3] {
     KEPT.with(Kept::asks)
 }
 
+/// How many graphs of a body's edges this thread has made for lane liveness.
+pub fn graphs() -> usize {
+    KEPT.with(Kept::graphs)
+}
+
 /// How many answers this thread has worked out, whole or in part.
 pub fn exits_computed() -> usize {
     let [whole, partly, _] = asks();
@@ -559,7 +564,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{asks, from_scratch, lanewise, live_into};
+    use super::{asks, from_scratch, graphs, lanewise, live_into};
     use crate::backend::peephole::_lanes;
     use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
@@ -755,5 +760,44 @@ mod tests {
         lanewise(&body(&changed));
         let [whole_now, partly_now, same_now] = asks();
         assert_eq!((whole_now - whole, partly_now - partly, same_now - same), (1, 1, 1));
+    }
+
+    /// A block that goes elsewhere is a new graph and its lanes follow the new
+    /// edge; one whose instructions alone changed keeps the graph. Reusing the
+    /// graph after a reroute answered from the old edges: block 1 still read
+    /// AX through block 2 after it jumped to block 3.
+    #[test]
+    fn test_a_graph_is_made_again_only_where_a_block_goes_elsewhere() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let (bx, cx) = (Reg { register: RegId::BX, width: 2 }, Reg { register: RegId::CX, width: 2 });
+        let mov =
+            |at: i64, to: Reg, from: Reg| _insn(at, Operation::Move, "mov", vec![Loc::Reg(to)], vec![Loc::Reg(from)]);
+        let first =
+            |to: i64| -> Block { LirBlock { succ: vec![to].into(), ..LirBlock::new(1, vec![mov(1, bx, DX)]) }.into() };
+        // Each loops on itself, so that nothing past it is assumed live.
+        let reads_ax: Block = LirBlock { succ: vec![2].into(), ..LirBlock::new(2, vec![mov(2, DX, AX)]) }.into();
+        let reads_cx: Block = LirBlock { succ: vec![3].into(), ..LirBlock::new(3, vec![mov(3, DX, cx)]) }.into();
+        let body = |first: Block, second: &Block| {
+            LirBody::new(
+                "f",
+                1,
+                vec![first, second.clone(), reads_cx.clone()],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
+        };
+        let made = graphs();
+        let at_two = lanewise(&body(first(2), &reads_ax));
+        assert!(_lanes(regs, RegId::AX).is_subset(&at_two.leaving[&1]), "premise: AX is read through block 2");
+        // Block 2 changed alone: the same edges.
+        let reads_bx: Block = LirBlock { succ: vec![2].into(), ..LirBlock::new(2, vec![mov(2, DX, bx)]) }.into();
+        lanewise(&body(first(2), &reads_bx));
+        assert_eq!(graphs() - made, 1, "an instruction changed and no edge: the graph is kept");
+        // Block 1 goes to block 3 instead.
+        let at_three = lanewise(&body(first(3), &reads_ax));
+        assert_eq!(graphs() - made, 2, "an edge changed: the graph is made again");
+        assert!(_lanes(regs, RegId::AX).is_disjoint(&at_three.leaving[&1]), "AX is read only through block 2");
+        assert!(_lanes(regs, RegId::CX).is_subset(&at_three.leaving[&1]), "CX is read through block 3");
+        assert!(at_three.leaving == from_scratch(&body(first(3), &reads_ax)));
     }
 }

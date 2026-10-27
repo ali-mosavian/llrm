@@ -21,13 +21,6 @@
 //! anything, and its pass manager lets that stand. A pipeline run to a fixed
 //! point here would not end, so the pass answers whether the function changed.
 //!
-//! DEVIATE 15, `simplifyInstruction` is not asked of a phi. Two reasons, each
-//! a measured loss: LLVM forms LCSSA inside its loop pipeline only, and here
-//! `lcssa` and this pass run to one fixed point, which they would never reach;
-//! and a loop's invariant phi simplified to its input lets the loop's
-//! expressions merge with copies outside it, a live range the allocator
-//! spills (x_hanoi2 -O2 +22.8% clocks, quicksort +1.5%; issue 2186).
-//!
 //! DEVIATE 3, `salvageAndRemoveInstruction` removes the instruction: MIR has no
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
 //! operand bundles, which MIR has none of.
@@ -775,9 +768,8 @@ impl GvnPass<'_> {
         // redundancies, for example if it determines that %y is equal to %x
         // then the instruction "%z = and i32 %x, %y" becomes "%z = and i32 %x,
         // %x" which we now simplify.
-        // DEVIATE 15: no phi is simplified (issue 2186); DEVIATE 18: no GEP
-        // either, whose offset-zero form the BASIC runtime and the `bq32` bench
-        // cells ran worse without.
+        // DEVIATE 18: no GEP, whose offset-zero form the BASIC runtime and the
+        // `bq32` bench cells ran worse without.
         // `simplifyInstruction` has no arm of MIR's for the other kinds, and
         // building its operands costs.
         let simplified = match self.function.instruction(inst).opcode {
@@ -795,6 +787,7 @@ impl GvnPass<'_> {
                 self.function,
                 inst,
             ),
+            Opcode::Phi => llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst),
             _ => None,
         };
         if let Some(simplified) = simplified {

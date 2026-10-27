@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:5b369746373d12a9058a5a37d86233ad6d1524e8b4b5807c0651970f380b4007 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:ed361ca41374374677a005673852f5c63746b268582917e53ae1ed445f877d95 -->
 
 # inlinecost
 
@@ -76,12 +76,6 @@ each site's cost and threshold beside the existing decision; with
   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
   of a local callee, which goes with it, is the pin's. No shape of callee
   but the loop and the one smaller than its call is tested.
-  Measured (m16 -Os, frontend llrm-c, owner w-6): `jpeg_single.c` 2910 B on
-  main, 2770 B here (-140), 79.4 M clocks on main, 92.7 M here (+16.8%). Of
-  the 13.3 M, inlining `clamp` (x3, cost -10) alone recovers 7.3 M for +7 B;
-  the same relaxation by cost sign grows 4 of 48 C programs by 167 B
-  (`qlight.c` +134), so the lever is the bound for bytes-cheap sites, not
-  the sign. The rest is LSR, 2abaf530f and RFP. Decision: bytes first.
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
   address of a stack slot or a global the caller stored a constant to and
   whose callee loads through that parameter, is inlined if the caller,

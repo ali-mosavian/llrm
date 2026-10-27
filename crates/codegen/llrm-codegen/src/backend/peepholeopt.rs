@@ -60,8 +60,6 @@
 
 use std::sync::Arc;
 
-use iced_x86::RflagsBits;
-
 use crate::backend::lanes::Lanes;
 use crate::backend::precse::flag_lanes;
 use crate::model::ir::{Imm, Loc, Operation, Semantics};
@@ -88,7 +86,7 @@ impl LIRTransform for PeepholeOptimizer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(compared(&immediates_folded(&body, self.size)))
+        Ok(loads_folded(&compared(&immediates_folded(&recurrences_commuted(&body), self.size))))
     }
 }
 
@@ -336,8 +334,7 @@ fn reusable(
     // the scan forward from the compare: the readers of the flags read only
     // what the definition sets, until something writes them again. A write of
     // some flags (`inc` leaves CF) kills only those.
-    let mut pending =
-        Lanes::flags((RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::CF | RflagsBits::PF) as u32);
+    let mut pending = Lanes::read_flags();
     for one in &insns[at + 1..] {
         if one.is_meta() {
             continue;
@@ -579,6 +576,254 @@ fn folded_use(
     folded.uses.retain(|&used| used != value);
     folded.widths.retain(|&(used, _)| used != value);
     Some((folded, value))
+}
+
+/// `body` with each single-use load folded into the instruction that reads it
+/// (`isLoadFoldable`, `foldLoadInto`, `X86InstrInfo::optimizeLoadInstr`): the
+/// block's `d := mov [m]` ahead of `cmp d, r`, `cmp r, d` or
+/// `add|sub|and|or|xor r, d` is the same instruction with `[m]` as the operand.
+/// A store, a call or anything else `isLoadFoldBarrier` drops the loads waiting
+/// to fold.
+///
+/// Not translated: the other instructions `foldMemoryOperand` knows (`test`,
+/// `imul`, the extends, the x87 forms), a load whose result is read twice.
+pub fn loads_folded(body: &LirBody) -> LirBody {
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    for block in &body.blocks {
+        for phi in block.phis.iter() {
+            for &(_from, value) in &phi.incoming {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+        for one in &block.insns {
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+    }
+    let mut out = body.clone();
+    for block in &mut out.blocks {
+        let mut loads: HashMap<u32, usize> = HashMap::default();
+        let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
+        let mut changed = false;
+        for at in 0..insns.len() {
+            if let Some(value) = foldable_load(&insns[at]).filter(|value| reads.get(value) == Some(&1)) {
+                loads.insert(value, at);
+                continue;
+            }
+            if !loads.is_empty() {
+                if let Some((folded, value)) = load_folded(&insns[at], &loads, &insns) {
+                    let def = loads.remove(&value).expect("a waiting load");
+                    insns[def] = lir::bytes_only(&insns[def]);
+                    insns[at] = Arc::new(folded);
+                    changed = true;
+                }
+                if crate::backend::machinelicm::keeps_loads(&insns[at]) {
+                    loads.clear();
+                }
+            }
+        }
+        if changed {
+            block.insns = insns.into();
+        }
+    }
+    out
+}
+
+/// The value a plain load defines, where nothing but its address is read.
+fn foldable_load(one: &Insn) -> Option<u32> {
+    let what = one.what.as_ref()?;
+    let ([Loc::Held(dest)], [Loc::Mem(cell)]) = (&what.dests[..], &what.sources[..]) else { return None };
+    (what.op == Operation::Move
+        && what.name.as_deref() == Some("mov")
+        && one.defines == [dest.value]
+        && dest.width == cell.width
+        && !one.volatile()
+        && one.group.is_none()
+        && one.requires.is_empty()
+        && one.delivers.is_empty()
+        && one.clobbers.is_empty())
+    .then_some(dest.value)
+}
+
+/// `one` with the memory a waiting load reads as its operand, and the load's
+/// value.
+fn load_folded(
+    one: &Insn,
+    loads: &HashMap<u32, usize>,
+    insns: &[Arc<Insn>],
+) -> Option<(Insn, u32)> {
+    let what = one.what.as_ref()?;
+    let name = what.name.as_deref()?;
+    let commutes = match (what.op, name) {
+        (Operation::Compare, "cmp") => false,
+        (Operation::Binary, "add" | "and" | "or" | "xor") => true,
+        (Operation::Binary, "sub") => false,
+        _ => return None,
+    };
+    if one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() || what.indirect {
+        return None;
+    }
+    let ([.., Loc::Held(_)] | [], [Loc::Held(first), Loc::Held(second)]) = (&what.dests[..], &what.sources[..]) else {
+        return None;
+    };
+    let compare = what.op == Operation::Compare;
+    // the memory goes where the pin's `rm` or `mr` form has it: second for an
+    // arithmetic instruction (the first is tied to the result), either for a
+    // compare, and first for a commutative one whose second is not the load
+    let (kept, load, swapped) = if loads.contains_key(&second.value) && first.value != second.value {
+        (*first, second.value, false)
+    } else if (compare || commutes) && loads.contains_key(&first.value) && first.value != second.value {
+        (*second, first.value, !compare)
+    } else {
+        return None;
+    };
+    let Some(Loc::Mem(cell)) = insns[loads[&load]].what.as_ref().and_then(|w| w.sources.first()) else { return None };
+    // The memory operand has the instruction's width: a word read as its low
+    // byte, or a byte as a word, is not the same instruction.
+    let read = if load == second.value { second } else { first };
+    if read.width != cell.width || kept.width != cell.width {
+        return None;
+    }
+    let held = if swapped {
+        [Loc::Held(kept), Loc::Mem(cell.clone())]
+    } else if load == second.value {
+        [Loc::Held(kept), Loc::Mem(cell.clone())]
+    } else {
+        [Loc::Mem(cell.clone()), Loc::Held(kept)]
+    };
+    let def = &insns[loads[&load]];
+    let mut folded = one.clone();
+    folded.what = Some(Semantics { sources: held.to_vec(), ..what.clone() });
+    let at = folded.uses.iter().position(|&used| used == load)?;
+    folded.uses.splice(at..=at, def.uses.iter().copied());
+    folded.widths.retain(|&(used, _)| used != load);
+    folded.widths.extend(def.widths.iter().copied());
+    Some((folded, load))
+}
+
+/// `MaxRecurrenceChain` (`-recurrence-chain-limit`).
+const MAX_RECURRENCE_CHAIN: usize = 3;
+
+/// `body` with the recurrence of each loop-header phi commuted so the
+/// phi's value is the tied operand (`PeepholeOptimizer::optimizeRecurrence`,
+/// [PeepholeOptimizer.cpp#L1719](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L1719),
+/// `findTargetRecurrence` #L1648).
+///
+/// `s := phi(s0, s2); s1 := add t, s; s2 := add s1, u` ties `t` to `s1` and
+/// `s1` to `s2`, so the copy phi elimination makes into `s` cannot coalesce
+/// with `s2` (`s` and `t` overlap). Commuting the first add to `add s, t`
+/// removes the copy (x_ll_arith: the sum's `adc` kept the shifted half as
+/// its tied operand, +3 instructions in the loop).
+///
+/// A chain follows the single reader of each value while its instruction
+/// has a tied def, up to three long, and counts only if it ends in one of the
+/// phi's incoming values.
+///
+/// Not translated: nothing (the X86 commutes are `add`, `adc`, `and`, `or`,
+/// `xor`, `imul`).
+pub fn recurrences_commuted(body: &LirBody) -> LirBody {
+    if body.blocks.iter().all(|block| block.phis.is_empty()) {
+        return body.clone();
+    }
+    let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    let mut users: HashMap<u32, (usize, usize)> = HashMap::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        for phi in block.phis.iter() {
+            for &(_from, value) in &phi.incoming {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+        for (place, one) in block.insns.iter().enumerate() {
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                *reads.entry(value).or_default() += 1;
+                users.insert(value, (at, place));
+            }
+        }
+    }
+    let mut swaps: HashSet<(usize, usize)> = HashSet::default();
+    for block in body.blocks.iter() {
+        if !forest.innermost(block.at).is_some_and(|one| forest.loops[one].header == block.at) {
+            continue;
+        }
+        for phi in block.phis.iter() {
+            let targets: HashSet<u32> = phi.incoming.iter().map(|&(_from, value)| value).collect();
+            let mut chain = Vec::new();
+            if target_recurrence(body, phi.result, &targets, &reads, &users, &mut chain) {
+                swaps.extend(chain.into_iter().flatten());
+            }
+        }
+    }
+    if swaps.is_empty() {
+        return body.clone();
+    }
+    let mut out = body.clone();
+    for (at, place) in swaps {
+        let one = &out.blocks[at].insns[place];
+        let Some(what) = one.what.as_ref() else { continue };
+        let mut made = (**one).clone();
+        made.what = Some(Semantics { sources: vec![what.sources[1].clone(), what.sources[0].clone()], ..what.clone() });
+        let mut insns: Vec<Arc<Insn>> = out.blocks[at].insns.iter().cloned().collect();
+        insns[place] = Arc::new(made);
+        out.blocks[at].insns = insns.into();
+    }
+    out
+}
+
+/// `findTargetRecurrence`: `chain` collects the instructions of the cycle, with
+/// the place of each that reads the value in the second place (to commute).
+fn target_recurrence(
+    body: &LirBody,
+    value: u32,
+    targets: &HashSet<u32>,
+    reads: &HashMap<u32, usize>,
+    users: &HashMap<u32, (usize, usize)>,
+    chain: &mut Vec<Option<(usize, usize)>>,
+) -> bool {
+    if targets.contains(&value) {
+        return true;
+    }
+    if reads.get(&value).copied() != Some(1) || chain.len() >= MAX_RECURRENCE_CHAIN {
+        return false;
+    }
+    let Some(&(at, place)) = users.get(&value) else { return false };
+    let one = &body.blocks[at].insns[place];
+    let Some(what) = one.what.as_ref() else { return false };
+    let name = what.name.as_deref().unwrap_or_default();
+    let tied = matches!(
+        name,
+        "add"
+            | "sub"
+            | "adc"
+            | "sbb"
+            | "and"
+            | "or"
+            | "xor"
+            | "imul"
+            | "neg"
+            | "not"
+            | "inc"
+            | "dec"
+            | "shl"
+            | "shr"
+            | "sar"
+    );
+    let ([Loc::Held(into)], Some(Loc::Held(first))) = (&what.dests[..], what.sources.first()) else { return false };
+    if !tied || what.indirect || one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() {
+        return false;
+    }
+    if first.value == value {
+        chain.push(None);
+        return into.width == first.width && target_recurrence(body, into.value, targets, reads, users, chain);
+    }
+    let commutes = matches!(name, "add" | "adc" | "and" | "or" | "xor" | "imul");
+    let [_, Loc::Held(second)] = &what.sources[..] else { return false };
+    if !commutes || second.value != value || into.width != first.width || first.width != second.width {
+        return false;
+    }
+    chain.push(Some((at, place)));
+    target_recurrence(body, into.value, targets, reads, users, chain)
 }
 
 #[cfg(test)]
@@ -934,5 +1179,142 @@ mod tests {
             insn(3, Operation::Branch, "jmp", vec![], vec![], vec![], vec![]),
         ]);
         assert_eq!(immediates_folded(&body, false).blocks[0].insns[1].what.as_ref().unwrap().sources, [constant(0)]);
+    }
+
+    fn load_of(value: u32) -> Arc<Insn> {
+        let cell = llrm_lir::Mem { index: Some(Held { value: 7, width: 4 }), scale: 4, ..llrm_lir::Mem::new(None, 4) };
+        insn(0, Operation::Move, "mov", vec![held(value)], vec![Loc::Mem(cell)], vec![value], vec![7])
+    }
+
+    /// `v8 := mov [m]; cmp v8, v3; jl` kept the load in a register of its own
+    /// (coalesce_hot_copies: a binary search ran 11 instructions a trip, the
+    /// pin's 9); the pin's PeepholeOptimizer makes it `cmp [m], v3`.
+    #[test]
+    fn test_a_load_read_once_by_a_compare_is_its_operand() {
+        let body = body_of(vec![
+            load_of(8),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(8), held(3)], vec![], vec![8, 3]),
+            insn(2, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+        ]);
+        let done = loads_folded(&body);
+        assert_eq!(names(&done, true), ["", "cmp", "jl"]);
+        let (load, cmp) = (&done.blocks[0].insns[0], &done.blocks[0].insns[1]);
+        assert!(load.defines.is_empty() && load.uses.is_empty());
+        assert!(matches!(cmp.what.as_ref().unwrap().sources[..], [Loc::Mem(_), Loc::Held(_)]));
+        assert_eq!(cmp.uses, [7, 3]);
+    }
+
+    /// A load read twice, or with a store between it and its reader, stays.
+    #[test]
+    fn test_a_load_read_twice_or_past_a_store_stays() {
+        let twice = body_of(vec![
+            load_of(8),
+            insn(1, Operation::Compare, "cmp", vec![], vec![held(8), held(3)], vec![], vec![8, 3]),
+            insn(2, Operation::Compare, "cmp", vec![], vec![held(8), held(4)], vec![], vec![8, 4]),
+        ]);
+        assert!(loads_folded(&twice).blocks[0].insns[0].uses == [7]);
+        let cell = llrm_lir::Mem::new(None, 4);
+        let store = insn(1, Operation::Move, "mov", vec![Loc::Mem(cell)], vec![held(5)], vec![], vec![5]);
+        let past = body_of(vec![
+            load_of(8),
+            store,
+            insn(2, Operation::Compare, "cmp", vec![], vec![held(8), held(3)], vec![], vec![8, 3]),
+        ]);
+        assert!(matches!(loads_folded(&past).blocks[0].insns[2].what.as_ref().unwrap().sources[0], Loc::Held(_)));
+    }
+
+    /// regparm3_matrix_22 and _4: a word load read by a byte `add`/`xor` (the
+    /// low byte of the value) folded to `add al, word ptr [bp+0xc]`, a width
+    /// the encoder refuses (compile failure). The memory operand is the
+    /// instruction's width, so only a load of that width folds.
+    #[test]
+    fn test_a_word_load_read_as_a_byte_is_not_folded() {
+        let cell = llrm_lir::Mem::new(None, 2);
+        let load = insn(
+            0,
+            Operation::Move,
+            "mov",
+            vec![Loc::Held(Held { value: 8, width: 2 })],
+            vec![Loc::Mem(cell)],
+            vec![8],
+            vec![],
+        );
+        let byte = |value| Loc::Held(Held { value, width: 1 });
+        let body = body_of(vec![
+            load,
+            insn(1, Operation::Binary, "add", vec![byte(4)], vec![byte(3), byte(8)], vec![4], vec![3, 8]),
+        ]);
+        let done = loads_folded(&body);
+        assert!(matches!(done.blocks[0].insns[1].what.as_ref().unwrap().sources[..], [Loc::Held(_), Loc::Held(_)]));
+    }
+
+    /// A loop `s := phi(s0, s2); s1 := add t, s; s2 := add s1, u`.
+    fn recurrence(
+        name: &str,
+        length: usize,
+    ) -> LirBody {
+        use crate::model::lir::Phi;
+        let mut insns =
+            vec![insn(0, Operation::Binary, "add", vec![held(20)], vec![held(5), held(5)], vec![20], vec![5, 5])];
+        // v20 is the shifted half; each step adds one more operand to the sum
+        let mut value = 10;
+        for step in 0..length {
+            let next = 30 + step as u32;
+            let (first, second) = if step == 0 { (20, value) } else { (value, 21) };
+            insns.push(insn(
+                1 + step as i64,
+                Operation::Binary,
+                name,
+                vec![held(next)],
+                vec![held(first), held(second)],
+                vec![next],
+                vec![first, second],
+            ));
+            value = next;
+        }
+        let header = LirBlock {
+            succ: vec![1, 2].into(),
+            phis: vec![Phi { result: 10, incoming: vec![(0, 1), (1, value)] }].into(),
+            ..LirBlock::new(1, insns)
+        };
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![]) };
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![entry.into(), header.into(), LirBlock::new(2, vec![]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body
+    }
+
+    fn first_sources(
+        body: &LirBody,
+        place: usize,
+    ) -> Vec<u32> {
+        let what = body.blocks[1].insns[place].what.as_ref().unwrap();
+        what.sources.iter().filter_map(|one| if let Loc::Held(held) = one { Some(held.value) } else { None }).collect()
+    }
+
+    /// x_ll_arith: the sum's `adc` took the shifted half as its tied operand
+    /// and the loop-carried sum a copy (+3 instructions a trip, 43 against
+    /// the pin's 40). The pin commutes the add that reads the phi.
+    #[test]
+    fn test_a_loops_sum_is_the_tied_operand_of_the_add_that_reads_it() {
+        let body = recurrences_commuted(&recurrence("adc", 1));
+        assert_eq!(first_sources(&body, 1), [10, 20]);
+    }
+
+    #[test]
+    fn test_a_recurrence_longer_than_the_limit_is_left() {
+        let body = recurrences_commuted(&recurrence("add", MAX_RECURRENCE_CHAIN + 1));
+        assert_eq!(first_sources(&body, 1), [20, 10]);
+    }
+
+    #[test]
+    fn test_a_subtract_is_not_commuted() {
+        let body = recurrences_commuted(&recurrence("sub", 1));
+        assert_eq!(first_sources(&body, 1), [20, 10]);
     }
 }

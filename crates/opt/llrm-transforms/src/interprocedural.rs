@@ -163,7 +163,7 @@ use crate::profit::OperationCosts;
 /// function, and the callers' analyses were read as they stood before
 /// (`ModuleAnalyses::function` brings them up to date, and
 /// `LLRM_CHECK_UNREPORTED` fails the read).
-fn reporting<T>(
+pub(crate) fn reporting<T>(
     module: &mut Module,
     modules: &mut ModuleAnalyses,
     edit: impl FnOnce(&mut Module) -> T,
