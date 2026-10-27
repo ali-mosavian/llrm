@@ -234,8 +234,28 @@ pub fn compiled(
     let default = flags.convention(&*bound.target)?;
     with_default_convention(&mut module, default);
     decorate(&mut module, bound.target.calling(), default, format.name());
-    let options = llrm_codegen::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
+    let mut options = llrm_codegen::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
+    options.libcalls.extend(libm_calls(default, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+}
+
+/// The C library's rounding routines, in the convention and spelling a call
+/// the source declared would have: what `llvm.floor` and its family become
+/// where the target has no instruction for them. A C program that made one
+/// called the routine, so its runtime has it.
+fn libm_calls(
+    default: &llrm_target::calling::Convention,
+    format: &str,
+) -> Vec<(String, u32, String)> {
+    let number = llrm_target::calling::Calling::number_of(default.cc.as_deref()).unwrap_or(0);
+    ["floor", "ceil", "trunc", "round", "roundeven", "nearbyint"]
+        .iter()
+        .flat_map(|op| ["", "f", "l"].map(|suffix| format!("{op}{suffix}")))
+        .map(|name| {
+            let symbol = default.decorated(format, &name).unwrap_or_else(|| name.clone());
+            (name, number, symbol)
+        })
+        .collect()
 }
 
 fn compile(
