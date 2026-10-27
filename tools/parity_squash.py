@@ -1412,6 +1412,26 @@ def batch_blame(heads: dict[str, str], base: str, cwd: Path = ROOT) -> list[str]
     return lines
 
 
+PR_FIELDS = "headRefOid,headRefName,title,body,baseRefName,mergeable"
+
+
+def pr_info(number: str) -> dict:
+    return json.loads(subprocess.run(["gh", "pr", "view", number, "--json", PR_FIELDS], capture_output=True, text=True, errors="replace", check=True).stdout)
+
+
+def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> dict[str, tuple[str, str]]:
+    """{number: (old head, new head)} of the PRs whose head moved since `infos` was read, which `infos` now holds. A batch that halves and runs again for an hour kept merging the
+    heads it read at its start: at 02:34 the sub-batch merged #5088's 01:18 head with sinkcast.md stale, 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head
+    its owner had moved."""
+    moved = {}
+    for number in numbers:
+        now = view(number)
+        if now["headRefOid"] != infos[number]["headRefOid"]:
+            moved[number] = (infos[number]["headRefOid"], now["headRefOid"])
+            infos[number] = now
+    return moved
+
+
 def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
     """`parity_squash.py merge-batch N1..N8`: the PRs in order, one smoke on the base with all of them merged in, each squashed with its head lease."""
     known = known or {}
@@ -1606,6 +1626,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         return culprits
 
     def passes(group: list[str]) -> bool:
+        for number, (old, new) in refresh_heads(infos, group).items():
+            print(f"#{number}: head moved {old[:9]} -> {new[:9]} since the batch began; the new head is used")
         if FAST:
             return passes_fast(group)
         git("fetch", "-q", "origin", "feat/parity")
