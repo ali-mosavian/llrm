@@ -1990,8 +1990,8 @@ impl Selector<'_, '_, '_> {
             }
         }
         if self.zeroed {
-            let prezeroed = self.prezeroed();
-            self.consumed.extend(prezeroed);
+            let prezeroed = crate::backend::prezeroed::prezeroed(self.module, self.function);
+            self.consumed.extend(prezeroed.iter());
         }
         for &block in layout {
             let from = block_at[&block];
@@ -2989,60 +2989,6 @@ impl Selector<'_, '_, '_> {
             })
             .collect();
         (default, cases)
-    }
-
-    /// The entry block's zero writes to a local nothing has touched yet:
-    /// what the zeroed frame already holds. A local's address is its
-    /// alloca's, so nothing reaches it before the alloca's first user.
-    fn prezeroed(&self) -> BTreeSet<InstId> {
-        let function = self.function;
-        let mut out = BTreeSet::new();
-        let Some(&entry) = function.layout().first() else { return out };
-        let order: IndexMap<InstId, usize> =
-            function.iter_block(entry).enumerate().map(|(index, inst)| (inst, index)).collect();
-        for (&inst, &index) in &order {
-            let Some(local) = self.zero_write(inst) else { continue };
-            if function.users(local).iter().all(|one| {
-                one.user == inst || out.contains(&one.user) || order.get(&one.user).is_none_or(|&at| at > index)
-            }) {
-                out.insert(inst);
-            }
-        }
-        out
-    }
-
-    /// The local `inst` fills with zeros, where it is a store or memset of
-    /// zero straight to an alloca.
-    fn zero_write(
-        &self,
-        inst: InstId,
-    ) -> Option<ValueId> {
-        let function = self.function;
-        let instruction = function.instruction(inst);
-        let zero = |operand: Operand| match operand {
-            Operand::Constant(one) => matches!(
-                self.module.context.get(one).kind,
-                ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Null | ConstantKind::Zero
-            ),
-            _ => false,
-        };
-        let (value, destination) = match instruction.opcode {
-            Opcode::Store { volatile: false, .. } => (instruction.operands[0], instruction.operands[1]),
-            Opcode::Call(_) => {
-                let [destination, value, _, volatile, Operand::Constant(callee)] = instruction.operands[..] else {
-                    return None;
-                };
-                let ConstantKind::Global(global) = self.module.context.get(callee).kind else { return None };
-                if self.module.global(global).intrinsic() != Some(Intrinsic::MemSet) || !zero(volatile) {
-                    return None;
-                }
-                (value, destination)
-            }
-            _ => return None,
-        };
-        let Operand::Value(local) = destination else { return None };
-        let ValueDef::Instruction(alloca) = function.value(local).def else { return None };
-        (zero(value) && matches!(function.instruction(alloca).opcode, Opcode::Alloca { .. })).then_some(local)
     }
 
     /// The branch `inst`'s condition as a tree of `and`s (or of `or`s) of
