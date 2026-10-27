@@ -12,6 +12,8 @@ iced-x86 = { workspace = true }
 toml = { workspace = true }
 iced-x86 = { workspace = true }
 llrm-lir = { workspace = true }
+llrm-macho = { workspace = true }
+llrm-object = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
 llrm-support = { workspace = true }

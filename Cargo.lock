@@ -503,8 +503,10 @@ dependencies = [
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
+ "llrm-arm64",
  "llrm-debuginfo",
  "llrm-object",
+ "llrm-x86",
  "tempfile",
 ]
 
@@ -663,7 +665,9 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "llrm-lir",
+ "llrm-macho",
  "llrm-mir",
+ "llrm-object",
  "llrm-support",
  "llrm-target",
  "toml",

@@ -10,4 +10,6 @@ llrm-object = { workspace = true }
 llrm-debuginfo = { workspace = true }
 
 [dev-dependencies]
+llrm-arm64 = { workspace = true }
+llrm-x86 = { workspace = true }
 tempfile = { workspace = true }
