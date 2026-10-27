@@ -192,6 +192,8 @@ pub struct EmitContext<'a> {
     /// How addresses are formed: real mode constrains a base and an index to
     /// their register classes (SD4).
     pub address_mode: AddrMode,
+    /// Code size is wanted over speed (`-Os`, `-Oz`).
+    pub opt_size: bool,
     /// The multiple a call's argument area is rounded to, so a call finds the
     /// stack aligned (`aligned_calls`); 1 where calls need none.
     pub call_alignment: i64,
@@ -454,10 +456,25 @@ pub fn emit_in(
             }
         }
         for block in &mut blocks {
-            pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes, &reads)?;
+            pushed_arguments(
+                &mut block.insns,
+                ctx.stack_pointer,
+                emitter.state,
+                &mut emitter.classes,
+                &reads,
+                ctx.opt_size && ctx.address_mode == AddrMode::Real16,
+            )?;
         }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
+}
+
+/// The high and low words of a dword constant when pushing them one at a
+/// time is shorter than `pushd imm32`: a half fits a sign-extended byte.
+fn word_halves(imm: &Imm) -> Option<(i16, i16)> {
+    (imm.address.is_none() && imm.width == 4)
+        .then(|| (((imm.value >> 16) & 0xFFFF) as u16 as i16, (imm.value & 0xFFFF) as u16 as i16))
+        .filter(|&(high, low)| i8::try_from(high).is_ok() || i8::try_from(low).is_ok())
 }
 
 /// A push of a register whose only use it is, and which a `mov` of an
@@ -468,7 +485,8 @@ pub fn emit_in(
 fn fold_immediate_pushes(
     insns: &mut Vec<Arc<Insn>>,
     reads: &HashMap<u32, usize>,
-    state: &EmitState,
+    state: &mut EmitState,
+    split_wide: bool,
 ) {
     let mut at = 0;
     while at < insns.len() {
@@ -501,13 +519,35 @@ fn fold_immediate_pushes(
         };
         let old = insns[at].clone();
         let mut what = old.what.clone().expect("a push");
-        what.sources[0] = Loc::Imm(imm);
-        insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()));
+        // DEVIATE SD243 (real mode): tuned for size, a dword constant with a
+        // byte-sized half is two `pushw` (high, then low), 4 or 5 bytes
+        // against `pushd imm32`'s 6; the pin has no 16-bit push. The old
+        // selector's pair. Owner w12. Exit: a cost hook on the target.
+        let halves = word_halves(&imm).filter(|_| split_wide);
+        let split_at = place < at;
+        let Some((high, low)) = halves else {
+            what.sources[0] = Loc::Imm(imm);
+            insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()));
+            insns.remove(place);
+            if split_at {
+                at -= 1;
+            }
+            at += 1;
+            continue;
+        };
+        let word = |half: i16| Loc::Imm(Imm { value: i64::from(half as u16), width: 2, address: None });
+        let mut first = what.clone();
+        first.sources[0] = word(high);
+        let mut second = what;
+        second.sources[0] = word(low);
+        let made = state.next_address();
+        insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(first), old.defines.clone(), Vec::new()));
+        insns.insert(at + 1, Arc::new(Insn::new(made, Some((made, made)), Some(second), vec![], Vec::new())));
         insns.remove(place);
-        if place < at {
+        if split_at {
             at -= 1;
         }
-        at += 1;
+        at += 2;
     }
 }
 
@@ -528,6 +568,7 @@ fn pushed_arguments(
     state: &mut EmitState,
     classes: &mut Vec<(u32, &'static str)>,
     reads: &HashMap<u32, usize>,
+    split_wide: bool,
 ) -> Result<(), EmitError> {
     let through_sp =
         |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
@@ -636,9 +677,24 @@ fn pushed_arguments(
             let what = old.what.as_ref().expect("a store");
             let source = what.sources[0].clone();
             let uses = old.uses.clone();
-            let push =
-                Semantics { name: Some("push".into()), sources: vec![source], ..Semantics::new(Operation::Push) };
-            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], uses)));
+            let halves = match &source {
+                Loc::Imm(imm) if split_wide => word_halves(imm),
+                _ => None,
+            };
+            let pusher = |source| Semantics {
+                name: Some("push".into()),
+                sources: vec![source],
+                ..Semantics::new(Operation::Push)
+            };
+            let Some((high, low)) = halves else {
+                pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(pusher(source)), vec![], uses)));
+                continue;
+            };
+            // DEVIATE SD243: see `fold_immediate_pushes`
+            let word = |half: i16| Loc::Imm(Imm { value: i64::from(half as u16), width: 2, address: None });
+            let made = state.next_address();
+            pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(pusher(word(high))), vec![], uses)));
+            pushes.push(Arc::new(Insn::new(made, Some((made, made)), Some(pusher(word(low))), vec![], vec![])));
         }
         let gone: std::collections::BTreeSet<usize> = stores.iter().map(|&(place, _, _)| place).chain([at]).collect();
         let mut rebuilt = Vec::with_capacity(insns.len());
@@ -650,7 +706,7 @@ fn pushed_arguments(
             }
         }
         *insns = rebuilt;
-        fold_immediate_pushes(insns, reads, state);
+        fold_immediate_pushes(insns, reads, state, split_wide);
         // Back to the start: indices moved.
         at = 0;
         while at < insns.len() && !insns[at].what.as_ref().is_some_and(|w| w.op == Operation::Call) {
