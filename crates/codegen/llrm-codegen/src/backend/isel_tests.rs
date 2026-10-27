@@ -1270,6 +1270,31 @@ define i16 @f() addrspace(1) {{
     );
 }
 
+/// DivRemPairs froze an i64 operand and isel refused it as "freeze": the QB
+/// runtime's `i8_output` did not link. A frozen i64 is its two dwords, so the
+/// code is that of the same body without the freeze.
+#[test]
+fn test_a_frozen_i64_is_its_dwords() {
+    let body = |freeze: bool| {
+        let (wide, next) = if freeze { ("%5", 6) } else { ("%4", 5) };
+        let line = if freeze { "  %5 = freeze i64 %4\n" } else { "" };
+        format!(
+            "define i32 @f(i32 %0, i32 %1) addrspace(1) {{
+b1:
+  %2 = sext i32 %0 to i64
+  %3 = sext i32 %1 to i64
+  %4 = mul i64 %2, %3
+{line}  %{next} = lshr i64 {wide}, 16
+  %{last} = trunc i64 %{next} to i32
+  ret i32 %{last}
+}}
+",
+            last = next + 1
+        )
+    };
+    assert_eq!(listing(&body(true), "f"), listing(&body(false), "f"));
+}
+
 /// fixed.nib's `left * right / right` in 16.16: a 64-bit product and
 /// quotient of 32-bit factors, which isel refused as "a i64 value". Each
 /// i64 is a pair of dwords; factors and a divisor sign-extended from i32

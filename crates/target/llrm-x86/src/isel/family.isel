@@ -448,6 +448,12 @@ pattern freeze
   emit mov r <- s
 end
 
+pattern wide_freeze
+  match freeze.i64
+  when splits_i64
+  call wide_freeze
+end
+
 pattern unselected_cast
   match cast
   call unselected_cast

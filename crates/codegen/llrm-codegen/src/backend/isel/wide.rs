@@ -453,6 +453,21 @@ impl Selector<'_, '_, '_> {
         Ok(())
     }
 
+    /// An i64 `freeze`: the operand's halves. A poison operand is the zeros
+    /// `wide` makes of it.
+    pub(super) fn wide_freeze(
+        &mut self,
+        inst: InstId,
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(inst);
+        let (operand, result) = (instruction.operands[0], instruction.result.expect("a result"));
+        let pair = self.wide(operand, at, out)?;
+        self.wides.insert(result, pair);
+        Ok(())
+    }
+
     /// An i64 binary operation, on the halves.
     pub(super) fn wide_binary(
         &mut self,

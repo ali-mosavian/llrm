@@ -1277,6 +1277,14 @@ impl Selector<'_, '_, '_> {
         self.wide_cast(self.cast(m), m.inst, m.at, out)
     }
 
+    pub fn hook_wide_freeze(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        self.wide_freeze(m.inst, m.at, out)
+    }
+
     pub fn hook_wide_binary(
         &mut self,
         m: &Match,
