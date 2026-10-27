@@ -56,6 +56,7 @@ use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_icmp_binop::fold_icmp_bin_op;
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
 use crate::combine_shared::{get_complexity, has_one_use, query};
 
@@ -208,7 +209,9 @@ pub fn visit_icmp(
             return new_icmp(c, inst, IntPredicate::Sgt, op0, ones);
         }
     }
-    // OWED: foldICmpBinOp.
+    if let Some(r) = fold_icmp_bin_op(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
@@ -232,9 +235,63 @@ pub fn visit_icmp(
             }
         }
     }
+    // foldICmpCommutative, its GEP step: both orders.
+    if let Some(r) = fold_gep_icmp(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_gep_icmp(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
     // OWED: foldICmpInstWithConstantNotInt, foldICmpCommutative,
     // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `foldGEPICmp`
+/// ([:`foldGEPICmp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)),
+/// its first arm: `icmp (gep Ptr, OFFSET), Ptr` is `icmp OFFSET, 0`, for an
+/// equality or an unsigned predicate on a GEP with a no-wrap flag.
+///
+/// DEVIATE 1: one GEP between the compare and `Ptr` (`CommonPointerBase`
+/// walks a chain). Exit: translate `CommonPointerBase`.
+/// DEVIATE 2: the null arm and the GEP-against-GEP arms are not made.
+fn fold_gep_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    gep_operand: Operand,
+    rhs: Operand,
+) -> Option<Visit> {
+    use crate::combine_gep::GepFlags;
+    // Signed compares of GEPs are not index compares: the final add of the
+    // base can overflow.
+    if matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    ) {
+        return None;
+    }
+    let def = c.definition_of(gep_operand)?;
+    let gep = c.gep_of(def)?;
+    if gep.ptr != rhs {
+        return None;
+    }
+    let flags = GepFlags::of(gep.flags);
+    let equality = matches!(pred, IntPredicate::Eq | IntPredicate::Ne);
+    if !equality && !(flags.in_bounds || flags.nusw || flags.nuw) {
+        return None;
+    }
+    let offset = c.emit_gep_offset(def, false);
+    let zero = c.int(c.type_of(offset), 0);
+    // Without nuw the offset can wrap the address space: compare it as signed.
+    let pred = match (flags.nuw, pred) {
+        (false, IntPredicate::Ugt) => IntPredicate::Sgt,
+        (false, IntPredicate::Uge) => IntPredicate::Sge,
+        (false, IntPredicate::Ult) => IntPredicate::Slt,
+        (false, IntPredicate::Ule) => IntPredicate::Sle,
+        (_, same) => same,
+    };
+    Some(new_icmp(c, inst, pred, offset, zero))
 }
 
 /// `foldSignBitTest`

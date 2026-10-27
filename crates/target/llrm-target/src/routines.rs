@@ -9,6 +9,15 @@ use llrm_lir::registers::RegId;
 pub const DIVIDE_PREFIX: &str = "div64_";
 pub const HUGE_PREFIX: &str = "huge_";
 
+/// What a caller reads of a divide's results; a routine may leave the other
+/// one unfixed (SD232).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Used {
+    Both,
+    Quotient,
+    Remainder,
+}
+
 /// A 64-bit divide: its code and where its operands are.
 #[derive(Clone, Debug)]
 pub struct Divide {

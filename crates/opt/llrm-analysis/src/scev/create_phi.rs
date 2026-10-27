@@ -6,6 +6,7 @@
 //! `createAddRecFromPHIWithCasts` and the predicated rewrites are not
 //! translated.
 
+use llrm_mir::context::{ConstantExpr, ConstantKind};
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{Flags as IrFlags, IntPredicate, Opcode};
@@ -642,6 +643,24 @@ impl ScalarEvolution {
             index_exprs.push(Use::of(self.get_scev(cx, index)));
         }
         self.get_gep_expr_of_instruction(cx, gep, &index_exprs)
+    }
+
+    /// `createSCEV` of a constant `getelementptr` expression (an `Operator`
+    /// at the pin): `getGEPExpr` of its operands. A non-instruction takes no
+    /// wrap flags from the IR.
+    pub(super) fn create_node_for_constant_gep(
+        &mut self,
+        cx: &Cx,
+        v: Operand,
+    ) -> Option<Scev> {
+        let Operand::Constant(id) = v else { return None };
+        let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) = &cx.context.get(id).kind else {
+            return None;
+        };
+        let base = self.get_scev(cx, Operand::Constant(operands[0]));
+        let indexes: Vec<Use> =
+            operands[1..].iter().map(|&one| Use::of(self.get_scev(cx, Operand::Constant(one)))).collect();
+        Some(self.get_gep_expr(cx, Use::of(base), &indexes, *source, GepFlags::default()))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L3790

@@ -885,7 +885,7 @@ impl Builder<'_> {
     /// argument registers the named parameters did not take are stored in the
     /// register save area (one 8-byte slot each, in order) that `va_start`
     /// names. The vector registers' half of the area (48..176) is left
-    /// unwritten until floating point is selected at m64 (DEVIATE SD313: a
+    /// unwritten until floating point is selected at m64 (DEVIATE SD238: a
     /// `double` passed to such a function is not read back).
     fn save_variadic_registers(&mut self) -> Result<(), Refused> {
         let calling = self.arch.calling();
