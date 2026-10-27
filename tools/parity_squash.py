@@ -1171,6 +1171,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
 
 
 HITS = [0]  # verdicts read from the cache by this process
+UNCHECKED: list[str] = []  # the PRs `alone` kept because the cap came before their verdict: in the batch with no check at all
 
 
 def alone_refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
@@ -1232,6 +1233,7 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
     for number in [one for one in numbers if verdicts.get(one) and current]:
         if (now := current(number)) and now != heads[number]:
             del verdicts[number]
+    UNCHECKED[:] = [number for number in numbers if number not in verdicts]
     kept = [number for number in numbers if not verdicts.get(number)]  # unchecked at the cap: kept
     return kept, {number: verdicts[number] for number in numbers if verdicts.get(number)}
 
@@ -2044,7 +2046,7 @@ def dispatch() -> int:
             kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
         for number, why in dropped.items():
             print(alone_refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
-        print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
+        print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0] - len(UNCHECKED)} checked, {len(UNCHECKED)} UNCHECKED at the cap{' (' + ' '.join(UNCHECKED) + ')' if UNCHECKED else ''}, {len(dropped)} dropped", file=sys.stderr)
         print("\n".join(kept))
         return 0
     if len(sys.argv) >= 4 and sys.argv[1] == "assemble":

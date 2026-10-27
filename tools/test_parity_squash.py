@@ -1276,6 +1276,17 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
+def test_a_pr_the_cap_cuts_off_is_reported_unchecked_not_checked():
+    """The 00:32 batch's line said "9 checked, 0 dropped" while a single scanners check took 620 s against ALONE_CAP=600: #5050 and #5051, red alone, went into the batch."""
+    import threading
+
+    release = threading.Event()
+    kept, dropped = ps.alone(["1", "2"], {"1": "h1", "2": "h2"}, refusals=lambda head, base: [] if head == "h1" else (release.wait(5), [])[1], jobs=2, cap=0.2)
+    release.set()
+    assert kept == ["1", "2"] and dropped == {}, "kept unfiltered, as designed"
+    assert ps.UNCHECKED == ["2"], "but named as unchecked"
+
+
 def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
     """The 02:34 sub-batch merged #5088's 01:18 head (sinkcast.md stale) 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head w14 had moved."""
     infos = {"5088": {"headRefOid": "old" * 13 + "o", "title": "t"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
