@@ -750,6 +750,23 @@ mod tests {
         assert!(crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi()).tti().is_some());
     }
 
+    /// The target every frontend lowers to states its C library: real mode's
+    /// `_sin@3`. `library` was not forwarded, so no declaration was a library
+    /// function's and viewfx called `sin` 13 times where the pin calls 4.
+    #[test]
+    fn test_the_lowered_target_forwards_its_library() {
+        use llrm_mir::target::Machine;
+        let abi = crate::abi::qb::HirAbi {
+            runtime: crate::hir::model::RuntimeProfile::Freestanding,
+            objects: Default::default(),
+            preserved: Default::default(),
+            stack_check: None,
+            hosted: false,
+        };
+        let library = crate::abi::qb::LoweredTarget::of(profile("486").unwrap(), abi).library().expect("states one");
+        assert_eq!(library.standard("_sin@3"), "sin");
+    }
+
     /// The target every frontend lowers to states X86's `TargetLowering`
     /// facts on both word sizes. `lowering` was not forwarded (and `mask_test`
     /// priced the sink of a masked compare): the sink never ran on QB's
