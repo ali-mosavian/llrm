@@ -2500,6 +2500,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
+        b.function.reserve_instructions(function.blocks.iter().map(|one| one.instructions.len() + 1).sum());
         Ok(Self {
             b,
             tables,

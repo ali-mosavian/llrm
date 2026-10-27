@@ -14,8 +14,10 @@
 //! found without a search. `node` asserts the slot exists; `check_uses` is the
 //! test.
 //!
-//! A block is named by terminators and phis, so it has a list as a value does:
-//! LLVM's `BasicBlock` is a `Value` and its predecessors are its use list.
+//! A block is named by terminators, so it has a list as a value does: LLVM's
+//! `BasicBlock` is a `Value` and its predecessors are its use list. A phi's
+//! incoming blocks are not uses in LLVM (`PHINode::block_begin` is a separate
+//! array), so the phis naming a block are a second list, `Held::PhiBlock`.
 //!
 //! DEVIATE 2: `Users::snapshot` copies the list, where LLVM walks it with
 //! `make_early_inc_range` while the body edits. A Rust loop cannot hold the
@@ -45,6 +47,7 @@ struct Node {
 pub struct UseLists {
     heads: Vec<u32>,
     block_heads: Vec<u32>,
+    phi_heads: Vec<u32>,
     nodes: Vec<Node>,
     base: Vec<u32>,
     cap: Vec<u32>,
@@ -55,13 +58,21 @@ pub struct UseLists {
 pub enum Held {
     Value(u32),
     Block(u32),
+    /// The phis naming a block, kept apart as LLVM keeps a phi's incoming
+    /// blocks apart from the block's uses.
+    PhiBlock(u32),
 }
 
 impl Held {
-    /// What `operand` names, none for a constant.
-    pub fn of(operand: crate::module::Operand) -> Option<Held> {
+    /// What `operand` of a phi (`phi`) or of another instruction names, none
+    /// for a constant.
+    pub fn of(
+        operand: crate::module::Operand,
+        phi: bool,
+    ) -> Option<Held> {
         match operand {
             crate::module::Operand::Value(value) => Some(Held::Value(value.0)),
+            crate::module::Operand::Block(block) if phi => Some(Held::PhiBlock(block.0)),
             crate::module::Operand::Block(block) => Some(Held::Block(block.0)),
             crate::module::Operand::Constant(_) => None,
         }
@@ -162,6 +173,8 @@ impl UseLists {
         self.heads.resize(values, NIL);
         self.block_heads.clear();
         self.block_heads.resize(blocks, NIL);
+        self.phi_heads.clear();
+        self.phi_heads.resize(blocks, NIL);
         self.nodes.clear();
         self.base.clear();
         self.cap.clear();
@@ -173,6 +186,7 @@ impl UseLists {
 
     pub fn push_block(&mut self) {
         self.block_heads.push(NIL);
+        self.phi_heads.push(NIL);
     }
 
     fn head_of(
@@ -182,6 +196,7 @@ impl UseLists {
         match of {
             Held::Value(value) => self.heads[value as usize],
             Held::Block(block) => self.block_heads[block as usize],
+            Held::PhiBlock(block) => self.phi_heads[block as usize],
         }
     }
 
@@ -192,6 +207,7 @@ impl UseLists {
         match of {
             Held::Value(value) => &mut self.heads[value as usize],
             Held::Block(block) => &mut self.block_heads[block as usize],
+            Held::PhiBlock(block) => &mut self.phi_heads[block as usize],
         }
     }
 
@@ -277,5 +293,6 @@ impl UseLists {
     pub fn clear_all(&mut self) {
         self.heads.fill(NIL);
         self.block_heads.fill(NIL);
+        self.phi_heads.fill(NIL);
     }
 }
