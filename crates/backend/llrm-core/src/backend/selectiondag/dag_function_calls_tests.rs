@@ -732,9 +732,9 @@ declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
 #[test]
 fn a_fixed_point_divide_is_selected() {
     let made = names(SDIV_FIX).unwrap_or_else(|why| panic!("{why}"));
-    // the numerator shifted up, the 64-bit divide and remainder as helper calls
+    // the numerator shifted up, the 64-bit divide and remainder from one call
     assert!(made.iter().any(|name| name == "shld"), "{made:?}");
-    assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
+    assert_eq!(made.iter().filter(|name| *name == "call").count(), 1, "{made:?}");
 }
 
 const SDIV_FIX_POWER_OF_TWO: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -755,6 +755,26 @@ fn a_fixed_point_divide_by_a_power_of_two_is_a_shift() {
     let made = names(SDIV_FIX_POWER_OF_TWO).unwrap_or_else(|why| panic!("{why}"));
     assert!(made.iter().all(|name| name != "call"), "{made:?}");
     assert!(made.iter().any(|name| name == "sar" || name == "shrd"), "{made:?}");
+}
+
+const QUOTIENT_AND_REMAINDER: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define void @f(i64 %a, i64 %b, ptr %q, ptr %r) {
+entry:
+  %d = sdiv i64 %a, %b
+  %m = srem i64 %a, %b
+  store i64 %d, ptr %q
+  store i64 %m, ptr %r
+  ret void
+}
+";
+
+/// `x / y` and `x % y` of an `i64` were two calls of the same routine, which
+/// answers both: an inline ~100-byte copy each, +2110 B over the old selector
+/// across the m16 -Os programs. They share one call.
+#[test]
+fn an_i64_quotient_and_remainder_of_the_same_operands_share_one_call() {
+    let made = names(QUOTIENT_AND_REMAINDER).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(made.iter().filter(|name| *name == "call").count(), 1, "{made:?}");
 }
 
 const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2\"

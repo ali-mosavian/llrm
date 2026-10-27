@@ -79,6 +79,9 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// The four results of a division routine's call, by operands and
+    /// signedness: the routine answers quotient and remainder together.
+    divisions: HashMap<(SDValue, SDValue, bool), [SDValue; 4]>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -99,6 +102,7 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::new(),
             promoted: HashMap::new(),
             expanded: HashMap::new(),
+            divisions: HashMap::new(),
             target: None,
             hooks: None,
         }
@@ -1260,6 +1264,12 @@ impl<'a> TypeLegalizer<'a> {
         let signed = matches!(op, ISD::SDiv | ISD::SRem);
         let wants_quotient = matches!(op, ISD::SDiv | ISD::UDiv);
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        // DEVIATE SD323: `x / y` and `x % y` share one call. The pin makes
+        // `__divdi3` and `__moddi3` two; the routine answers both, so the
+        // second reads the first's results (the old selector's one divide).
+        if let Some(results) = self.divisions.get(&(lhs, rhs, signed)) {
+            return Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) });
+        }
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
             (self.expanded_integer(lhs), self.expanded_integer(rhs));
         let wide = self.dag.constant(divisor_hi) != Some(0);
@@ -1284,6 +1294,7 @@ impl<'a> TypeLegalizer<'a> {
         let root = self.dag.entry_node();
         let env = CallEnv { arch, pointer };
         let (_chain, results) = lib_call(self.dag, &env, root, callee, &args, 0, 0, &returns);
+        self.divisions.insert((lhs, rhs, signed), [results[0], results[1], results[2], results[3]]);
         Ok(if wants_quotient { (results[0], results[1]) } else { (results[2], results[3]) })
     }
 
