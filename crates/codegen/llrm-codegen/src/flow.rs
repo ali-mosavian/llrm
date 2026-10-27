@@ -209,15 +209,16 @@ pub fn machine_with<'a>(
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
+        // Before the scheduler, as the pin has it (it runs before phi elimination;
+        // DEVIATE F1 needs the values phi elimination leaves defined twice): a `setcc` zero-extended is a
+        // zero made before the compare (the pin: X86FixupSetCC).
+        Box::new(crate::backend::fixupsetcc::FixupSetCc),
         // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
         // pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
             classes: Rc::clone(classes),
             segments: segments.clone(),
         }),
-        // After the shrinking of live ranges: a `setcc` zero-extended is a
-        // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
