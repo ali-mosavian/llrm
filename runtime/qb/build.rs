@@ -34,6 +34,7 @@ fn main() {
         } else {
             "None".to_owned()
         };
+        let flags_result = row.get("flags_result").is_some_and(|one| one.as_bool().expect("flags_result is a bool"));
         let calls_back = row.get("calls_back").is_some_and(|one| one.as_bool().expect("calls_back is a bool"));
         let optional_str = |key: &str| {
             option(row, key, if row.contains_key(key) { format!("{:?}", string(row, key)) } else { String::new() })
@@ -42,7 +43,7 @@ fn main() {
             |key: &str| option(row, key, if row.contains_key(key) { list(row, key) } else { String::new() });
         writeln!(
             out,
-            "    Row {{ name: {name:?}, cleanup: {}, control: {:?}, enters_user_code: {}, raises_error: {}, error_handling: {}, writes: {:?}, reads: {:?}, clobbers: {}, established: {}, evidence: {:?}, documented: {}, inputs: {}, direct_writes: {}, direct_reads: {}, captures: {captures}, calls_back: {calls_back} }},",
+            "    Row {{ name: {name:?}, cleanup: {}, control: {:?}, enters_user_code: {}, raises_error: {}, error_handling: {}, writes: {:?}, reads: {:?}, clobbers: {}, established: {}, evidence: {:?}, documented: {}, inputs: {}, direct_writes: {}, direct_reads: {}, captures: {captures}, calls_back: {calls_back}, flags_result: {flags_result} }},",
             row["cleanup"].as_integer().expect("cleanup is an int"),
             string(row, "control"),
             flag("enters_user_code"),
@@ -78,6 +79,13 @@ fn main() {
                 .collect();
             writeln!(out, "    ({group:?}, &[{}]),", all.join(", ")).expect("a string takes text");
         }
+    }
+    out.push_str("];\n");
+    out.push_str("\n/// The cells a program names by EXTDEF and the routines that write each: (cell, family, routines).\npub static WRITERS_ROWS: &[(&str, &str, &[&str])] = &[\n");
+    for one in rows.get("writers").and_then(|one| one.as_array()).expect("[[writers]]") {
+        let one = one.as_table().expect("a writers entry is a table");
+        writeln!(out, "    ({:?}, {:?}, {}),", string(one, "cell"), string(one, "family"), list(one, "routines"))
+            .expect("a string takes text");
     }
     out.push_str("];\n");
     writeln!(out, "\n/// Each row's contract once built: a program asks of the same routine at every call.\npub static BUILT: [std::sync::OnceLock<crate::Contract>; {}] = [const {{ std::sync::OnceLock::new() }}; {}];", names.len(), names.len()).expect("a string takes text");
