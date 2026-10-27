@@ -1098,9 +1098,12 @@ pub enum Linkage {
     Common,
     ExternWeak,
     AvailableExternally,
+    /// A global array that linking concatenates with the others of its name
+    /// (`llvm.global_ctors`, `llvm.used`).
+    Appending,
 }
 
-pub const LINKAGE: [(Linkage, &str); 9] = [
+pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Internal, "internal"),
     (Linkage::Private, "private"),
     (Linkage::Weak, "weak"),
@@ -1110,6 +1113,7 @@ pub const LINKAGE: [(Linkage, &str); 9] = [
     (Linkage::Common, "common"),
     (Linkage::ExternWeak, "extern_weak"),
     (Linkage::AvailableExternally, "available_externally"),
+    (Linkage::Appending, "appending"),
 ];
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
