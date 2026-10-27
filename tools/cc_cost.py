@@ -61,15 +61,19 @@ def instructions(argv: list[str], env: dict[str, str]) -> int:
     sys.exit("perf printed no instruction count")
 
 
+def pin_ir_command(src: Path, level: str, march: str, includes: list[str]) -> list[str]:
+    """The pin's front end as llrm-cc runs it. `-march` is required: without it clang targets pentium4 +sse2."""
+    return [str(PIN), "-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector",
+            "-fno-asynchronous-unwind-tables", f"-march={march}", level, "-fno-builtin", *includes, "-S", "-emit-llvm",
+            "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone"]
+
+
 def pin_same_ir(src: Path, level: str, march: str, includes: list[str], tmp: Path, env: dict[str, str]) -> tuple[int, Path]:
     """The pin on llrm-cc's IR: front end, `opt`, `llc`. Returns (instructions of the three, object)."""
     stem = src.stem
     ll, opt_ll, obj = tmp / f"{stem}.pin.ll", tmp / f"{stem}.pin.opt.ll", tmp / f"{stem}.pin.o"
     bins = PIN.parent
-    total = instructions(
-        [str(PIN), "-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector",
-         "-fno-asynchronous-unwind-tables", f"-march={march}", level, "-fno-builtin", *includes, "-S", "-emit-llvm", "-Xclang",
-         "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o", str(ll), str(src)], env)
+    total = instructions([*pin_ir_command(src, level, march, includes), "-o", str(ll), str(src)], env)
     text = ll.read_text()
     ll.write_text(re.sub(r'target datalayout = "[^"]*"', f'target datalayout = "{DATALAYOUT}"', text, count=1))
     total += instructions(

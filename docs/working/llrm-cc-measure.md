@@ -41,4 +41,5 @@ tools/cc_cost.py --dist <dir with llrm-cc> [--programs jpeg_fixed,matmul] [--con
 - Sizes: ours is 11-13% larger on jpeg_fixed (10421 vs 9371 -O2, 3847 vs 3414 -Os), equal on stft_fixed; nbody -O2 is smaller (701 vs 749), matmul -O2 larger (2326 vs 2141), crc -O2 larger (379 vs 213, `main` not folded).
 - Earlier versions of this table are withdrawn: the first compared against `clang -cc1 -O2` bytes (other IR); the second built the pin's IR without `-march`, so it targeted pentium4 +sse2 (w12 found it). Both gave different, wrong size columns.
 - An earlier version of this table compared against `clang -cc1 -O2` bytes (crc 243, jpeg "+6.5%"); those numbers came from different IR and are withdrawn.
+- m16 columns are ours only (no pin run), so they cannot carry an ISA mismatch; a future m16 pin column must use the m16 clang build with `-march=i386` explicitly.
 - Raw output: `~/scratch/w10/cc_cost_baseline4.txt` (m32), `cc_cost_baseline3.txt` (m16 time rows).
