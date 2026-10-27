@@ -1608,8 +1608,11 @@ impl Emitter<'_, '_> {
         glue: Option<SDValue>,
     ) -> bool {
         let Some(mut glue) = glue else { return false };
-        while self.dag.opcode(glue) == ISD::CopyFromReg {
-            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+        while self.dag.opcode(glue) == ISD::CopyFromReg
+            || self.is_machine_named(glue, "MOVZX32rr8_NOREX")
+            || self.is_machine_named(glue, "MOVSX32rr8_NOREX")
+        {
+            let Some(&next) = self.dag.node(glue).ops.last() else { return false };
             glue = next;
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
@@ -1633,8 +1636,13 @@ impl Emitter<'_, '_> {
     ) -> bool {
         let Some(mut glue) = glue else { return false };
         // A second result is read through the glue of the first read.
-        while self.dag.opcode(glue) == ISD::CopyFromReg {
-            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+        // The byte divide's remainder copy (`MOV[SZ]X32rr8_NOREX` of AH) sits
+        // between the divide and the read of AL.
+        while self.dag.opcode(glue) == ISD::CopyFromReg
+            || self.is_machine_named(glue, "MOVZX32rr8_NOREX")
+            || self.is_machine_named(glue, "MOVSX32rr8_NOREX")
+        {
+            let Some(&next) = self.dag.node(glue).ops.last() else { return false };
             glue = next;
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
@@ -2311,10 +2319,53 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
+            // The remainder of the byte divide: AH of the word AX, shifted down
+            // and extended (the pin's `movzx` of AH).
+            "MOVZX32rr8_NOREX" | "MOVSX32rr8_NOREX"
+                if matches!(
+                    self.dag.node(node.ops[0]).data,
+                    NodeData::PhysReg(llrm_lir::registers::RegId::AH)
+                ) =>
+            {
+                let word = self.accumulated(llrm_lir::registers::RegId::AX)?;
+                let high = self.fresh(2);
+                let eight = Imm { value: 8, width: 1, address: None };
+                self.push(Operation::Binary, "shr", vec![Loc::Held(high)], vec![Loc::Held(word), Loc::Imm(eight)]);
+                let wide = self.fresh(4);
+                let mnemonic = if name == "MOVSX32rr8_NOREX" { "movsx" } else { "movzx" };
+                self.push(
+                    Operation::Extend,
+                    mnemonic,
+                    vec![Loc::Held(wide)],
+                    vec![Loc::Held(Held { width: 1, ..high })],
+                );
+                self.values.insert(SDValue { node: n, res: 0 }, wide.value);
+                return Ok(Some(()));
+            }
             _ if is_div_or_mul(name) => {
                 let (signed, divide, bytes, memory) = div_or_mul(name);
                 if bytes == 1 && divide {
-                    return Err(EmitError::Unsupported(format!("{name}: the byte divide works in AH:AL")));
+                    // AX divided by the byte: AL the quotient, AH the
+                    // remainder, both in the word AX the form defines.
+                    let dividend = self.accumulated(llrm_lir::registers::RegId::AX)?;
+                    let divisor = if memory {
+                        let group =
+                            node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
+                        Loc::Mem(self.cell(group, 1)?)
+                    } else {
+                        self.operand(node.ops[0])?
+                    };
+                    let word = self.fresh(2);
+                    self.push(
+                        Operation::Divide,
+                        if signed { "idiv" } else { "div" },
+                        vec![Loc::Held(word)],
+                        vec![Loc::Held(dividend), divisor],
+                    );
+                    self.values.insert(SDValue { node: n, res: 0 }, word.value);
+                    self.accumulator.insert(llrm_lir::registers::RegId::AX, word);
+                    self.accumulator.insert(llrm_lir::registers::RegId::AL, Held { width: 1, ..word });
+                    return Ok(Some(()));
                 }
                 // The byte multiply is AL times the operand into AX: the form
                 // pins AX and DX like the wider ones, the product is AX.

@@ -727,6 +727,7 @@ pub mod x86 {
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
     pub const AH: u16 = 1;
+    pub const AL: u16 = 2;
     pub const AND16mi: u16 = 804;
     pub const AND16mr: u16 = 814;
     pub const AND32mi: u16 = 845;
@@ -749,6 +750,8 @@ pub mod x86 {
     pub const DIV32r: u16 = 1562;
     pub const DIV64m: u16 = 1565;
     pub const DIV64r: u16 = 1568;
+    pub const DIV8m: u16 = 1571;
+    pub const DIV8r: u16 = 1574;
     pub const DS: u16 = 20;
     pub const DX: u16 = 21;
     pub const EAX: u16 = 22;
@@ -764,6 +767,8 @@ pub mod x86 {
     pub const IDIV32r: u16 = 1766;
     pub const IDIV64m: u16 = 1769;
     pub const IDIV64r: u16 = 1772;
+    pub const IDIV8m: u16 = 1775;
+    pub const IDIV8r: u16 = 1778;
     pub const IMUL32m: u16 = 1821;
     pub const IMUL32r: u16 = 1824;
     pub const IMUL64m: u16 = 1849;
@@ -772,6 +777,12 @@ pub mod x86 {
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
     pub const MOV32r0: u16 = 386;
+    pub const MOVSX16rm8: u16 = 2735;
+    pub const MOVSX16rr8: u16 = 2738;
+    pub const MOVSX32rr8_NOREX: u16 = 2746;
+    pub const MOVZX16rm8: u16 = 2763;
+    pub const MOVZX16rr8: u16 = 2765;
+    pub const MOVZX32rr8_NOREX: u16 = 2771;
     pub const MUL32m: u16 = 2784;
     pub const MUL32r: u16 = 2787;
     pub const MUL64m: u16 = 2790;
@@ -858,6 +869,8 @@ pub mod x86 {
         (1562, "DIV32r"),
         (1565, "DIV64m"),
         (1568, "DIV64r"),
+        (1571, "DIV8m"),
+        (1574, "DIV8r"),
         (1706, "FNSTSW16r"),
         (1757, "IDIV16m"),
         (1760, "IDIV16r"),
@@ -865,6 +878,8 @@ pub mod x86 {
         (1766, "IDIV32r"),
         (1769, "IDIV64m"),
         (1772, "IDIV64r"),
+        (1775, "IDIV8m"),
+        (1778, "IDIV8r"),
         (1821, "IMUL32m"),
         (1824, "IMUL32r"),
         (1849, "IMUL64m"),
@@ -872,6 +887,12 @@ pub mod x86 {
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2735, "MOVSX16rm8"),
+        (2738, "MOVSX16rr8"),
+        (2746, "MOVSX32rr8_NOREX"),
+        (2763, "MOVZX16rm8"),
+        (2765, "MOVZX16rr8"),
+        (2771, "MOVZX32rr8_NOREX"),
         (2784, "MUL32m"),
         (2787, "MUL32r"),
         (2790, "MUL64m"),

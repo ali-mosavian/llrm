@@ -699,7 +699,7 @@ fn selected_in(
         }
     }
     let (builder_target, address_mode) = match bitness {
-        16 => (BuilderTarget::m16(), AddrMode::Real16),
+        16 => (BuilderTarget::m16().with_memset_stores_size(4).with_memcpy_moves_size(2), AddrMode::Real16),
         64 => (BuilderTarget::m64(), AddrMode::Flat64),
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
