@@ -714,6 +714,7 @@ fn break_loop_backedge(
                 run.function.set_metadata(jump, &kind, Some(node));
             }
         }
+        run.function.move_records_before(term, jump);
         run.function.erase(term).expect("the branch had no users");
     } else {
         // General case. By splitting the backedge, and then explicitly making
@@ -759,10 +760,14 @@ fn delete_dead_loop(
         let jump =
             run.function.create_instruction(Opcode::Br, void, vec![Operand::Block(exit)], Flags::default(), None);
         run.function.insert(jump, Position::Before(old)).expect("a placed block");
+        // `Preheader->flushTerminatorDbgRecords()`: what was said before the
+        // old branch is said before the new one.
+        run.function.move_records_before(old, jump);
     } else {
         let unreachable =
             run.function.create_instruction(Opcode::Unreachable, void, Vec::new(), Flags::default(), None);
         run.function.insert(unreachable, Position::Before(old)).expect("a placed block");
+        run.function.move_records_before(old, unreachable);
     }
     run.function.erase(old).expect("the branch had no users");
 

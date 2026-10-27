@@ -281,3 +281,15 @@ b3:
     assert!(alone > 0);
     assert_eq!(both, alone, "loopdeletion made {} expressions again", both - alone);
 }
+
+/// observed.c's `mix` at -O2 -g lost the debug record of its parameter `n`,
+/// which stands before the preheader's branch, when its loop was deleted: the
+/// branch was replaced and its records dropped, and gdb read `n` as optimised
+/// out where it is in a register throughout.
+#[test]
+fn the_debug_records_before_the_preheaders_branch_survive_a_deletion() {
+    let text = COUNTER.replace("b0:\n  br label %head", "b0:\n  #dbg_value(i16 %n, !1)\n  br label %head")
+        + "\n!1 = !{!\"f\", !\"n\", !2, i64 0, i64 1, i64 0}\n!2 = !{!\"int\"}\n";
+    let after = deleted(&text, INPUTS);
+    assert!(!after.contains("phi") && after.contains("#dbg_value(i16 %n"), "{after}");
+}

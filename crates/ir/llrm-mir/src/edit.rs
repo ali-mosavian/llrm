@@ -304,6 +304,17 @@ impl Function {
         self.debug_records = kept;
     }
 
+    /// What stood before `from` now stands before `to`, ahead of what stood
+    /// there (`BasicBlock::flushTerminatorDbgRecords`): a pass that replaces a
+    /// terminator keeps what was said before the old one.
+    pub fn move_records_before(
+        &mut self,
+        from: InstId,
+        to: InstId,
+    ) {
+        self.reanchor_records(from, to);
+    }
+
     /// The first instruction after the phis of the block that the unconditional
     /// branch `inst` alone enters.
     fn sole_successor_start(
