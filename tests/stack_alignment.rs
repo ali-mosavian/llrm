@@ -4,8 +4,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn listing(source: &str) -> String {
     listing_with(source, None)
 }

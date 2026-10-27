@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// A value squared that stays on the stack below the top was exchanged up and
 /// copied (`fxch st(1); fld st(0)`), two instructions where `fld st(1)` and
 /// `fmul st(0), st(2)` do it without moving what lies between (nbody's inner

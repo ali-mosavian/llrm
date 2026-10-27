@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 #[test]
 fn test_the_trace_names_the_idiom_pass_loopidioms_not_fill() {
     let scratch = tempfile::tempdir().unwrap();

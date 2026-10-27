@@ -55,6 +55,8 @@ pub enum Token {
     },
     /// `0x` and 16 hex digits: a double's bits.
     HexFloat(u64),
+    /// `0xK` and 20 hex digits: an `x86_fp80`'s 80 bits.
+    Float80(u128),
     Str(Vec<u8>),
     /// `c"..."`.
     Bytes(Vec<u8>),
@@ -314,6 +316,14 @@ fn number_at(
     at: usize,
 ) -> Result<(Token, usize), String> {
     let bytes = text.as_bytes();
+    if text[at..].starts_with("0xK") {
+        let end = scan(bytes, at + 3, |b| b.is_ascii_hexdigit());
+        let digits = &text[at + 3..end];
+        if digits.len() != 20 {
+            return Err(format!("0xK{digits}: an x86_fp80 literal is 20 hex digits"));
+        }
+        return Ok((Token::Float80(u128::from_str_radix(digits, 16).expect("hex digits")), end));
+    }
     if text[at..].starts_with("0x") {
         let end = scan(bytes, at + 2, |b| b.is_ascii_hexdigit());
         let digits = &text[at + 2..end];

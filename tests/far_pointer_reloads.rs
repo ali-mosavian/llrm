@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 typedef struct { float x, y, z, d; } P;
 extern float g(float);

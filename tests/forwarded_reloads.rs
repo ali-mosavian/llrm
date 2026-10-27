@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// PLASMA's loop: eight values live across the inner loop at m16.
 const SOURCE: &str = "short unf[321], unfunf[321], sine[513];
 void p(short n)

@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// Eight trips of `steps` multiply-xor steps.
 fn kernel(steps: usize) -> String {
     let body: String = (0..steps)

@@ -142,9 +142,9 @@ fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
     assert_eq!(one.level, "max");
 }
 
-/// `-Og` reached the backend as `-O1`, so the scroll loops of o1_fill.rs were
-/// turned into memmoves and a memset: -Og is -O1 without loop idioms.
+/// `-Og` reached the backend as `-Og`, so the loops of o1_fill.rs stayed
+/// loops: clang's -Og is its -O1, which has LoopIdiomRecognize.
 #[test]
-fn og_reaches_the_backend_as_og_not_o1() {
-    assert_eq!(built("-Og -c x.c").level, "g");
+fn og_reaches_the_backend_as_o1_like_clang() {
+    assert_eq!(built("-Og -c x.c").level, "1");
 }

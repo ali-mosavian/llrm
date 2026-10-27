@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn compares(
     kernel: &str,
     flags: &[&str],
