@@ -4702,6 +4702,29 @@ impl Compiler {
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
+                    "FIELD" => {
+                        // B$FLDP(channel), then B$FIEL(width, the string
+                        // variable's near descriptor) for each pair.
+                        let Some((file, pairs)) = arguments.split_first() else {
+                            return self.fail("FIELD expects a file number");
+                        };
+                        let (file, file_type) = self.expression(file)?;
+                        let file = self.convert(file, file_type, INTEGER)?;
+                        self.emit_runtime_call("B$FLDP", Vec::new(), vec![file]);
+                        for pair in pairs.chunks(2) {
+                            let [width, variable] = pair else {
+                                return self.fail("FIELD expects width AS variable pairs");
+                            };
+                            let (width, width_type) = self.expression(width)?;
+                            let width = self.convert(width, width_type, INTEGER)?;
+                            let (place, variable_type) = self.destination(variable)?;
+                            if variable_type != STRING {
+                                return self.fail("FIELD needs a variable-length string variable");
+                            }
+                            let descriptor = self.near_string_address(place);
+                            self.emit_runtime_call("B$FIEL", Vec::new(), vec![width, descriptor]);
+                        }
+                    }
                     _ => {
                         return self
                             .fail(format!("{name} is valid, but this compiler cannot generate code for it yet"));
