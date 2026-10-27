@@ -53,7 +53,18 @@ impl Function {
         operand: Operand,
         at: Use,
     ) {
-        if let Some(held) = Held::of(operand) {
+        let phi = self.instructions[at.user.0 as usize].opcode == Opcode::Phi;
+        self.add_use_as(operand, at, phi);
+    }
+
+    /// `add_use` for a user not yet in the arena, whose opcode is `phi` or not.
+    fn add_use_as(
+        &mut self,
+        operand: Operand,
+        at: Use,
+        phi: bool,
+    ) {
+        if let Some(held) = Held::of(operand, phi) {
             self.uses.link(held, at);
         }
     }
@@ -63,7 +74,8 @@ impl Function {
         operand: Operand,
         at: Use,
     ) {
-        if let Some(held) = Held::of(operand) {
+        let phi = self.instructions[at.user.0 as usize].opcode == Opcode::Phi;
+        if let Some(held) = Held::of(operand, phi) {
             self.uses.unlink(held, at);
         }
     }
@@ -73,6 +85,7 @@ impl Function {
     pub fn check_uses(&self) -> Vec<String> {
         let mut values = vec![BTreeSet::new(); self.values.len()];
         let mut blocks = vec![BTreeSet::new(); self.blocks.len()];
+        let mut phi_blocks = vec![BTreeSet::new(); self.blocks.len()];
         for (at, instruction) in self.instructions.iter().enumerate() {
             if self.erased[at] {
                 continue;
@@ -81,6 +94,9 @@ impl Function {
                 let one = Use { user: InstId(at as u32), index: index as u32 };
                 match operand {
                     Operand::Value(value) => values[value.0 as usize].insert(one),
+                    Operand::Block(block) if instruction.opcode == Opcode::Phi => {
+                        phi_blocks[block.0 as usize].insert(one)
+                    }
                     Operand::Block(block) => blocks[block.0 as usize].insert(one),
                     Operand::Constant(_) => false,
                 };
@@ -99,6 +115,13 @@ impl Function {
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
                 problems.push(format!("block {at}: kept {list:?}, operands say {expected:?}"));
+            }
+        }
+        for (at, expected) in phi_blocks.iter().enumerate() {
+            let list = self.uses.users(Held::PhiBlock(at as u32)).iter().copied().collect::<Vec<_>>();
+            let kept: BTreeSet<Use> = list.iter().copied().collect();
+            if kept != *expected || kept.len() != list.len() {
+                problems.push(format!("block {at} (phi): kept {list:?}, operands say {expected:?}"));
             }
         }
         problems
@@ -198,7 +221,7 @@ impl Function {
         });
         self.uses.slots(id.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
-            self.add_use(operand, Use { user: id, index: index as u32 });
+            self.add_use_as(operand, Use { user: id, index: index as u32 }, opcode == Opcode::Phi);
         }
         self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new(), link: (0, 0) });
         self.parent.push(None);
@@ -682,7 +705,17 @@ impl Function {
         inst: InstId,
         opcode: Opcode,
     ) {
+        // A block operand is on the phi list or the terminator list by its
+        // user's opcode.
+        let moves = (self.instructions[inst.0 as usize].opcode == Opcode::Phi) != (opcode == Opcode::Phi);
+        let operands = if moves { self.instructions[inst.0 as usize].operands.to_vec() } else { Vec::new() };
+        for (index, &operand) in operands.iter().enumerate() {
+            self.remove_use(operand, Use { user: inst, index: index as u32 });
+        }
         self.instructions[inst.0 as usize].opcode = opcode;
+        for (index, &operand) in operands.iter().enumerate() {
+            self.add_use(operand, Use { user: inst, index: index as u32 });
+        }
         self.log(Change::Rewritten(inst));
     }
 
@@ -835,8 +868,10 @@ impl Function {
         with: BlockId,
     ) {
         if with != block {
-            while let Some(one) = self.uses.head(Held::Block(block.0)) {
-                self.set_operand(one.user, one.index as usize, Operand::Block(with));
+            for held in [Held::Block(block.0), Held::PhiBlock(block.0)] {
+                while let Some(one) = self.uses.head(held) {
+                    self.set_operand(one.user, one.index as usize, Operand::Block(with));
+                }
             }
         }
     }
@@ -894,8 +929,9 @@ impl Function {
             }
         }
         for &inst in &insts {
+            let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
             for (index, &operand) in self.instructions[inst.0 as usize].operands.iter().enumerate() {
-                if let Some(held) = Held::of(operand) {
+                if let Some(held) = Held::of(operand, phi) {
                     self.uses.unlink(held, Use { user: inst, index: index as u32 });
                 }
             }
@@ -1538,8 +1574,9 @@ impl Function {
             if !self.blocks[block.0 as usize].is_empty() {
                 return Err(format!("block {} still holds instructions", block.0));
             }
-            if !self.block_users(block).is_empty() {
-                return Err(format!("block {} still has {} users", block.0, self.block_users(block).iter().count()));
+            if !self.block_users(block).is_empty() || !self.phi_block_users(block).is_empty() {
+                let users = self.block_users(block).iter().count() + self.phi_block_users(block).iter().count();
+                return Err(format!("block {} still has {users} users", block.0));
             }
         }
         let mut gone = crate::dense::IdSet::<BlockId>::new();

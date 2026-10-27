@@ -45,6 +45,7 @@ struct Node {
 pub struct UseLists {
     heads: Vec<u32>,
     block_heads: Vec<u32>,
+    phi_heads: Vec<u32>,
     nodes: Vec<Node>,
     base: Vec<u32>,
     cap: Vec<u32>,
@@ -54,14 +55,23 @@ pub struct UseLists {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Held {
     Value(u32),
+    /// A block named by a terminator: LLVM's `BasicBlock` use list, whose
+    /// predecessors are its first uses.
     Block(u32),
+    /// A block named by a phi's incoming edge; LLVM keeps these outside the
+    /// block's use list.
+    PhiBlock(u32),
 }
 
 impl Held {
     /// What `operand` names, none for a constant.
-    pub fn of(operand: crate::module::Operand) -> Option<Held> {
+    pub fn of(
+        operand: crate::module::Operand,
+        phi: bool,
+    ) -> Option<Held> {
         match operand {
             crate::module::Operand::Value(value) => Some(Held::Value(value.0)),
+            crate::module::Operand::Block(block) if phi => Some(Held::PhiBlock(block.0)),
             crate::module::Operand::Block(block) => Some(Held::Block(block.0)),
             crate::module::Operand::Constant(_) => None,
         }
@@ -162,6 +172,8 @@ impl UseLists {
         self.heads.resize(values, NIL);
         self.block_heads.clear();
         self.block_heads.resize(blocks, NIL);
+        self.phi_heads.clear();
+        self.phi_heads.resize(blocks, NIL);
         self.nodes.clear();
         self.base.clear();
         self.cap.clear();
@@ -173,6 +185,7 @@ impl UseLists {
 
     pub fn push_block(&mut self) {
         self.block_heads.push(NIL);
+        self.phi_heads.push(NIL);
     }
 
     fn head_of(
@@ -182,6 +195,7 @@ impl UseLists {
         match of {
             Held::Value(value) => self.heads[value as usize],
             Held::Block(block) => self.block_heads[block as usize],
+            Held::PhiBlock(block) => self.phi_heads[block as usize],
         }
     }
 
@@ -192,6 +206,7 @@ impl UseLists {
         match of {
             Held::Value(value) => &mut self.heads[value as usize],
             Held::Block(block) => &mut self.block_heads[block as usize],
+            Held::PhiBlock(block) => &mut self.phi_heads[block as usize],
         }
     }
 
@@ -277,5 +292,6 @@ impl UseLists {
     pub fn clear_all(&mut self) {
         self.heads.fill(NIL);
         self.block_heads.fill(NIL);
+        self.phi_heads.fill(NIL);
     }
 }
