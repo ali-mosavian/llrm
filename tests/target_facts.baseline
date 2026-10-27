@@ -92,7 +92,7 @@
 2 crates/support/llrm-support/src/pyrepr.rs
 1 crates/support/llrm-support/src/pyset.rs
 7 tools/analysis/runtime_writes.py
-2 tools/arm64_fuzz.py
+2 tools/targets/arm64_fuzz.py
 1 tools/bench/flatcount.py
 3 tools/bench/maps.py
 2 tools/debug-matrix.py
@@ -110,7 +110,7 @@
 9 tools/loops/oracle.py
 9 tools/loops/quality.py
 1 tools/loops/run.py
-4 tools/msp430.py
+4 tools/targets/msp430.py
 1 tools/pairs/bench_pin.py
 1 tools/pairs/pinclocks.sh
 1 tools/pairs/pindiff.py

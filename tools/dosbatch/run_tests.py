@@ -158,8 +158,8 @@ def first_difference(want: list[str], got: list[str]) -> str:
 
 
 def start_defines(target: str, flags: list[str]) -> tuple[str, ...]:
-    """The OS layer's defines for a C program's link, plus `MAIN_WATCOM=1` under `-mabi=watcom`: the program's `main` is `main_`, which the start-up calls."""
-    return (*dosbatch.os_defines(target, "c"), *(("MAIN_WATCOM=1",) if "-mabi=watcom" in flags else ()))
+    """The OS layer's defines for a C program's link, plus `LL_MAIN=main_` under `-mabi=watcom`: the program's `main` is `main_`, which the start-up calls."""
+    return (*dosbatch.os_defines(target, "c"), *(("LL_MAIN=main_",) if "-mabi=watcom" in flags else ()))
 
 
 def compile_command(program: Program, obj: Path) -> list[str]:

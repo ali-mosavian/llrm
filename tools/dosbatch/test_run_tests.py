@@ -153,7 +153,7 @@ def test_a_watcom_program_links_the_start_up_that_calls_main_(tmp_path, monkeypa
     for target in ("x86-m16", "x86-m32"):
         plain = run_tests.start_defines(target, ["-O2"])
         watcom = run_tests.start_defines(target, ["-O2", "-mabi=watcom"])
-        assert "MAIN_WATCOM=1" not in plain and "MAIN_WATCOM=1" in watcom
+        assert "LL_MAIN=main_" not in plain and "LL_MAIN=main_" in watcom
         symbols = {}
         for name, defines in (("plain", plain), ("watcom", watcom)):
             obj = tmp_path / f"{target}-{name}.obj"
