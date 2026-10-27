@@ -95,6 +95,7 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
     }

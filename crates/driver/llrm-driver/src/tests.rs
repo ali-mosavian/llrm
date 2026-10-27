@@ -665,3 +665,36 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
     assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
     assert_eq!(built.code_segments.values().collect::<Vec<_>>(), ["HOT_TEXT"], "{:?}", built.code_segments);
 }
+
+/// `@llvm.global_ctors` panicked the x86 backends (`no entry found for key`: an
+/// intrinsic-named global has no symbol): each target now lays out the function
+/// pointers, lowest priority first, in an init-function segment.
+#[test]
+fn global_ctors_become_init_function_pointers_at_x86_64_and_m32() {
+    for (layout, triple) in [
+        ("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128", "x86_64-unknown-linux-gnu"),
+        ("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32", "i486-unknown-linux-gnu"),
+    ] {
+        let text = format!(
+            "target datalayout = \"{layout}\"\ntarget triple = \"{triple}\"\n\
+             @llvm.global_ctors = appending global [3 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 200, ptr @late, ptr null }}, \
+             {{ i32, ptr, ptr }} {{ i32 100, ptr @early, ptr null }}, {{ i32, ptr, ptr }} {{ i32 150, ptr null, ptr null }}]\n\
+             define void @early() {{\n  ret void\n}}\ndefine internal void @late() {{\n  ret void\n}}\n"
+        );
+        let (built, _) =
+            crate::llc::compiled(&flags(&[]), &text, "ctors").unwrap_or_else(|error| panic!("{triple}: {error}"));
+        let (_, items) = built
+            .data
+            .iter()
+            .find(|(name, _)| name == ".init_array")
+            .unwrap_or_else(|| panic!("{triple}: {:?}", built.data));
+        let names: Vec<&str> = items
+            .iter()
+            .filter_map(|item| match item {
+                llrm_codegen::backend::masm::Datum::Pointer(pointer) => Some(pointer.name.trim_matches('_')),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["early", "late"], "{triple}");
+    }
+}
