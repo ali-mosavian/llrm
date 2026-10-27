@@ -8,6 +8,9 @@
 //! writer does; an addend goes in an `ARM64_RELOC_ADDEND` entry before its
 //! relocation.
 //!
+//! An arm64 object carries `LC_BUILD_VERSION` (macOS 11, no tools, no SDK), as LLVM's does
+//! for `arm64-apple-macos`; `ld` takes the platform from it.
+//!
 //! The file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays
 //! one atom, so a call between two functions of it may be resolved where it is
 //! written.
@@ -21,6 +24,8 @@ const MH_OBJECT: u32 = 1;
 const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xB;
 const LC_SEGMENT_64: u32 = 0x19;
+const LC_BUILD_VERSION: u32 = 0x32;
+const PLATFORM_MACOS: u32 = 1;
 const S_ZEROFILL: u32 = 1;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
@@ -128,6 +133,10 @@ struct Described {
 trait Flavor {
     fn cpu(&self) -> (u32, u32);
 
+    /// The platform and minimum OS (`xxxx.yy.zz` packed) of `LC_BUILD_VERSION`, if the
+    /// machine's objects carry one.
+    fn build_version(&self) -> Option<(u32, u32)>;
+
     /// Whether the symbol table lists the symbols the object keeps local. A
     /// relocation then names the symbol and not its section.
     fn lists_locals(&self) -> bool;
@@ -143,6 +152,10 @@ struct X8664;
 impl Flavor for X8664 {
     fn cpu(&self) -> (u32, u32) {
         (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL)
+    }
+
+    fn build_version(&self) -> Option<(u32, u32)> {
+        None
     }
 
     fn lists_locals(&self) -> bool {
@@ -176,6 +189,12 @@ struct Arm64;
 impl Flavor for Arm64 {
     fn cpu(&self) -> (u32, u32) {
         (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL)
+    }
+
+    /// macOS 11, the first with arm64; `ld` takes the platform from this command and warns
+    /// "no platform load command" without it.
+    fn build_version(&self) -> Option<(u32, u32)> {
+        Some((PLATFORM_MACOS, 11 << 16))
     }
 
     fn lists_locals(&self) -> bool {
@@ -410,7 +429,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
     // Layout: header, load commands, section contents, relocations, symbols,
     // strings.
-    let commands = 72 + 80 * order.len() + 24 + 80;
+    let version = flavor.build_version();
+    let commands = 72 + 80 * order.len() + 24 + 80 + if version.is_some() { 24 } else { 0 };
     let first = align_up(32 + commands, 16);
     let mut offsets = vec![0usize; object.sections.len()];
     for &one in order.iter().take(file_backed) {
@@ -433,7 +453,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
     let mut out = Vec::new();
     let (cpu_type, cpu_subtype) = flavor.cpu();
-    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, 3, commands as u32, 0, 0] {
+    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, if version.is_some() { 4 } else { 3 }, commands as u32, 0, 0] {
         put32(&mut out, field);
     }
     put32(&mut out, LC_SEGMENT_64);
@@ -456,6 +476,12 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         put32(&mut out, reloc_offsets[one] as u32);
         put32(&mut out, (entries[one].len() / 8) as u32);
         for field in [flags, 0, 0, 0] {
+            put32(&mut out, field);
+        }
+    }
+    if let Some((platform, minos)) = version {
+        // No tools, and no SDK: the version of the SDK is the build's, not the object's.
+        for field in [LC_BUILD_VERSION, 24, platform, minos, 0, 0] {
             put32(&mut out, field);
         }
     }
@@ -584,6 +610,45 @@ mod tests {
             omf_comdat: Vec::new(),
             debug: None,
         }
+    }
+
+    /// Every command of a Mach-O object: `(cmd, bytes)`.
+    fn commands_of(object: &[u8]) -> Vec<(u32, Vec<u8>)> {
+        let word = |at: usize| u32::from_le_bytes(object[at..at + 4].try_into().unwrap());
+        let (count, mut at) = (word(16), 32);
+        (0..count)
+            .map(|_| {
+                let (cmd, size) = (word(at), word(at + 4) as usize);
+                let one = (cmd, object[at..at + size].to_vec());
+                at += size;
+                one
+            })
+            .collect()
+    }
+
+    /// An arm64 object had no `LC_BUILD_VERSION`: `ld` warned "no platform load command
+    /// found" for every object and assumed macOS.
+    #[test]
+    fn an_arm64_object_names_its_platform() {
+        let mut object = program();
+        object.arch = Arch::Arm64;
+        object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
+        object.symbols = vec![defined("_f", 0, 0)];
+        let written = write(&object).unwrap();
+        let build: Vec<_> = commands_of(&written).into_iter().filter(|(cmd, _)| *cmd == LC_BUILD_VERSION).collect();
+        assert_eq!(build.len(), 1);
+        let words: Vec<u32> = build[0].1.chunks(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
+        assert_eq!(words, [LC_BUILD_VERSION, 24, PLATFORM_MACOS, 11 << 16, 0, 0]);
+        // The header's byte count covers it: the symbol table is where the commands end.
+        let total: usize = commands_of(&written).iter().map(|(_, bytes)| bytes.len()).sum();
+        assert_eq!(total, u32::from_le_bytes(written[20..24].try_into().unwrap()) as usize);
+    }
+
+    /// An x86-64 object's bytes are unchanged: it carries no build version.
+    #[test]
+    fn an_x86_64_object_has_none() {
+        let written = write(&program()).unwrap();
+        assert!(commands_of(&written).iter().all(|(cmd, _)| *cmd != LC_BUILD_VERSION));
     }
 
     const REFERENCE: &str = "
