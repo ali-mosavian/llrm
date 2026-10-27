@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/functionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/functionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:6cb97db858d380954949e5a43b40721f80841d9b2358380107fef1c7aac18314 -->
+<!-- src: crates/opt/llrm-analysis/src/functionattrs.rs sha256:22f265921924edbd30de354f204b14cfc5bde93af9bacbec42cc5f980cee274a -->
 
 # functionattrs
 
@@ -20,6 +20,8 @@ its site's attributes and its callee's declaration.
   member may be a declaration or inexact; no instruction may throw (a call
   without `nounwind`, an `invoke`, `resume`) except a `call` to another
   member.
+- `nofree` and `nosync` (`InstrBreaksNoFree`, `InstrBreaksNoSync`): every
+  call states it or reaches an SCC member; all or none of the SCC.
 - `willreturn` (`addWillReturn`): `mustprogress` and no writes, or no back
   edge and every call states `willreturn`.
 - `noreturn` (`addNoReturnAttrs`): no path from the entry reaches a `ret`
@@ -58,6 +60,8 @@ From unit test `test_a_body_over_norecurse_callees_is_stamped_all_three` in
 DEVIATE F1: `willreturn` also where a loop's trip count is proved or the
 language promises each loop ends, in a function that does nothing
 observable (`will_return_by_loops`).
+Exit: once llrm-cc over clang is the only C frontend its IR carries
+`mustprogress`, and LLVM's rule gives the same answer; F1 goes then.
 
 ## See also
 LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,

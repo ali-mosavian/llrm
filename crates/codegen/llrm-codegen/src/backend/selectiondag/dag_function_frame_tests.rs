@@ -483,7 +483,11 @@ fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
 fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
     let backward = select_m32(&memmove_ir(", !llrm.backward !0")).unwrap_or_else(|why| panic!("{why}"));
-    assert!(backward.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0xA4, 0xFC]), "{:?}", backward.inline);
+    assert!(
+        backward.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC]),
+        "{:?}",
+        backward.inline
+    );
     let refused = select_m32(&memmove_ir("")).err().expect("no direction proved");
     assert!(refused.contains("memmove"), "{refused}");
 }
@@ -1093,4 +1097,78 @@ fn fills_and_stores(name: &str) -> (usize, usize) {
 fn at_os_an_18_byte_clear_is_a_fill() {
     assert_eq!(fills_and_stores("f").0, 1, "a fill for the local");
     assert_eq!(fills_and_stores("h").0, 1, "a fill for the global");
+}
+
+/// A cell exactly one past a frame object's end is the next object's first
+/// byte; it was tagged with the nearer slot (`home_of`: the next object), so
+/// the relayout moved it under that object: matmul -O3 at m32 loaded
+/// `[esp+eax]` where `[esp+eax+396]` was the first element of `a`, and
+/// returned 318236 for 353712. The cell names the object it was made from.
+#[test]
+fn a_cell_one_past_a_frame_object_keeps_its_own_slot() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f() {
+b1:
+  %o = alloca [8192 x i8]
+  %p = alloca [8192 x i8]
+  br label %b10
+b9:
+  ret i32 %s1
+b10:
+  %n = phi i32 [ -8192, %b1 ], [ %nx, %b10 ]
+  %acc = phi i32 [ %s1, %b10 ], [ 0, %b1 ]
+  %g1 = getelementptr i8, ptr %p, i32 %n
+  %g2 = getelementptr i8, ptr %g1, i32 8192
+  %l1 = load i16, ptr %g2
+  %x1 = sext i16 %l1 to i32
+  %s1 = add i32 %acc, %x1
+  %nx = add nsw i32 %n, 128
+  %exitcond = icmp ne i32 %nx, 0
+  br i1 %exitcond, label %b10, label %b9
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let cell = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter())
+        .find_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) if m.index.is_some() => Some(m.clone()),
+            _ => None,
+        })
+        .expect("an indexed load");
+    let home = cell.addr.expect("a frame address").slot_home();
+    let lowest = done.extents.iter().map(|(start, _)| *start).min();
+    assert_eq!(home, lowest, "the cell belongs to %p, the lower object: {cell:?} in {:?}", done.extents);
+}
+
+/// `select (a < b), 1, 2` was `setl; mov 2; sub` (a load of the constant and a
+/// subtract from it: bintree m32 -O2 +3.8% clocks against the pin); the
+/// pin's `combineSubSetcc` makes it `setge; inc`, the inverted condition plus
+/// `C - 1`.
+#[test]
+fn a_select_of_one_and_two_is_the_inverted_setcc_plus_one() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a, i32 %b) {
+entry:
+  %c = icmp slt i32 %a, %b
+  %s = select i1 %c, i32 1, i32 2
+  ret i32 %s
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
+    assert!(names.iter().any(|n| n == "setge"), "{names:?}");
+    assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }

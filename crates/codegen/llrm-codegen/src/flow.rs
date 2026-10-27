@@ -209,16 +209,9 @@ pub fn machine_with<'a>(
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
-        // Before the scheduler, as the pin has it (it runs before phi elimination;
-        // DEVIATE F1 needs the values phi elimination leaves defined twice): a `setcc` zero-extended is a
+        // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
-        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
-        // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler {
-            classes: Rc::clone(classes),
-            segments: segments.clone(),
-        }),
         // A float load only one arithmetic instruction reads is its memory
         // operand.
         Box::new(crate::backend::floatfold::FloatFold { cpu: target }),
@@ -238,6 +231,12 @@ pub fn machine_with<'a>(
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        // After TwoAddress and the coalescer, before any value is placed: the
+        // pin's pre-RA scheduler, bottom-up by pressure.
+        Box::new(crate::backend::machinesched::MachineScheduler {
+            classes: Rc::clone(classes),
+            segments: segments.clone(),
+        }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
                 .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
@@ -556,9 +555,9 @@ mod tests {
         }
     }
 
-    /// `llc -O2 -debug-pass` has X86FixupSetCC before the pre-RA scheduler; ours
-    /// ran after it, so the zero a `setcc` needs was placed once the order was
-    /// fixed (x_rle m32: a `lea` in another place).
+    /// `llc -O2 -debug-pass` has X86FixupSetCC before the pre-RA scheduler;
+    /// ours ran after it, so the zero a `setcc` needs was placed once the
+    /// order was fixed (x_rle m32: a `lea` in another place).
     #[test]
     fn test_fixupsetcc_runs_before_the_machine_scheduler() {
         let names: Vec<&'static str> =

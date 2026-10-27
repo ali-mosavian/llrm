@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/memdepchecker.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/memdepchecker.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/memdepchecker.rs sha256:f90c84ab4a100716ddb976845c1567e1b528decc3e3f16947a1fcbdedcf0354a -->
+<!-- src: crates/opt/llrm-analysis/src/memdepchecker.rs sha256:82b59a080e07cedab734c474963dd2e2f91f7d544b00c88f7368baf8260114ca -->
 
 # memdepchecker
 
@@ -26,3 +26,6 @@ dependence, safe to vectorize when the distance covers the vector.
 Where LLVM adds a wrap predicate or an addrec-with-predicates to prove a
 stride (`getPtrStride` with a `Predicates` argument) the access has no
 stride here and the pair is `IndirectUnsafe`.
+
+## Used by
+Named by `accessanalysis`, `loopaccessinfo`, `looploadelim`, `runtimecheck`.
