@@ -580,7 +580,8 @@ fn a_required_module_analysis_is_computed_again_only_after_a_pass_drops_it() {
 }
 
 /// `-verify-analysis-invalidation` of a module analysis: a pass claiming
-/// to keep `Bodies` while it empties a body.
+/// to keep `Bodies` while it empties a body (which `CalleeEffects` reads as
+/// `defined`, so it is stale too).
 #[test]
 fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     struct Empty;
@@ -605,7 +606,7 @@ fn a_pass_keeping_a_module_analysis_it_changed_is_caught() {
     passes.add(Empty);
     assert_eq!(
         passes.run_module(&mut module(), Rc::new(Neutral)).err().as_deref(),
-        Some("empty claims to preserve bodies but changed them")
+        Some("empty claims to preserve bodies, callee-effects but changed them")
     );
 }
 
