@@ -21,8 +21,16 @@
 //! ```
 //!
 //! MIRROR: `SinkCast`, the two entry conditions, the promotion of a narrow
-//! integer to the register that holds it. The address-space cast (a free one
-//! is a target's: x86 has none) is left alone.
+//! integer to the register that holds it. The pin leaves the address-space
+//! cast alone (a free one is a target's: x86 has none).
+//!
+//! DEVIATE SD220 (real mode): a segment made a far pointer (`addrspacecast`
+//! from the segment space to the far or huge one) is sunk too. Far pointers
+//! are ours, the pin has no such cast: its offset is the constant 0, and
+//! left in one block the halves cross every block edge in registers
+//! (`xor ebx, ebx` and a base register per store, deedlines COPPER +398 B).
+//! Owner w12. Exit: a `isFreeAddrSpaceCast` hook on the target. Review
+//! 2026-12-10.
 //!
 //! # Example
 //! `test_a_pointer_cast_read_in_another_block_is_made_there` in
@@ -36,6 +44,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::lowering::Lowering;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::spaces::Spaces;
 use llrm_mir::types::Type;
 
 /// The bits of an integer or pointer type: what `getValueType` makes of it.
@@ -115,6 +124,7 @@ pub fn casts_sunk(
     context: &Context,
     layout: &llrm_mir::datalayout::DataLayout,
     lowering: &dyn Lowering,
+    spaces: Spaces,
     function: &mut Function,
 ) -> bool {
     let casts: Vec<InstId> = function
@@ -148,7 +158,14 @@ pub fn casts_sunk(
             && promoted(lowering, from) == promoted(lowering, to)
             && !matches!(kind, CastOp::FPExt | CastOp::FPTrunc);
         let expands = matches!(kind, CastOp::ZExt | CastOp::SExt) && to > widest(lowering);
-        if (noop || expands) && sunk(function, cast) {
+        let space_of = |ty| match context.types.get(ty) {
+            Type::Pointer(space) => Some(*space),
+            _ => None,
+        };
+        let far = kind == CastOp::AddrSpaceCast
+            && space_of(source).is_some_and(|from| spaces.segment == Some(from))
+            && space_of(one.ty).is_some_and(|to| to == spaces.far || spaces.huge == Some(to));
+        if (noop || expands || far) && sunk(function, cast) {
             changed = true;
         }
     }

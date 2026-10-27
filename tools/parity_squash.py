@@ -570,17 +570,27 @@ def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> t
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
 
 
-def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None) -> list[str]:
+def error_files(text: str) -> set[str]:
+    """The `.rs` paths a build error names (`crates/x/src/y.rs:816:16`)."""
+    return set(re.findall(r"[\w./-]+\.rs(?=:\d)", text))
+
+
+def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None, suspects=None) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
     fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR.
-    `errors` receives each culprit's own build error: the 16:56 batch printed the batch's error for #4743, which built clean when asked alone."""
+    `errors` receives each culprit's own build error: the 16:56 batch printed the batch's error for #4743, which built clean when asked alone.
+    `suspects` are the PRs whose diff touches a file the batch's error names: only they are built alone first, and when one is at fault the rest are not (8 alone-builds of 50 s
+    each for the 00:49 batch's one culprit); none at fault, every other PR is built alone as before."""
     found = []
-    for number in group:
+    first = [number for number in group if number in (suspects or ())]
+    for number in first + [number for number in group if number not in first]:
+        if number not in first and any(one in found for one in first):
+            break
         if merge_alone(number) and (error := check()):
             found.append(number)
             if errors is not None:
                 errors[number] = error
-    return found
+    return [number for number in group if number in found]
 
 
 def needs(package: str, graph: dict[str, set[str]]) -> set[str]:
@@ -1163,7 +1173,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
 HITS = [0]  # verdicts read from the cache by this process
 
 
-def refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
+def alone_refusal_line(number: str, why: str, head: str, directory: Path, width: int = 300) -> str:
     """The runner-log line of a refusal: all of `why` when it fits in `width`, else its start, its length and the file that holds all of it (#4991's list of failing tests was cut mid-name)."""
     if len(why) <= width:
         return f"{number}: REFUSED: alone: {why}"
@@ -1234,6 +1244,37 @@ def docs_stale(root: Path) -> set[str]:
     if not done.returncode:
         return set()
     return {line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip().startswith("docs/")} or {"docsbuild --check failed"}
+
+
+def crash_line(number: str, error: BaseException) -> str:
+    """`#N: REFUSED: the batch crashed: <exception>`: a TypeError in docs_gated (05:18) left 13 PRs refused with an empty reason, the traceback on a line no summary carries."""
+    return f"#{number}: REFUSED: the batch crashed (a tool fault, not this PR): {type(error).__name__}: {' '.join(str(error).split())[:200]}"
+
+
+def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, set[str]]:
+    """(why, stale now): a refusal naming the pages `root` has out of date that `before` did not. #5031, #5049 and #4988 each changed a `//!` header, passed alone and landed
+    with six pages stale: the head's red docs_in_sync was excused, so the batch never saw a new one."""
+    now = docs(root)
+    new = sorted(now - before)
+    return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
+
+
+def docs_gated(merge_one, docs_before: set[str], root: Path = ROOT, docs=docs_stale):
+    """`merge_one` that also refuses, and resets `root` to where it was, a merge that leaves a generated page stale that was not stale before it."""
+    state = [docs_before]
+
+    def gated(number: str) -> str:
+        before = git("rev-parse", "HEAD", cwd=root).strip()
+        if why := merge_one(number):
+            return why
+        why, now = docs_refusal(state[0], root, docs)
+        if why:
+            git("reset", "-q", "--hard", before, cwd=root)
+            return why
+        state[0] = now
+        return ""
+
+    return gated
 
 
 def _alone_base_docs(base: str, target: Path | None) -> set[str]:
@@ -1385,7 +1426,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
-        kept, out = fast_merge(group, merge_one)
+        kept, out = fast_merge(group, docs_gated(merge_one, docs_stale(ROOT)))
         left_out.update(out)
         for number, why in out.items():
             print(f"#{number}: left out: {why}")
@@ -1472,7 +1513,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
             own = {}
-            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own)
+            named_files = error_files(failed_build[-1])
+            suspects = [number for number in group if named_files & set(git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split())]
+            culprits = build_offenders(group, merge_alone, lambda: _workspace_check(ROOT), own, suspects)
             named.update({number: f"alone on the head it does not build: {own[number][:160]}" for number in culprits})
             return culprits
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
@@ -1948,7 +1991,7 @@ def dispatch() -> int:
         with contextlib.redirect_stdout(sys.stderr):
             kept, dropped = alone(numbers, heads, cache=Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-cache-v2", jobs=int(os.environ.get("ALONE_JOBS", ALONE_JOBS)), cap=float(os.environ.get("ALONE_CAP", "600")), current=_current_head)
         for number, why in dropped.items():
-            print(refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
+            print(alone_refusal_line(number, why, heads[number], Path(os.environ.get("LAND_TMP", "/tmp")) / "alone-full"), file=sys.stderr)
         print(f"alone: {len(numbers)} PRs, {HITS[0]} cached, {len(numbers) - HITS[0]} checked, {len(dropped)} dropped", file=sys.stderr)
         print("\n".join(kept))
         return 0
@@ -1969,7 +2012,12 @@ def dispatch() -> int:
     if len(sys.argv) >= 3 and sys.argv[1] == "merge-batch":
         numbers = [a for a in sys.argv[2:] if not a.startswith("--") and a.isdigit()]
         rest = sys.argv[2:]
-        return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+        try:
+            return merge_batch(numbers, parse_known_red([rest[i + 1] for i, a in enumerate(rest) if a == "--known-red" and i + 1 < len(rest)]))
+        except Exception as error:
+            for number in numbers:
+                print(crash_line(number, error))
+            raise
     if len(sys.argv) >= 2 and sys.argv[1] == "audit":
         since = sys.argv[2] if len(sys.argv) > 2 else "96468410e"
         rows = audit(since)
