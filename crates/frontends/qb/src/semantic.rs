@@ -4702,6 +4702,17 @@ impl Compiler {
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
+                    "PCOPY" => {
+                        let [from, to] = arguments.as_slice() else {
+                            return self.fail("PCOPY expects a source page and a destination page");
+                        };
+                        let mut pages = Vec::new();
+                        for page in [from, to] {
+                            let (page, page_type) = self.expression(page)?;
+                            pages.push(self.convert(page, page_type, INTEGER)?);
+                        }
+                        self.emit_runtime_call("B$PCPY", Vec::new(), pages);
+                    }
                     _ => {
                         return self
                             .fail(format!("{name} is valid, but this compiler cannot generate code for it yet"));
