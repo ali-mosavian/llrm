@@ -65,3 +65,29 @@ def test_identical_writers_are_not_a_change(tmp_path):
     old, new = _stub(tmp_path, "old", "R_386_PLT32"), _stub(tmp_path, "new", "R_386_PLT32")
     args = type("A", (), {"old": old, "new": new, "targets": "m32", "levels": "O2", "jobs": 1})()
     assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 0
+
+
+def test_the_debug_leg_compiles_with_each_debug_format_of_the_target(tmp_path):
+    """The sweep never passed -g, so a changed DW_FORM byte read 0 objects changed."""
+    (tmp_path / "x.c").write_text("")
+    log = tmp_path / "log"
+    stub = tmp_path / "cc"
+    stub.write_text(f'#!/bin/sh\necho "$*" >> {log}\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ printf obj > "$a"; next=; }};; esac; done\n')
+    stub.chmod(0o755)
+    args = type("A", (), {"old": str(stub), "new": str(stub), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
+    assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 0
+    flags = {flag for line in log.read_text().splitlines() for flag in line.split() if flag.startswith("-g")}
+    assert flags == {"-g", "-gtd", "-gcodeview", "-gdwarf-5"}
+
+
+def test_a_changed_debug_byte_is_a_changed_object(tmp_path):
+    (tmp_path / "x.c").write_text("")
+
+    def cc(name, byte):
+        stub = tmp_path / name
+        stub.write_text(f'#!/bin/sh\ng=0\nfor a in "$@"; do case $a in -g*) g=1;; esac; done\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && {{ [ $g = 1 ] && printf {byte} > "$a" || printf obj > "$a"; next=; }};; esac; done\nexit 0\n')
+        stub.chmod(0o755)
+        return str(stub)
+
+    args = type("A", (), {"old": cc("old", "A"), "new": cc("new", "B"), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
+    assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 1

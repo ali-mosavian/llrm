@@ -44,6 +44,14 @@ def changed_files(old_sha: str, new_sha: str) -> list[str] | None:
 FLAGS = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"], "m64": ["-m64"]}  # llrm-c rejects -march=i286 on m16, and takes no -m64: name it only for llrm-cc
 
 
+# The -g leg: the debug formats each target writes. An object holds its debug sections, so comparing whole objects compares them.
+DEBUG_LEGS = {
+    "m32": [["-g", "-fobject-format=elf"], ["-gdwarf-2", "-fobject-format=elf"], ["-gcodeview", "-fobject-format=coff"], ["-g", "-fobject-format=omf"]],
+    "m16": [["-g"], ["-gtd"], ["-gcodeview"], ["-gdwarf-5"]],
+    "m64": [["-g", "-fobject-format=elf"]],
+}
+
+
 def writer_results(directory: Path) -> dict[str, str]:
     """The md5 of each `<format>.bin` the compile wrote through LLRM_OBJECT_ALL_WRITERS: every writer of the object's architecture, not only the one the target chose."""
     return {file.stem: hashlib.md5(file.read_bytes()).hexdigest()[:12] for file in sorted(directory.glob("*.bin"))}
@@ -67,9 +75,9 @@ def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None) 
     return data, ""
 
 
-def compile_one(binary: str, source: Path, target: str, level: str, out: Path, isel: str = "old", writers: dict[str, str] | None = None) -> tuple[bytes | None, str]:
+def compile_one(binary: str, source: Path, target: str, level: str, out: Path, isel: str = "old", writers: dict[str, str] | None = None, extra: list[str] | None = None) -> tuple[bytes | None, str]:
     """(object bytes, '') or (None, first line of stderr). `out` ends in `.o`: llrm-c writes any other name as assembly text."""
-    return run_compiler([binary, *FLAGS[target], f"--isel={isel}", *os.environ.get("OBJSWEEP_FLAGS", "").split(), f"-{level}", "-o", str(out), str(source)], out, writers)
+    return run_compiler([binary, *FLAGS[target], f"--isel={isel}", *os.environ.get("OBJSWEEP_FLAGS", "").split(), *(extra or []), f"-{level}", "-o", str(out), str(source)], out, writers)
 
 
 def compile_arm64(binary: str, source: Path, out: Path, writers: dict[str, str] | None = None) -> tuple[bytes | None, str]:
@@ -82,21 +90,22 @@ def md5(path: str) -> str:
 
 
 def sweep(args, sources: list[Path], isel: str) -> int:
-    cells = [(s, t, lv) for s in sources for t in args.targets.split(",") for lv in args.levels.split(",")]
+    legs = lambda target: DEBUG_LEGS[target] if getattr(args, "debug", False) else [[]]  # noqa: E731
+    cells = [(s, t, lv, tuple(leg)) for s in sources for t in args.targets.split(",") for lv in args.levels.split(",") for leg in legs(t)]
     scratch = Path(tempfile.mkdtemp(prefix="objsweep-"))
 
     def run(cell):
-        source, target, level = cell
-        tag = f"{source.stem}-{target}-{level}"
+        source, target, level, leg = cell
+        tag = f"{source.stem}-{target}-{level}" + "".join(re.sub(r"\W", "", flag) for flag in leg)
         old_writers, new_writers = {}, {}
-        old = compile_one(args.old, source, target, level, scratch / f"{tag}.old.o", isel, old_writers)
-        new = compile_one(args.new, source, target, level, scratch / f"{tag}.new.o", isel, new_writers)
+        old = compile_one(args.old, source, target, level, scratch / f"{tag}.old.o", isel, old_writers, list(leg))
+        new = compile_one(args.new, source, target, level, scratch / f"{tag}.new.o", isel, new_writers, list(leg))
         return cell, old, new, old_writers, new_writers
 
     changed, one_side, both, same = [], [], [], 0
     with ThreadPoolExecutor(args.jobs) as pool:
-        for (source, target, level), (a, ea), (b, eb), wa, wb in pool.map(run, cells):
-            name = f"{source.stem} {target} -{level}"
+        for (source, target, level, leg), (a, ea), (b, eb), wa, wb in pool.map(run, cells):
+            name = f"{source.stem} {target} -{level}" + "".join(f" {flag}" for flag in leg)
             if a is None and b is None:
                 both.append((name, ea))
             elif a is None or b is None:
@@ -157,6 +166,7 @@ def main() -> int:
     parser.add_argument("--programs", default="", help="comma-separated names; default every .c in --src")
     parser.add_argument("--cross-branch", action="store_true", help="compare a base that is not an ancestor of the new build (the report header says so)")
     parser.add_argument("--isel", choices=["old", "dag", "both", "shadow"], help="the selector; unnamed, a diff touching selector or machine-pass code is swept under both")
+    parser.add_argument("--debug", action="store_true", help="the -g leg: compile with each debug format of the target (DEBUG_LEGS) instead of without -g")
     parser.add_argument("--arm64", help="a directory of `.ll` files to compile with llrm-arm64-llc (beside OLD and NEW), as Mach-O and ELF")
     parser.add_argument("--jobs", type=int, default=int(os.environ.get("JOBS", "6")))
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
