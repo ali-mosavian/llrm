@@ -1281,6 +1281,23 @@ check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 "B$FDAT" = 0
 "B$FTIM" = 0
 
+# Which routines write a runtime cell a program names by EXTDEF, where the
+# runtime source settles it. A call to anything else leaves the cell alone,
+# unless it runs the program's own code -- which `enters_user_code` and an
+# error handler say, and the caller asks.
+#
+# b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
+# does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
+# `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
+# CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
+# B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
+# bload.asm only read it, and no reference takes its address. ABSOLUTE runs
+# machine code of the program's choosing.
+[[writers]]
+cell = "b$seg"
+family = "qb45"
+routines = ["B$DSEG", "B$DSG0", "B$SCLR", "B$RUNL", "B$StackReset", "B$Init", "B$IINIT", "B$RUNINI", "ABSOLUTE"]
+
 # llrm's runtime takes its calls as the target's own convention states them, except these routines, whose
 # stack block is the call site's own length (the bounds of every dimension, the channels closed): a register
 # convention cannot name that, so they keep BASIC's pushes and are popped by the callee.
@@ -1410,6 +1427,7 @@ evidence = "runtime/qb/events.c: PEN(n) of a machine with no joystick or light p
 ["B$SCMP"]
 cleanup = 4
 control = "returns"
+flags_result = true
 enters_user_code = false
 raises_error = false
 error_handling = false

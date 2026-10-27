@@ -305,15 +305,9 @@ impl Repr for Contract {
     }
 }
 
-/// Routines whose result is the flags, and the source that says so.
-const FLAGS_RESULTS: [(&str, &str); 1] = [(
-    "B$SCMP",
-    "rt/stcore.asm SCMP: the result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF",
-)];
-
 /// Whether `name`'s result is the flags.
 pub fn flags_result(name: &str) -> bool {
-    FLAGS_RESULTS.iter().any(|&(routine, _)| routine == name)
+    row(name).is_some_and(|one| one.flags_result)
 }
 
 pub fn worst(name: &str) -> Contract {
@@ -1424,33 +1418,10 @@ fn _entry(
     );
 }
 
-// Which routines write a runtime cell a program names by EXTDEF, where the
-// runtime source settles it. A call to anything else leaves the cell alone,
-// unless it runs the program's own code -- which `enters_user_code` and an
-// error handler say, and the caller asks.
-//
-// b$seg, QuickBASIC 4.5: rt/rtinit.asm writes it three times and nothing else
-// does. B$DSG0 `MOV [b$seg],DS` and B$DSEG `MOV [b$seg],AX`; B$RTCLR
-// `MOV b$seg,DS`, reached through b$clr_disp from clear.asm's B$SCLR (whose
-// CLR_RUN B$RUNL and B$StackReset jump to) and through b$run_disp's
-// B$RTRUNINI from B$IINIT, B$Init and B$RUNINI. abs.asm, peek.asm and
-// bload.asm only read it, and no reference takes its address. ABSOLUTE runs
-// machine code of the program's choosing.
+// Which routines write a runtime cell a program names by EXTDEF: runtime.toml's
+// `[[writers]]`, with the source that settles each.
 pub static WRITERS: LazyLock<IndexMap<(&'static str, &'static str), BTreeSet<&'static str>>> = LazyLock::new(|| {
-    IndexMap::from_iter([(
-        ("b$seg", "qb45"),
-        BTreeSet::from([
-            "B$DSEG",
-            "B$DSG0",
-            "B$SCLR",
-            "B$RUNL",
-            "B$StackReset",
-            "B$Init",
-            "B$IINIT",
-            "B$RUNINI",
-            "ABSOLUTE",
-        ]),
-    )])
+    WRITERS_ROWS.iter().map(|&(cell, family, routines)| ((cell, family), routines.iter().copied().collect())).collect()
 });
 
 /// Whether `name` is a runtime cell only a reference naming it reaches: one
@@ -1625,6 +1596,8 @@ pub struct Row {
     direct_writes: Option<&'static str>,
     direct_reads: Option<&'static str>,
     pub captures: Option<&'static str>,
+    /// The routine's result is the flags (`flags_result = true`).
+    flags_result: bool,
     /// The routine hands control back to the program (`calls_back = true`).
     calls_back: bool,
 }
@@ -1759,7 +1732,7 @@ pub fn audited_pop(
 /// pointer argument past their return.
 /// The routines whose result is the flags.
 pub fn flags_results() -> Vec<&'static str> {
-    FLAGS_RESULTS.iter().map(|&(name, _)| name).collect()
+    ROWS.iter().filter(|row| row.flags_result).map(|row| row.name).collect()
 }
 
 pub fn captures_nothing() -> Vec<&'static str> {
@@ -1966,7 +1939,24 @@ mod tests {
     /// runtime's declaration kept no `noretain` until the table said so.
     #[test]
     fn test_erase_keeps_no_pointer_it_is_handed() {
-        assert_eq!(captures_nothing(), ["B$ERAS"]);
+        assert_eq!(captures_nothing(), ["B$ERAS", "B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8"]);
+    }
+
+    /// The set was a literal; the rows' `flags_result` must name the same one.
+    #[test]
+    fn test_the_routines_with_a_flags_result_are_the_rows_that_say_so() {
+        assert_eq!(flags_results(), ["B$SCMP"]);
+        assert!(flags_result("B$SCMP") && !flags_result("B$SCAT") && !flags_result("not a routine"));
+    }
+
+    /// The table was a literal; `[[writers]]` must give the same one.
+    #[test]
+    fn test_the_cells_with_writers_are_the_toml_s() {
+        assert_eq!(
+            WRITERS[&("b$seg", "qb45")].iter().copied().collect::<Vec<_>>(),
+            ["ABSOLUTE", "B$DSEG", "B$DSG0", "B$IINIT", "B$Init", "B$RUNINI", "B$RUNL", "B$SCLR", "B$StackReset"]
+        );
+        assert_eq!(WRITERS.len(), 1);
     }
 
     /// The pop tables were literals in abi/qb.rs; spot values must survive.
@@ -2017,7 +2007,8 @@ mod tests {
     fn test_an_unestablished_routine_is_left_at_the_worst_case() {
         for name in names().into_iter().filter(|name| !CONTRACTS[name].established) {
             let routine = &CONTRACTS[&name];
-            assert_eq!(*routine, Contract { evidence: routine.evidence.clone(), ..worst(&name) });
+            let claimed = Contract { evidence: routine.evidence.clone(), cleanup: routine.cleanup, ..worst(&name) };
+            assert_eq!(*routine, claimed);
         }
     }
 
