@@ -147,7 +147,42 @@ fn should_use_post_inc_value(
     phi_incoming(instruction).all(|(value, from)| value != operand || cx.tree.dominates(latch, from))
 }
 
+/// The first way the uses a pass carried through its edits differ from the
+/// ones made afresh for the function as it is now, or none.
+pub fn difference(
+    carried: &[IvStrideUse],
+    fresh: &[IvStrideUse],
+) -> Option<String> {
+    if let Some((at, (a, b))) = carried.iter().zip(fresh).enumerate().find(|(_, (a, b))| a != b) {
+        return Some(format!("use {at}: carried {a:?}, fresh {b:?}"));
+    }
+    (carried.len() != fresh.len()).then(|| format!("{} uses carried, {} fresh", carried.len(), fresh.len()))
+}
+
+/// `LLRM_CHECK_IVUSERS`: a pass that carries its `IvUsers` through an edit
+/// instead of making them again rebuilds them and fails on a difference.
+pub fn check_enabled() -> bool {
+    llrm_support::env_flag!("LLRM_CHECK_IVUSERS")
+}
+
 impl IvUsers {
+    /// Under `LLRM_CHECK_IVUSERS`: panics unless `self`, carried to the function
+    /// as it is now, is what [`Self::of`] makes of it.
+    pub fn assert_current(
+        &self,
+        se: &mut ScalarEvolution,
+        cx: &Cx,
+        env: &Env,
+    ) {
+        if !check_enabled() {
+            return;
+        }
+        let fresh = Self::of(se, cx, self.l, env);
+        if let Some(found) = difference(&self.uses, &fresh.uses) {
+            panic!("IvUsers carried through an edit are stale: {found}");
+        }
+    }
+
     /// `IVUsers::IVUsers`: all the uses of the induction variables of the loop
     /// with header `l`, from the phis of its header.
     pub fn of(
