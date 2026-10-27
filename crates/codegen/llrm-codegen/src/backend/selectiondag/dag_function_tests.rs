@@ -966,3 +966,23 @@ define i32 @f(i32 %a) {
     let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
     assert!(seen.iter().any(|n| n.starts_with("lea")) && !seen.iter().any(|n| n.starts_with("imul")), "{seen:?}");
 }
+
+/// m16 `long long a * 10` (f_mul_c) added the high words with `add ecx, ecx;
+/// add ecx, edx; mov edx, ecx`; the pin's dword `lea` takes the scaled
+/// index: `lea ecx, [ecx+ecx*4]; lea edx, [edx+ecx*2]`.
+#[test]
+fn at_m16_a_qword_multiply_by_ten_is_two_leas_and_a_mul() {
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+define i64 @f(i64 %a) {
+  %r = mul i64 %a, 10
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert_eq!(seen.iter().filter(|n| n.starts_with("lea")).count(), 2, "{seen:?}");
+    assert!(!seen.iter().any(|n| n.starts_with("add") || n.starts_with("imul")), "{seen:?}");
+}
