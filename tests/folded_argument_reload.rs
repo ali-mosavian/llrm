@@ -1,6 +1,6 @@
 //! An incoming argument the allocator would reload is read where it is used.
 
-use std::process::Command;
+mod common;
 
 /// x_isqrt: `n` is read at the entry and again by every trip of the outer loop,
 /// where the loop's own values hold the registers.
@@ -26,7 +26,7 @@ int main(void) { report((*bench_x_isqrt_via)(1500)); return 0; }
 fn a_load_made_again_for_one_instruction_is_that_instructions_memory_operand() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()
