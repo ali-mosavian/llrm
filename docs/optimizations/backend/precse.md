@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/precse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/precse.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/precse.rs sha256:732970f4429403b6a7d999168e6fb00f1a55b12de3d07f514a38671bfa735984 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/precse.rs sha256:241e0e2243f6a2b011b650253cb89af0a58ada7081bcd1a572794414008ab178 -->
 
 # precse
 
@@ -30,8 +30,10 @@ copy's source and a copy nothing else reads is erased
 (`PerformTrivialCopyPropagation`); a commutative operation is then asked
 with its sources swapped if the first form is still not there.
 
-An operation that sets flags is shared only where nothing after it in its
-block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
+An operation that sets flags is shared where nothing after it in its block
+reads them, or where the flags it would set are the shared one's still
+(`PhysRegDefsReach`: the same block or the sole predecessor, no flag write
+or call between, five instructions at most).
 
 An invariant load (a load of a constant global the module defines,
 `isDereferenceableInvariantLoad`; selection marks it `Insn::invariant`) is
