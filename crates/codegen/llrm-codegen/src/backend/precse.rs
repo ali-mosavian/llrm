@@ -26,10 +26,9 @@
 //! with its sources swapped if the first form is still not there.
 //!
 //! An operation that sets flags is shared where nothing after it in its block
-//! reads them, or where the first one's flags reach the readers: nothing
-//! writes them in between, within four instructions, and the first is in the
-//! same block or the only predecessor of this one (the pin's
-//! `hasLivePhysRegDefUses` and `PhysRegDefsReach`, `CrossMBBPhysDef`).
+//! reads them, or where the flags it would set are the shared one's still
+//! (`PhysRegDefsReach`: the same block or the sole predecessor, no flag write
+//! or call between, five instructions at most).
 //!
 //! An invariant load (a load of a constant global the module defines,
 //! `isDereferenceableInvariantLoad`; selection marks it `Insn::invariant`) is
@@ -230,6 +229,8 @@ struct Walk<'a> {
     /// `expression -> (value, block, instruction)`.
     table: HashMap<Semantics, (u32, usize)>,
     regs: llrm_lir::registers::Regs,
+    /// Each block's predecessors, as block numbers.
+    preds: Vec<Vec<usize>>,
 }
 
 impl Walk<'_> {
@@ -362,35 +363,42 @@ impl Walk<'_> {
             .is_some_and(|what| what.op == Operation::Move)
     }
 
-    /// `PhysRegDefsReach` for the flags: the ones `insns[index]` of `block`
-    /// sets are those of the same operation `shared` made, because nothing
-    /// that writes them lies between (the pin looks at five instructions at
-    /// most, `getMachineCSELookAheadLimit`), and `shared` is in the same block
-    /// or in the only predecessor of this one.
+    /// `PhysRegDefsReach`: the flags the instruction that defines `value` in
+    /// `shared` set are still there at the instruction `index` of `block`,
+    /// which is in `shared` or has it as its only predecessor, within
+    /// `LookAheadLimit` instructions that neither write the flags nor call.
     fn flags_reach(
         &self,
-        shared: (u32, usize),
+        value: u32,
+        shared: usize,
         block: usize,
         index: usize,
     ) -> bool {
-        let (value, home) = shared;
-        let insns = |number: usize| &self.body.blocks[number].insns;
-        let Some(from) = insns(home).iter().position(|one| one.defines.first() == Some(&value)) else {
+        const LOOK_AHEAD_LIMIT: usize = 5;
+        let first = &self.body.blocks[shared].insns;
+        let Some(def) = first.iter().position(|one| one.defines.first() == Some(&value)) else { return false };
+        let (rest, until) = if shared == block {
+            (&first[def + 1..index], None)
+        } else if self.preds[block] == [shared] {
+            (&first[def + 1..], Some(&self.body.blocks[block].insns[..index]))
+        } else {
             return false;
         };
-        let between: Vec<&Arc<Insn>> = if home == block {
-            insns(block).get(from + 1..index).unwrap_or_default().iter().collect()
-        } else {
-            let at = self.body.blocks[block].at;
-            let entering = self.body.blocks.iter().filter(|other| other.succ.contains(&at)).count();
-            if entering != 1 || !self.body.blocks[home].succ.contains(&at) {
+        let mut left = LOOK_AHEAD_LIMIT;
+        for one in rest.iter().chain(until.into_iter().flatten()) {
+            if self.removed.contains(&one.id()) || one.is_meta() {
+                continue;
+            }
+            if left == 0 {
                 return false;
             }
-            insns(home)[from + 1..].iter().chain(&insns(block)[..index]).collect()
-        };
-        let between: Vec<_> = between.into_iter().filter(|one| !one.is_meta()).collect();
-        between.len() < LOOK_AHEAD
-            && between.iter().all(|one| is_terminator(one) || !sets_flags(self.regs, self.body.bits, one))
+            let calls = one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+            if calls || (!is_terminator(one) && sets_flags(self.regs, self.body.bits, one)) {
+                return false;
+            }
+            left -= 1;
+        }
+        true
     }
 
     /// Whether the flags `one` sets are read before anything sets them again,
@@ -672,9 +680,6 @@ fn hoisted(
     Some((out, made_ids))
 }
 
-/// `getMachineCSELookAheadLimit`: X86 keeps the default.
-const LOOK_AHEAD: usize = 5;
-
 /// `body` with every repeated pure computation shared.
 pub fn shared(
     body: &LirBody,
@@ -732,7 +737,14 @@ pub fn shared(
             }
         }
     }
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); body.blocks.len()];
+    for (from, block) in body.blocks.iter().enumerate() {
+        for to in block.succ.iter().filter_map(|at| by_at.get(at)) {
+            preds[*to].push(from);
+        }
+    }
     let mut walk = Walk {
+        preds,
         body,
         block_of,
         readers,
@@ -785,13 +797,11 @@ pub fn shared(
                 mine.push(key);
                 continue;
             };
-            // An operation that sets flags is shared where nothing reads them,
-            // or where the first one's flags reach the readers
-            // (`PhysRegDefsReach`).
+            // An operation that sets flags is shared where nothing reads them.
             let sets_flags = sets_flags(regs, body.bits, one);
             if sets_flags
                 && walk.flags_read_after(number, index)
-                && !walk.flags_reach((shared_value, shared_block), number, index)
+                && !walk.flags_reach(shared_value, shared_block, number, index)
             {
                 walk.table.insert(key.clone(), (one.defines[0], number));
                 mine.push(key);
