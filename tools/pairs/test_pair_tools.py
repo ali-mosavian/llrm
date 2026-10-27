@@ -206,3 +206,11 @@ def test_pair_builds_the_binaries_its_rows_and_sizes_steps_run():
     text = (HERE / "pair.sh").read_text()
     build = text.index("cargo build --release --bins")
     assert build < text.index("nice -n 10 tools/rows/run.sh") and build < text.index("python3 tools/sizes.py")
+
+
+def test_pindiff_pin_side_has_no_forced_frame_pointer():
+    """pindiff ran the pin with -frame-pointer=all: every w-O*/*.pin.s opened `push ebp; mov ebp, esp`, so hanoi2/queens -Os read as encoding-byte gaps."""
+    pindiff = load("pindiff")
+    assert pindiff.forced_frame("f:\n\tpush\tebp\n\tmov\tebp, esp\n", "define void @f() {\n  ret void\n}\n")
+    assert not pindiff.forced_frame("f:\n\tret\n", "define void @f() {\n  ret void\n}\n")
+    assert "-frame-pointer=all" not in (HERE / "pindiff.py").read_text()
