@@ -692,6 +692,9 @@ fn selected_in(
         64 => (BuilderTarget::m64(), AddrMode::Flat64),
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
+    let mut builder_target = builder_target;
+    // The frontends compile static code: every symbol is `dso_local`.
+    builder_target.dag.dso_local_symbols = true;
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
