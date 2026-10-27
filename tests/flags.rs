@@ -32,7 +32,7 @@ fn tools() -> Vec<Tool> {
     vec![
         Tool {
             name: "llrm-c",
-            path: env!("CARGO_BIN_EXE_llrm-c"),
+            path: env!("CARGO_BIN_EXE_llrm-cc"),
             input: ("a.c", C),
             more: &["-S", "-o", "a.s"],
             meets: Meets::Builds,
