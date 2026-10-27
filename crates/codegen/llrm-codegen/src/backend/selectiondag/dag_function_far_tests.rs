@@ -932,6 +932,22 @@ entry:
     }
 }
 
+/// `freeze` of an `i64` at m16 stopped the legalizer with `Unsupported
+/// { op: Freeze, ty: I64, what: "expand result" }` (vsgcc `x_ll_div`).
+#[test]
+fn a_frozen_i64_expands_to_two_frozen_halves() {
+    let ir = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+define i64 @f(i64 %a) {
+entry:
+  %b = freeze i64 %a
+  ret i64 %b
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+}
+
 const HUGE_STEP: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 define ptr addrspace(3) @f(ptr addrspace(3) %p) {
 entry:

@@ -256,6 +256,53 @@ fn test_a_shifted_index_is_the_scale_of_an_index_the_block_reads() {
     assert!(b2.contains("%j"), "the store's block makes its address from j: {after}");
 }
 
+/// x_bubble again, the swap block reading none of the index (`i` is dead there
+/// once `i1` is made): the stores took the header's `shl` from a register,
+/// `lea ecx,[esi*4]; mov [ecx+_a],..; mov [ecx+_a+4],..` (+3702 instructions
+/// against the pin, which folds `_a[esi*4]` in each). Every use of the `shl` is
+/// an access that folds it, so the pin folds it into each
+/// (`isProfitableToFoldInto AddressingMode`, the last case).
+#[test]
+fn test_a_shift_only_accesses_read_is_the_scale_where_the_index_is_dead() {
+    let after = sunk_flat(
+        "@a = global [200 x i32] zeroinitializer
+
+define void @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b3 ]
+  %s = shl i32 %i, 2
+  %p = getelementptr i8, ptr @a, i32 %s
+  %x = load i32, ptr %p
+  %i1 = add i32 %i, 1
+  %q = getelementptr i8, ptr %p, i32 4
+  %y = load i32, ptr %q
+  %c = icmp sgt i32 %x, %y
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p2 = getelementptr i8, ptr @a, i32 %s
+  store i32 %y, ptr %p2
+  %q2 = getelementptr i8, ptr %p2, i32 4
+  store i32 %x, ptr %q2
+  br label %b3
+
+b3:
+  %done = icmp eq i32 %i1, %n
+  br i1 %done, label %b4, label %b1
+
+b4:
+  ret void
+}
+",
+    );
+    let (_, rest) = after.split_once("b2:").expect("a block b2");
+    let b2 = rest.split_once("b3:").expect("a block b3").0;
+    assert!(!b2.contains("%s"), "the shifted index crosses the edge: {after}");
+}
+
 /// Real mode forms a scaled index with an address-size prefix and a stall of
 /// its own (`scaled_index_insns`): folding the shift would pay them at each
 /// access where the shift is made once (quicksort at m16 grew 21 bytes).
