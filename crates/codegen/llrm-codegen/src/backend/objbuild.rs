@@ -518,7 +518,16 @@ pub fn written_in(
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
         let object = built_inner(module, source, layout, format)?;
-        serialized(&object, format)
+        let bytes = serialized(&object, format)?;
+        if let Some(dir) = llrm_target::object::all_writers_dir() {
+            for other in Format::ALL {
+                let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
+                if let Ok(written) = written {
+                    llrm_target::object::record_writer(&dir, other, &written);
+                }
+            }
+        }
+        Ok(bytes)
     })
 }
 
