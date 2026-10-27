@@ -132,6 +132,7 @@ pub mod libcall;
 pub mod logic_setcc;
 pub mod opcodes;
 mod reassociate;
+pub mod rotate_combine;
 pub mod schedule;
 pub mod switchcg;
 pub mod x86_carry;
