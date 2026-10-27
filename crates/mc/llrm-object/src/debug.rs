@@ -81,8 +81,42 @@ pub enum FrameBase {
     Cfa { bias: i64, far_bias: i64 },
 }
 
+/// What a debug writer needs to know of the machine, so it reads no
+/// [`crate::Arch`]. The target says it (`Info::target`); a made-up one needs no
+/// variant of `Arch`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DebugTarget {
+    /// The width of a near address: a DWARF address, and the size of a
+    /// reference.
+    pub address_bytes: u8,
+    /// Whether an address is a segment and an offset (16-bit real mode).
+    pub segmented: bool,
+    /// CodeView's machine number for `S_COMPILE3`, where the target has one.
+    pub codeview_machine: Option<u16>,
+}
+
+impl DebugTarget {
+    /// What the architectures of today say; the target replaces it
+    /// (`Info::target`).
+    pub fn of(arch: crate::Arch) -> Self {
+        use crate::Arch;
+        Self {
+            address_bytes: (arch.bits() / 8) as u8,
+            segmented: arch == Arch::I8086,
+            codeview_machine: match arch {
+                Arch::I386 => Some(0x03),
+                Arch::X8664 => Some(0xD0),
+                _ => None,
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
+    /// The machine, where the target says so; unset, [`DebugTarget::of`] the
+    /// object's architecture.
+    pub target: Option<DebugTarget>,
     pub format: Format,
     pub language: Language,
     /// Which CodeView 4 an OMF object carries, where the frontend says.
@@ -108,6 +142,16 @@ pub struct Info {
     /// Variables of the module, in data.
     pub globals: Vec<Variable>,
     pub lines: Vec<Line>,
+}
+
+impl Info {
+    /// The machine this information is written for.
+    pub fn target_of(
+        &self,
+        arch: crate::Arch,
+    ) -> DebugTarget {
+        self.target.unwrap_or_else(|| DebugTarget::of(arch))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

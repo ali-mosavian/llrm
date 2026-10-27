@@ -6,7 +6,7 @@ pub mod symbols;
 mod types;
 
 use llrm_object::debug::Info;
-use llrm_object::{Arch, Object, Reloc, Unsupported};
+use llrm_object::{Object, Reloc, Unsupported};
 
 /// `CV_SIGNATURE_C13`: what opens both sections.
 const SIGNATURE: u32 = 4;
@@ -109,10 +109,12 @@ pub fn encode(
 }
 
 /// CodeView's machine number, for `S_COMPILE3`.
-pub(crate) fn machine(arch: Arch) -> Result<u16, Unsupported> {
-    match arch {
-        Arch::I386 => Ok(0x03),
-        Arch::X8664 => Ok(0xD0),
-        other => refused(format!("{other:?} has no C13 machine")),
+pub(crate) fn machine(
+    object: &Object,
+    info: &Info,
+) -> Result<u16, Unsupported> {
+    match info.target_of(object.arch).codeview_machine {
+        Some(number) => Ok(number),
+        None => refused(format!("{:?} has no C13 machine", object.arch)),
     }
 }

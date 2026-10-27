@@ -132,7 +132,7 @@ impl Builder<'_> {
             }
             Type::Reference(target) => {
                 let target = self.of(target)?;
-                self.pointer(target, self.object.arch.bits() as u8 / 8, 1)?
+                self.pointer(target, self.info.target_of(self.object.arch).address_bytes, 1)?
             }
             Type::Qualified { target, constant, volatile } => {
                 let target = self.of(target)?;

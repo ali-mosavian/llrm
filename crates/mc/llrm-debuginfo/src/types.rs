@@ -211,7 +211,7 @@ impl Tree<'_> {
             }
             Type::Reference(target) => {
                 let mut die = Die::new(TAG_REFERENCE);
-                die.attrs.push((AT_BYTE_SIZE, Value::U8(self.object.arch.bits() as u8 / 8)));
+                die.attrs.push((AT_BYTE_SIZE, Value::U8(self.info.target_of(self.object.arch).address_bytes)));
                 self.typed(&mut die, *target)?;
                 die
             }

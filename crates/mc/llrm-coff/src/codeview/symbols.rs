@@ -424,7 +424,7 @@ pub(super) fn encode(
     symbols.symbol(S_COMPILE3, |out| {
         // Language 0 is C.
         put32(&mut out.bytes, 0);
-        put16(&mut out.bytes, machine(object.arch)?);
+        put16(&mut out.bytes, machine(object, info)?);
         [0u16, 1, 0, 0, 0, 1, 0, 0].iter().for_each(|&one| put16(&mut out.bytes, one));
         name(&mut out.bytes, "llrm");
         Ok(())

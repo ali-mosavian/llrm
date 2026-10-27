@@ -569,7 +569,7 @@ pub fn records(
     object: &Object,
     info: &Info,
 ) -> Result<Debug, Error> {
-    if object.arch.bits() != 16 {
+    if !info.target_of(object.arch).segmented {
         return refused("its records are 16-bit: Borland's 32-bit information is another format");
     }
     let mut builder = Builder {

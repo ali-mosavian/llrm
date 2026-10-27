@@ -62,7 +62,7 @@ pub fn expanded(
         Format::CodeView => return refused("this object format cannot carry CodeView"),
         Format::TurboDebugger => return refused("this object format cannot carry Turbo Debugger's information"),
     };
-    let address = object.arch.bits() / 8;
+    let address = u32::from(info.target_of(object.arch).address_bytes);
     let base = object.sections.len();
     // The sections' places: abbrev, str, line_str (5), line, info, aranges.
     let mut names = vec![".debug_abbrev", ".debug_str"];

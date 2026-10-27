@@ -505,3 +505,16 @@ fn a_base_type_is_named_as_the_source_spells_it() {
     let plain = strings(vec![Type::Scalar(Scalar::Int { bytes: 4, signed: false })]);
     assert!(has(&plain, "uint32_t"), "{:?}", String::from_utf8_lossy(&plain));
 }
+
+/// The unit header's address size was `object.arch.bits() / 8`, so a machine
+/// with no `Arch` variant could not be written: a target says it in
+/// `Info::target`.
+#[test]
+fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
+    made.debug.as_mut().unwrap().target =
+        Some(llrm_object::debug::DebugTarget { address_bytes: 3, segmented: false, codeview_machine: None });
+    let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    let (_, info) = named(&written, ".debug_info");
+    assert_eq!(info.image[7], 3, "the unit header's address size");
+}
