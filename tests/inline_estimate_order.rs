@@ -1,7 +1,9 @@
 //! An inline the estimate keeps is put through the pipeline caller by caller.
 
+mod common;
+
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// qb-runtime's `i8out.c` (source with an out-of-bounds store through a macro,
@@ -15,7 +17,7 @@ use std::time::{Duration, Instant};
 fn test_a_kept_inline_is_optimised_in_one_caller_before_the_next_is_spliced_into() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/i8out");
     let directory = tempfile::tempdir().expect("a directory");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let mut child = common::cc::llrm_c()
         .args(["-m16", "-O2", "-I", root.to_str().unwrap(), "-S", "-o", directory.path().join("x.s").to_str().unwrap()])
         .arg(root.join("i8out.c"))
         .env("LLRM_DEBUG", "time")

@@ -176,6 +176,58 @@ const TAKES_VALUE: &[&str] = &[
     "-arch",
     "-target",
 ];
+/// The backend's own flags (llrm-llc's `Flags`), which clang does not know.
+const LLC_FLAGS: &[&str] = &[
+    "-mstack-is-data",
+    "-mno-stack-is-data",
+    "-mfar-bss",
+    "-mno-far-bss",
+    "-mregcall-default",
+    "-mbss-begin",
+    "-mno-bss-begin",
+    "-fstack-usage",
+    "-ffloat-store",
+    "-fno-float-store",
+];
+const LLC_PREFIXES: &[&str] =
+    &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
+/// The passes `-f[no-]PASS` switches in the backend's pipeline.
+const BACKEND_PASSES: &[&str] = &[
+    "allocation-search",
+    "allocation-search-all",
+    "peel-loops",
+    "inline-functions-called-once",
+    "inline-functions",
+    "strength-reduce",
+    "lsr",
+    "unswitch-loops",
+    "loop-interchange",
+    "loop-unroll-and-jam",
+    "tree-ch",
+    "ipa-cp-clone",
+    "inline-recursive",
+    "gcse",
+    "tree-pre",
+    "tree-switch-conversion",
+    "jump-tables",
+    "tree-dse",
+    "tree-dce",
+    "tree-sink",
+    "llrm-spares",
+    "llrm-homes",
+    "llrm-stable-loads",
+    "tree-sra",
+    "move-loop-invariants",
+    "tree-loop-distribute-patterns",
+    "optimize-sibling-calls",
+];
+
+fn backend_pass(flag: &str) -> Option<&'static str> {
+    let name = flag.strip_prefix("-f")?;
+    let name = name.strip_prefix("no-").unwrap_or(name);
+    BACKEND_PASSES.iter().copied().find(|pass| *pass == name)
+}
+
 const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile"];
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
@@ -228,13 +280,33 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 "g" => "1".into(),
                 other => other.to_owned(),
             };
-            build.clang.push(flag.to_owned());
+            // clang has no -Omax: its top level is -O3.
+            build.clang.push(if level == "max" { "-O3".to_owned() } else { flag.to_owned() });
         } else if flag.starts_with("-mabi=") {
             // The backend's convention (clang's own -mabi is for other
             // targets); it follows the table's.
             build.llc.push(flag.to_owned());
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
+            build.llc.push(flag.to_owned());
+        } else if flag.starts_with("-march=") || flag.starts_with("-mtune=") {
+            // The backend prices and selects for the CPU as clang does.
+            build.clang.push(flag.to_owned());
+            build.llc.push(flag.to_owned());
+        } else if let Some(pass) = backend_pass(flag) {
+            // The pipeline's `-f[no-]PASS` switches are the backend's; clang
+            // knows only the inliner's.
+            if pass == "inline-functions" {
+                build.clang.push(flag.to_owned());
+            }
+            build.llc.push(flag.to_owned());
+        } else if LLC_FLAGS.contains(&flag) || LLC_PREFIXES.iter().any(|one| flag.starts_with(one)) {
+            build.llc.push(flag.to_owned());
+        } else if flag == "--dump" {
+            // llrm-c's switch: each backend stage written to the directory.
+            build.llc.push(flag.to_owned());
+            build.llc.push(value(&mut at)?);
+        } else if flag.starts_with("--dump=") {
             build.llc.push(flag.to_owned());
         } else if flag == "-l" || flag == "-L" || flag == "-Xlinker" {
             build.link.push(flag.to_owned());

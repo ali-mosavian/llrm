@@ -1,7 +1,7 @@
 //! A return that the early exit shares with the late path is not a reason to
 //! save registers at the entry.
 
-use std::process::Command;
+mod common;
 
 /// x_hanoi2's `mv`, called from outside so that it takes its first two
 /// arguments in registers: the loop falls into the return the `n == 0` test
@@ -41,7 +41,7 @@ fn listing(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()
@@ -87,7 +87,7 @@ fn a_late_path_that_jumps_to_a_join_pops_before_the_jump_and_the_early_exit_pays
 fn at_os_the_registers_stay_saved_at_the_entry() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), LOOP).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-Os", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()

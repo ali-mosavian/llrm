@@ -1472,6 +1472,33 @@ impl<'a> TypeLegalizer<'a> {
                 return Ok((low, self.dag.get_node(ISD::Add, half, &[selector, steps])));
             }
         }
+        // A step of less than one offset range, known at compile time, moves
+        // the selector by at most one stride, and the offset's carry (borrow)
+        // says whether: `add; sbb; and`, not the dword sum's high word.
+        if let Some(step) = self.dag.constant(delta).and_then(|bits| {
+            let (width, bits) = (dword.size_in_bits(), bits);
+            let half_bits = half.size_in_bits();
+            let range = 1u128 << half_bits;
+            let negative = bits >= (1u128 << width) - range;
+            (bits != 0 && (bits < range || negative))
+                .then(|| (negative, if negative { (1u128 << width) - bits } else { bits }))
+        }) {
+            let (negative, magnitude) = step;
+            let amount = self.dag.get_constant(magnitude, half);
+            // the wrap is the add's own carry (`UADDO`, `add; setb`), not a
+            // compare against the offset before the step, which keeps that
+            // offset alive across the loop
+            let bool_vt = self.tli.types.set_cc_result_type(half);
+            let both = self
+                .dag
+                .get_node_multi(if negative { ISD::USubO } else { ISD::UAddO }, &[half, bool_vt], &[offset, amount]);
+            let (moved, wrapped) = (both, SDValue { node: both.node, res: 1 });
+            let stride = self.dag.get_constant(1u128 << shift, half);
+            let zero = self.dag.get_constant(0, half);
+            let carry = self.dag.get_select(half, wrapped, stride, zero);
+            let op = if negative { ISD::Sub } else { ISD::Add };
+            return Ok((moved, self.dag.get_node(op, half, &[selector, carry])));
+        }
         // A delta that fits the offset adds as a word and the carry steps the
         // selector: `add bx, 4; sbb di, di; and di, 4096`, not a dword add and
         // a shift of its high word. (The expansion of the dword add: the
