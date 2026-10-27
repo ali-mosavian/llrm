@@ -870,6 +870,9 @@ mod tests {
             vec![],
         );
         assert!(physical(&physical_body(vec![write, read.clone()]), &BTreeSet::new()).is_empty());
-        assert!(physical(&physical_body(vec![read]), &BTreeSet::from([physical_body(vec![]).regs().root(RegId::BX)])).is_empty());
+        assert!(
+            physical(&physical_body(vec![read]), &BTreeSet::from([physical_body(vec![]).regs().root(RegId::BX)]))
+                .is_empty()
+        );
     }
 }
