@@ -33,3 +33,11 @@ Owner: TBD (low priority, after the parity items). CodeView register variables a
 makes a variable invisible where it had a home before: `p.nib` -O0 `add`'s `b` was in EDX to the end before b74cf6bf4, and now EDX takes `t` at `b`'s
 last use. Fix: `S_DEFRANGE_REGISTER` ranges per live interval. `cv4::codeview_debugs_a_nib_program_as_it_does_a_c_one` expects no `reg long b`; it
 documents today's behaviour.
+
+## Huge-pointer carry: `sbb`+`and` for `select(carry, 2^n, 0)`
+
+Owner: w12. Do after switch-over. A huge pointer's step moves the selector by `select(carry, 4096, 0)` of the offset add (`expand_huge_add`). The pin lowers
+that select to `setb al; shl eax, 12` (its `llc -O2`, i486, `uadd.with.overflow.i16` + `select i1 %c, i16 4096, i16 0`: `xorl %eax,%eax; addw; setb %al; shll $12,%eax`);
+`SETCC_CARRY` only fires for an all-ones select. The old selector's `sbb r, r; and r, 4096` prices 2 clocks against `setb`+`shl` 5 on a 486.
+`tests/run/huge/pairs.c` m16 -Os loop: dag 16 instructions (`setb dl; shl dx, 12; add dx, cx` twice), old 17 (`sbb dx, dx; and dx, 4096; add dx, cx` twice).
+Fix: a documented deviation for 486-class targets, priced from the CPU profile, with a fail-first isel test and the m16 -Os sweep in clocks.

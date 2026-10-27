@@ -6,14 +6,17 @@
 //! folds.
 //!
 //! OWED, in place as `// OWED:` comments: `foldICmpXNegX`, the sign-mask and
-//! low-bit-mask forms, `foldICmpXorXX`, `foldICmpOrXX`, the shared multiplier,
-//! `srem`, and every arm after them (`udiv`, `shl`, `lshr`, `and`...).
+//! low-bit-mask forms, the equality forms of `foldICmpOrXX`, and every arm
+//! after `srem` (the shared second operand, `udiv`, `shl`, `lshr`, `and`...).
 //!
 //! DEVIATE 1: `ShareCommonDivisor` takes only its fast path (the offset is 1,
 //! or -1 for the negative forms); the general case needs `isMultipleOf`, which
 //! MIR's value tracking does not have. Exit: `isMultipleOf`.
 //!
 //! DEVIATE 2: no vectors; the constants of the equality fold are integers.
+//!
+//! DEVIATE 3: the shared multiplier asks `simplifyICmpInst` without the
+//! instruction as its context.
 //!
 //! # How it works
 //! With `Op0 = A + B` and `Op1 = C + D` (an `or disjoint` is an add), a
@@ -32,10 +35,12 @@
 use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::valuetracking::{nonzero, pattern};
+use llrm_mir::simplify::simplify_icmp_operands;
+use llrm_mir::valuetracking::{known, nonzero, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{has_one_use, query};
+use crate::constraintelim::strict_predicate;
 
 fn is_equality(pred: IntPredicate) -> bool {
     matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
@@ -374,8 +379,390 @@ pub fn fold_icmp_bin_op(
     {
         return Some(new_icmp(c, inst, pred, d, b));
     }
-    // OWED: icmp (0-X) < cst, foldICmpXorXX, foldICmpOrXX, the shared
-    // multiplier, srem and the arms after it.
+    // icmp (0-X) < cst --> x > -cst
+    if side0.no_wrap_problem
+        && is_signed(pred)
+        && side0.op == Some(BinaryOp::Sub)
+        && let Some((_, zero, x, _)) = binary_operator(c, op0)
+        && const_bits(c, zero) == Some(0)
+        && let Some((bits, width)) = query(c, None).int_constant(op1)
+        && bits != 1 << (width - 1)
+    {
+        let negated = c.int(ty, 0u128.wrapping_sub(bits));
+        return Some(new_icmp(c, inst, swapped(pred), x, negated));
+    }
+
+    if let Some(r) = fold_icmp_xor_xx(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_icmp_or_xx(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_shared_multiplier(c, inst, pred, op0, op1, &side0, &side1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_srem_against_divisor(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_same_opcode(c, inst, pred, op0, op1, &side0, &side1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_and_below_limit(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_doubling(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    // OWED: foldMultiplicationOverflowCheck, foldICmpAndXX,
+    // foldICmpWithTruncSignExtendedVal and
+    // foldShiftIntoShiftInAnotherHandOfAndInICmp.
+    None
+}
+
+/// `ICmpInst::getFlippedSignednessPredicate`.
+fn flipped_signedness(pred: IntPredicate) -> IntPredicate {
+    match pred {
+        IntPredicate::Ugt => IntPredicate::Sgt,
+        IntPredicate::Uge => IntPredicate::Sge,
+        IntPredicate::Ult => IntPredicate::Slt,
+        IntPredicate::Ule => IntPredicate::Sle,
+        IntPredicate::Sgt => IntPredicate::Ugt,
+        IntPredicate::Sge => IntPredicate::Uge,
+        IntPredicate::Slt => IntPredicate::Ult,
+        IntPredicate::Sle => IntPredicate::Ule,
+        other => other,
+    }
+}
+
+/// Two operators of one opcode with the same second operand, one of them
+/// used only here.
+fn fold_same_opcode(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+    side0: &Side,
+    side1: &Side,
+) -> Option<Visit> {
+    let (opcode, a, y0, f0) = binary_operator(c, op0)?;
+    let (opcode1, b, y1, f1) = binary_operator(c, op1)?;
+    if opcode != opcode1 || !(side0.one_use || side1.one_use) || y0 != y1 {
+        return None;
+    }
+    let ty = c.type_of(op0);
+    let exact = f0.contains(Flags::EXACT) && f1.contains(Flags::EXACT);
+    match opcode {
+        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Xor => {
+            // a+x icmp eq/ne b+x --> a icmp b
+            if is_equality(pred) {
+                return Some(new_icmp(c, inst, pred, a, b));
+            }
+            let (bits, width) = query(c, None).int_constant(y0)?;
+            // icmp u/s (a ^ signmask), (b ^ signmask) --> icmp s/u a, b
+            if bits == 1 << (width - 1) {
+                return Some(new_icmp(c, inst, flipped_signedness(pred), a, b));
+            }
+            // icmp u/s (a ^ maxsignval), (b ^ maxsignval) --> icmp s/u' a, b
+            if opcode == BinaryOp::Xor && bits == (1 << (width - 1)) - 1 {
+                return Some(new_icmp(c, inst, swapped(flipped_signedness(pred)), a, b));
+            }
+            None
+        }
+        BinaryOp::Mul => {
+            if !is_equality(pred) {
+                return None;
+            }
+            let (bits, width) = query(c, None).int_constant(y0)?;
+            // icmp eq/ne (X * C), (Y * C) --> icmp (X & Mask), (Y & Mask)
+            // Mask = -1 >> count-trailing-zeros(C).
+            let tzs = bits.trailing_zeros();
+            if bits == 0 || bits == 1 || tzs == 0 {
+                return None;
+            }
+            let mask = c.int(ty, mask(width - tzs));
+            let and1 = c.create_binop(inst, BinaryOp::And, a, mask, Flags::default());
+            let and2 = c.create_binop(inst, BinaryOp::And, b, mask, Flags::default());
+            Some(new_icmp(c, inst, pred, and1, and2))
+        }
+        BinaryOp::UDiv | BinaryOp::LShr => {
+            if is_signed(pred) || !exact {
+                return None;
+            }
+            Some(new_icmp(c, inst, pred, a, b))
+        }
+        BinaryOp::SDiv => {
+            let non_negative = query(c, None).int_constant(y0).is_some_and(|(bits, width)| bits >> (width - 1) == 0);
+            if !(is_equality(pred) || non_negative) || !exact {
+                return None;
+            }
+            Some(new_icmp(c, inst, pred, a, b))
+        }
+        BinaryOp::AShr => exact.then(|| new_icmp(c, inst, pred, a, b)),
+        BinaryOp::Shl => {
+            let nuw = side0.has_nuw && side1.has_nuw;
+            let nsw = side0.has_nsw && side1.has_nsw;
+            if (!nuw && !nsw) || (!nsw && is_signed(pred)) {
+                return None;
+            }
+            Some(new_icmp(c, inst, pred, a, b))
+        }
+        _ => None,
+    }
+}
+
+/// Transform  A & (L - 1) `ult` L --> L != 0
+fn fold_and_below_limit(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    if pred != IntPredicate::Ult {
+        return None;
+    }
+    let (_, x, y, _) = binary_operator(c, op0).filter(|&(op, ..)| op == BinaryOp::And)?;
+    let limit_minus_one = |c: &Combiner, v: Operand| {
+        binary_operator(c, v).is_some_and(|(op, l, m, _)| {
+            op == BinaryOp::Add
+                && l == op1
+                && query(c, None).int_constant(m).is_some_and(|(bits, width)| bits == mask(width))
+        })
+    };
+    if !(limit_minus_one(c, y) || limit_minus_one(c, x)) {
+        return None;
+    }
+    let zero = c.int(c.type_of(op1), 0);
+    Some(new_icmp(c, inst, IntPredicate::Ne, op1, zero))
+}
+
+/// For unsigned predicates / eq / ne:
+/// icmp pred (x << 1), x --> icmp getSignedPredicate(pred) x, 0
+/// icmp pred x, (x << 1) --> icmp getSignedPredicate(pred) 0, x
+fn fold_doubling(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    if is_signed(pred) {
+        return None;
+    }
+    let doubles = |c: &Combiner, v: Operand, of: Operand| {
+        binary_operator(c, v)
+            .is_some_and(|(op, x, one, _)| op == BinaryOp::Shl && x == of && const_bits(c, one) == Some(1))
+    };
+    let signed_pred = if is_unsigned(pred) { flipped_signedness(pred) } else { pred };
+    if doubles(c, op0, op1) {
+        let zero = c.int(c.type_of(op1), 0);
+        Some(new_icmp(c, inst, signed_pred, op1, zero))
+    } else if doubles(c, op1, op0) {
+        let zero = c.int(c.type_of(op0), 0);
+        Some(new_icmp(c, inst, signed_pred, zero, op0))
+    } else {
+        None
+    }
+}
+
+/// `X * Z pred Y * Z`: the shared multiplier is removed from the compare.
+///
+/// DEVIATE 3 (header).
+fn fold_shared_multiplier(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+    side0: &Side,
+    side1: &Side,
+) -> Option<Visit> {
+    let (_, m0, m1, _) = binary_operator(c, op0).filter(|&(op, ..)| op == BinaryOp::Mul)?;
+    // m_Mul(m_Value(X), m_Value(Z)) or m_Mul(m_Value(Z), m_Value(X)), against
+    // m_c_Mul(m_Specific(Z), m_Value(Y)).
+    let (x, z, y) = [(m0, m1), (m1, m0)]
+        .into_iter()
+        .find_map(|(x, z)| commutative_with_specific(c, inst, op1, BinaryOp::Mul, z).map(|y| (x, z, y)))?;
+    let q = query(c, Some(inst));
+    let (nsw, nuw) = (side0.has_nsw && side1.has_nsw, side0.has_nuw && side1.has_nuw);
+    let ty = c.type_of(z);
+    if is_signed(pred) {
+        if !nsw {
+            return None;
+        }
+        let known = known::compute_known_bits(&q, z, 0);
+        if known.is_strictly_positive() {
+            return Some(new_icmp(c, inst, pred, x, y));
+        }
+        if known.is_negative() {
+            return Some(new_icmp(c, inst, swapped(pred), x, y));
+        }
+        let simplified = |c: &Combiner, p| {
+            simplify_icmp_operands(c.context, c.env.layout, c.function, p, x, y).and_then(|r| const_bits(c, r))
+        };
+        let zero = c.int(ty, 0);
+        if simplified(c, IntPredicate::Slt) == Some(1) {
+            return Some(new_icmp(c, inst, swapped(pred), z, zero));
+        }
+        if simplified(c, IntPredicate::Sgt) == Some(1) {
+            return Some(new_icmp(c, inst, pred, z, zero));
+        }
+        return None;
+    }
+    let non_zero;
+    if is_equality(pred) {
+        // If X != Y, fold (X *nw Z) eq/ne (Y *nw Z) -> Z eq/ne 0
+        if (nsw || nuw) && nonzero::is_known_non_equal(&q, x, y, 0) {
+            let zero = c.int(ty, 0);
+            return Some(new_icmp(c, inst, pred, z, zero));
+        }
+        let known = known::compute_known_bits(&q, z, 0);
+        // if Z % 2 != 0: X * Z eq/ne Y * Z -> X eq/ne Y
+        if known.count_max_trailing_zeros() == 0 {
+            return Some(new_icmp(c, inst, pred, x, y));
+        }
+        non_zero = known.one != 0 || nonzero::is_known_non_zero(&q, z, 0);
+        // if Z != 0 and nsw(X * Z) and nsw(Y * Z): X * Z eq/ne Y * Z -> X eq/ne
+        // Y
+        if non_zero && nsw {
+            return Some(new_icmp(c, inst, pred, x, y));
+        }
+    } else {
+        non_zero = nonzero::is_known_non_zero(&q, z, 0);
+    }
+    // If Z != 0 and nuw(X * Z) and nuw(Y * Z):
+    //    X * Z u{lt/le/gt/ge}/eq/ne Y * Z -> X u{lt/le/gt/ge}/eq/ne Y
+    if non_zero && nuw {
+        return Some(new_icmp(c, inst, pred, x, y));
+    }
+    None
+}
+
+/// `icmp (srem X, Y), Y` and `icmp Y, (srem X, Y)`: the sign of `Y` decides.
+fn fold_srem_against_divisor(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let srem_of = |c: &Combiner, rem: Operand, divisor: Operand| {
+        binary_operator(c, rem).filter(|&(op, _, d, _)| op == BinaryOp::SRem && d == divisor)
+    };
+    // We don't check hasOneUse to avoid increasing register pressure because
+    // the value we use is the same value this instruction was already using.
+    let (divisor, pred) = if let Some((_, _, d, _)) = srem_of(c, op0, op1) {
+        (d, swapped(pred))
+    } else {
+        let (_, _, d, _) = srem_of(c, op1, op0)?;
+        (d, pred)
+    };
+    let ty = c.type_of(divisor);
+    let i1 = c.context.types.int(1);
+    match pred {
+        IntPredicate::Eq => Some(Visit::Replace(c.int(i1, 0))),
+        IntPredicate::Ne => Some(Visit::Replace(c.int(i1, 1))),
+        IntPredicate::Sgt | IntPredicate::Sge => {
+            let ones = c.all_ones(ty);
+            Some(new_icmp(c, inst, IntPredicate::Sgt, divisor, ones))
+        }
+        IntPredicate::Slt | IntPredicate::Sle => {
+            let zero = c.int(ty, 0);
+            Some(new_icmp(c, inst, IntPredicate::Slt, divisor, zero))
+        }
+        _ => None,
+    }
+}
+
+/// `ICmpInst::getSwappedPredicate`.
+fn swapped(pred: IntPredicate) -> IntPredicate {
+    match pred {
+        IntPredicate::Eq | IntPredicate::Ne => pred,
+        IntPredicate::Ugt => IntPredicate::Ult,
+        IntPredicate::Uge => IntPredicate::Ule,
+        IntPredicate::Ult => IntPredicate::Ugt,
+        IntPredicate::Ule => IntPredicate::Uge,
+        IntPredicate::Sgt => IntPredicate::Slt,
+        IntPredicate::Sge => IntPredicate::Sle,
+        IntPredicate::Slt => IntPredicate::Sgt,
+        IntPredicate::Sle => IntPredicate::Sge,
+    }
+}
+
+/// `m_c_<op>(m_Specific(other), m_Value(A))` of `v`: `A`.
+fn commutative_with_specific(
+    c: &Combiner,
+    inst: InstId,
+    v: Operand,
+    op: BinaryOp,
+    other: Operand,
+) -> Option<Operand> {
+    pattern::commutative_with(&query(c, Some(inst)), v, op, |x| x == other).map(|(_, _, a)| a)
+}
+
+/// `foldICmpXorXX`: a compare of `X ^ A` with `X`.
+fn fold_icmp_xor_xx(
+    c: &mut Combiner,
+    inst: InstId,
+    mut pred: IntPredicate,
+    mut op0: Operand,
+    mut op1: Operand,
+) -> Option<Visit> {
+    // Normalize the xor operand as operand 0.
+    if commutative_with_specific(c, inst, op1, BinaryOp::Xor, op0).is_some() {
+        std::mem::swap(&mut op0, &mut op1);
+        pred = swapped(pred);
+    }
+    let a = commutative_with_specific(c, inst, op0, BinaryOp::Xor, op1)?;
+
+    // icmp (X ^ Y_NonZero) u>= X --> icmp (X ^ Y_NonZero) u> X, and the like
+    let strict = strict_predicate(pred);
+    if strict != pred && nonzero::is_known_non_zero(&query(c, Some(inst)), a, 0) {
+        return Some(new_icmp(c, inst, strict, op0, op1));
+    }
+
+    // These transform work when A is negative.
+    // X s< X^A, X s<= X^A, X u> X^A, X u>= X^A  --> X s< 0
+    // X s> X^A, X s>= X^A, X u< X^A, X u<= X^A  --> X s>= 0
+    if let Some((bits, width)) = query(c, None).int_constant(a)
+        && bits >> (width - 1) & 1 == 1
+    {
+        let new = match strict_predicate(pred) {
+            IntPredicate::Slt | IntPredicate::Ugt => IntPredicate::Slt,
+            IntPredicate::Sgt | IntPredicate::Ult => IntPredicate::Sge,
+            _ => return None,
+        };
+        let zero = c.int(c.type_of(op0), 0);
+        return Some(new_icmp(c, inst, new, op0, zero));
+    }
+    None
+}
+
+/// `foldICmpOrXX`: a compare of `X | A` with `X`. OWED: its two equality
+/// forms, which need `getFreelyInverted`.
+fn fold_icmp_or_xx(
+    c: &mut Combiner,
+    inst: InstId,
+    mut pred: IntPredicate,
+    mut op0: Operand,
+    mut op1: Operand,
+) -> Option<Visit> {
+    // Normalize or operand as operand 0.
+    if commutative_with_specific(c, inst, op1, BinaryOp::Or, op0).is_some() {
+        std::mem::swap(&mut op0, &mut op1);
+        pred = swapped(pred);
+    } else {
+        commutative_with_specific(c, inst, op0, BinaryOp::Or, op1)?;
+    }
+    // icmp (X | Y) u<= X --> (X | Y) == X
+    if pred == IntPredicate::Ule {
+        return Some(new_icmp(c, inst, IntPredicate::Eq, op0, op1));
+    }
+    // icmp (X | Y) u> X --> (X | Y) != X
+    if pred == IntPredicate::Ugt {
+        return Some(new_icmp(c, inst, IntPredicate::Ne, op0, op1));
+    }
     None
 }
 

@@ -677,9 +677,22 @@ pub(crate) fn llvm_order(
     // `-fno-jump-tables`: clang's "no-jump-tables" on every function, which
     // stops SimplifyCFG's lookup tables as well as the jump tables.
     let no_jump_tables = !applied.options.jump_tables;
-    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
+    // Each runs once: nothing undoes a loop's simple form between rounds (D7).
+    let simplify_cfg = |name| {
+        slot(
+            name,
+            Box::new(simplifycfg::SimplifyCfg {
+                options: simplifycfg::Options { loop_form_kept: false, ..Default::default() },
+            }),
+        )
+    };
     let simplify_cfg_with = |name, options: simplifycfg::Options| {
-        slot(name, Box::new(simplifycfg::SimplifyCfg { options: simplifycfg::Options { no_jump_tables, ..options } }))
+        slot(
+            name,
+            Box::new(simplifycfg::SimplifyCfg {
+                options: simplifycfg::Options { no_jump_tables, loop_form_kept: false, ..options },
+            }),
+        )
     };
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
@@ -760,6 +773,8 @@ pub(crate) fn llvm_order(
         // LoopSink) and L1682.
         Phase::Late => vec![
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
+            // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
+            slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),

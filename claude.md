@@ -35,7 +35,7 @@ eight get restated at the end of a reply here:
    frontend in the IR; a machine fact comes from the target. SRP, DRY,
    Open/Closed, separation of concerns.
 8. **A change updates the doc of what it changes, in the same PR.** A
-   pass's `//!` header is its doc; `python3 tools/docsbuild/build.py --sync`
+   pass's `//!` header is its doc; `python3 tools/docs/docsbuild/build.py --sync`
    output is committed with it; the stale and missing-section tests enforce
    it where they can.
 
