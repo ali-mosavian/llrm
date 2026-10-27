@@ -19,14 +19,13 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 const BASELINE: &str = "tests/target_facts.baseline";
 /// Shared code: everything but the target crates, the tests and the build
 /// products.
-const SHARED: [&str; 10] = [
+const SHARED: [&str; 9] = [
     "crates/backend",
     "crates/codegen",
     "crates/driver",
     "crates/ir",
     "crates/opt",
     "crates/support",
-    "crates/bc",
     "crates/frontends",
     "src",
     "tools",
