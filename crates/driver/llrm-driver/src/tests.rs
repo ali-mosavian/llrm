@@ -694,3 +694,131 @@ fn a_fake_use_compiles_to_no_code() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("fake"), "{listing}");
 }
+
+/// A variable of zeros in LLVM IR (`@c = internal global i32 0`) went into
+/// `_DATA` as `db 0,0,0,0`: every zero static stored its bytes in the image,
+/// and `-mbss-begin` found no `_BSS` to open. It is uninitialised data, as
+/// LLVM's `getKindForGlobal` makes it; a constant of zeros and a nonzero
+/// initial value stay in `_DATA`.
+#[test]
+fn a_zero_static_in_llvm_ir_is_uninitialised_data() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @zero = internal global i32 0, align 4\n\
+                @three = internal global i32 3, align 4\n\
+                @ro = internal constant i32 0, align 4\n\
+                define i32 @f() {\n  store volatile i32 1, ptr @zero\n  %a = load volatile i32, ptr @zero\n  store volatile i32 1, ptr @three\n  %b = load volatile i32, ptr @three\n  %c = load volatile i32, ptr @ro\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  ret i32 %t\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bss = listing.split(".data?").nth(1).unwrap_or_default().split(".code").next().unwrap();
+    assert!(bss.contains("_zero") && bss.contains("dup (?)"), "{listing}");
+    assert!(!bss.contains("_three") && !bss.contains("_ro"), "{listing}");
+    assert!(listing.split(".data?").next().unwrap().contains("_three"), "{listing}");
+}
+
+/// `__attribute__((weak))` left no trace in the listing, so a weak definition
+/// linked as a strong one and could clash with, or hide, the strong one it was
+/// written to yield to. It is refused, naming the symbol.
+#[test]
+fn a_weak_symbol_is_refused_where_the_object_format_cannot_say_so() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define weak i32 @hook() {\n  ret i32 1\n}\n\
+                declare extern_weak i32 @maybe()\n";
+    let refused = crate::llc::compiled(&flags(&["-m32"]), text, "w").map(|_| ()).unwrap_err();
+    assert!(refused.contains("@hook") && refused.contains("weak"), "{refused}");
+    let strong = text.replace("define weak", "define").replace("declare extern_weak", "declare");
+    assert!(crate::llc::compiled(&flags(&["-m32"]), &strong, "w").is_ok());
+}
+
+/// A store into the video buffer (`*(char *)0xB8000 = 1`) was taken for a
+/// write that may reach the program's own `g`, so `g` was read back after it
+/// instead of forwarded: the target's foreign ranges reached only the other
+/// frontends, not LLVM IR.
+#[test]
+fn a_store_to_video_memory_leaves_a_global_forwarded_in_llvm_ir() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @g = global i32 0, align 4\n\
+                define i32 @f() {\n  store i32 5, ptr @g, align 4\n  store i8 1, ptr inttoptr (i32 753664 to ptr), align 1\n  %a = load i32, ptr @g, align 4\n  ret i32 %a\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("mov eax, dword ptr _g"), "{listing}");
+    let ordinary = text.replace("753664", "4096");
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), &ordinary, "f").unwrap();
+    assert!(llrm_codegen::backend::masm::text(&built).unwrap().contains("mov eax, dword ptr _g"));
+}
+
+const REGCALL_DATALAYOUT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                                  target triple = \"i486-unknown-linux-gnu\"\n";
+
+/// `__cdecl` on a Watcom target was the register convention: clang's `ccc`
+/// took the ABI's default, so `int __cdecl a(int, int)` read EAX/EDX and was
+/// named `a_`. With `-mregcall-default` an unmarked (regcall) function and
+/// `main` take the ABI's, a variadic one too, and `ccc` stays C's: `_a`, on the
+/// stack.
+#[test]
+fn an_explicit_cdecl_stays_cdecl_when_regcall_is_the_default() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}\
+         define i32 @a(i32 %x, i32 %y) {{\n  %s = add i32 %x, %y\n  ret i32 %s\n}}\n\
+         define x86_regcallcc i32 @__regcall3__b(i32 %x, i32 %y) {{\n  %s = sub i32 %x, %y\n  ret i32 %s\n}}\n\
+         define i32 @main() {{\n  ret i32 0\n}}\n\
+         declare i32 @pr(ptr, ...)\n\
+         define x86_regcallcc i32 @__regcall3__use() {{\n  %p = call i32 (ptr, ...) @pr(ptr null, i32 1)\n  ret i32 %p\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom", "-mregcall-default"]), &text, "c").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let body = |name: &str| listing.split(&format!("{name} proc")).nth(1).unwrap_or_default().split("endp").next().unwrap();
+    assert!(body("_a").contains("[esp+4]") || body("_a").contains("[ebp+8]"), "{listing}");
+    for name in ["b_", "use_", "main_"] {
+        assert!(listing.contains(&format!("{name} proc")), "{name}: {listing}");
+    }
+    assert!(listing.contains("call pr_"), "{listing}");
+    assert!(!listing.contains("__regcall3__"), "{listing}");
+}
+
+/// `__stdcall` and `__fastcall` reached the backend as "calling convention
+/// 64": no target here has them, and the message did not say which function or
+/// what to write instead.
+#[test]
+fn stdcall_is_refused_by_name() {
+    let text = format!("{REGCALL_DATALAYOUT}define x86_stdcallcc i32 @c(i32 %x) {{\n  ret i32 %x\n}}\n");
+    let refused = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom"]), &text, "c").map(|_| ()).unwrap_err();
+    assert!(refused.contains("@c") && refused.contains("stdcall") && refused.contains("__cdecl"), "{refused}");
+}
+
+/// At m16 an unmarked function takes the register-size convention (`_f@3`,
+/// callee clobbers CX and DX), as llrm-c's did, and `main` stays C's (`_main`).
+/// `-mabi=watcom` forced on the Watcom row made every function save BX, CX and
+/// DX and call `main_`: the m16 -Os programs came out 16% larger.
+#[test]
+fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                define i16 @f(i16 %x) {\n  %d = sdiv i16 %x, 7\n  ret i16 %d\n}\n\
+                define i16 @main() {\n  ret i16 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("_f@3 proc") && listing.contains("_main proc"), "{listing}");
+    let body = listing.split("_f@3 proc").nth(1).unwrap().split("endp").next().unwrap();
+    assert!(!body.contains("push cx") && !body.contains("push dx"), "{listing}");
+}
+
+/// A C `static` function at m16 stayed a far procedure (`call far ptr`,
+/// `retf`) where llrm-c entered it by a near call: 3 bytes a call site, 1 a
+/// return, the growth of the programs that call a static helper often. One
+/// whose address is taken stays far.
+#[test]
+fn a_static_function_is_entered_by_a_near_call() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                @keep = global ptr addrspace(1) @taken\n\
+                define internal i16 @h(i16 %x) addrspace(1) {\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n\
+                define internal i16 @taken(i16 %x) addrspace(1) {\n  %y = mul i16 %x, 5\n  ret i16 %y\n}\n\
+                define i16 @f(i16 %x) addrspace(1) {\n  %a = call addrspace(1) i16 @h(i16 %x)\n  %b = call addrspace(1) i16 @taken(i16 %a)\n  ret i16 %b\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16", "-O0"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("call _h@3\n"), "{listing}");
+    assert!(listing.contains("call far ptr _taken@3"), "{listing}");
+}

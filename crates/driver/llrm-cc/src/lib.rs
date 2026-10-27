@@ -182,6 +182,7 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-stack-is-data",
     "-mfar-bss",
     "-mno-far-bss",
+    "-mregcall-default",
     "-mbss-begin",
     "-mno-bss-begin",
     "-fstack-usage",
@@ -276,7 +277,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             build.level = match level {
                 "" => "1".into(),
                 "fast" => "3".into(),
-                "g" => "1".into(),
+                "g" => "g".into(),
                 other => other.to_owned(),
             };
             // clang has no -Omax: its top level is -O3.

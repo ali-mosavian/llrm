@@ -141,3 +141,10 @@ fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
     assert_eq!(one.clang, words("-O3"));
     assert_eq!(one.level, "max");
 }
+
+/// `-Og` reached the backend as `-O1`, so the scroll loops of o1_fill.rs were
+/// turned into memmoves and a memset: -Og is -O1 without loop idioms.
+#[test]
+fn og_reaches_the_backend_as_og_not_o1() {
+    assert_eq!(built("-Og -c x.c").level, "g");
+}

@@ -15,10 +15,11 @@
 //! ```
 //!
 //! MIRROR: both folds, their one-use tests and the lossless-truncation test
-//! of the constant.
+//! of the constant, and the `i1` fold (`and` for `umin` and `smax`, `or` for
+//! `umax` and `smin`).
 //!
 //! DEVIATE 1: the rest of the min/max case is not translated (clamp forms,
-//! `i1` operands, `neg`, `xor` of a power of two, `not`, nested min/max,
+//! `neg`, `xor` of a power of two, `not`, nested min/max,
 //! `cttz`/`ctlz` and the saturating folds). Exit: the next slice of
 //! `visitCallInst`.
 //!
@@ -26,7 +27,7 @@
 //! `visit_call` (`combine_memintrinsics`).
 
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{CastOp, Flags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
@@ -102,6 +103,14 @@ impl Combiner<'_> {
                     return Visit::Replace(self.create_cast(call, ext, narrow, ty, Flags::default()));
                 }
             }
+        }
+        // umin(i1 X, i1 Y) -> and i1 X, Y
+        // smax(i1 X, i1 Y) -> and i1 X, Y
+        // umax(i1 X, i1 Y) -> or i1 X, Y
+        // smin(i1 X, i1 Y) -> or i1 X, Y
+        if bits == 1 {
+            let op = if max == signed { BinaryOp::And } else { BinaryOp::Or };
+            return self.replace_with_binop(call, op, i0, i1, Flags::default());
         }
         Visit::None
     }
