@@ -3,6 +3,8 @@ docs/examples/basic/*.bas text eol=crlf
 docs/examples/basic/*.BI text eol=crlf
 # DOS BASIC test sources are CRLF: the diff check must not flag the CR (#5440's chfirst.bas refused sqb-5300).
 tests/**/*.bas whitespace=cr-at-eol
+# Expected program output keeps the trailing space printf left (tests/run/qb/dateserial_vbdos.out).
+tests/**/*.out whitespace=-trailing-space
 # GitHub has no Nib grammar; Python's fits its comments and blocks.
 *.nib linguist-language=Python linguist-detectable=false
 # Two branches that lower the same file's count merge as both lines; the guard asks for a re-bless.
