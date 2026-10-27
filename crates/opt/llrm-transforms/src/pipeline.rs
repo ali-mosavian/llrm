@@ -677,9 +677,22 @@ pub(crate) fn llvm_order(
     // `-fno-jump-tables`: clang's "no-jump-tables" on every function, which
     // stops SimplifyCFG's lookup tables as well as the jump tables.
     let no_jump_tables = !applied.options.jump_tables;
-    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
+    // Each runs once: nothing undoes a loop's simple form between rounds (D7).
+    let simplify_cfg = |name| {
+        slot(
+            name,
+            Box::new(simplifycfg::SimplifyCfg {
+                options: simplifycfg::Options { loop_form_kept: false, ..Default::default() },
+            }),
+        )
+    };
     let simplify_cfg_with = |name, options: simplifycfg::Options| {
-        slot(name, Box::new(simplifycfg::SimplifyCfg { options: simplifycfg::Options { no_jump_tables, ..options } }))
+        slot(
+            name,
+            Box::new(simplifycfg::SimplifyCfg {
+                options: simplifycfg::Options { no_jump_tables, loop_form_kept: false, ..options },
+            }),
+        )
     };
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
@@ -788,6 +801,20 @@ pub(crate) fn llvm_order(
                     options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
+            // LoopUnrollPass (l.1476) with the full unroll the target allows
+            // (X86 sets no partial or runtime unrolling), then SROA (l.1494)
+            // on the allocas the unroll made constant-indexed. The loops the
+            // early unroll refused are looked at again after the combines.
+            slot(
+                "unroll@1476",
+                Box::new(loopunrollpass::LoopFullUnroll {
+                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_size: size,
+                    only_when_forced: !applied.options.loop_unrolling,
+                    created: Default::default(),
+                }),
+            ),
+            sroa("sroa@1494"),
             // LICMPass again (l.1508,
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1508,
             // `AllowSpeculation=true`), in a loop pass manager of its own after

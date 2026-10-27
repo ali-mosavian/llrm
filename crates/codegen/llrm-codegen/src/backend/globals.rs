@@ -108,7 +108,7 @@ pub fn names(
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         // An intrinsic is lowered where it is called, never linked.
-        if global.name.as_deref().is_some_and(llrm_mir::intrinsics::is_reserved) {
+        if global.name.as_deref().is_some_and(|name| llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) {
             continue;
         }
         let name = linked(global.name.as_deref().unwrap_or_default());
@@ -134,6 +134,22 @@ pub fn segment_name(
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Option<((Space, i64), String)> {
     (module.global(id).address_space != spaces.near).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
+}
+
+/// The constructor list: laid out as the loader's init-function pointers.
+pub const CONSTRUCTORS: &str = "llvm.global_ctors";
+
+/// The segment the constructor list is laid out in.
+pub const INIT_SEGMENT: &str = ".init_array";
+
+/// `llvm.used` and `llvm.compiler.used` are for the compiler and the linker
+/// only; LLVM lays neither out.
+pub fn is_compiler_only(name: &str) -> bool {
+    matches!(name, "llvm.used" | "llvm.compiler.used")
+}
+
+fn is_list(name: &str) -> bool {
+    name == CONSTRUCTORS
 }
 
 fn is_symbol(name: &str) -> bool {
@@ -210,8 +226,54 @@ pub fn datums(
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let name = names[&(Space::Segment, i64::from(global.0))].clone();
     let mut out = vec![Datum::Label(Label { name })];
+    if module.global(global).name.as_deref() == Some(CONSTRUCTORS) {
+        constructors(module, &layout, initializer, names, &mut out)?;
+        return Ok(out);
+    }
     Initializer { module, layout: &layout, names, out: &mut out }.constant(initializer)?;
     Ok(out)
+}
+
+/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function,
+/// ptr data }` entries, lowest priority first and in order within one, as
+/// `AsmPrinter::emitXXStructorList` sorts them; an entry without a function is
+/// dropped.
+fn constructors(
+    module: &Module,
+    layout: &DataLayout,
+    list: ConstantId,
+    names: &IndexMap<(Space, i64), String>,
+    out: &mut Vec<Datum>,
+) -> Result<(), String> {
+    let context = &module.context;
+    let bytes = layout.pointer(0).bits / 8;
+    if bytes < 4 {
+        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
+    }
+    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
+    let entries = match &context.get(list).kind {
+        ConstantKind::Aggregate(entries) => entries.clone(),
+        _ => Vec::new(),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let ConstantKind::Aggregate(fields) = &context.get(entry).kind else { continue };
+        let [priority, function, ..] = fields[..] else { return Err("a malformed llvm.global_ctors entry".to_owned()) };
+        let ConstantKind::Int(priority) = context.get(priority).kind else {
+            return Err("a malformed llvm.global_ctors priority".to_owned());
+        };
+        if absolute(module, layout, function) == Some(0) {
+            continue;
+        }
+        let (global, offset) = target(module, layout, function)?;
+        found.push((priority, global, offset));
+    }
+    found.sort_by_key(|(priority, ..)| *priority);
+    for (_, global, offset) in found {
+        let name = names[&(space(module, global), i64::from(global.0))].clone();
+        out.push(Datum::Pointer(Pointer { name, offset, far: false, bytes }));
+    }
+    Ok(())
 }
 
 struct Initializer<'a> {
