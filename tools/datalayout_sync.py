@@ -59,7 +59,7 @@ def stale(root: Path = ROOT) -> list[str]:
     layouts = descriptions(root)
     found = []
     for path in tracked(root):
-        if path.is_symlink() or not path.is_file() or str(path.relative_to(root)).startswith(PORTED):
+        if path.is_symlink() or not path.is_file() or str(path.relative_to(root)).startswith(PORTED) or path.name == "test_datalayout_sync.py":
             continue
         try:
             text = path.read_text()
@@ -67,6 +67,24 @@ def stale(root: Path = ROOT) -> list[str]:
             continue
         if rewritten(text, layouts) != text:
             found.append(str(path.relative_to(root)))
+    return found
+
+
+def copies(root: Path = ROOT) -> dict[str, int]:
+    """Per tracked text file, how many copies of a description's string it holds (the description files are the source, not copies)."""
+    layouts = [one for one in descriptions(root) if one.count("-") >= 6]
+    pattern = re.compile("|".join(re.escape(anchor(one)) for one in layouts))
+    found = {}
+    for path in tracked(root):
+        name = str(path.relative_to(root))
+        if path.is_symlink() or not path.is_file() or name.endswith("/datalayout.toml") or name.startswith(PORTED) or name == "tools/test_datalayout_sync.py":
+            continue
+        try:
+            n = len(pattern.findall(path.read_text()))
+        except (UnicodeDecodeError, OSError):
+            continue
+        if n:
+            found[name] = n
     return found
 
 
