@@ -728,10 +728,9 @@ fn selected_in(
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
-        // only). Flipping it grows m32 -Os +250 B and m16 -Os +301 B; only
-        // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
-        // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
-        // +59 B in 4 spill slots).
+        // only). Flipping it at --isel=dag grows m32 -Os +467 B over 126
+        // programs and m16 -Os +763 B over 309; matmul gains 20/3 B. Exit:
+        // keep the divide unless the expansion forces spills.
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
