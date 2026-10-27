@@ -77,7 +77,7 @@
 
 use std::sync::Arc;
 
-use crate::model::ir::{self, Loc, Semantics};
+use crate::model::ir::{self, Held, Loc, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::HashMap;
 
@@ -463,6 +463,9 @@ pub enum ThreeAddress {
     /// takes a 16-bit address form: `lea ax, [bx + k]`.
     AddSubWords,
     All,
+    /// `All` on a target that addresses with 64-bit registers: `lea eax, [rdi +
+    /// k]` (`LEA64_32r`), the base read at its full width.
+    Wide,
 }
 
 /// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
@@ -496,7 +499,11 @@ pub fn three_address(
             op: Operation::Address,
             name: Some("lea".into()),
             dests: vec![Loc::Held(*into)],
-            sources: vec![Loc::Mem(Mem { base: Some(*base), offset, ..Mem::new(None, 4) })],
+            sources: vec![Loc::Mem(Mem {
+                base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
+                offset,
+                ..Mem::new(None, 4)
+            })],
             ..Semantics::new(Operation::Address)
         });
         return Some(Arc::new(made));
@@ -519,17 +526,22 @@ pub fn three_address(
     if !(width == 4 || word) || base.width != width || into.value == base.value {
         return None;
     }
+    let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
     let cell = match (&what.sources[1], what.name.as_deref()) {
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
-        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl")) if mode == ThreeAddress::All => Mem {
-            base: (*shift == 1).then_some(*base),
-            index: Some(*base),
-            scale: if *shift == 1 { 1 } else { 1 << shift },
-            offset: 0,
-            disp_width: if *shift == 1 { 0 } else { 4 },
-            ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
-        },
+        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl"))
+            if matches!(mode, ThreeAddress::All | ThreeAddress::Wide) =>
+        {
+            Mem {
+                base: (*shift == 1).then_some(wide(base)),
+                index: Some(wide(base)),
+                scale: if *shift == 1 { 1 } else { 1 << shift },
+                offset: 0,
+                disp_width: if *shift == 1 { 0 } else { 4 },
+                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+            }
+        }
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
@@ -539,10 +551,10 @@ pub fn three_address(
             if word && step.abs() == 1 {
                 return None;
             }
-            Mem { base: Some(*base), offset: step, ..Mem::new(None, width) }
+            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, width) }
         }
         (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
-            Mem { base: Some(*base), index: Some(*index), scale: 1, offset: 0, ..Mem::new(None, 4) }
+            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
         }
         _ => return None,
     };
