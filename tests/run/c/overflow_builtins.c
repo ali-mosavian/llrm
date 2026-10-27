@@ -41,6 +41,7 @@ int main(void)
             CASE(unsigned long, mul, ul[i], ul[j]);
             CASE(i64, add, q[i], q[j]);
             CASE(i64, sub, q[i], q[j]);
+            CASE(i64, mul, q[i], q[j]);
             CASE(u64, add, uq[i], uq[j]);
             CASE(u64, sub, uq[i], uq[j]);
             CASE(u64, mul, uq[i], uq[j]);
