@@ -77,6 +77,13 @@
 //! reads them (`SinkInstruction`'s zombie check).
 //! Exit: honor a dead implicit def when LIR marks one.
 //!
+//! DEVIATE M7 (no number): an instruction whose pinned operands are all
+//! sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
+//! makes it read a physical register; ours names the pin only in the register
+//! class, so `touches_machine_state` asks the classes. One with a pinned result
+//! (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
+//! in its block grew switch.c 16 B at m16 -Os. Exit: none.
+//!
 //! DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 //! (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
 //! instruction has none).
@@ -116,6 +123,9 @@ const SINK_LOAD_INSTS_PER_BLOCK_THRESHOLD: usize = 2000;
 const SINK_LOAD_BLOCKS_THRESHOLD: usize = 20;
 
 pub struct MachineSink {
+    /// Which operands the encoding pins to a register (`$cl = COPY` in the
+    /// pin).
+    pub classes: std::rc::Rc<crate::backend::classes::RegisterClasses>,
     /// A build for size: successors are tried by loop depth alone
     /// (`shouldOptimizeForSize` in `GetAllSortedSuccessors`).
     pub size: bool,
@@ -137,7 +147,7 @@ impl LIRTransform for MachineSink {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(sunk_within(&body, self.size, self.limit))
+        Ok(sunk_within(&body, self.size, self.limit, Some(&self.classes)))
     }
 }
 
@@ -298,6 +308,9 @@ struct Sinker {
     flags_live_in: Vec<bool>,
     /// `RegClassInfo->getRegPressureSetLimit`.
     limit: usize,
+    /// Instructions with an operand the encoding pins to a register (DEVIATE
+    /// M7).
+    pinned: HashSet<usize>,
     /// The values of the float operations, which the general registers do not
     /// hold; made when the pressure tail first asks.
     stack: Option<HashSet<u32>>,
@@ -430,6 +443,7 @@ impl Sinker {
             bits: body.bits,
             flags_live_in: Vec::new(),
             limit: usize::MAX,
+            pinned: HashSet::default(),
             stack: None,
             phi_blocks,
             defined: None,
@@ -512,6 +526,9 @@ impl Sinker {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
         let one = &self.insns[block][index];
+        if self.pinned.contains(&crate::backend::peephole::id(one)) {
+            return true;
+        }
         let Some(effect) = liveness::effect(self.regs, self.bits, one) else { return true };
         // An incoming argument's cell is a fixed stack object in the pin, a
         // frame index with no register: the frame register the address is
@@ -1020,7 +1037,7 @@ pub fn sunk(
     body: &LirBody,
     size: bool,
 ) -> LirBody {
-    sunk_within(body, size, usize::MAX)
+    sunk_within(body, size, usize::MAX, None)
 }
 
 /// `body` with what `MachineSinking::run` moves moved, no block to hold more
@@ -1029,6 +1046,7 @@ pub fn sunk_within(
     body: &LirBody,
     size: bool,
     limit: usize,
+    classes: Option<&crate::backend::classes::RegisterClasses>,
 ) -> LirBody {
     let mut body = body.clone();
     // Each round walks the blocks, then breaks the edges it marked; it ends
@@ -1037,6 +1055,24 @@ pub fn sunk_within(
     loop {
         let mut sinker = Sinker::new(&body, size, before.take());
         sinker.limit = limit;
+        if let Some(classes) = classes {
+            sinker.pinned = body
+                .blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| {
+                    one.what
+                        .as_ref()
+                        .is_some_and(
+                            |what| {
+                                let pins = classes.requirements(what);
+                                !pins.is_empty() && pins.keys().all(|place| place.side != "dest")
+                            },
+                        )
+                })
+                .map(crate::backend::peephole::id)
+                .collect();
+        }
         for block in 0..sinker.cfg.len() {
             sinker.process_block(block);
         }
@@ -1757,12 +1793,12 @@ mod tests {
                 .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
                 .collect()
         };
-        let moved = sunk_within(&bubble(10), false, 7);
+        let moved = sunk_within(&bubble(10), false, 7, None);
         assert_eq!(names(&moved, 1), ["mov", "cmp", "jle"], "the add left the header");
         assert_eq!(names(&moved, 3), ["add", "cmp", "jne"], "and went into the latch");
         // A value of the loop that the add would keep live to the latch counts
         // against the latch's pressure: room for it, and none.
-        assert_eq!(names(&sunk_within(&bubble(12), false, 7), 3), ["add", "cmp", "jne"], "room");
-        assert_eq!(names(&sunk_within(&bubble(12), false, 3), 1), ["mov", "add", "cmp", "jle"], "full");
+        assert_eq!(names(&sunk_within(&bubble(12), false, 7, None), 3), ["add", "cmp", "jne"], "room");
+        assert_eq!(names(&sunk_within(&bubble(12), false, 3, None), 1), ["mov", "add", "cmp", "jle"], "full");
     }
 }
