@@ -1251,3 +1251,14 @@ def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others
     assert "docs/new.md" in why and "docs/old.md" not in why
     assert not (tmp_path / "pr2.txt").exists() and run("log", "--format=%s").splitlines() == ["pr 1", "base"], "the merge of the refused PR is reset"
     assert gated("3") == "" and (tmp_path / "pr3.txt").exists(), "a later PR still joins"
+
+def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_refused(capsys):
+    """#5039 was REFUSED with `GraphQL: Something went wrong` (00:14, request A186:1A8971): GitHub's own error, the PR open, mergeable and unchanged; it cost a batch cycle."""
+    run, calls = _gh(["GraphQL: Something went wrong while executing your query.", ""])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    assert ps.squash("5039", info, "body", run=run, settle=0, retry_wait=0) is True
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2
+    run, calls = _gh(["GraphQL: Something went wrong.", "GraphQL: Something went wrong."])
+    assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
+    assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
+    assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")

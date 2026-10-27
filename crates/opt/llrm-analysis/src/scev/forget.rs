@@ -118,9 +118,23 @@ impl ScalarEvolution {
         cx: &Cx,
         touched: &llrm_mir::touched::Touched,
     ) {
+        self.forget_touched_keeping(cx, touched, false);
+    }
+
+    /// [`Self::forget_touched`], the expressions of values whose operands
+    /// changed and the trip counts of the loops the edits are in kept where
+    /// `keep_counts`: LLVM drops one only on a `forgetLoop`, a deleted value
+    /// or an explicit `forgetValue`, none of which an operand replaced in
+    /// place (the widening of a counter's compares) is.
+    pub fn forget_touched_keeping(
+        &mut self,
+        cx: &Cx,
+        touched: &llrm_mir::touched::Touched,
+        keep_counts: bool,
+    ) {
         let removed: Vec<Scev> = touched.values_removed.iter().filter_map(|v| self.value_expr_map.remove(&v)).collect();
         self.forget_memoized_results(&removed);
-        for v in touched.operands_changed.iter() {
+        for v in touched.operands_changed.iter().filter(|_| !keep_counts) {
             if !touched.values_removed.contains(&v) {
                 self.forget_value(cx, Operand::Value(v));
             }
@@ -128,7 +142,7 @@ impl ScalarEvolution {
         // The count of a loop reads its blocks, and its parents' count its
         // subloops.
         let mut forgotten = IdSet::<BlockId>::new();
-        for block in touched.blocks.iter() {
+        for block in touched.blocks.iter().filter(|_| !keep_counts) {
             let mut one = cx.loops.get_loop_for(block);
             while let Some(found) = one {
                 let header = found.get_header();
