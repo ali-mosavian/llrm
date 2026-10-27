@@ -1235,7 +1235,9 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
     let mut passes: Vec<Box<dyn FunctionPass>> = Vec::new();
     if applied.options.wanted("lsr") {
         passes.push(Box::new(loopsimplify::LoopSimplify));
-        passes.push(Box::new(lcssa::LoopClosedSSA));
+        // The pin's llc takes the IR after opt's closing InstSimplify (l.1662,
+        // "clean up LCSSA form before generating code").
+        passes.push(Box::new(crate::instsimplify::InstSimplify));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
         passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));

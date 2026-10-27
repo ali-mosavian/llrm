@@ -2860,15 +2860,54 @@ b2:
 /// its reader through a phi that was not LCSSA, so the use counted as outside
 /// the loop and got `-1` scales: a second counter stepping down by 4 beside
 /// the one stepping up by 4, live across a call (+224 bytes). LSR requires
-/// LoopSimplify and LCSSA, so they run right before it.
+/// LoopSimplify, and the phis are cleaned by InstSimplify right before it, as
+/// the pin's llc takes the IR after opt's closing InstSimplify.
 #[test]
-fn lsr_runs_on_simplified_loops_in_lcssa_form() {
+fn lsr_runs_on_simplified_loops_after_the_closing_instsimplify() {
     for options in [pipeline::Options::size(), pipeline::Options::basic(), pipeline::Options::default()] {
         let applied = Applied { options, ..Applied::default() };
         let names: Vec<&str> = pipeline::strength_slot(&applied).iter().map(|one| one.name()).collect();
         let at = names.iter().position(|one| *one == "lsr").expect("lsr is in the slot");
-        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "lcssa", "canonfreeze"], "{names:?}");
+        assert_eq!(&names[at.saturating_sub(3)..at], ["loopsimplify", "instsimplify", "canonfreeze"], "{names:?}");
     }
+}
+
+/// x_strlen at -O2: the end of a scan was read through an exit phi, which
+/// stops IVUsers where the pin's walk goes on, so LSR kept the pointer IV
+/// (`lea eax,_buf-1`, a copy of it in the loop) where the pin has an index.
+#[test]
+fn a_scan_whose_end_is_read_after_the_loop_is_an_index_not_a_pointer() {
+    let mut module = llrm_analysis::testing::parsed(&format!(
+        "{}@buf = global [64 x i8] zeroinitializer
+define i16 @f(i16 %k) {{
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ @buf, %b0 ], [ %n, %b1 ]
+  %c = load i8, ptr %p
+  %n = getelementptr inbounds i8, ptr %p, i16 1
+  %z = icmp eq i8 %c, 0
+  br i1 %z, label %b2, label %b1
+
+b2:
+  %a = ptrtoint ptr %p to i16
+  %e = ptrtoint ptr @buf to i16
+  %d = sub i16 %a, %e
+  %r = add i16 %d, %k
+  ret i16 %r
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &Applied::default())
+    })
+    .and_then(|done| done)
+    .unwrap();
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("phi ptr"), "{text}");
 }
 
 /// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)
