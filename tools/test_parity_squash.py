@@ -1496,3 +1496,14 @@ def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_
     sh(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
     base = sh(clone, "rev-parse", "origin/main")
     assert ps.head_files(head, base=base, cwd=clone) == ["b.txt"]
+
+
+def test_the_group_rescan_regenerates_the_pages_before_it_scans(monkeypatch):
+    """11:35, 11:38, 11:42, 11:49: the group scan was red while every member was green alone: the merged members' pass counts leave docs/optimizations/passes/readme.md stale, which only a sync fixes."""
+    order = []
+    monkeypatch.setattr(ps, "git", lambda *a, **k: "")
+    monkeypatch.setattr(ps, "clean_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(ps.subprocess, "run", lambda cmd, **k: order.append("sync" if "--sync" in cmd else "git") or subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(ps, "new_scanner_failures", lambda *a, **k: order.append("scan") or set())
+    assert ps.rescan_group_alone(["1", "2"], {"1": {"headRefOid": "a"}, "2": {"headRefOid": "b"}}) == set()
+    assert order[-2:] == ["sync", "scan"]

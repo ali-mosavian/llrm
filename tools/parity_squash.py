@@ -1071,6 +1071,7 @@ def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
         git("fetch", "-q", "origin", infos[number]["headRefOid"])
         if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
             subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+    subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync", "--force"], cwd=ROOT, capture_output=True)  # each member's pages are current alone; together the pass counts of docs/optimizations/passes/readme.md are not (11:35-11:49: the group scan was red, each member green)
     return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
 
 
