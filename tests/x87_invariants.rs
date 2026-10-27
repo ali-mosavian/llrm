@@ -10,8 +10,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// nbody's pair loop: `x[i]` and `y[i]` are invariant in the inner loop, five
 /// more floats live through the nest. The spill victim was the read furthest
 /// ahead in block order, which ignores the back edge: an invariant read

@@ -7,8 +7,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn compiles(
     program: &str,
     flags: &[&str],

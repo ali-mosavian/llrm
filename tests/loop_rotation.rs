@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 long steps(unsigned x)
 {

@@ -3,7 +3,7 @@
 mod common;
 
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 /// qb-runtime's `i8out.c` (source with an out-of-bounds store through a macro,

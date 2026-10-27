@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn listing(kernel: &str) -> String {
     let source = format!("{}/crates/target/llrm-x86-m32/vsgcc/kernels/{kernel}/{kernel}.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();

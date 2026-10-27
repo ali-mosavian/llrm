@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// A sum the loop optimizer writes in closed form, widened to i64 for the
 /// product: 35 B as a loop on main, 107 B as the formula.
 const SUM: &str = r#"long b(unsigned short n)

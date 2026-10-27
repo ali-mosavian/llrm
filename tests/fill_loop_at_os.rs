@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn fill_listing(
     source: &str,
     flags: &[&str],

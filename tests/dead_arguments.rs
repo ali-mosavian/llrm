@@ -1,7 +1,5 @@
 //! A parameter nothing reads leaves with its argument, round a recursion too.
 
-use std::process::Command;
-
 pub mod common;
 
 const KERNEL: &str = "

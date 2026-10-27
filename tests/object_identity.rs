@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// `i64_param_home.c` at -O2 -m32: a frame slot whose address an edit stopped
 /// exposing was object 15 in the result kept past the edit and 17 in one
 /// derived after it, so a query between them found two objects that cannot

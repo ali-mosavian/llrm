@@ -5,7 +5,7 @@
 
 mod common;
 
-use std::process::{Command, Output};
+use std::process::Output;
 
 fn compile(source: &str) -> (Output, String) {
     compiled("-m16", source)

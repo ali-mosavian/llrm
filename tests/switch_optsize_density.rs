@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 extern void a(void), b(void), c(void), d(void);
 void f(int x)

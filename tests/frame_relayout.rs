@@ -6,8 +6,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// (program, flags) whose frames reach past one-byte displacements and spill.
 // shellsort -m32 left the list: with EBP a value register (no frame pointer) it
 // no longer spills. sieve -m32 -march=i486 left it with the translated

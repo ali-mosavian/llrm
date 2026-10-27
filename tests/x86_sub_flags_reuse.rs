@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 extern unsigned total;
 void adler(const unsigned char *p, unsigned n)

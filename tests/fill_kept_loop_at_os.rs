@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn kept_listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
