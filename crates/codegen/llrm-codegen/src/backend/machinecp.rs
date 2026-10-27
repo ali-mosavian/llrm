@@ -157,6 +157,8 @@ struct Copy {
     pairs: Vec<(usize, usize)>,
     dst: Mask,
     src: Mask,
+    /// The value the copy defines and the value it reads, when each is one.
+    values: Option<(u32, u32)>,
 }
 
 impl Copy {
@@ -571,7 +573,15 @@ impl Machine {
             .map(|(dst, src)| Some((self.unit(dst)?, self.unit(src)?)))
             .collect::<Option<Vec<_>>>()?;
         let (dst, src) = pairs.iter().fold((0 as Mask, 0 as Mask), |(dst, src), (d, s)| (dst | 1 << d, src | 1 << s));
-        (dst & src == 0 && dst >> GENERAL == 0).then_some(Copy { pairs, dst, src })
+        (dst & src == 0 && dst >> GENERAL == 0).then_some(Copy {
+            pairs,
+            dst,
+            src,
+            values: match (one.defines.as_slice(), one.uses.as_slice()) {
+                (&[defined], &[read]) => Some((defined, read)),
+                _ => None,
+            },
+        })
     }
 
     /// Every register `what` names, with where it sits: explicit operands and
@@ -794,7 +804,7 @@ impl<'a> Walk<'a> {
         let Some(previous) = self.tracker.avail_copy(look, &self.copies) else {
             return false;
         };
-        let wanted = Copy { pairs, dst: 0, src: 0 };
+        let wanted = Copy { pairs, dst: 0, src: 0, values: None };
         if !self.copies[previous].as_ref().is_some_and(|prior| prior.repeats(&wanted)) {
             return false;
         }
@@ -827,6 +837,7 @@ impl<'a> Walk<'a> {
         let machine = self.machine;
         let mut current = what.clone();
         let mut touched = false;
+        let mut uses = one.uses.clone();
         let places = machine.registers(what);
         let mut done: Vec<RegId> = Vec::new();
         for &(place, register, width) in &places {
@@ -869,10 +880,15 @@ impl<'a> Walk<'a> {
                 current = proposed;
                 touched = true;
                 done.push(register);
+                // The copy dies once nothing reads it: the read now names the
+                // value the copy read.
+                if let Some((defined, read)) = rec.values {
+                    uses.iter_mut().filter(|value| **value == defined).for_each(|value| *value = read);
+                }
             }
         }
         if touched {
-            let replacement = Arc::new(Insn { what: Some(current), ..(*one).clone() });
+            let replacement = Arc::new(Insn { what: Some(current), uses, ..(*one).clone() });
             self.put(at, replacement);
         }
     }

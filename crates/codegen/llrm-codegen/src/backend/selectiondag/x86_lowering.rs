@@ -130,6 +130,8 @@ pub struct X86Lowering {
     pub cmov: bool,
     /// Scalar floats live in xmm registers (`isScalarFPTypeInSSEReg`).
     pub sse2: bool,
+    /// `hasMinSize`: llrm's `-Os` as well as `-Oz`.
+    pub min_size: bool,
 }
 
 impl CombineHooks for X86Lowering {
@@ -156,7 +158,7 @@ impl CombineHooks for X86Lowering {
         level: CombineLevel,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
-            ISD::Mul => combine_mul(dag, node, level),
+            ISD::Mul => combine_mul(dag, node, level, self.min_size),
             ISD::Add => combine_add(dag, node),
             ISD::Sub => combine_sub(dag, node),
             x86isd::ADD | x86isd::SUB => combine_x86_add_sub(dag, node),
@@ -1616,6 +1618,7 @@ fn combine_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
     level: CombineLevel,
+    min_size: bool,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 {
@@ -1630,7 +1633,8 @@ fn combine_mul(
     if bits == super::fold::mask(width) {
         return Some(dag.get_negative(x, vt));
     }
-    if is_pow2(bits) || level == CombineLevel::BeforeLegalizeTypes {
+    // An imul is usually smaller than the alternative sequence.
+    if is_pow2(bits) || min_size || level == CombineLevel::BeforeLegalizeTypes {
         return None;
     }
     let signed = i128::from(bits as u32 as i32);

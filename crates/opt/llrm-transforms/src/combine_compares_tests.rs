@@ -144,3 +144,64 @@ fn test_a_constant_outside_the_narrow_type_is_not_narrowed() {
         combined("define i1 @f(i8 %x) {\nb0:\n  %e = zext i8 %x to i32\n  %r = icmp ult i32 %e, 300\n  ret i1 %r\n}\n");
     assert!(!out.contains("icmp ult i8"), "{out}");
 }
+
+/// `for (short k = 0; k < n; k++) a[k]` reached indvars with
+/// `icmp slt (sext i16 %k.next), (sext i16 %n)` kept at i32 beside an i32
+/// counter of the same value: `foldICmpWithZextOrSext`'s extension-against-
+/// extension arm was not translated, so the pin's `icmp slt i16` never came
+/// and the i16 counter stayed (`movsx` a trip, d_faces 18,142 executed).
+#[test]
+fn a_signed_compare_of_two_sext_is_the_compare_of_their_sources() {
+    check(
+        "i16 %x, i16 %y",
+        "  %a = sext i16 %x to i32\n  %b = sext i16 %y to i32\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = icmp slt i16 %x, %y\n  ret i1 %0\n",
+    );
+}
+
+/// Two `zext`: every predicate is the unsigned one (`icmp slt` of two
+/// non-negative values).
+#[test]
+fn a_compare_of_two_zext_is_unsigned() {
+    check(
+        "i16 %x, i16 %y",
+        "  %a = zext i16 %x to i32\n  %b = zext i16 %y to i32\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = icmp ult i16 %x, %y\n  ret i1 %0\n",
+    );
+}
+
+/// A `zext nneg` against a `sext` is two sign extensions; without `nneg` the
+/// mismatch is left alone.
+#[test]
+fn a_zext_nneg_beside_a_sext_reads_as_a_sext() {
+    check(
+        "i16 %x, i16 %y",
+        "  %a = zext nneg i16 %x to i32\n  %b = sext i16 %y to i32\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = icmp slt i16 %x, %y\n  ret i1 %0\n",
+    );
+    check(
+        "i16 %x, i16 %y",
+        "  %a = zext i16 %x to i32\n  %b = sext i16 %y to i32\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+        "  %a = zext i16 %x to i32\n  %b = sext i16 %y to i32\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+    );
+}
+
+/// Two `i1`: `(zext X) == (sext Y)` is `(X | Y) == 0`.
+#[test]
+fn an_equality_of_a_zext_and_a_sext_of_bools_is_an_or() {
+    check(
+        "i1 %x, i1 %y",
+        "  %a = zext i1 %x to i8\n  %b = sext i1 %y to i8\n  %r = icmp eq i8 %a, %b\n  ret i1 %r\n",
+        "  %0 = or i1 %x, %y\n  %1 = xor i1 %0, true\n  ret i1 %1\n",
+    );
+}
+
+/// Sources of different widths: the narrower is extended to the wider's type.
+#[test]
+fn a_compare_of_extensions_of_different_widths_extends_the_narrower_source() {
+    check(
+        "i16 %x, i8 %y",
+        "  %a = sext i16 %x to i32\n  %b = sext i8 %y to i32\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = sext i8 %y to i16\n  %1 = icmp slt i16 %x, %0\n  ret i1 %1\n",
+    );
+}
