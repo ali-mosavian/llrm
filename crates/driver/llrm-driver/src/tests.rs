@@ -872,6 +872,34 @@ fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
     assert!(!built.debug.expect("debug info").procedures.is_empty());
 }
 
+/// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
+/// writes as subfields; the writer refused the unit ("a location list holds
+/// only registers and frame cells") and no object came out.
+#[test]
+fn a_variable_in_two_registers_is_written_to_coff_as_subfields() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg_pieces.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) =
+        crate::llc::compiled(&flags(&["-m32", "-O2", "-g", "-fobject-format=coff"]), &text, "dbgpieces").unwrap();
+    llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "dbgpieces.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+    )
+    .unwrap();
+}
+
 /// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
 /// not the `.ll` file: the debugger could not find the text.
 #[test]

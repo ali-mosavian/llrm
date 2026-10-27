@@ -24,6 +24,7 @@ const S_GPROC32: u16 = 0x1110;
 const S_COMPILE3: u16 = 0x113C;
 const S_LOCAL: u16 = 0x113E;
 const S_DEFRANGE_REGISTER: u16 = 0x1141;
+const S_DEFRANGE_SUBFIELD_REGISTER: u16 = 0x1143;
 const S_DEFRANGE_REGISTER_REL: u16 = 0x1145;
 const IS_PARAMETER: u16 = 1;
 const COLUMNS: u16 = 1;
@@ -193,9 +194,25 @@ impl Writer<'_> {
                         at(out);
                         Ok(())
                     })?,
-                    Location::List(_) | Location::Static { .. } | Location::Constant(_) | Location::Pieces(_) => {
-                        return refused("a location list holds only registers and frame cells");
+                    // Each piece in a register is a subfield of the variable; a piece
+                    // anywhere else, like a constant, a list or a place in data, has no
+                    // record (LLVM's `CodeViewDebug` skips them too).
+                    Location::Pieces(parts) => {
+                        let mut parent = 0u32;
+                        for (size, place) in parts {
+                            if let Some(Location::Register(register)) = place {
+                                out.symbol(S_DEFRANGE_SUBFIELD_REGISTER, |out| {
+                                    put16(&mut out.bytes, self.register(register)?);
+                                    put16(&mut out.bytes, 0);
+                                    put32(&mut out.bytes, parent);
+                                    at(out);
+                                    Ok(())
+                                })?;
+                            }
+                            parent += size;
+                        }
                     }
+                    Location::List(_) | Location::Static { .. } | Location::Constant(_) => {}
                 }
             }
         }
