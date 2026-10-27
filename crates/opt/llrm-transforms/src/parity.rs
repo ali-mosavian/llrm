@@ -305,6 +305,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
     entry("float2int@1594", Late, "float2int", Translated, ""),
+    entry("lower-constant-intrinsics@1597", Late, "lower-constant-intrinsics", Translated, ""),
     entry("instsimplify@1662", Late, "instsimplify", Translated, ""),
     entry("divrempairs@1667", Late, "div-rem-pairs", Translated, ""),
     entry("tailrec@1677", Late, "tailcallelim", Translated, ""),
