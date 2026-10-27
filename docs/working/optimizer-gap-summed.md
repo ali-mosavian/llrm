@@ -29,3 +29,14 @@ Calls are not comparable: ours counts function runs, the pin's loop passes count
 Not comparable: LCSSA (4.91 vs 0.75, the pin runs it inside other passes), LSR (pin runs it in llc).
 
 The earlier table's pin column already matched these sums; the 4.3 M LoopDeletion figure is the all-sites total (65 calls), so +4.0 survives. Largest unowned gaps: EarlyCSE (parked), Combine, IndVars, LoopDeletion.
+
+## EarlyCSE fork (+7.5 M row)
+
+`Function::fork` 3.1 M plus its drop 0.9 M per 22 runs. The fork is a borrow, not an algorithm: `View`/`Accesses`/`FunctionAnalyses` hold `&Function`, and the walk edits the live function while they read, so they read a copy. The pin's EarlyCSE.cpp reads and edits one IR and updates MemorySSA in place (`MemorySSAUpdater`, which `Translated` already is).
+
+Only 7 of 22 runs change anything (2 of 11 in the first slot, 5 of 11 in the second), so 15 forks are pure waste: a ceiling of 2.7 M (0.3% of d_faces). The options, none cheap:
+- Defer the edits and resolve through a substitution map: the walk reads use lists and `is_erased` mid-walk (`dead`, `replace_dominated`), so it needs an emulated use list.
+- Speculative immutable walk, fork only on the first edit: needs the walk generic over its edit sink, or aliasing `&mut`/`&` (unsound).
+- Copy-on-write instructions: measured, +0.4 M net (the check on every access costs what the fork saves).
+
+Not pursued; reopen if a shared MSSA view over a mutable body appears.
