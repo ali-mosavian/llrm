@@ -200,20 +200,22 @@ fn found_backward_loop(procedure: &str) -> Option<String> {
 
 #[test]
 fn test_a_counter_whose_start_seeds_pointers_counts_up_to_its_symbolic_bound() {
-    // The pin's loop-reduce leaves this up-counter too (its bound is `UBOUND`,
-    // not a constant), and its i486 loop is no tighter (11 instructions, two
-    // reloads, `incl; addl; cmpw; jle`): ours is 10 with two reloads from [bp].
+    // The pin's indvars rewrites the exit to `icmp eq %next, lb + count`
+    // (`opt -passes='default<O2>'` on our early IR gives ours instruction for
+    // instruction since foldICmpBinOp's add/sub arms), so the counter runs
+    // down to zero: `dec; jne`, with the two reloads from [bp].
     let loop_ = backward_loop(&sum_three(false));
     assert_eq!(loop_.matches("[bp").count(), 2, "{loop_}");
-    assert!(regex::Regex::new(r"\n    inc \w+\n    cmp \w+, \w+\n    jle \w+\n$").unwrap().is_match(&loop_), "{loop_}");
+    assert!(regex::Regex::new(r"\n    dec \w+\n    jne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
 }
 
 #[test]
 fn test_a_loop_whose_exit_moves_a_value_closes_on_its_branch() {
     // The exit's `mov ax,cx` sat after `retf`, so every trip ran `je` out and
-    // `jmp` back. The loop closes on `jle`, the pin's form for this bound.
+    // `jmp` back. The loop closes on its conditional branch (`jne`, the pin's
+    // `icmp eq` exit test for this bound).
     let loop_ = backward_loop(&sum_three(false));
-    assert!(regex::Regex::new(r"\bjle \w+\n$").unwrap().is_match(&loop_), "{loop_}");
+    assert!(regex::Regex::new(r"\bjne \w+\n$").unwrap().is_match(&loop_), "{loop_}");
     assert!(!loop_.contains("jmp"), "{loop_}");
 }
 
@@ -652,7 +654,9 @@ fn test_local_error_and_resume_label_use_their_measured_procedure_abi() {
     let registered = procedure.find("call far ptr B$OEGP").expect("B$OEGP");
     let raised = procedure.find("call far ptr B$SERR").expect("B$SERR");
     assert!(entered < registered && registered < raised, "{procedure}");
-    assert!(procedure[..registered].contains("mov ax, offset"), "{procedure}");
+    // The handler address is pushed as an immediate (`push offset`, #5135), not
+    // made in `ax` first.
+    assert!(procedure[..registered].contains("push offset"), "{procedure}");
     assert!(!procedure.contains("call far ptr B$OEGA"), "{procedure}");
 }
 
@@ -1086,7 +1090,10 @@ fn test_the_first_dimension_is_not_rank_checked() {
     let tests: BTreeSet<&str> = jumps(&procedure, false)
         .iter()
         .filter(|(_, _, label)| calls.contains(label))
-        .map(|(start, _, _)| procedure[..*start].trim_end().lines().last().unwrap_or("").trim())
+        .map(|(start, _, _)| {
+            // The compare may be followed by flag-free moves before its branch.
+            procedure[..*start].lines().rev().map(str::trim).find(|line| line.starts_with("cmp ")).unwrap_or("")
+        })
         .collect();
     assert!(!tests.is_empty() && tests.iter().all(|test| test.ends_with("+2], 0")), "{tests:?}");
 }
@@ -1982,15 +1989,16 @@ fn test_a_masked_subscripts_scale_steps_with_its_recurrence() {
 #[test]
 fn test_a_loop_to_a_symbolic_bound_keeps_its_counter_and_compare() {
     // `-n TO n` is not a constant bound, so no pointer takes over: the pin's
-    // loop-reduce leaves ADVANCE's `icmp sle` up-counter, and its i486 loop is
-    // longer (17 instructions, four reloads) than ours (13).
+    // indvars leaves ADVANCE an up-counter tested `icmp eq %counter, n`
+    // (`opt -passes='default<O2>'` on our early IR), which is the compare
+    // against the bound below.
     let basic = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/inputs/qb/particle.bas");
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).expect("parses");
     let text = listing(&program);
     let start = text.find("ADVANCE proc").expect("ADVANCE proc");
     let end = text.find("ADVANCE endp").expect("ADVANCE endp");
     let body = backward_loop(&text[start..end]);
-    assert!(body.contains("inc cx") && body.contains("cmp cx, ax"), "{body}");
+    assert!(regex::Regex::new(r"\binc \w+\n").unwrap().is_match(&body) && body.contains("cmp cx, ax"), "{body}");
 }
 
 #[test]
@@ -3607,6 +3615,21 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
     let directory = tempfile::tempdir().expect("a temporary directory");
     for text in ["BSAVE \"V.BIN\", 0, 16\r\n", "BLOAD \"V.BIN\", 0\r\n"] {
         records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "vbdos", "vbdos"), "T.BAS");
+    }
+}
+
+/// `END n` and `SYSTEM n` (PDS 7.1, VBDOS) were refused ("END with a return
+/// code"). BC pushes the code as a word and calls `B$CENC` (measured in BC 7.1
+/// and VBDOS objects), which never returns.
+#[test]
+fn end_and_system_with_a_code_call_b_cenc() {
+    for (statement, dialect) in [("END 3", "pds71"), ("SYSTEM 3", "vbdos")] {
+        let directory = tempfile::tempdir().expect("creates a directory");
+        let source = format!("DEFINT A-Z\r\nINPUT a\r\nIF a THEN {statement}\r\nPRINT 1\r\n");
+        let path = written(&directory, "endn.bas", source.as_bytes());
+        let text = listing(&parsed_as(&path, dialect, dialect));
+        assert!(text.contains("pushw 3") && text.contains("call far ptr B$CENC"), "{statement}:\n{text}");
+        assert!(!text.contains("B$CEND"), "{statement}:\n{text}");
     }
 }
 
