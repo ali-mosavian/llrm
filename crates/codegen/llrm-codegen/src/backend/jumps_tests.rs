@@ -310,9 +310,8 @@ fn test_pruning_unreachable_blocks_keeps_the_frequencies_of_the_others() {
             block(9, vec![_return(9)], vec![]).into(),
         ],
     );
-    start.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(
-        [(1, 1.0), (5, 0.5), (9, 1.0)].into_iter().collect(),
-    )));
+    start.frequencies =
+        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (5, 0.5), (9, 1.0)].into_iter().collect())));
     let kept = _reachable(&start, start.blocks.clone());
     let table = &kept.frequencies.as_ref().expect("a table").0;
     assert_eq!(table.get(&1), Some(&1.0));
