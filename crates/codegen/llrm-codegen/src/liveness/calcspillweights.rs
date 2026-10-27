@@ -264,7 +264,13 @@ impl<'a> VirtRegAuxInfo<'a> {
                 // Follow the copy live-in value.
                 let src_li = lis.interval(cur).clone();
                 let src_q = src_li.query(&vni.def());
-                vni = src_q.value_in().expect("Copy from non-existing value");
+                // DEVIATE (no number): `%1 = COPY undef %1`, a copy whose
+                // source is not live at it, is a value no
+                // register carries. The pin's coalescer erases such copies
+                // before it joins them (`eliminateUndefCopy`,
+                // not ported); until then the value is not rematerializable.
+                let Some(source_value) = src_q.value_in() else { return false };
+                vni = source_value;
                 if vni.is_phi_def() {
                     return false;
                 }
@@ -571,6 +577,28 @@ mod tests {
     }
 
     /// Copy hints are collected for both ends of a copy, heavier first.
+    /// A join left `%1 = COPY undef %1` (its source not live there): tracing
+    /// the copies for a rematerializable definition found no value and
+    /// panicked "Copy from non-existing value" on bench/crc at -O2 (m16 and
+    /// m32).
+    #[test]
+    fn test_a_copy_of_an_undefined_value_is_not_rematerializable() {
+        let mut copy = (*Arc::new(Insn::new(0, None, None, vec![1], vec![]))).clone();
+        copy.what = Some(crate::model::ir::Semantics {
+            name: Some("mov".into()),
+            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
+            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
+            ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Move)
+        });
+        let body = body(vec![vec![Arc::new(copy), insn(vec![], vec![1])], vec![]]);
+        let mut lis = LiveIntervals::new(&body);
+        let env = Env { freq: vec![1.0, 1.0] };
+        let original = HashMap::default();
+        let aux = VirtRegAuxInfo::new(&env, &original);
+        let li = (*lis.interval_rc(1)).clone();
+        assert!(!aux.is_rematerializable(&li, &mut lis));
+    }
+
     #[test]
     fn test_a_copy_hints_each_end_to_the_other() {
         let mut copy = (*Arc::new(Insn::new(0, None, None, vec![2], vec![1]))).clone();
