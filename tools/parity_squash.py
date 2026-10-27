@@ -960,6 +960,25 @@ def new_link_failures(
 _BUILT: set[str] = set()
 
 
+def alone_link_failures(files: list[str], cwd: Path, target: Path | None, run=subprocess.run) -> list[str]:
+    """`tools/link_check.py` of the scratch tree `cwd` (its own release bins, built under `target/link`), when the PR touches the runtime or a frontend; the failing `qb <name>: why` / `c <name>: why` lines."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import link_check  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    if not (link_check.touches_runtime(files) or any(one.startswith("crates/frontends/") for one in files)):
+        return []
+    out = (target or cwd / "target") / "link"
+    env = {**os.environ, "CARGO_TARGET_DIR": str(out)}
+    built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    if built.returncode:
+        return [f"release: {(built.stdout + built.stderr).strip().splitlines()[-1:] or ['the bins do not build']}"]
+    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+        (out / "release" / name).touch()  # the runners refuse a binary older than its sources
+    done = run([sys.executable, "tools/link_check.py", str(out / "link-check")], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release")}, capture_output=True, text=True, errors="replace")
+    return [line for line in done.stdout.splitlines() if line.startswith(("qb ", "c "))]
+
+
 def _build_release() -> None:
     """Release bins of the checkout, once per tree: the link layer and the behavioural gate share the build."""
     from buildslot import slotted  # noqa: PLC0415
@@ -1126,7 +1145,7 @@ def own_test_targets(files: list[str], root: Path) -> set[str]:
     return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None) -> list[str]:
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None, links=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1163,6 +1182,9 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
         if new:
             return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
+    # the QB and C programs, built and linked: #4822 and #4839 (frontend changes) reached three batches and cost 19 refusals because only a batch member touching the runtime made the batch link
+    if broken := (links or alone_link_failures)(files, cwd, target):
+        return [f"programs do not link: {', '.join('link ' + line.split(':')[0] for line in broken[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)
