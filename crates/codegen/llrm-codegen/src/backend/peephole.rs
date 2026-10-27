@@ -622,10 +622,18 @@ pub fn high_extracts<'a>(
     let regs = body.regs();
     let profile = targets::profile(cpu)?;
     let mut virtual_uses = Counter::default();
+    // The value a bare anchor (an instruction with no operation, left where a
+    // coalesced copy was) hands on: its one use to its one definition.
+    let mut anchors: std::collections::BTreeMap<u32, u32> = Default::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
                 *virtual_uses.entry(*value).or_insert(0) += 1;
+            }
+            if one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
+                && let ([from], [to]) = (one.uses.as_slice(), one.defines.as_slice())
+            {
+                anchors.insert(*from, *to);
             }
         }
     }
@@ -654,10 +662,20 @@ pub fn high_extracts<'a>(
                 return Ok(None);
             }
             let pair = &run[..2];
-            Ok(match _selected_register_high_extract(regs, body.bits, pair, &dead_after, &virtual_uses, profile)? {
-                Some(changed) => Some((2, changed)),
-                None => _high_extract(regs, body.bits, pair, &dead_after).map(|changed| (2, changed)),
-            })
+            Ok(
+                match _selected_register_high_extract(
+                    regs,
+                    body.bits,
+                    pair,
+                    &dead_after,
+                    &virtual_uses,
+                    &anchors,
+                    profile,
+                )? {
+                    Some(changed) => Some((2, changed)),
+                    None => _high_extract(regs, body.bits, pair, &dead_after).map(|changed| (2, changed)),
+                },
+            )
         })?;
         blocks.push(block.with_insns(insns));
     }
@@ -834,6 +852,7 @@ fn _selected_register_high_extract(
     parts: &[Arc<Insn>],
     dead_after: &dyn Fn(usize) -> Lanes,
     virtual_uses: &Counter,
+    anchors: &std::collections::BTreeMap<u32, u32>,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
     let (moved, shift) = (&parts[0], &parts[1]);
@@ -890,7 +909,11 @@ fn _selected_register_high_extract(
     }
     let shared_two_address = moved.defines == shift.defines && shift.defines == shift.uses;
     let temporary_chain = shift.uses == moved.defines && count(virtual_uses, moved.defines[0]) == 1;
-    if !(shared_two_address || temporary_chain) {
+    // The copy's value reaches the shift through an anchor that is its one use.
+    let anchored = shift.defines == shift.uses
+        && count(virtual_uses, moved.defines[0]) == 1
+        && anchors.get(&moved.defines[0]) == Some(&shift.uses[0]);
+    if !(shared_two_address || temporary_chain || anchored) {
         return Ok(None);
     }
 
@@ -925,7 +948,13 @@ fn _selected_register_high_extract(
         return Ok(None);
     }
 
-    let combined = Arc::new(Insn { what: Some(extract), defines: shift.defines.clone(), ..(**moved).clone() });
+    // The anchor still reads the copy's value: the combined instruction defines
+    // it too.
+    let mut defines = shift.defines.clone();
+    if anchored && !(shared_two_address || temporary_chain) {
+        defines.extend(moved.defines.iter().copied());
+    }
+    let combined = Arc::new(Insn { what: Some(extract), defines, ..(**moved).clone() });
     let folded = lir::without(
         &[combined, Arc::clone(shift)],
         |one| Arc::ptr_eq(one, shift),

@@ -3345,6 +3345,53 @@ fn test_a_move_shift_high_extract_is_found_past_an_unrelated_instruction() {
 }
 
 #[test]
+fn test_a_move_shift_high_extract_is_found_through_a_coalescing_anchor() {
+    // regparm3_matrix_4 (m16 -Os): `mov esi, eax` defined a split piece that an
+    // anchor (no operation) handed to the value the shift is tied to, and
+    // the pair stayed.
+    let (source, high) = (rl(RegId::ECX, 4), rl(RegId::EDX, 4));
+    let parts = vec![
+        Arc::new(insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])),
+            vec![7],
+            vec![1],
+        )),
+        Arc::new(insn(11, Some((11, 11)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![3], vec![7])),
+        Arc::new(insn(
+            12,
+            Some((12, 12)),
+            Some(sem(Operation::Binary, "shr", vec![high.clone()], vec![high.clone(), im(16, 1)])),
+            vec![3],
+            vec![3],
+        )),
+        Arc::new(Insn {
+            reads_complete: true,
+            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            ..insn(
+                13,
+                Some((13, 13)),
+                Some(sem(Operation::Return, "retf", vec![], vec![rl(RegId::AX, 2), rl(RegId::DX, 2)])),
+                vec![],
+                vec![4, 3],
+            )
+        }),
+    ];
+    let input = body("c-return-high-anchored", 10, vec![block(10, parts, vec![]).into()]);
+
+    let result = high_extracts(&input, "386").unwrap().insns();
+
+    assert!(
+        result.iter().any(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shld"))),
+        "{result:?}"
+    );
+    assert!(!result.iter().any(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shr"))));
+    // The anchor's use still has a definition.
+    assert!(result.iter().any(|one| one.defines.contains(&7)));
+}
+
+#[test]
 fn test_register_high_extract_shifts_a_dying_return_root_in_place() {
     // Frontend-parity LOOP returned EDX through push/pop/pop.
     let source = rl(RegId::EDX, 4);
