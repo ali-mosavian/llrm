@@ -1297,6 +1297,22 @@ def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
     assert ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number]) == {}, "nothing moved the second time"
 
 
+def test_a_pr_whose_head_moved_is_left_out_and_not_held_as_its_own_refusal():
+    """A halved batch kept merging a head the owner had replaced, or (with the re-read alone) a new head that had not waited its 15 minutes."""
+    infos = {"5088": {"headRefOid": "o" * 40}, "5087": {"headRefOid": "s" * 40}}
+    views = {"5088": {"headRefOid": "n" * 40}, "5087": {"headRefOid": "s" * 40}}
+    left_out = {}
+    moved = ps.defer_moved(infos, ["5088", "5087"], left_out, view=lambda number: views[number])
+    assert list(moved) == ["5088"] and list(left_out) == ["5088"] and "waits its own head age" in left_out["5088"]
+    assert not ps.own_refusal(left_out["5088"]), "a moved head is not the PR's own refusal"
+
+
+def test_a_merge_batch_older_than_twenty_minutes_is_expired():
+    """The 01:45 batch ran 65+ minutes on the heads it assembled with, refusing PRs whose owners had fixed them."""
+    assert not ps.batch_expired(100.0, 100.0 + ps.BATCH_MAX_SECONDS) and ps.batch_expired(100.0, 100.0 + ps.BATCH_MAX_SECONDS + 1)
+    assert ps.BATCH_MAX_SECONDS == 1200
+
+
 def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
     """docs_in_sync was refused four times on trees the next check reset and nobody could reproduce: no evidence was kept."""
     def run(*args):
