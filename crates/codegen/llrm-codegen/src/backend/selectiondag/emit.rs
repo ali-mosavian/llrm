@@ -941,7 +941,13 @@ impl Emitter<'_, '_> {
                 continue;
             }
             let dests = vec![Loc::Held(Held { value, width })];
-            let narrowed = Semantics { dests, ..what.clone() };
+            // A zero's immediate narrows with it: the `xor` pass wants both
+            // alike.
+            let sources = match what.sources.as_slice() {
+                [Loc::Imm(imm)] if imm.value == 0 => vec![Loc::Imm(Imm { width, ..imm.clone() })],
+                _ => what.sources.clone(),
+            };
+            let narrowed = Semantics { dests, sources, ..what.clone() };
             *insn = Arc::new(Insn::new(insn.at, insn.covers, Some(narrowed), insn.defines.clone(), insn.uses.clone()));
             return;
         }
@@ -2383,6 +2389,13 @@ impl Emitter<'_, '_> {
                 let only_user = self.glue_users.get(&node.ops[0]).is_some_and(|users| users.len() == 1);
                 if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
                     self.narrow_definition(source.value, 2);
+                }
+                // DEVIATE SD219 (m16): the pin's `(i8 0)` and `(i16 0)` are the
+                // low part of a `MOV32r0`; a dword `xor` is 3 bytes here (the
+                // 66 prefix), the word's or byte's 2. A zero read only narrow
+                // is made narrow.
+                if matches!(index, 1 | 4) && !status && only_user && self.is_machine_named(node.ops[0], "MOV32r0") {
+                    self.narrow_definition(source.value, if index == 1 { 1 } else { 2 });
                 }
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
