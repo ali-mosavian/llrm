@@ -2102,3 +2102,19 @@ fn test_names_intrinsic_covers_every_op_that_names_a_callee() {
         }
     }
 }
+
+/// Lowering grew the instruction arena by doubling (capacity 16 for 10
+/// instructions); it asks for the HIR function's count up front.
+#[test]
+fn test_lowering_reserves_the_functions_instructions() {
+    let mut function = difference();
+    let sub =
+        |id, result| Instruction::new(id, Op::Sub, vec![result], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    function.values.extend((4..=11).map(|id| Value { id, r#type: 1 }));
+    function.blocks[0].instructions.extend((4..=11).map(|id| sub(id, id)));
+    let mut emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let (_, lowered) = emitted.module.function_mut("DIFF%").expect("lowered");
+    assert_eq!(lowered.instruction_count(), 10);
+    assert_eq!(lowered.instruction_capacity(), 10);
+}

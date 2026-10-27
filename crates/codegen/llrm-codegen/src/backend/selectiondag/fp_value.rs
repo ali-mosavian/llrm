@@ -65,6 +65,15 @@ pub fn negate(
     Some(bits ^ (1u128 << sign))
 }
 
+/// `|x|` (`clearSign`).
+pub fn abs(
+    vt: EVT,
+    bits: u128,
+) -> Option<u128> {
+    let (sign, ..) = layout(vt)?;
+    Some(bits & !(1u128 << sign))
+}
+
 /// The positive integer `value` (`getConstantFP(2.0, ..)`).
 pub fn from_integer(
     vt: EVT,
