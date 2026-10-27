@@ -2361,9 +2361,12 @@ mod tests {
     #[test]
     fn test_m16_regparm3_a_far_pointer_result_is_one_dword_joined_and_split() {
         let body = regparm3("_far_result");
+        // joined into eax: the words shifted together, not left as dx:ax. (Not
+        // "no edx": which register holds the low word as a scratch is the
+        // allocator's choice.)
         assert!(
-            body.iter().any(|line| line.starts_with("shl") || line.starts_with("shld"))
-                && !body.iter().any(|line| line.contains("edx")),
+            body.iter().any(|line| line.starts_with("shl eax, 16") || line.starts_with("shld eax,"))
+                && body.iter().any(|line| line.starts_with("or eax,") || line.starts_with("shld eax,")),
             "{body:?}"
         );
         let body = regparm3("_caller");

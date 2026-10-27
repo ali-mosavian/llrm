@@ -739,7 +739,7 @@ b0:
 #[test]
 fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     let mut module = parsed(CHOP);
-    let options = crate::pipeline::Options::speed();
+    let options = crate::pipeline::Options::aggressive();
     let applied = crate::pipeline::Applied { options, ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
@@ -1087,10 +1087,11 @@ b0:
     assert!(!top.contains("call"), "the call to step stayed:\n{top}");
 }
 
-/// The same two calls with values the caller does not know fold nothing: the
-/// call stays.
+/// The same two calls with values the caller does not know: the first call's
+/// stores are dead, and `step` private with both calls in `a2c` goes with its
+/// last, so the copy is smaller than the calls and the body it replaces.
 #[test]
-fn test_an_os_call_whose_global_arguments_hold_unknown_values_stays_a_call() {
+fn test_an_os_call_whose_global_arguments_hold_unknown_values_goes_with_its_private_callee() {
     let top = sized(
         "@value = internal global i16 0
 @delta = internal global i16 0
@@ -1119,7 +1120,7 @@ b0:
 ",
         "@a2c(",
     );
-    assert!(top.contains("call"), "step was inlined for nothing:\n{top}");
+    assert!(!top.contains("call"), "step stayed a call:\n{top}");
 }
 
 /// LLRM_CHECK_CALLEES said `the declarations held by the module's analyses
@@ -1194,4 +1195,280 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
     assert!(header("sink").contains("range(i16 -32768, 6) %x"), "{text}");
     assert!(header("place").contains("range(i16 0, 8) %row"), "{text}");
     assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
+}
+
+/// A float kernel called once on stack slots: the trial's copy adds x87 loads,
+/// multiplies and a compare-and-branch the call did not, and costs 2 bytes more
+/// than the call (`qmove`, 147 -> 149 bytes at m16 -Os). The model counted each
+/// float instruction as one and tied, so `<=` kept the copy.
+#[test]
+fn test_an_os_trial_that_adds_x87_code_to_a_stack_slot_float_call_stays_a_call() {
+    let top = sized(
+        "@vx = internal global float 3.0
+@vy = internal global float 4.0
+@wx = internal global float 1.0
+@speed = internal global float 10.0
+@dt = internal global float 0.25
+
+define void @accel(ptr %0, ptr %1, float %2, float %3) {
+b1:
+  %4 = load float, ptr %0
+  %5 = load float, ptr %1
+  %6 = fmul float %4, %5
+  %7 = getelementptr inbounds nuw i8, ptr %0, i16 4
+  %8 = load float, ptr %7
+  %9 = getelementptr inbounds nuw i8, ptr %1, i16 4
+  %10 = load float, ptr %9
+  %11 = fmul float %8, %10
+  %12 = fadd float %6, %11
+  %13 = fsub float %2, %12
+  %14 = fcmp ole float %13, 0.000000e+00
+  br i1 %14, label %b4, label %b2
+
+b2:
+  %15 = fmul float %2, 1.000000e+01
+  %16 = fmul float %15, %3
+  %17 = fcmp ogt float %16, %13
+  %18 = select i1 %17, float %13, float %16
+  %19 = load float, ptr %0
+  %20 = load float, ptr %1
+  %21 = fmul float %18, %20
+  %22 = fadd float %19, %21
+  store float %22, ptr %0
+  %23 = load float, ptr %7
+  %24 = load float, ptr %9
+  %25 = fmul float %18, %24
+  %26 = fadd float %23, %25
+  store float %26, ptr %7
+  br label %b4
+
+b4:
+  ret void
+}
+
+define i32 @bench() {
+b1:
+  %0 = alloca [12 x i8]
+  %1 = alloca [12 x i8]
+  %2 = load volatile float, ptr @vx
+  store float %2, ptr %0
+  %3 = load volatile float, ptr @vy
+  %4 = getelementptr inbounds nuw i8, ptr %0, i16 4
+  store float %3, ptr %4
+  %5 = getelementptr inbounds nuw i8, ptr %0, i16 8
+  store float 5.000000e+00, ptr %5
+  %6 = load volatile float, ptr @wx
+  store float %6, ptr %1
+  %7 = getelementptr inbounds nuw i8, ptr %1, i16 4
+  store float 0.000000e+00, ptr %7
+  %8 = getelementptr inbounds nuw i8, ptr %1, i16 8
+  store float 0.000000e+00, ptr %8
+  %9 = load volatile float, ptr @dt
+  %10 = load volatile float, ptr @speed
+  call void @accel(ptr %0, ptr %1, float %10, float %9)
+  %11 = load float, ptr %0
+  %12 = fptosi float %11 to i32
+  %13 = mul nsw i32 %12, 10000
+  %14 = load float, ptr %4
+  %15 = fptosi float %14 to i32
+  %16 = mul nsw i32 %15, 100
+  %17 = add nsw i32 %13, %16
+  %18 = load float, ptr %5
+  %19 = fptosi float %18 to i32
+  %20 = add nsw i32 %17, %19
+  ret i32 %20
+}
+",
+        "@bench(",
+    );
+    assert!(top.contains("call void @accel"), "accel was inlined for 2 bytes more:\n{top}");
+}
+
+/// `@top` after the -O2 pipeline over `text`.
+fn at_o2(
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::default(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// `@top` after the -Os pipeline over `text`.
+fn at_os(
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// Two calls of a private tail-recursive `gcd`, one with a constant argument
+/// (it folds, so the -Os size bound passes it) and one without (the bound
+/// refused it, and the trial of it alone credited no callee body because the
+/// other call still counted as a reference): `call _gcd` stayed in
+/// `bench_recgcd` (m16 -Os, +20 B), where the pin inlines both and drops
+/// `gcd`.
+#[test]
+fn test_an_os_site_beside_an_inlined_site_of_a_private_callee_gets_the_callee_credit() {
+    let top = at_os(
+        "define internal i16 @gcd(i16 %a, i16 %b) {
+b0:
+  %z = icmp eq i16 %b, 0
+  br i1 %z, label %done, label %rec
+
+rec:
+  %r = srem i16 %a, %b
+  %t = call i16 @gcd(i16 %b, i16 %r)
+  ret i16 %t
+
+done:
+  ret i16 %a
+}
+
+define i16 @bench(i16 %n, i16 %m) {
+b0:
+  %x = mul i16 %n, 7
+  %y = add i16 %x, 3
+  %p = mul i16 %m, 5
+  %q = add i16 %p, 2
+  %g1 = call i16 @gcd(i16 %y, i16 %q)
+  %s = add i16 %n, 90
+  %g2 = call i16 @gcd(i16 %s, i16 360)
+  %t = add i16 %g1, %g2
+  ret i16 %t
+}
+",
+        "@bench(",
+    );
+    assert!(!top.contains("@gcd"), "a call of gcd stayed:\n{top}");
+}
+
+/// A private callee that is one 16-case switch over values 2..21 (a jump
+/// table on x86) was priced as a compare tree, 3n/2-1 compares, because the
+/// walk never gave the cost model the target's switch answer: cost 290 against
+/// 225, so it stayed a call that the pin inlines (QCport `item_mdl_id` in
+/// `mdl_rebind_items`; the pin prices the table, 20 entries, about 175).
+#[test]
+fn test_an_o2_call_to_a_dense_switch_callee_is_inlined_as_the_pin_does() {
+    let cases: Vec<i16> = vec![2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16, 17, 18, 20, 21];
+    let labels: String = cases.iter().map(|c| format!(" i16 {c}, label %c{c}\n")).collect();
+    let arms: String =
+        cases.iter().map(|c| format!("c{c}:\n  %v{c} = mul i16 %w, {}\n  br label %out\n\n", c * 3 + 1)).collect();
+    let incoming: String = cases.iter().map(|c| format!(", [ %v{c}, %c{c} ]")).collect();
+    let top = at_o2(
+        &format!(
+            "define internal i16 @pick(ptr %it, i16 %w) {{
+b0:
+  %k = load i16, ptr %it
+  switch i16 %k, label %out [
+{labels}  ]
+
+{arms}out:
+  %r = phi i16 [ -1, %b0 ]{incoming}
+  ret i16 %r
+}}
+
+define i16 @top(ptr %p, ptr %q, i16 %w) {{
+b0:
+  %a = call i16 @pick(ptr %p, i16 %w)
+  %b = call i16 @pick(ptr %q, i16 %a)
+  ret i16 %b
+}}
+"
+        ),
+        "@top(",
+    );
+    assert!(!top.contains("@pick"), "the dense switch callee stayed a call:\n{top}");
+}
+
+/// A private callee with a stack frame, called once from a recursive function,
+/// stayed a call because `fits_with` never copies a body that allocates into a
+/// recursive caller; its only call goes with it, so the copy shrinks the code
+/// and the recursive path is no deeper than before (QCport
+/// `ent_lightning_` into `ent_use_targets_`: the pin inlines it).
+#[test]
+fn test_an_o2_last_call_to_a_private_callee_with_a_frame_is_inlined_into_a_recursive_caller() {
+    let top = at_o2(
+        "declare void @sink(ptr)
+
+define internal void @leaf(i16 %v) {
+b0:
+  %buf = alloca [16 x i8]
+  store i16 %v, ptr %buf
+  call void @sink(ptr %buf)
+  ret void
+}
+
+define i16 @rec(i16 %n) {
+b0:
+  %c = icmp sgt i16 %n, 0
+  br i1 %c, label %go, label %out
+
+go:
+  call void @leaf(i16 %n)
+  %m = sub i16 %n, 1
+  %r = call i16 @rec(i16 %m)
+  %s = add i16 %r, %n
+  ret i16 %s
+
+out:
+  ret i16 0
+}
+",
+        "@rec(",
+    );
+    assert!(!top.contains("@leaf"), "the last call stayed a call:\n{top}");
+}
+
+/// The pin's `GlobalOpt` runs between IPSCCP and the walk (pass 20 of
+/// `default<O2>` on sum_three): a static a norecurse function writes before it
+/// reads is a register when the loop passes run. Ours split and localized after
+/// the walk, so `indvars` saw the memory (sum_three.bas kept the `sgt` exit
+/// test).
+#[test]
+fn test_module_ipo_makes_a_static_one_function_writes_first_a_stack_slot() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "@n = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %a) norecurse {
+b0:
+  store i16 %a, ptr @n
+  %x = load i16, ptr @n
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let body = text.split("define").nth(1).unwrap_or_default();
+    assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
 }

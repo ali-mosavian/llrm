@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_gep_phi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_gep_phi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_gep_phi.rs sha256:e2e07f29dca93a5e5e9a9c4e0572890f898147017817fda1a85e577ecae8df12 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_gep_phi.rs sha256:0ed5968c203a4932cbbabeee7d8da1f8f71ff60b70703f735b6674082b3ae3c3 -->
 
 # combine_gep_phi
 
@@ -20,3 +20,7 @@ the new GEP has the flags all of them had.
 %p = phi ptr [ %a, %l ], [ %b, %r ]       %i = phi i64 [ %x, %l ], [ %y, %r ]
   (%a, %b: gep i32, ptr %base, i64 %x/%y)  %g = gep i32, ptr %base, i64 %i
 ```
+
+## Used by
+The `getelementptr` visit of [`combine_gep`](combine_gep.md), which
+tries `fold_gep_of_phi` on a pointer that is a phi.

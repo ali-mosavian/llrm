@@ -131,6 +131,10 @@ pub struct Wrap {
     /// where it falls into it (the edge `tryToSplitRestore` puts the epilogue
     /// on), in that order.
     pub closes_after: BTreeMap<i64, Vec<Piece>>,
+    /// Taken back on the taken edge of the block's conditional branch to the
+    /// restore: `masm` makes the block `tryToSplitRestore` splits the edge
+    /// with, after the procedure's last.
+    pub closes_taken: BTreeMap<i64, Vec<Piece>>,
     pub wrapped: BTreeSet<Piece>,
 }
 
@@ -140,21 +144,37 @@ pub fn named(
     regs: Regs,
     one: &Insn,
 ) -> BTreeSet<RegId> {
-    let mut found: BTreeSet<RegId> =
-        one.call.iter().flat_map(|call| call.disturbs.iter().copied().map(|register| regs.root(register))).collect();
-    let Some(what) = &one.what else { return found };
-    for place in what.dests.iter().chain(&what.sources) {
-        match place {
-            Loc::Reg(ir::Reg { register, .. }) => {
-                found.insert(regs.root(*register));
-            }
-            Loc::Mem(ir::Mem { through, index_through, .. }) => {
-                found.extend([*through, *index_through].map(|register| regs.root(register)));
-            }
-            _ => {}
-        }
-    }
+    let mut found = BTreeSet::new();
+    any_named(regs, one, |register| {
+        found.insert(register);
+        false
+    });
     found
+}
+
+/// Whether `test` holds of a register `one` names (`named`'s, as it finds
+/// them, none collected): what `useOrDefCSROrFI` asks of each operand.
+fn any_named(
+    regs: Regs,
+    one: &Insn,
+    mut test: impl FnMut(RegId) -> bool,
+) -> bool {
+    if one.call.iter().flat_map(|call| call.disturbs.iter()).any(|register| test(regs.root(*register))) {
+        return true;
+    }
+    let Some(what) = &one.what else { return false };
+    what.dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |place| match place {
+                Loc::Reg(ir::Reg { register, .. }) => test(regs.root(*register)),
+                Loc::Mem(ir::Mem { through, index_through, .. }) => {
+                    test(regs.root(*through)) || test(regs.root(*index_through))
+                }
+                _ => false,
+            },
+        )
 }
 
 /// Whether `one` reads or writes the frame or the stack pointer: a frame cell
@@ -222,7 +242,9 @@ pub fn wrapped(
         if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
             continue;
         }
-        if !split.iter().all(|&one| ends_on_edge_into(body, one, placement.restore)) {
+        if !split.iter().all(|&one| {
+            ends_on_edge_into(body, one, placement.restore) || ends_on_taken_edge_into(body, one, placement.restore)
+        }) {
             continue;
         }
         let (save, restore) = (body.blocks[placement.save.0 as usize].at, body.blocks[placement.restore.0 as usize].at);
@@ -255,8 +277,18 @@ pub fn wrapped(
         }
         pieces.extend(kept.iter().map(|&register| Piece::Saved(register)));
         let closes: Vec<Piece> = pieces.iter().rev().copied().collect();
+        let mut closes_taken = BTreeMap::new();
         let (closes, closes_after) = if !split.is_empty() {
-            (BTreeMap::new(), split.iter().map(|one| (body.blocks[one.0 as usize].at, closes.clone())).collect())
+            let mut after = BTreeMap::new();
+            for &one in split {
+                let at = body.blocks[one.0 as usize].at;
+                if ends_on_taken_edge_into(body, one, placement.restore) {
+                    closes_taken.insert(at, closes.clone());
+                } else {
+                    after.insert(at, closes.clone());
+                }
+            }
+            (BTreeMap::new(), after)
         } else if returns {
             (BTreeMap::from([(restore, closes)]), BTreeMap::new())
         } else {
@@ -267,6 +299,7 @@ pub fn wrapped(
             opens: BTreeMap::from([(save, pieces)]),
             closes,
             closes_after,
+            closes_taken,
         });
     }
     None
@@ -297,6 +330,25 @@ fn ends_on_edge_into(
         ir::Operation::Return => false,
         _ => next && only,
     }
+}
+
+/// Whether `from` ends in a conditional branch that takes it to `to` and
+/// falls into another block: the edge `tryToSplitRestore` splits is the taken
+/// one.
+fn ends_on_taken_edge_into(
+    body: &LirBody,
+    from: BlockId,
+    to: BlockId,
+) -> bool {
+    let (Some(block), Some(restore)) = (body.blocks.get(from.0 as usize), body.blocks.get(to.0 as usize)) else {
+        return false;
+    };
+    let Some(what) =
+        block.insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| one.what.as_ref())
+    else {
+        return false;
+    };
+    what.op == ir::Operation::Branch && what.target == Some(restore.at) && from.0 + 1 != to.0
 }
 
 /// Whether `from` leaves by one jump, or falls out by none, and so can take the
@@ -343,6 +395,11 @@ struct Uses<'a> {
     kept: &'a BTreeSet<RegId>,
     frame_registers: BTreeSet<RegId>,
     framed: bool,
+    /// Per block, whether it touches: asked again by every pass over the
+    /// blocks, scanned once.
+    touched: std::cell::RefCell<Vec<Option<bool>>>,
+    /// How many blocks were scanned.
+    scans: std::cell::Cell<usize>,
 }
 
 impl<'a> Uses<'a> {
@@ -354,16 +411,24 @@ impl<'a> Uses<'a> {
         let regs = body.regs();
         let frame_registers =
             frame.iter().flat_map(|(pointer, stack)| [regs.root(*pointer), regs.root(*stack)]).collect();
-        Self { body, kept, frame_registers, framed: frame.is_some() }
+        Self {
+            body,
+            kept,
+            frame_registers,
+            framed: frame.is_some(),
+            touched: std::cell::RefCell::new(vec![None; body.blocks.len()]),
+            scans: std::cell::Cell::new(0),
+        }
     }
 
     fn insn_needs(
         &self,
         one: &Insn,
     ) -> bool {
-        let names = named(self.body.regs(), one);
-        (self.framed && (touches_frame(one) || names.iter().any(|register| self.frame_registers.contains(register))))
-            || names.iter().any(|register| self.kept.contains(register))
+        let regs = self.body.regs();
+        (self.framed
+            && (touches_frame(one) || any_named(regs, one, |register| self.frame_registers.contains(&register))))
+            || any_named(regs, one, |register| self.kept.contains(&register))
     }
 
     fn block(
@@ -380,7 +445,13 @@ impl Frame for Uses<'_> {
         block: BlockId,
         _: bool,
     ) -> bool {
-        self.block(block).insns.iter().any(|one| self.insn_needs(one))
+        if let Some(known) = self.touched.borrow()[block.0 as usize] {
+            return known;
+        }
+        self.scans.set(self.scans.get() + 1);
+        let found = self.block(block).insns.iter().any(|one| self.insn_needs(one));
+        self.touched.borrow_mut()[block.0 as usize] = Some(found);
+        found
     }
 
     fn terminators_touch(
@@ -480,6 +551,34 @@ mod tests {
         LirBody::new("wrap", blocks[0].at, blocks, IndexMap::default(), IndexMap::default())
     }
 
+    /// The placement asks of each block twice (the walk, then the dirty
+    /// set): the second ask rescanned its instructions, 4596 scans of d_faces
+    /// where the blocks held half.
+    #[test]
+    fn test_a_block_asked_twice_is_scanned_once() {
+        let blocks = vec![block(0, vec![touch(0, RegId::EBX), ret(2)], vec![])];
+        let kept = BTreeSet::from([RegId::EBX]);
+        let body = body(blocks);
+        let uses = Uses::of(&body, &kept, None);
+        assert!(uses.touches(BlockId(0), false) && uses.touches(BlockId(0), true));
+        assert_eq!(uses.scans.get(), 1);
+    }
+
+    /// A register named only as the base or the index of a memory operand is
+    /// a use: `any_named` must find both, as `named`'s set did.
+    #[test]
+    fn test_a_register_named_as_an_address_base_or_index_is_found() {
+        let place = Loc::Mem(ir::Mem { through: RegId::ESI, index_through: RegId::EBX, ..ir::Mem::new(None, 4) });
+        let one =
+            insn(0, Semantics { name: Some("mov".into()), dests: vec![place], ..Semantics::new(ir::Operation::Move) });
+        let regs = body(vec![block(0, vec![], vec![])]).regs();
+        for register in [RegId::ESI, RegId::EBX] {
+            assert!(any_named(regs, &one, |named| named == regs.root(register)), "{register:?} not found");
+            assert!(named(regs, &one).contains(&regs.root(register)));
+        }
+        assert!(!any_named(regs, &one, |named| named == regs.root(RegId::EDI)));
+    }
+
     /// The early exit saved every register the late path uses, and popped them
     /// again: hanoi's `push ecx` before the `n == 0` test.
     #[test]
@@ -553,18 +652,25 @@ mod tests {
         assert!(wrap.is_some_and(|wrap| wrap.closes_after.contains_key(&2)));
     }
 
-    /// A late path whose conditional branch takes it to the return has its
-    /// not-taken edge elsewhere: the end of the block is on neither edge alone,
-    /// and nothing is saved late.
+    /// A late path whose conditional branch takes it to the shared return
+    /// pops on that edge: the early exit still skips the prologue (x_mergesort
+    /// `msort` pushed four registers before its early `jl`).
     #[test]
-    fn test_a_late_path_that_branches_to_the_shared_return_keeps_the_save_at_the_entry() {
+    fn test_a_late_path_that_branches_to_the_shared_return_pops_on_the_taken_edge() {
+        let jump =
+            insn(42, Semantics { name: Some("jmp".into()), target: Some(3), ..Semantics::new(ir::Operation::Jump) });
         let blocks = vec![
             block(0, vec![branch(2, 3)], vec![3, 2]),
             block(2, vec![touch(20, RegId::ESI), branch(22, 3)], vec![3, 4]),
-            block(4, vec![touch(40, RegId::EBX), ret(42)], vec![]),
+            block(4, vec![touch(40, RegId::ESI), jump], vec![3]),
             block(3, vec![ret(30)], vec![]),
         ];
-        assert!(wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).is_none());
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false).expect("a wrap");
+        assert!(
+            wrap.closes_after.contains_key(&4)
+                && wrap.closes_taken.contains_key(&2)
+                && !wrap.closes_after.contains_key(&2)
+        );
     }
 
     /// Two late paths that each use a register were saved and popped per exit

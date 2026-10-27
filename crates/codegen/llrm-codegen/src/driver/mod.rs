@@ -332,6 +332,8 @@ pub fn compiled_module(
             &options.libcalls,
         )
     })?;
+    let mut assembled = assembled;
+    data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }
@@ -470,6 +472,9 @@ pub fn optimized(
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
+    timed("mir libm calls", || {
+        program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
+    })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
         timed("mir memcpy calls", || {
             program
@@ -478,6 +483,9 @@ pub fn optimized(
                 .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
         })?;
     }
+    timed("mir constant intrinsics", || {
+        program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
+    })?;
     if crate::backend::memsetpattern::expands_for(options.isel) {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
@@ -529,7 +537,9 @@ pub fn optimized(
                 |module| crate::backend::compares::expanded(module, |operation| options.arch.expands(operation)),
             )
     })?;
-    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    if options.isel != crate::backend::shadow::Selector::Dag {
+        timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    }
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));

@@ -18,7 +18,6 @@ llrm-coff64 = { workspace = true }
 llrm-elf32 = { workspace = true }
 llrm-elf64 = { workspace = true }
 llrm-macho = { workspace = true }
-llrm-x86-bcmachine = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-instr = { workspace = true }

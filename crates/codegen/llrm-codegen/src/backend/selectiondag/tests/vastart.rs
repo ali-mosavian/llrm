@@ -4,7 +4,7 @@ use super::*;
 
 fn legalize(dag: &mut SelectionDAG) {
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov: false, sse2: false }).run().unwrap();
+    DagLegalizer::new(dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
 }
 
 fn list(

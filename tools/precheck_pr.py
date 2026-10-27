@@ -14,7 +14,8 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
 4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
 5. the changed .rs files are formatted (tools/fmt.sh);
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
-7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have;
+7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have, and
+   `tools/docs/docsbuild/build.py --check` finds no generated page stale that the tip has not (seconds);
 6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
@@ -235,6 +236,26 @@ def scanner_failures(
     return [f"scanner fails here and passes on {base}: {name}" for name in sorted(here)]
 
 
+def docs_failures(root: Path, base: str = BASE, docs=None, docs_on_base=None) -> list[str]:
+    """The generated pages `build.py --check` finds stale on the branch (which contains `base`, so it is the branch merged with it) and not on `base`: #5062, #5085 and #5088 changed
+    sources and were marked ready without the page, and each failed the batch's docs check."""
+    stale = (docs or parity_squash.docs_stale)(root)
+    if not stale:
+        return []
+
+    def on_base() -> set[str]:
+        with tempfile.TemporaryDirectory(prefix="precheck-base-") as scratch:
+            work = Path(scratch) / "w"
+            git("worktree", "add", "-q", "--detach", str(work), base, cwd=root)
+            try:
+                return parity_squash.docs_stale(work)
+            finally:
+                subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=root, capture_output=True)
+
+    new = sorted(stale - (docs_on_base or on_base)())
+    return [f"generated docs out of date: {', '.join(new[:6])}; run python3 tools/docs/docsbuild/build.py --sync and commit the pages"] if new else []
+
+
 def precheck(
     root: Path,
     title: str | None,
@@ -260,6 +281,7 @@ def precheck(
     why += warning_failures(root, packages, run, dict(os.environ))
     why += lib_failures(root, packages, files, base, run, on_base)
     why += scanner_failures(root, files, base, run)
+    why += docs_failures(root, base)
     return list(dict.fromkeys(why))
 
 

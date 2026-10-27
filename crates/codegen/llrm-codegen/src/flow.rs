@@ -164,7 +164,7 @@ pub fn machine_with<'a>(
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
-        Box::new(crate::processimpdefs::ProcessImplicitDefs),
+        Box::new(crate::processimpdefs::ProcessImplicitDefs { ignored_inputs: target.in_order }),
         // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
         // addILPOpts): a chain of one integer operation rebuilt so its late
         // operand joins last.
@@ -209,12 +209,6 @@ pub fn machine_with<'a>(
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
-        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
-        // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler {
-            classes: Rc::clone(classes),
-            segments: segments.clone(),
-        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -237,6 +231,12 @@ pub fn machine_with<'a>(
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        // After TwoAddress and the coalescer, before any value is placed: the
+        // pin's pre-RA scheduler, bottom-up by pressure.
+        Box::new(crate::backend::machinesched::MachineScheduler {
+            classes: Rc::clone(classes),
+            segments: segments.clone(),
+        }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
                 .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),

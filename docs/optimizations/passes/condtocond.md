@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/condtocond.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/condtocond.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/condtocond.rs sha256:519943b6240d35777fd2c51c01c36a263a4828aa2d3ba09a89c37c72ac18b58c -->
+<!-- src: crates/opt/llrm-transforms/src/condtocond.rs sha256:e12151984c120b6188f2ccfe510d527b3289cc0901c0f31ae72e2f212bb90fb2 -->
 
 # condtocond
 
@@ -22,3 +22,6 @@ branch, which now goes to the common destination or the other one.
   b0: br i1 %a, label %b1, label %d         b0: %m = or i1 %a, %b   (a select if %b may be poison)
   b1: br i1 %b, label %d, label %e    ==>       br i1 %m, label %d, label %e
 ```
+
+## Used by
+Named by `simplifycfg`.

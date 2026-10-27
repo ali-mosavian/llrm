@@ -13,7 +13,7 @@ Status: todo, audit (X86 hook exists in some form, compare), blocked (blocker, d
 | # | Pin function | Line | Status |
 |---|---|---|---|
 | 1 | `run` (the block walk, `LocalMIs`, `ImmDefMIs`, `FoldAsLoadDefCandidates`) | #L1776 | todo: pass skeleton before phielim's successor |
-| 2 | `optimizeRecurrence`, `findTargetRecurrence` | #L1719, #L1648 | todo: needs phi recurrence + `TII->getRecurrence`-style hook (X86: none) |
+| 2 | `optimizeRecurrence`, `findTargetRecurrence` | #L1719, #L1648 | done: `recurrences_commuted` in backend/peepholeopt.rs |
 | 3 | `isNAPhysCopy`, `foldRedundantNAPhysCopy` | #L1591, #L1595 | todo |
 | 4 | `optimizeCmpInstr` (`TII->optimizeCompareInstr`) | #L948 | audit: ours is `peep` rules on flags; X86InstrInfo::optimizeCompareInstr is the pin's |
 | 5 | `optimizeUncoalescableCopy`, `optimizeSelect`, `optimizeCondBranch` | #L1388, #L987, #L999 | todo; select/branch hooks are no-ops on X86 |
