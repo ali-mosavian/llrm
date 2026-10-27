@@ -4717,6 +4717,13 @@ impl Compiler {
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
+                    "CHAIN" => {
+                        let [file] = arguments.as_slice() else {
+                            return self.unsupported("CHAIN with a line, ALL, DELETE or MERGE");
+                        };
+                        let file = self.string_descriptor(file)?;
+                        self.emit_runtime_call("B$SCHN", Vec::new(), vec![file]);
+                    }
                     _ => {
                         return self
                             .fail(format!("{name} is valid, but this compiler cannot generate code for it yet"));

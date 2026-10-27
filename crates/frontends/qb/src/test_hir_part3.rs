@@ -3680,3 +3680,13 @@ fn test_clear_with_a_stack_size_passes_it_and_the_flag() {
     let call = main.find("call far ptr B$SCLR").expect("the call");
     assert!(main[..call].trim_end().ends_with("pushd 268500991"), "stack 4096, flag -1: {main}");
 }
+
+/// CHAIN was refused ("cannot generate code for it yet"): BC pushes the
+/// file name's descriptor and calls B$SCHN (measured on BC 4.50's object).
+#[test]
+fn test_chain_calls_the_chain_routine_with_the_file_name() {
+    let text = listing_in("qb45", &[], "chaincall", "CHAIN \"NEXT\"\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCHN").expect("the call");
+    assert!(main[..call].trim_end().rsplit('\n').next().unwrap().trim_start().starts_with("push offset"), "{main}");
+}

@@ -1704,3 +1704,17 @@ established = false
 evidence = '''
 rt/clear.asm: `cProc B$SCLR,<FAR,PUBLIC>` with parmW stack and parmW fStack, so it returns with `ret 4`. It zeroes the program's data segment, closes the files, starts the heaps afresh and may move the stack, so every register and every byte of memory is conceded, as is a callback into the program.
 '''
+
+["B$SCHN"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+BC 4.50 on `CHAIN "NEXT"`: `mov ax,<descriptor> / push ax / call far B$SCHN`, then B$CENP; BCOM45.LIB osrun.asm B$SCHN opens with `push bp / mov bp,sp / mov bx,[bp+6]`, one word. Only the cleanup is claimed: it loads and runs another program, so every register and every byte of memory is conceded.
+'''
