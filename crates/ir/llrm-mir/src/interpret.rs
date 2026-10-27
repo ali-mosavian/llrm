@@ -410,6 +410,11 @@ impl<'m> Machine<'m> {
                 };
                 Val::Aggregate(vec![wrapped, overflowed])
             }
+            Intrinsic::UnsignedSubSat => match (icmp(IntPredicate::Ugt, argument(0), argument(1)), argument(0)) {
+                (Val::Int { bits: 1, .. }, _) => binary(BinaryOp::Sub, Flags::default(), argument(0), argument(1))?,
+                (Val::Int { .. }, Val::Int { width, .. }) => Val::Int { bits: 0, width },
+                _ => Val::Poison,
+            },
             Intrinsic::MinMax { signed, max } => {
                 let predicate = match (signed, max) {
                     (true, true) => IntPredicate::Sgt,

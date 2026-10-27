@@ -36,6 +36,8 @@ pub enum Intrinsic {
         signed: bool,
         max: bool,
     },
+    /// `llvm.usub.sat`: the difference, or zero where it would go below zero.
+    UnsignedSubSat,
     /// `llvm.smul.fix` and `llvm.sdiv.fix`: signed fixed point with as many
     /// fraction bits as the third argument says.
     Fixed {
@@ -451,7 +453,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 61] = [
+const TABLE: [Spec; 62] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -462,6 +464,7 @@ const TABLE: [Spec; 61] = [
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
+    arithmetic("llvm.usub.sat", Intrinsic::UnsignedSubSat, Slot::Any(0), INTS, Kind::Int),
     bit_count("llvm.ctlz", BitCount::LeadingZeros),
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),

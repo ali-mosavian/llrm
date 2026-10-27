@@ -17,6 +17,11 @@
 //!                                        rest
 //! ```
 //!
+//! DEVIATE S3 (no number): `llvm.usub.sat` is expanded here, before selection,
+//! to `a > b ? a - b : 0`. The pin expands it in the DAG legalizer
+//! (`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
+//! and a conditional move. Exit: the legalizer's expansion lands.
+//!
 //! DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 //! CodeGenPrepare's `optimizeSelectInst` forms no branch where
 //! `isPredictableSelectExpensive` is false (in-order i486, `CodeGenPrepare.cpp`
@@ -82,7 +87,7 @@
 //! LLVM's CodeGenPrepare (`optimizeSelectInst`) makes the same change where the
 //! target prices a branch below a conditional move.
 
-use llrm_mir::context::ConstantKind;
+use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, Function, GlobalKind, GlobalValue, InstId, Module, Operand};
@@ -90,28 +95,31 @@ use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::tti::Tti;
 
 /// Every `llvm.{s,u}{min,max}` call of `module` made a compare and a select,
-/// as LLVM expands ISD::SMAX where the target has no such instruction.
+/// as LLVM expands ISD::SMAX where the target has no such instruction, and
+/// every `llvm.usub.sat` a subtraction and a select of zero (ISD::USUBSAT).
 pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
     let intrinsics: Vec<Option<Intrinsic>> = module.globals.iter().map(GlobalValue::intrinsic).collect();
     let context = &mut module.context;
     for global in &mut module.globals {
         let GlobalKind::Function(function) = &mut global.kind else { continue };
-        let found: Vec<(InstId, bool, bool)> = function
+        let found: Vec<(InstId, Option<(bool, bool)>)> = function
             .walk()
             .filter_map(|(_, inst)| {
                 let instruction = function.instruction(inst);
                 let Some(&Operand::Constant(callee)) = instruction.operands.last() else { return None };
                 let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
                 match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
-                    (true, Some(Intrinsic::MinMax { signed, max })) => Some((inst, signed, max)),
+                    (true, Some(Intrinsic::MinMax { signed, max })) => Some((inst, Some((signed, max)))),
+                    (true, Some(Intrinsic::UnsignedSubSat)) => Some((inst, None)),
                     _ => None,
                 }
             })
             .collect();
-        for (inst, signed, max) in found {
+        for (inst, minmax) in found {
             let call = function.instruction(inst).clone();
             let [a, b, _] = call.operands[..] else { return Err("a min or max of two operands".into()) };
             let bit = context.types.int(1);
+            let (signed, max) = minmax.unwrap_or((false, true));
             let predicate = match (signed, max) {
                 (true, true) => IntPredicate::Sgt,
                 (true, false) => IntPredicate::Slt,
@@ -124,7 +132,14 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 Ok(Operand::Value(function.instruction(made).result.expect("a value")))
             };
             let beats = before(function, Opcode::ICmp(predicate), bit, vec![a, b])?;
-            let chosen = before(function, Opcode::Select, call.ty, vec![beats, a, b])?;
+            // `usub.sat` is `a > b ? a - b : 0`.
+            let chosen = if minmax.is_none() {
+                let difference = before(function, Opcode::Binary(BinaryOp::Sub), call.ty, vec![a, b])?;
+                let zero = Operand::Constant(context.constant(Constant { ty: call.ty, kind: ConstantKind::Int(0) }));
+                before(function, Opcode::Select, call.ty, vec![beats, difference, zero])?
+            } else {
+                before(function, Opcode::Select, call.ty, vec![beats, a, b])?
+            };
             function.replace_all_uses_with(call.result.ok_or("a min or max value")?, chosen);
             function.erase(inst)?;
         }
@@ -577,6 +592,30 @@ entry:
         let (_, long) = branched(&body("i32"), &i486);
         assert_eq!(conditional_branches(&long), 0, "{}", llrm_mir::print::module(&long));
         assert!(llrm_mir::print::module(&long).contains(" and "), "{}", llrm_mir::print::module(&long));
+    }
+
+    /// `llvm.usub.sat` had no lowering: `--isel=old` stopped at
+    /// "@llvm.usub.sat.i16" and `--isel=dag` panicked in assemble. It is a
+    /// subtraction and a select of zero, with the same answers.
+    #[test]
+    fn test_a_saturating_subtraction_becomes_a_sub_and_a_select() {
+        let text = "declare i16 @llvm.usub.sat.i16(i16, i16)
+define i16 @f(i16 %a, i16 %b) {
+entry:
+  %v = call i16 @llvm.usub.sat.i16(i16 %a, i16 %b)
+  ret i16 %v
+}
+";
+        let before = llrm_mir::parse::module(text).unwrap();
+        let mut after = before.clone();
+        super::minmax_expanded(&mut after).unwrap();
+        assert_eq!(llrm_mir::verify::verify(&after), Vec::<String>::new(), "{}", llrm_mir::print::module(&after));
+        assert!(!llrm_mir::print::module(&after).contains("= call"));
+        for (a, b, want) in [(5u128, 3u128, 2u128), (3, 5, 0), (4, 4, 0), (0xFFFF, 1, 0xFFFE), (0, 0xFFFF, 0)] {
+            let arguments = vec![Val::Int { bits: a, width: 16 }, Val::Int { bits: b, width: 16 }];
+            assert_eq!(run(&after, "f", arguments.clone(), 100).unwrap(), Val::Int { bits: want, width: 16 });
+            assert_eq!(run(&before, "f", arguments, 100).unwrap(), Val::Int { bits: want, width: 16 });
+        }
     }
 
     /// `llvm.smax.i16` and its kin, which SCEV's exit values and InstCombine
