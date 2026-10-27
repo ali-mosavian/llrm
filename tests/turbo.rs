@@ -21,8 +21,8 @@ fn skipped(reason: &str) {
     dosbox::skipped("LLRM_REQUIRE_TURBO", reason);
 }
 
-fn llrm_c() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
+fn beside_qb(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).with_file_name(name)
 }
 
 fn toolchain() -> Option<(PathBuf, PathBuf)> {
@@ -100,7 +100,7 @@ fn tlink_builds_turbo_debuggers_table_from_an_llrm_object_as_from_turbo_cs() {
     // DOS names are 8.3: each program is a short name.
     for (short, source) in [("obs", "observed.c"), ("lst", "list.c")] {
         std::fs::copy(fixtures.join(source), scratch.path().join(format!("{short}.c"))).unwrap();
-        let made = Command::new(llrm_c())
+        let made = common::cc::llrm_c()
             .args(["-m16", "-gtd", "-O0"])
             .arg(scratch.path().join(format!("{short}.c")))
             .arg("-o")
@@ -155,7 +155,7 @@ fn tlink_builds_turbo_debuggers_table_from_a_nib_object() {
         skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
         return;
     };
-    let nib = llrm_c().with_file_name("llrm-nib");
+    let nib = beside_qb("llrm-nib");
     let scratch = tempfile::tempdir().unwrap();
     for (short, flag) in [("kt", "-gtd"), ("kn", "-O0")] {
         let made = Command::new(&nib)
@@ -203,7 +203,7 @@ fn tdump_names_the_type_of_a_function_pointer_as_turbo_cs_does() {
     .unwrap();
     // Turbo C++'s own convention, whose symbols the table is compared by:
     // cdecl.
-    let made = Command::new(llrm_c())
+    let made = common::cc::llrm_c()
         .args(["-m16", "-mabi=cdecl", "-gtd", "-O0"])
         .arg(scratch.path().join("fnp.c"))
         .arg("-o")
@@ -367,7 +367,7 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
     let scratch = tempfile::tempdir().unwrap();
     std::fs::copy(fixtures.join("list.c"), scratch.path().join("lst.c")).unwrap();
-    let made = Command::new(llrm_c())
+    let made = common::cc::llrm_c()
         .args(["-m16", "-gtd", "-O0"])
         .arg(scratch.path().join("lst.c"))
         .arg("-o")
@@ -417,7 +417,7 @@ fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
         scratch.path().join("rv.c"),
     )
     .unwrap();
-    let made = Command::new(llrm_c())
+    let made = common::cc::llrm_c()
         .args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
         .arg(scratch.path().join("rv.c"))
         .arg("-o")
