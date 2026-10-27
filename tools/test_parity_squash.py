@@ -1258,7 +1258,7 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
     kept = tmp_path.parent / (tmp_path.name + "-refused")
     ps.keep_refused_evidence("abcdef0123456789", tmp_path, ["scanner red alone: integration docs_in_sync::test_no_generated_page_is_stale"], kept)
     out = kept / "abcdef012345"
-    assert (out / "head.txt").read_text().strip() == run("rev-parse", "HEAD") and "stray.txt" in (out / "status.txt").read_text() and "docs/a.md" in (out / "check.txt").read_text()
+    assert f"tree {run('rev-parse', 'HEAD')}" in (out / "head.txt").read_text() and "pr head abcdef0123456789" in (out / "head.txt").read_text() and "stray.txt" in (out / "status.txt").read_text() and "docs/a.md" in (out / "check.txt").read_text()
     ps.keep_refused_evidence("1111111111111111", tmp_path, ["unit tests fail alone"], kept)
     assert not (kept / "111111111111").exists(), "only a docs refusal keeps its tree's evidence"
 
