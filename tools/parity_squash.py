@@ -1306,7 +1306,7 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
                 if number in rechecked:
                     why = recheck(heads[number], base)
                 else:
-                    why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot))
+                    why = "; ".join(refusals(heads[number], base) if refusals else _alone_in_scratch(heads[number], base, slot, number in urgent_numbers()))
             except BaseException as error:  # a thread drops SystemExit silently: #5008 was kept with no verdict, unchecked and counted as checked, and broke the 21:53 batch
                 why = f"alone check crashed: {type(error).__name__}: {str(error)[-200:]}"
             finally:
@@ -1416,10 +1416,19 @@ def _alone_checkout(work: Path, ref: str, repo: Path = ROOT) -> None:
         git("worktree", "add", "-q", "--detach", str(work), ref, cwd=repo)
 
 
-def _claim_slot(root: Path, count: int):
-    """(slot, lock file) of the first slot no other `alone` process holds; waits for one. Two processes (the filter and a warm-up) never share a checkout."""
+def urgent_numbers(environ=os.environ) -> set[str]:
+    """The PR numbers of `$LAND_TMP/urgent.txt` (numbers, `#` comments): landing fixes, which may use the reserved alone slot."""
+    path = Path(environ.get("LAND_TMP", "/tmp")) / "urgent.txt"
+    return set(re.findall(r"\b\d+\b", re.sub(r"#.*", "", path.read_text()))) if path.exists() else set()
+
+
+def _claim_slot(root: Path, count: int, urgent: bool = False, reserved: int = 1):
+    """(slot, lock file) of the first slot no other `alone` process holds; waits for one. Two processes (the filter and a warm-up) never share a checkout.
+    The last `reserved` slots are for `urgent` PRs (landing fixes) only, which try them first: with every slot held by other checks a fix waited behind them."""
+    first = count - reserved if urgent and count > reserved else 0
+    usable = list(range(first, count)) + list(range(first)) if urgent else list(range(max(1, count - reserved)))
     while True:
-        for slot in range(count):
+        for slot in usable:
             root.mkdir(parents=True, exist_ok=True)
             handle = open(root / f"alone-{slot}.lock", "w")
             try:
@@ -1457,9 +1466,9 @@ def keep_batch_evidence(heads: dict[str, str], cwd: Path, directory: Path, stamp
     (out / "check.txt").write_text(check.stdout + check.stderr)
 
 
-def _alone_in_scratch(head: str, base: str, slot: int = 0) -> list[str]:
+def _alone_in_scratch(head: str, base: str, slot: int = 0, urgent: bool = False) -> list[str]:
     root = Path(os.environ.get("ALONE_TARGETS", Path.home() / ".cache/llrm"))
-    slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")))
+    slot, lock = _claim_slot(root, int(os.environ.get("ALONE_SLOTS", "6")), urgent, int(os.environ.get("ALONE_RESERVED", "1")))
     targets = root / f"alone-{slot}"  # one cargo target and one checkout per slot
     try:
         _alone_checkout(targets / "w", base)
