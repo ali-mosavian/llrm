@@ -305,15 +305,9 @@ impl Repr for Contract {
     }
 }
 
-/// Routines whose result is the flags, and the source that says so.
-const FLAGS_RESULTS: [(&str, &str); 1] = [(
-    "B$SCMP",
-    "rt/stcore.asm SCMP: the result is the flags of the comparison, saved across B$STDALCTMP by PUSHF/POPF",
-)];
-
 /// Whether `name`'s result is the flags.
 pub fn flags_result(name: &str) -> bool {
-    FLAGS_RESULTS.iter().any(|&(routine, _)| routine == name)
+    row(name).is_some_and(|one| one.flags_result)
 }
 
 pub fn worst(name: &str) -> Contract {
@@ -1625,6 +1619,8 @@ pub struct Row {
     direct_writes: Option<&'static str>,
     direct_reads: Option<&'static str>,
     pub captures: Option<&'static str>,
+    /// The routine's result is the flags (`flags_result = true`).
+    flags_result: bool,
     /// The routine hands control back to the program (`calls_back = true`).
     calls_back: bool,
 }
@@ -1749,7 +1745,7 @@ pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
 /// pointer argument past their return.
 /// The routines whose result is the flags.
 pub fn flags_results() -> Vec<&'static str> {
-    FLAGS_RESULTS.iter().map(|&(name, _)| name).collect()
+    ROWS.iter().filter(|row| row.flags_result).map(|row| row.name).collect()
 }
 
 pub fn captures_nothing() -> Vec<&'static str> {
@@ -1957,6 +1953,13 @@ mod tests {
     #[test]
     fn test_erase_keeps_no_pointer_it_is_handed() {
         assert_eq!(captures_nothing(), ["B$ERAS", "B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8"]);
+    }
+
+    /// The set was a literal; the rows' `flags_result` must name the same one.
+    #[test]
+    fn test_the_routines_with_a_flags_result_are_the_rows_that_say_so() {
+        assert_eq!(flags_results(), ["B$SCMP"]);
+        assert!(flags_result("B$SCMP") && !flags_result("B$SCAT") && !flags_result("not a routine"));
     }
 
     /// The set was a literal; the rows' `calls_back` must name the same four.
