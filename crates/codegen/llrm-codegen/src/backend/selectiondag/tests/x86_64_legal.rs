@@ -306,3 +306,17 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
     assert_eq!(dag.opcode(root), ISD::CopyToReg);
     assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::CopyFromReg);
 }
+
+/// An `undef` of `i1` (a phi's or select's unknown flag) was refused in the
+/// type legalizer ("promote result"): QCport's render/sc.c did not compile
+/// under `--isel=dag`. The pin's `PromoteIntRes_UNDEF` makes an undef of the
+/// promoted type.
+#[test]
+fn an_i1_undef_is_promoted() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let flag = dag.get_undef(EVT::Simple(MVT::I1));
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[flag]);
+    dag.set_root(wide);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
+}
