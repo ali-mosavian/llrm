@@ -136,6 +136,8 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
         return "clang: " + (done.stderr.strip().splitlines() or ["failed"])[0]
     text = raw.read_text()
     irguard.check(text, target.cpu, str(raw))
+    if shifts := irguard.undefined_shifts(text):
+        return f"undefined shift in the source: {shifts[0]}"
     opted = pin.opt("default<O2>" if level == "Os" else f"default<{level}>", text, target)
     if opted.returncode:
         return "pin opt: " + (opted.stderr.strip().splitlines() or ["failed"])[0]

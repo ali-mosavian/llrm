@@ -121,3 +121,15 @@ def test_two_objects_differing_only_in_alignment_have_no_padding_free_delta():
     assert sizes[0] != sizes[1]
     free = [pindiff.padding_free(omf.code_blob_of(obj), 32) for obj in (one, other)]
     assert free[0] == free[1] == 2 * len(body)
+
+
+def test_a_shift_by_the_type_width_in_raw_ir_is_flagged():
+    """x_fir at m16 compared the pin's `xor eax,eax` (22 insns) with ours: `unsigned s >> 16` is `lshr i16 %s, 16`, UB, and the pin folded
+    the function away. The row read +190 B at -O2 and was chased as a gap (2026-10-27)."""
+    guard = load("irguard")
+    assert guard.undefined_shifts("  %33 = lshr i16 %32, 16\n  %9 = shl nuw i8 %a, 9\n  %x = ashr exact i32 %v, 32") == [
+        "lshr i16 %32, 16",
+        "shl nuw i8 %a, 9",
+        "ashr exact i32 %v, 32",
+    ]
+    assert guard.undefined_shifts("  %1 = lshr i16 %0, 15\n  %2 = shl i32 %a, 16\n  %3 = lshr i32 %b, %c") == []

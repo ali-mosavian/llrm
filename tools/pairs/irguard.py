@@ -18,6 +18,14 @@ def check(text: str, cpu: str, name: str = "<ir>") -> None:
         raise SystemExit(f"irguard: {name}: target-cpu {sorted(bad)} but the llc is run with {cpu}")
 
 
+SHIFT = re.compile(r"\b((?:shl|lshr|ashr)(?: (?:nuw|nsw|exact))* i(\d+) [^,\n]+, (\d+))\b")
+
+
+def undefined_shifts(text: str) -> list[str]:
+    """Shifts by a constant of at least the type's width: UB, which the pin folds to poison and ours does not (x_fir at m16)."""
+    return [found.group(1) for found in SHIFT.finditer(text) if int(found.group(3)) >= int(found.group(2))]
+
+
 if __name__ == "__main__":
     for path in sys.argv[2:]:
         with open(path) as handle:
