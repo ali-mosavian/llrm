@@ -14,8 +14,10 @@
 //! found without a search. `node` asserts the slot exists; `check_uses` is the
 //! test.
 //!
-//! A block is named by terminators and phis, so it has a list as a value does:
-//! LLVM's `BasicBlock` is a `Value` and its predecessors are its use list.
+//! A block is named by terminators, so it has a list as a value does: LLVM's
+//! `BasicBlock` is a `Value` and its predecessors are its use list. A phi's
+//! incoming blocks are not uses in LLVM (`PHINode::block_begin` is a separate
+//! array), so the phis naming a block are a second list, `Held::PhiBlock`.
 //!
 //! DEVIATE 2: `Users::snapshot` copies the list, where LLVM walks it with
 //! `make_early_inc_range` while the body edits. A Rust loop cannot hold the
@@ -55,16 +57,15 @@ pub struct UseLists {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Held {
     Value(u32),
-    /// A block named by a terminator: LLVM's `BasicBlock` use list, whose
-    /// predecessors are its first uses.
     Block(u32),
-    /// A block named by a phi's incoming edge; LLVM keeps these outside the
-    /// block's use list.
+    /// The phis naming a block, kept apart as LLVM keeps a phi's incoming
+    /// blocks apart from the block's uses.
     PhiBlock(u32),
 }
 
 impl Held {
-    /// What `operand` names, none for a constant.
+    /// What `operand` of a phi (`phi`) or of another instruction names, none
+    /// for a constant.
     pub fn of(
         operand: crate::module::Operand,
         phi: bool,

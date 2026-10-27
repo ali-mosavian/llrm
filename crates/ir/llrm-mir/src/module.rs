@@ -798,8 +798,7 @@ impl Function {
         self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
-    /// The terminator operand slots naming `block`, as LLVM's `BasicBlock`
-    /// use list: its predecessors are its first uses.
+    /// The operand slots naming `block`: terminators'.
     pub fn block_users(
         &self,
         block: BlockId,
@@ -807,8 +806,7 @@ impl Function {
         self.uses.users(crate::uselist::Held::Block(block.0))
     }
 
-    /// The phi operand slots naming `block`: the incoming edges LLVM keeps
-    /// beside the phi, not in the block's use list.
+    /// The incoming-block slots of phis naming `block`.
     pub fn phi_block_users(
         &self,
         block: BlockId,

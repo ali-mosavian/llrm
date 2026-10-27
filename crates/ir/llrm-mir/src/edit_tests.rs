@@ -502,6 +502,26 @@ fn a_blocks_predecessors_do_not_walk_the_phis_that_name_it() {
     assert_eq!(f.phi_block_users(f.layout()[0]).iter().count(), 30);
 }
 
+/// The phis of its successor named a block in its list of uses, where LLVM
+/// keeps a phi's incoming blocks apart: `predecessors` of a block whose
+/// successor has 40 phis read 41 entries on every ask. Its list holds
+/// terminators only.
+#[test]
+fn predecessors_of_a_block_read_none_of_its_phis() {
+    let phis: String = (0..40).map(|i| format!("  %p{i} = phi i32 [ {i}, %mid ]\n")).collect();
+    let text =
+        format!("define void @f() {{\nentry:\n  br label %mid\nmid:\n  br label %end\nend:\n{phis}  ret void\n}}\n");
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let mid = f.layout()[1];
+    crate::uselist::WALKED.with(|walked| walked.set(0));
+    let preds = f.predecessors(mid);
+    let sole = f.sole_predecessor(mid);
+    let walked = crate::uselist::WALKED.with(|walked| walked.get());
+    assert_eq!((preds.len(), sole.is_some()), (1, true));
+    assert!(walked <= 2, "{walked} list entries read asking the predecessors of a block named by 40 phis");
+}
+
 /// A block is a `Value` in LLVM and its predecessors are its use list, the
 /// newest use first: `predecessors` ran oldest first.
 #[test]

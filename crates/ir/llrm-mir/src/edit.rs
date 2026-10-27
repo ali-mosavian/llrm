@@ -41,24 +41,15 @@ impl Function {
         }
         for inst in 0..self.instructions.len() {
             let operands = self.instructions[inst].operands.clone();
+            let phi = self.instructions[inst].opcode == Opcode::Phi;
             self.uses.slots(inst as u32, operands.len());
             for (index, operand) in operands.into_iter().enumerate() {
-                self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 });
+                self.add_use(operand, Use { user: InstId(inst as u32), index: index as u32 }, phi);
             }
         }
     }
 
     fn add_use(
-        &mut self,
-        operand: Operand,
-        at: Use,
-    ) {
-        let phi = self.instructions[at.user.0 as usize].opcode == Opcode::Phi;
-        self.add_use_as(operand, at, phi);
-    }
-
-    /// `add_use` for a user not yet in the arena, whose opcode is `phi` or not.
-    fn add_use_as(
         &mut self,
         operand: Operand,
         at: Use,
@@ -73,8 +64,8 @@ impl Function {
         &mut self,
         operand: Operand,
         at: Use,
+        phi: bool,
     ) {
-        let phi = self.instructions[at.user.0 as usize].opcode == Opcode::Phi;
         if let Some(held) = Held::of(operand, phi) {
             self.uses.unlink(held, at);
         }
@@ -121,7 +112,7 @@ impl Function {
             let list = self.uses.users(Held::PhiBlock(at as u32)).iter().copied().collect::<Vec<_>>();
             let kept: BTreeSet<Use> = list.iter().copied().collect();
             if kept != *expected || kept.len() != list.len() {
-                problems.push(format!("block {at} (phi): kept {list:?}, operands say {expected:?}"));
+                problems.push(format!("phis of block {at}: kept {list:?}, operands say {expected:?}"));
             }
         }
         problems
@@ -221,7 +212,7 @@ impl Function {
         });
         self.uses.slots(id.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
-            self.add_use_as(operand, Use { user: id, index: index as u32 }, opcode == Opcode::Phi);
+            self.add_use(operand, Use { user: id, index: index as u32 }, opcode == Opcode::Phi);
         }
         self.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata: Vec::new(), link: (0, 0) });
         self.parent.push(None);
@@ -356,15 +347,9 @@ impl Function {
         if self.parent(inst) == Some(target) {
             return None;
         }
-        // A phi that names the block as where its value comes from is a use of
-        // it too, but no way in. (An erase has already taken its own
-        // use of the block away.)
         // Two entries decide it: a list of N was walked whole for each erase.
-        let mut entries = self
-            .block_users(target)
-            .iter()
-            .map(|one| one.user)
-            .filter(|&one| self.instruction(one).opcode != Opcode::Phi);
+        // (An erase has already taken its own use of the block away.)
+        let mut entries = self.block_users(target).iter().map(|one| one.user);
         match (entries.next(), entries.next()) {
             (None, _) => {}
             (Some(only), None) if only == inst => {}
@@ -562,8 +547,9 @@ impl Function {
     ) {
         let at = Use { user: inst, index: index as u32 };
         let old = std::mem::replace(&mut self.instructions[inst.0 as usize].operands[index], operand);
-        self.remove_use(old, at);
-        self.add_use(operand, at);
+        let phi = self.instructions[at.user.0 as usize].opcode == Opcode::Phi;
+        self.remove_use(old, at, phi);
+        self.add_use(operand, at, phi);
         self.log(Change::Operand { inst, index: index as u32, was: old });
         self.log(Change::Rewritten(inst));
     }
@@ -575,14 +561,15 @@ impl Function {
         inst: InstId,
         operands: Vec<Operand>,
     ) {
+        let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         let was: Box<[Operand]> = old.as_slice().into();
         for (index, operand) in old.into_iter().enumerate() {
-            self.remove_use(operand, Use { user: inst, index: index as u32 });
+            self.remove_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         self.uses.slots(inst.0, operands.len());
         for (index, &operand) in operands.iter().enumerate() {
-            self.add_use(operand, Use { user: inst, index: index as u32 });
+            self.add_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         self.instructions[inst.0 as usize].operands = operands;
         self.log(Change::Operands { inst, was });
@@ -705,17 +692,7 @@ impl Function {
         inst: InstId,
         opcode: Opcode,
     ) {
-        // A block operand is on the phi list or the terminator list by its
-        // user's opcode.
-        let moves = (self.instructions[inst.0 as usize].opcode == Opcode::Phi) != (opcode == Opcode::Phi);
-        let operands = if moves { self.instructions[inst.0 as usize].operands.to_vec() } else { Vec::new() };
-        for (index, &operand) in operands.iter().enumerate() {
-            self.remove_use(operand, Use { user: inst, index: index as u32 });
-        }
         self.instructions[inst.0 as usize].opcode = opcode;
-        for (index, &operand) in operands.iter().enumerate() {
-            self.add_use(operand, Use { user: inst, index: index as u32 });
-        }
         self.log(Change::Rewritten(inst));
     }
 
@@ -779,7 +756,7 @@ impl Function {
             while let Some(one) = self.uses.head(Held::Value(value.0)) {
                 self.uses.unlink(Held::Value(value.0), one);
                 self.instructions[one.user.0 as usize].operands[one.index as usize] = with;
-                self.add_use(with, one);
+                self.add_use(with, one, self.instructions[one.user.0 as usize].opcode == Opcode::Phi);
                 self.log(Change::Operand { inst: one.user, index: one.index, was: Operand::Value(value) });
                 self.log(Change::Rewritten(one.user));
             }
@@ -895,8 +872,9 @@ impl Function {
             ));
         }
         let operands = self.instructions[inst.0 as usize].operands.clone();
+        let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
         for (index, operand) in operands.into_iter().enumerate() {
-            self.remove_use(operand, Use { user: inst, index: index as u32 });
+            self.remove_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         if let Some(result) = self.instruction(inst).result {
             self.forget_debug_value(result);
@@ -929,9 +907,8 @@ impl Function {
             }
         }
         for &inst in &insts {
-            let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
             for (index, &operand) in self.instructions[inst.0 as usize].operands.iter().enumerate() {
-                if let Some(held) = Held::of(operand, phi) {
+                if let Some(held) = Held::of(operand, self.instructions[inst.0 as usize].opcode == Opcode::Phi) {
                     self.uses.unlink(held, Use { user: inst, index: index as u32 });
                 }
             }
