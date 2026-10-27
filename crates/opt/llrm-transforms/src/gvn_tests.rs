@@ -271,12 +271,10 @@ fn test_gvn_numbers_then_joins() {
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }
 
-/// The premise of `simplifycfg`'s trivial-phi cleanup (D5): gvn forwards the
-/// cell a loop stores its phi to, and leaves `phi [%p, entry], [%self, latch]`.
-/// LLVM's GVN builds its phis with SSAUpdater, which never leaves one; the
-/// cleanup stays until gvn does the same (#2186).
+/// Forwarding the cell a loop stores its phi to leaves `phi [%p, entry],
+/// [%self, latch]`, which `simplifyInstruction` then makes `%p`.
 #[test]
-fn test_forwarding_a_loops_cell_to_its_phi_leaves_a_phi_of_itself() {
+fn test_forwarding_a_loops_cell_to_its_phi_leaves_no_phi_of_itself() {
     let text = "@g = global ptr null
 
 define i16 @f(ptr %p, i16 %n) {
@@ -302,7 +300,7 @@ b2:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
-    assert!(after.contains("%q = phi ptr [ %p, %b0 ], [ %q, %b1 ]"), "{after}");
+    assert!(!after.contains("phi ptr"), "{after}");
 }
 
 /// Under the pass manager a load through a global is served across a
