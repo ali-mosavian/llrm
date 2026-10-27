@@ -332,7 +332,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
-            ISD::BSwap => self.visit_bswap(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             _ => None,
         }
@@ -1719,46 +1718,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         self.reassociate_ops(ISD::Mul, n0, n1)
-    }
-    /// `visitBSWAP` ([L12530][pin]): `bswap (shl/srl x, 8k)` is the inverse
-    /// shift of `bswap x`, and an operand with one possibly nonzero byte is a
-    /// shift to the mirror byte. SD312: not the half-width `shl` fold nor
-    /// `foldBitOrderCrossLogicOp`.
-    ///
-    /// [pin]:
-    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L12530
-    fn visit_bswap(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let n0 = self.dag.operand(node, 0);
-        let vt = self.dag.value_type(node);
-        let width = vt.size_in_bits();
-        if matches!(self.dag.opcode(n0), ISD::Shl | ISD::Srl) && self.dag.use_count(n0.node) == 1 {
-            let amount = self.dag.operand(n0, 1);
-            if self.dag.constant(amount).is_some_and(|a| a < u128::from(width) && a % 8 == 0) {
-                let inner = self.dag.operand(n0, 0);
-                let swapped = self.dag.get_node(ISD::BSwap, vt, &[inner]);
-                let inverse = if self.dag.opcode(n0) == ISD::Shl { ISD::Srl } else { ISD::Shl };
-                return Some(self.dag.get_node(inverse, vt, &[swapped, amount]));
-            }
-        }
-        let known = super::known_bits::known_bits(self.dag, n0);
-        let maybe = !known.zero & super::fold::mask(width);
-        if maybe == 0 {
-            return Some(self.dag.get_constant(0, vt));
-        }
-        let leading = (maybe.leading_zeros() - (128 - width)) / 8 * 8;
-        let trailing = maybe.trailing_zeros() / 8 * 8;
-        if width - (leading + trailing) == 8 {
-            let op = if leading > trailing { ISD::Shl } else { ISD::Srl };
-            if !self.legal_operations() || self.fp_op_legal(op, vt) {
-                let amount = self.dag.get_constant(u128::from(leading.abs_diff(trailing)), EVT::I8);
-                let flags = if op == ISD::Shl { SDNodeFlags::NO_UNSIGNED_WRAP } else { SDNodeFlags::EXACT };
-                return Some(self.dag.get_node_flags(op, vt, &[n0, amount], flags));
-            }
-        }
-        None
     }
 }
 
