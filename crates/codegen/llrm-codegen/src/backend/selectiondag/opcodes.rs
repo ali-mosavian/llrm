@@ -309,7 +309,7 @@ fn split(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
     while let Some(c) = tail.chars().next() {
         match c {
             'r' | 'm' | 'i' => letters.push(c),
-            'C' if tail.starts_with("CL") => {
+            'C' if tail[1..].starts_with('L') => {
                 letters.push('r');
                 tail = &tail[1..];
             }

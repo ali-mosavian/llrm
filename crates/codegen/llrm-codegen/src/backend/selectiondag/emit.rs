@@ -168,6 +168,10 @@ pub struct EmitContext<'a> {
     pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
     pub stack_pointer: llrm_lir::registers::RegId,
+    /// The registers a string operation names, where the target fixes them.
+    pub strings: Option<llrm_target::StringRegisters>,
+    /// The target's registers: which one a narrower view of another is.
+    pub registers: &'static llrm_lir::registers::Info,
     pub conventions: &'a dyn Conventions,
     pub constants: &'a dyn ConstantCells,
     pub globals: &'a dyn GlobalMap,
@@ -771,7 +775,7 @@ impl Emitter<'_, '_> {
                     value
                 };
                 let held = self.held_operand(source)?;
-                self.arguments.push((held, Self::argument_register(register, held.width)));
+                self.arguments.push((held, self.argument_register(register, held.width)));
                 Ok(())
             }
             // A value returned in a register is required there by the `RET`,
@@ -1374,19 +1378,15 @@ impl Emitter<'_, '_> {
     /// word value required in `EAX` is a dword to the allocator, which spilled
     /// every pointer live across a call as a dword (QCport -Os: +16%).
     fn argument_register(
+        &self,
         register: llrm_lir::registers::RegId,
         width: u32,
     ) -> llrm_lir::registers::RegId {
-        use llrm_lir::registers::RegId;
-        match (width, register) {
-            (2, RegId::EAX) => RegId::AX,
-            (2, RegId::EBX) => RegId::BX,
-            (2, RegId::ECX) => RegId::CX,
-            (2, RegId::EDX) => RegId::DX,
-            (2, RegId::ESI) => RegId::SI,
-            (2, RegId::EDI) => RegId::DI,
-            _ => register,
+        let registers = self.ctx.registers;
+        if width == 2 && register.is_gpr32() {
+            return registers.view(registers.root(register), 16).unwrap_or(register);
         }
+        register
     }
 
     /// The call instruction: it destroys the caller-saved registers and may
@@ -1597,8 +1597,11 @@ impl Emitter<'_, '_> {
         glue: Option<SDValue>,
     ) -> bool {
         let Some(mut glue) = glue else { return false };
-        while self.dag.opcode(glue) == ISD::CopyFromReg {
-            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+        while self.dag.opcode(glue) == ISD::CopyFromReg
+            || self.is_machine_named(glue, "MOVZX32rr8_NOREX")
+            || self.is_machine_named(glue, "MOVSX32rr8_NOREX")
+        {
+            let Some(&next) = self.dag.node(glue).ops.last() else { return false };
             glue = next;
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
@@ -1622,8 +1625,13 @@ impl Emitter<'_, '_> {
     ) -> bool {
         let Some(mut glue) = glue else { return false };
         // A second result is read through the glue of the first read.
-        while self.dag.opcode(glue) == ISD::CopyFromReg {
-            let Some(&next) = self.dag.node(glue).ops.get(2) else { return false };
+        // The byte divide's remainder copy (`MOV[SZ]X32rr8_NOREX` of AH) sits
+        // between the divide and the read of AL.
+        while self.dag.opcode(glue) == ISD::CopyFromReg
+            || self.is_machine_named(glue, "MOVZX32rr8_NOREX")
+            || self.is_machine_named(glue, "MOVSX32rr8_NOREX")
+        {
+            let Some(&next) = self.dag.node(glue).ops.last() else { return false };
             glue = next;
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
@@ -2150,20 +2158,26 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "REP_MOVSB_16" | "REP_MOVSW_16" | "REP_MOVSD_16" => {
-                use llrm_lir::registers::RegId;
+                let Some(strings) = self.ctx.strings else {
+                    return Err(EmitError::Unsupported(
+                        "a segmented string operation at a target without segments".to_owned(),
+                    ));
+                };
+                let (counter, to_offset, from_offset, from_segment) =
+                    (strings.count, strings.destination, strings.source, strings.source_segment);
                 let (count, source, destination) = (
-                    self.accumulated(RegId::CX)?,
-                    self.offset_of_pointer(RegId::SI)?,
-                    self.offset_of_pointer(RegId::DI)?,
+                    self.accumulated(counter)?,
+                    self.offset_of_pointer(from_offset)?,
+                    self.offset_of_pointer(to_offset)?,
                 );
                 // a source in DGROUP is read through DS, which holds it: no
                 // segment to load and no override
-                let from = if self.is_dgroup_pointer(RegId::SI) {
-                    Loc::Reg(Reg { register: RegId::DS, width: 2 })
+                let from = if self.is_dgroup_pointer(from_offset) {
+                    Loc::Reg(Reg { register: from_segment, width: 2 })
                 } else {
-                    Loc::Held(self.segment_of_pointer(RegId::SI)?)
+                    Loc::Held(self.segment_of_pointer(from_offset)?)
                 };
-                let to = self.segment_of_pointer(RegId::DI)?;
+                let to = self.segment_of_pointer(to_offset)?;
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
                 self.push(
                     Operation::Copy,
@@ -2177,9 +2191,9 @@ impl Emitter<'_, '_> {
                     vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination), from, Loc::Held(to)],
                 );
                 // a `rep` glued after this one goes on from where it stopped
-                self.accumulator.insert(RegId::CX, emptied);
-                self.accumulator.insert(RegId::SI, source_after);
-                self.accumulator.insert(RegId::DI, destination_after);
+                self.accumulator.insert(counter, emptied);
+                self.accumulator.insert(from_offset, source_after);
+                self.accumulator.insert(to_offset, destination_after);
                 return Ok(Some(()));
             }
             "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" | "REP_MOVSB_64" | "REP_MOVSW_64" | "REP_MOVSD_64"
@@ -2300,10 +2314,53 @@ impl Emitter<'_, '_> {
                 );
                 return Ok(Some(()));
             }
+            // The remainder of the byte divide: AH of the word AX, shifted down
+            // and extended (the pin's `movzx` of AH).
+            "MOVZX32rr8_NOREX" | "MOVSX32rr8_NOREX"
+                if matches!(
+                    self.dag.node(node.ops[0]).data,
+                    NodeData::PhysReg(llrm_lir::registers::RegId::AH)
+                ) =>
+            {
+                let word = self.accumulated(llrm_lir::registers::RegId::AX)?;
+                let high = self.fresh(2);
+                let eight = Imm { value: 8, width: 1, address: None };
+                self.push(Operation::Binary, "shr", vec![Loc::Held(high)], vec![Loc::Held(word), Loc::Imm(eight)]);
+                let wide = self.fresh(4);
+                let mnemonic = if name == "MOVSX32rr8_NOREX" { "movsx" } else { "movzx" };
+                self.push(
+                    Operation::Extend,
+                    mnemonic,
+                    vec![Loc::Held(wide)],
+                    vec![Loc::Held(Held { width: 1, ..high })],
+                );
+                self.values.insert(SDValue { node: n, res: 0 }, wide.value);
+                return Ok(Some(()));
+            }
             _ if is_div_or_mul(name) => {
                 let (signed, divide, bytes, memory) = div_or_mul(name);
                 if bytes == 1 && divide {
-                    return Err(EmitError::Unsupported(format!("{name}: the byte divide works in AH:AL")));
+                    // AX divided by the byte: AL the quotient, AH the
+                    // remainder, both in the word AX the form defines.
+                    let dividend = self.accumulated(llrm_lir::registers::RegId::AX)?;
+                    let divisor = if memory {
+                        let group =
+                            node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short div".to_owned()))?;
+                        Loc::Mem(self.cell(group, 1)?)
+                    } else {
+                        self.operand(node.ops[0])?
+                    };
+                    let word = self.fresh(2);
+                    self.push(
+                        Operation::Divide,
+                        if signed { "idiv" } else { "div" },
+                        vec![Loc::Held(word)],
+                        vec![Loc::Held(dividend), divisor],
+                    );
+                    self.values.insert(SDValue { node: n, res: 0 }, word.value);
+                    self.accumulator.insert(llrm_lir::registers::RegId::AX, word);
+                    self.accumulator.insert(llrm_lir::registers::RegId::AL, Held { width: 1, ..word });
+                    return Ok(Some(()));
                 }
                 // The byte multiply is AL times the operand into AX: the form
                 // pins AX and DX like the wider ones, the product is AX.
