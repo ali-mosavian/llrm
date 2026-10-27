@@ -1000,3 +1000,24 @@ declare void @llrm.qb.B$PER4(float) nocallback
     );
     assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
+
+const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare void @g(ptr byval([40 x i8]) %p)
+define void @f(ptr %q) minsize {
+entry:
+  call void @g(ptr byval([40 x i8]) %q)
+  ret void
+}
+";
+
+/// A 40-byte byval copy is past the store limit (4 at -Os, 8 otherwise), so the
+/// pin's `emitConstantSizeRepmov` makes it a `rep movs`: ten dword stores were
+/// 28 bytes more in `byval_struct.c` (249 against the old selector's 193).
+#[test]
+fn a_forty_byte_byval_argument_is_a_string_move() {
+    let module = llrm_mir::parse::module(BYVAL_FORTY).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(ops.iter().any(|name| name.starts_with("movs")), "{ops:?}");
+}
