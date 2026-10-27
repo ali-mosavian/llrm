@@ -174,6 +174,8 @@ impl Function {
         self.parent.reserve(count);
         self.erased.reserve(count);
         self.values.reserve(count);
+        // Each instruction is created and placed: two edits logged.
+        self.changes.0.reserve((count * 2).min(1 << 17));
     }
 
     /// A new instruction, placed nowhere yet; its result, if its type is not
