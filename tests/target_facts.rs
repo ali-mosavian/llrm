@@ -246,9 +246,19 @@ fn counts(root: &Path) -> BTreeMap<String, usize> {
         files(root, directory, &mut all);
     }
     let in_tests = test_modules(&all);
+    // `LLRM_SHOW_FACTS=a,b` prints the matching lines of the files whose path
+    // holds a or b.
+    let show = std::env::var("LLRM_SHOW_FACTS").ok();
     let mut found = BTreeMap::new();
     for path in all.into_iter().filter(|path| !in_tests.contains(path)) {
         let n = code(&path).iter().map(|line| facts.find_iter(line).count()).sum();
+        if n > 0
+            && show.as_deref().is_some_and(|only| only.split(',').any(|part| path.to_string_lossy().contains(part)))
+        {
+            for line in code(&path).iter().filter(|line| facts.is_match(line)) {
+                eprintln!("{}: {}", path.display(), line.trim());
+            }
+        }
         if n > 0 {
             found.insert(path.strip_prefix(root).unwrap().to_string_lossy().into_owned(), n);
         }
