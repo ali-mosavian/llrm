@@ -636,6 +636,27 @@ fn pushed_arguments(
             let what = old.what.as_ref().expect("a store");
             let source = what.sources[0].clone();
             let uses = old.uses.clone();
+            // DEVIATE SD324: a dword constant is pushed as two words when
+            // that is shorter. `pushd 65535` is six bytes (operand-size
+            // prefix, opcode, dword), `push 0; push -1` four; the pin has one
+            // `PUSH32i`.
+            if let (4, Loc::Imm(Imm { value, address: None, .. })) = (store_width(old), &source) {
+                let (high, low) = (value >> 16, *value);
+                let word = |one: i64| Imm { value: i64::from(one as i16), width: 2, address: None };
+                let bytes = |one: i64| if i8::try_from(one as i16).is_ok() { 2 } else { 3 };
+                let whole = if i8::try_from(*value as i32).is_ok() { 3 } else { 6 };
+                if bytes(high) + bytes(low) < whole {
+                    for (part, at) in [(high, old.at), (low, state.next_address())] {
+                        let push = Semantics {
+                            name: Some("push".into()),
+                            sources: vec![Loc::Imm(word(part))],
+                            ..Semantics::new(Operation::Push)
+                        };
+                        pushes.push(Arc::new(Insn::new(at, Some((at, at)), Some(push), vec![], vec![])));
+                    }
+                    continue;
+                }
+            }
             let push =
                 Semantics { name: Some("push".into()), sources: vec![source], ..Semantics::new(Operation::Push) };
             pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(push), vec![], uses)));
@@ -662,6 +683,14 @@ fn pushed_arguments(
         return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
     }
     Ok(())
+}
+
+/// The width in bytes of the cell a store writes.
+fn store_width(store: &Insn) -> u32 {
+    match store.what.as_ref().and_then(|what| what.dests.first()) {
+        Some(Loc::Mem(cell)) => cell.width,
+        _ => 0,
+    }
 }
 
 /// DEVIATE SD228: an outgoing argument area whose call is in a later block (a

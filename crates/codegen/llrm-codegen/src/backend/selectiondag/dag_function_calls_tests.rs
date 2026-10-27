@@ -1074,6 +1074,36 @@ fn a_pushed_segment_of_a_global_is_an_immediate() {
     assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
 }
 
+const PUSH_LONG_CONSTANT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+declare cc 1000 void @g(i32) addrspace(1)
+define cc 1000 void @f() addrspace(1) {
+b1:
+  call cc 1000 addrspace(1) void @g(i32 65535)
+  ret void
+}
+";
+
+/// A constant `LONG` argument was `pushd 65535`: an operand-size prefix, an
+/// opcode and a dword, six bytes, where `push 0; push -1` is four
+/// (`hex_oct_negative.bas` +29 B, the top QB grower at m16 -Os).
+#[test]
+fn a_long_constant_argument_is_two_word_pushes_when_shorter() {
+    let module = llrm_mir::parse::module(PUSH_LONG_CONSTANT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let widths: Vec<u32> = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("push"))
+        .filter_map(|w| match &w.sources[..] {
+            [Loc::Imm(imm)] => Some(imm.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths, vec![2, 2], "{insns:?}");
+}
+
 const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
 @\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
