@@ -472,6 +472,10 @@ fn instruction(
             writeln!(out, "    {} = IMUL{}rm {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, cell(m, symbols)?)
                 .unwrap()
         }
+        ("imul", Some(Loc::Held(d)), [Loc::Mem(m), Loc::Imm(i)]) if what.dests.len() == 1 => {
+            writeln!(out, "    {} = IMUL{}rmi {}, {}, {eflags}", vreg(d)?, bits(d.width)?, cell(m, symbols)?, immediate(i)?)
+                .unwrap()
+        }
         ("imul", Some(Loc::Held(d)), [Loc::Held(a), Loc::Held(b)]) if what.dests.len() == 1 => {
             writeln!(out, "    {} = IMUL{}rr {}, {}, {eflags}", vreg(d)?, bits(d.width)?, vreg(a)?, vreg(b)?).unwrap()
         }
@@ -1142,6 +1146,26 @@ mod tests {
         use super::physical;
         assert_eq!(physical(RegId::AX, 2).as_deref(), Ok("ax"));
         assert_eq!(physical(RegId::EAX, 2).as_deref(), Ok("ax"));
+    }
+
+    /// `imul r, [cell], imm` was refused ("`imul` with 1 destinations and 2
+    /// sources"), so frameless.c's `main` could not be allocated by the pin.
+    #[test]
+    fn test_a_multiply_of_a_cell_by_an_immediate_prints() {
+        let imm = Loc::Imm(Imm { value: 3, width: 4, address: None });
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 8)), 4);
+        let times = insn("imul", Operation::Binary, vec![held(1)], vec![Loc::Mem(cell), imm]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let body = LirBody::new(
+            "m",
+            0,
+            vec![Block::from(LirBlock::new(0, vec![times, ret]))],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("IMUL32rmi %fixed-stack."), "{text}");
     }
 
     #[test]
