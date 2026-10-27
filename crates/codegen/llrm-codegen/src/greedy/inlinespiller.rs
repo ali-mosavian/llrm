@@ -485,7 +485,13 @@ impl<'a> InlineSpiller<'a> {
             self.tables.remat.borrow_mut().insert(value);
             made.push(value);
         }
-        lis.remove_instr(def_block, own.id());
+        if own_remat {
+            lis.remove_instr(def_block, own.id());
+        } else {
+            // A copy reads a register whose range it was holding up:
+            // `eliminateDeadDefs` cuts it back (`spill` calls it).
+            self.dead.push(own.id());
+        }
         Some(made)
     }
 
@@ -1438,6 +1444,7 @@ impl Spiller for InlineSpiller<'_> {
                 lis.insert_interval(li);
                 new_vregs.push(value);
             }
+            self.eliminate_dead_defs(lis, matrix, shrunk);
             edit.erase_virt_reg(lis, reg);
             self.recomputed(lis, &new_vregs[first_new..]);
             return;
