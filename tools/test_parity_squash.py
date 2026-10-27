@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [["docs_in_sync", "docs_links", "no_local_paths"]]
+    assert asked == [list(ps.ALWAYS_SCANNERS)] and asked[0][:3] == ["docs_in_sync", "docs_links", "no_local_paths"]
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1463,6 +1463,11 @@ def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
     whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
     assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
     assert len(groups) == 1 and ones == ["b", "c", "d"]
+
+
+def test_target_facts_is_a_scanner_every_batch_runs():
+    """Parity went red on tests/target_facts.rs (11:09) and no batch noticed: the always-on scanners were docs_in_sync, docs_links and no_local_paths, and target_facts was in prepush only."""
+    assert "target_facts" in ps.ALWAYS_SCANNERS
 
 
 def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
