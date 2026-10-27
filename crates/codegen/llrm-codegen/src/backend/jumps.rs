@@ -183,8 +183,14 @@ pub fn optimized(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, _) = tails_merged(placed, size, calls)?;
+    let (merged, any) = tails_merged(placed, size, calls)?;
     placed = merged;
+    if any {
+        // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
+        // tail merging creates/removes/moves blocks."
+        let explicit = placed.with_blocks(_explicit(&placed)?);
+        placed = threaded(&_placed(&explicit, size, cpu.aggressive)?);
+    }
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
