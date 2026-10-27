@@ -3,7 +3,7 @@
 //! CodeView 4 as `cvwrite` writes it cannot say is refused with what it was.
 
 use llrm_object::debug::{self as model, Info, Location};
-use llrm_object::{Definition, Fix, Object, Reloc, Role, Section, Target};
+use llrm_object::{DebugSection, Definition, Fix, Object, Reloc, Role, Section, Target};
 
 use crate::cvwrite::{self, Flavor, Reach, Scalar, Type};
 use crate::write::Error;
@@ -251,7 +251,19 @@ pub fn sections(
     }
     let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| {
         let spans = if image.is_empty() { Vec::new() } else { vec![[0, image.len()]] };
-        Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, image, spans, relocs }
+        Section {
+            name: name.to_owned(),
+            role: Role::Debug(if name == SYMBOLS {
+                DebugSection::CodeViewSymbols
+            } else {
+                DebugSection::CodeViewTypes
+            }),
+            near: true,
+            align: 1,
+            image,
+            spans,
+            relocs,
+        }
     };
     Ok([section(SYMBOLS, image, relocs), section(TYPES, encoded.types, Vec::new())])
 }

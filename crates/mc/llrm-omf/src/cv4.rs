@@ -8,7 +8,7 @@
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 
 use llrm_object::debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
-use llrm_object::{Binding, Fix, Object, Reloc, Role, Section, Target};
+use llrm_object::{Binding, DebugSection, Fix, Object, Reloc, Role, Section, Target};
 use llrm_support::leaf::{numeric, pad};
 
 use crate::codeview::{SYMBOLS, TYPES};
@@ -830,7 +830,19 @@ pub fn sections(
     }
     let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| {
         let spans = vec![[0, image.len()]];
-        Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, image, spans, relocs }
+        Section {
+            name: name.to_owned(),
+            role: Role::Debug(if name == SYMBOLS {
+                DebugSection::CodeViewSymbols
+            } else {
+                DebugSection::CodeViewTypes
+            }),
+            near: true,
+            align: 1,
+            image,
+            spans,
+            relocs,
+        }
     };
     let image = [&SIGNATURE[..], &symbols.bytes].concat();
     let relocs = symbols.relocs.into_iter().map(|one| Reloc { at: one.at + SIGNATURE.len(), ..one }).collect();

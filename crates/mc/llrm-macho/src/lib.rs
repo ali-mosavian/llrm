@@ -94,7 +94,7 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         }
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
-        Role::Debug => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
+        Role::Debug(_) => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
     })
 }
 
@@ -237,7 +237,9 @@ pub fn write<W: MachTargetWriter>(
             // One debug section's offset into another is not relocated:
             // dsymutil reads the object's own sections, where it is
             // the offset itself.
-            if section.role == Role::Debug && home.is_some_and(|home| object.sections[home].role == Role::Debug) {
+            if matches!(section.role, Role::Debug(_))
+                && home.is_some_and(|home| matches!(object.sections[home].role, Role::Debug(_)))
+            {
                 let offset = u32::try_from(one.addend)
                     .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
                 image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);

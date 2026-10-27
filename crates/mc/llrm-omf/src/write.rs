@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_object::{Definition, Fix, FixupKind, FixupKindInfo, Object, Role, Section, Target};
+use llrm_object::{DebugSection, Definition, Fix, FixupKind, FixupKindInfo, Object, Role, Section, Target};
 
 use crate::omf;
 
@@ -95,7 +95,7 @@ impl Comdats {
             own = (own ^ 0xff).wrapping_mul(0x0000_0100_0000_01b3);
         };
         feed(object.name.as_bytes());
-        for section in object.sections.iter().filter(|section| section.role != Role::Debug) {
+        for section in object.sections.iter().filter(|section| !matches!(section.role, Role::Debug(_))) {
             feed(section.name.as_bytes());
             feed(&section.image);
             let mut text = Vec::with_capacity(48);
@@ -201,9 +201,9 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
         (Role::InitFunctions, _) => "DATA",
-        (Role::Debug, _) if section.name == crate::codeview::SYMBOLS => "DEBSYM",
-        (Role::Debug, _) if section.name.starts_with(".debug_") => "DWARF",
-        (Role::Debug, _) => "DEBTYP",
+        (Role::Debug(DebugSection::CodeViewSymbols), _) => "DEBSYM",
+        (Role::Debug(DebugSection::Dwarf), _) => "DWARF",
+        (Role::Debug(DebugSection::CodeViewTypes), _) => "DEBTYP",
     }
 }
 
@@ -341,8 +341,8 @@ fn resolved(
     // linker that writes the index of the fixup's frame (jwlink's
     // `FindGroupIdx`) finds none for a frame that is the segment itself
     // where the segment is not the group's first, and writes 0.
-    let through_group =
-        matches!(loc, OFFSET | OFFSET32) && !relative || section.role == Role::Debug && matches!(loc, POINTER | BASE);
+    let through_group = matches!(loc, OFFSET | OFFSET32) && !relative
+        || matches!(section.role, Role::Debug(_)) && matches!(loc, POINTER | BASE);
     let subrecord = match group {
         Some(group) if through_group => {
             [vec![GROUP_FRAME << 4 | 4 | method], omf::as_index(group as i64 + 1)?, omf::as_index(datum)?].concat()
@@ -982,6 +982,21 @@ mod tests {
     /// once the runtime was linked in: the debug fixup's frame was the data
     /// segment, which is not at its group's base there (`_NULL` comes first),
     /// so no group matched it. A data symbol's address in the debug section
+    /// The class of a debug segment came from its name (`$$SYMBOLS`, a
+    /// `.debug_` prefix), so a CodeView symbols section under any other
+    /// name was written as DEBTYP; the role says it now.
+    #[test]
+    fn a_debug_segments_class_comes_from_its_role_not_its_name() {
+        let classed = |name: &str, kind| {
+            let mut debug = section(name, vec![0; 4], vec![]);
+            debug.role = Role::Debug(kind);
+            class(&debug)
+        };
+        assert_eq!(classed("whatever", DebugSection::CodeViewSymbols), "DEBSYM");
+        assert_eq!(classed("$$SYMBOLS", DebugSection::CodeViewTypes), "DEBTYP");
+        assert_eq!(classed("x", DebugSection::Dwarf), "DWARF");
+    }
+
     /// is addressed through its group.
     #[test]
     fn a_debug_address_in_a_group_is_addressed_through_the_group() {
@@ -989,7 +1004,7 @@ mod tests {
         data.role = Role::Data;
         let far = Reloc::new(2, Fix::FAR_POINTER, Target::Section(0), 0);
         let mut debug = section("$$SYMBOLS", vec![0; 8], vec![far]);
-        debug.role = Role::Debug;
+        debug.role = Role::Debug(DebugSection::CodeViewSymbols);
         let mut made = object(16u8, vec![data, debug], vec![]);
         made.omf_groups = vec![llrm_object::OmfGroup { name: "DGROUP".into(), members: vec![0] }];
         let records = crate::omf::parse(&write(&made).unwrap()).unwrap();

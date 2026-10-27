@@ -106,7 +106,11 @@ pub fn expanded(
     let encoded = encode(object, info, machine)?;
     let section = |name: &str, one: Section| llrm_object::Section {
         name: name.to_owned(),
-        role: llrm_object::Role::Debug,
+        role: llrm_object::Role::Debug(if name == ".debug$S" {
+            llrm_object::DebugSection::CodeViewSymbols
+        } else {
+            llrm_object::DebugSection::CodeViewTypes
+        }),
         near: true,
         align: 1,
         spans: vec![[0, one.image.len()]],

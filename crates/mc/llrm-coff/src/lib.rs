@@ -151,7 +151,7 @@ fn spelling(
         Role::InitFunctions => {
             return Err(unsupported(format!("{}: COFF has no init-function section here", section.name)));
         }
-        Role::Debug => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
+        Role::Debug(_) => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
     };
     if !section.align.is_power_of_two() || section.align > 8192 {
         return Err(unsupported(format!(
@@ -160,7 +160,11 @@ fn spelling(
         )));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
-    let name = if taken && section.role != Role::Debug { format!("{base}${}", section.name) } else { base.to_owned() };
+    let name = if taken && !matches!(section.role, Role::Debug(_)) {
+        format!("{base}${}", section.name)
+    } else {
+        base.to_owned()
+    };
     Ok((name, flags | align))
 }
 

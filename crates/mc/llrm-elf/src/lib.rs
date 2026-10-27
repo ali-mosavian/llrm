@@ -124,7 +124,7 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no ELF section", section.name))),
         // Named as the DWARF writer names it.
         Role::InitFunctions => (".init_array", SHT_INIT_ARRAY, SHF_ALLOC | SHF_WRITE),
-        Role::Debug => (".debug", SHT_PROGBITS, 0),
+        Role::Debug(_) => (".debug", SHT_PROGBITS, 0),
     })
 }
 
@@ -175,8 +175,9 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // apart by its own name.
     let mut section_names: Vec<String> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
-        let taken = section.role != Role::Debug && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
-        section_names.push(if section.role == Role::Debug {
+        let taken =
+            !matches!(section.role, Role::Debug(_)) && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
+        section_names.push(if matches!(section.role, Role::Debug(_)) {
             section.name.clone()
         } else if taken {
             format!("{}.{}", spelled[index].0, section.name)

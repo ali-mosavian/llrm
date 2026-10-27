@@ -3,6 +3,18 @@
 
 pub mod debug;
 
+/// Which debug format a [`Role::Debug`] section belongs to, so a writer needs
+/// no name to tell them apart.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DebugSection {
+    /// A `.debug_*` section of DWARF.
+    Dwarf,
+    /// CodeView's symbols: OMF's `$$SYMBOLS`, COFF's `.debug$S`.
+    CodeViewSymbols,
+    /// CodeView's types: OMF's `$$TYPES`, COFF's `.debug$T`.
+    CodeViewTypes,
+}
+
 /// What a section holds, which each format spells its own way.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
@@ -15,7 +27,7 @@ pub enum Role {
     /// The linker's stack: concatenated with the other objects' stacks.
     Stack,
     /// A format's debug section, which only that format's writer makes.
-    Debug,
+    Debug(DebugSection),
     /// Pointers to the functions the loader calls before `main`, in order
     /// (`llvm.global_ctors`): `__mod_init_func`, `.init_array`.
     InitFunctions,

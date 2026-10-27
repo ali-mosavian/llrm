@@ -15,7 +15,7 @@ mod types;
 
 pub use buffer::{sleb, uleb};
 use llrm_object::debug::{Format, Info};
-use llrm_object::{Definition, Fix, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{DebugSection, Definition, Fix, Object, Reloc, Role, Section, Target, Unsupported};
 
 /// The version DWARF is written in when the format does not say.
 pub const DEFAULT_VERSION: u16 = 5;
@@ -126,7 +126,7 @@ fn section(
     let spans = if part.bytes.is_empty() { Vec::new() } else { vec![[0, part.bytes.len()]] };
     Section {
         name: name.to_owned(),
-        role: Role::Debug,
+        role: Role::Debug(DebugSection::Dwarf),
         near: true,
         align: 1,
         image: part.bytes,
