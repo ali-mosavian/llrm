@@ -1,2170 +1,1930 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$data = internal global [60 x i8] zeroinitializer
-@$qb$statementTable = internal constant [0 x i8] zeroinitializer
 @"BENCHHI&" = internal global [4 x i8] zeroinitializer
 @"BENCHLO&" = internal global [4 x i8] zeroinitializer
-@"BENCHFRAME&" = internal global [4 x i8] zeroinitializer
 @"TOTALFRAMECOUNT%" = internal global [2 x i8] zeroinitializer
 @"FRACTAL1%" = internal global [18 x i8] zeroinitializer
 @"FRACTAL2%" = internal global [18 x i8] zeroinitializer
 @"BOBSPRITE%" = internal global [22 x i8] zeroinitializer
-@"X%" = internal global [2 x i8] zeroinitializer
+@$arguments$17 = internal global [36 x i8] zeroinitializer
 @"TI1!" = internal global [4 x i8] zeroinitializer
-@"Y%" = internal global [2 x i8] zeroinitializer
-@b$seg = global [2 x i8] zeroinitializer
-@$float4 = internal constant [8 x i8] c"^A\DA\22%2\E4\BF"
-@$float5 = internal constant [8 x i8] c"\8E`s\FBw}\E2\BF"
-@$float6 = internal constant [4 x i8] c"\CD\CC\CC?"
-@$string7 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string7, i16 4) }>
-@$string8 = internal constant <{ [2 x i8], ptr, [10 x i8] }> <{ [2 x i8] c"\0A\00", ptr getelementptr (i8, ptr @$string8, i16 4), [10 x i8] c"canada.bsv" }>
-@$string9 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string9, i16 4) }>
-@$float10 = internal constant [4 x i8] c"\C3\F5H@"
-@$string11 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string11, i16 4) }>
-@$string12 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string12, i16 4) }>
-@$float13 = internal constant [8 x i8] c"\18-DT\FB!\09@"
-@$float14 = internal constant [4 x i8] c"\C0\CF\B8:"
-@$float15 = internal constant [4 x i8] c"\B0\03g<"
-@$float16 = internal constant [4 x i8] c"\89\D2^<"
-@$string17 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string17, i16 4), [2 x i8] c"V\00" }>
-@$string18 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string18, i16 4), [4 x i8] c".BIN" }>
-@$string19 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string19, i16 4), [2 x i8] c"P\00" }>
-@$string20 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string20, i16 4), [4 x i8] c".BIN" }>
-@$string21 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string21, i16 4), [2 x i8] c"T\00" }>
-@$string22 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string22, i16 4), [4 x i8] c".BIN" }>
+@b$seg = external global [2 x i8]
+@$string8 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string8, i16 4) }>
+@$string9 = internal constant <{ [2 x i8], ptr, [10 x i8] }> <{ [2 x i8] c"\0A\00", ptr getelementptr (i8, ptr @$string9, i16 4), [10 x i8] c"canada.bsv" }>
+@$string10 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string10, i16 4) }>
+@$string13 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string13, i16 4) }>
+@$string14 = internal constant <{ [2 x i8], ptr }> <{ [2 x i8] zeroinitializer, ptr getelementptr (i8, ptr @$string14, i16 4) }>
+@$string20 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string20, i16 4), [2 x i8] c"V\00" }>
+@$string21 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string21, i16 4), [4 x i8] c".BIN" }>
+@$string22 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string22, i16 4), [2 x i8] c"P\00" }>
+@$string23 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string23, i16 4), [4 x i8] c".BIN" }>
+@$string24 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\01\00", ptr getelementptr (i8, ptr @$string24, i16 4), [2 x i8] c"T\00" }>
+@$string25 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string25, i16 4), [4 x i8] c".BIN" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn {
 b1:
-  call cc1000 addrspace(1) void @llrm.qb.B$CSCN(i16 1, i16 13, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 32000, i16 2, i16 257, ptr @"FRACTAL1%")
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 32000, i16 2, i16 257, ptr @"FRACTAL2%")
-  store i16 0, ptr @"X%", !tbaa !2
-  store i16 63, ptr @$data, !tbaa !2
-  %0 = getelementptr i8, ptr @$data, i16 2
-  store i16 1, ptr %0, !tbaa !2
-  br label %b2
-
-b2:
-  %1 = load i16, ptr %0, !tbaa !2
-  %2 = icmp sge i16 %1, 0
-  br i1 %2, label %b3, label %b4
-
-b3:
-  %3 = load i16, ptr @"X%", !tbaa !2
-  %4 = load i16, ptr @$data, !tbaa !2
-  %5 = icmp sle i16 %3, %4
-  br i1 %5, label %b5, label %b6
-
-b4:
-  %6 = load i16, ptr @"X%", !tbaa !2
-  %7 = load i16, ptr @$data, !tbaa !2
-  %8 = icmp sge i16 %6, %7
-  br i1 %8, label %b5, label %b6
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$CSCN(i16 1, i16 13, i16 2)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 32000, i16 2, i16 257, ptr @"FRACTAL1%")
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 32000, i16 2, i16 257, ptr @"FRACTAL2%")
+  br label %b5
 
 b5:
-  %9 = load i16, ptr @"X%", !tbaa !2
-  %10 = trunc i16 %9 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %10)
-  %11 = load i16, ptr @"X%", !tbaa !2
-  %12 = trunc i16 %11 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %12)
-  %13 = load i16, ptr @"X%", !tbaa !2
-  %14 = trunc i16 %13 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %14)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  %15 = load i16, ptr @"X%", !tbaa !2
-  %16 = load i16, ptr %0, !tbaa !2
-  %17 = add i16 %15, %16
-  store i16 %17, ptr @"X%", !tbaa !2
-  br label %b2
+  %0 = phi i16 [ 0, %b1 ], [ %1, %b5 ]
+  %tmp9 = trunc i16 %0 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp9) memory(inaccessiblemem: readwrite)
+  %tmp8 = trunc i16 %0 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %tmp8) memory(inaccessiblemem: readwrite)
+  %tmp7 = trunc i16 %0 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %tmp7) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  %1 = add nuw nsw i16 %0, 1
+  %exitcond5 = icmp eq i16 %1, 64
+  br i1 %exitcond5, label %b6, label %b5
 
 b6:
-  store i16 64, ptr @"X%", !tbaa !2
-  %18 = getelementptr i8, ptr @$data, i16 4
-  store i16 127, ptr %18, !tbaa !2
-  %19 = getelementptr i8, ptr @$data, i16 6
-  store i16 1, ptr %19, !tbaa !2
-  br label %b7
-
-b7:
-  %20 = load i16, ptr %19, !tbaa !2
-  %21 = icmp sge i16 %20, 0
-  br i1 %21, label %b8, label %b9
-
-b8:
-  %22 = load i16, ptr @"X%", !tbaa !2
-  %23 = load i16, ptr %18, !tbaa !2
-  %24 = icmp sle i16 %22, %23
-  br i1 %24, label %b10, label %b11
-
-b9:
-  %25 = load i16, ptr @"X%", !tbaa !2
-  %26 = load i16, ptr %18, !tbaa !2
-  %27 = icmp sge i16 %25, %26
-  br i1 %27, label %b10, label %b11
+  br label %b10
 
 b10:
-  %28 = load i16, ptr @"X%", !tbaa !2
-  %29 = trunc i16 %28 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %29)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  %30 = load i16, ptr @"X%", !tbaa !2
-  %31 = trunc i16 %30 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %31)
-  %32 = load i16, ptr @"X%", !tbaa !2
-  %33 = load i16, ptr %19, !tbaa !2
-  %34 = add i16 %32, %33
-  store i16 %34, ptr @"X%", !tbaa !2
-  br label %b7
+  %2 = phi i16 [ %4, %b10 ], [ -64, %b6 ]
+  %3 = add i16 %2, 128
+  %tmp6 = trunc i16 %3 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp6) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  %tmp5 = trunc i16 %3 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %tmp5) memory(inaccessiblemem: readwrite)
+  %4 = add nsw i16 %2, 1
+  %exitcond4 = icmp eq i16 %4, 0
+  br i1 %exitcond4, label %b11, label %b10
 
 b11:
-  store i16 128, ptr @"X%", !tbaa !2
-  %35 = getelementptr i8, ptr @$data, i16 8
-  store i16 191, ptr %35, !tbaa !2
-  %36 = getelementptr i8, ptr @$data, i16 10
-  store i16 1, ptr %36, !tbaa !2
-  br label %b12
-
-b12:
-  %37 = load i16, ptr %36, !tbaa !2
-  %38 = icmp sge i16 %37, 0
-  br i1 %38, label %b13, label %b14
-
-b13:
-  %39 = load i16, ptr @"X%", !tbaa !2
-  %40 = load i16, ptr %35, !tbaa !2
-  %41 = icmp sle i16 %39, %40
-  br i1 %41, label %b15, label %b16
-
-b14:
-  %42 = load i16, ptr @"X%", !tbaa !2
-  %43 = load i16, ptr %35, !tbaa !2
-  %44 = icmp sge i16 %42, %43
-  br i1 %44, label %b15, label %b16
+  br label %b15
 
 b15:
-  %45 = load i16, ptr @"X%", !tbaa !2
-  %46 = trunc i16 %45 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %46)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  %47 = load i16, ptr @"X%", !tbaa !2
-  %48 = trunc i16 %47 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %48)
-  %49 = load i16, ptr @"X%", !tbaa !2
-  %50 = load i16, ptr %36, !tbaa !2
-  %51 = add i16 %49, %50
-  store i16 %51, ptr @"X%", !tbaa !2
-  br label %b12
+  %5 = phi i16 [ %7, %b15 ], [ -64, %b11 ]
+  %6 = add i16 %5, 192
+  %tmp4 = trunc i16 %6 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp4) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  %tmp3 = trunc i16 %6 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %tmp3) memory(inaccessiblemem: readwrite)
+  %7 = add nsw i16 %5, 1
+  %exitcond3 = icmp eq i16 %7, 0
+  br i1 %exitcond3, label %b16, label %b15
 
 b16:
-  store i16 191, ptr @"X%", !tbaa !2
-  %52 = getelementptr i8, ptr @$data, i16 12
-  store i16 255, ptr %52, !tbaa !2
-  %53 = getelementptr i8, ptr @$data, i16 14
-  store i16 1, ptr %53, !tbaa !2
-  br label %b17
-
-b17:
-  %54 = load i16, ptr %53, !tbaa !2
-  %55 = icmp sge i16 %54, 0
-  br i1 %55, label %b18, label %b19
-
-b18:
-  %56 = load i16, ptr @"X%", !tbaa !2
-  %57 = load i16, ptr %52, !tbaa !2
-  %58 = icmp sle i16 %56, %57
-  br i1 %58, label %b20, label %b21
-
-b19:
-  %59 = load i16, ptr @"X%", !tbaa !2
-  %60 = load i16, ptr %52, !tbaa !2
-  %61 = icmp sge i16 %59, %60
-  br i1 %61, label %b20, label %b21
+  br label %b20
 
 b20:
-  %62 = load i16, ptr @"X%", !tbaa !2
-  %63 = trunc i16 %62 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %63)
-  %64 = load i16, ptr @"X%", !tbaa !2
-  %65 = trunc i16 %64 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %65)
-  %66 = load i16, ptr @"X%", !tbaa !2
-  %67 = trunc i16 %66 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %67)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  %68 = load i16, ptr @"X%", !tbaa !2
-  %69 = load i16, ptr %53, !tbaa !2
-  %70 = add i16 %68, %69
-  store i16 %70, ptr @"X%", !tbaa !2
-  br label %b17
+  %8 = phi i16 [ %10, %b20 ], [ -65, %b16 ]
+  %9 = add i16 %8, 256
+  %tmp2 = trunc i16 %9 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp2) memory(inaccessiblemem: readwrite)
+  %tmp1 = trunc i16 %9 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %tmp1) memory(inaccessiblemem: readwrite)
+  %tmp = trunc i16 %9 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %tmp) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  %10 = add nsw i16 %8, 1
+  %exitcond2 = icmp eq i16 %10, 0
+  br i1 %exitcond2, label %b21, label %b20
 
 b21:
-  call void @llrm.ia16.out.i8(i16 968, i8 -1)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  call void @llrm.ia16.out.i8(i16 968, i8 127)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  call void @llrm.ia16.out.i8(i16 969, i8 0)
-  %71 = getelementptr i8, ptr @$data, i16 16
-  store i16 0, ptr %71, !tbaa !2
-  call cc1000 addrspace(1) void @BENCHMARK(ptr %71)
-  %72 = call cc1000 addrspace(1) ptr @llrm.qb.B$TIMR()
-  %73 = load float, ptr %72
-  store float %73, ptr @"TI1!", !tbaa !2
-  %74 = getelementptr i8, ptr @$data, i16 18
-  store i16 150, ptr %74, !tbaa !2
-  call cc1000 addrspace(1) void @FRACTALEFFECT(ptr %74)
-  %75 = getelementptr i8, ptr @$data, i16 20
-  store i16 1, ptr %75, !tbaa !2
-  call cc1000 addrspace(1) void @BENCHMARK(ptr %75)
-  %76 = call cc1000 addrspace(1) ptr @llrm.qb.B$TIMR()
-  %77 = load float, ptr %76
-  %78 = load float, ptr @"TI1!", !tbaa !2
-  %79 = fsub float %77, %78
-  store float %79, ptr @"TI1!", !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr @"FRACTAL1%")
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr @"FRACTAL2%")
-  call cc1000 addrspace(1) void @llrm.qb.B$SCLS(i16 -1)
-  %80 = getelementptr i8, ptr @$data, i16 22
-  store i16 16, ptr %80, !tbaa !2
-  call cc1000 addrspace(1) void @UNWHITEFADE(ptr %80)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 32, i16 0, i16 32, i16 2, i16 258, ptr @"BOBSPRITE%")
-  store i16 0, ptr @"X%", !tbaa !2
-  %81 = getelementptr i8, ptr @$data, i16 24
-  store i16 32, ptr %81, !tbaa !2
-  %82 = getelementptr i8, ptr @$data, i16 26
-  store i16 1, ptr %82, !tbaa !2
-  %83 = getelementptr i8, ptr @$data, i16 28
-  %84 = getelementptr i8, ptr @$data, i16 30
-  %85 = getelementptr i8, ptr @"BOBSPRITE%", i16 2
-  %86 = load i16, ptr %85, !tbaa !2
-  %87 = inttoptr i16 %86 to ptr addrspace(2)
-  %88 = addrspacecast ptr addrspace(2) %87 to ptr addrspace(1)
-  %89 = getelementptr i8, ptr @$data, i16 32
-  %90 = getelementptr i8, ptr @$data, i16 34
-  %91 = getelementptr i8, ptr @$data, i16 38
-  %92 = getelementptr i8, ptr @$data, i16 40
-  %93 = getelementptr i8, ptr @$data, i16 44
-  br label %b22
-
-b22:
-  %94 = load i16, ptr @"X%", !tbaa !2
-  %95 = icmp sle i16 %94, 32
-  br i1 %95, label %b25, label %b26
+  tail call void @llrm.ia16.out.i8(i16 968, i8 -1) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 968, i8 127) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 0) memory(inaccessiblemem: readwrite)
+  store i16 0, ptr @$arguments$17, align 16, !tbaa !2
+  tail call cc 1000 addrspace(1) void @BENCHMARK(ptr @$arguments$17)
+  %11 = tail call cc 1000 addrspace(1) ptr @llrm.qb.B$TIMR()
+  %12 = load float, ptr %11
+  store float %12, ptr @"TI1!", !tbaa !2
+  store i16 150, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 2), !tbaa !2
+  tail call cc 1000 addrspace(1) void @FRACTALEFFECT(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 2))
+  store i16 1, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 4), align 4, !tbaa !2
+  tail call cc 1000 addrspace(1) void @BENCHMARK(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 4))
+  %13 = tail call cc 1000 addrspace(1) ptr @llrm.qb.B$TIMR()
+  %14 = load float, ptr %13
+  %15 = load float, ptr @"TI1!", !tbaa !2
+  %16 = fsub float %14, %15
+  %17 = fpround float %16 to float
+  store float %17, ptr @"TI1!", !tbaa !2
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr @"FRACTAL1%")
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr @"FRACTAL2%")
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SCLS(i16 -1)
+  store i16 16, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 6), !tbaa !2
+  tail call cc 1000 addrspace(1) void @UNWHITEFADE(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 6))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 32, i16 0, i16 32, i16 2, i16 258, ptr @"BOBSPRITE%")
+  br label %b25
 
 b25:
-  store i16 0, ptr @"Y%", !tbaa !2
-  store i16 32, ptr %83, !tbaa !2
-  store i16 1, ptr %84, !tbaa !2
-  %96 = sub i16 16, %94
-  %97 = sitofp i16 %96 to float
-  %98 = fmul float %97, %97
-  br label %b28
+  %18 = phi i16 [ %41, %b31 ], [ 0, %b21 ]
+  %19 = phi i16 [ 0, %b21 ], [ %40, %b31 ]
+  %20 = sub nsw i16 16, %19
+  %21 = sitofp i16 %20 to float
+  %22 = fpround float %21 to float
+  %23 = fmul float %22, %22
+  br label %b30
 
 b26:
-  %99 = getelementptr i8, ptr @$data, i16 46
-  store i16 1024, ptr %99, !tbaa !2
-  call cc1000 addrspace(1) void @SHADEBOBEFFECT(ptr %99)
-  %100 = getelementptr i8, ptr @$data, i16 48
-  store i16 2, ptr %100, !tbaa !2
-  call cc1000 addrspace(1) void @BENCHMARK(ptr %100)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr @"BOBSPRITE%")
-  call cc1000 addrspace(1) void @llrm.qb.B$SCLS(i16 -1)
-  %101 = getelementptr i8, ptr @$data, i16 50
-  store i16 16, ptr %101, !tbaa !2
-  call cc1000 addrspace(1) void @UNWHITEFADE(ptr %101)
-  %102 = getelementptr i8, ptr @$data, i16 52
-  store i16 160, ptr %102, !tbaa !2
-  call cc1000 addrspace(1) void @PLASMA(ptr %102)
-  %103 = getelementptr i8, ptr @$data, i16 54
-  store i16 3, ptr %103, !tbaa !2
-  call cc1000 addrspace(1) void @BENCHMARK(ptr %103)
-  call cc1000 addrspace(1) void @llrm.qb.B$SCLS(i16 -1)
-  %104 = getelementptr i8, ptr @$data, i16 56
-  store i16 96, ptr %104, !tbaa !2
-  call cc1000 addrspace(1) void @OHCANADA(ptr %104)
-  %105 = getelementptr i8, ptr @$data, i16 58
-  store i16 4, ptr %105, !tbaa !2
-  call cc1000 addrspace(1) void @BENCHMARK(ptr %105)
-  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  store i16 1024, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 22), !tbaa !2
+  tail call cc 1000 addrspace(1) void @SHADEBOBEFFECT(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 22))
+  store i16 2, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 24), align 8, !tbaa !2
+  tail call cc 1000 addrspace(1) void @BENCHMARK(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 24))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr @"BOBSPRITE%")
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SCLS(i16 -1)
+  store i16 16, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 26), !tbaa !2
+  tail call cc 1000 addrspace(1) void @UNWHITEFADE(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 26))
+  store i16 160, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 28), align 4, !tbaa !2
+  tail call cc 1000 addrspace(1) void @PLASMA(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 28))
+  store i16 3, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 30), !tbaa !2
+  tail call cc 1000 addrspace(1) void @BENCHMARK(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 30))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SCLS(i16 -1)
+  store i16 96, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 32), align 16, !tbaa !2
+  tail call cc 1000 addrspace(1) void @OHCANADA(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 32))
+  store i16 4, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 34), !tbaa !2
+  tail call cc 1000 addrspace(1) void @BENCHMARK(ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 34))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$CEND()
   unreachable
 
-b28:
-  %106 = load i16, ptr @"Y%", !tbaa !2
-  %107 = icmp sle i16 %106, 32
-  br i1 %107, label %b30, label %b31
-
 b30:
-  %108 = mul i16 %106, 33
-  %109 = add i16 %108, %94
-  %110 = shl i16 %109, 1
-  %111 = getelementptr i8, ptr addrspace(1) %88, i16 %110
-  store i16 %96, ptr %89, !tbaa !2
-  store float %97, ptr %90, !tbaa !2
-  %112 = sub i16 16, %106
-  store i16 %112, ptr %91, !tbaa !2
-  %113 = sitofp i16 %112 to float
-  store float %113, ptr %92, !tbaa !2
-  %114 = fmul float %113, %113
-  %115 = fadd float %98, %114
-  %116 = call float @llvm.sqrt.f32(float %115)
-  store i16 16, ptr %93, !tbaa !2
-  %117 = fsub float 1.600000e+01, %116
-  %118 = call i16 @llvm.lrint.i16.f32(float %117)
-  store i16 %118, ptr addrspace(1) %111, !tbaa !4
-  %119 = load i16, ptr addrspace(1) %111, !tbaa !4
-  %120 = icmp slt i16 %119, 0
-  br i1 %120, label %b32, label %b34
+  %24 = phi i16 [ %39, %b30 ], [ %18, %b25 ]
+  %25 = phi i16 [ %38, %b30 ], [ 16, %b25 ]
+  %26 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"BOBSPRITE%", i16 2), !tbaa !2
+  %27 = inttoptr i16 %26 to ptr addrspace(2)
+  %28 = addrspacecast ptr addrspace(2) %27 to ptr addrspace(1)
+  %29 = getelementptr i8, ptr addrspace(1) %28, i16 %24
+  store i16 %20, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 8), align 8, !tbaa !2
+  store float %22, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 10), !tbaa !2
+  store i16 %25, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 14), !tbaa !2
+  %30 = sitofp i16 %25 to float
+  %31 = fpround float %30 to float
+  store float %31, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 16), align 16, !tbaa !2
+  %32 = fmul float %31, %31
+  %33 = fadd float %23, %32
+  %34 = tail call float @llvm.sqrt.f32(float %33)
+  store i16 16, ptr getelementptr inbounds nuw (i8, ptr @$arguments$17, i16 20), align 4, !tbaa !2
+  %35 = fsub float 1.600000e+01, %34
+  %36 = tail call i16 @llvm.lrint.i16.f32(float %35)
+  %37 = tail call i16 @llvm.smax.i16(i16 %36, i16 0)
+  store i16 %37, ptr addrspace(1) %29
+  %38 = add nsw i16 %25, -1
+  %39 = add nuw nsw i16 %24, 66
+  %exitcond = icmp eq i16 %38, -17
+  br i1 %exitcond, label %b31, label %b30
 
 b31:
-  %121 = load i16, ptr @"X%", !tbaa !2
-  %122 = add i16 %121, 1
-  store i16 %122, ptr @"X%", !tbaa !2
-  br label %b22
-
-b32:
-  store i16 0, ptr addrspace(1) %111, !tbaa !4
-  br label %b34
-
-b34:
-  %123 = load i16, ptr @"Y%", !tbaa !2
-  %124 = add i16 %123, 1
-  store i16 %124, ptr @"Y%", !tbaa !2
-  br label %b28
+  %40 = add nuw nsw i16 %19, 1
+  %exitcond1 = icmp eq i16 %40, 33
+  %41 = add nuw nsw i16 %18, 2
+  br i1 %exitcond1, label %b26, label %b25
 }
 
-define cc1000 void @DRAWBOB(ptr %0) addrspace(1) {
+define cc 1000 void @DRAWBOB(ptr dereferenceable(2) nocapture %0) addrspace(1) "llrm-fp-eval"="x87-extended" nounwind nofree nosync norecurse willreturn {
 b1:
-  %1 = getelementptr i8, ptr @"BOBSPRITE%", i16 2
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %29, %b11 ]
-  %3 = icmp sle i16 %2, 31
-  br i1 %3, label %b5, label %b6
+  %1 = load i16, ptr %0
+  br label %b5
 
 b5:
-  %4 = load i16, ptr %0
-  %5 = add i16 %4, 288
+  %2 = phi i16 [ %26, %b11 ], [ 0, %b1 ]
+  %3 = phi i16 [ %1, %b1 ], [ %23, %b11 ]
+  %4 = phi i16 [ 0, %b1 ], [ %25, %b11 ]
+  %5 = add i16 %3, 288
   store i16 %5, ptr %0
-  %6 = mul i16 %2, 33
-  %7 = shl i16 %6, 1
-  br label %b7
+  br label %b10
 
 b6:
   ret void
 
-b7:
-  %8 = phi i16 [ %7, %b5 ], [ %28, %b10 ]
-  %9 = phi i16 [ 0, %b5 ], [ %27, %b10 ]
-  %10 = icmp sle i16 %9, 31
-  br i1 %10, label %b10, label %b11
-
 b10:
-  %11 = load i16, ptr %0
-  %12 = load i16, ptr @b$seg, !tbaa !2
-  %13 = inttoptr i16 %12 to ptr addrspace(2)
-  %14 = addrspacecast ptr addrspace(2) %13 to ptr addrspace(1)
-  %15 = getelementptr i8, ptr addrspace(1) %14, i16 %11
-  %16 = load i8, ptr addrspace(1) %15
-  %17 = zext i8 %16 to i16
-  %18 = load i16, ptr %1, !tbaa !2
-  %19 = inttoptr i16 %18 to ptr addrspace(2)
-  %20 = addrspacecast ptr addrspace(2) %19 to ptr addrspace(1)
-  %21 = getelementptr i8, ptr addrspace(1) %20, i16 %8
-  %22 = load i16, ptr addrspace(1) %21, !tbaa !4
-  %23 = add i16 %17, %22
-  %24 = trunc i16 %23 to i8
-  store i8 %24, ptr addrspace(1) %15
-  %25 = load i16, ptr %0
-  %26 = add i16 %25, 1
-  store i16 %26, ptr %0
-  %27 = add i16 %9, 1
-  %28 = add i16 %8, 2
-  br label %b7
+  %6 = phi i16 [ %24, %b10 ], [ -64, %b5 ]
+  %7 = phi i16 [ %5, %b5 ], [ %23, %b10 ]
+  %8 = load i16, ptr @b$seg, !tbaa !2
+  %9 = inttoptr i16 %8 to ptr addrspace(2)
+  %10 = addrspacecast ptr addrspace(2) %9 to ptr addrspace(1)
+  %11 = getelementptr i8, ptr addrspace(1) %10, i16 %7
+  %12 = load volatile i8, ptr addrspace(1) %11
+  %13 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"BOBSPRITE%", i16 2), !tbaa !2
+  %14 = inttoptr i16 %13 to ptr addrspace(2)
+  %15 = addrspacecast ptr addrspace(2) %14 to ptr addrspace(1)
+  %16 = getelementptr i8, ptr addrspace(1) %15, i16 %2
+  %17 = getelementptr i8, ptr addrspace(1) %16, i16 %6
+  %18 = getelementptr i8, ptr addrspace(1) %17, i16 64
+  %19 = load i16, ptr addrspace(1) %18, !tbaa !6
+  %20 = trunc i16 %19 to i8
+  %21 = add i8 %12, %20
+  store volatile i8 %21, ptr addrspace(1) %11
+  %22 = load i16, ptr %0
+  %23 = add i16 %22, 1
+  store i16 %23, ptr %0
+  %24 = add nsw i16 %6, 2
+  %exitcond = icmp eq i16 %24, 0
+  br i1 %exitcond, label %b11, label %b10
 
 b11:
-  %29 = add i16 %2, 1
-  br label %b2
+  %25 = add nuw nsw i16 %4, 1
+  %exitcond1 = icmp eq i16 %25, 32
+  %26 = add nuw nsw i16 %2, 66
+  br i1 %exitcond1, label %b6, label %b5
 }
 
-define cc1000 void @FRACLINE(ptr %0, ptr %1, ptr %2, ptr %3, ptr %4, ptr %5) addrspace(1) {
+define cc 1000 void @FRACLINE(ptr dereferenceable(2) nocapture readonly %0, ptr dereferenceable(8) nocapture readonly %1, ptr dereferenceable(8) nocapture readonly %2, ptr dereferenceable(8) nocapture readonly %3, ptr dereferenceable(8) nocapture readonly %4, ptr dereferenceable(8) nocapture readonly %5) addrspace(1) "llrm-fp-eval"="x87-extended" nounwind nofree nosync norecurse {
 b1:
   %6 = load double, ptr %4
   %7 = load double, ptr %3
   %8 = fsub double %6, %7
   %9 = fdiv double %8, 1.600000e+02
-  %10 = load double, ptr %2
-  %11 = load double, ptr %1
-  %12 = fsub double %10, %11
-  %13 = fdiv double %12, 1.600000e+02
-  %14 = load i16, ptr %0
-  %15 = mul i16 %14, 320
-  %16 = fdiv double %9, 2.000000e+00
-  %17 = fadd double %7, %16
+  %10 = fpround double %9 to double
+  %11 = load double, ptr %2
+  %12 = load double, ptr %1
+  %13 = fsub double %11, %12
+  %14 = fdiv double %13, 1.600000e+02
+  %15 = fpround double %14 to double
+  %16 = load i16, ptr %0
+  %17 = mul i16 %16, 320
+  %18 = fmul double %10, 5.000000e-01
+  %19 = fadd double %7, %18
   br label %b3
 
 b3:
-  %18 = phi double [ %11, %b1 ], [ %73, %b13 ]
-  %19 = phi i16 [ 1, %b1 ], [ %45, %b13 ]
-  %20 = phi double [ %17, %b1 ], [ %72, %b13 ]
-  %21 = add i16 %15, %19
-  %22 = add i16 %21, -1
-  %23 = load i16, ptr @b$seg, !tbaa !2
-  %24 = inttoptr i16 %23 to ptr addrspace(2)
-  %25 = addrspacecast ptr addrspace(2) %24 to ptr addrspace(1)
-  %26 = getelementptr i8, ptr addrspace(1) %25, i16 %22
-  %27 = load i8, ptr addrspace(1) %26
-  %28 = zext i8 %27 to i16
-  %29 = add i16 %21, 1
-  %30 = getelementptr i8, ptr addrspace(1) %25, i16 %29
-  %31 = load i8, ptr addrspace(1) %30
-  %32 = zext i8 %31 to i16
-  %33 = icmp eq i16 %28, %32
-  %34 = sext i1 %33 to i16
-  %35 = icmp sgt i16 %28, 0
-  %36 = sext i1 %35 to i16
-  %37 = and i16 %34, %36
-  %38 = icmp ne i16 %37, 0
-  br i1 %38, label %b7, label %b6
+  %20 = phi double [ %19, %b1 ], [ %70, %b13 ]
+  %21 = phi i16 [ 1, %b1 ], [ %69, %b13 ]
+  %22 = phi double [ %12, %b1 ], [ %72, %b13 ]
+  %23 = fpround double %20 to double
+  %24 = load i16, ptr @b$seg, !tbaa !2
+  %25 = inttoptr i16 %24 to ptr addrspace(2)
+  %26 = addrspacecast ptr addrspace(2) %25 to ptr addrspace(1)
+  %27 = getelementptr i8, ptr addrspace(1) %26, i16 %17
+  %28 = getelementptr i8, ptr addrspace(1) %27, i16 %21
+  %29 = getelementptr i8, ptr addrspace(1) %28, i16 -1
+  %30 = load volatile i8, ptr addrspace(1) %29
+  %31 = getelementptr i8, ptr addrspace(1) %28, i16 1
+  %32 = load volatile i8, ptr addrspace(1) %31
+  %33 = icmp eq i8 %30, %32
+  %34 = icmp ne i8 %30, 0
+  %35 = and i1 %34, %33
+  br i1 %35, label %b7, label %b6
 
 b6:
+  %36 = load double, ptr %5
   br label %b9
 
 b7:
-  %39 = phi i16 [ %28, %b3 ], [ %57, %b10 ]
-  %40 = trunc i16 %39 to i8
-  %41 = load i16, ptr @b$seg, !tbaa !2
-  %42 = inttoptr i16 %41 to ptr addrspace(2)
-  %43 = addrspacecast ptr addrspace(2) %42 to ptr addrspace(1)
-  %44 = getelementptr i8, ptr addrspace(1) %43, i16 %21
-  store i8 %40, ptr addrspace(1) %44
-  %45 = add i16 %19, 2
-  %46 = icmp sge i16 %45, 320
-  br i1 %46, label %b11, label %b13
+  %37 = phi i8 [ %tmp1, %b10 ], [ %30, %b3 ]
+  store volatile i8 %37, ptr addrspace(1) %28
+  %38 = icmp ugt i16 %21, 317
+  br i1 %38, label %b11, label %b13
 
 b9:
-  %47 = phi i16 [ 0, %b6 ], [ %57, %b9 ]
-  %48 = phi double [ 0.000000e+00, %b6 ], [ %56, %b9 ]
-  %49 = phi double [ 0.000000e+00, %b6 ], [ %55, %b9 ]
-  %50 = fmul double %48, %48
-  %51 = fmul double %49, %49
-  %52 = fsub double %50, %51
-  %53 = fmul double %48, %49
-  %54 = fadd double %53, %53
-  %55 = fadd double %54, %18
-  %56 = fadd double %52, %20
-  %57 = add i16 %47, 1
-  %58 = fmul double %56, %56
-  %59 = fmul double %55, %55
-  %60 = fadd double %58, %59
-  %61 = load double, ptr %5
-  %62 = fcmp oge double %60, %61
-  %63 = sext i1 %62 to i16
-  %64 = icmp eq i16 %57, 255
-  %65 = sext i1 %64 to i16
-  %66 = or i16 %63, %65
-  %67 = icmp ne i16 %66, 0
-  br i1 %67, label %b10, label %b9
+  %39 = phi i16 [ 0, %b6 ], [ %53, %b9 ]
+  %40 = phi double [ 0.000000e+00, %b6 ], [ %52, %b9 ]
+  %41 = phi double [ 0.000000e+00, %b6 ], [ %50, %b9 ]
+  %42 = fmul double %40, %40
+  %43 = fmul double %41, %41
+  %44 = fsub double %42, %43
+  %45 = fpround double %44 to double
+  %46 = fmul double %40, %41
+  %47 = fpround double %46 to double
+  %48 = fadd double %47, %47
+  %49 = fadd double %22, %48
+  %50 = fpround double %49 to double
+  %51 = fadd double %23, %45
+  %52 = fpround double %51 to double
+  %53 = add i16 %39, 1
+  %54 = fmul double %52, %52
+  %55 = fmul double %50, %50
+  %56 = fadd double %54, %55
+  %57 = fcmp oge double %56, %36
+  %58 = sext i1 %57 to i16
+  %59 = icmp eq i16 %39, 254
+  %60 = sext i1 %59 to i16
+  %61 = or i16 %58, %60
+  %62 = icmp eq i16 %61, 0
+  br i1 %62, label %b9, label %b10
 
 b10:
+  %tmp1 = trunc i16 %53 to i8
   br label %b7
 
 b11:
-  %68 = load double, ptr %3
-  %69 = load double, ptr %4
-  %70 = fadd double %68, %69
-  %71 = fdiv double %70, 2.000000e+00
+  %63 = load double, ptr %3
+  %64 = load double, ptr %4
+  %65 = fadd double %63, %64
+  %66 = fmul double %65, 5.000000e-01
+  %67 = fpround double %66 to double
+  %68 = load double, ptr %5
   br label %b16
 
 b13:
-  %72 = fadd double %20, %9
-  %73 = fadd double %18, %13
+  %69 = add nuw nsw i16 %21, 2
+  %70 = fadd double %10, %23
+  %71 = fadd double %22, %15
+  %72 = fpround double %71 to double
   br label %b3
 
 b16:
-  %74 = phi i16 [ 0, %b11 ], [ %84, %b16 ]
-  %75 = phi double [ 0.000000e+00, %b11 ], [ %83, %b16 ]
-  %76 = phi double [ 0.000000e+00, %b11 ], [ %82, %b16 ]
+  %73 = phi i16 [ 0, %b11 ], [ %87, %b16 ]
+  %74 = phi double [ 0.000000e+00, %b11 ], [ %86, %b16 ]
+  %75 = phi double [ 0.000000e+00, %b11 ], [ %84, %b16 ]
+  %76 = fmul double %74, %74
   %77 = fmul double %75, %75
-  %78 = fmul double %76, %76
-  %79 = fsub double %77, %78
-  %80 = fmul double %75, %76
-  %81 = fadd double %80, %80
-  %82 = fadd double %81, %18
-  %83 = fadd double %79, %71
-  %84 = add i16 %74, 1
-  %85 = fmul double %83, %83
-  %86 = fmul double %82, %82
-  %87 = fadd double %85, %86
-  %88 = load double, ptr %5
-  %89 = fcmp oge double %87, %88
-  %90 = sext i1 %89 to i16
-  %91 = icmp eq i16 %84, 255
+  %78 = fsub double %76, %77
+  %79 = fpround double %78 to double
+  %80 = fmul double %74, %75
+  %81 = fpround double %80 to double
+  %82 = fadd double %81, %81
+  %83 = fadd double %22, %82
+  %84 = fpround double %83 to double
+  %85 = fadd double %67, %79
+  %86 = fpround double %85 to double
+  %87 = add i16 %73, 1
+  %88 = fmul double %86, %86
+  %89 = fmul double %84, %84
+  %90 = fadd double %88, %89
+  %91 = fcmp oge double %90, %68
   %92 = sext i1 %91 to i16
-  %93 = or i16 %90, %92
-  %94 = icmp ne i16 %93, 0
-  br i1 %94, label %b17, label %b16
+  %93 = icmp eq i16 %73, 254
+  %94 = sext i1 %93 to i16
+  %95 = or i16 %92, %94
+  %96 = icmp eq i16 %95, 0
+  br i1 %96, label %b16, label %b17
 
 b17:
-  %95 = add i16 %15, 160
-  %96 = trunc i16 %84 to i8
   %97 = load i16, ptr @b$seg, !tbaa !2
   %98 = inttoptr i16 %97 to ptr addrspace(2)
   %99 = addrspacecast ptr addrspace(2) %98 to ptr addrspace(1)
-  %100 = getelementptr i8, ptr addrspace(1) %99, i16 %95
-  store i8 %96, ptr addrspace(1) %100
+  %100 = getelementptr i8, ptr addrspace(1) %99, i16 %17
+  %101 = getelementptr i8, ptr addrspace(1) %100, i16 160
+  %tmp = trunc i16 %87 to i8
+  store volatile i8 %tmp, ptr addrspace(1) %101
   ret void
 }
 
-define cc1000 void @FRACLINE2(ptr %0, ptr %1, ptr %2, ptr %3, ptr %4, ptr %5) addrspace(1) {
+define cc 1000 void @FRACLINE2(ptr dereferenceable(2) nocapture readonly %0, ptr dereferenceable(8) nocapture readonly %1, ptr dereferenceable(8) nocapture readonly %2, ptr dereferenceable(8) nocapture readonly %3, ptr dereferenceable(8) nocapture readonly %4, ptr dereferenceable(8) nocapture readonly %5) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
 b1:
   %6 = alloca [18 x i8]
-  call void @llvm.memset.p0.i16(ptr %6, i8 0, i16 18, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 320, i16 2, i16 257, ptr %6)
+  call void @llvm.memset.p0.i16(ptr align 2 %6, i8 0, i16 18, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 320, i16 2, i16 257, ptr nonnull %6)
   %7 = load double, ptr %4
   %8 = load double, ptr %3
   %9 = fsub double %7, %8
   %10 = fdiv double %9, 3.200000e+02
-  %11 = load double, ptr %2
-  %12 = load double, ptr %1
-  %13 = fsub double %11, %12
-  %14 = fdiv double %13, 3.200000e+02
-  %15 = load i16, ptr %0
-  %16 = mul i16 %15, 320
+  %11 = fpround double %10 to double
+  %12 = load double, ptr %2
+  %13 = load double, ptr %1
+  %14 = fsub double %12, %13
+  %15 = fdiv double %14, 3.200000e+02
+  %16 = fpround double %15 to double
+  %17 = load i16, ptr %0
+  %18 = mul i16 %17, 320
   br label %b3
 
 b3:
-  %17 = phi double [ %12, %b1 ], [ %65, %b13 ]
-  %18 = phi i16 [ 0, %b1 ], [ %41, %b13 ]
-  %19 = phi double [ %8, %b1 ], [ %64, %b13 ]
-  %20 = add i16 %18, %16
-  %21 = add i16 %20, -320
+  %19 = phi double [ %8, %b1 ], [ %62, %b13 ]
+  %20 = phi i16 [ 0, %b1 ], [ %60, %b13 ]
+  %21 = phi double [ %13, %b1 ], [ %64, %b13 ]
   %22 = load i16, ptr @b$seg, !tbaa !2
   %23 = inttoptr i16 %22 to ptr addrspace(2)
   %24 = addrspacecast ptr addrspace(2) %23 to ptr addrspace(1)
-  %25 = getelementptr i8, ptr addrspace(1) %24, i16 %21
-  %26 = load i8, ptr addrspace(1) %25
-  %27 = zext i8 %26 to i16
-  %28 = add i16 %20, 320
-  %29 = getelementptr i8, ptr addrspace(1) %24, i16 %28
-  %30 = load i8, ptr addrspace(1) %29
-  %31 = zext i8 %30 to i16
-  %32 = icmp eq i16 %27, %31
-  br i1 %32, label %b5, label %b6
-
-b5:
-  %33 = load i8, ptr addrspace(1) %25
-  %34 = zext i8 %33 to i16
-  br label %b7
-
-b6:
-  br label %b9
-
-b7:
-  %35 = phi i16 [ %34, %b5 ], [ %53, %b10 ]
-  %36 = trunc i16 %35 to i8
-  %37 = load i16, ptr @b$seg, !tbaa !2
-  %38 = inttoptr i16 %37 to ptr addrspace(2)
-  %39 = addrspacecast ptr addrspace(2) %38 to ptr addrspace(1)
-  %40 = getelementptr i8, ptr addrspace(1) %39, i16 %20
-  store i8 %36, ptr addrspace(1) %40
-  %41 = add i16 %18, 1
-  %42 = icmp sge i16 %41, 320
-  br i1 %42, label %b11, label %b13
-
-b9:
-  %43 = phi i16 [ 0, %b6 ], [ %53, %b9 ]
-  %44 = phi double [ 0.000000e+00, %b6 ], [ %52, %b9 ]
-  %45 = phi double [ 0.000000e+00, %b6 ], [ %51, %b9 ]
-  %46 = fmul double %44, %44
-  %47 = fmul double %45, %45
-  %48 = fsub double %46, %47
-  %49 = fmul double %44, %45
-  %50 = fadd double %49, %49
-  %51 = fadd double %50, %17
-  %52 = fadd double %48, %19
-  %53 = add i16 %43, 1
-  %54 = fmul double %52, %52
-  %55 = fmul double %51, %51
-  %56 = fadd double %54, %55
-  %57 = load double, ptr %5
-  %58 = fcmp oge double %56, %57
-  %59 = sext i1 %58 to i16
-  %60 = icmp eq i16 %53, 255
-  %61 = sext i1 %60 to i16
-  %62 = or i16 %59, %61
-  %63 = icmp ne i16 %62, 0
-  br i1 %63, label %b10, label %b9
-
-b10:
-  br label %b7
-
-b11:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %6)
-  ret void
-
-b13:
-  %64 = fadd double %19, %10
-  %65 = fadd double %17, %14
-  br label %b3
-}
-
-define cc1000 void @FRACTALEFFECT(ptr %0) addrspace(1) {
-b1:
-  %1 = alloca i16
-  %2 = alloca i16
-  %3 = alloca i16
-  %4 = alloca i16
-  %5 = alloca i16
-  %6 = alloca i16
-  %7 = alloca i16
-  %8 = alloca i16
-  %9 = alloca double
-  %10 = alloca double
-  %11 = alloca double
-  %12 = alloca double
-  %13 = alloca double
-  %14 = alloca double
-  %15 = alloca double
-  %16 = alloca [22 x i8]
-  store i16 0, ptr %1
-  store i16 0, ptr %2
-  store i16 0, ptr %3
-  store i16 0, ptr %4
-  store i16 0, ptr %5
-  store i16 0, ptr %6
-  store i16 0, ptr %7
-  store i16 0, ptr %8
-  store double 0.000000e+00, ptr %9
-  store double 0.000000e+00, ptr %10
-  store double 0.000000e+00, ptr %11
-  store double 0.000000e+00, ptr %12
-  store double 0.000000e+00, ptr %13
-  store double 0.000000e+00, ptr %14
-  store double 0.000000e+00, ptr %15
-  call void @llvm.memset.p0.i16(ptr %16, i8 0, i16 22, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 160, i16 0, i16 100, i16 2, i16 258, ptr %16)
-  %17 = load i16, ptr %0
-  %18 = getelementptr i8, ptr @"FRACTAL1%", i16 2
-  %19 = getelementptr i8, ptr @"FRACTAL2%", i16 2
-  %20 = getelementptr i8, ptr %16, i16 2
-  br label %b2
-
-b2:
-  %21 = phi i16 [ -100, %b1 ], [ %64, %b37 ]
-  %22 = phi double [ 1.000000e+00, %b1 ], [ %65, %b37 ]
-  %23 = phi i16 [ 1, %b1 ], [ %141, %b37 ]
-  %24 = icmp sle i16 %23, %17
-  br i1 %24, label %b5, label %b6
-
-b5:
-  %25 = add i16 %21, 1
-  %26 = add i16 %21, 2
-  %27 = add i16 %21, 3
-  %28 = sitofp i16 %21 to double
-  %29 = fdiv double %28, %22
-  %30 = load double, ptr @$float4, !tbaa !2
-  %31 = fadd double %29, %30
-  store double %31, ptr %15, !tbaa !2
-  %32 = sitofp i16 %25 to double
-  %33 = fdiv double %32, %22
-  %34 = fadd double %33, %30
-  store double %34, ptr %14, !tbaa !2
-  %35 = sitofp i16 %26 to double
-  %36 = fdiv double %35, %22
-  %37 = fadd double %36, %30
-  store double %37, ptr %13, !tbaa !2
-  %38 = sitofp i16 %27 to double
-  %39 = fdiv double %38, %22
-  %40 = fadd double %39, %30
-  store double %40, ptr %12, !tbaa !2
-  %41 = load double, ptr @$float5, !tbaa !2
-  %42 = fdiv double 1.600000e+02, %22
-  %43 = fsub double %41, %42
-  store double %43, ptr %11, !tbaa !2
-  %44 = fadd double %41, %42
-  store double %44, ptr %10, !tbaa !2
-  %45 = load i16, ptr %18, !tbaa !2
-  %46 = inttoptr i16 %45 to ptr addrspace(2)
-  %47 = addrspacecast ptr addrspace(2) %46 to ptr addrspace(1)
-  %48 = getelementptr i8, ptr addrspace(1) %47, i16 0
-  %49 = addrspacecast ptr addrspace(1) %48 to ptr addrspace(2)
-  %50 = ptrtoint ptr addrspace(2) %49 to i16
-  store i16 %50, ptr @b$seg, !tbaa !2
-  store double 4.000000e+00, ptr %9, !tbaa !2
-  %51 = add i16 %21, 100
-  store i16 %51, ptr %8, !tbaa !2
-  call cc1000 addrspace(1) void @FRACLINE(ptr %8, ptr %15, ptr %15, ptr %11, ptr %10, ptr %9)
-  %52 = add i16 %21, 102
-  store i16 %52, ptr %7, !tbaa !2
-  call cc1000 addrspace(1) void @FRACLINE(ptr %7, ptr %13, ptr %13, ptr %11, ptr %10, ptr %9)
-  %53 = add i16 %21, 101
-  store i16 %53, ptr %6, !tbaa !2
-  call cc1000 addrspace(1) void @FRACLINE2(ptr %6, ptr %14, ptr %14, ptr %11, ptr %10, ptr %9)
-  %54 = add i16 %21, 103
-  store i16 %54, ptr %5, !tbaa !2
-  call cc1000 addrspace(1) void @FRACLINE2(ptr %5, ptr %12, ptr %12, ptr %11, ptr %10, ptr %9)
-  %55 = add i16 %21, 4
-  %56 = icmp sge i16 %55, 100
-  br i1 %56, label %b7, label %b9
-
-b6:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %16)
-  ret void
-
-b7:
-  %57 = fmul double %22, 2.000000e+00
-  %58 = load i16, ptr %20, !tbaa !2
-  %59 = inttoptr i16 %58 to ptr addrspace(2)
-  %60 = addrspacecast ptr addrspace(2) %59 to ptr addrspace(1)
-  %61 = load i16, ptr @b$seg, !tbaa !2
-  %62 = inttoptr i16 %61 to ptr addrspace(2)
-  %63 = addrspacecast ptr addrspace(2) %62 to ptr addrspace(1)
-  br label %b10
-
-b9:
-  %64 = phi i16 [ %55, %b5 ], [ -100, %b29 ]
-  %65 = phi double [ %22, %b5 ], [ %57, %b29 ]
-  %66 = load i16, ptr %19, !tbaa !2
-  %67 = inttoptr i16 %66 to ptr addrspace(2)
-  %68 = addrspacecast ptr addrspace(2) %67 to ptr addrspace(1)
-  %69 = getelementptr i8, ptr addrspace(1) %68, i16 0
-  %70 = addrspacecast ptr addrspace(1) %69 to ptr addrspace(2)
-  %71 = ptrtoint ptr addrspace(2) %70 to i16
-  store i16 %71, ptr @b$seg, !tbaa !2
-  %72 = sext i16 %23 to i32
-  %73 = srem i32 %72, 50
-  %74 = trunc i32 %73 to i16
-  %75 = load float, ptr @$float6, !tbaa !2
-  %76 = sitofp i16 %74 to float
-  %77 = fmul float %76, %75
-  %78 = call i16 @llvm.lrint.i16.f32(float %77)
-  store i16 %78, ptr %4, !tbaa !2
-  store i16 %74, ptr %3, !tbaa !2
-  %79 = fsub float 3.200000e+02, %77
-  %80 = call i16 @llvm.lrint.i16.f32(float %79)
-  store i16 %80, ptr %2, !tbaa !2
-  %81 = sub i16 200, %74
-  store i16 %81, ptr %1, !tbaa !2
-  call cc1000 addrspace(1) void @RENDER(ptr %4, ptr %3, ptr %2, ptr %1)
-  %82 = call cc1000 addrspace(1) ptr @llrm.qb.B$INKY()
-  %83 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %82, ptr @$string7)
-  %84 = icmp sgt i16 %83, 0
-  br i1 %84, label %b35, label %b37
-
-b10:
-  %85 = phi i16 [ 16080, %b7 ], [ %107, %b19 ]
-  %86 = phi i16 [ 0, %b7 ], [ %108, %b19 ]
-  %87 = icmp sle i16 %86, 99
-  br i1 %87, label %b13, label %b14
-
-b13:
-  %88 = mul i16 %86, 161
-  %89 = shl i16 %88, 1
-  br label %b15
-
-b14:
-  %90 = load i16, ptr %19, !tbaa !2
-  %91 = inttoptr i16 %90 to ptr addrspace(2)
-  %92 = addrspacecast ptr addrspace(2) %91 to ptr addrspace(1)
-  %93 = load i16, ptr %18, !tbaa !2
-  %94 = inttoptr i16 %93 to ptr addrspace(2)
-  %95 = addrspacecast ptr addrspace(2) %94 to ptr addrspace(1)
-  br label %b20
-
-b15:
-  %96 = phi i16 [ %89, %b13 ], [ %106, %b18 ]
-  %97 = phi i16 [ %85, %b13 ], [ %104, %b18 ]
-  %98 = phi i16 [ 0, %b13 ], [ %105, %b18 ]
-  %99 = icmp sle i16 %98, 159
-  br i1 %99, label %b18, label %b19
-
-b18:
-  %100 = getelementptr i8, ptr addrspace(1) %60, i16 %96
-  %101 = getelementptr i8, ptr addrspace(1) %63, i16 %97
-  %102 = load i8, ptr addrspace(1) %101
-  %103 = zext i8 %102 to i16
-  store i16 %103, ptr addrspace(1) %100, !tbaa !4
-  %104 = add i16 %97, 1
-  %105 = add i16 %98, 1
-  %106 = add i16 %96, 2
-  br label %b15
-
-b19:
-  %107 = add i16 %97, 160
-  %108 = add i16 %86, 1
-  br label %b10
-
-b20:
-  %109 = phi i16 [ 0, %b14 ], [ %115, %b23 ]
-  %110 = icmp sle i16 %109, 32000
-  br i1 %110, label %b23, label %b24
-
-b23:
-  %111 = shl i16 %109, 1
-  %112 = getelementptr i8, ptr addrspace(1) %92, i16 %111
-  %113 = getelementptr i8, ptr addrspace(1) %95, i16 %111
-  %114 = load i16, ptr addrspace(1) %113, !tbaa !4
-  store i16 %114, ptr addrspace(1) %112, !tbaa !4
-  store i16 0, ptr addrspace(1) %113, !tbaa !4
-  %115 = add i16 %109, 1
-  br label %b20
-
-b24:
-  br label %b25
-
-b25:
-  %116 = phi i16 [ 0, %b24 ], [ %138, %b34 ]
-  %117 = icmp sle i16 %116, 99
-  br i1 %117, label %b28, label %b29
-
-b28:
-  %118 = mul i16 %116, 640
-  %119 = mul i16 %116, 161
-  %120 = shl i16 %119, 1
-  br label %b30
-
-b29:
-  br label %b9
-
-b30:
-  %121 = phi i16 [ %120, %b28 ], [ %137, %b33 ]
-  %122 = phi i16 [ %118, %b28 ], [ %136, %b33 ]
-  %123 = phi i16 [ 0, %b28 ], [ %135, %b33 ]
-  %124 = icmp sle i16 %123, 159
-  br i1 %124, label %b33, label %b34
-
-b33:
-  %125 = load i16, ptr %20, !tbaa !2
-  %126 = inttoptr i16 %125 to ptr addrspace(2)
-  %127 = addrspacecast ptr addrspace(2) %126 to ptr addrspace(1)
-  %128 = getelementptr i8, ptr addrspace(1) %127, i16 %121
-  %129 = load i16, ptr addrspace(1) %128, !tbaa !4
-  %130 = trunc i16 %129 to i8
-  %131 = load i16, ptr @b$seg, !tbaa !2
-  %132 = inttoptr i16 %131 to ptr addrspace(2)
-  %133 = addrspacecast ptr addrspace(2) %132 to ptr addrspace(1)
-  %134 = getelementptr i8, ptr addrspace(1) %133, i16 %122
-  store i8 %130, ptr addrspace(1) %134
-  %135 = add i16 %123, 1
-  %136 = add i16 %122, 2
-  %137 = add i16 %121, 2
-  br label %b30
-
-b34:
-  %138 = add i16 %116, 1
-  br label %b25
-
-b35:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %16)
-  ret void
-
-b37:
-  %139 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %140 = add i16 %139, 1
-  store i16 %140, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %141 = add i16 %23, 1
-  br label %b2
-}
-
-define cc1000 void @OHCANADA(ptr %0) addrspace(1) {
-b1:
-  %1 = alloca i16
-  store i16 0, ptr %1
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %5, %b5 ]
-  %3 = icmp sle i16 %2, 255
-  br i1 %3, label %b5, label %b6
-
-b5:
-  %4 = trunc i16 %2 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %4)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  %5 = add i16 %2, 1
-  br label %b2
-
-b6:
-  store i16 -24576, ptr @b$seg, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$BLOD(ptr @$string8, i16 0, i16 1)
-  br label %b7
-
-b7:
-  %6 = phi i16 [ 0, %b6 ], [ %12, %b10 ]
-  %7 = icmp sle i16 %6, 255
-  br i1 %7, label %b10, label %b11
-
-b10:
-  %8 = trunc i16 %6 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %8)
-  call void @llrm.ia16.out.i8(i16 969, i8 63)
-  %9 = sext i16 %6 to i32
-  %10 = sdiv i32 %9, 4
-  %11 = trunc i32 %10 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %11)
-  call void @llrm.ia16.out.i8(i16 969, i8 %11)
-  %12 = add i16 %6, 1
-  br label %b7
-
-b11:
-  store i16 256, ptr %1, !tbaa !2
-  call cc1000 addrspace(1) void @UNWHITEFADE(ptr %1)
-  %13 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %14 = add i16 %13, 16
-  store i16 %14, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %15 = load i16, ptr %0
-  br label %b12
-
-b12:
-  %16 = phi i16 [ 1, %b11 ], [ %24, %b19 ]
-  %17 = icmp sle i16 %16, %15
-  br i1 %17, label %b15, label %b16
-
-b15:
-  %18 = load i32, ptr @"BENCHFRAME&", !tbaa !2
-  store i32 %18, ptr @"BENCHFRAME&", !tbaa !2
-  store i32 %18, ptr @"BENCHFRAME&", !tbaa !2
-  %19 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %20 = add i16 %19, 1
-  store i16 %20, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %21 = call cc1000 addrspace(1) ptr @llrm.qb.B$INKY()
-  %22 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %21, ptr @$string9)
-  %23 = icmp sgt i16 %22, 0
-  br i1 %23, label %b17, label %b19
-
-b16:
-  ret void
-
-b17:
-  ret void
-
-b19:
-  %24 = add i16 %16, 1
-  br label %b12
-}
-
-define cc1000 void @PLASMA(ptr %0) addrspace(1) {
-b1:
-  %1 = alloca i16
-  %2 = alloca [22 x i8]
-  %3 = alloca [18 x i8]
-  %4 = alloca [18 x i8]
-  %5 = alloca [18 x i8]
-  store i16 0, ptr %1
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 22, i1 false)
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 18, i1 false)
-  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 18, i1 false)
-  call void @llvm.memset.p0.i16(ptr %5, i8 0, i16 18, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 320, i16 2, i16 257, ptr %5)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 320, i16 2, i16 257, ptr %4)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 512, i16 2, i16 257, ptr %3)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 128, i16 0, i16 128, i16 2, i16 258, ptr %2)
-  store i16 -24576, ptr @b$seg, !tbaa !2
-  %6 = getelementptr i8, ptr %3, i16 2
-  %7 = load i16, ptr %6, !tbaa !2
-  %8 = inttoptr i16 %7 to ptr addrspace(2)
-  %9 = addrspacecast ptr addrspace(2) %8 to ptr addrspace(1)
-  %10 = load float, ptr @$float10, !tbaa !2
-  br label %b2
-
-b2:
-  %11 = phi i16 [ 0, %b1 ], [ %22, %b5 ]
-  %12 = icmp sle i16 %11, 512
-  br i1 %12, label %b5, label %b6
-
-b5:
-  %13 = shl i16 %11, 1
-  %14 = getelementptr i8, ptr addrspace(1) %9, i16 %13
-  %15 = sitofp i16 %11 to float
-  %16 = fmul float %15, %10
-  %17 = fdiv float %16, 2.560000e+02
-  %18 = call float @llvm.sin.f32(float %17)
-  %19 = fmul float %18, 3.200000e+01
-  %20 = fadd float %19, 3.200000e+01
-  %21 = call i16 @llvm.lrint.i16.f32(float %20)
-  store i16 %21, ptr addrspace(1) %14, !tbaa !4
-  %22 = add i16 %11, 1
-  br label %b2
-
-b6:
-  store i16 1, ptr %1, !tbaa !2
-  %23 = load i16, ptr %0
-  %24 = getelementptr i8, ptr %5, i16 2
-  %25 = getelementptr i8, ptr %2, i16 2
-  %26 = getelementptr i8, ptr %4, i16 2
-  br label %b8
-
-b8:
-  %27 = load i16, ptr %1, !tbaa !2
-  %28 = icmp sle i16 %27, %23
-  br i1 %28, label %b10, label %b11
-
-b10:
-  %29 = load i16, ptr %24, !tbaa !2
-  %30 = inttoptr i16 %29 to ptr addrspace(2)
-  %31 = addrspacecast ptr addrspace(2) %30 to ptr addrspace(1)
-  %32 = load i16, ptr %6, !tbaa !2
-  %33 = inttoptr i16 %32 to ptr addrspace(2)
-  %34 = addrspacecast ptr addrspace(2) %33 to ptr addrspace(1)
-  %35 = mul i16 %27, 7
-  %36 = add i16 %35, 3
-  br label %b12
-
-b11:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %2)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %3)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %5)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %4)
-  ret void
-
-b12:
-  %37 = phi i16 [ %36, %b10 ], [ %53, %b15 ]
-  %38 = phi i16 [ 0, %b10 ], [ %52, %b15 ]
-  %39 = icmp sle i16 %38, 320
-  br i1 %39, label %b15, label %b16
-
-b15:
-  %40 = shl i16 %38, 1
-  %41 = getelementptr i8, ptr addrspace(1) %31, i16 %40
-  %42 = add i16 %38, %27
-  %43 = and i16 %42, 511
-  %44 = shl i16 %43, 1
-  %45 = getelementptr i8, ptr addrspace(1) %34, i16 %44
-  %46 = load i16, ptr addrspace(1) %45, !tbaa !4
-  %47 = and i16 %37, 511
-  %48 = shl i16 %47, 1
-  %49 = getelementptr i8, ptr addrspace(1) %34, i16 %48
-  %50 = load i16, ptr addrspace(1) %49, !tbaa !4
-  %51 = add i16 %46, %50
-  store i16 %51, ptr addrspace(1) %41, !tbaa !4
-  %52 = add i16 %38, 1
-  %53 = add i16 %37, 3
-  br label %b12
-
-b16:
-  %54 = load i16, ptr %1, !tbaa !2
-  %55 = mul i16 %54, 5
-  %56 = load i16, ptr %6, !tbaa !2
-  %57 = inttoptr i16 %56 to ptr addrspace(2)
-  %58 = addrspacecast ptr addrspace(2) %57 to ptr addrspace(1)
-  %59 = mul i16 %54, 11
-  %60 = load i16, ptr %25, !tbaa !2
-  %61 = inttoptr i16 %60 to ptr addrspace(2)
-  %62 = addrspacecast ptr addrspace(2) %61 to ptr addrspace(1)
-  %63 = load i16, ptr %24, !tbaa !2
-  %64 = inttoptr i16 %63 to ptr addrspace(2)
-  %65 = addrspacecast ptr addrspace(2) %64 to ptr addrspace(1)
-  %66 = add i16 %59, 1943
-  br label %b17
-
-b17:
-  %67 = phi i16 [ %66, %b16 ], [ %108, %b26 ]
-  %68 = phi i16 [ %55, %b16 ], [ %107, %b26 ]
-  %69 = phi i16 [ 0, %b16 ], [ %106, %b26 ]
-  %70 = icmp sle i16 %69, 128
-  br i1 %70, label %b20, label %b21
-
-b20:
-  %71 = and i16 %68, 511
-  %72 = shl i16 %71, 1
-  %73 = getelementptr i8, ptr addrspace(1) %58, i16 %72
-  %74 = load i16, ptr addrspace(1) %73, !tbaa !4
-  %75 = and i16 %67, 511
-  %76 = shl i16 %75, 1
-  %77 = getelementptr i8, ptr addrspace(1) %58, i16 %76
-  %78 = load i16, ptr addrspace(1) %77, !tbaa !4
-  %79 = add i16 %74, %78
-  %80 = mul i16 %69, 129
-  %81 = shl i16 %80, 1
-  br label %b22
-
-b21:
-  %82 = load i16, ptr %24, !tbaa !2
-  %83 = inttoptr i16 %82 to ptr addrspace(2)
-  %84 = addrspacecast ptr addrspace(2) %83 to ptr addrspace(1)
-  %85 = load i16, ptr %1, !tbaa !2
-  %86 = mul i16 %85, 7
-  %87 = load i16, ptr %6, !tbaa !2
-  %88 = inttoptr i16 %87 to ptr addrspace(2)
-  %89 = addrspacecast ptr addrspace(2) %88 to ptr addrspace(1)
-  %90 = load i16, ptr %26, !tbaa !2
-  %91 = inttoptr i16 %90 to ptr addrspace(2)
-  %92 = addrspacecast ptr addrspace(2) %91 to ptr addrspace(1)
-  %93 = mul i16 %85, 5
-  %94 = shl i16 %85, 1
-  %95 = add i16 %94, 371
-  br label %b27
-
-b22:
-  %96 = phi i16 [ %81, %b20 ], [ %105, %b25 ]
-  %97 = phi i16 [ 0, %b20 ], [ %104, %b25 ]
-  %98 = icmp sle i16 %97, 128
-  br i1 %98, label %b25, label %b26
-
-b25:
-  %99 = getelementptr i8, ptr addrspace(1) %62, i16 %96
-  %100 = shl i16 %97, 1
-  %101 = getelementptr i8, ptr addrspace(1) %65, i16 %100
-  %102 = load i16, ptr addrspace(1) %101, !tbaa !4
-  %103 = add i16 %102, %79
-  store i16 %103, ptr addrspace(1) %99, !tbaa !4
-  %104 = add i16 %97, 1
-  %105 = add i16 %96, 2
-  br label %b22
-
-b26:
-  %106 = add i16 %69, 1
-  %107 = add i16 %68, 7
-  %108 = add i16 %67, 14
-  br label %b17
-
-b27:
-  %109 = phi i16 [ %95, %b21 ], [ %141, %b30 ]
-  %110 = phi i16 [ %93, %b21 ], [ %140, %b30 ]
-  %111 = phi i16 [ 0, %b21 ], [ %139, %b30 ]
-  %112 = icmp sle i16 %111, 320
-  br i1 %112, label %b30, label %b31
-
-b30:
-  %113 = shl i16 %111, 1
-  %114 = getelementptr i8, ptr addrspace(1) %84, i16 %113
-  %115 = mul i16 %111, 11
-  %116 = add i16 %115, %86
-  %117 = and i16 %116, 511
-  %118 = shl i16 %117, 1
-  %119 = getelementptr i8, ptr addrspace(1) %89, i16 %118
-  %120 = load i16, ptr addrspace(1) %119, !tbaa !4
-  %121 = mul i16 %111, 3
-  %122 = add i16 %121, %86
-  %123 = add i16 %122, 3
-  %124 = and i16 %123, 511
-  %125 = shl i16 %124, 1
-  %126 = getelementptr i8, ptr addrspace(1) %89, i16 %125
-  %127 = load i16, ptr addrspace(1) %126, !tbaa !4
-  %128 = add i16 %120, %127
-  store i16 %128, ptr addrspace(1) %114, !tbaa !4
-  %129 = getelementptr i8, ptr addrspace(1) %92, i16 %113
-  %130 = and i16 %110, 511
-  %131 = shl i16 %130, 1
-  %132 = getelementptr i8, ptr addrspace(1) %89, i16 %131
-  %133 = load i16, ptr addrspace(1) %132, !tbaa !4
-  %134 = and i16 %109, 511
-  %135 = shl i16 %134, 1
-  %136 = getelementptr i8, ptr addrspace(1) %89, i16 %135
-  %137 = load i16, ptr addrspace(1) %136, !tbaa !4
-  %138 = add i16 %133, %137
-  store i16 %138, ptr addrspace(1) %129, !tbaa !4
-  %139 = add i16 %111, 1
-  %140 = add i16 %110, 4
-  %141 = add i16 %109, 9
-  br label %b27
-
-b31:
-  br label %b32
-
-b32:
-  %142 = phi i16 [ 0, %b31 ], [ %187, %b41 ]
-  %143 = phi i16 [ 0, %b31 ], [ %219, %b41 ]
-  %144 = icmp sle i16 %143, 199
-  br i1 %144, label %b35, label %b36
-
-b35:
-  %145 = mul i16 %143, 11
-  %146 = load i16, ptr %1, !tbaa !2
-  %147 = mul i16 %146, 6
-  %148 = add i16 %145, %147
-  %149 = and i16 %148, 511
-  %150 = shl i16 %149, 1
-  %151 = load i16, ptr %6, !tbaa !2
-  %152 = inttoptr i16 %151 to ptr addrspace(2)
-  %153 = addrspacecast ptr addrspace(2) %152 to ptr addrspace(1)
-  %154 = getelementptr i8, ptr addrspace(1) %153, i16 %150
-  %155 = load i16, ptr addrspace(1) %154, !tbaa !4
-  %156 = mul i16 %143, 14
-  %157 = mul i16 %146, 11
-  %158 = add i16 %156, %157
-  %159 = add i16 %158, 1943
-  %160 = and i16 %159, 511
-  %161 = shl i16 %160, 1
-  %162 = getelementptr i8, ptr addrspace(1) %153, i16 %161
-  %163 = load i16, ptr addrspace(1) %162, !tbaa !4
-  %164 = add i16 %155, %163
-  %165 = mul i16 %143, 9
-  %166 = shl i16 %146, 2
-  %167 = add i16 %165, %166
-  %168 = and i16 %167, 511
-  %169 = shl i16 %168, 1
-  %170 = getelementptr i8, ptr addrspace(1) %153, i16 %169
-  %171 = load i16, ptr addrspace(1) %170, !tbaa !4
-  %172 = mul i16 %143, 17
-  %173 = mul i16 %146, 23
-  %174 = add i16 %172, %173
-  %175 = add i16 %174, 1943
-  %176 = and i16 %175, 511
-  %177 = shl i16 %176, 1
-  %178 = getelementptr i8, ptr addrspace(1) %153, i16 %177
-  %179 = load i16, ptr addrspace(1) %178, !tbaa !4
-  %180 = add i16 %171, %179
-  br label %b37
-
-b36:
-  call cc1000 addrspace(1) void @UPDPALPLASMA(ptr %1)
-  %181 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %182 = add i16 %181, 1
-  store i16 %182, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %183 = call cc1000 addrspace(1) ptr @llrm.qb.B$INKY()
-  %184 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %183, ptr @$string11)
-  %185 = icmp sgt i16 %184, 0
-  br i1 %185, label %b42, label %b44
-
-b37:
-  %186 = phi i16 [ 0, %b35 ], [ %218, %b40 ]
-  %187 = phi i16 [ %142, %b35 ], [ %217, %b40 ]
-  %188 = icmp sle i16 %186, 319
-  br i1 %188, label %b40, label %b41
-
-b40:
-  %189 = shl i16 %186, 1
-  %190 = load i16, ptr %24, !tbaa !2
-  %191 = inttoptr i16 %190 to ptr addrspace(2)
-  %192 = addrspacecast ptr addrspace(2) %191 to ptr addrspace(1)
-  %193 = getelementptr i8, ptr addrspace(1) %192, i16 %189
-  %194 = load i16, ptr addrspace(1) %193, !tbaa !4
-  %195 = add i16 %194, %164
-  %196 = and i16 %195, 127
-  %197 = load i16, ptr %26, !tbaa !2
-  %198 = inttoptr i16 %197 to ptr addrspace(2)
-  %199 = addrspacecast ptr addrspace(2) %198 to ptr addrspace(1)
-  %200 = getelementptr i8, ptr addrspace(1) %199, i16 %189
-  %201 = load i16, ptr addrspace(1) %200, !tbaa !4
-  %202 = add i16 %201, %180
-  %203 = and i16 %202, 127
-  %204 = mul i16 %203, 129
-  %205 = add i16 %204, %196
-  %206 = shl i16 %205, 1
-  %207 = load i16, ptr %25, !tbaa !2
-  %208 = inttoptr i16 %207 to ptr addrspace(2)
-  %209 = addrspacecast ptr addrspace(2) %208 to ptr addrspace(1)
-  %210 = getelementptr i8, ptr addrspace(1) %209, i16 %206
-  %211 = load i16, ptr addrspace(1) %210, !tbaa !4
-  %212 = trunc i16 %211 to i8
-  %213 = load i16, ptr @b$seg, !tbaa !2
-  %214 = inttoptr i16 %213 to ptr addrspace(2)
-  %215 = addrspacecast ptr addrspace(2) %214 to ptr addrspace(1)
-  %216 = getelementptr i8, ptr addrspace(1) %215, i16 %187
-  store i8 %212, ptr addrspace(1) %216
-  %217 = add i16 %187, 1
-  %218 = add i16 %186, 1
-  br label %b37
-
-b41:
-  %219 = add i16 %143, 1
-  br label %b32
-
-b42:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %2)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %3)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %5)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %4)
-  ret void
-
-b44:
-  %220 = load i16, ptr %1, !tbaa !2
-  %221 = add i16 %220, 1
-  store i16 %221, ptr %1, !tbaa !2
-  br label %b8
-}
-
-define cc1000 void @RENDER(ptr %0, ptr %1, ptr %2, ptr %3) addrspace(1) {
-b1:
-  %4 = alloca [22 x i8]
-  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 22, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 160, i16 0, i16 100, i16 2, i16 258, ptr %4)
-  %5 = load i16, ptr %3
-  %6 = load i16, ptr %1
-  %7 = sub i16 %5, %6
-  %8 = load i16, ptr %2
-  %9 = load i16, ptr %0
-  %10 = sub i16 %8, %9
-  %11 = sext i16 %7 to i32
-  %12 = sdiv i32 %11, 100
-  %13 = trunc i32 %12 to i16
-  %14 = sext i16 %10 to i32
-  %15 = sdiv i32 %14, 160
-  %16 = trunc i32 %15 to i16
-  %17 = srem i32 %14, 160
-  %18 = trunc i32 %17 to i16
-  %19 = srem i32 %11, 100
-  %20 = trunc i32 %19 to i16
-  %21 = getelementptr i8, ptr %4, i16 2
-  %22 = load i16, ptr %21, !tbaa !2
-  %23 = inttoptr i16 %22 to ptr addrspace(2)
-  %24 = addrspacecast ptr addrspace(2) %23 to ptr addrspace(1)
-  %25 = load i16, ptr @b$seg, !tbaa !2
-  %26 = inttoptr i16 %25 to ptr addrspace(2)
-  %27 = addrspacecast ptr addrspace(2) %26 to ptr addrspace(1)
-  br label %b2
-
-b2:
-  %28 = phi i16 [ %6, %b1 ], [ %61, %b17 ]
-  %29 = phi i16 [ 0, %b1 ], [ %62, %b17 ]
-  %30 = phi i16 [ 0, %b1 ], [ %60, %b17 ]
-  %31 = icmp sle i16 %29, 99
+  %25 = getelementptr i8, ptr addrspace(1) %24, i16 %20
+  %26 = getelementptr i8, ptr addrspace(1) %25, i16 %18
+  %27 = getelementptr i8, ptr addrspace(1) %26, i16 -320
+  %28 = load volatile i8, ptr addrspace(1) %27
+  %29 = getelementptr i8, ptr addrspace(1) %26, i16 320
+  %30 = load volatile i8, ptr addrspace(1) %29
+  %31 = icmp eq i8 %28, %30
   br i1 %31, label %b5, label %b6
 
 b5:
-  %32 = load i16, ptr %0
-  %33 = mul i16 %28, 320
-  %34 = mul i16 %29, 161
-  %35 = shl i16 %34, 1
+  %32 = getelementptr i8, ptr addrspace(1) %26, i16 -320
+  %33 = load volatile i8, ptr addrspace(1) %32
   br label %b7
 
 b6:
-  store i16 -24576, ptr @b$seg, !tbaa !2
-  br label %b18
+  %34 = load double, ptr %5
+  br label %b9
 
 b7:
-  %36 = phi i16 [ %35, %b5 ], [ %56, %b14 ]
-  %37 = phi i16 [ %32, %b5 ], [ %54, %b14 ]
-  %38 = phi i16 [ 0, %b5 ], [ %53, %b14 ]
-  %39 = phi i16 [ 0, %b5 ], [ %55, %b14 ]
-  %40 = icmp sle i16 %39, 159
-  br i1 %40, label %b10, label %b11
-
-b10:
-  %41 = getelementptr i8, ptr addrspace(1) %24, i16 %36
-  %42 = add i16 %37, %33
-  %43 = getelementptr i8, ptr addrspace(1) %27, i16 %42
-  %44 = load i8, ptr addrspace(1) %43
-  %45 = zext i8 %44 to i16
-  store i16 %45, ptr addrspace(1) %41, !tbaa !4
-  %46 = add i16 %38, %18
-  %47 = icmp sgt i16 %46, 160
-  br i1 %47, label %b12, label %b14
-
-b11:
-  %48 = add i16 %30, %20
-  %49 = icmp sgt i16 %48, 100
-  br i1 %49, label %b15, label %b17
-
-b12:
-  %50 = add i16 %46, -160
-  %51 = add i16 %37, 1
-  br label %b14
-
-b14:
-  %52 = phi i16 [ %51, %b12 ], [ %37, %b10 ]
-  %53 = phi i16 [ %50, %b12 ], [ %46, %b10 ]
-  %54 = add i16 %52, %16
-  %55 = add i16 %39, 1
-  %56 = add i16 %36, 2
-  br label %b7
-
-b15:
-  %57 = add i16 %48, -100
-  %58 = add i16 %28, 1
-  br label %b17
-
-b17:
-  %59 = phi i16 [ %58, %b15 ], [ %28, %b11 ]
-  %60 = phi i16 [ %57, %b15 ], [ %48, %b11 ]
-  %61 = add i16 %59, %13
-  %62 = add i16 %29, 1
-  br label %b2
-
-b18:
-  %63 = phi i16 [ 0, %b6 ], [ %92, %b27 ]
-  %64 = phi i16 [ 16080, %b6 ], [ %91, %b27 ]
-  %65 = icmp sle i16 %63, 99
-  br i1 %65, label %b21, label %b22
-
-b21:
-  %66 = mul i16 %63, 161
-  %67 = shl i16 %66, 1
-  br label %b23
-
-b22:
-  %68 = getelementptr i8, ptr @"FRACTAL2%", i16 2
-  %69 = load i16, ptr %68, !tbaa !2
-  %70 = inttoptr i16 %69 to ptr addrspace(2)
-  %71 = addrspacecast ptr addrspace(2) %70 to ptr addrspace(1)
-  %72 = getelementptr i8, ptr addrspace(1) %71, i16 0
-  %73 = addrspacecast ptr addrspace(1) %72 to ptr addrspace(2)
-  %74 = ptrtoint ptr addrspace(2) %73 to i16
-  store i16 %74, ptr @b$seg, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %4)
-  ret void
-
-b23:
-  %75 = phi i16 [ %67, %b21 ], [ %90, %b26 ]
-  %76 = phi i16 [ 0, %b21 ], [ %89, %b26 ]
-  %77 = icmp sle i16 %76, 159
-  br i1 %77, label %b26, label %b27
-
-b26:
-  %78 = add i16 %64, %76
-  %79 = load i16, ptr %21, !tbaa !2
-  %80 = inttoptr i16 %79 to ptr addrspace(2)
-  %81 = addrspacecast ptr addrspace(2) %80 to ptr addrspace(1)
-  %82 = getelementptr i8, ptr addrspace(1) %81, i16 %75
-  %83 = load i16, ptr addrspace(1) %82, !tbaa !4
-  %84 = trunc i16 %83 to i8
-  %85 = load i16, ptr @b$seg, !tbaa !2
-  %86 = inttoptr i16 %85 to ptr addrspace(2)
-  %87 = addrspacecast ptr addrspace(2) %86 to ptr addrspace(1)
-  %88 = getelementptr i8, ptr addrspace(1) %87, i16 %78
-  store i8 %84, ptr addrspace(1) %88
-  %89 = add i16 %76, 1
-  %90 = add i16 %75, 2
-  br label %b23
-
-b27:
-  %91 = add i16 %64, 320
-  %92 = add i16 %63, 1
-  br label %b18
-}
-
-define cc1000 void @SHADEBOBEFFECT(ptr %0) addrspace(1) {
-b1:
-  %1 = alloca [18 x i8]
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 18, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 4096, i16 2, i16 257, ptr %1)
-  store i16 -24576, ptr @b$seg, !tbaa !2
-  %2 = load i16, ptr %0
-  %3 = getelementptr i8, ptr %1, i16 2
-  %4 = getelementptr i8, ptr @"BOBSPRITE%", i16 2
-  br label %b2
-
-b2:
-  %5 = phi i16 [ 0, %b1 ], [ %123, %b9 ]
-  %6 = phi i16 [ 1, %b1 ], [ %129, %b9 ]
-  %7 = icmp sle i16 %6, %2
-  br i1 %7, label %b5, label %b6
-
-b5:
-  %8 = shl i16 %5, 1
-  %9 = load i16, ptr %3, !tbaa !2
-  %10 = inttoptr i16 %9 to ptr addrspace(2)
-  %11 = addrspacecast ptr addrspace(2) %10 to ptr addrspace(1)
-  %12 = getelementptr i8, ptr addrspace(1) %11, i16 %8
-  %13 = load i16, ptr addrspace(1) %12, !tbaa !4
-  br label %14
-
-14:
-  %15 = phi i16 [ %13, %b5 ], [ %24, %44 ]
-  %16 = phi i16 [ 0, %b5 ], [ %45, %44 ]
-  %17 = icmp sle i16 %16, 31
-  br i1 %17, label %18, label %46
-
-18:
-  %19 = add i16 %15, 288
-  %20 = mul i16 %16, 33
-  %21 = shl i16 %20, 1
-  br label %22
-
-22:
-  %23 = phi i16 [ %21, %18 ], [ %43, %27 ]
-  %24 = phi i16 [ %19, %18 ], [ %41, %27 ]
-  %25 = phi i16 [ 0, %18 ], [ %42, %27 ]
-  %26 = icmp sle i16 %25, 31
-  br i1 %26, label %27, label %44
-
-27:
-  %28 = load i16, ptr @b$seg
-  %29 = inttoptr i16 %28 to ptr addrspace(2)
-  %30 = addrspacecast ptr addrspace(2) %29 to ptr addrspace(1)
-  %31 = getelementptr i8, ptr addrspace(1) %30, i16 %24
-  %32 = load i8, ptr addrspace(1) %31
-  %33 = zext i8 %32 to i16
-  %34 = load i16, ptr %4
-  %35 = inttoptr i16 %34 to ptr addrspace(2)
-  %36 = addrspacecast ptr addrspace(2) %35 to ptr addrspace(1)
-  %37 = getelementptr i8, ptr addrspace(1) %36, i16 %23
-  %38 = load i16, ptr addrspace(1) %37
-  %39 = sub i16 %33, %38
-  %40 = trunc i16 %39 to i8
-  store i8 %40, ptr addrspace(1) %31
-  %41 = add i16 %24, 1
-  %42 = add i16 %25, 1
-  %43 = add i16 %23, 2
-  br label %22
-
-44:
-  %45 = add i16 %16, 1
-  br label %14
-
-46:
-  %47 = sitofp i16 %6 to float
-  %48 = fdiv float %47, 7.100000e+01
-  %49 = call float @llvm.sin.f32(float %48)
-  %50 = fdiv float %47, 4.700000e+01
-  %51 = fadd float %50, 2.000000e+00
-  %52 = call float @llvm.cos.f32(float %51)
-  %53 = fadd float %49, %52
-  %54 = fdiv float %47, 9.100000e+01
-  %55 = fadd float %54, 7.000000e+00
-  %56 = call float @llvm.cos.f32(float %55)
-  %57 = fadd float %53, %56
-  %58 = fmul float %57, 4.800000e+01
-  %59 = fadd float %58, 1.600000e+02
-  %60 = call i16 @llvm.lrint.i16.f32(float %59)
-  %61 = fdiv float %47, 4.900000e+01
-  %62 = fadd float %61, 3.000000e+00
-  %63 = call float @llvm.cos.f32(float %62)
-  %64 = fdiv float %47, 4.100000e+01
-  %65 = fadd float %64, 2.000000e+00
-  %66 = call float @llvm.sin.f32(float %65)
-  %67 = fadd float %63, %66
-  %68 = fdiv float %47, 9.700000e+01
-  %69 = fadd float %68, 7.000000e+00
-  %70 = call float @llvm.sin.f32(float %69)
-  %71 = fadd float %67, %70
-  %72 = fmul float %71, 2.800000e+01
-  %73 = fadd float %72, 1.000000e+02
-  %74 = call i16 @llvm.lrint.i16.f32(float %73)
-  %75 = load i16, ptr %3, !tbaa !2
-  %76 = inttoptr i16 %75 to ptr addrspace(2)
-  %77 = addrspacecast ptr addrspace(2) %76 to ptr addrspace(1)
-  %78 = getelementptr i8, ptr addrspace(1) %77, i16 %8
-  %79 = mul i16 %74, 320
-  %80 = add i16 %60, %79
-  store i16 %80, ptr addrspace(1) %78, !tbaa !4
-  %81 = load i16, ptr addrspace(1) %78, !tbaa !4
-  br label %82
-
-82:
-  %83 = phi i16 [ %81, %46 ], [ %92, %112 ]
-  %84 = phi i16 [ 0, %46 ], [ %113, %112 ]
-  %85 = icmp sle i16 %84, 31
-  br i1 %85, label %86, label %114
-
-86:
-  %87 = add i16 %83, 288
-  %88 = mul i16 %84, 33
-  %89 = shl i16 %88, 1
-  br label %90
-
-90:
-  %91 = phi i16 [ %89, %86 ], [ %111, %95 ]
-  %92 = phi i16 [ %87, %86 ], [ %109, %95 ]
-  %93 = phi i16 [ 0, %86 ], [ %110, %95 ]
-  %94 = icmp sle i16 %93, 31
-  br i1 %94, label %95, label %112
-
-95:
-  %96 = load i16, ptr @b$seg
-  %97 = inttoptr i16 %96 to ptr addrspace(2)
-  %98 = addrspacecast ptr addrspace(2) %97 to ptr addrspace(1)
-  %99 = getelementptr i8, ptr addrspace(1) %98, i16 %92
-  %100 = load i8, ptr addrspace(1) %99
-  %101 = zext i8 %100 to i16
-  %102 = load i16, ptr %4
-  %103 = inttoptr i16 %102 to ptr addrspace(2)
-  %104 = addrspacecast ptr addrspace(2) %103 to ptr addrspace(1)
-  %105 = getelementptr i8, ptr addrspace(1) %104, i16 %91
-  %106 = load i16, ptr addrspace(1) %105
-  %107 = add i16 %101, %106
-  %108 = trunc i16 %107 to i8
-  store i8 %108, ptr addrspace(1) %99
-  %109 = add i16 %92, 1
-  %110 = add i16 %93, 1
-  %111 = add i16 %91, 2
-  br label %90
-
-112:
-  %113 = add i16 %84, 1
-  br label %82
-
-114:
-  %115 = sext i16 %6 to i32
-  %116 = sdiv i32 %115, 2
-  %117 = trunc i32 %116 to i16
-  %118 = add i16 %117, 1
-  %119 = add i16 %5, 1
-  %120 = sext i16 %119 to i32
-  %121 = sext i16 %118 to i32
-  %122 = srem i32 %120, %121
-  %123 = trunc i32 %122 to i16
-  %124 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %125 = add i16 %124, 1
-  store i16 %125, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %126 = call cc1000 addrspace(1) ptr @llrm.qb.B$INKY()
-  %127 = call cc1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %126, ptr @$string12)
-  %128 = icmp sgt i16 %127, 0
-  br i1 %128, label %b7, label %b9
-
-b6:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %1)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %1)
-  ret void
-
-b7:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %1)
-  ret void
+  %35 = phi i8 [ %33, %b5 ], [ %tmp, %b10 ]
+  store volatile i8 %35, ptr addrspace(1) %26
+  %exitcond = icmp eq i16 %20, 319
+  br i1 %exitcond, label %b11, label %b13
 
 b9:
-  %129 = add i16 %6, 1
-  br label %b2
-}
+  %36 = phi i16 [ 0, %b6 ], [ %50, %b9 ]
+  %37 = phi double [ 0.000000e+00, %b6 ], [ %49, %b9 ]
+  %38 = phi double [ 0.000000e+00, %b6 ], [ %47, %b9 ]
+  %39 = fmul double %37, %37
+  %40 = fmul double %38, %38
+  %41 = fsub double %39, %40
+  %42 = fpround double %41 to double
+  %43 = fmul double %37, %38
+  %44 = fpround double %43 to double
+  %45 = fadd double %44, %44
+  %46 = fadd double %21, %45
+  %47 = fpround double %46 to double
+  %48 = fadd double %19, %42
+  %49 = fpround double %48 to double
+  %50 = add i16 %36, 1
+  %51 = fmul double %49, %49
+  %52 = fmul double %47, %47
+  %53 = fadd double %51, %52
+  %54 = fcmp oge double %53, %34
+  %55 = sext i1 %54 to i16
+  %56 = icmp eq i16 %36, 254
+  %57 = sext i1 %56 to i16
+  %58 = or i16 %55, %57
+  %59 = icmp eq i16 %58, 0
+  br i1 %59, label %b9, label %b10
 
-define cc1000 void @UNDRAWBOB(ptr %0) addrspace(1) {
-b1:
-  %1 = getelementptr i8, ptr @"BOBSPRITE%", i16 2
-  br label %b2
-
-b2:
-  %2 = phi i16 [ 0, %b1 ], [ %29, %b11 ]
-  %3 = icmp sle i16 %2, 31
-  br i1 %3, label %b5, label %b6
-
-b5:
-  %4 = load i16, ptr %0
-  %5 = add i16 %4, 288
-  store i16 %5, ptr %0
-  %6 = mul i16 %2, 33
-  %7 = shl i16 %6, 1
+b10:
+  %tmp = trunc i16 %50 to i8
   br label %b7
 
-b6:
+b11:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %6)
+  ret void
+
+b13:
+  %60 = add nuw nsw i16 %20, 1
+  %61 = fadd double %19, %11
+  %62 = fpround double %61 to double
+  %63 = fadd double %21, %16
+  %64 = fpround double %63 to double
+  br label %b3
+}
+
+define cc 1000 void @FRACTALEFFECT(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = alloca double
+  %2 = alloca double
+  %3 = alloca double
+  %4 = alloca double
+  %5 = alloca double
+  %6 = alloca double
+  %7 = alloca double
+  %8 = alloca i16
+  %9 = alloca i16
+  %10 = alloca i16
+  %11 = alloca i16
+  %12 = alloca i16
+  %13 = alloca i16
+  %14 = alloca i16
+  %15 = alloca i16
+  %16 = alloca [22 x i8]
+  call void @llvm.memset.p0.i16(ptr align 2 %16, i8 0, i16 22, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 160, i16 0, i16 100, i16 2, i16 258, ptr nonnull %16)
+  %17 = load i16, ptr %0
+  %18 = icmp slt i16 %17, 1
+  br i1 %18, label %common.ret, label %19
+
+19:
+  br label %b5
+
+b5:
+  %20 = phi i16 [ %66, %b37 ], [ -100, %19 ]
+  %21 = phi double [ %65, %b37 ], [ 1.000000e+00, %19 ]
+  %22 = phi i16 [ %139, %b37 ], [ 1, %19 ]
+  %23 = add i16 %20, 1
+  %24 = add i16 %20, 2
+  %25 = add i16 %20, 3
+  %26 = sitofp i16 %20 to double
+  %27 = fdiv double %26, %21
+  %28 = fadd double %27, 0xBFE4322522DA415E
+  %29 = fpround double %28 to double
+  store double %29, ptr %1, !tbaa !2
+  %30 = sitofp i16 %23 to double
+  %31 = fdiv double %30, %21
+  %32 = fadd double %31, 0xBFE4322522DA415E
+  %33 = fpround double %32 to double
+  store double %33, ptr %2, !tbaa !2
+  %34 = sitofp i16 %24 to double
+  %35 = fdiv double %34, %21
+  %36 = fadd double %35, 0xBFE4322522DA415E
+  %37 = fpround double %36 to double
+  store double %37, ptr %3, !tbaa !2
+  %38 = sitofp i16 %25 to double
+  %39 = fdiv double %38, %21
+  %40 = fadd double %39, 0xBFE4322522DA415E
+  %41 = fpround double %40 to double
+  store double %41, ptr %4, !tbaa !2
+  %42 = fdiv double 1.600000e+02, %21
+  %43 = fsub double 0xBFE27D77FB73608E, %42
+  %44 = fpround double %43 to double
+  store double %44, ptr %5, !tbaa !2
+  %45 = fadd double %42, 0xBFE27D77FB73608E
+  %46 = fpround double %45 to double
+  store double %46, ptr %6, !tbaa !2
+  %47 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"FRACTAL1%", i16 2), !tbaa !2
+  %48 = inttoptr i16 %47 to ptr addrspace(2)
+  %49 = addrspacecast ptr addrspace(2) %48 to ptr addrspace(1)
+  %50 = addrspacecast ptr addrspace(1) %49 to ptr addrspace(2)
+  %51 = ptrtoint ptr addrspace(2) %50 to i16
+  store i16 %51, ptr @b$seg, !tbaa !2
+  store double 4.000000e+00, ptr %7, !tbaa !2
+  %52 = add i16 %20, 100
+  store i16 %52, ptr %8, !tbaa !2
+  call cc 1000 addrspace(1) void @FRACLINE(ptr nonnull %8, ptr nonnull %1, ptr nonnull %1, ptr nonnull %5, ptr nonnull %6, ptr nonnull %7)
+  %53 = add i16 %20, 102
+  store i16 %53, ptr %9, !tbaa !2
+  call cc 1000 addrspace(1) void @FRACLINE(ptr nonnull %9, ptr nonnull %3, ptr nonnull %3, ptr nonnull %5, ptr nonnull %6, ptr nonnull %7)
+  %54 = add i16 %20, 101
+  store i16 %54, ptr %10, !tbaa !2
+  call cc 1000 addrspace(1) void @FRACLINE2(ptr nonnull %10, ptr nonnull %2, ptr nonnull %2, ptr nonnull %5, ptr nonnull %6, ptr nonnull %7)
+  %55 = add i16 %20, 103
+  store i16 %55, ptr %11, !tbaa !2
+  call cc 1000 addrspace(1) void @FRACLINE2(ptr nonnull %11, ptr nonnull %4, ptr nonnull %4, ptr nonnull %5, ptr nonnull %6, ptr nonnull %7)
+  %56 = add i16 %20, 4
+  %57 = icmp sgt i16 %56, 99
+  br i1 %57, label %b7, label %b9
+
+common.ret:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %16)
   ret void
 
 b7:
-  %8 = phi i16 [ %7, %b5 ], [ %28, %b10 ]
-  %9 = phi i16 [ 0, %b5 ], [ %27, %b10 ]
-  %10 = icmp sle i16 %9, 31
-  br i1 %10, label %b10, label %b11
+  %58 = fmul double %21, 2.000000e+00
+  %59 = fpround double %58 to double
+  %60 = getelementptr i8, ptr %16, i16 2
+  %61 = load i16, ptr %60, !tbaa !2
+  %62 = inttoptr i16 %61 to ptr addrspace(2)
+  %63 = addrspacecast ptr addrspace(2) %62 to ptr addrspace(1)
+  %64 = load i16, ptr @b$seg, !tbaa !2
+  br label %b13
+
+b9:
+  %65 = phi double [ %21, %b5 ], [ %59, %b34 ]
+  %66 = phi i16 [ %56, %b5 ], [ -100, %b34 ]
+  %67 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"FRACTAL2%", i16 2), !tbaa !2
+  %68 = inttoptr i16 %67 to ptr addrspace(2)
+  %69 = addrspacecast ptr addrspace(2) %68 to ptr addrspace(1)
+  %70 = addrspacecast ptr addrspace(1) %69 to ptr addrspace(2)
+  %71 = ptrtoint ptr addrspace(2) %70 to i16
+  store i16 %71, ptr @b$seg, !tbaa !2
+  %72 = urem i16 %22, 50
+  %73 = uitofp nneg i16 %72 to float
+  %74 = fmul float %73, 0x3FF99999A0000000
+  %75 = call i16 @llvm.lrint.i16.f32(float %74)
+  store i16 %75, ptr %12, !tbaa !2
+  store i16 %72, ptr %13, !tbaa !2
+  %76 = fsub float 3.200000e+02, %74
+  %77 = call i16 @llvm.lrint.i16.f32(float %76)
+  store i16 %77, ptr %14, !tbaa !2
+  %78 = sub nuw nsw i16 200, %72
+  store i16 %78, ptr %15, !tbaa !2
+  call cc 1000 addrspace(1) void @RENDER(ptr nonnull %12, ptr nonnull %13, ptr nonnull %14, ptr nonnull %15)
+  %79 = call cc 1000 addrspace(1) ptr @llrm.qb.B$INKY()
+  %80 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %79, ptr @$string8)
+  %81 = icmp sgt i16 %80, 0
+  br i1 %81, label %common.ret, label %b37
+
+b13:
+  %82 = phi ptr addrspace(1) [ %101, %b19 ], [ %63, %b7 ]
+  %83 = phi i16 [ 16080, %b7 ], [ %98, %b19 ]
+  %84 = phi i16 [ 0, %b7 ], [ %100, %b19 ]
+  %85 = add i16 %83, 160
+  br label %b18
+
+b14:
+  %86 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"FRACTAL2%", i16 2), !tbaa !2
+  %87 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"FRACTAL1%", i16 2), !tbaa !2
+  br label %b23
+
+b18:
+  %88 = phi i16 [ %99, %b18 ], [ -320, %b13 ]
+  %89 = phi i16 [ %98, %b18 ], [ %85, %b13 ]
+  %90 = inttoptr i16 %64 to ptr addrspace(2)
+  %91 = addrspacecast ptr addrspace(2) %90 to ptr addrspace(1)
+  %92 = getelementptr i8, ptr addrspace(1) %82, i16 %88
+  %93 = getelementptr i8, ptr addrspace(1) %92, i16 320
+  %94 = getelementptr i8, ptr addrspace(1) %91, i16 %89
+  %95 = getelementptr i8, ptr addrspace(1) %94, i16 -160
+  %96 = load volatile i8, ptr addrspace(1) %95
+  %97 = zext i8 %96 to i16
+  store i16 %97, ptr addrspace(1) %93, !tbaa !8
+  %98 = add i16 %89, 1
+  %99 = add nsw i16 %88, 2
+  %exitcond3 = icmp eq i16 %99, 0
+  br i1 %exitcond3, label %b19, label %b18
+
+b19:
+  %100 = add nuw nsw i16 %84, 1
+  %exitcond4 = icmp eq i16 %100, 100
+  %101 = getelementptr i8, ptr addrspace(1) %82, i16 322
+  br i1 %exitcond4, label %b14, label %b13
+
+b23:
+  %102 = phi i16 [ %112, %b23 ], [ 0, %b14 ]
+  %103 = phi i16 [ %111, %b23 ], [ 32001, %b14 ]
+  %104 = inttoptr i16 %87 to ptr addrspace(2)
+  %105 = inttoptr i16 %86 to ptr addrspace(2)
+  %106 = addrspacecast ptr addrspace(2) %104 to ptr addrspace(1)
+  %107 = addrspacecast ptr addrspace(2) %105 to ptr addrspace(1)
+  %108 = getelementptr i8, ptr addrspace(1) %107, i16 %102
+  %109 = getelementptr i8, ptr addrspace(1) %106, i16 %102
+  %110 = load i16, ptr addrspace(1) %109, !tbaa !10
+  store i16 %110, ptr addrspace(1) %108, !tbaa !12
+  store i16 0, ptr addrspace(1) %109, !tbaa !10
+  %111 = add nsw i16 %103, -1
+  %112 = add nuw i16 %102, 2
+  %exitcond2 = icmp eq i16 %111, 0
+  br i1 %exitcond2, label %113, label %b23
+
+113:
+  br label %b28
+
+b28:
+  %114 = phi i16 [ 0, %113 ], [ %136, %b34 ]
+  %115 = phi i16 [ 0, %113 ], [ %135, %b34 ]
+  %116 = phi i16 [ %134, %b34 ], [ 0, %113 ]
+  br label %b33
+
+b33:
+  %117 = phi i16 [ %133, %b33 ], [ -320, %b28 ]
+  %118 = getelementptr i8, ptr %16, i16 2
+  %119 = load i16, ptr %118, !tbaa !2
+  %120 = inttoptr i16 %119 to ptr addrspace(2)
+  %121 = addrspacecast ptr addrspace(2) %120 to ptr addrspace(1)
+  %122 = getelementptr i8, ptr addrspace(1) %121, i16 %115
+  %123 = getelementptr i8, ptr addrspace(1) %122, i16 %117
+  %124 = getelementptr i8, ptr addrspace(1) %123, i16 320
+  %125 = load i16, ptr addrspace(1) %124, !tbaa !8
+  %126 = trunc i16 %125 to i8
+  %127 = load i16, ptr @b$seg, !tbaa !2
+  %128 = inttoptr i16 %127 to ptr addrspace(2)
+  %129 = addrspacecast ptr addrspace(2) %128 to ptr addrspace(1)
+  %130 = getelementptr i8, ptr addrspace(1) %129, i16 %114
+  %131 = getelementptr i8, ptr addrspace(1) %130, i16 %117
+  %132 = getelementptr i8, ptr addrspace(1) %131, i16 320
+  store volatile i8 %126, ptr addrspace(1) %132
+  %133 = add nsw i16 %117, 2
+  %exitcond = icmp eq i16 %133, 0
+  br i1 %exitcond, label %b34, label %b33
+
+b34:
+  %134 = add nuw nsw i16 %116, 1
+  %exitcond1 = icmp eq i16 %134, 100
+  %135 = add nuw nsw i16 %115, 322
+  %136 = add nuw i16 %114, 640
+  br i1 %exitcond1, label %b9, label %b28
+
+b37:
+  %137 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %138 = add i16 %137, 1
+  store i16 %138, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %139 = add nuw i16 %22, 1
+  %140 = icmp eq i16 %22, %17
+  br i1 %140, label %common.ret, label %b5
+}
+
+define cc 1000 void @OHCANADA(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = alloca i16
+  br label %b5
+
+b5:
+  %2 = phi i16 [ 0, %b1 ], [ %3, %b5 ]
+  %tmp1 = trunc i16 %2 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp1) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  %3 = add nuw nsw i16 %2, 1
+  %exitcond2 = icmp eq i16 %3, 256
+  br i1 %exitcond2, label %b6, label %b5
+
+b6:
+  store i16 -24576, ptr @b$seg, !tbaa !2
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$BLOD(ptr @$string9, i16 0, i16 1)
+  br label %b10
 
 b10:
-  %11 = load i16, ptr %0
-  %12 = load i16, ptr @b$seg, !tbaa !2
-  %13 = inttoptr i16 %12 to ptr addrspace(2)
-  %14 = addrspacecast ptr addrspace(2) %13 to ptr addrspace(1)
-  %15 = getelementptr i8, ptr addrspace(1) %14, i16 %11
-  %16 = load i8, ptr addrspace(1) %15
-  %17 = zext i8 %16 to i16
-  %18 = load i16, ptr %1, !tbaa !2
-  %19 = inttoptr i16 %18 to ptr addrspace(2)
+  %4 = phi i16 [ 0, %b6 ], [ %7, %b10 ]
+  %tmp = trunc i16 %4 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 63) memory(inaccessiblemem: readwrite)
+  %5 = lshr i16 %4, 2
+  %6 = trunc nuw nsw i16 %5 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %6) memory(inaccessiblemem: readwrite)
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %6) memory(inaccessiblemem: readwrite)
+  %7 = add nuw nsw i16 %4, 1
+  %exitcond1 = icmp eq i16 %7, 256
+  br i1 %exitcond1, label %b11, label %b10
+
+b11:
+  store i16 256, ptr %1, !tbaa !2
+  call cc 1000 addrspace(1) void @UNWHITEFADE(ptr nonnull %1)
+  %8 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %9 = add i16 %8, 16
+  store i16 %9, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %10 = load i16, ptr %0
+  %11 = icmp slt i16 %10, 1
+  br i1 %11, label %common.ret, label %12
+
+12:
+  %13 = add i16 %10, -1
+  br label %b15
+
+b15:
+  %14 = phi i16 [ %13, %12 ], [ %21, %b15 ]
+  %15 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %16 = add i16 %15, 1
+  store i16 %16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %17 = tail call cc 1000 addrspace(1) ptr @llrm.qb.B$INKY()
+  %18 = tail call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %17, ptr @$string10)
+  %19 = icmp sgt i16 %18, 0
+  %20 = icmp eq i16 %14, 0
+  %or.cond = select i1 %19, i1 true, i1 %20
+  %21 = add i16 %14, -1
+  br i1 %or.cond, label %common.ret, label %b15
+
+common.ret:
+  ret void
+}
+
+define cc 1000 void @PLASMA(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = alloca i16
+  %2 = alloca [76 x i8]
+  %3 = getelementptr inbounds nuw i8, ptr %2, i16 18
+  %4 = getelementptr inbounds nuw i8, ptr %2, i16 36
+  %5 = getelementptr inbounds nuw i8, ptr %2, i16 38
+  %6 = getelementptr inbounds nuw i8, ptr %2, i16 54
+  call void @llvm.memset.p0.i16(ptr align 2 %2, i8 0, i16 76, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 320, i16 2, i16 257, ptr nonnull %2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 320, i16 2, i16 257, ptr nonnull %3)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 512, i16 2, i16 257, ptr nonnull %4)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 128, i16 0, i16 128, i16 2, i16 258, ptr nonnull %6)
+  store i16 -24576, ptr @b$seg, !tbaa !2
+  %7 = load i16, ptr %5, !tbaa !2
+  br label %b5
+
+b5:
+  %8 = phi i16 [ %28, %b8 ], [ -513, %b1 ]
+  %9 = phi i16 [ %27, %b8 ], [ -1026, %b1 ]
+  %10 = add i16 %8, 513
+  %11 = uitofp nneg i16 %10 to float
+  %12 = fmul float %11, 0x40091EB860000000
+  %13 = fmul float %12, 3.906250e-03
+  %14 = call float @llvm.fabs.f32(float %13)
+  %15 = fcmp ogt float %14, 0x41E0000000000000
+  br i1 %15, label %b7, label %b8
+
+b6:
+  store i16 1, ptr %1, !tbaa !2
+  %16 = load i16, ptr %0
+  %17 = icmp slt i16 %16, 1
+  br i1 %17, label %common.ret, label %18
+
+18:
+  br label %b12
+
+b7:
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b8:
+  %19 = inttoptr i16 %7 to ptr addrspace(2)
   %20 = addrspacecast ptr addrspace(2) %19 to ptr addrspace(1)
-  %21 = getelementptr i8, ptr addrspace(1) %20, i16 %8
-  %22 = load i16, ptr addrspace(1) %21, !tbaa !4
-  %23 = sub i16 %17, %22
-  %24 = trunc i16 %23 to i8
-  store i8 %24, ptr addrspace(1) %15
-  %25 = load i16, ptr %0
-  %26 = add i16 %25, 1
-  store i16 %26, ptr %0
-  %27 = add i16 %9, 1
-  %28 = add i16 %8, 2
-  br label %b7
+  %21 = getelementptr i8, ptr addrspace(1) %20, i16 %9
+  %22 = getelementptr i8, ptr addrspace(1) %21, i16 1026
+  %23 = call float @llvm.sin.f32(float %13)
+  %24 = fmul float %23, 3.200000e+01
+  %25 = fadd float %24, 3.200000e+01
+  %26 = call i16 @llvm.lrint.i16.f32(float %25)
+  store i16 %26, ptr addrspace(1) %22, !tbaa !14
+  %27 = add nsw i16 %9, 2
+  %28 = add nsw i16 %8, 1
+  %exitcond7 = icmp eq i16 %27, 0
+  br i1 %exitcond7, label %b6, label %b5
 
-b11:
-  %29 = add i16 %2, 1
-  br label %b2
+b12:
+  %29 = phi i16 [ 2, %18 ], [ %218, %b46 ]
+  %30 = phi i16 [ 14, %18 ], [ %217, %b46 ]
+  %31 = phi i16 [ 20, %18 ], [ %216, %b46 ]
+  %32 = phi i16 [ 10, %18 ], [ %215, %b46 ]
+  %33 = phi i16 [ 746, %18 ], [ %214, %b46 ]
+  %34 = phi i16 [ %212, %b46 ], [ 1, %18 ]
+  %35 = getelementptr i8, ptr %2, i16 2
+  %36 = load i16, ptr %35, !tbaa !2
+  %37 = getelementptr i8, ptr %2, i16 38
+  %38 = load i16, ptr %37, !tbaa !2
+  br label %b17
+
+common.ret:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %6)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %4)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %3)
+  ret void
+
+b17:
+  %39 = phi i16 [ %55, %b17 ], [ %31, %b12 ]
+  %40 = phi i16 [ %54, %b17 ], [ 0, %b12 ]
+  %41 = inttoptr i16 %38 to ptr addrspace(2)
+  %42 = inttoptr i16 %36 to ptr addrspace(2)
+  %43 = addrspacecast ptr addrspace(2) %41 to ptr addrspace(1)
+  %44 = addrspacecast ptr addrspace(2) %42 to ptr addrspace(1)
+  %45 = getelementptr i8, ptr addrspace(1) %44, i16 %40
+  %46 = add i16 %29, %40
+  %47 = and i16 %46, 1022
+  %48 = getelementptr i8, ptr addrspace(1) %43, i16 %47
+  %49 = load i16, ptr addrspace(1) %48, !tbaa !14
+  %50 = and i16 %39, 1022
+  %51 = getelementptr i8, ptr addrspace(1) %43, i16 %50
+  %52 = load i16, ptr addrspace(1) %51, !tbaa !14
+  %53 = add i16 %52, %49
+  store i16 %53, ptr addrspace(1) %45, !tbaa !16
+  %54 = add nuw nsw i16 %40, 2
+  %55 = add i16 %39, 6
+  %exitcond5 = icmp eq i16 %54, 642
+  br i1 %exitcond5, label %b18, label %b17
+
+b18:
+  %56 = mul i16 %34, 5
+  %57 = getelementptr i8, ptr %2, i16 38
+  %58 = load i16, ptr %57, !tbaa !2
+  %59 = mul i16 %34, 11
+  %60 = getelementptr i8, ptr %2, i16 56
+  %61 = load i16, ptr %60, !tbaa !2
+  %62 = inttoptr i16 %61 to ptr addrspace(2)
+  %63 = addrspacecast ptr addrspace(2) %62 to ptr addrspace(1)
+  %64 = getelementptr i8, ptr %2, i16 2
+  %65 = load i16, ptr %64, !tbaa !2
+  br label %b22
+
+b22:
+  %66 = phi ptr addrspace(1) [ %101, %b28 ], [ %63, %b18 ]
+  %67 = phi i16 [ 0, %b18 ], [ %100, %b28 ]
+  %68 = inttoptr i16 %58 to ptr addrspace(2)
+  %69 = addrspacecast ptr addrspace(2) %68 to ptr addrspace(1)
+  %70 = mul nuw nsw i16 %67, 7
+  %71 = add i16 %70, %56
+  %72 = shl i16 %71, 1
+  %73 = and i16 %72, 1022
+  %74 = getelementptr i8, ptr addrspace(1) %69, i16 %73
+  %75 = load i16, ptr addrspace(1) %74, !tbaa !14
+  %76 = mul nuw nsw i16 %67, 14
+  %77 = add i16 %76, %59
+  %78 = shl i16 %77, 1
+  %79 = add i16 %78, 814
+  %80 = and i16 %79, 1022
+  %81 = getelementptr i8, ptr addrspace(1) %69, i16 %80
+  %82 = load i16, ptr addrspace(1) %81, !tbaa !14
+  %83 = add i16 %82, %75
+  br label %b27
+
+b23:
+  %84 = getelementptr i8, ptr %2, i16 2
+  %85 = load i16, ptr %84, !tbaa !2
+  %86 = getelementptr i8, ptr %2, i16 38
+  %87 = load i16, ptr %86, !tbaa !2
+  %88 = getelementptr i8, ptr %2, i16 20
+  %89 = load i16, ptr %88, !tbaa !2
+  br label %b32
+
+b27:
+  %90 = phi i16 [ %99, %b27 ], [ -258, %b22 ]
+  %91 = inttoptr i16 %65 to ptr addrspace(2)
+  %92 = addrspacecast ptr addrspace(2) %91 to ptr addrspace(1)
+  %93 = getelementptr i8, ptr addrspace(1) %66, i16 %90
+  %94 = getelementptr i8, ptr addrspace(1) %93, i16 258
+  %95 = getelementptr i8, ptr addrspace(1) %92, i16 %90
+  %96 = getelementptr i8, ptr addrspace(1) %95, i16 258
+  %97 = load i16, ptr addrspace(1) %96, !tbaa !16
+  %98 = add i16 %83, %97
+  store i16 %98, ptr addrspace(1) %94, !tbaa !18
+  %99 = add nsw i16 %90, 2
+  %exitcond3 = icmp eq i16 %99, 0
+  br i1 %exitcond3, label %b28, label %b27
+
+b28:
+  %100 = add nuw nsw i16 %67, 1
+  %exitcond4 = icmp eq i16 %100, 129
+  %101 = getelementptr i8, ptr addrspace(1) %66, i16 258
+  br i1 %exitcond4, label %b23, label %b22
+
+b32:
+  %102 = phi i16 [ %133, %b32 ], [ %30, %b23 ]
+  %103 = phi i16 [ %132, %b32 ], [ %31, %b23 ]
+  %104 = phi i16 [ %131, %b32 ], [ %32, %b23 ]
+  %105 = phi i16 [ %130, %b32 ], [ %33, %b23 ]
+  %106 = phi i16 [ %129, %b32 ], [ 0, %b23 ]
+  %107 = inttoptr i16 %89 to ptr addrspace(2)
+  %108 = inttoptr i16 %87 to ptr addrspace(2)
+  %109 = inttoptr i16 %85 to ptr addrspace(2)
+  %110 = addrspacecast ptr addrspace(2) %107 to ptr addrspace(1)
+  %111 = addrspacecast ptr addrspace(2) %108 to ptr addrspace(1)
+  %112 = addrspacecast ptr addrspace(2) %109 to ptr addrspace(1)
+  %113 = getelementptr i8, ptr addrspace(1) %112, i16 %106
+  %114 = and i16 %102, 1022
+  %115 = getelementptr i8, ptr addrspace(1) %111, i16 %114
+  %116 = load i16, ptr addrspace(1) %115, !tbaa !14
+  %117 = and i16 %103, 1022
+  %118 = getelementptr i8, ptr addrspace(1) %111, i16 %117
+  %119 = load i16, ptr addrspace(1) %118, !tbaa !14
+  %120 = add i16 %119, %116
+  store i16 %120, ptr addrspace(1) %113, !tbaa !16
+  %121 = getelementptr i8, ptr addrspace(1) %110, i16 %106
+  %122 = and i16 %104, 1022
+  %123 = getelementptr i8, ptr addrspace(1) %111, i16 %122
+  %124 = load i16, ptr addrspace(1) %123, !tbaa !14
+  %125 = and i16 %105, 1022
+  %126 = getelementptr i8, ptr addrspace(1) %111, i16 %125
+  %127 = load i16, ptr addrspace(1) %126, !tbaa !14
+  %128 = add i16 %127, %124
+  store i16 %128, ptr addrspace(1) %121, !tbaa !20
+  %129 = add nuw nsw i16 %106, 2
+  %130 = add i16 %105, 18
+  %131 = add i16 %104, 8
+  %132 = add i16 %103, 6
+  %133 = add i16 %102, 22
+  %exitcond2 = icmp eq i16 %129, 642
+  br i1 %exitcond2, label %b33, label %b32
+
+b33:
+  %134 = mul i16 %34, 6
+  %135 = getelementptr i8, ptr %2, i16 38
+  %136 = load i16, ptr %135, !tbaa !2
+  %137 = shl i16 %34, 3
+  %138 = mul i16 %34, 23
+  %139 = getelementptr i8, ptr %2, i16 2
+  %140 = load i16, ptr %139, !tbaa !2
+  %141 = getelementptr i8, ptr %2, i16 20
+  %142 = load i16, ptr %141, !tbaa !2
+  %143 = getelementptr i8, ptr %2, i16 56
+  %144 = load i16, ptr %143, !tbaa !2
+  %145 = load i16, ptr @b$seg, !tbaa !2
+  br label %b37
+
+b37:
+  %146 = phi i16 [ 0, %b33 ], [ %209, %b43 ]
+  %147 = phi i16 [ 0, %b33 ], [ %211, %b43 ]
+  %148 = inttoptr i16 %136 to ptr addrspace(2)
+  %149 = addrspacecast ptr addrspace(2) %148 to ptr addrspace(1)
+  %150 = mul nuw nsw i16 %147, 11
+  %151 = add i16 %150, %134
+  %152 = shl i16 %151, 1
+  %153 = and i16 %152, 1022
+  %154 = getelementptr i8, ptr addrspace(1) %149, i16 %153
+  %155 = load i16, ptr addrspace(1) %154, !tbaa !14
+  %156 = mul nuw nsw i16 %147, 14
+  %157 = add i16 %156, %59
+  %158 = shl i16 %157, 1
+  %159 = add i16 %158, 814
+  %160 = and i16 %159, 1022
+  %161 = getelementptr i8, ptr addrspace(1) %149, i16 %160
+  %162 = load i16, ptr addrspace(1) %161, !tbaa !14
+  %163 = add i16 %162, %155
+  %164 = mul nuw nsw i16 %147, 18
+  %165 = add i16 %164, %137
+  %166 = and i16 %165, 1022
+  %167 = getelementptr i8, ptr addrspace(1) %149, i16 %166
+  %168 = load i16, ptr addrspace(1) %167, !tbaa !14
+  %169 = mul nuw nsw i16 %147, 17
+  %170 = add i16 %169, %138
+  %171 = shl i16 %170, 1
+  %172 = add i16 %171, 814
+  %173 = and i16 %172, 1022
+  %174 = getelementptr i8, ptr addrspace(1) %149, i16 %173
+  %175 = load i16, ptr addrspace(1) %174, !tbaa !14
+  %176 = add i16 %175, %168
+  br label %b42
+
+b38:
+  call cc 1000 addrspace(1) void @UPDPALPLASMA(ptr nonnull %1)
+  %177 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %178 = add i16 %177, 1
+  store i16 %178, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %179 = call cc 1000 addrspace(1) ptr @llrm.qb.B$INKY()
+  %180 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %179, ptr @$string13)
+  %181 = icmp sgt i16 %180, 0
+  br i1 %181, label %common.ret, label %b46
+
+b42:
+  %182 = phi i16 [ %210, %b42 ], [ -640, %b37 ]
+  %183 = phi i16 [ %146, %b37 ], [ %209, %b42 ]
+  %184 = inttoptr i16 %145 to ptr addrspace(2)
+  %185 = inttoptr i16 %144 to ptr addrspace(2)
+  %186 = inttoptr i16 %142 to ptr addrspace(2)
+  %187 = inttoptr i16 %140 to ptr addrspace(2)
+  %188 = addrspacecast ptr addrspace(2) %184 to ptr addrspace(1)
+  %189 = addrspacecast ptr addrspace(2) %185 to ptr addrspace(1)
+  %190 = addrspacecast ptr addrspace(2) %186 to ptr addrspace(1)
+  %191 = addrspacecast ptr addrspace(2) %187 to ptr addrspace(1)
+  %192 = getelementptr i8, ptr addrspace(1) %191, i16 %182
+  %193 = getelementptr i8, ptr addrspace(1) %192, i16 640
+  %194 = load i16, ptr addrspace(1) %193, !tbaa !16
+  %195 = add i16 %163, %194
+  %196 = and i16 %195, 127
+  %197 = getelementptr i8, ptr addrspace(1) %190, i16 %182
+  %198 = getelementptr i8, ptr addrspace(1) %197, i16 640
+  %199 = load i16, ptr addrspace(1) %198, !tbaa !20
+  %200 = add i16 %176, %199
+  %201 = and i16 %200, 127
+  %202 = mul nuw nsw i16 %201, 129
+  %203 = add nuw nsw i16 %202, %196
+  %204 = shl nuw i16 %203, 1
+  %205 = getelementptr i8, ptr addrspace(1) %189, i16 %204
+  %206 = load i16, ptr addrspace(1) %205, !tbaa !18
+  %207 = trunc i16 %206 to i8
+  %208 = getelementptr i8, ptr addrspace(1) %188, i16 %183
+  store volatile i8 %207, ptr addrspace(1) %208, !tbaa !4
+  %209 = add i16 %183, 1
+  %210 = add nsw i16 %182, 2
+  %exitcond = icmp eq i16 %210, 0
+  br i1 %exitcond, label %b43, label %b42
+
+b43:
+  %211 = add nuw nsw i16 %147, 1
+  %exitcond1 = icmp eq i16 %211, 200
+  br i1 %exitcond1, label %b38, label %b37
+
+b46:
+  %212 = add nuw i16 %34, 1
+  store i16 %212, ptr %1, !tbaa !2
+  %213 = icmp eq i16 %34, %16
+  %214 = add i16 %33, 4
+  %215 = add i16 %32, 10
+  %216 = add i16 %31, 14
+  %217 = add i16 %30, 14
+  %218 = add i16 %29, 2
+  br i1 %213, label %common.ret, label %b12
 }
 
-define cc1000 void @UNWHITEFADE(ptr %0) addrspace(1) {
+define cc 1000 void @RENDER(ptr dereferenceable(2) nocapture readonly %0, ptr dereferenceable(2) nocapture readonly %1, ptr dereferenceable(2) nocapture readonly %2, ptr dereferenceable(2) nocapture readonly %3) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
 b1:
-  %1 = alloca [22 x i8]
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 22, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 256, i16 0, i16 3, i16 2, i16 258, ptr %1)
-  %2 = getelementptr i8, ptr %1, i16 2
-  br label %b2
-
-b2:
-  %3 = phi i16 [ 0, %b1 ], [ %29, %b5 ]
-  %4 = icmp sle i16 %3, 255
-  br i1 %4, label %b5, label %b6
+  %4 = alloca [22 x i8]
+  %5 = getelementptr inbounds nuw i8, ptr %4, i16 2
+  call void @llvm.memset.p0.i16(ptr align 2 %4, i8 0, i16 22, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 160, i16 0, i16 100, i16 2, i16 258, ptr nonnull %4)
+  %6 = load i16, ptr %3
+  %7 = load i16, ptr %1
+  %8 = sub i16 %6, %7
+  %9 = load i16, ptr %2
+  %10 = load i16, ptr %0
+  %11 = sub i16 %9, %10
+  %12 = sdiv i16 %8, 100
+  %13 = sdiv i16 %11, 160
+  %14 = srem i16 %11, 160
+  %15 = srem i16 %8, 100
+  %16 = load i16, ptr %5, !tbaa !2
+  %17 = inttoptr i16 %16 to ptr addrspace(2)
+  %18 = addrspacecast ptr addrspace(2) %17 to ptr addrspace(1)
+  %19 = load i16, ptr @b$seg, !tbaa !2
+  br label %b5
 
 b5:
-  %5 = trunc i16 %3 to i8
-  call void @llrm.ia16.out.i8(i16 967, i8 %5)
-  %6 = shl i16 %3, 1
-  %7 = load i16, ptr %2, !tbaa !2
-  %8 = inttoptr i16 %7 to ptr addrspace(2)
-  %9 = addrspacecast ptr addrspace(2) %8 to ptr addrspace(1)
-  %10 = getelementptr i8, ptr addrspace(1) %9, i16 %6
-  %11 = call i8 @llrm.ia16.in.i8(i16 969)
-  %12 = zext i8 %11 to i16
-  store i16 %12, ptr addrspace(1) %10, !tbaa !4
-  %13 = add i16 %3, 257
-  %14 = shl i16 %13, 1
-  %15 = load i16, ptr %2, !tbaa !2
-  %16 = inttoptr i16 %15 to ptr addrspace(2)
-  %17 = addrspacecast ptr addrspace(2) %16 to ptr addrspace(1)
-  %18 = getelementptr i8, ptr addrspace(1) %17, i16 %14
-  %19 = call i8 @llrm.ia16.in.i8(i16 969)
-  %20 = zext i8 %19 to i16
-  store i16 %20, ptr addrspace(1) %18, !tbaa !4
-  %21 = add i16 %3, 514
-  %22 = shl i16 %21, 1
-  %23 = load i16, ptr %2, !tbaa !2
+  %20 = phi ptr addrspace(1) [ %55, %b11 ], [ %18, %b1 ]
+  %21 = phi i16 [ 0, %b1 ], [ %51, %b11 ]
+  %22 = phi i16 [ %7, %b1 ], [ %53, %b11 ]
+  %23 = phi i16 [ 0, %b1 ], [ %54, %b11 ]
+  %24 = inttoptr i16 %19 to ptr addrspace(2)
+  %25 = addrspacecast ptr addrspace(2) %24 to ptr addrspace(1)
+  %26 = load i16, ptr %0
+  %27 = mul i16 %22, 320
+  %invariant.gep = getelementptr i8, ptr addrspace(1) %25, i16 %27
+  br label %b10
+
+b6:
+  %28 = getelementptr i8, ptr %4, i16 2
+  %29 = load i16, ptr %28, !tbaa !2
+  %30 = inttoptr i16 %29 to ptr addrspace(2)
+  %31 = addrspacecast ptr addrspace(2) %30 to ptr addrspace(1)
+  br label %b21
+
+b10:
+  %32 = phi i16 [ %46, %b10 ], [ -320, %b5 ]
+  %33 = phi i16 [ %26, %b5 ], [ %45, %b10 ]
+  %34 = phi i16 [ 0, %b5 ], [ %42, %b10 ]
+  %35 = getelementptr i8, ptr addrspace(1) %20, i16 %32
+  %36 = getelementptr i8, ptr addrspace(1) %35, i16 320
+  %gep = getelementptr i8, ptr addrspace(1) %invariant.gep, i16 %33
+  %37 = load volatile i8, ptr addrspace(1) %gep
+  %38 = zext i8 %37 to i16
+  store i16 %38, ptr addrspace(1) %36, !tbaa !22
+  %39 = add i16 %34, %14
+  %40 = icmp sgt i16 %39, 160
+  %41 = add nsw i16 %39, -160
+  %42 = select i1 %40, i16 %41, i16 %39
+  %43 = zext i1 %40 to i16
+  %44 = add i16 %33, %13
+  %45 = add i16 %44, %43
+  %46 = add nsw i16 %32, 2
+  %exitcond2 = icmp eq i16 %46, 0
+  br i1 %exitcond2, label %b11, label %b10
+
+b11:
+  %47 = add i16 %21, %15
+  %48 = icmp sgt i16 %47, 100
+  %49 = add nsw i16 %47, -100
+  %50 = zext i1 %48 to i16
+  %51 = select i1 %48, i16 %49, i16 %47
+  %52 = add i16 %22, %12
+  %53 = add i16 %52, %50
+  %54 = add nuw nsw i16 %23, 1
+  %exitcond3 = icmp eq i16 %54, 100
+  %55 = getelementptr i8, ptr addrspace(1) %20, i16 322
+  br i1 %exitcond3, label %b6, label %b5
+
+b21:
+  %56 = phi ptr addrspace(1) [ %75, %b27 ], [ %31, %b6 ]
+  %57 = phi i16 [ 0, %b6 ], [ %74, %b27 ]
+  %58 = phi i16 [ 16080, %b6 ], [ %73, %b27 ]
+  br label %b26
+
+b22:
+  %59 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"FRACTAL2%", i16 2), !tbaa !2
+  %60 = inttoptr i16 %59 to ptr addrspace(2)
+  %61 = addrspacecast ptr addrspace(2) %60 to ptr addrspace(1)
+  %62 = addrspacecast ptr addrspace(1) %61 to ptr addrspace(2)
+  %63 = ptrtoint ptr addrspace(2) %62 to i16
+  store i16 %63, ptr @b$seg, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %4)
+  ret void
+
+b26:
+  %64 = phi ptr addrspace(1) [ %72, %b26 ], [ addrspacecast (ptr addrspace(2) inttoptr (i16 -24576 to ptr addrspace(2)) to ptr addrspace(1)), %b21 ]
+  %65 = phi i16 [ %71, %b26 ], [ -320, %b21 ]
+  %66 = getelementptr i8, ptr addrspace(1) %56, i16 %65
+  %67 = getelementptr i8, ptr addrspace(1) %66, i16 320
+  %68 = load i16, ptr addrspace(1) %67, !tbaa !22
+  %69 = trunc i16 %68 to i8
+  %70 = getelementptr i8, ptr addrspace(1) %64, i16 %58
+  store volatile i8 %69, ptr addrspace(1) %70, !tbaa !4
+  %71 = add nsw i16 %65, 2
+  %72 = getelementptr i8, ptr addrspace(1) %64, i16 1
+  %exitcond = icmp eq i16 %71, 0
+  br i1 %exitcond, label %b27, label %b26
+
+b27:
+  %73 = add nuw i16 %58, 320
+  %74 = add nuw nsw i16 %57, 1
+  %exitcond1 = icmp eq i16 %74, 100
+  %75 = getelementptr i8, ptr addrspace(1) %56, i16 322
+  br i1 %exitcond1, label %b22, label %b21
+}
+
+define cc 1000 void @SHADEBOBEFFECT(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = alloca [18 x i8]
+  call void @llvm.memset.p0.i16(ptr align 2 %1, i8 0, i16 18, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 4096, i16 2, i16 257, ptr nonnull %1)
+  store i16 -24576, ptr @b$seg, !tbaa !2
+  %2 = load i16, ptr %0
+  %3 = icmp slt i16 %2, 1
+  br i1 %3, label %b6, label %4
+
+4:
+  br label %5
+
+5:
+  %6 = phi i16 [ %127, %b25 ], [ 0, %4 ]
+  %7 = phi i16 [ %128, %b25 ], [ 1, %4 ]
+  %8 = shl i16 %6, 1
+  %9 = getelementptr i8, ptr %1, i16 2
+  %10 = load i16, ptr %9, !tbaa !2
+  %11 = inttoptr i16 %10 to ptr addrspace(2)
+  %12 = addrspacecast ptr addrspace(2) %11 to ptr addrspace(1)
+  %13 = getelementptr i8, ptr addrspace(1) %12, i16 %8
+  %14 = load i16, ptr addrspace(1) %13, !tbaa !24
+  br label %15
+
+15:
+  %16 = phi i16 [ %41, %39 ], [ 0, %5 ]
+  %17 = phi i16 [ %14, %5 ], [ %37, %39 ]
+  %18 = phi i16 [ 0, %5 ], [ %40, %39 ]
+  %19 = add i16 %17, 288
+  br label %20
+
+20:
+  %21 = phi i16 [ %38, %20 ], [ -64, %15 ]
+  %22 = phi i16 [ %19, %15 ], [ %37, %20 ]
+  %23 = load i16, ptr @b$seg, !tbaa !2
   %24 = inttoptr i16 %23 to ptr addrspace(2)
   %25 = addrspacecast ptr addrspace(2) %24 to ptr addrspace(1)
   %26 = getelementptr i8, ptr addrspace(1) %25, i16 %22
-  %27 = call i8 @llrm.ia16.in.i8(i16 969)
-  %28 = zext i8 %27 to i16
-  store i16 %28, ptr addrspace(1) %26, !tbaa !4
-  %29 = add i16 %3, 1
-  br label %b2
+  %27 = load volatile i8, ptr addrspace(1) %26
+  %28 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"BOBSPRITE%", i16 2), !tbaa !2
+  %29 = inttoptr i16 %28 to ptr addrspace(2)
+  %30 = addrspacecast ptr addrspace(2) %29 to ptr addrspace(1)
+  %31 = getelementptr i8, ptr addrspace(1) %30, i16 %16
+  %32 = getelementptr i8, ptr addrspace(1) %31, i16 %21
+  %33 = getelementptr i8, ptr addrspace(1) %32, i16 64
+  %34 = load i16, ptr addrspace(1) %33, !tbaa !6
+  %35 = trunc i16 %34 to i8
+  %36 = sub i8 %27, %35
+  store volatile i8 %36, ptr addrspace(1) %26
+  %37 = add i16 %22, 1
+  %38 = add nsw i16 %21, 2
+  %exitcond2 = icmp eq i16 %38, 0
+  br i1 %exitcond2, label %39, label %20
 
-b6:
-  %30 = load i16, ptr %0
-  br label %b7
+39:
+  %40 = add nuw nsw i16 %18, 1
+  %exitcond11 = icmp eq i16 %40, 32
+  %41 = add nuw nsw i16 %16, 66
+  br i1 %exitcond11, label %42, label %15
 
-b7:
-  %31 = phi i16 [ 0, %b6 ], [ %81, %b16 ]
-  %32 = icmp sle i16 %31, %30
-  br i1 %32, label %b10, label %b11
+42:
+  %43 = sitofp i16 %7 to float
+  %44 = fdiv float %43, 7.100000e+01
+  %45 = call float @llvm.fabs.f32(float %44)
+  %46 = fcmp ogt float %45, 0x41E0000000000000
+  br i1 %46, label %b7, label %b8
 
-b10:
-  %33 = load i16, ptr %0
-  %34 = sitofp i16 %31 to float
-  %35 = sitofp i16 %33 to float
-  %36 = fdiv float %34, %35
-  %37 = load i32, ptr @"BENCHFRAME&", !tbaa !2
-  store i32 %37, ptr @"BENCHFRAME&", !tbaa !2
-  store i32 %37, ptr @"BENCHFRAME&", !tbaa !2
-  %38 = fsub float 1.000000e+00, %36
-  %39 = fmul float 6.300000e+01, %38
-  br label %b12
-
-b11:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %1)
+common.ret:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %1)
   ret void
 
+b6:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %1)
+  br label %common.ret
+
+b7:
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b8:
+  %47 = fdiv float %43, 4.700000e+01
+  %48 = fadd float %47, 2.000000e+00
+  %49 = call float @llvm.fabs.f32(float %48)
+  %50 = fcmp ogt float %49, 0x41E0000000000000
+  br i1 %50, label %b9, label %b10
+
+b9:
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b10:
+  %51 = fdiv float %43, 9.100000e+01
+  %52 = fadd float %51, 7.000000e+00
+  %53 = call float @llvm.fabs.f32(float %52)
+  %54 = fcmp ogt float %53, 0x41E0000000000000
+  br i1 %54, label %b11, label %b12
+
+b11:
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
 b12:
-  %40 = phi i16 [ 0, %b10 ], [ %78, %b15 ]
-  %41 = icmp sle i16 %40, 255
-  br i1 %41, label %b15, label %b16
+  %55 = call float @llvm.sin.f32(float %44)
+  %56 = call float @llvm.cos.f32(float %48)
+  %57 = fadd float %55, %56
+  %58 = call float @llvm.cos.f32(float %52)
+  %59 = fadd float %58, %57
+  %60 = fmul float %59, 4.800000e+01
+  %61 = fadd float %60, 1.600000e+02
+  %62 = call i16 @llvm.lrint.i16.f32(float %61)
+  %63 = fdiv float %43, 4.900000e+01
+  %64 = fadd float %63, 3.000000e+00
+  %65 = call float @llvm.fabs.f32(float %64)
+  %66 = fcmp ogt float %65, 0x41E0000000000000
+  br i1 %66, label %b13, label %b14
+
+b13:
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b14:
+  %67 = fdiv float %43, 4.100000e+01
+  %68 = fadd float %67, 2.000000e+00
+  %69 = call float @llvm.fabs.f32(float %68)
+  %70 = fcmp ogt float %69, 0x41E0000000000000
+  br i1 %70, label %b15, label %b16
 
 b15:
-  %42 = trunc i16 %40 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %42)
-  %43 = shl i16 %40, 1
-  %44 = load i16, ptr %2, !tbaa !2
-  %45 = inttoptr i16 %44 to ptr addrspace(2)
-  %46 = addrspacecast ptr addrspace(2) %45 to ptr addrspace(1)
-  %47 = getelementptr i8, ptr addrspace(1) %46, i16 %43
-  %48 = load i16, ptr addrspace(1) %47, !tbaa !4
-  %49 = sitofp i16 %48 to float
-  %50 = fmul float %49, %36
-  %51 = fadd float %50, %39
-  %52 = call i16 @llvm.lrint.i16.f32(float %51)
-  %53 = trunc i16 %52 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %53)
-  %54 = add i16 %40, 257
-  %55 = shl i16 %54, 1
-  %56 = load i16, ptr %2, !tbaa !2
-  %57 = inttoptr i16 %56 to ptr addrspace(2)
-  %58 = addrspacecast ptr addrspace(2) %57 to ptr addrspace(1)
-  %59 = getelementptr i8, ptr addrspace(1) %58, i16 %55
-  %60 = load i16, ptr addrspace(1) %59, !tbaa !4
-  %61 = sitofp i16 %60 to float
-  %62 = fmul float %61, %36
-  %63 = fadd float %62, %39
-  %64 = call i16 @llvm.lrint.i16.f32(float %63)
-  %65 = trunc i16 %64 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %65)
-  %66 = add i16 %40, 514
-  %67 = shl i16 %66, 1
-  %68 = load i16, ptr %2, !tbaa !2
-  %69 = inttoptr i16 %68 to ptr addrspace(2)
-  %70 = addrspacecast ptr addrspace(2) %69 to ptr addrspace(1)
-  %71 = getelementptr i8, ptr addrspace(1) %70, i16 %67
-  %72 = load i16, ptr addrspace(1) %71, !tbaa !4
-  %73 = sitofp i16 %72 to float
-  %74 = fmul float %73, %36
-  %75 = fadd float %74, %39
-  %76 = call i16 @llvm.lrint.i16.f32(float %75)
-  %77 = trunc i16 %76 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %77)
-  %78 = add i16 %40, 1
-  br label %b12
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
 
 b16:
-  %79 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %80 = add i16 %79, 1
-  store i16 %80, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %81 = add i16 %31, 1
-  br label %b7
+  %71 = fdiv float %43, 9.700000e+01
+  %72 = fadd float %71, 7.000000e+00
+  %73 = call float @llvm.fabs.f32(float %72)
+  %74 = fcmp ogt float %73, 0x41E0000000000000
+  br i1 %74, label %b17, label %75
+
+b17:
+  call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+75:
+  %76 = call float @llvm.cos.f32(float %64)
+  %77 = call float @llvm.sin.f32(float %68)
+  %78 = fadd float %76, %77
+  %79 = call float @llvm.sin.f32(float %72)
+  %80 = fadd float %79, %78
+  %81 = fmul float %80, 2.800000e+01
+  %82 = fadd float %81, 1.000000e+02
+  %83 = call i16 @llvm.lrint.i16.f32(float %82)
+  %84 = getelementptr i8, ptr %1, i16 2
+  %85 = load i16, ptr %84, !tbaa !2
+  %86 = inttoptr i16 %85 to ptr addrspace(2)
+  %87 = addrspacecast ptr addrspace(2) %86 to ptr addrspace(1)
+  %88 = getelementptr i8, ptr addrspace(1) %87, i16 %8
+  %89 = mul i16 %83, 320
+  %90 = add i16 %89, %62
+  store i16 %90, ptr addrspace(1) %88, !tbaa !24
+  br label %91
+
+91:
+  %92 = phi i16 [ %117, %115 ], [ 0, %75 ]
+  %93 = phi i16 [ %90, %75 ], [ %113, %115 ]
+  %94 = phi i16 [ 0, %75 ], [ %116, %115 ]
+  %95 = add i16 %93, 288
+  br label %96
+
+96:
+  %97 = phi i16 [ %114, %96 ], [ -64, %91 ]
+  %98 = phi i16 [ %95, %91 ], [ %113, %96 ]
+  %99 = load i16, ptr @b$seg, !tbaa !2
+  %100 = inttoptr i16 %99 to ptr addrspace(2)
+  %101 = addrspacecast ptr addrspace(2) %100 to ptr addrspace(1)
+  %102 = getelementptr i8, ptr addrspace(1) %101, i16 %98
+  %103 = load volatile i8, ptr addrspace(1) %102
+  %104 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"BOBSPRITE%", i16 2), !tbaa !2
+  %105 = inttoptr i16 %104 to ptr addrspace(2)
+  %106 = addrspacecast ptr addrspace(2) %105 to ptr addrspace(1)
+  %107 = getelementptr i8, ptr addrspace(1) %106, i16 %92
+  %108 = getelementptr i8, ptr addrspace(1) %107, i16 %97
+  %109 = getelementptr i8, ptr addrspace(1) %108, i16 64
+  %110 = load i16, ptr addrspace(1) %109, !tbaa !6
+  %111 = trunc i16 %110 to i8
+  %112 = add i8 %103, %111
+  store volatile i8 %112, ptr addrspace(1) %102
+  %113 = add i16 %98, 1
+  %114 = add nsw i16 %97, 2
+  %exitcond = icmp eq i16 %114, 0
+  br i1 %exitcond, label %115, label %96
+
+115:
+  %116 = add nuw nsw i16 %94, 1
+  %exitcond1 = icmp eq i16 %116, 32
+  %117 = add nuw nsw i16 %92, 66
+  br i1 %exitcond1, label %118, label %91
+
+118:
+  %119 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %120 = add i16 %119, 1
+  store i16 %120, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %121 = call cc 1000 addrspace(1) ptr @llrm.qb.B$INKY()
+  %122 = call cc 1000 addrspace(1) i16 @llrm.qb.B$SCMP(ptr %121, ptr @$string14)
+  %123 = icmp sgt i16 %122, 0
+  br i1 %123, label %common.ret, label %b25
+
+b25:
+  %124 = lshr i16 %7, 1
+  %125 = add nuw nsw i16 %124, 1
+  %126 = add i16 %6, 1
+  %127 = srem i16 %126, %125
+  %128 = add nuw i16 %7, 1
+  %129 = icmp eq i16 %7, %2
+  br i1 %129, label %b6, label %5
 }
 
-define cc1000 void @UPDPALPLASMA(ptr %0) addrspace(1) {
+define cc 1000 void @UNDRAWBOB(ptr dereferenceable(2) nocapture %0) addrspace(1) "llrm-fp-eval"="x87-extended" nounwind nofree nosync norecurse willreturn {
 b1:
-  br label %b2
-
-b2:
-  %1 = phi i16 [ 0, %b1 ], [ %47, %b5 ]
-  %2 = icmp sle i16 %1, 255
-  br i1 %2, label %b5, label %b6
+  %1 = load i16, ptr %0
+  br label %b5
 
 b5:
-  %3 = trunc i16 %1 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %3)
-  %4 = load double, ptr @$float13, !tbaa !2
-  %5 = sitofp i16 %1 to double
-  %6 = fmul double %5, %4
-  %7 = fdiv double %6, 1.280000e+02
-  %8 = load i16, ptr %0
-  %9 = load float, ptr @$float14, !tbaa !2
-  %10 = sitofp i16 %8 to float
-  %11 = fmul float %10, %9
-  %12 = fpext float %11 to double
-  %13 = fadd double %7, %12
-  %14 = call double @llvm.cos.f64(double %13)
-  %15 = fmul double 3.100000e+01, %14
-  %16 = fsub double 3.200000e+01, %15
-  %17 = call i16 @llvm.lrint.i16.f64(double %16)
-  %18 = trunc i16 %17 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %18)
-  %19 = load double, ptr @$float13, !tbaa !2
-  %20 = fmul double %5, %19
-  %21 = fdiv double %20, 1.280000e+02
+  %2 = phi i16 [ %26, %b11 ], [ 0, %b1 ]
+  %3 = phi i16 [ %1, %b1 ], [ %23, %b11 ]
+  %4 = phi i16 [ 0, %b1 ], [ %25, %b11 ]
+  %5 = add i16 %3, 288
+  store i16 %5, ptr %0
+  br label %b10
+
+b6:
+  ret void
+
+b10:
+  %6 = phi i16 [ %24, %b10 ], [ -64, %b5 ]
+  %7 = phi i16 [ %5, %b5 ], [ %23, %b10 ]
+  %8 = load i16, ptr @b$seg, !tbaa !2
+  %9 = inttoptr i16 %8 to ptr addrspace(2)
+  %10 = addrspacecast ptr addrspace(2) %9 to ptr addrspace(1)
+  %11 = getelementptr i8, ptr addrspace(1) %10, i16 %7
+  %12 = load volatile i8, ptr addrspace(1) %11
+  %13 = load i16, ptr getelementptr inbounds nuw (i8, ptr @"BOBSPRITE%", i16 2), !tbaa !2
+  %14 = inttoptr i16 %13 to ptr addrspace(2)
+  %15 = addrspacecast ptr addrspace(2) %14 to ptr addrspace(1)
+  %16 = getelementptr i8, ptr addrspace(1) %15, i16 %2
+  %17 = getelementptr i8, ptr addrspace(1) %16, i16 %6
+  %18 = getelementptr i8, ptr addrspace(1) %17, i16 64
+  %19 = load i16, ptr addrspace(1) %18, !tbaa !6
+  %20 = trunc i16 %19 to i8
+  %21 = sub i8 %12, %20
+  store volatile i8 %21, ptr addrspace(1) %11
   %22 = load i16, ptr %0
-  %23 = load float, ptr @$float15, !tbaa !2
-  %24 = sitofp i16 %22 to float
-  %25 = fmul float %24, %23
-  %26 = fpext float %25 to double
-  %27 = fadd double %21, %26
-  %28 = call double @llvm.cos.f64(double %27)
-  %29 = fmul double 3.100000e+01, %28
-  %30 = fsub double 3.200000e+01, %29
-  %31 = call i16 @llvm.lrint.i16.f64(double %30)
-  %32 = trunc i16 %31 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %32)
-  %33 = load double, ptr @$float13, !tbaa !2
-  %34 = fmul double %5, %33
-  %35 = fdiv double %34, 6.400000e+01
-  %36 = load i16, ptr %0
-  %37 = load float, ptr @$float16, !tbaa !2
-  %38 = sitofp i16 %36 to float
-  %39 = fmul float %38, %37
-  %40 = fpext float %39 to double
-  %41 = fadd double %35, %40
-  %42 = call double @llvm.cos.f64(double %41)
-  %43 = fmul double 3.100000e+01, %42
-  %44 = fsub double 3.200000e+01, %43
-  %45 = call i16 @llvm.lrint.i16.f64(double %44)
-  %46 = trunc i16 %45 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %46)
-  %47 = add i16 %1, 1
-  br label %b2
-
-b6:
-  ret void
-}
-
-define cc1000 void @WHITEFADE(ptr %0) addrspace(1) {
-b1:
-  %1 = alloca [22 x i8]
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 22, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 256, i16 0, i16 3, i16 2, i16 258, ptr %1)
-  %2 = getelementptr i8, ptr %1, i16 2
-  br label %b2
-
-b2:
-  %3 = phi i16 [ 0, %b1 ], [ %29, %b5 ]
-  %4 = icmp sle i16 %3, 255
-  br i1 %4, label %b5, label %b6
-
-b5:
-  %5 = trunc i16 %3 to i8
-  call void @llrm.ia16.out.i8(i16 967, i8 %5)
-  %6 = shl i16 %3, 1
-  %7 = load i16, ptr %2, !tbaa !2
-  %8 = inttoptr i16 %7 to ptr addrspace(2)
-  %9 = addrspacecast ptr addrspace(2) %8 to ptr addrspace(1)
-  %10 = getelementptr i8, ptr addrspace(1) %9, i16 %6
-  %11 = call i8 @llrm.ia16.in.i8(i16 969)
-  %12 = zext i8 %11 to i16
-  store i16 %12, ptr addrspace(1) %10, !tbaa !4
-  %13 = add i16 %3, 257
-  %14 = shl i16 %13, 1
-  %15 = load i16, ptr %2, !tbaa !2
-  %16 = inttoptr i16 %15 to ptr addrspace(2)
-  %17 = addrspacecast ptr addrspace(2) %16 to ptr addrspace(1)
-  %18 = getelementptr i8, ptr addrspace(1) %17, i16 %14
-  %19 = call i8 @llrm.ia16.in.i8(i16 969)
-  %20 = zext i8 %19 to i16
-  store i16 %20, ptr addrspace(1) %18, !tbaa !4
-  %21 = add i16 %3, 514
-  %22 = shl i16 %21, 1
-  %23 = load i16, ptr %2, !tbaa !2
-  %24 = inttoptr i16 %23 to ptr addrspace(2)
-  %25 = addrspacecast ptr addrspace(2) %24 to ptr addrspace(1)
-  %26 = getelementptr i8, ptr addrspace(1) %25, i16 %22
-  %27 = call i8 @llrm.ia16.in.i8(i16 969)
-  %28 = zext i8 %27 to i16
-  store i16 %28, ptr addrspace(1) %26, !tbaa !4
-  %29 = add i16 %3, 1
-  br label %b2
-
-b6:
-  %30 = load i16, ptr %0
-  br label %b7
-
-b7:
-  %31 = phi i16 [ %30, %b6 ], [ %81, %b16 ]
-  %32 = icmp sge i16 %31, 0
-  br i1 %32, label %b10, label %b11
-
-b10:
-  %33 = load i16, ptr %0
-  %34 = sitofp i16 %31 to float
-  %35 = sitofp i16 %33 to float
-  %36 = fdiv float %34, %35
-  %37 = load i32, ptr @"BENCHFRAME&", !tbaa !2
-  store i32 %37, ptr @"BENCHFRAME&", !tbaa !2
-  store i32 %37, ptr @"BENCHFRAME&", !tbaa !2
-  %38 = fsub float 1.000000e+00, %36
-  %39 = fmul float 6.300000e+01, %38
-  br label %b12
+  %23 = add i16 %22, 1
+  store i16 %23, ptr %0
+  %24 = add nsw i16 %6, 2
+  %exitcond = icmp eq i16 %24, 0
+  br i1 %exitcond, label %b11, label %b10
 
 b11:
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %1)
-  ret void
-
-b12:
-  %40 = phi i16 [ 0, %b10 ], [ %78, %b15 ]
-  %41 = icmp sle i16 %40, 255
-  br i1 %41, label %b15, label %b16
-
-b15:
-  %42 = trunc i16 %40 to i8
-  call void @llrm.ia16.out.i8(i16 968, i8 %42)
-  %43 = shl i16 %40, 1
-  %44 = load i16, ptr %2, !tbaa !2
-  %45 = inttoptr i16 %44 to ptr addrspace(2)
-  %46 = addrspacecast ptr addrspace(2) %45 to ptr addrspace(1)
-  %47 = getelementptr i8, ptr addrspace(1) %46, i16 %43
-  %48 = load i16, ptr addrspace(1) %47, !tbaa !4
-  %49 = sitofp i16 %48 to float
-  %50 = fmul float %49, %36
-  %51 = fadd float %50, %39
-  %52 = call i16 @llvm.lrint.i16.f32(float %51)
-  %53 = trunc i16 %52 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %53)
-  %54 = add i16 %40, 257
-  %55 = shl i16 %54, 1
-  %56 = load i16, ptr %2, !tbaa !2
-  %57 = inttoptr i16 %56 to ptr addrspace(2)
-  %58 = addrspacecast ptr addrspace(2) %57 to ptr addrspace(1)
-  %59 = getelementptr i8, ptr addrspace(1) %58, i16 %55
-  %60 = load i16, ptr addrspace(1) %59, !tbaa !4
-  %61 = sitofp i16 %60 to float
-  %62 = fmul float %61, %36
-  %63 = fadd float %62, %39
-  %64 = call i16 @llvm.lrint.i16.f32(float %63)
-  %65 = trunc i16 %64 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %65)
-  %66 = add i16 %40, 514
-  %67 = shl i16 %66, 1
-  %68 = load i16, ptr %2, !tbaa !2
-  %69 = inttoptr i16 %68 to ptr addrspace(2)
-  %70 = addrspacecast ptr addrspace(2) %69 to ptr addrspace(1)
-  %71 = getelementptr i8, ptr addrspace(1) %70, i16 %67
-  %72 = load i16, ptr addrspace(1) %71, !tbaa !4
-  %73 = sitofp i16 %72 to float
-  %74 = fmul float %73, %36
-  %75 = fadd float %74, %39
-  %76 = call i16 @llvm.lrint.i16.f32(float %75)
-  %77 = trunc i16 %76 to i8
-  call void @llrm.ia16.out.i8(i16 969, i8 %77)
-  %78 = add i16 %40, 1
-  br label %b12
-
-b16:
-  %79 = load i16, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %80 = add i16 %79, 1
-  store i16 %80, ptr @"TOTALFRAMECOUNT%", !tbaa !2
-  %81 = add i16 %31, -1
-  br label %b7
+  %25 = add nuw nsw i16 %4, 1
+  %exitcond1 = icmp eq i16 %25, 32
+  %26 = add nuw nsw i16 %2, 66
+  br i1 %exitcond1, label %b6, label %b5
 }
 
-define cc1000 void @BENCHMARK(ptr %0) addrspace(1) {
+define cc 1000 void @UNWHITEFADE(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = alloca [22 x i8]
+  %2 = getelementptr inbounds nuw i8, ptr %1, i16 2
+  call void @llvm.memset.p0.i16(ptr align 2 %1, i8 0, i16 22, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 256, i16 0, i16 3, i16 2, i16 258, ptr nonnull %1)
+  %3 = load i16, ptr %2, !tbaa !2
+  %4 = inttoptr i16 %3 to ptr addrspace(2)
+  br label %b5
+
+b5:
+  %5 = phi i8 [ %21, %b5 ], [ 0, %b1 ]
+  %6 = phi i16 [ %20, %b5 ], [ -512, %b1 ]
+  %7 = addrspacecast ptr addrspace(2) %4 to ptr addrspace(1)
+  call void @llrm.ia16.out.i8(i16 967, i8 %5) memory(inaccessiblemem: readwrite)
+  %8 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %9 = zext i8 %8 to i16
+  %10 = getelementptr i8, ptr addrspace(1) %7, i16 %6
+  %11 = getelementptr i8, ptr addrspace(1) %10, i16 512
+  store i16 %9, ptr addrspace(1) %11, !tbaa !26
+  %12 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %13 = zext i8 %12 to i16
+  %14 = getelementptr i8, ptr addrspace(1) %7, i16 %6
+  %15 = getelementptr i8, ptr addrspace(1) %14, i16 1026
+  store i16 %13, ptr addrspace(1) %15, !tbaa !26
+  %16 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %17 = zext i8 %16 to i16
+  %18 = getelementptr i8, ptr addrspace(1) %7, i16 %6
+  %19 = getelementptr i8, ptr addrspace(1) %18, i16 1540
+  store i16 %17, ptr addrspace(1) %19, !tbaa !26
+  %20 = add nsw i16 %6, 2
+  %21 = add i8 %5, 1
+  %exitcond2 = icmp eq i16 %20, 0
+  br i1 %exitcond2, label %b6, label %b5
+
+b6:
+  %22 = load i16, ptr %0
+  %23 = icmp slt i16 %22, 0
+  br i1 %23, label %b11, label %24
+
+24:
+  %promoted = load i16, ptr @"TOTALFRAMECOUNT%", align 1
+  %25 = uitofp nneg i16 %22 to float
+  %26 = getelementptr i8, ptr %1, i16 2
+  %27 = load i16, ptr %26, !tbaa !2
+  %28 = inttoptr i16 %27 to ptr addrspace(2)
+  br label %b10
+
+b10:
+  %29 = phi i16 [ 0, %24 ], [ %66, %b16 ]
+  %30 = phi i16 [ %promoted, %24 ], [ %65, %b16 ]
+  %31 = sitofp i16 %29 to float
+  %32 = fdiv float %31, %25
+  %33 = fpround float %32 to float
+  %34 = fsub float 1.000000e+00, %33
+  %35 = fmul float %34, 6.300000e+01
+  br label %b15
+
+b11:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %1)
+  ret void
+
+b15:
+  %36 = phi i8 [ %64, %b15 ], [ 0, %b10 ]
+  %37 = phi i16 [ %63, %b15 ], [ -512, %b10 ]
+  %38 = addrspacecast ptr addrspace(2) %28 to ptr addrspace(1)
+  call void @llrm.ia16.out.i8(i16 968, i8 %36) memory(inaccessiblemem: readwrite)
+  %39 = getelementptr i8, ptr addrspace(1) %38, i16 %37
+  %40 = getelementptr i8, ptr addrspace(1) %39, i16 512
+  %41 = load i16, ptr addrspace(1) %40, !tbaa !26
+  %42 = sitofp i16 %41 to float
+  %43 = fmul float %33, %42
+  %44 = fadd float %35, %43
+  %45 = call i16 @llvm.lrint.i16.f32(float %44)
+  %46 = trunc i16 %45 to i8
+  call void @llrm.ia16.out.i8(i16 969, i8 %46) memory(inaccessiblemem: readwrite)
+  %47 = getelementptr i8, ptr addrspace(1) %38, i16 %37
+  %48 = getelementptr i8, ptr addrspace(1) %47, i16 1026
+  %49 = load i16, ptr addrspace(1) %48, !tbaa !26
+  %50 = sitofp i16 %49 to float
+  %51 = fmul float %33, %50
+  %52 = fadd float %35, %51
+  %53 = call i16 @llvm.lrint.i16.f32(float %52)
+  %54 = trunc i16 %53 to i8
+  call void @llrm.ia16.out.i8(i16 969, i8 %54) memory(inaccessiblemem: readwrite)
+  %55 = getelementptr i8, ptr addrspace(1) %38, i16 %37
+  %56 = getelementptr i8, ptr addrspace(1) %55, i16 1540
+  %57 = load i16, ptr addrspace(1) %56, !tbaa !26
+  %58 = sitofp i16 %57 to float
+  %59 = fmul float %33, %58
+  %60 = fadd float %35, %59
+  %61 = call i16 @llvm.lrint.i16.f32(float %60)
+  %62 = trunc i16 %61 to i8
+  call void @llrm.ia16.out.i8(i16 969, i8 %62) memory(inaccessiblemem: readwrite)
+  %63 = add nsw i16 %37, 2
+  %64 = add i8 %36, 1
+  %exitcond = icmp eq i16 %63, 0
+  br i1 %exitcond, label %b16, label %b15
+
+b16:
+  %65 = add i16 %30, 1
+  store i16 %65, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %66 = add nuw i16 %29, 1
+  %67 = icmp eq i16 %29, %22
+  br i1 %67, label %b11, label %b10
+}
+
+define cc 1000 void @UPDPALPLASMA(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = load i16, ptr %0
+  %2 = sitofp i16 %1 to float
+  %3 = fmul float %2, 0x3F5719F800000000
+  %4 = fpext float %3 to double
+  %5 = fmul float %2, 0x3F8CE07600000000
+  %6 = fpext float %5 to double
+  %7 = fmul float %2, 0x3F8BDA5120000000
+  %8 = fpext float %7 to double
+  br label %b5
+
+b5:
+  %9 = phi i16 [ 0, %b1 ], [ %38, %b12 ]
+  %tmp = trunc i16 %9 to i8
+  tail call void @llrm.ia16.out.i8(i16 968, i8 %tmp) memory(inaccessiblemem: readwrite)
+  %10 = uitofp nneg i16 %9 to double
+  %11 = fmul double %10, 0x400921FB54442D18
+  %12 = fmul double %11, 7.812500e-03
+  %13 = fadd double %12, %4
+  %14 = tail call double @llvm.fabs.f64(double %13)
+  %15 = fcmp ogt double %14, 0x41E0000000000000
+  br i1 %15, label %b7, label %b8
+
+b6:
+  ret void
+
+b7:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b8:
+  %16 = tail call double @llvm.cos.f64(double %13)
+  %17 = fmul double %16, 3.100000e+01
+  %18 = fsub double 3.200000e+01, %17
+  %19 = tail call i16 @llvm.lrint.i16.f64(double %18)
+  %20 = trunc i16 %19 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %20) memory(inaccessiblemem: readwrite)
+  %21 = fadd double %12, %6
+  %22 = tail call double @llvm.fabs.f64(double %21)
+  %23 = fcmp ogt double %22, 0x41E0000000000000
+  br i1 %23, label %b9, label %b10
+
+b9:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b10:
+  %24 = tail call double @llvm.cos.f64(double %21)
+  %25 = fmul double %24, 3.100000e+01
+  %26 = fsub double 3.200000e+01, %25
+  %27 = tail call i16 @llvm.lrint.i16.f64(double %26)
+  %28 = trunc i16 %27 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %28) memory(inaccessiblemem: readwrite)
+  %29 = fmul double %11, 1.562500e-02
+  %30 = fadd double %29, %8
+  %31 = tail call double @llvm.fabs.f64(double %30)
+  %32 = fcmp ogt double %31, 0x41E0000000000000
+  br i1 %32, label %b11, label %b12
+
+b11:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$SERR(i16 5) cold
+  unreachable
+
+b12:
+  %33 = tail call double @llvm.cos.f64(double %30)
+  %34 = fmul double %33, 3.100000e+01
+  %35 = fsub double 3.200000e+01, %34
+  %36 = tail call i16 @llvm.lrint.i16.f64(double %35)
+  %37 = trunc i16 %36 to i8
+  tail call void @llrm.ia16.out.i8(i16 969, i8 %37) memory(inaccessiblemem: readwrite)
+  %38 = add nuw nsw i16 %9, 1
+  %exitcond = icmp eq i16 %38, 256
+  br i1 %exitcond, label %b6, label %b5
+}
+
+define cc 1000 void @WHITEFADE(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
+b1:
+  %1 = alloca [22 x i8]
+  %2 = getelementptr inbounds nuw i8, ptr %1, i16 2
+  call void @llvm.memset.p0.i16(ptr align 2 %1, i8 0, i16 22, i1 false)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 256, i16 0, i16 3, i16 2, i16 258, ptr nonnull %1)
+  %3 = load i16, ptr %2, !tbaa !2
+  %4 = inttoptr i16 %3 to ptr addrspace(2)
+  br label %b5
+
+b5:
+  %5 = phi i8 [ %21, %b5 ], [ 0, %b1 ]
+  %6 = phi i16 [ %20, %b5 ], [ -512, %b1 ]
+  %7 = addrspacecast ptr addrspace(2) %4 to ptr addrspace(1)
+  call void @llrm.ia16.out.i8(i16 967, i8 %5) memory(inaccessiblemem: readwrite)
+  %8 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %9 = zext i8 %8 to i16
+  %10 = getelementptr i8, ptr addrspace(1) %7, i16 %6
+  %11 = getelementptr i8, ptr addrspace(1) %10, i16 512
+  store i16 %9, ptr addrspace(1) %11, !tbaa !28
+  %12 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %13 = zext i8 %12 to i16
+  %14 = getelementptr i8, ptr addrspace(1) %7, i16 %6
+  %15 = getelementptr i8, ptr addrspace(1) %14, i16 1026
+  store i16 %13, ptr addrspace(1) %15, !tbaa !28
+  %16 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %17 = zext i8 %16 to i16
+  %18 = getelementptr i8, ptr addrspace(1) %7, i16 %6
+  %19 = getelementptr i8, ptr addrspace(1) %18, i16 1540
+  store i16 %17, ptr addrspace(1) %19, !tbaa !28
+  %20 = add nsw i16 %6, 2
+  %21 = add i8 %5, 1
+  %exitcond1 = icmp eq i16 %20, 0
+  br i1 %exitcond1, label %b6, label %b5
+
+b6:
+  %22 = load i16, ptr %0
+  %23 = icmp sgt i16 %22, -1
+  br i1 %23, label %24, label %b11
+
+24:
+  %promoted = load i16, ptr @"TOTALFRAMECOUNT%", align 1
+  %25 = uitofp nneg i16 %22 to float
+  %26 = getelementptr i8, ptr %1, i16 2
+  %27 = load i16, ptr %26, !tbaa !2
+  %28 = inttoptr i16 %27 to ptr addrspace(2)
+  br label %b10
+
+b10:
+  %29 = phi i16 [ %22, %24 ], [ %66, %b16 ]
+  %30 = phi i16 [ %promoted, %24 ], [ %65, %b16 ]
+  %31 = uitofp nneg i16 %29 to float
+  %32 = fdiv float %31, %25
+  %33 = fpround float %32 to float
+  %34 = fsub float 1.000000e+00, %33
+  %35 = fmul float %34, 6.300000e+01
+  br label %b15
+
+b11:
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %1)
+  ret void
+
+b15:
+  %36 = phi i8 [ %64, %b15 ], [ 0, %b10 ]
+  %37 = phi i16 [ %63, %b15 ], [ -512, %b10 ]
+  %38 = addrspacecast ptr addrspace(2) %28 to ptr addrspace(1)
+  call void @llrm.ia16.out.i8(i16 968, i8 %36) memory(inaccessiblemem: readwrite)
+  %39 = getelementptr i8, ptr addrspace(1) %38, i16 %37
+  %40 = getelementptr i8, ptr addrspace(1) %39, i16 512
+  %41 = load i16, ptr addrspace(1) %40, !tbaa !28
+  %42 = sitofp i16 %41 to float
+  %43 = fmul float %33, %42
+  %44 = fadd float %35, %43
+  %45 = call i16 @llvm.lrint.i16.f32(float %44)
+  %46 = trunc i16 %45 to i8
+  call void @llrm.ia16.out.i8(i16 969, i8 %46) memory(inaccessiblemem: readwrite)
+  %47 = getelementptr i8, ptr addrspace(1) %38, i16 %37
+  %48 = getelementptr i8, ptr addrspace(1) %47, i16 1026
+  %49 = load i16, ptr addrspace(1) %48, !tbaa !28
+  %50 = sitofp i16 %49 to float
+  %51 = fmul float %33, %50
+  %52 = fadd float %35, %51
+  %53 = call i16 @llvm.lrint.i16.f32(float %52)
+  %54 = trunc i16 %53 to i8
+  call void @llrm.ia16.out.i8(i16 969, i8 %54) memory(inaccessiblemem: readwrite)
+  %55 = getelementptr i8, ptr addrspace(1) %38, i16 %37
+  %56 = getelementptr i8, ptr addrspace(1) %55, i16 1540
+  %57 = load i16, ptr addrspace(1) %56, !tbaa !28
+  %58 = sitofp i16 %57 to float
+  %59 = fmul float %33, %58
+  %60 = fadd float %35, %59
+  %61 = call i16 @llvm.lrint.i16.f32(float %60)
+  %62 = trunc i16 %61 to i8
+  call void @llrm.ia16.out.i8(i16 969, i8 %62) memory(inaccessiblemem: readwrite)
+  %63 = add nsw i16 %37, 2
+  %64 = add i8 %36, 1
+  %exitcond = icmp eq i16 %63, 0
+  br i1 %exitcond, label %b16, label %b15
+
+b16:
+  %65 = add i16 %30, 1
+  store i16 %65, ptr @"TOTALFRAMECOUNT%", !tbaa !2
+  %66 = add nsw i16 %29, -1
+  %67 = icmp eq i16 %29, 0
+  br i1 %67, label %b11, label %b10
+}
+
+define cc 1000 void @BENCHMARK(ptr dereferenceable(2) nocapture readonly %0) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca i32
   %2 = alloca i32
-  %3 = alloca [18 x i8]
-  %4 = alloca [18 x i8]
-  store i32 0, ptr %1
-  store i32 0, ptr %2
-  call void @llvm.memset.p0.i16(ptr %3, i8 0, i16 18, i1 false)
-  call void @llvm.memset.p0.i16(ptr %4, i8 0, i16 18, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 767, i16 2, i16 257, ptr %4)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 5, i16 4, i16 257, ptr %3)
-  call cc1000 addrspace(1) void @TSCSNAP(ptr %2, ptr %1)
+  %3 = alloca [36 x i8]
+  %4 = getelementptr inbounds nuw i8, ptr %3, i16 18
+  call void @llvm.memset.p0.i16(ptr align 2 %3, i8 0, i16 36, i1 false)
+  store i32 0, ptr %1, !tbaa !2
+  store i32 0, ptr %2, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 767, i16 2, i16 257, ptr nonnull %3)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 5, i16 4, i16 257, ptr nonnull %4)
+  call cc 1000 addrspace(1) void @TSCSNAP(ptr nonnull %1, ptr nonnull %2)
   store i16 -24576, ptr @b$seg, !tbaa !2
-  %5 = inttoptr i16 -24576 to ptr addrspace(2)
-  %6 = addrspacecast ptr addrspace(2) %5 to ptr addrspace(1)
-  br label %b2
-
-b2:
-  %7 = phi i32 [ 0, %b1 ], [ %19, %b5 ]
-  %8 = phi i32 [ 1, %b1 ], [ %16, %b5 ]
-  %9 = phi i32 [ 0, %b1 ], [ %18, %b5 ]
-  %10 = icmp sle i32 %7, 63999
-  br i1 %10, label %b5, label %b6
+  br label %b5
 
 b5:
-  %11 = trunc i32 %7 to i16
-  %12 = getelementptr i8, ptr addrspace(1) %6, i16 %11
-  %13 = load i8, ptr addrspace(1) %12
-  %14 = zext i8 %13 to i32
-  %15 = add i32 %8, %14
-  %16 = srem i32 %15, 65521
-  %17 = add i32 %9, %16
-  %18 = srem i32 %17, 65521
-  %19 = add i32 %7, 1
-  br label %b2
+  %5 = phi ptr addrspace(1) [ %16, %b5 ], [ addrspacecast (ptr addrspace(2) inttoptr (i16 -24576 to ptr addrspace(2)) to ptr addrspace(1)), %b1 ]
+  %6 = phi i32 [ %15, %b5 ], [ 64000, %b1 ]
+  %7 = phi i32 [ 1, %b1 ], [ %12, %b5 ]
+  %8 = phi i32 [ 0, %b1 ], [ %14, %b5 ]
+  %9 = load volatile i8, ptr addrspace(1) %5
+  %10 = zext i8 %9 to i32
+  %11 = add i32 %7, %10
+  %12 = srem i32 %11, 65521
+  %13 = add i32 %12, %8
+  %14 = srem i32 %13, 65521
+  %15 = add nsw i32 %6, -1
+  %16 = getelementptr i8, ptr addrspace(1) %5, i16 1
+  %exitcond1 = icmp eq i32 %15, 0
+  br i1 %exitcond1, label %b6, label %b5
 
 b6:
-  %20 = load i16, ptr %0
-  %21 = call cc1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %20)
-  %22 = call cc1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %21)
-  %23 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string17, ptr %22)
-  %24 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %23, ptr @$string18)
-  call cc1000 addrspace(1) void @llrm.qb.B$BSAV(ptr %24, i16 0, i16 -1536)
-  call cc1000 addrspace(1) void @llrm.qb.B$DSG0()
-  call void @llrm.ia16.out.i8(i16 967, i8 0)
-  %25 = getelementptr i8, ptr %4, i16 2
-  br label %b7
-
-b7:
-  %26 = phi i16 [ 0, %b6 ], [ %35, %b10 ]
-  %27 = icmp sle i16 %26, 767
-  br i1 %27, label %b10, label %b11
+  %17 = load i16, ptr %0
+  %18 = call cc 1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %17)
+  %19 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %18)
+  %20 = call cc 1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string20, ptr %19)
+  %21 = call cc 1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %20, ptr @$string21)
+  call cc 1000 addrspace(1) void @llrm.qb.B$BSAV(ptr %21, i16 0, i16 -1536)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DSG0()
+  call void @llrm.ia16.out.i8(i16 967, i8 0) memory(inaccessiblemem: readwrite)
+  %22 = getelementptr i8, ptr %3, i16 2
+  %23 = load i16, ptr %22, !tbaa !2
+  br label %b10
 
 b10:
-  %28 = shl i16 %26, 1
-  %29 = load i16, ptr %25, !tbaa !2
-  %30 = inttoptr i16 %29 to ptr addrspace(2)
-  %31 = addrspacecast ptr addrspace(2) %30 to ptr addrspace(1)
-  %32 = getelementptr i8, ptr addrspace(1) %31, i16 %28
-  %33 = call i8 @llrm.ia16.in.i8(i16 969)
-  %34 = zext i8 %33 to i16
-  store i16 %34, ptr addrspace(1) %32, !tbaa !4
-  %35 = add i16 %26, 1
-  br label %b7
+  %24 = phi i16 [ %31, %b10 ], [ -1536, %b6 ]
+  %25 = inttoptr i16 %23 to ptr addrspace(2)
+  %26 = addrspacecast ptr addrspace(2) %25 to ptr addrspace(1)
+  %27 = getelementptr i8, ptr addrspace(1) %26, i16 %24
+  %28 = getelementptr i8, ptr addrspace(1) %27, i16 1536
+  %29 = call i8 @llrm.ia16.in.i8(i16 969) memory(inaccessiblemem: readwrite)
+  %30 = zext i8 %29 to i16
+  store i16 %30, ptr addrspace(1) %28, !tbaa !30
+  %31 = add nsw i16 %24, 2
+  %exitcond = icmp eq i16 %31, 0
+  br i1 %exitcond, label %b11, label %b10
 
 b11:
-  %36 = load i16, ptr %25, !tbaa !2
-  %37 = inttoptr i16 %36 to ptr addrspace(2)
-  %38 = addrspacecast ptr addrspace(2) %37 to ptr addrspace(1)
-  %39 = getelementptr i8, ptr addrspace(1) %38, i16 0
-  %40 = addrspacecast ptr addrspace(1) %39 to ptr addrspace(2)
-  %41 = ptrtoint ptr addrspace(2) %40 to i16
-  store i16 %41, ptr @b$seg, !tbaa !2
-  %42 = load i16, ptr %0
-  %43 = call cc1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %42)
-  %44 = call cc1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %43)
-  %45 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string19, ptr %44)
-  %46 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %45, ptr @$string20)
-  %47 = load i16, ptr %25, !tbaa !2
-  %48 = inttoptr i16 %47 to ptr addrspace(2)
-  %49 = addrspacecast ptr addrspace(2) %48 to ptr addrspace(1)
-  %50 = getelementptr i8, ptr addrspace(1) %49, i16 0
-  %51 = ptrtoint ptr addrspace(1) %50 to i16
-  call cc1000 addrspace(1) void @llrm.qb.B$BSAV(ptr %46, i16 %51, i16 1536)
-  %52 = getelementptr i8, ptr %3, i16 2
-  %53 = load i16, ptr %52, !tbaa !2
-  %54 = inttoptr i16 %53 to ptr addrspace(2)
-  %55 = addrspacecast ptr addrspace(2) %54 to ptr addrspace(1)
-  %56 = getelementptr i8, ptr addrspace(1) %55, i16 0
-  %57 = load i32, ptr @"BENCHHI&", !tbaa !2
-  store i32 %57, ptr addrspace(1) %56, !tbaa !4
-  %58 = getelementptr i8, ptr addrspace(1) %55, i16 4
-  %59 = load i32, ptr @"BENCHLO&", !tbaa !2
-  store i32 %59, ptr addrspace(1) %58, !tbaa !4
-  %60 = getelementptr i8, ptr addrspace(1) %55, i16 8
-  %61 = load i32, ptr %2, !tbaa !2
-  store i32 %61, ptr addrspace(1) %60, !tbaa !4
-  %62 = getelementptr i8, ptr addrspace(1) %55, i16 12
-  %63 = load i32, ptr %1, !tbaa !2
-  store i32 %63, ptr addrspace(1) %62, !tbaa !4
-  %64 = getelementptr i8, ptr addrspace(1) %55, i16 16
-  store i32 %9, ptr addrspace(1) %64, !tbaa !4
-  %65 = getelementptr i8, ptr addrspace(1) %55, i16 20
-  store i32 %8, ptr addrspace(1) %65, !tbaa !4
-  %66 = addrspacecast ptr addrspace(1) %56 to ptr addrspace(2)
-  %67 = ptrtoint ptr addrspace(2) %66 to i16
-  store i16 %67, ptr @b$seg, !tbaa !2
-  %68 = load i16, ptr %0
-  %69 = call cc1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %68)
-  %70 = call cc1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %69)
-  %71 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string21, ptr %70)
-  %72 = call cc1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %71, ptr @$string22)
-  %73 = load i16, ptr %52, !tbaa !2
-  %74 = inttoptr i16 %73 to ptr addrspace(2)
-  %75 = addrspacecast ptr addrspace(2) %74 to ptr addrspace(1)
-  %76 = getelementptr i8, ptr addrspace(1) %75, i16 0
-  %77 = ptrtoint ptr addrspace(1) %76 to i16
-  call cc1000 addrspace(1) void @llrm.qb.B$BSAV(ptr %72, i16 %77, i16 24)
-  call cc1000 addrspace(1) void @llrm.qb.B$DSG0()
-  call cc1000 addrspace(1) void @TSCSNAP(ptr @"BENCHHI&", ptr @"BENCHLO&")
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %3)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %4)
+  %32 = getelementptr inbounds nuw i8, ptr %3, i16 20
+  %33 = getelementptr i8, ptr %3, i16 2
+  %34 = load i16, ptr %33, !tbaa !2
+  %35 = inttoptr i16 %34 to ptr addrspace(2)
+  %36 = addrspacecast ptr addrspace(2) %35 to ptr addrspace(1)
+  %37 = addrspacecast ptr addrspace(1) %36 to ptr addrspace(2)
+  %38 = ptrtoint ptr addrspace(2) %37 to i16
+  store i16 %38, ptr @b$seg, !tbaa !2
+  %39 = load i16, ptr %0
+  %40 = call cc 1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %39)
+  %41 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %40)
+  %42 = call cc 1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string22, ptr %41)
+  %43 = call cc 1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %42, ptr @$string23)
+  %44 = load i16, ptr %33, !tbaa !2
+  %45 = inttoptr i16 %44 to ptr addrspace(2)
+  %46 = addrspacecast ptr addrspace(2) %45 to ptr addrspace(1)
+  %47 = ptrtoint ptr addrspace(1) %46 to i16
+  call cc 1000 addrspace(1) void @llrm.qb.B$BSAV(ptr %43, i16 %47, i16 1536)
+  %48 = load i16, ptr %32, !tbaa !2
+  %49 = inttoptr i16 %48 to ptr addrspace(2)
+  %50 = addrspacecast ptr addrspace(2) %49 to ptr addrspace(1)
+  %51 = load i32, ptr @"BENCHHI&", !tbaa !2
+  store i32 %51, ptr addrspace(1) %50, !tbaa !32
+  %52 = getelementptr i8, ptr addrspace(1) %50, i16 4
+  %53 = load i32, ptr @"BENCHLO&", !tbaa !2
+  store i32 %53, ptr addrspace(1) %52, !tbaa !32
+  %54 = getelementptr i8, ptr addrspace(1) %50, i16 8
+  %55 = load i32, ptr %1, !tbaa !2
+  store i32 %55, ptr addrspace(1) %54, !tbaa !32
+  %56 = getelementptr i8, ptr addrspace(1) %50, i16 12
+  %57 = load i32, ptr %2, !tbaa !2
+  store i32 %57, ptr addrspace(1) %56, !tbaa !32
+  %58 = getelementptr i8, ptr addrspace(1) %50, i16 16
+  store i32 %14, ptr addrspace(1) %58, !tbaa !32
+  %59 = getelementptr i8, ptr addrspace(1) %50, i16 20
+  store i32 %12, ptr addrspace(1) %59, !tbaa !32
+  %60 = addrspacecast ptr addrspace(1) %50 to ptr addrspace(2)
+  %61 = ptrtoint ptr addrspace(2) %60 to i16
+  store i16 %61, ptr @b$seg, !tbaa !2
+  %62 = load i16, ptr %0
+  %63 = call cc 1000 addrspace(1) ptr @llrm.qb.B$STI2(i16 %62)
+  %64 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LTRM(ptr %63)
+  %65 = call cc 1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr @$string24, ptr %64)
+  %66 = call cc 1000 addrspace(1) ptr @llrm.qb.B$SCAT(ptr %65, ptr @$string25)
+  %67 = load i16, ptr %32, !tbaa !2
+  %68 = inttoptr i16 %67 to ptr addrspace(2)
+  %69 = addrspacecast ptr addrspace(2) %68 to ptr addrspace(1)
+  %70 = ptrtoint ptr addrspace(1) %69 to i16
+  call cc 1000 addrspace(1) void @llrm.qb.B$BSAV(ptr %66, i16 %70, i16 24)
+  call cc 1000 addrspace(1) void @llrm.qb.B$DSG0()
+  call cc 1000 addrspace(1) void @TSCSNAP(ptr @"BENCHHI&", ptr @"BENCHLO&")
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %4)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr nonnull %3)
   ret void
 }
 
-declare cc1000 void @llrm.qb.B$CSCN(i16, i16, i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$CSCN(i16, i16, i16) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$DDIM(i16, i16, i16, i16, ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$DDIM(i16, i16, i16, i16, ptr) addrspace(1) nocallback
 
-declare void @llrm.ia16.out.i8(i16, i8) nocallback nofree nounwind willreturn memory(read, inaccessiblemem: readwrite)
+declare void @llrm.ia16.out.i8(i16, i8) nocallback nofree nounwind willreturn memory(readwrite)
 
-declare cc1000 ptr @llrm.qb.B$TIMR() addrspace(1)
+declare cc 1000 ptr @llrm.qb.B$TIMR() addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$ERAS(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$ERAS(ptr nocapture noretain) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$SCLS(i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$SCLS(i16) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$CEND() addrspace(1)
+declare cc 1000 void @llrm.qb.B$CEND() addrspace(1) nocallback nounwind noreturn
 
 declare float @llvm.sqrt.f32(float) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 declare i16 @llvm.lrint.i16.f32(float) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1000 ptr @llrm.qb.B$INKY() addrspace(1) nocallback
 
-declare cc1000 ptr @llrm.qb.B$INKY() addrspace(1)
+declare cc 1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1) threeway nocallback nounwind flagsresult
 
-declare cc1000 i16 @llrm.qb.B$SCMP(ptr, ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$BLOD(ptr, i16, i16) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$BLOD(ptr, i16, i16) addrspace(1)
+declare float @llvm.fabs.f32(float) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+declare cc 1000 void @llrm.qb.B$SERR(i16) addrspace(1) nocallback noreturn
 
 declare float @llvm.sin.f32(float) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 declare float @llvm.cos.f32(float) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare i8 @llrm.ia16.in.i8(i16) nocallback nofree nounwind willreturn memory(read, inaccessiblemem: readwrite)
+declare i8 @llrm.ia16.in.i8(i16) nocallback nofree nounwind willreturn memory(readwrite)
+
+declare double @llvm.fabs.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 declare double @llvm.cos.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 declare i16 @llvm.lrint.i16.f64(double) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
-declare cc1000 void @TSCSNAP(ptr, ptr) addrspace(1)
+declare cc 1000 void @TSCSNAP(ptr, ptr) addrspace(1)
 
-declare cc1000 ptr @llrm.qb.B$STI2(i16) addrspace(1)
+declare cc 1000 ptr @llrm.qb.B$STI2(i16) addrspace(1) nocallback
 
-declare cc1000 ptr @llrm.qb.B$LTRM(ptr) addrspace(1)
+declare cc 1000 ptr @llrm.qb.B$LTRM(ptr) addrspace(1) nocallback
 
-declare cc1000 ptr @llrm.qb.B$SCAT(ptr, ptr) addrspace(1)
+declare cc 1000 ptr @llrm.qb.B$SCAT(ptr, ptr) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$BSAV(ptr, i16, i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$BSAV(ptr, i16, i16) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$DSG0() addrspace(1)
+declare cc 1000 void @llrm.qb.B$DSG0() addrspace(1) nocallback nounwind
+
+declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+
+declare i16 @llvm.smax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
 !2 = !{!1, !1, i64 0}
 !3 = !{!"allocation", !0, i64 0}
 !4 = !{!3, !3, i64 0}
+!5 = !{!"allocation.0", !3, i64 0}
+!6 = !{!5, !5, i64 0}
+!7 = !{!"allocation.1", !3, i64 0}
+!8 = !{!7, !7, i64 0}
+!9 = !{!"allocation.2", !3, i64 0}
+!10 = !{!9, !9, i64 0}
+!11 = !{!"allocation.3", !3, i64 0}
+!12 = !{!11, !11, i64 0}
+!13 = !{!"allocation.4", !3, i64 0}
+!14 = !{!13, !13, i64 0}
+!15 = !{!"allocation.5", !3, i64 0}
+!16 = !{!15, !15, i64 0}
+!17 = !{!"allocation.6", !3, i64 0}
+!18 = !{!17, !17, i64 0}
+!19 = !{!"allocation.7", !3, i64 0}
+!20 = !{!19, !19, i64 0}
+!21 = !{!"allocation.8", !3, i64 0}
+!22 = !{!21, !21, i64 0}
+!23 = !{!"allocation.9", !3, i64 0}
+!24 = !{!23, !23, i64 0}
+!25 = !{!"allocation.10", !3, i64 0}
+!26 = !{!25, !25, i64 0}
+!27 = !{!"allocation.11", !3, i64 0}
+!28 = !{!27, !27, i64 0}
+!29 = !{!"allocation.12", !3, i64 0}
+!30 = !{!29, !29, i64 0}
+!31 = !{!"allocation.13", !3, i64 0}
+!32 = !{!31, !31, i64 0}
