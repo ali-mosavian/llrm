@@ -1152,7 +1152,7 @@ mod tests {
     }
 
     fn names_of(body: &LirBody) -> Vec<String> {
-        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+        body.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }
 
     fn of(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -1586,7 +1586,7 @@ mod tests {
         let before = crate::backend::allocate::live_rows_walks(&input);
         let got = tied(&input, Default::default());
         let names: Vec<_> =
-            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+            got.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
@@ -1814,7 +1814,7 @@ mod tests {
         let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
         let got = tied(&of(vec![imm_def(0, 7), add, read(2, 8), read(3, 7)]), Off);
         let mut shapes = Vec::new();
-        for one in got.insns().iter() {
+        for one in got.iter_insns() {
             let Some(what) = one.what.as_ref() else { continue };
             shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
         }
@@ -1842,7 +1842,7 @@ mod tests {
         let mul = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
         let got = tied(&of(vec![imm_def(0, 7), mul, read(2, 8), read(3, 7)]), Off);
         let mut shapes = Vec::new();
-        for one in got.insns().iter() {
+        for one in got.iter_insns() {
             let Some(what) = one.what.as_ref() else { continue };
             shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
         }

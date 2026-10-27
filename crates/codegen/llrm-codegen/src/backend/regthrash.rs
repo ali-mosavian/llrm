@@ -685,7 +685,7 @@ mod tests {
         let before = crate::backend::liveness::effects_worked_out();
         let after = thrashed(body.clone());
         let worked = crate::backend::liveness::effects_worked_out() - before;
-        let changed = after.insns().iter().zip(body.insns()).filter(|(new, old)| !Arc::ptr_eq(new, old)).count();
+        let changed = after.iter_insns().zip(body.insns()).filter(|(new, old)| !Arc::ptr_eq(new, old)).count();
         assert!(changed >= 4, "premise: several rounds rename ({changed} instructions changed)");
         assert!(
             worked <= size + changed + 2,
@@ -724,7 +724,7 @@ mod tests {
         // Whether or not it renamed, `thrashed` checked the liveness it kept
         // against working it out whole; a rename is the premise.
         assert!(
-            after.insns().iter().zip(body.insns().iter()).any(|(new, old)| !Arc::ptr_eq(new, &old)),
+            after.iter_insns().zip(body.iter_insns()).any(|(new, old)| !Arc::ptr_eq(new, &old)),
             "premise: the copy was renamed"
         );
     }

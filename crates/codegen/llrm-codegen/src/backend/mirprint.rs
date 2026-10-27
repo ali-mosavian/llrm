@@ -89,7 +89,7 @@ fn bits(width: u32) -> Result<&'static str, String> {
 /// The widest each value is named at.
 fn widths_of(body: &LirBody) -> Result<std::collections::BTreeMap<u32, u32>, String> {
     let mut out = std::collections::BTreeMap::new();
-    for one in body.insns().iter().filter_map(|one| one.what.as_ref()) {
+    for one in body.iter_insns().filter_map(|one| one.what.as_ref()) {
         for held in one.dests.iter().chain(&one.sources).flat_map(llrm_lir::values) {
             let wide = out.entry(held.value).or_insert(held.width);
             *wide = (*wide).max(held.width);
@@ -602,7 +602,7 @@ pub fn mir(
         .unwrap_or(8);
     ARGUMENTS_AT.with(|a| a.set(first_argument));
     let mut locals: Vec<(i64, i64, i64)> = Vec::new();
-    for loc in body.insns().iter().filter_map(|one| one.what.as_ref()).flat_map(|w| w.dests.iter().chain(&w.sources)) {
+    for loc in body.iter_insns().filter_map(|one| one.what.as_ref()).flat_map(|w| w.dests.iter().chain(&w.sources)) {
         let named;
         let m = match loc {
             Loc::Mem(m) => m,
