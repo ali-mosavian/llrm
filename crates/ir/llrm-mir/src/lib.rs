@@ -40,6 +40,7 @@ mod facts_coverage;
 mod facts_rewrite;
 pub mod footprint;
 pub mod forest;
+pub mod fp80;
 pub mod fpclass;
 pub mod hash;
 pub mod idf;

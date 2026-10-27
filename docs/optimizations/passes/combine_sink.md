@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_sink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_sink.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_sink.rs sha256:777f34acb1246278a6cfc62234ba461af6048151fde0977b065c6edaf42e0f89 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_sink.rs sha256:4b690066cc4bcd2fe797fcc6d7d206011a851a1e23abca9efc07c304ed257fc2 -->
 
 # combine_sink
 
@@ -35,11 +35,13 @@ b2: ret 0                     b2: ret 0
 
 MIRROR: every check and its order; the user scan; the position.
 
-DEVIATE, with the reason: an instruction that writes memory is never sunk
-(`SoleWriteToDeadLocal` needs a capture analysis llrm has not translated);
-`isDroppable` is the `llvm.assume` call (MIR has no operand bundles, so no
-`dereferenceable` bundle keeps a sink away); `isEHPad` is `landingpad` (MIR
-has no funclet pads); debug records are not moved (MIR has none).
+DEVIATE, with the reason: a compare of a runtime call's flags result is
+never sunk (the flags do not survive to another block); an instruction that
+writes memory is never sunk (`SoleWriteToDeadLocal` needs a capture analysis
+llrm has not translated); `isDroppable` is the `llvm.assume` call (MIR has
+no operand bundles, so no `dereferenceable` bundle keeps a sink away);
+`isEHPad` is `landingpad` (MIR has no funclet pads); debug records are not
+moved (MIR has none).
 
 ## Example
 `%x` is read only in `b1`, whose only predecessor is `b0`:
