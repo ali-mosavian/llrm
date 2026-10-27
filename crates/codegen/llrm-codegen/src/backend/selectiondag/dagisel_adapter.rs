@@ -557,6 +557,17 @@ impl Dag for DagisAdapter<'_> {
     ) -> Option<Vec<MemRef>> {
         matches!(self.dag.nodes()[node as usize].data, NodeData::Mem(_)).then(|| vec![node])
     }
+    fn is_call_argument_store(
+        &self,
+        node: u32,
+    ) -> bool {
+        let node = &self.dag.nodes()[node as usize];
+        node.opcode == ISD::Store
+            && matches!(
+                node.data,
+                NodeData::Mem(info) if matches!(info.base, super::dag::MemBase::CallArgument(_))
+            )
+    }
     fn load_ext_type(
         &self,
         node: u32,

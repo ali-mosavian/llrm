@@ -713,6 +713,18 @@ impl Builder<'_> {
         }
     }
 
+    /// The byte register of a dword one: `EAX` -> `AL`; none for `ESI`, `EDI`.
+    fn byte_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
+        use llrm_lir::registers::RegId;
+        Some(match reg {
+            RegId::EAX => RegId::AL,
+            RegId::EBX => RegId::BL,
+            RegId::ECX => RegId::CL,
+            RegId::EDX => RegId::DL,
+            _ => return None,
+        })
+    }
+
     /// The word register of a dword one: `EAX` -> `AX`.
     fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
         use llrm_lir::registers::RegId;
@@ -1243,7 +1255,7 @@ impl Builder<'_> {
                             mem_vt: vt,
                             align: 1,
                             volatile: false,
-                            base: MemBase::Unknown,
+                            base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
                         };
@@ -1282,6 +1294,17 @@ impl Builder<'_> {
                             .flatten();
                         if let Some(word) = word {
                             copies.push((word, piece));
+                            continue;
+                        }
+                        // and a byte one in the byte register (`DL`, not
+                        // `EDX`): the callee truncates
+                        // it, so extending it is a 6-byte
+                        // `mov edx, 12` for a 2-byte `mov dl, 12`
+                        let byte = (vt == EVT::I8 && self.target.dag.pointer == EVT::I16)
+                            .then(|| Self::byte_register(reg))
+                            .flatten();
+                        if let Some(byte) = byte {
+                            copies.push((byte, piece));
                             continue;
                         }
                         let piece = if vt.is_integer() && vt.size_in_bits() < width {
