@@ -1194,7 +1194,12 @@ mod tests {
         let insns: Vec<_> = (0..40_000u32)
             .map(|k| {
                 let at = i64::from(k);
-                insn(at, semantics(Operation::Binary, "add", vec![held(k + 1)], vec![held(k), imm(1)]), vec![k + 1], vec![k])
+                insn(
+                    at,
+                    semantics(Operation::Binary, "add", vec![held(k + 1)], vec![held(k), imm(1)]),
+                    vec![k + 1],
+                    vec![k],
+                )
             })
             .collect();
         let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
