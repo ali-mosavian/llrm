@@ -231,12 +231,12 @@ def docs_failures(root: Path = ROOT, run=None) -> dict[str, str]:
     """`ratchet:docs` -> the generated pages that are out of date (or the figure problem) on the tree in `root`; none when `docsbuild --check` is clean. A header change
     that landed without `docsbuild --sync` (jumps.rs) refused every docs-touching PR after it (#2757, #2763, #2857, #2836) with nothing naming the page."""
     run = run or (lambda command: subprocess.run(command, cwd=root, capture_output=True, text=True))
-    done = run([sys.executable, "tools/docsbuild/build.py", "--check"])
+    done = run([sys.executable, "tools/docs/docsbuild/build.py", "--check"])
     if not done.returncode:
         return {}
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
     pages = [line for line in lines if line.startswith("docs/")]
-    why = f"out of date: {', '.join(pages)}; run python3 tools/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
+    why = f"out of date: {', '.join(pages)}; run python3 tools/docs/docsbuild/build.py --sync" if pages else " / ".join(lines[:2])
     # one name per output line: docsbuild --check was red on the base with 23 lines, and a 24th hid behind the one `ratchet:docs`
     named = {f"ratchet:docs {line.replace(': ', ' - ').replace('; ', ' ')[:140]}": why[:300] for line in lines}
     return named or {"ratchet:docs": why[:300]}

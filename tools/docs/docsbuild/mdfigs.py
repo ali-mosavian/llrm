@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent.parent
+ROOT = HERE.parents[2]
 sys.path.insert(0, str(HERE.parent))
 
 from docsbuild import tomermaid  # noqa: E402
