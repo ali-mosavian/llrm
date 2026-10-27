@@ -3546,6 +3546,28 @@ fn a_dividend_of_long_min_keeps_the_minus_one_guard() {
     assert!(tests_against_minus_one(&text), "{text}");
 }
 
+/// A bounds-checked fill saved SI and DI under the DAG selector although its
+/// body names neither: the error exit `call B$SERR` never returns, but its
+/// contract's clobbers counted as a disturbance a function must save for its
+/// caller (+8 B a SUB: qb/idioms.bas +70 B at -Os with -fsanitize=bounds).
+#[test]
+fn test_a_call_that_never_returns_saves_no_register_under_the_dag_selector() {
+    let directory = tempfile::TempDir::new().unwrap();
+    let source = written(
+        &directory,
+        "fillpal.bas",
+        b"DEFINT A-Z\r\nDIM SHARED pal(63)\r\nDECLARE SUB SetPal (n, w)\r\nSetPal 10, 5\r\nPRINT pal(3)\r\nSUB SetPal (n, w)\r\nFOR i = 0 TO n - 1\r\npal(i) = w\r\nNEXT\r\nEND SUB\r\n",
+    );
+    let program = parsed_with(&source, "qb45", "qb45", "column-major", false, true);
+    let mut options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    options.isel = llrm_codegen::backend::shadow::Selector::Dag;
+    let module = qb_compile::assembled(&program, None, &options).expect("assembles");
+    let text = masm::text(&module).expect("prints");
+    let fill = between(&text, "SETPAL proc", "endp");
+    assert!(fill.contains("call far ptr B$SERR"), "the bounds exit: {fill}");
+    assert!(!fill.contains("push si") && !fill.contains("push di"), "{fill}");
+}
+
 /// CLEAR was parsed as a call of a SUB named CLEAR: "`CLEAR` is not a known
 /// procedure or runtime routine", as if misspelt. A valid statement this
 /// compiler does not lower says so, as CHAIN does (row QB-CLEAR-1).

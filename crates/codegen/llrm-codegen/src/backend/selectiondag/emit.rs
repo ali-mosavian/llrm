@@ -120,6 +120,17 @@ pub trait Conventions {
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>>;
 
+    /// What a call of `callee`, which destroys `clobbers`, makes a function
+    /// that keeps registers for its caller save: all of them, but for a callee
+    /// that never returns (nothing is left to restore).
+    fn disturbs(
+        &self,
+        _callee: Option<&Callee>,
+        clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        clobbers.clone()
+    }
+
     /// The registers a call of `callee` keeps only the pushed part of (a
     /// 16-bit push of a 32-bit register): their upper half is destroyed.
     fn clobbers_high(
@@ -1489,7 +1500,7 @@ impl Emitter<'_, '_> {
         let memory = Arc::new(crate::model::lir::CallMemory {
             effects: llrm_mir::memory::Effects::ANY,
             private: Vec::new(),
-            disturbs: clobbers.clone(),
+            disturbs: self.ctx.conventions.disturbs(callee, &clobbers),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
