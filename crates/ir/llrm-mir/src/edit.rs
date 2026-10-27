@@ -969,6 +969,23 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// `CallBase::addParamAttr(index, Attribute::getWithAlignment(align))`: the
+    /// argument's `align` is `align`, an earlier one replaced.
+    pub fn set_argument_align(
+        &mut self,
+        inst: InstId,
+        index: usize,
+        align: u64,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        let attrs = &mut info.argument_attrs[index];
+        attrs.retain(|one| !matches!(one, crate::opcode::Attribute::Int(name, _) if name == "align"));
+        attrs.push(crate::opcode::Attribute::Int("align".to_owned(), align));
+        self.log(Change::Rewritten(inst));
+    }
+
     /// Adds `attr` to the call `inst` itself, as LLVM's `CallBase::addFnAttr`.
     pub fn add_call_attr(
         &mut self,
