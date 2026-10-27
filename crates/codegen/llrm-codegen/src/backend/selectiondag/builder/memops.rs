@@ -828,6 +828,9 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
+        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0) {
+            return SDValue { node: rep.node, res: 0 };
+        }
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
         let copy = self
