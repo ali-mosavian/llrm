@@ -215,6 +215,7 @@ pub fn assembled_by(
             done.insert(id, made);
         }
     }
+    let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
     // DEVIATE SD314: a routine one site calls is pasted there, as the old
     // selector does: its procedure, call and return cost more than it saves.
     // The pin has no such routine (a libcall in the library).
@@ -236,7 +237,16 @@ pub fn assembled_by(
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
                 // A far or huge object lies outside DGROUP, in a segment of the
                 // module's own.
-                let datums = globals::datums(module, id, &names)?;
+                let mut datums = globals::datums(module, id, &names)?;
+                if let Some(to) = globals::alignment(
+                    module,
+                    layout.as_ref(),
+                    variable,
+                    module.sections.contains_key(name),
+                    arch.layout().segment_bytes().is_some(),
+                ) {
+                    datums.insert(0, masm::Datum::Align(masm::Align { to }));
+                }
                 if let Some(section) = module.sections.get(name) {
                     // `#pragma data_seg`: a segment of the program's own
                     // naming.

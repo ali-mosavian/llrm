@@ -299,71 +299,8 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$SMID" && pushed == 12 {
-        return Ok(returns(
-            12,
-            format!(
-                "{evidence} QB45 rt/mid.asm declares one dword and four \
-                 word parameters; cEnd returns past all 12 bytes. VBDOS listings \
-                 use the same stack shape. Other effects remain conservative."
-            ),
-        ));
-    }
-    if (name == "B$GET3" || name == "B$PUT3") && pushed == 8 {
-        return Ok(returns(
-            8,
-            format!(
-                "{evidence} QB45 rt/dvstmt.asm declares Channel word, \
-                 RecPtr dword, and RecLen word; B$GET3 cEnd returns past all \
-                 8 bytes and B$PUT3 joins that epilogue. Other effects stay conservative."
-            ),
-        ));
-    }
-    if (name == "B$FEOF" || name == "B$DSKI") && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} QB45 rt/dvstmt.asm B$FEOF (0073..009a) and rt/inpdsk.asm B$DSKI \
-                 (0016..0060) read the one file-number word at [BP+6] and return with RETF 2. \
-                 Device and error effects remain conservative."
-            ),
-        ));
-    }
-    if name == "B$FRI2" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} stfree.asm FRE selectors join POP SI/BP / RETF 2 after reading \
-                 the one selector word. Heap compaction and error effects remain conservative."
-            ),
-        ));
-    }
-    if name == "B$FCMD" && pushed == 0 {
-        return Ok(returns(
-            0,
-            format!(
-                "{evidence} COMMAND$ takes no argument: each shipped library's B$FCMD returns \
-                 with nothing popped and its answer in AX."
-            ),
-        ));
-    }
-    if (name == "B$GET4" || name == "B$PUT4") && pushed == 12 {
-        return Ok(returns(
-            12,
-            format!(
-                "{evidence} QB45 rt/dvstmt.asm declares Channel word, RecNum dword, \
-                 RecPtr dword, and RecLen word; both entry points return past all 12 bytes."
-            ),
-        ));
-    }
-    if name == "B$SSEK" && pushed == 6 {
-        return Ok(returns(
-            6,
-            format!(
-                "{evidence} QB45 rt/dkio.asm declares FileNum word and RecNum dword; \
-                 B$SSEK is a far Pascal entry returning past all 6 bytes."
-            ),
-        ));
+    if let Some(text) = runtime::audited_pop_note(name, pushed) {
+        return Ok(returns(pushed, format!("{evidence} {text}")));
     }
     if family == model::RuntimeProfile::Qb45 && name == "B$POKE" && pushed == 4 {
         return Ok(returns(
@@ -387,55 +324,6 @@ fn _contract_keeping(
                  call; B$SERR validates it and jumps to B$RUNERR. Its documented \
                  exit is either the installed handler or fatal termination, never \
                  the instruction after the call."
-            ),
-        ));
-    }
-    if (name == "B$STRI" || name == "B$STRS") && pushed == 4 {
-        return Ok(returns(
-            4,
-            format!(
-                "{evidence} QB45 rt/strfcn.asm declares two word parameters for {name}; \
-                 the far Pascal entry returns past all 4 bytes."
-            ),
-        ));
-    }
-    if name == "B$FLEN" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} Typed LEN supplies one descriptor word. \
-                 BCOM45 strfcn.asm B$FLEN 000f..001c, BCL71ENR stcommon.asm \
-                 0050..005d, and VBDCL10E stcore.asm 02b9..02f9 each end RETF 2. \
-                 Heap, alias and error effects remain conservative."
-            ),
-        ));
-    }
-    if name == "B$SPAC" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} Typed SPACE$ supplies the word count seen at \
-                 [BP+6]; VBDOS D_SURF.OBJ 2d1c..2d24 shows that one pushed word, \
-                 and farstr strfcn.asm's Pascal entry returns past 2 bytes. \
-                 Allocation, alias and error effects remain conservative."
-            ),
-        ));
-    }
-    if name == "B$FINP" && pushed == 4 {
-        return Ok(returns(
-            4,
-            format!(
-                "{evidence} QB45 rt/inputf.asm `cProc B$FINP,<PUBLIC,FAR>` with ParmW cbInp and \
-                 ParmW Channel, so cEnd returns past 4 bytes. Allocation, file and error effects remain conservative."
-            ),
-        ));
-    }
-    if (name == "B$FEVS" || name == "B$FEVI") && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} QB45 rt/osstmt.asm declares one word descriptor or integer \
-                 parameter for {name}; the far Pascal entry returns past 2 bytes."
             ),
         ));
     }
@@ -468,53 +356,12 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$INPP" && pushed == 6 {
-        return Ok(returns(
-            6,
-            format!(
-                "{evidence} QB45 runtime/rt/inptty.asm declares one near prompt \
-                 descriptor and one far input-table pointer; its cProc frame reads the \
-                 six-byte argument block at [BP+6]..[BP+0A]. PDS and VBDOS retain the \
-                 same documented entry, confirmed by the measured VBDOS INP*.OBJ sites."
-            ),
-        ));
-    }
     if ["B$RDI2", "B$RDI4", "B$RDR4", "B$RDR8", "B$RDCY"].contains(&name) && pushed == 4 {
         return Ok(returns(
             4,
             format!(
                 "{evidence} QB45 rt/read.asm sends {name} through CommRead with one \
                  far destination pointer; its shared cEnd removes 4 bytes."
-            ),
-        ));
-    }
-    if (name == "B$LBND" || name == "B$UBND") && pushed == 4 {
-        return Ok(returns(
-            4,
-            format!(
-                "{evidence} QB45 rt/dynamic.asm declares pAd and iDim as \
-                 two word Pascal parameters for {name}; the shared cEnd removes \
-                 exactly four bytes. Bounds errors and descriptor effects remain conservative."
-            ),
-        ));
-    }
-    if name == "B$RDSD" && pushed == 6 {
-        return Ok(returns(
-            6,
-            format!(
-                "{evidence} QB45 rt/read.asm AssignStr consumes a far destination \
-                 pointer plus a word fixed-string length; shared return removes 6 bytes."
-            ),
-        ));
-    }
-    if name == "B$FDR1" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} The typed DIR$ source form selects the FDR1 \
-                 find-first entry and supplies its one descriptor word; VBDCL10E \
-                 rt/dkdir.asm's saved nonzero mode selects the shared RETF 2 exit. \
-                 Filesystem, heap, alias and error effects remain conservative."
             ),
         ));
     }
@@ -539,46 +386,6 @@ fn _contract_keeping(
             ),
         ));
     }
-    if name == "B$DSG0" && pushed == 0 {
-        return Ok(returns(
-            0,
-            format!(
-                "{evidence} QB45, PDS71 and VBDOS rtinit.asm B$DSG0 \
-                 store DS into the runtime DEF SEG word and immediately RETF; \
-                 the typed bare DEF SEG form has no stack arguments."
-            ),
-        ));
-    }
-    if (name == "B$FERR" || name == "B$FERL") && pushed == 0 {
-        return Ok(returns(
-            0,
-            format!(
-                "{evidence} Typed ERR/ERL has no arguments; rt/error.asm \
-                 returns directly after loading the saved value."
-            ),
-        ));
-    }
-    if name == "B$FREF" && pushed == 0 {
-        return Ok(returns(
-            0,
-            format!(
-                "{evidence} QB45 rt/dvstmt.asm declares `int pascal \
-                 B$FREF(void)` and its cProc has no parameters; the measured \
-                 PDS71 PDLOCAL.OBJ call likewise has no preceding argument push."
-            ),
-        ));
-    }
-    if name == "B$FRSD" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} QB45, PDS71 and VBDOS stfree.asm B$FRSD \
-                 read the descriptor word at [BP+6] and join a RETF 2 epilogue; \
-                 the FRE(\"\") VBDOS probe pushes the canonical null descriptor. \
-                 Heap and error effects remain conservative."
-            ),
-        ));
-    }
     if matches!(name, "B$FLOF" | "B$FLOC" | "B$FSEK") && pushed == 2 {
         return Ok(returns(
             2,
@@ -586,108 +393,6 @@ fn _contract_keeping(
                 "{evidence} Typed LOF supplies the single file-number word; \
                  MAIN.OBJ 0ec4..0ecc shows that exact call shape and the runtime \
                  wrapper's normal return consumes it. Device/error effects remain conservative."
-            ),
-        ));
-    }
-    if name == "B$RNZP" && pushed == 8 {
-        return Ok(returns(
-            8,
-            format!(
-                "{evidence} VBDCL10E.LIB random.asm B$RNZP at 0079 \
-                 reads its R8 seed at [BP+0Ah] and returns with RETF 8; \
-                 MAIN.OBJ 07fe..080c pushes the high and low dwords before the call."
-            ),
-        ));
-    }
-    if name == "B$PMAP" && pushed == 6 {
-        return Ok(returns(
-            6,
-            format!(
-                "{evidence} QB45 grpmap.asm B$PMAP(parmD expr, parmW funct) returns the \
-                 address of its R4 result in AX with RETF 6; BC pushes the dword, then the word."
-            ),
-        ));
-    }
-    if name == "B$RND0" && pushed == 0 {
-        return Ok(returns(
-            0,
-            format!(
-                "{evidence} QB45 random.asm declares B$RND0 with no \
-                 parameters and returns its result address in AX with a bare RETF."
-            ),
-        ));
-    }
-    if name == "B$RND1" && pushed == 4 {
-        return Ok(returns(
-            4,
-            format!(
-                "{evidence} VBDCL10E.LIB random.asm B$RND1 reads its R4 \
-                 selector at [BP+6]/[BP+8], returns its result address in AX, \
-                 and exits with RETF 4; RND.OBJ shows the matching dword push."
-            ),
-        ));
-    }
-    if name == "B$RSTB" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} VBDOS REST.OBJ moves the labeled DATA key \
-                 to AX, pushes it, and calls B$RSTB with one word."
-            ),
-        ));
-    }
-    if name == "B$SCLS" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} QB45 rt/gwscr.asm declares B$SCLS with one \
-                 ScnNum word; its Pascal far entry consumes that selector. \
-                 VBDOS uses the same typed runtime entry."
-            ),
-        ));
-    }
-    if name == "B$WIDT" && pushed == 4 {
-        return Ok(returns(
-            4,
-            format!(
-                "{evidence} QB45 runtime/rt/iotty.asm declares width and height \
-                 as two Pascal words; the typed source site supplies exactly those four bytes."
-            ),
-        ));
-    }
-    if name == "B$VWPT" && pushed == 4 {
-        return Ok(returns(
-            4,
-            format!(
-                "{evidence} QB45 runtime/rt/grview.asm declares TopLine and BotLine \
-                 as two Pascal words; VBDOS VIEWP.OBJ independently confirms that call shape."
-            ),
-        ));
-    }
-    if name == "B$SPLY" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} QB45 runtime/rt/gwplays.asm declares one near string \
-                 descriptor; VBDOS PLAY.OBJ independently confirms that call shape."
-            ),
-        ));
-    }
-    if name == "B$INKY" && pushed == 0 {
-        return Ok(returns(
-            0,
-            format!(
-                "{evidence} QB45 rt/stinkey.asm declares sd* pascal \
-                 B$INKY(void); its far entry returns the descriptor in AX with no parameters."
-            ),
-        ));
-    }
-    if name == "B$USNG" && pushed == 2 {
-        return Ok(returns(
-            2,
-            format!(
-                "{evidence} QB45 runtime/rt/prtu.asm declares one near format \
-                 descriptor; VBDOS PRTUSING.OBJ independently confirms that call shape."
             ),
         ));
     }

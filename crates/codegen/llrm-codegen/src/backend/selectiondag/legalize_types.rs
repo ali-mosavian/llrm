@@ -1494,7 +1494,9 @@ impl<'a> TypeLegalizer<'a> {
         let ((dividend_lo, dividend_hi), (divisor_lo, divisor_hi)) =
             (self.expanded_integer(lhs), self.expanded_integer(rhs));
         let wide = self.dag.constant(divisor_hi) != Some(0);
-        let Ok(routine) = arch.divide_routine(signed, wide) else {
+        let used =
+            if wants_quotient { llrm_target::routines::Used::Quotient } else { llrm_target::routines::Used::Remainder };
+        let Ok(routine) = arch.divide_routine_used(signed, wide, used) else {
             return Err(LegalizeError::Unsupported { op, ty: vt, what: "the i64 divide routine is unavailable" });
         };
         let mut args = vec![
