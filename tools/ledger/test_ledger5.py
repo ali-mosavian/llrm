@@ -20,3 +20,9 @@ def test_clangs_own_cost_is_its_own_bucket():
     assert got["clang (llrm-cc front end)"] > 3.0, got
     assert "front end" not in got and "unattributed" not in got, got
     assert not [k for k in got if k not in ("clang (llrm-cc front end)", "alloc/libc/std (shared leaves)", "(below threshold)", "TOTAL")], got
+
+
+def test_a_rust_module_named_llvm_is_not_clang():
+    """`llrm_codegen::abi::llvm::LlvmAbi` matched `llvm::` and went to the clang bucket."""
+    path = HERE / "fixtures" / "llrm-llc.callgrind.txt"
+    assert "clang (llrm-cc front end)" not in buckets(path)

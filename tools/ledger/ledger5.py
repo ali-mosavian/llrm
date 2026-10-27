@@ -2,7 +2,7 @@ import re, sys, collections
 # Self cost by callee, attributed to the pin pass the callee's module is the counterpart of
 # (not by call site). Shared leaves (alloc, libc, llrm_mir core) stay as their own rows.
 RULES = [
- (r"llrm_cc::|clang::|llvm::|/(clang|llvm)/(lib|include|tools)/", "clang (llrm-cc front end)"),
+ (r"llrm_cc::|(?<![\w:])(clang|llvm)::|/(clang|llvm)/(lib|include|tools)/", "clang (llrm-cc front end)"),
  (r"llrm_codegen::(twoaddress|backend::twoaddr)", "TwoAddress"),
  (r"llrm_codegen::(coalescer|backend::coalesce)", "RegisterCoalescer"),
  (r"llrm_codegen::greedy|backend::allocate|backend::spiller|backend::lifetimes|backend::regalloc", "RAGreedy + SplitKit + InlineSpiller"),
