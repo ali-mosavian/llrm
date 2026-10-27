@@ -738,6 +738,15 @@ def waiting(number: str, path: str | None = None) -> bool:
     return number in re.sub(r"#.*", "", text).split()
 
 
+def conflict_detail(head: str, body: str, base: str = BASE, cwd: Path = ROOT) -> str:
+    """` [owner W; conflicts in: file file]` for a PR whose squash GitHub refused for merge conflicts: the files `git merge-tree` finds when `head` meets `base`, and the `Owner:` line of its
+    description. #5456 and #5462 were refused at squash with neither, and the coordinator probed each by hand."""
+    done = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", base, head], cwd=cwd, capture_output=True, text=True, errors="replace")
+    files = done.stdout.splitlines()[1:] if done.returncode == 1 else []
+    owner = (re.search(r"^\s*Owner:\s*(\S+)", body or "", re.M) or [None, "unknown"])[1]
+    return f" [owner {owner}; conflicts in: {' '.join(files[:6]) or 'none found'}]"
+
+
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
     """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     run = rate_limit_proof(run)
@@ -772,7 +781,9 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         return False
     if done.returncode:
         # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
-        print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")
+        why = ' '.join((done.stderr or done.stdout or 'no message').split())[-200:]
+        detail = conflict_detail(info["headRefOid"], info.get("body") or pr_body(number)) if "merge conflicts" in why else ""
+        print(f"#{number}: REFUSED: the squash was refused by GitHub: {why}{detail}")
     return done.returncode == 0
 
 

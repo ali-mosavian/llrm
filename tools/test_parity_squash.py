@@ -1810,3 +1810,30 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+
+def test_a_conflict_detail_names_the_owner_and_the_conflicting_file(tmp_path):
+    """#5456 and #5462 were refused at squash for merge conflicts: the line said neither who owns them nor where (dag_function_tests.rs); the coordinator ran git merge-tree by hand."""
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "tests.rs").write_text("one\n")
+    git("add", "."), git("commit", "-qm", "base")
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / "tests.rs").write_text("pr\n")
+    git("commit", "-qam", "pr")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    (tmp_path / "tests.rs").write_text("landed\n")
+    git("commit", "-qam", "landed")
+    assert ps.conflict_detail(head, "TL;DR\n\nOwner: w10\nRows: none", "main", tmp_path) == " [owner w10; conflicts in: tests.rs]"
+    assert ps.conflict_detail(head, "", "main", tmp_path).startswith(" [owner unknown;")
+
+
+def test_a_squash_refused_for_merge_conflicts_prints_the_owner_and_files(capsys, monkeypatch):
+    monkeypatch.setattr(ps, "conflict_detail", lambda head, body, *rest: " [owner w10; conflicts in: dag_function_tests.rs]")
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b", "body": "Owner: w10"}
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request has merge conflicts (mergePullRequest)\n")  # noqa: E731
+    assert ps.squash("5462", info, "body", run=refuse) is False
+    assert "has merge conflicts (mergePullRequest) [owner w10; conflicts in: dag_function_tests.rs]" in capsys.readouterr().out
