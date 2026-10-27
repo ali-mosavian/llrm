@@ -54,6 +54,7 @@
 use crate::constfold::{self, is_null_value, null_value};
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId, mask, signed};
 use crate::datalayout::DataLayout;
+use crate::fpclass::RoundingMode;
 use crate::hash::HashMap;
 use crate::knownbits::KnownBits;
 use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, Linkage, Operand};
@@ -2211,7 +2212,7 @@ fn constant_fold_scalar_call1(
         return (!null_defined).then_some(operand);
     }
     if matches!(id, Folded::Id(IntrinsicId::Lrint | IntrinsicId::Llrint)) {
-        return exact_rint(context, ty, operand);
+        return exact_rint(context, ty, operand, caller);
     }
     if let Folded::Id(math) = id
         && let ConstantKind::Float(_) = context.get(operand).kind
@@ -2337,7 +2338,14 @@ fn exact_rint(
     context: &Context,
     ty: TypeId,
     operand: ConstantId,
+    caller: Option<&Function>,
 ) -> Option<ConstantId> {
+    if matches!(
+        context.types.get(ty_of(context, operand)),
+        Type::Float(FloatKind::X86Fp80)
+    ) {
+        return x87_rint(context, ty, operand, caller);
+    }
     let value = match (&context.get(operand).kind, context.types.get(ty_of(context, operand))) {
         (ConstantKind::Float(bits), Type::Float(FloatKind::Double)) => f64::from_bits(*bits),
         (ConstantKind::Float(bits), Type::Float(FloatKind::Float)) => f64::from(f32::from_bits(*bits as u32)),
@@ -2350,6 +2358,43 @@ fn exact_rint(
     }
     let limit = 2f64.powi(width as i32 - 1);
     (-limit <= value && value < limit).then(|| int(context, width, (value as i128 as u128) & mask(width)))
+}
+
+/// `lrint` of an `x86_fp80` constant. A caller that evaluates at the x87's
+/// extended precision (BASIC's runtime) runs with the control word at round to
+/// nearest even, so the integer is the value rounded so; for any other the
+/// value must be integral (DEVIATE 9).
+fn x87_rint(
+    context: &Context,
+    ty: TypeId,
+    operand: ConstantId,
+    caller: Option<&Function>,
+) -> Option<ConstantId> {
+    let number = crate::fp80::value(&context.get(operand).kind)?;
+    let width = context.types.int_bits(ty)?;
+    if width > 64 || !number.is_finite() {
+        return None;
+    }
+    let nearest = caller.is_some_and(|caller| {
+        caller
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Str(name, Some(value)) if name == FP_EVAL && value == FP_EVAL_EXTENDED
+                ),
+            )
+    });
+    if !nearest {
+        let mut whole = number;
+        whole.round_to_integral(RoundingMode::NearestTiesToEven);
+        if whole.compare(&number) != crate::apfloat::CmpResult::Equal {
+            return None;
+        }
+    }
+    let value = crate::fp80::to_integer(&number, RoundingMode::NearestTiesToEven, width, true)?;
+    Some(int(context, width, value as u128 & mask(width)))
 }
 
 /// `APIntOps::pext`/`pdep`.

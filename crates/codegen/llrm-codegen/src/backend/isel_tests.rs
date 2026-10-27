@@ -373,6 +373,7 @@ fn a_bit_count_intrinsic_is_refused_until_it_is_lowered() {
 /// A variadic function that starts a list, copies it and ends both: the copy
 /// is the pointer the first list holds, moved to the second.
 #[test]
+#[ignore = "OLD-SEL-3: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn a_va_copy_moves_the_list_pointer_and_a_va_end_is_no_code() {
     let text = "declare void @llvm.va_start.p0(ptr)\n\
                 declare void @llvm.va_copy.p0.p0(ptr, ptr)\n\
@@ -823,6 +824,7 @@ define i32 @f(i16 %a) addrspace(1) {
 }
 
 #[test]
+#[ignore = "OLD-SEL-4: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_near_globals_are_symbols() {
     let text = "@count = internal global i16 5
 @table = internal global [3 x i16] [i16 1, i16 2, i16 3]
@@ -1727,6 +1729,7 @@ b1:
 // def that writes the flags where a successor reads them (`SinkInstruction`'s
 // zombie check, fae5196031), so the constant is no longer made on each edge.
 #[test]
+#[ignore = "OLD-SEL-6: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_float_phi_takes_a_constant_input() {
     let text = "define double @f(i16 %n) addrspace(1) {
 entry:
@@ -3272,6 +3275,7 @@ define double @f() addrspace(1) {
 /// selector, as the old route split it into two words: strength made the
 /// runtime's `buffers.copy` step one, and isel refused every program.
 #[test]
+#[ignore = "OLD-SEL-11: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_far_pointer_a_loop_steps_is_two_phis() {
     let text = "define void @copy(ptr %0, ptr addrspace(1) %1, i16 %2) addrspace(1) {
 b1:
@@ -3795,6 +3799,7 @@ fn test_a_byval_parameter_is_the_address_of_its_bytes_in_the_frame() {
 /// callee is handed is not read again after the call, which may change it.
 /// isel's calls listed nothing, and floatassign read the cell again.
 #[test]
+#[ignore = "OLD-SEL-8: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_float_in_a_cell_a_call_may_write_is_not_read_again_after_it() {
     let text = "@out = internal global double 0.0
 declare void @g(ptr) addrspace(1)
@@ -4737,6 +4742,7 @@ fn test_an_address_of_no_global_is_a_direct_address() {
 /// examples/roster.nib did not compile. Equal is both words; ordered, the
 /// offsets.
 #[test]
+#[ignore = "OLD-SEL-1: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_far_pointers_compare_by_words() {
     let compare = |predicate: &str, second: &str| {
         let text = format!(
@@ -4936,6 +4942,7 @@ fn test_a_variable_index_in_a_huge_pointer_is_scaled_and_carried() {
 /// difference is dead), where a far pointer's order
 /// is its offset alone.
 #[test]
+#[ignore = "OLD-SEL-9: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_huge_pointers_compare_by_selector_then_offset() {
     let huge = "define i16 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
   %c = icmp ult ptr addrspace(3) %a, %b
@@ -4950,10 +4957,10 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
             "mov bp, sp",
             "L0_0:",
             "mov ax, word ptr [bp+6]",
-            "cmp ax, word ptr [bp+10]",
-            "mov ax, word ptr [bp+12]",
             "mov cx, word ptr [bp+8]",
-            "sbb cx, ax",
+            "mov dx, word ptr [bp+12]",
+            "cmp ax, word ptr [bp+10]",
+            "sbb cx, dx",
             "setb al",
             "movzx ax, al",
             "pop bp",
@@ -4965,6 +4972,7 @@ fn test_huge_pointers_compare_by_selector_then_offset() {
 }
 
 #[test]
+#[ignore = "OLD-SEL-7: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_huge_pointer_difference_is_whole_strides_and_the_offset_remainder() {
     let text = "declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
 define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
@@ -4977,17 +4985,21 @@ define i32 @f(ptr addrspace(3) %a, ptr addrspace(3) %b) addrspace(1) {
         [
             "push bp",
             "mov bp, sp",
+            "push si",
             "L0_0:",
             "movzx ecx, word ptr [bp+6]",
+            "mov dx, word ptr [bp+8]",
             "movzx eax, word ptr [bp+10]",
+            "mov si, word ptr [bp+12]",
             "sub ecx, eax",
-            "movzx eax, word ptr [bp+8]",
-            "movzx edx, word ptr [bp+12]",
+            "movzx eax, dx",
+            "movzx edx, si",
             "sub eax, edx",
             "sar eax, 12",
             "shl eax, 16",
             "add eax, ecx",
             "shld edx, eax, 16",
+            "pop si",
             "pop bp",
             "retf"
         ]
@@ -5630,6 +5642,7 @@ fn test_a_word_step_of_a_loop_index_is_a_lea_after_the_compare_not_an_add_and_a_
 /// but narrows these to word pairs would lose what every program is priced on.
 /// There is no 286 profile yet: when there is, it asserts none of these.
 #[test]
+#[ignore = "OLD-SEL-10: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_m16_emits_386_forms() {
     let arithmetic = listing(
         "define i32 @f(i32 %a, i32 %b) addrspace(1) {\n  %c = add i32 %a, %b\n  %d = mul i32 %c, 3\n  ret i32 %d\n}\n",
@@ -6355,6 +6368,7 @@ define i16 @f() addrspace(1) {
 /// sizeof messages` (runtime/qb/error.c at -O2) was refused, "an address of no
 /// global".
 #[test]
+#[ignore = "OLD-SEL-2: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_ptrtoint_of_a_far_global_to_a_word_is_its_offset() {
     let text = "@messages = internal addrspace(1) global [8 x i8] zeroinitializer
 define i1 @f(i16 %x) addrspace(1) {
@@ -6405,6 +6419,21 @@ define i16 @f(i16 %i) addrspace(1) {
         any("mov ", ", DGROUP") && any("mov ", ", offset g") && any("shl e", ", 16") && has("pushw 47104"),
         "{got:?}"
     );
+}
+
+/// `os_screen.c` read a far constant (`0xB8000010`) through a near pointer,
+/// which the pin writes `addrspacecast (inttoptr ... to ptr addrspace(1)) to
+/// ptr`; isel refused it, "an address of no global". The near pointer is the
+/// offset.
+#[test]
+fn test_a_far_constant_cast_to_a_near_pointer_is_its_offset() {
+    let text = "define i8 @f() addrspace(1) {
+  %v = load volatile i8, ptr addrspacecast (ptr addrspace(1) inttoptr (i32 -1207959536 to ptr addrspace(1)) to ptr)
+  ret i8 %v
+}
+";
+    let got = listing(text, "f");
+    assert!(got.iter().any(|one| one.contains("[16]")), "{got:?}");
 }
 
 /// A branch's LIR odds are `BranchProbabilityInfo`'s: `p == null` is the
@@ -6747,6 +6776,7 @@ r:
 /// pin does (`fadds 20(%esp)`): a call bounded the load's move down to its
 /// reader, so both arguments were loaded first and spilled across the call.
 #[test]
+#[ignore = "OLD-SEL-5: old selector, PressureSink deleted in #4992; goes with --isel=old"]
 fn test_a_float_argument_read_after_a_call_is_loaded_after_it() {
     let text = "declare void @g() addrspace(1)
 define float @f(float %x, float %y) addrspace(1) {
@@ -7000,4 +7030,17 @@ define void @f() addrspace(1) {
     assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
     assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
+}
+
+/// `candidates` found each instruction's opcode, types and kinds by string
+/// compare down the generator's lists, 47,681 times (4.1 M Ir) on d_faces: an
+/// opcode is searched for once, whatever number of instructions use it.
+#[test]
+fn test_an_opcode_is_searched_for_once() {
+    let adds: String = (1..=40).map(|n| format!("  %t{n} = add i16 %t{}, 3\n", n - 1)).collect();
+    let text = format!("define i16 @f(i16 %t0) addrspace(1) {{\n{adds}  ret i16 %t40\n}}\n");
+    crate::backend::isel::OPCODE_SCANS.with(|one| one.set(0));
+    assembled(&text);
+    let scans = crate::backend::isel::OPCODE_SCANS.with(std::cell::Cell::get);
+    assert!(scans < 40, "{scans}");
 }

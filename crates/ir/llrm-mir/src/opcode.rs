@@ -561,13 +561,14 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 11] = [
+pub const CONVENTIONS: [(&str, u32); 12] = [
     ("ccc", 0),
     ("fastcc", 8),
     ("coldcc", 9),
     ("x86_stdcallcc", 64),
     ("x86_fastcallcc", 65),
     ("x86_intrcc", 83),
+    ("x86_regcallcc", REGCALL),
     ("watcallcc", WATCALL),
     ("sysvcc", SYSV),
     ("ia16cc", IA16),
@@ -613,6 +614,8 @@ pub const IA16: u32 = 1004;
 pub const SYSV: u32 = 1003;
 
 /// `watcallcc`: Open Watcom's register convention.
+/// clang's `x86_regcallcc`.
+pub const REGCALL: u32 = 92;
 pub const WATCALL: u32 = 1002;
 
 /// BASIC's own: arguments pushed left to right, popped by the callee.

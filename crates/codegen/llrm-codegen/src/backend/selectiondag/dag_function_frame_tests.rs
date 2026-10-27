@@ -830,6 +830,76 @@ fn at_os_a_54_byte_clear_is_a_rep_string_operation() {
     assert_eq!((fills, stores), (1, 0), "a fill and no store");
 }
 
+const M16_CLEAR_24: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global [24 x i8] zeroinitializer
+
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+
+define void @f() {
+entry:
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 24, i1 false)
+  ret void
+}
+";
+
+/// A 24-byte local array cleared by six dword stores at -Os (24 B of code)
+/// where the old selector's `rep stos` is 12: the inline limit was the pin's
+/// 8 stores, not the target's size-tuned ratio (nbody_single.nib: 96 B of
+/// `mov [bp-N],esi` for four arrays, and 610 more `mov` stores over the
+/// corpus under dag). Real mode takes four stores inline at -Os.
+#[test]
+fn at_os_a_24_byte_clear_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_CLEAR_24).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let fills =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((fills, stores), (1, 0), "a fill and no store");
+}
+
+const M16_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@a = global [12 x i8] zeroinitializer
+@b = global [12 x i8] zeroinitializer
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i16(ptr @a, ptr @b, i16 12, i1 false)
+  ret void
+}
+";
+
+/// A 12-byte struct copy (a `vec3` of floats) was three dword load and store
+/// pairs at -Os, 24 bytes of code where `rep movs` is about 16 (QCport
+/// `_ent_mover_push`: 21 stores and 15 loads). Real mode takes two pairs
+/// inline at size.
+#[test]
+fn at_os_a_12_byte_copy_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Copy).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((copies, stores), (1, 0), "a copy and no store");
+}
+
 /// A 16-byte clear at m16 was eight word stores: the widest store was the
 /// pointer's. The pin's `getOptimalMemOpType` gives `i32` there, and clang
 /// `-m16 -O2` clears 16 bytes with four `movl $0` (rep_count: 1046 bytes
