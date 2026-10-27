@@ -69,9 +69,9 @@ pub fn expanded(
 /// `SHLD`/`SHRD`), as the pin does.
 pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
-    bits: u32,
+    ty: &str,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && matches!(bits, 8 | 16 | 32)
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
 }
 
 /// The integer constant `operand` is.

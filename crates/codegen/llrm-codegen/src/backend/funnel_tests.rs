@@ -114,10 +114,14 @@ fn a_constant_funnel_shift_is_two_shifts_and_an_or() {
 fn the_dag_keeps_a_byte_word_or_dword_funnel_shift() {
     use crate::backend::funnel::kept_for_isel;
     use crate::backend::shadow::Selector;
-    assert!(kept_for_isel(Selector::Dag, 32) && kept_for_isel(Selector::Dag, 16) && kept_for_isel(Selector::Dag, 8));
-    assert!(!kept_for_isel(Selector::Dag, 64), "an i64 funnel shift is not lowered");
-    assert!(!kept_for_isel(Selector::Old, 32), "the old selector has no shld pattern");
+    assert!(
+        kept_for_isel(Selector::Dag, "i32")
+            && kept_for_isel(Selector::Dag, "i16")
+            && kept_for_isel(Selector::Dag, "i8")
+    );
+    assert!(!kept_for_isel(Selector::Dag, "i64"), "an i64 funnel shift is not lowered");
+    assert!(!kept_for_isel(Selector::Old, "i32"), "the old selector has no shld pattern");
     let mut module = shifting("fshl", 32, None);
-    expanded(&mut module, |_| true, |bits| kept_for_isel(Selector::Dag, bits)).expect("expands");
+    expanded(&mut module, |_| true, |bits| kept_for_isel(Selector::Dag, &format!("i{bits}"))).expect("expands");
     assert!(llrm_mir::print::module(&module).contains("@llvm.fshl.i32("), "the call stays");
 }
