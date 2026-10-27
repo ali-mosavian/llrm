@@ -158,6 +158,10 @@ pub struct DagConfig {
     pub boolean_contents: BooleanContents,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
+    /// Every symbol is `dso_local`, as clang marks them under `-fno-pic`: an
+    /// `extern` symbol's offset then folds too. The pin takes the flag from
+    /// the IR; its absence there is this field's default.
+    pub dso_local_symbols: bool,
     /// The pointer type (`TLI->getPointerTy`).
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
@@ -171,6 +175,7 @@ impl Default for DagConfig {
         DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             offset_folding: false,
+            dso_local_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
         }
