@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:920eb99d5f4acc42a3cea3d3f666cb9fcbd206542b70c082302e42d6fc601a1b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:17d3e1973353111fc1655ff9e9b9acda05499552e3210ad9f0eb3b85fe0f13e3 -->
 
 # selects
 
@@ -23,7 +23,7 @@ replaces the select's uses:
 ```
 
 DEVIATE S3 (no number): `llvm.usub.sat` is expanded here, before selection,
-to `a > b ? a - b : 0`. The pin expands it in the DAG legalizer
+to `umax(a, b) - b`. The pin expands it in the DAG legalizer
 (`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
 and a conditional move. Exit: the legalizer's expansion lands.
 
