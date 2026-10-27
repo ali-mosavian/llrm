@@ -760,6 +760,8 @@ pub(crate) fn llvm_order(
         // LoopSink) and L1682.
         Phase::Late => vec![
             slot("float2int@1594", Box::new(crate::float2int::Float2Int)),
+            // `LowerConstantIntrinsicsPass` (l.1597), right after Float2Int.
+            slot("lower-constant-intrinsics@1597", Box::new(crate::lowerconstantintrinsics::LowerConstantIntrinsics)),
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
