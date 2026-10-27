@@ -1,5 +1,7 @@
 //! A split register read as undef by an instruction that also defines it.
 
+mod common;
+
 use std::process::Command;
 
 /// `crc = ... XOR (&HEDB88320 AND (0& - (crc AND 1&)))` at -O2 (dag): the mask
@@ -28,9 +30,9 @@ fn a_split_register_read_as_undef_by_its_own_def_compiles() {
 fn a_copy_of_an_undefined_value_does_not_panic_the_spill_weights() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/crc/crc.c");
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["--isel=dag", "-O2", "-o", "x.obj"])
+        .args(["--isel=dag", "-O2", "-c", "-o", "x.obj"])
         .arg(&source)
         .output()
         .unwrap();
