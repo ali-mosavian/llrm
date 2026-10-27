@@ -69,9 +69,9 @@ def test_a_pr_whose_build_fails_alone_is_dropped_before_assembly_and_checked_onc
         return ["does not build as a whole: error[E0425]"] if head == bad else []
 
     heads = {"1": good, "2": bad}
-    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    kept, dropped = ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache", base_sha="b" * 40)
     assert kept == ["1"] and "E0425" in dropped["2"] and "2" not in kept
-    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache")
+    ps.alone(["1", "2"], heads, refusals=refusals, cache=tmp_path / "cache", base_sha="b" * 40)
     assert built == [good, bad], built
 
 
