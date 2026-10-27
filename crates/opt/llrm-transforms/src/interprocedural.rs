@@ -694,6 +694,17 @@ pub fn optimized_with<E: From<String>>(
         }
     }
 
+    // A load the only store of an internal variable dominates reads the
+    // stored constant: GlobalOpt's `forwardStoredOnceStore`.
+    for at in 0..count {
+        let ids =
+            reporting(&mut program.modules[at], &mut modules[at], |module| crate::globalforward::forwarded(module));
+        edited(&mut modules[at], &ids);
+        for id in ids {
+            reoptimised(&mut program.modules[at], &mut modules[at], id, "globalforward.")?;
+        }
+    }
+
     let mut return_round = 0;
 
     // Materialize every newly constant result.

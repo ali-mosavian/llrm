@@ -191,6 +191,7 @@ pub mod gepoffset;
 pub mod globaldce;
 #[cfg(test)]
 mod globaldce_tests;
+pub mod globalforward;
 pub mod globalopt;
 pub mod globalsra;
 pub mod gvn;
