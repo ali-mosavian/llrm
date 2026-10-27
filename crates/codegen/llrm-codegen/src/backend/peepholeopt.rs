@@ -86,7 +86,7 @@ impl LIRTransform for PeepholeOptimizer {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(loads_folded(&compared(&immediates_folded(&body, self.size))))
+        Ok(loads_folded(&compared(&immediates_folded(&recurrences_commuted(&body), self.size))))
     }
 }
 
@@ -702,6 +702,130 @@ fn load_folded(
     Some((folded, load))
 }
 
+/// `MaxRecurrenceChain` (`-recurrence-chain-limit`).
+const MAX_RECURRENCE_CHAIN: usize = 3;
+
+/// `body` with the recurrence of each loop-header phi commuted so the
+/// phi's value is the tied operand (`PeepholeOptimizer::optimizeRecurrence`,
+/// [PeepholeOptimizer.cpp#L1719](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L1719),
+/// `findTargetRecurrence` #L1648).
+///
+/// `s := phi(s0, s2); s1 := add t, s; s2 := add s1, u` ties `t` to `s1` and
+/// `s1` to `s2`, so the copy phi elimination makes into `s` cannot coalesce
+/// with `s2` (`s` and `t` overlap). Commuting the first add to `add s, t`
+/// removes the copy (x_ll_arith: the sum's `adc` kept the shifted half as
+/// its tied operand, +3 instructions in the loop).
+///
+/// A chain follows the single reader of each value while its instruction
+/// has a tied def, up to three long, and counts only if it ends in one of the
+/// phi's incoming values.
+///
+/// Not translated: nothing (the X86 commutes are `add`, `adc`, `and`, `or`,
+/// `xor`, `imul`).
+pub fn recurrences_commuted(body: &LirBody) -> LirBody {
+    if body.blocks.iter().all(|block| block.phis.is_empty()) {
+        return body.clone();
+    }
+    let forest = crate::analysis::loops::forest_of(&body.blocks, Some(body.entry));
+    let mut reads: HashMap<u32, usize> = HashMap::default();
+    let mut users: HashMap<u32, (usize, usize)> = HashMap::default();
+    for (at, block) in body.blocks.iter().enumerate() {
+        for phi in block.phis.iter() {
+            for &(_from, value) in &phi.incoming {
+                *reads.entry(value).or_default() += 1;
+            }
+        }
+        for (place, one) in block.insns.iter().enumerate() {
+            for value in one.uses.iter().copied().chain(one.requires.iter().map(|(held, _)| held.value)) {
+                *reads.entry(value).or_default() += 1;
+                users.insert(value, (at, place));
+            }
+        }
+    }
+    let mut swaps: HashSet<(usize, usize)> = HashSet::default();
+    for block in body.blocks.iter() {
+        if !forest.innermost(block.at).is_some_and(|one| forest.loops[one].header == block.at) {
+            continue;
+        }
+        for phi in block.phis.iter() {
+            let targets: HashSet<u32> = phi.incoming.iter().map(|&(_from, value)| value).collect();
+            let mut chain = Vec::new();
+            if target_recurrence(body, phi.result, &targets, &reads, &users, &mut chain) {
+                swaps.extend(chain.into_iter().flatten());
+            }
+        }
+    }
+    if swaps.is_empty() {
+        return body.clone();
+    }
+    let mut out = body.clone();
+    for (at, place) in swaps {
+        let one = &out.blocks[at].insns[place];
+        let Some(what) = one.what.as_ref() else { continue };
+        let mut made = (**one).clone();
+        made.what = Some(Semantics { sources: vec![what.sources[1].clone(), what.sources[0].clone()], ..what.clone() });
+        let mut insns: Vec<Arc<Insn>> = out.blocks[at].insns.iter().cloned().collect();
+        insns[place] = Arc::new(made);
+        out.blocks[at].insns = insns.into();
+    }
+    out
+}
+
+/// `findTargetRecurrence`: `chain` collects the instructions of the cycle, with
+/// the place of each that reads the value in the second place (to commute).
+fn target_recurrence(
+    body: &LirBody,
+    value: u32,
+    targets: &HashSet<u32>,
+    reads: &HashMap<u32, usize>,
+    users: &HashMap<u32, (usize, usize)>,
+    chain: &mut Vec<Option<(usize, usize)>>,
+) -> bool {
+    if targets.contains(&value) {
+        return true;
+    }
+    if reads.get(&value).copied() != Some(1) || chain.len() >= MAX_RECURRENCE_CHAIN {
+        return false;
+    }
+    let Some(&(at, place)) = users.get(&value) else { return false };
+    let one = &body.blocks[at].insns[place];
+    let Some(what) = one.what.as_ref() else { return false };
+    let name = what.name.as_deref().unwrap_or_default();
+    let tied = matches!(
+        name,
+        "add"
+            | "sub"
+            | "adc"
+            | "sbb"
+            | "and"
+            | "or"
+            | "xor"
+            | "imul"
+            | "neg"
+            | "not"
+            | "inc"
+            | "dec"
+            | "shl"
+            | "shr"
+            | "sar"
+    );
+    let ([Loc::Held(into)], Some(Loc::Held(first))) = (&what.dests[..], what.sources.first()) else { return false };
+    if !tied || what.indirect || one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() {
+        return false;
+    }
+    if first.value == value {
+        chain.push(None);
+        return into.width == first.width && target_recurrence(body, into.value, targets, reads, users, chain);
+    }
+    let commutes = matches!(name, "add" | "adc" | "and" | "or" | "xor" | "imul");
+    let [_, Loc::Held(second)] = &what.sources[..] else { return false };
+    if !commutes || second.value != value || into.width != first.width || first.width != second.width {
+        return false;
+    }
+    chain.push(Some((at, place)));
+    target_recurrence(body, into.value, targets, reads, users, chain)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1122,5 +1246,75 @@ mod tests {
         ]);
         let done = loads_folded(&body);
         assert!(matches!(done.blocks[0].insns[1].what.as_ref().unwrap().sources[..], [Loc::Held(_), Loc::Held(_)]));
+    }
+
+    /// A loop `s := phi(s0, s2); s1 := add t, s; s2 := add s1, u`.
+    fn recurrence(
+        name: &str,
+        length: usize,
+    ) -> LirBody {
+        use crate::model::lir::Phi;
+        let mut insns =
+            vec![insn(0, Operation::Binary, "add", vec![held(20)], vec![held(5), held(5)], vec![20], vec![5, 5])];
+        // v20 is the shifted half; each step adds one more operand to the sum
+        let mut value = 10;
+        for step in 0..length {
+            let next = 30 + step as u32;
+            let (first, second) = if step == 0 { (20, value) } else { (value, 21) };
+            insns.push(insn(
+                1 + step as i64,
+                Operation::Binary,
+                name,
+                vec![held(next)],
+                vec![held(first), held(second)],
+                vec![next],
+                vec![first, second],
+            ));
+            value = next;
+        }
+        let header = LirBlock {
+            succ: vec![1, 2].into(),
+            phis: vec![Phi { result: 10, incoming: vec![(0, 1), (1, value)] }].into(),
+            ..LirBlock::new(1, insns)
+        };
+        let entry = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, vec![]) };
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![entry.into(), header.into(), LirBlock::new(2, vec![]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body
+    }
+
+    fn first_sources(
+        body: &LirBody,
+        place: usize,
+    ) -> Vec<u32> {
+        let what = body.blocks[1].insns[place].what.as_ref().unwrap();
+        what.sources.iter().filter_map(|one| if let Loc::Held(held) = one { Some(held.value) } else { None }).collect()
+    }
+
+    /// x_ll_arith: the sum's `adc` took the shifted half as its tied operand
+    /// and the loop-carried sum a copy (+3 instructions a trip, 43 against
+    /// the pin's 40). The pin commutes the add that reads the phi.
+    #[test]
+    fn test_a_loops_sum_is_the_tied_operand_of_the_add_that_reads_it() {
+        let body = recurrences_commuted(&recurrence("adc", 1));
+        assert_eq!(first_sources(&body, 1), [10, 20]);
+    }
+
+    #[test]
+    fn test_a_recurrence_longer_than_the_limit_is_left() {
+        let body = recurrences_commuted(&recurrence("add", MAX_RECURRENCE_CHAIN + 1));
+        assert_eq!(first_sources(&body, 1), [20, 10]);
+    }
+
+    #[test]
+    fn test_a_subtract_is_not_commuted() {
+        let body = recurrences_commuted(&recurrence("sub", 1));
+        assert_eq!(first_sources(&body, 1), [20, 10]);
     }
 }

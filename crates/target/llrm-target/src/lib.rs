@@ -33,6 +33,9 @@ pub struct StringRegisters {
     pub source: RegId,
     pub destination: RegId,
     pub source_segment: RegId,
+    /// The segment a destination is written through, which a string move
+    /// leaves loaded with the source's.
+    pub destination_segment: RegId,
     /// A data register a tail's byte count rides in.
     pub tail: RegId,
 }
@@ -510,6 +513,17 @@ pub trait Target {
         signed: bool,
         wide_divisor: bool,
     ) -> Result<routines::Divide, String>;
+
+    /// `divide_routine` for a caller that reads only `used` of the results: a
+    /// target may have a shorter routine that leaves the rest unfixed.
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        _used: routines::Used,
+    ) -> Result<routines::Divide, String> {
+        self.divide_routine(signed, wide_divisor)
+    }
 
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
