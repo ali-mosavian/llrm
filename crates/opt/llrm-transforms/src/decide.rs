@@ -430,7 +430,8 @@ pub fn _executable_successors(
 }
 
 /// The blocks that hold a loop's simple form up: a jump alone in the block
-/// before the header (its one entry), the one latch, or an exit block only the
+/// before the header (its one entry), the one latch if two or more blocks go
+/// to it, or an exit block only the
 /// loop reaches. A pass that takes them out meets `loopsimplify` putting them
 /// back, round after round.
 pub(crate) fn loop_form_blocks(
@@ -453,8 +454,11 @@ fn loop_form_blocks_of(
         if let Some(parent) = loop_.preheader(function) {
             loop_edges.insert(parent);
         }
+        // A latch with one predecessor is not held up: LLVM's SimplifyCFG
+        // bypasses it (`NeedCanonicalLoop` is for two or more).
         if let Some(&latch) = loop_.latches.iter().next().filter(|_| loop_.latches.len() == 1)
             && successors_of(function, latch)[..] == [loop_.header]
+            && predecessors_of(function, latch).len() >= 2
         {
             loop_edges.insert(latch);
         }

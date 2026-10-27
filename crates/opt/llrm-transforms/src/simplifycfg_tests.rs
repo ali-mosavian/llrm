@@ -275,8 +275,8 @@ b0:
     );
 }
 
-/// The jump that closes a loop keeps its `!llvm.loop` (it is the loop's one
-/// latch, so it stays).
+/// The jump that closes a loop hands its `!llvm.loop` to the branch before it
+/// when the block goes (its one predecessor).
 #[test]
 fn test_the_new_jump_keeps_the_loop_metadata() {
     let mut module = parsed(
@@ -301,7 +301,7 @@ b3:
 ",
     );
     assert!(simplify(&mut module));
-    assert!(printed(&module).contains("br label %b1, !llvm.loop"), "{}", printed(&module));
+    assert!(printed(&module).contains("label %b3, !llvm.loop"), "{}", printed(&module));
 }
 
 /// `decide` took out `phi [%x, entry], [%self, latch]` (gvn leaves them) when
@@ -1168,4 +1168,36 @@ b5:
     let headers = super::loop_headers(function);
     let got: Vec<usize> = (0..blocks.len()).filter(|&at| headers.contains(&blocks[at])).collect();
     assert_eq!(got, [1, 3]);
+}
+
+/// A latch alone in its block with one predecessor is bypassed, as LLVM does
+/// (`NeedCanonicalLoop` needs two predecessors): `while ((*d++ = *s++) != 0);`
+/// kept `b2`, so LoopRotate peeled its first iteration (x_strlen +16 ins).
+#[test]
+fn test_a_single_predecessor_latch_of_a_loop_is_bypassed() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %a, %b2 ]
+  %a = add i16 %i, 1
+  %t = icmp ult i16 %a, %x
+  br i1 %t, label %b2, label %b3
+
+b2:
+  br label %b1
+
+b3:
+  ret i16 %a
+}
+";
+    let mut module = parsed(text);
+    let outer = Outer::of(&mut module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    assert!(super::simplified_with(&super::Options::default(), context, &spec, &mut declared, function));
+    assert!(!printed(&module).contains("b2:"), "{}", printed(&module));
 }

@@ -151,11 +151,12 @@
 //! - D7. `needCanonicalLoops` (the table row) keeps only the jump block that
 //!   would send two or more edges to a loop header, or leave one. Here a jump
 //!   alone in a block that holds a loop's simple form up (its preheader, its
-//!   one latch, a dedicated exit: `decide::loop_form_blocks`) is also kept
-//!   while the option is on, because rounds repeat until nothing changes and
-//!   `loopsimplify` runs in them: LLVM's passes run once, and without this the
-//!   two undid each other each round ("cycle after 3 rounds" on the `deedlines`
-//!   demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
+//!   one latch of two or more edges, a dedicated exit:
+//!   `decide::loop_form_blocks`) is also kept while the option is on, because
+//!   rounds repeat until nothing changes and `loopsimplify` runs in them:
+//!   LLVM's passes run once, and without this the two undid each other each
+//!   round ("cycle after 3 rounds" on the `deedlines` demo). Exit: the
+//!   LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches

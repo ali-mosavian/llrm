@@ -830,5 +830,5 @@ b3:
     let before = llrm_analysis::cfg::graphs_built();
     let found = super::loop_form_blocks(function, Some(loops));
     assert_eq!(llrm_analysis::cfg::graphs_built() - before, 0, "the whole graph was built");
-    assert_eq!(found.into_iter().collect::<Vec<_>>(), [0, 2]);
+    assert_eq!(found.into_iter().collect::<Vec<_>>(), [0]);
 }
