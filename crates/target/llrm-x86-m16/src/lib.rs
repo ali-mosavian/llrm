@@ -44,6 +44,31 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 /// The 16-bit x86 target as `llrm-driver` names it.
 pub struct M16;
 
+/// The registers the description states.
+static REGISTERS: std::sync::LazyLock<Vec<llrm_target::registers::Register>> = std::sync::LazyLock::new(|| {
+    llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses")
+});
+
+/// The pin's register pressure sets for the registers described above:
+/// `pressure.sets` (the pin's x86 tables are the same for 16 and 32 bits).
+static PRESSURE: std::sync::LazyLock<llrm_target::pressure::PressureSets> = std::sync::LazyLock::new(|| {
+    llrm_target::pressure::parse(include_str!("pressure.sets")).expect("pressure.sets parses")
+});
+
+impl M16 {
+    /// The limit of pressure set `set` here (`computePSetLimit`): a register
+    /// may be allocated if its root is a `gpr`.
+    fn pressure_limit(set: usize) -> u32 {
+        PRESSURE.limit(set, |name| {
+            REGISTERS
+                .iter()
+                .find(|one| one.name == name)
+                .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                .is_some_and(|root| root.is("gpr"))
+        })
+    }
+}
+
 fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
     let mut dos = Dos::priced(
         &prices.costs,
@@ -68,6 +93,23 @@ impl llrm_target::Target for M16 {
 
     fn register_capacity(&self) -> i64 {
         GENERAL.len() as i64
+    }
+
+    fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
+        Some((
+            &PRESSURE,
+            (0..PRESSURE.sets.len())
+                // A set whose largest class the table leaves out holds no value
+                // here: its raw limit stands.
+                .map(|set| {
+                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
+                        M16::pressure_limit(set)
+                    } else {
+                        PRESSURE.sets[set].limit
+                    }
+                })
+                .collect(),
+        ))
     }
 
     fn march(
