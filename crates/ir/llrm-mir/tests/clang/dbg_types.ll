@@ -41,7 +41,7 @@ attributes #0 = { noinline nounwind optnone uwtable "frame-pointer"="all" "min-l
 !0 = !DIGlobalVariableExpression(var: !1, expr: !DIExpression())
 !1 = distinct !DIGlobalVariable(name: "g", scope: !2, file: !6, line: 3, type: !15, isLocal: false, isDefinition: true)
 !2 = distinct !DICompileUnit(language: DW_LANG_C11, file: !3, producer: "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, enums: !4, globals: !11, splitDebugInlining: false, nameTableKind: None)
-!3 = !DIFile(filename: "/tmp/dbgt.c", directory: "/home/alim/work/personal/llrm/.claude/worktrees/fa-di/crates/ir/llrm-mir/tests/clang", checksumkind: CSK_MD5, checksum: "1cd46cd2c4a05022e8780f34dd9e3449")
+!3 = !DIFile(filename: "/tmp/dbgt.c", directory: "/work", checksumkind: CSK_MD5, checksum: "1cd46cd2c4a05022e8780f34dd9e3449")
 !4 = !{!5}
 !5 = !DICompositeType(tag: DW_TAG_enumeration_type, name: "E", file: !6, line: 1, baseType: !7, size: 32, elements: !8)
 !6 = !DIFile(filename: "/tmp/dbgt.c", directory: "", checksumkind: CSK_MD5, checksum: "1cd46cd2c4a05022e8780f34dd9e3449")

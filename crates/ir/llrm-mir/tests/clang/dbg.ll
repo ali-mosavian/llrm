@@ -69,7 +69,7 @@ attributes #0 = { noinline nounwind optnone uwtable "frame-pointer"="all" "min-l
 !llvm.ident = !{!9}
 
 !0 = distinct !DICompileUnit(language: DW_LANG_C11, file: !1, producer: "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc81016406a1917d0508d2df296266)", isOptimized: false, runtimeVersion: 0, emissionKind: FullDebug, splitDebugInlining: false, nameTableKind: None)
-!1 = !DIFile(filename: "dbg.c", directory: "/home/alim/scratch/handoff/mir-debug-input", checksumkind: CSK_MD5, checksum: "edf9135163a14d7b5141ba381daf995b")
+!1 = !DIFile(filename: "dbg.c", directory: "/work", checksumkind: CSK_MD5, checksum: "edf9135163a14d7b5141ba381daf995b")
 !2 = !{i32 1, !"NumRegisterParameters", i32 0}
 !3 = !{i32 7, !"Dwarf Version", i32 5}
 !4 = !{i32 2, !"Debug Info Version", i32 3}
