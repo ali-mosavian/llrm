@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [list(ps.ALWAYS_SCANNERS)] and asked[0][:3] == ["docs_in_sync", "docs_links", "no_local_paths"]
+    assert asked == [sorted(ps.ALWAYS_SCANNERS)] and {"docs_in_sync", "docs_links", "no_local_paths"} <= set(asked[0])
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1758,4 +1758,25 @@ def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
     import inspect
 
     assert "stage_summary()" in inspect.getsource(ps.merge_batch)
+
+
+def test_the_drift_prone_scanners_run_every_batch():
+    """A red scanner outside the default scan hid on parity for hours (the SD registry, 12:03 on). no_todo, tracked_build_products, block_list_ratchet and no_kill_by_pattern read
+    sources and the file list (0.02-5.6 s each on parity, all green) and are in the default scan."""
+    assert {"no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern"} <= set(ps.ALWAYS_SCANNERS)
+
+
+def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and_not_otherwise():
+    """It runs three release bin builds (67 s at load 80) and was in no default scan; it now runs on a diff that touches a build.rs, a Cargo.toml/lock or a selector-generator input,
+    and the full scan (tests=True) always runs it."""
+    assert "build_script_reruns" not in ps.scanners_for(["docs/a.md", "crates/opt/llrm-transforms/src/x.rs"])
+    for touched in ["crates/codegen/llrm-codegen/build.rs", "Cargo.lock", "crates/opt/llrm-x/Cargo.toml", "crates/target/llrm-x86/src/isel/patterns.isel", "crates/backend/llrm-iselgen/src/build.rs"]:
+        assert "build_script_reruns" in ps.scanners_for([touched]), touched
+    asked = []
+    ps.landing_scanner_failures(["crates/codegen/llrm-codegen/build.rs"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    ps.landing_scanner_failures(["docs/a.md"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0] and "build_script_reruns" not in asked[1]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0]
 

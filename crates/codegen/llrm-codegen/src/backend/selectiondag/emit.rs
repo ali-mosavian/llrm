@@ -2678,7 +2678,7 @@ impl Emitter<'_, '_> {
                 if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
                     self.narrow_definition(source.value, 2);
                 }
-                // DEVIATE SD219 (m16): the pin's `(i8 0)` and `(i16 0)` are the
+                // DEVIATE SD237 (m16): the pin's `(i8 0)` and `(i16 0)` are the
                 // low part of a `MOV32r0`; a dword `xor` is 3 bytes here (the
                 // 66 prefix), the word's or byte's 2. A zero read only narrow
                 // is made narrow.
@@ -3476,7 +3476,7 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
-            // DEVIATE SD317: the pin loads `LD_F1` once for all its readers; a
+            // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
             // call or block end is the only place the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
             let constant = cell.is_none();

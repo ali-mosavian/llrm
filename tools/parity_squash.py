@@ -994,7 +994,18 @@ def new_lib_failures(
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
 # without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
-ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts")
+ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts", "no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern")
+
+
+BUILD_SCRIPT_INPUTS = ("crates/target/", "crates/backend/llrm-iselgen/", "crates/codegen/llrm-codegen/src/backend/peep/")
+
+
+def scanners_for(files: list[str]) -> tuple[str, ...]:
+    """The default scan, plus build_script_reruns (three `cargo build --release --bins`, ~67 s) when the diff touches a build.rs, a Cargo.toml/Cargo.lock or a file the selector generator reads;
+    the full scan (LAND_FAST_TESTS=1, nightly) runs it always."""
+    if any(f.endswith(("build.rs", "Cargo.toml", "Cargo.lock")) or f.startswith(BUILD_SCRIPT_INPUTS) for f in files):
+        return (*ALWAYS_SCANNERS, "build_script_reruns")
+    return ALWAYS_SCANNERS
 
 
 def landing_scanner_failures(
@@ -1004,7 +1015,7 @@ def landing_scanner_failures(
     on_head=None,
 ) -> set[str]:
     """The new red scanners of a batch: all of them with the lib tests on (LAND_FAST_TESTS=1), else the always-on ones."""
-    return new_scanner_failures(files, on_merged, on_head, only=None if tests else ALWAYS_SCANNERS)
+    return new_scanner_failures(files, on_merged, on_head, only=None if tests else scanners_for(files))
 
 
 def new_scanner_failures(
@@ -1177,7 +1188,8 @@ def rescan_alone(number: str, info: dict) -> set[str]:
     if subprocess.run(["git", "merge", "--no-edit", "-q", info["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
         subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
         return set()  # a conflict is the squash's to refuse
-    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+    files = git("diff", "--name-only", BASE, "HEAD").split()
+    return new_scanner_failures(files, only=scanners_for(files))
 
 
 def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
@@ -1189,7 +1201,8 @@ def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
         if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
             subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
     subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync", "--force"], cwd=ROOT, capture_output=True)  # each member's pages are current alone; together the pass counts of docs/optimizations/passes/readme.md are not (11:35-11:49: the group scan was red, each member green)
-    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+    files = git("diff", "--name-only", BASE, "HEAD").split()
+    return new_scanner_failures(files, only=scanners_for(files))
 
 
 def rescan_culprit(group: list[str], infos: dict[str, dict], rescan_group, rescan_one) -> tuple[str, set[str]] | None:
