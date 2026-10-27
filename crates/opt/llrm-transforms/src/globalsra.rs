@@ -107,7 +107,7 @@ struct Access {
 }
 
 /// Each function's uses of each global.
-pub(crate) fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
+fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
     let mut named = BTreeMap::new();
     let mut all = BTreeMap::new();
     for (function_id, _, function) in module.functions() {
