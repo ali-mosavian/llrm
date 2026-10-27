@@ -2,7 +2,10 @@
 //! the allocator the spike needs, not LLVM's greedy (`RAGreedy`): an interval
 //! has no holes, a spilled one lives in its frame object, and every use of it
 //! is reloaded into a reserved scratch register. An interval that crosses a
-//! call takes a callee-saved register or is spilled.
+//! call takes a callee-saved register or is spilled. A value that is one
+//! constant (`movz`, `adrp`, an immediate) is never spilled and never takes a
+//! callee-saved register of its own: each use makes it again (LLVM
+//! rematerializes it: `TargetInstrInfo::isReMaterializable`).
 //!
 //! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR. This
 //! allocator stands in until the core machine passes run on arm64 LIR (see
@@ -101,7 +104,10 @@ impl Ranges {
 }
 
 /// The live ranges of every register, and the points of the calls.
-fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f64>) {
+/// Each register's weight is its definitions and uses over the loop depth of
+/// their blocks (10 per level); `uses` is the uses' share of it and `copies`
+/// the share of those that are the source of a copy.
+fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f64>, Uses) {
     let mut position = 0u32;
     let mut extents = Vec::new();
     let mut calls = Vec::new();
@@ -166,6 +172,7 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
     }
     let mut ranges: HashMap<Reg, Ranges> = HashMap::new();
     let mut weight: HashMap<Reg, f64> = HashMap::new();
+    let mut use_weight = Uses::default();
     for (at, block) in function.blocks.iter().enumerate() {
         let (first, last) = extents[at];
         // Walking backward, the end of the segment each live register has open.
@@ -184,6 +191,10 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
             }
             for register in &uses {
                 *weight.entry(*register).or_default() += frequency;
+                *use_weight.all.entry(*register).or_default() += frequency;
+                if matches!(op, Op::Copy { src, .. } if src == register) {
+                    *use_weight.copies.entry(*register).or_default() += frequency;
+                }
                 open.entry(*register).or_insert(point + 1);
             }
         }
@@ -194,7 +205,14 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
     for one in ranges.values_mut() {
         one.normalize();
     }
-    (ranges, calls, weight)
+    (ranges, calls, weight, use_weight)
+}
+
+/// The weight of a register's uses, and of those that are copies.
+#[derive(Default)]
+struct Uses {
+    all: HashMap<Reg, f64>,
+    copies: HashMap<Reg, f64>,
 }
 
 /// Joins the virtual registers a copy connects whose live ranges do not
@@ -202,7 +220,7 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
 /// `RegisterCoalescer`, for the copies phi elimination leaves): the registers
 /// are renamed in place.
 fn coalesce(function: &mut MFunc) {
-    let (ranges, _, weight) = analyse(function);
+    let (ranges, _, weight, _) = analyse(function);
     let mut ranges = ranges;
     let mut parent: HashMap<Reg, Reg> = HashMap::new();
     fn find(
@@ -273,7 +291,7 @@ fn coalesce(function: &mut MFunc) {
 /// `function` with every register physical.
 pub fn allocate(function: &mut MFunc) -> Allocation {
     coalesce(function);
-    let (ranges, calls, weight) = analyse(function);
+    let (ranges, calls, weight, use_weight) = analyse(function);
     // What each physical register holds: its own live ranges (arguments,
     // results) and, once a virtual register is given it, that one's; a call
     // destroys every caller-saved register at its point.
@@ -312,6 +330,8 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
         (weight.get(register).copied().unwrap_or(0.0) / f64::from(length.max(1)), std::cmp::Reverse(live.start()))
     };
     order.sort_by(|a, b| priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
+    let candidates = rematerializable(function);
+    let mut made_again: HashMap<Reg, Op> = HashMap::new();
     let mut assigned: HashMap<Reg, Reg> = HashMap::new();
     let mut spilled: HashMap<Reg, u32> = HashMap::new();
     let mut used_callee_saved: BTreeSet<Reg> = BTreeSet::new();
@@ -331,6 +351,15 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
             .flatten()
             .find(|candidate| class.contains(candidate) && fits(candidate));
         match hinted.or_else(|| class.iter().copied().find(fits)) {
+            // A new callee-saved register (a save and a restore) for a value one
+            // instruction makes is dearer than making it at each use.
+            Some(chosen)
+                if pool::callee_saved(chosen)
+                    && !used_callee_saved.contains(&chosen)
+                    && cheaper_again(&candidates, &register, &weight, &use_weight, 1.0) =>
+            {
+                made_again.insert(register, candidates[&register].0.clone());
+            }
             Some(chosen) => {
                 if pool::callee_saved(chosen) {
                     used_callee_saved.insert(chosen);
@@ -338,13 +367,16 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
                 occupied.entry(chosen).or_default().extend(live);
                 assigned.insert(register, chosen);
             }
+            None if cheaper_again(&candidates, &register, &weight, &use_weight, 1.0 + use_weight.all[&register]) => {
+                made_again.insert(register, candidates[&register].0.clone());
+            }
             None => {
                 let slot = function.slot(8, 8);
                 spilled.insert(register, slot);
             }
         }
     }
-    rewrite(function, &assigned, &spilled);
+    rewrite(function, &assigned, &spilled, &made_again);
     let mut allocation = Allocation::default();
     for register in used_callee_saved {
         match register {
@@ -362,10 +394,30 @@ fn rewrite(
     function: &mut MFunc,
     assigned: &HashMap<Reg, Reg>,
     spilled: &HashMap<Reg, u32>,
+    made_again: &HashMap<Reg, Op>,
 ) {
     for block in &mut function.blocks {
         let mut out = Vec::with_capacity(block.ops.len());
         for mut op in std::mem::take(&mut block.ops) {
+            // The one definition of a value made at each use.
+            if op.defs_and_uses().0.iter().any(|register| made_again.contains_key(register)) {
+                continue;
+            }
+            // A copy of such a value is the definition, aimed at the copy's target.
+            if let Op::Copy { dst, src } = &op
+                && let Some(def) = made_again.get(src)
+                && !made_again.contains_key(dst)
+            {
+                match spilled.get(dst) {
+                    None => out.push(aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst))),
+                    Some(slot) => {
+                        let scratch = Reg::Gpr(Gpr(pool::GPR_SCRATCH[0]));
+                        out.push(aimed_at(def, scratch));
+                        out.push(spill_access(scratch, *slot, false));
+                    }
+                }
+                continue;
+            }
             // A copy between a spill slot and a register is a load or store.
             if let Op::Copy { dst, src } = &op
                 && let Some(done) = spilled_copy(*dst, *src, assigned, spilled)
@@ -374,12 +426,23 @@ fn rewrite(
                 continue;
             }
             let (mut loads, mut stores) = (Vec::new(), Vec::new());
+            let mut again: Vec<(Reg, Reg)> = Vec::new();
             let (mut next_gpr, mut next_fpr) = (0usize, 0usize);
             // One scratch register per spilled register of this operation.
             let mut scratch: HashMap<Reg, Reg> = HashMap::new();
             op.visit(&mut |register, role| {
                 let key = register.key();
-                let replacement = if let Some(slot) = spilled.get(&key) {
+                let replacement = if made_again.contains_key(&key) {
+                    let Reg::Gpr(_) = key else { unreachable!("a constant is a general register") };
+                    let scratch_reg = *scratch.entry(key).or_insert_with(|| {
+                        next_gpr += 1;
+                        Reg::Gpr(Gpr(pool::GPR_SCRATCH[next_gpr - 1]))
+                    });
+                    if !again.iter().any(|(r, _)| *r == scratch_reg) {
+                        again.push((scratch_reg, key));
+                    }
+                    scratch_reg
+                } else if let Some(slot) = spilled.get(&key) {
                     let scratch_reg = *scratch
                         .entry(key)
                         .or_insert_with(
@@ -413,6 +476,9 @@ fn rewrite(
             for (register, slot) in loads {
                 out.push(spill_access(register, slot, true));
             }
+            for (register, key) in again {
+                out.push(aimed_at(&made_again[&key], register));
+            }
             let is_noop = matches!(&op, Op::Copy { dst, src } if dst == src);
             let is_return = matches!(op, Op::Return { .. });
             if !is_noop {
@@ -425,6 +491,72 @@ fn rewrite(
         }
         block.ops = out;
     }
+}
+
+/// Whether making `register` (a candidate) at each use costs less than
+/// keeping it: its instructions at each use (a use that is a copy costs the
+/// copy's one instruction less), against its instructions at the definition
+/// plus `extra` (a callee-saved register's save and restore, or the store and
+/// loads of a slot). Uses and definition count by loop depth.
+fn cheaper_again(
+    candidates: &HashMap<Reg, (Op, u32)>,
+    register: &Reg,
+    weight: &HashMap<Reg, f64>,
+    uses: &Uses,
+    extra: f64,
+) -> bool {
+    let Some((_, length)) = candidates.get(register) else { return false };
+    let (all, copies) = (uses.all.get(register).copied().unwrap_or(0.0), uses.copies.get(register).copied().unwrap_or(0.0));
+    let length = f64::from(*length);
+    all * length - copies < (weight[register] - all) * length + extra
+}
+
+/// The registers that hold one constant: defined once, by an operation that
+/// reads no register, and the operation.
+fn rematerializable(function: &MFunc) -> HashMap<Reg, (Op, u32)> {
+    let mut defined: HashMap<Reg, usize> = HashMap::new();
+    let mut made: HashMap<Reg, (Op, u32)> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        let (defs, uses) = op.defs_and_uses();
+        for register in &defs {
+            *defined.entry(*register).or_default() += 1;
+        }
+        // The instructions it takes to make the value.
+        let length = match op {
+            Op::Imm { bits, value, dst } => Some(crate::expand_imm::mov_imm(*value, *bits, *dst).len() as u32),
+            Op::FrameAddress { .. } => Some(1),
+            Op::I(Inst::MoveWide { op, .. }) => (*op != Wide::Keep).then_some(1),
+            Op::I(Inst::Adr { .. }) => Some(1),
+            _ => None,
+        };
+        if let Some(length) = length
+            && uses.is_empty()
+            && let [register] = defs.iter().copied().collect::<Vec<_>>()[..]
+            && register.is_virtual()
+        {
+            made.insert(register, (op.clone(), length));
+        }
+    }
+    made.retain(|register, _| defined[register] == 1);
+    made
+}
+
+/// `op`, a constant's definition, defining `register` instead.
+fn aimed_at(
+    op: &Op,
+    register: Reg,
+) -> Op {
+    let mut made = op.clone();
+    made.visit(&mut |slot, role| {
+        if role.writes() {
+            match (slot, register) {
+                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
+                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
+                _ => unreachable!("a register keeps its class"),
+            }
+        }
+    });
+    made
 }
 
 fn spilled_copy(

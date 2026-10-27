@@ -317,3 +317,15 @@ fn a_memset_pattern_becomes_a_store_loop() {
         .expect("the intrinsic lowers");
     assert!(asm.contains("strh"), "{asm}");
 }
+
+/// A constant several calls use was made once and kept in a callee-saved
+/// register (`movz x19, #0` and a save and restore of `x19`, a `mov` at each
+/// use); with every callee-saved register taken it went through a stack slot
+/// instead. The pin makes it again at each use: loop_fusion's `main` was 1.84x.
+#[test]
+fn a_constant_used_by_several_calls_is_made_at_each_use() {
+    let asm = driver::assembly(include_str!("data/constants_across_calls.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("x19"), "{asm}");
+    assert_eq!(asm.matches("movz x0, #0").count(), 2, "{asm}");
+}
