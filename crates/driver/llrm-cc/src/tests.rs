@@ -46,6 +46,16 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// `-fsanitize=stack` and `bounds` were refused with "not translated yet",
+/// so stackover.c, stackdeep.c, es_across_copy.c and idioms.c (8 configs)
+/// could not compile under llrm-cc; the backend takes them.
+#[test]
+fn the_stack_and_bounds_checks_reach_the_backend() {
+    let one = built("-fsanitize=stack -fsanitize=bounds -c x.c");
+    assert_eq!(one.llc, words("-fsanitize=stack -fsanitize=bounds"));
+    assert!(parse(&words("-fsanitize=signed-integer-overflow x.c")).is_err());
+}
+
 #[test]
 fn unroll_flags_reach_the_backend_too() {
     let one = built("-fno-unroll-loops -c x.c");

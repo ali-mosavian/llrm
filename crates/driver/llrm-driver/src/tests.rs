@@ -887,3 +887,21 @@ fn no_inline_takes_the_source_name_under_every_abi() {
         crate::llc::compiled(&flags, text, "sum5").unwrap_or_else(|why| panic!("{abi}: {why}"));
     }
 }
+
+/// `-fsanitize=stack` reached llrm-llc from llrm-cc and did nothing for IR:
+/// llrm-c marked the functions it compiled, an IR module's were never marked,
+/// so `stackover.c` ran off the stack instead of ending in "Stack Overflow!".
+#[test]
+fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @deep(i32 %a) {\n  %r = add i32 %a, 5\n  ret i32 %r\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-fobject-format=omf", "-mabi=sysv"];
+        arguments.extend(extra);
+        let (built, _) = crate::llc::compiled(&flags(&arguments), text, "deep").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(!listing(&[]).contains("STKOVERFLOW"), "unchecked");
+    assert!(listing(&["-fsanitize=stack"]).contains("STKOVERFLOW"), "checked");
+}

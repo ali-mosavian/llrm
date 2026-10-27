@@ -540,6 +540,7 @@ impl Flags {
             stack_usage: self.stack_usage,
             stack_limit: self.stack_limit,
             no_inline: self.no_inline.clone(),
+            stack_check: self.sanitize.stack,
             isel: self.isel,
             abi: self.abi.clone(),
             float_store: self.float_store,
