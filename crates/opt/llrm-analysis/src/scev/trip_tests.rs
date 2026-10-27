@@ -109,10 +109,10 @@ fn test_the_iterations_of_an_affine_recurrence_in_a_range_are_counted() {
 fn test_a_constant_exit_value_is_zero_trips_or_infinite() {
     with_loop(|se, cx, header| {
         let zero = constant(se, 32, 0);
-        let limit = se.how_far_to_zero(cx, zero, header, true);
+        let limit = se.how_far_to_zero(cx, zero, header, true, false);
         assert_eq!(limit.exact_not_taken, zero, "already zero: the backedge is taken no times");
         let five = constant(se, 32, 5);
-        let limit = se.how_far_to_zero(cx, five, header, true);
+        let limit = se.how_far_to_zero(cx, five, header, true, false);
         assert_eq!(limit.exact_not_taken, se.get_could_not_compute(), "a constant other than zero loops forever");
     });
 }
@@ -127,8 +127,34 @@ fn test_how_far_to_zero_collects_the_loop_guards_once() {
     with_loop(|se, cx, header| {
         let v = chain(se, cx, header, &[7, 3]);
         let before = super::guards::collections();
-        let limit = se.how_far_to_zero(cx, v, header, true);
+        let limit = se.how_far_to_zero(cx, v, header, true, false);
         assert_ne!(limit.exact_not_taken, se.get_could_not_compute(), "the query reaches the guards");
         assert_eq!(super::guards::collections() - before, 1);
+    });
+}
+
+/// `{-49,+,1,+,2}` is `n*n - 49`: the pinned `print<scalar-evolution>` takes
+/// the backedge 7 times (ten quadratic loops of `tools/scev/counts.py` agree).
+/// It was CouldNotCompute (D-T2). `n*n - 50` has no root: still unknown.
+#[test]
+fn test_a_quadratic_recurrence_is_zero_at_its_root() {
+    with_loop(|se, cx, header| {
+        let root = chain(se, cx, header, &[(1u128 << 32) - 49, 1, 2]);
+        let limit = se.how_far_to_zero(cx, root, header, true, false);
+        assert_eq!(se.as_constant(limit.exact_not_taken), Some(Ap::new(32, 7)));
+        let none = chain(se, cx, header, &[(1u128 << 32) - 50, 1, 2]);
+        let limit = se.how_far_to_zero(cx, none, header, true, false);
+        assert_eq!(limit.exact_not_taken, se.get_could_not_compute());
+    });
+}
+
+/// `{0,+,1,+,2}` is `n*n`: 0, 1, 4, ..., 49 are below 50, 64 is not.
+#[test]
+fn test_the_iterations_of_a_quadratic_recurrence_in_a_range_are_counted() {
+    with_loop(|se, cx, header| {
+        let squares = chain(se, cx, header, &[0, 1, 2]);
+        let range = ConstantRange::make_exact_icmp_region(llrm_mir::opcode::IntPredicate::Ult, 32, 50);
+        let got = se.get_num_iterations_in_range(cx, squares, &range);
+        assert_eq!(se.as_constant(got), Some(Ap::new(32, 8)));
     });
 }

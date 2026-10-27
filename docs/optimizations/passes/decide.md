@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/decide.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/decide.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:56f6fc7408fd1134eaa6b2dbc63a25c1b04e8ad3b462276dbcd94406433f8d35 -->
+<!-- src: crates/opt/llrm-transforms/src/decide.rs sha256:7471fa079f8be976d5e8af3111779ea2ceeb950b0a9ec6258ede4200c20573c1 -->
 
 # decide
 
@@ -35,8 +35,7 @@ Before:
 ```mir
 define i16 @f(i16 %x) {
 b0:
-  %k = add i16 2, 3
-  %c = icmp slt i16 %k, 10
+  %c = icmp slt i16 5, 10
   br i1 %c, label %b1, label %b2
 
 b1:
@@ -52,8 +51,7 @@ After:
 ```mir
 define i16 @f(i16 %x) {
 b0:
-  %k = add i16 2, 3
-  %c = icmp slt i16 %k, 10
+  %c = icmp slt i16 5, 10
   br label %b1
 
 b1:
@@ -74,10 +72,10 @@ at -O0. `jumpthreading` and `dfajumpthreading` are the separate passes that
 thread edges.
 
 ## ScalarEvolution
-A branch the other engines leave is asked of ScalarEvolution
-(`isKnownPredicateAt` at the branch, then its inverse), then of the `guards`
-engine for what it cannot prove (the partition index: not an add
-recurrence). `LLRM_NO_SCEV_DECIDE` asks the `guards` engine alone.
+None. A branch only a loop's trip count settles is `indvars`'s
+(`eliminateIVComparison`, on the loops an unroll made too: `indvars@753`),
+as in LLVM; the `guards` engine answers what it can from the guards over
+the branch (the partition index: not an add recurrence).
 
 ## Needs
 `consts`, `constant_cycles`, LazyValueInfo (a branch the dominating

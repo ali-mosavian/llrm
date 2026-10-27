@@ -1,6 +1,4 @@
-# style: format the tree with tools/fmt.sh
-cf063d3a027ecc365f939a5df73171189924badd
-# style: wrap comments at column 80 with tools/fmt.sh
-f656eb360bb5885576838b42da1c5e86abce5852
-# style: format the 60 files that drifted (tools/fmt.sh), #3398
-a36597f34c9fa98e1cbd96282f8debf294bae8b9
+# Commits that only reformat: `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes blame skip them.
+# One sha per commit, with the commit's subject above it.
+# style(fmt): tools/fmt.sh on the 91 files that were not formatted (#3825)
+92f4582b60fab35a994ce68da8a2acdb035872bc

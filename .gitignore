@@ -1,7 +1,8 @@
 build/
 /target/
 /tools/rfmt-post/target/
-/crates/frontends/qbfront/target/
+/crates/frontends/qb/target/
+/crates/frontends/qb/lalrspike/target/
 /crates/*/*/target/
 .DS_Store
 ._*
@@ -10,3 +11,6 @@ __pycache__/
 /*.err
 *.pyc
 /dosbox-crash.log
+
+# `--dump` at the repo root writes the stage dumps here
+/mir/

@@ -264,3 +264,208 @@ b2:
     assert!(!unrolled, "{text}");
     assert_eq!(text.matches("landingpad").count(), 1, "{text}");
 }
+
+/// An outer loop of two trips round an inner loop of unknown count: unrolling
+/// the outer copies the inner loop. The loop pass manager hands the copies to
+/// the passes after the unroll.
+const OUTER_TWICE: &str = "define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %o
+
+o:
+  %i = phi i16 [ 0, %b0 ], [ %i.next, %ol ]
+  %acc = phi i16 [ %x, %b0 ], [ %r, %ol ]
+  br label %h
+
+h:
+  %j = phi i16 [ 0, %o ], [ %j.next, %h ]
+  %a = phi i16 [ %acc, %o ], [ %a.next, %h ]
+  %a.next = add i16 %a, %j
+  %j.next = add i16 %j, 1
+  %go = icmp slt i16 %j.next, %n
+  br i1 %go, label %h, label %ol
+
+ol:
+  %r = phi i16 [ %a.next, %h ]
+  %i.next = add i16 %i, 1
+  %again = icmp slt i16 %i.next, 2
+  br i1 %again, label %o, label %out
+
+out:
+  %done = phi i16 [ %r, %ol ]
+  ret i16 %done
+}
+";
+
+#[test]
+fn a_full_unroll_hands_over_the_loops_it_made() {
+    let mut module = parsed(OUTER_TWICE);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let text = crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            created: std::rc::Rc::clone(&created),
+        },
+    );
+    assert!(!text.contains("%i = phi"), "the outer loop is gone: {text}");
+    assert!(!created.borrow().is_empty(), "the copy of the inner loop is a loop the unroll made: {text}");
+    assert_eq!(created.borrow().len(), 2, "the copy and the first trip's own loop: {:?}: {text}", created.borrow());
+}
+
+/// The first trip of an unrolled loop keeps its inner loop's blocks, and
+/// `addSiblingLoops` hands that loop on with the copies. Left out, shellsort's
+/// `while (at >= 32 && ...)` after the `gap = 32` trip kept its one-trip loop
+/// (28 blocks to the pin's 25).
+#[test]
+fn a_full_unroll_hands_over_the_inner_loop_of_its_first_trip() {
+    let mut module = parsed(OUTER_TWICE);
+    let created = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    crate::testing::managed(
+        &mut module,
+        super::LoopFullUnroll {
+            opt_level: 2,
+            opt_size: false,
+            only_when_forced: false,
+            created: std::rc::Rc::clone(&created),
+        },
+    );
+    // The text has five blocks, b0 to out: a loop headed by one of them is the
+    // first trip's own.
+    assert!(created.borrow().iter().any(|header| header.0 < 5), "{:?}", created.borrow());
+}
+
+/// `while (phase == DYING && now >= next_frame) { frame++; next_frame += 0.1f;
+/// if (frame == 13) ...}` of QCport's `_pl_death_selftest`: one exit tests a
+/// float that no trip count comes from, the other counts 14 iterations. The old
+/// full unroller (unroll.rs) admitted only a loop that leaves from its header,
+/// and a loop with two exiting blocks stayed rolled; the pin takes the smallest
+/// per-exit trip count (`getSmallConstantTripCount` over the exiting blocks,
+/// `computeUnrollCount`). Passes today: it guards a shape the old pass refused.
+#[test]
+fn a_loop_with_a_float_exit_and_an_integer_exit_is_unrolled_by_the_integer_count_and_the_float_chain_folds() {
+    let text = "define i16 @f(float %limit) {
+b0:
+  br label %b1
+
+b1:
+  %frame = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %t = phi float [ 0.000000e+00, %b0 ], [ %tn, %b2 ]
+  %more = fcmp olt float %t, %limit
+  br i1 %more, label %b2, label %done
+
+b2:
+  %next = add nuw nsw i16 %frame, 1
+  %tn = fadd float %t, 0x3FB99999A0000000
+  %again = icmp ne i16 %next, 14
+  br i1 %again, label %b1, label %done
+
+done:
+  %r = phi i16 [ %frame, %b1 ], [ %next, %b2 ]
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(unrolled(&mut module));
+    let after = printed(&module);
+    assert!(!after.contains("%frame") && !after.contains("%t ="), "no loop phi is left: {after}");
+    assert!(!after.contains("fadd"), "the float chain folded into constants: {after}");
+    // 14 copies of the float test remain, against constants.
+    assert_eq!(after.matches("fcmp olt float").count(), 14, "{after}");
+}
+
+/// QCport's `pl_death_tick` loop with its count read from a constant table
+/// (`death_counts[set]`, `set` known): the integer exit's bound is a load.
+/// Fold's `_numbers` table folded it; with that switched off the loop kept
+/// "trips 0, max 32766" because MIR had no `simplifyLoadInst`. InstSimplify
+/// folds the load and the loop unrolls by the table's value.
+#[test]
+fn a_loop_bounded_by_a_constant_table_unrolls_once_instsimplify_folds_the_load() {
+    let text = "@counts = internal constant [12 x i8] c\"\\0B\\00\\09\\00\\0F\\00\\09\\00\\09\\00\\09\\00\"
+
+define i16 @f(float %limit) {
+b0:
+  %n = load i16, ptr getelementptr inbounds nuw (i8, ptr @counts, i16 4)
+  %bound = add nsw i16 %n, -1
+  br label %b1
+
+b1:
+  %frame = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %t = phi float [ 0.000000e+00, %b0 ], [ %tn, %b2 ]
+  %more = fcmp olt float %t, %limit
+  br i1 %more, label %b2, label %done
+
+b2:
+  %next = add nuw nsw i16 %frame, 1
+  %tn = fadd float %t, 0x3FB99999A0000000
+  %again = icmp ne i16 %frame, %bound
+  br i1 %again, label %b1, label %done
+
+done:
+  %r = phi i16 [ %frame, %b1 ], [ %next, %b2 ]
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    assert!(!unrolled(&mut module.clone()), "premise: with the load in the bound the loop stays rolled");
+    crate::testing::managed(&mut module, crate::instsimplify::InstSimplify);
+    assert!(unrolled(&mut module));
+    let after = printed(&module);
+    assert!(!after.contains("fadd"), "the float chain folded into constants: {after}");
+}
+
+/// A nest whose inner loop compares with the outer counter was peeled four
+/// times in one run and then unrolled completely (nbody_single -O3: 114 -> 826
+/// IR insns, the pin's 424): `LoopFullUnrollPass` does not revisit a loop it
+/// peeled, so one iteration comes off and the outer loop stays.
+#[test]
+fn a_peeled_loop_is_not_visited_again_by_the_full_unroll() {
+    let mut text = String::from(
+        "define i32 @f(i32 %x) {
+b0:
+  br label %outer
+outer:
+  %b = phi i32 [ 0, %b0 ], [ %b2, %latch ]
+  %acc = phi i32 [ %x, %b0 ], [ %s, %latch ]
+  br label %inner
+inner:
+  %o = phi i32 [ 0, %outer ], [ %o2, %inner ]
+  %a = phi i32 [ %acc, %outer ], [ %a2, %inner ]
+  %ne = icmp ne i32 %o, %b
+",
+    );
+    for k in 0..14 {
+        let previous = if k == 0 { "%a".to_owned() } else { format!("%t{}", k - 1) };
+        text += &format!("  %t{k} = mul i32 {previous}, {}\n", k + 3);
+    }
+    text += "  %pick = select i1 %ne, i32 %t12, i32 %t13
+  %a2 = add i32 %a, %pick
+  %o2 = add i32 %o, 1
+  %done = icmp eq i32 %o2, 6
+  br i1 %done, label %latch, label %inner
+latch:
+  %s = phi i32 [ %a2, %inner ]
+  %b2 = add i32 %b, 1
+  %end = icmp eq i32 %b2, 6
+  br i1 %end, label %exit, label %outer
+exit:
+  %r = phi i32 [ %s, %latch ]
+  ret i32 %r
+}
+";
+    let mut module = parsed(&text);
+    let inputs: &[&[i128]] = &[&[1], &[0], &[-7], &[1000]];
+    let before = results(&module, inputs);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::lcssa::closed(function).expect("closes");
+    let tti = X86::of_cpu("i486").expect("a cpu");
+    let options =
+        Options { opt_level: 3, opt_size: false, min_size: false, only_when_forced: false, prepare_for_lto: false };
+    assert!(unroll_function(&mut module, "f", &tti, options).expect("unrolls"));
+    let after = printed(&module);
+    assert_eq!(results(&module, inputs), before, "{after}");
+    assert!(after.contains("%b = phi") || after.matches("phi i32 [ 0").count() > 0, "the outer loop is gone: {after}");
+}

@@ -1,6 +1,6 @@
 /* SLEEP and BEEP (QB rt/gwsleep, rt/llscnio B$BLEEP). */
 #include "console.h"
-#include "device.h"
+#include "dev.h"
 #include "llrm_os.h"
 #include "qb.h"
 
@@ -19,7 +19,7 @@ void B_SLEP(long seconds)
     for (;;) {
         if (cn_key_hook)
             cn_key_hook();
-        if (llrm_os_console_key_ready()) {
+        if (dev_key_ready()) {
             if (!cn_key_hook || !cn_key_hook())
                 break;
         } else if (seconds != 0 && elapsed(start) >= seconds * HUNDREDTHS) {

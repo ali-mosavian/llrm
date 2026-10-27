@@ -233,8 +233,17 @@ pattern divide
   call divide
 end
 
+# An i1's byte is 0 or 1: its sum and difference are the xor, its product the
+# and. LSR's expander makes `add i1 x, true` of a `not`.
+pattern boolean_sum for add=xor sub=xor mul=and
+  match $mir.i1(a, b)
+  let x = held(a)
+  let y = source(b)
+  emit $x86 result <- x, y
+end
+
 pattern boolean_arithmetic
-  match add|sub|mul|shl|lshr|ashr.i1
+  match shl|lshr|ashr.i1
   refuse "arithmetic on an i1"
 end
 
@@ -266,6 +275,32 @@ pattern multiply_scaled
   when scalable(n)
   cost scaled(n)
   call scaled(a, n)
+end
+
+# The `not` of a comparison is the comparison of the opposite condition, as
+# DAGCombiner's visitXOR has it; one nothing else reads is not made twice.
+pattern inverted_icmp_only
+  match xor.i1(t=icmp(_, _), #1)
+  when only_reader(t)
+  cover t
+  call setcc_inverted
+end
+
+pattern inverted_fcmp_only
+  match xor.i1(t=fcmp(_, _), #1)
+  when only_reader(t)
+  cover t
+  call setcc_inverted
+end
+
+pattern inverted_icmp
+  match xor.i1(t=icmp(_, _), #1)
+  call setcc_inverted
+end
+
+pattern inverted_fcmp
+  match xor.i1(t=fcmp(_, _), #1)
+  call setcc_inverted
 end
 
 # What the target would rather run on the whole register (`promote` in its datalayout.toml): the word
@@ -335,6 +370,13 @@ end
 # Where a target's own casts go: after the i64 and float casts, which are not
 # those of its own types, and before the general ones.
 own casts
+
+# A boolean truncation only the block's branch reads is the branch's `test`.
+pattern fused_truncation
+  match trunc.i1(x)
+  when fused
+  nothing
+end
 
 pattern truncate_to_boolean
   match trunc.i1(x)
@@ -406,6 +448,13 @@ pattern freeze
   emit mov r <- s
 end
 
+# Where an i64 is its halves, a frozen one is the same halves.
+pattern wide_freeze
+  match freeze.i64
+  when splits_i64
+  call wide_freeze
+end
+
 pattern unselected_cast
   match cast
   call unselected_cast
@@ -420,14 +469,14 @@ end
 
 # An AND only a comparison with zero reads is `test`.
 pattern and_tested
-  match icmp(t=and.i16|i32(_:value, _:value|int), #0)
+  match icmp(t=and.i8|i16|i32(_:value, _:value|int), #0)
   when only_reader(t)
   cover t
   call setcc
 end
 
 pattern and_tested_second
-  match icmp(#0, t=and.i16|i32(_:value, _:value|int))
+  match icmp(#0, t=and.i8|i16|i32(_:value, _:value|int))
   when only_reader(t)
   cover t
   call setcc

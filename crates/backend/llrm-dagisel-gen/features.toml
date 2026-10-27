@@ -1,0 +1,140 @@
+# What a CPU is to the pin's pattern predicates, for the x86-32 targets without SSE or MMX.
+#
+# `features` are the pin's `Proc<...>` lists: i486 is `[FeatureX87]` (X86.td L1914), i586 is
+# `[FeatureX87, FeatureCX8]` (L1916); `Subtarget->hasX()` is true for the listed `X`. Every
+# other `Subtarget->hasX()` is false.
+[cpu.i486]
+features = ["X87"]
+
+# Real mode on a 386: the pin's `Proc<"i386", [FeatureX87]>` (L1912).
+[cpu.m16]
+features = ["X87"]
+
+# m16.td's 16-bit string forms ask for the mode.
+[cpu.m16.atom]
+"Subtarget->is16Bit()" = true
+
+[cpu.p5]
+features = ["X87", "CX8"]
+
+# x86-64 (D64-0): the 64-bit mode of the same pin table. The baseline CMOV and CX8 of any 64-bit CPU,
+# x87 for `long double`; no SSE yet (scalar floating point is D64-4), so a float pattern stays on x87.
+[cpu.x64]
+features = ["X87", "CX8", "CMOV", "SSE1", "SSE2"]
+
+[cpu.x64.atom]
+"Subtarget->is64Bit()" = true
+"Subtarget->isTarget64BitLP64()" = true
+
+# Atoms that are not `Subtarget->hasX()`: a constant for every CPU here, or a feature list.
+[atom]
+"Subtarget->is64Bit()" = false
+"Subtarget->isTarget64BitLP64()" = false
+"Subtarget->isTargetWin64()" = false
+"Subtarget->isTargetPS()" = false
+"Subtarget->isCallingConvWin64(MF->getFunction().getCallingConv())" = false
+# Tuning flags set only for Atom, Silvermont and later cores.
+"Subtarget->slowIncDec()" = false
+"Subtarget->slowTwoMemOps()" = false
+"Subtarget->slowIndirectCall()" = false
+"Subtarget->preferLegacySetCC()" = false
+# Retpoline and the thunks need a feature flag nothing here sets.
+"Subtarget->useIndirectThunkCalls()" = false
+# Windows-only module flag.
+"MF->getFunction().getParent()->getModuleFlag(\"import-call-optimization\")" = false
+# No HiPE calling convention.
+"MF->getFunction().getCallingConv() == CallingConv::HiPE" = false
+"MF->getFunction().getCallingConv() != CallingConv::HiPE" = true
+# Static code model, no PIC.
+"TM.getCodeModel() == CodeModel::Small" = true
+"TM.getCodeModel() == CodeModel::Kernel" = false
+"TM.isPositionIndependent()" = false
+"true" = true
+# `X86Subtarget.h` L199: hasCMOV() || hasSSE1() || is64Bit().
+"Subtarget->canUseCMOV()" = ["CMOV", "SSE1"]
+
+# Atoms decided when a function is selected: the name of the `PatternContext` method.
+[dynamic]
+"shouldOptForSize(MF)" = "should_opt_for_size"
+"MF->getFunction().hasMinSize()" = "has_min_size"
+"Subtarget->getFrameLowering()->hasFP(*MF)" = "has_frame_pointer"
+"Subtarget->isLegalToCallImmediateAddr()" = "is_legal_to_call_immediate_addr"
+
+# Value types no selection here produces: vectors.
+[types]
+dead_prefixes = ["v", "nxv"]
+
+# Node predicates (`CheckPredicate`): a name of the predicate's PatFrags, and the function of
+# `llrm_dagisel::predicates` that is its body. One name per predicate is enough.
+[node_predicate]
+load = "non_extending_load"
+unindexedload = "unindexed_load"
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+truncstore = "truncating_store"
+add_su = "has_one_use"
+and_du = "two_uses_of_first_value"
+loadi8 = "loadi8"
+loadi16 = "loadi16"
+loadi32 = "loadi32"
+extload = "ext_load"
+zextload = "zext_load"
+sextload = "sext_load"
+extloadi64i32 = "extload_i64_i32"
+memop = "memop"
+simple_load = "simple_load"
+simple_store = "simple_store"
+alignedload128 = "aligned_16"
+alignedloadf128 = "aligned_to_store_size"
+atomic_load_nonext = "atomic_non_extending"
+extloadi1 = "memory_vt_i1"
+extloadi8 = "memory_vt_i8"
+extloadi16 = "memory_vt_i16"
+sextloadi32 = "memory_vt_i32"
+X86fild64 = "memory_vt_i64"
+extloadf32 = "memory_vt_f32"
+extloadf64 = "memory_vt_f64"
+X86fldf32 = "memory_vt_f32"
+X86fldf64 = "memory_vt_f64"
+X86fldf80 = "memory_vt_f80"
+X86fist32 = "memory_vt_i32"
+X86fist64 = "memory_vt_i64"
+fp32imm0 = "is_pos_zero"
+fpimm0 = "fp_imm_pos_zero"
+fpimm1 = "fp_imm_one"
+fpimmneg0 = "fp_imm_neg_zero"
+fpimmneg1 = "fp_imm_minus_one"
+i64immSExt32 = "imm_sext_32"
+i16immSExt8 = "imm_sext_8"
+i64immZExt32 = "imm_zext_32"
+immff00_ffff = "imm_ff00_ffff"
+BTCBTSMask64 = "btc_bts_mask_64"
+BTRMask64 = "btr_mask_64"
+imm_su = "not_avoid_immediate_forms"
+i16relocImmSExt8_su = "not_avoid_immediate_forms"
+shiftMask8 = "shift_mask_8"
+shiftMask16 = "shift_mask_16"
+shiftMask32 = "shift_mask_32"
+shiftMask64 = "shift_mask_64"
+i64relocImmSExt32 = "reloc_imm_sext_32"
+i16relocImmSExt8 = "reloc_imm_sext_8"
+X86add_flag_nocf = "no_carry_flag_uses_of_flags"
+xor_flag_dead_result = "xor_flag_dead_result"
+# SSE (D64-4). The vector broadcasts, `vzload` and `memopf128` never match a scalar DAG; the
+# builder sets no `!nontemporal`.
+X86VBroadcastld32 = "memory_vt_i32"
+X86vzload32 = "memory_vt_i32"
+X86VBroadcastld64 = "memory_vt_i64"
+X86vzload64 = "memory_vt_i64"
+X86vextractstore64 = "memory_vt_i64"
+extloadvf32 = "memory_vt_f32"
+memopf128 = "memop"
+nontemporalstore = "non_temporal_store"
+alignednontemporalstore = "non_temporal_store"
+CommutableCMPCC = "commutable_cmp_cc"
+X86sub_flag_nocf = "sub_no_carry_flag_uses"
+X86lock_add_nocf = "no_carry_flag_uses_of_result"
+def32 = "def32"
+or_disjoint = "or_disjoint"
+X86tcret_enough_regs = "tcret_enough_regs"
+anyext_sdiv = "anyext_sdiv"

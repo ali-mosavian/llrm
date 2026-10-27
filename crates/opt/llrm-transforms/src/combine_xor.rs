@@ -12,9 +12,8 @@
 //! `undef` lanes are not matched or made).
 //!
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
-//! each named where it stood: `foldXorToXor`,
-//! `SimplifyDemandedInstructionBits` (`combine_demanded`), `foldNot`,
-//! `foldBinOpShiftWithShift`, `visitMaskedMerge`, the `ctlz`/`cttz` and
+//! each named where it stood: `foldXorToXor`, `foldNot`,
+//! `visitMaskedMerge`, the `ctlz`/`cttz` and
 //! `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
 //! `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 //! `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
@@ -38,10 +37,12 @@ use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef;
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_bitorder::fold_bitwise_logic_with_intrinsics;
 use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
+use crate::combine_shift_binop::fold_binop_shift_with_shift;
 
 type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
 
@@ -69,6 +70,7 @@ const FOLDS: &[Fold] = &[
     not_or_xor,
     or_or_common,
     hoist_xor_constant,
+    fold_bitwise_logic_with_intrinsics,
 ];
 
 /// `m_Not(v)`.
@@ -646,10 +648,18 @@ pub fn visit_xor(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: foldXorToXor, SimplifyDemandedInstructionBits, foldNot,
-    // foldBinOpShiftWithShift.
+    // DEVIATE 2: foldXorToXor, foldNot.
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
+    }
+    // See if we can simplify any instructions used by the instruction whose
+    // sole purpose is to compute bits we don't care about.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return found;
+    }
+    if let Some(r) = fold_binop_shift_with_shift(c, inst) {
+        return r;
     }
     let (op0, op1, _) = parts(c, inst);
     FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)).unwrap_or(Visit::None)

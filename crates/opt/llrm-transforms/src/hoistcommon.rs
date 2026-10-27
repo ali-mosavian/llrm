@@ -382,10 +382,24 @@ pub fn hoisted(
             return false;
         }
     }
+    // `AllInstsEqOnly`: successors that end differently match nowhere, so no
+    // body is collected for them.
+    if all_equal_only {
+        let end = |successor: BlockId| function.terminator(successor).map(|last| function.instruction(last));
+        let first = end(unique[0]);
+        if !unique[1..].iter().all(|&successor| {
+            let other = end(successor);
+            other.map(|one| (&one.opcode, &one.operands)) == first.map(|one| (&one.opcode, &one.operands))
+        }) {
+            return false;
+        }
+    }
     // The cursors: each successor's instructions, where the walk is in them,
     // and the flags of those skipped.
     let mut bodies: Vec<(Vec<InstId>, usize, u32)> = Vec::new();
     for &successor in &unique {
+        #[cfg(test)]
+        BODY_COLLECTS.with(|count| count.set(count.get() + 1));
         let body: Vec<InstId> = function.iter_block(successor).collect();
         if function.instruction(body[0]).opcode == Opcode::Phi {
             return false;
@@ -490,3 +504,9 @@ pub fn hoisted(
 #[cfg(test)]
 #[path = "hoistcommon_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    /// Successor bodies `hoisted` has collected on this thread.
+    pub(crate) static BODY_COLLECTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

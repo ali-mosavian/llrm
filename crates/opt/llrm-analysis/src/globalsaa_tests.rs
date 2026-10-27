@@ -11,7 +11,7 @@ use llrm_mir::program::{Exports, Program, ProgramAnalyses};
 use llrm_mir::target::Neutral;
 
 use crate::consts::{Calls, Known, known_walked};
-use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory, call_effects};
+use crate::manager::{GlobalsAA, ProgramSummaries, Summaries, ThroughMemory};
 use crate::memory::Unit;
 use crate::testing::{DOS, function, layout, parsed, value};
 
@@ -24,7 +24,7 @@ fn kept(
     kept_by(globals, call, true)
 }
 
-/// `kept`, or without `Summaries` what `manager::call_effects` leaves.
+/// `kept`, or without `Summaries` what `calls_by_attributes` leaves.
 fn kept_by(
     globals: &str,
     call: &str,
@@ -60,6 +60,7 @@ b0:
     let module = &program.modules[0];
     let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
     modules.require::<GlobalsAA>();
+    modules.require::<crate::manager::GlobalsModRefAnalysis>();
     if summarized {
         modules.require::<Summaries>();
     }
@@ -67,8 +68,10 @@ b0:
     let f = function(module, "f");
     if !summarized {
         let unit = crate::testing::with_registers(Unit::within(&module.context, &layout, f, &outer));
-        let calls: Calls =
-            call_effects(&unit, &outer).unwrap().into_iter().map(|(at, effect)| (at, effect.stores)).collect();
+        let calls: Calls = crate::alias::calls_by_attributes(&crate::testing::with_points(unit))
+            .iter()
+            .map(|(at, effect)| (at, effect.stores.clone()))
+            .collect();
         return known_walked(&unit, &calls).get(&value(f, "r")).cloned();
     }
     let known = Analyses::new(outer).get::<ThroughMemory>(&module.context, &layout, f);
@@ -149,32 +152,36 @@ b0:
     assert_eq!(kept(&constant, call), None);
 }
 
-/// QB's `REDIM` descriptor held every array's address in a private constant
-/// nothing read: the array was untracked, and a runtime call that writes
-/// through a pointer it loaded then reloaded it (deedlines, +128 memory
-/// operands).
+/// A private constant nothing names holds a global's address: GlobalsModRef,
+/// as the pin's, takes an address stored in any initializer as escaped (the
+/// pin's pipeline has globaldce remove a dead one first, so QB's `REDIM`
+/// descriptors never reach this in a compile). `CallEffects`, deleted with
+/// #3436, kept the global tracked (deedlines +128 memory operands then); row
+/// AM-CA-5.
 #[test]
-fn a_private_initializer_nothing_names_does_not_leak_the_address_it_holds() {
+fn a_private_initializer_nothing_names_leaks_the_address_it_holds_as_the_pin_has_it() {
     let dead = format!("{PRIVATE}@held = internal constant ptr @g\n");
-    assert_eq!(kept(&dead, "call void @outside(ptr null)"), seven());
+    assert_eq!(kept(&dead, "call void @outside(ptr null)"), None);
     let chained = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
-    assert_eq!(kept(&chained, "call void @outside(ptr null)"), seven());
+    assert_eq!(kept(&chained, "call void @outside(ptr null)"), None);
     let named = format!("{PRIVATE}@held = internal constant ptr @g\n");
     assert_eq!(kept(&named, "%h = load ptr, ptr @held\n  call void @outside(ptr null)"), None);
     let behind = format!("{PRIVATE}@held = internal constant ptr @g\n@outer = internal constant ptr @held\n");
     assert_eq!(kept(&behind, "%h = load ptr, ptr @outer\n  call void @outside(ptr null)"), None);
 }
 
-/// A descriptor holding a global's address, handed only to a routine that
-/// `noretain`s it, leaves the global tracked; `nocapture` alone does not.
+/// A descriptor holding a global's address, handed to a routine that
+/// `noretain`s it: GlobalsModRef does not read `noretain` (ours, not the
+/// pin's), so the global is untracked either way; `CallEffects` kept it. Row
+/// AM-CA-5.
 #[test]
-fn a_global_held_only_by_a_noretain_argument_stays_tracked() {
+fn a_global_held_by_a_noretain_argument_is_untracked_until_globalsmodref_reads_noretain() {
     let held = |attrs: &str| {
         let globals =
             format!("{PRIVATE}@desc = internal constant ptr @g\n\ndeclare void @erase(ptr {attrs}) nocallback\n");
         kept(&globals, "call void @erase(ptr @desc)\n  store i16 7, ptr @g\n  call void @outside(ptr null)")
     };
-    assert_eq!(held("nocapture noretain"), seven());
+    assert_eq!(held("nocapture noretain"), None);
     assert_eq!(held("nocapture"), None);
 }
 
@@ -323,6 +330,7 @@ fn kept_in(
     let module = &program.modules[1];
     let mut modules = ModuleAnalyses::new(analyses.proxy(&program, 1));
     modules.require::<GlobalsAA>();
+    modules.require::<crate::manager::GlobalsModRefAnalysis>();
     modules.require::<Summaries>();
     let f = function(module, "f");
     let known = Analyses::new(modules.outer(module)).get::<ThroughMemory>(&module.context, &program.layout, f);
@@ -574,6 +582,26 @@ fn globals_of(text: &str) -> crate::globalsaa::Globals {
     Result::as_ref(&*found).expect("GlobalsAA").clone()
 }
 
+/// GlobalsAA is held past the bodies ipa-cp adds after it was made. A copy
+/// is no declaration: taken for one, its call wrote no tracked global and a
+/// load of @g across it kept a stale value.
+#[test]
+fn a_function_added_after_globals_aa_was_made_reaches_every_tracked_global() {
+    let found = globals_of(
+        "@g = internal global i16 0
+
+define void @f() {
+b0:
+  store i16 1, ptr @g
+  ret void
+}
+",
+    );
+    let added = llrm_mir::context::GlobalId(2);
+    let (read, written) = found.unsummarized(Some(added));
+    assert_eq!((read.len(), written.len()), (1, 1), "a copy made since was taken for a declaration");
+}
+
 /// A loop summing `@a` that reads it by index, then the same loop after loop
 /// strength reduction: through a pointer phi that steps by 2. `after` adds
 /// `uses` to the second, in the loop (`ret` is its return value, `decl` what
@@ -716,4 +744,69 @@ b3:
     let (before, after) = (globals_of(&before), globals_of(&after));
     assert!(!before.tracked(GlobalId(0)) && before.tracked(GlobalId(1)));
     assert!(!before.covers(&after));
+}
+
+/// `GlobalsAA` of the one-module program `text` on real mode.
+fn globals_on_dos(text: &str) -> crate::globalsaa::Globals {
+    let module = parsed(text);
+    let program = Program::new(vec![module], Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+    let module = &program.modules[0];
+    let mut modules = ModuleAnalyses::new(ProgramAnalyses::default().proxy(&program, 0));
+    let found = modules.get::<GlobalsAA>(module);
+    Result::as_ref(&*found).expect("GlobalsAA").clone()
+}
+
+/// A body that makes a far pointer from `selector`, an `i16`, and reads a
+/// byte through it, beside `@a`, an internal global nobody takes the address
+/// of (`rest` follows).
+fn forged_over_a(
+    selector: &str,
+    rest: &str,
+) -> crate::globalsaa::Globals {
+    globals_on_dos(&format!(
+        "{DOS}@a = internal global [8 x i8] zeroinitializer
+@w = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {{
+b0:
+  %s = inttoptr i16 {selector} to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %p = getelementptr i8, ptr addrspace(1) %far, i16 %n
+  %v = load volatile i8, ptr addrspace(1) %p
+  %w = load i16, ptr @a
+  ret i16 %w
+}}
+{rest}"
+    ))
+}
+
+/// far6.bas: z, a DIM SHARED whose address nobody took, was promoted to a
+/// register (z's loads 4 -> 1) while `DEF SEG = VARSEG(w)` and a POKE at a
+/// scanned offset wrote it: 21257 where BC printed 100. A selector made of an
+/// integer that is no plain number may name the data segment, so no global is
+/// reached by name only; a plain number names a segment no object occupies.
+#[test]
+fn a_selector_forged_from_a_computed_integer_leaves_no_global_tracked() {
+    let a = GlobalId(0);
+    assert!(forged_over_a("-18432", "").tracked(a), "premise: a numeric segment (&HB800) forges nothing");
+    assert!(!forged_over_a("%n", "").tracked(a), "a selector computed from a parameter");
+    let varseg = "ptrtoint (ptr addrspace(2) addrspacecast (ptr @w to ptr addrspace(2)) to i16)";
+    assert!(!forged_over_a(varseg, "").tracked(a), "VARSEG(w): the data segment's own value");
+}
+
+/// The runtime's bodies come `available_externally` and are no forger of the
+/// program's globals (`!llrm.named` is the same trust boundary).
+#[test]
+fn a_runtime_body_that_forges_a_selector_does_not_untrack_the_programs_globals() {
+    let runtime = "
+define available_externally i16 @rt(i16 %n) {
+b0:
+  %s = inttoptr i16 %n to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  %z = zext i8 %v to i16
+  ret i16 %z
+}
+";
+    assert!(forged_over_a("-18432", runtime).tracked(GlobalId(0)));
 }

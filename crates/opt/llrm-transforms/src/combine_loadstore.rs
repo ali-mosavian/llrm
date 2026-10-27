@@ -45,9 +45,20 @@
 //! throws.
 //!
 //! DEVIATE 6: an alloca only copied from constant memory
-//! (`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) and `visitAllocSite`
-//! (InstructionCombining.cpp) are not translated here. MIR's scalar alloca has
-//! no count operand, so a count of 1 is dropping the operand.
+//! (`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) is not translated
+//! here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
+//! scalar alloca has no count operand, so a count of 1 is dropping the operand.
+//!
+//! `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
+//! instructions before it in its block stored (`FindAvailableLoadedValue`) is
+//! that value, cast to the load's type.
+//!
+//! DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
+//! of `FindAvailableLoadedValue` (an earlier load of the address) is left to
+//! GVN: the combine holds no metadata to merge (`combineMetadataForCSE`).
+//! The alias analysis is BasicAA with its dominator tree off, not the
+//! pipeline's chain; the stores skipped are those it proves disjoint. Exit:
+//! the rest of `visitLoadInst`.
 //!
 //! # Used by
 //! `combine` (its `visit`).
@@ -60,6 +71,10 @@
 //! ```
 //! After, one store: `store i16 2, ptr %p`.
 
+use llrm_analysis::aa::BatchAAResults;
+use llrm_analysis::basicaa::BasicAA;
+use llrm_analysis::loads::{Available, DEF_MAX_INSTS_TO_SCAN, find_available_loaded_value_before};
+use llrm_analysis::memory::Unit;
 use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
@@ -112,6 +127,39 @@ impl Combiner<'_> {
             Opcode::Binary(_) | Opcode::Cast(_) | Opcode::Phi | Opcode::GetElementPtr { .. }
         )
             && a.is_identical_to_when_defined(b)
+    }
+
+    /// `visitLoadInst`, the store-to-load forwarding only: DEVIATE 8.
+    pub fn visit_load(
+        &mut self,
+        load: InstId,
+    ) -> Visit {
+        let available = {
+            let context: &llrm_mir::context::Context = &*self.context;
+            let function = &*self.function;
+            let unit = Unit::over(context, self.env.layout, &[], self.env.globals, function);
+            let mut basic = BasicAA::new(&unit);
+            let mut batch = BatchAAResults::new(&mut basic);
+            batch.disable_dominator_tree();
+            find_available_loaded_value_before(&unit, load, &mut batch, DEF_MAX_INSTS_TO_SCAN)
+        };
+        let Some(Available { value, is_load_cse: false }) = available else { return Visit::None };
+        let ty = self.function.instruction(load).ty;
+        // The load itself only in a dead loop.
+        if self.function.instruction(load).result.is_some_and(|result| value == Operand::Value(result)) {
+            return Visit::Replace(self.poison(ty));
+        }
+        let from = self.type_of(value);
+        if from == ty {
+            return Visit::Replace(value);
+        }
+        let op = match (self.context.types.get(from), self.context.types.get(ty)) {
+            (Type::Pointer(_), Type::Int(_)) => CastOp::PtrToInt,
+            (Type::Int(_), Type::Pointer(_)) => CastOp::IntToPtr,
+            (Type::Pointer(_), Type::Pointer(_)) => CastOp::AddrSpaceCast,
+            _ => CastOp::BitCast,
+        };
+        Visit::Replace(self.create_cast(load, op, value, ty, Flags::default()))
     }
 
     /// `canSimplifyNullStoreOrGEP`: the address is null, or a GEP of null, and
@@ -346,13 +394,28 @@ impl Combiner<'_> {
 
     /// `InstCombinerImpl::visitAllocSite` of an alloca
     /// ([InstructionCombining.cpp:3900](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L3900)):
-    /// an alloca that is only written is erased with its stores.
+    /// an alloca that is only written, or only read (its initial value is
+    /// undef), is erased with its users: a load reads undef, a pointer made of
+    /// it is poison.
     fn visit_alloc_site(
         &mut self,
         alloca: InstId,
     ) -> Visit {
         let Some(users) = self.alloc_site_removable(alloca) else { return Visit::None };
-        // Each user before the casts and GEPs it was reached through.
+        // The values the users made are replaced first, then each user is
+        // erased before the casts and GEPs it was reached through.
+        for &user in &users {
+            let instruction = self.function.instruction(user);
+            let Some(result) = instruction.result else { continue };
+            let ty = instruction.ty;
+            let kind = if matches!(instruction.opcode, Opcode::Load { .. }) {
+                ConstantKind::Undef
+            } else {
+                ConstantKind::Poison
+            };
+            let replacement = Operand::Constant(self.context.constant(llrm_mir::context::Constant { ty, kind }));
+            self.function.replace_value(result, replacement);
+        }
         for user in users.into_iter().rev() {
             self.erase(user);
         }
@@ -360,37 +423,46 @@ impl Combiner<'_> {
         Visit::Erased
     }
 
+    /// The intrinsic `call` calls.
+    pub(crate) fn intrinsic_of(
+        &self,
+        call: InstId,
+    ) -> Option<llrm_mir::intrinsics::Intrinsic> {
+        let callee = llrm_mir::memory::callee(self.context, self.function, call)?;
+        self.env.globals.get(callee.0 as usize)?.intrinsic()
+    }
+
     /// `isAllocSiteRemovable`
     /// ([InstructionCombining.cpp:3742](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L3742)):
     /// the users of `alloca` and of the casts and GEPs of it, in the order they
-    /// were reached, when all of them are non-volatile stores to it.
+    /// were reached, when every one is a non-volatile store to it, a
+    /// non-volatile load from it, a `memset`/`memcpy`/`memmove` with it as
+    /// destination or as source, or a lifetime marker or `assume`. The accesses
+    /// must all write or all read (`Access`): a read after a write, or a write
+    /// after a read, keeps the alloca.
     ///
-    /// DEVIATE 7: the pin also removes an alloca with these users, and here one
-    /// with any of them stays: loads (an alloca's initial value is undef, so
-    /// an alloca nothing writes goes with its loads, replaced by undef), `icmp`
-    /// equalities (folded to false/true), `memset`/`memcpy`/`memmove` into it
-    /// (or out of it, for an alloca nothing writes), `lifetime.start`/`end` and
-    /// `assume`. What it costs: an alloca written only by a `memset` or marked
-    /// by lifetimes lives on past InstCombine, until dead-store elimination
-    /// (a `memset` into a local nothing reads) or `dead` (the markers) takes
-    /// it; one only read, or compared, is not removed. None of these shows
-    /// in the corpus: with the entry wired, 568 vsgcc objects at m32/m16 x
-    /// O1..Os came out byte for byte the same. Exit: the next slice of this
-    /// file (the users `llvm.*` calls need `Combiner` to ask the callee's
-    /// intrinsic).
+    /// DEVIATE 7: not made: `icmp` equalities with null or another allocation,
+    /// `objectsize`, `invariant.start`/`end`, `launder.invariant.group`, and
+    /// the calls whose only effect is writing to the alloca
+    /// (`isRemovableWrite`); an alloca with one of those stays. Exit: a
+    /// slice after the C front end's `memcpy` lands (#3621).
     fn alloc_site_removable(
         &self,
         alloca: InstId,
     ) -> Option<Vec<InstId>> {
+        use llrm_mir::intrinsics::Intrinsic;
         let mut users: Vec<InstId> = Vec::new();
         let mut work = vec![alloca];
+        // `Access`: Mod and Ref.
+        let (mut modified, mut referenced) = (false, false);
         while let Some(address) = work.pop() {
             let value = self.function.instruction(address).result?;
             for one in self.function.users(value).iter() {
                 if users.len() >= MAX_ALLOC_SITE_REMOVABLE_USERS {
                     return None;
                 }
-                match self.function.instruction(one.user).opcode {
+                let instruction = self.function.instruction(one.user);
+                match instruction.opcode {
                     Opcode::Cast(CastOp::AddrSpaceCast) | Opcode::GetElementPtr { .. } => {
                         if !users.contains(&one.user) {
                             users.push(one.user);
@@ -398,10 +470,59 @@ impl Combiner<'_> {
                         }
                     }
                     Opcode::Store { volatile: false, .. } if one.index == 1 => {
+                        if referenced {
+                            return None;
+                        }
+                        modified = true;
                         if !users.contains(&one.user) {
                             users.push(one.user);
                         }
                     }
+                    Opcode::Load { volatile: false, .. } if one.index == 0 => {
+                        if modified {
+                            return None;
+                        }
+                        referenced = true;
+                        if !users.contains(&one.user) {
+                            users.push(one.user);
+                        }
+                    }
+                    Opcode::Call(_) => match self.intrinsic_of(one.user)? {
+                        Intrinsic::MemSet | Intrinsic::MemCpy | Intrinsic::MemMove => {
+                            let volatile = match instruction.operands.get(3) {
+                                Some(Operand::Constant(id)) => {
+                                    !matches!(
+                                        self.context.get(*id).kind,
+                                        ConstantKind::Int(0) | ConstantKind::Zero
+                                    )
+                                }
+                                _ => true,
+                            };
+                            if volatile {
+                                return None;
+                            }
+                            if instruction.operands.first() == Some(&Operand::Value(value)) {
+                                if referenced {
+                                    return None;
+                                }
+                                modified = true;
+                            } else {
+                                if modified {
+                                    return None;
+                                }
+                                referenced = true;
+                            }
+                            if !users.contains(&one.user) {
+                                users.push(one.user);
+                            }
+                        }
+                        Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => {
+                            if !users.contains(&one.user) {
+                                users.push(one.user);
+                            }
+                        }
+                        _ => return None,
+                    },
                     _ => return None,
                 }
             }

@@ -156,6 +156,7 @@ fn prepare(
     let graph = llrm_analysis::cfg::graph(function);
     let order = llrm_support::graph::reverse_postorder(&graph, llrm_analysis::cfg::id(entry));
     let mut dead_edges = std::collections::BTreeSet::<(BlockId, BlockId)>::new();
+    let mut live = std::collections::BTreeSet::<BlockId>::new();
     let mut seeded: Vec<InstId> = Vec::new();
     for at in order {
         let block = llrm_analysis::cfg::block(at);
@@ -174,6 +175,7 @@ fn prepare(
                 continue;
             }
         }
+        live.insert(block);
         for inst in function.iter_block(block).collect::<Vec<_>>() {
             if function.parent(inst).is_none() {
                 continue;
@@ -197,6 +199,20 @@ fn prepare(
             }
             seeded.push(inst);
         }
+        // A branch or switch on undef or poison is UB: no successor is live.
+        if let Some(last) = function.terminator(block)
+            && matches!(function.instruction(last).opcode, Opcode::Br | Opcode::Switch)
+            && let Some(&Operand::Constant(condition)) = function.instruction(last).operands.first()
+            && matches!(
+                context.get(condition).kind,
+                llrm_mir::context::ConstantKind::Undef | llrm_mir::context::ConstantKind::Poison
+            )
+        {
+            for succ in function.successors(block) {
+                handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, None, succ);
+            }
+            continue;
+        }
         // A branch on a number has one live successor.
         if let Some(branch) = function.terminator(block)
             && function.instruction(branch).opcode == Opcode::Br
@@ -206,6 +222,31 @@ fn prepare(
         {
             let (live, dead) = if bits & 1 == 1 { (taken, other) } else { (other, taken) };
             handle_only_live_successor(context, function, &mut dead_edges, &mut changed, block, Some(live), dead);
+        }
+    }
+    // Remove instructions inside unreachable blocks
+    // (`removeAllNonTerminatorAndEHPadInstructions`): this keeps the combine
+    // from the bad special cases, and reduces use counts.
+    for block in function.layout().to_vec() {
+        if live.contains(&block) {
+            continue;
+        }
+        let last = function.terminator(block);
+        for inst in function.iter_block(block).collect::<Vec<_>>().into_iter().rev() {
+            if Some(inst) == last || matches!(function.instruction(inst).opcode, Opcode::LandingPad { .. }) {
+                continue;
+            }
+            if let Some(result) = function.instruction(inst).result
+                && !function.users(result).is_empty()
+            {
+                let ty = function.instruction(inst).ty;
+                let poison = Operand::Constant(
+                    context.constant(llrm_mir::context::Constant { ty, kind: llrm_mir::context::ConstantKind::Poison }),
+                );
+                function.replace_value(result, poison);
+            }
+            let _ = function.erase(inst);
+            changed = true;
         }
     }
     // Pushed in reverse so the first instruction is the first popped, the dead
@@ -391,6 +432,8 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Binary(BinaryOp::Or) => &[visit_or],
         Opcode::Binary(BinaryOp::Xor) => &[visit_xor],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
+        Opcode::Binary(BinaryOp::FDiv) => &[crate::combine_fp::visit_fdiv],
+        Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => &[crate::combine_fp::visit_fadd_or_fmul],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
         Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],
         Opcode::Binary(BinaryOp::URem) => &[visit_urem],
@@ -405,10 +448,45 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
+        Opcode::Load { .. } => &[|c, inst| c.visit_load(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
+        Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
+        Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
         _ => &[],
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The instructions `visit` asked the generic `simplify_instruction_in`
+    /// about.
+    pub(crate) static GENERIC_SIMPLIFIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether the visitor of `opcode` opens with its own `simplify*Inst`
+/// (`simplify_visited`, `simplify_first`, the shifts' `simplified` and the
+/// compare's), unconditionally and before it changes anything.
+fn simplifies_itself(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::ICmp(_)
+            | Opcode::Binary(
+                BinaryOp::Add
+                    | BinaryOp::Sub
+                    | BinaryOp::And
+                    | BinaryOp::Or
+                    | BinaryOp::Xor
+                    | BinaryOp::Mul
+                    | BinaryOp::UDiv
+                    | BinaryOp::SDiv
+                    | BinaryOp::URem
+                    | BinaryOp::SRem
+                    | BinaryOp::Shl
+                    | BinaryOp::LShr
+                    | BinaryOp::AShr
+            )
+    )
 }
 
 /// `InstCombinerImpl::run`'s per-instruction step: what the instruction
@@ -418,15 +496,48 @@ pub fn visit(
     inst: InstId,
 ) -> Visit {
     let env = c.env;
-    if let Some(result) = c.function.instruction(inst).result
-        && let Some(found) =
+    // The visitors below open with their own `simplify*Inst`, as the pin's do;
+    // a pass of the generic one before them asked the same question twice
+    // (d_faces -O2: 9,931 asks, 18.6 M Ir, 9.6 M of it on compares).
+    if !simplifies_itself(&c.function.instruction(inst).opcode)
+        && let Some(result) = c.function.instruction(inst).result
+        && let Some(found) = {
+            #[cfg(test)]
+            GENERIC_SIMPLIFIES.with(|one| one.set(one.get() + 1));
             simplify_instruction_in(c.context, env.globals, env.layout, Some(&env.analyses), c.function, inst)
+        }
         && found != Operand::Value(result)
     {
         return Visit::Replace(found);
     }
-    let opcode = c.function.instruction(inst).opcode.clone();
-    visitors(&opcode).iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
+    // A flags result is read by a comparison and nothing else: neither the
+    // comparison nor what reads it (`sext (icmp slt v, 0)`) is rewritten into
+    // a user of `v` that is not a comparison.
+    let compares_flags = |inst| llrm_mir::facts::compares_flags_result(c.context, env.globals, c.function, inst);
+    // An `i1` add, subtract or multiply is a xor or an and of the compare
+    // (never a user of the flags): the selector refuses the arithmetic, so
+    // it is always rewritten.
+    let boolean_arithmetic =
+        matches!(
+            c.function.instruction(inst).opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+        )
+            && c.context.types.int_bits(c.function.instruction(inst).ty) == Some(1);
+    if !boolean_arithmetic
+        && (compares_flags(inst)
+            || c.function.instruction(inst).operands.iter().any(|operand| {
+            matches!(
+                operand,
+                Operand::Value(value) if matches!(c.function.value(*value).def, ValueDef::Instruction(one) if compares_flags(one))
+            )
+        }))
+    {
+        return Visit::None;
+    }
+    // The table is 'static: the opcode (a clone per visit, a Box for calls) is
+    // not held.
+    let table = visitors(&c.function.instruction(inst).opcode);
+    table.iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
 }
 
 /// `InstCombinerImpl::run` (:5780): drain the worklist. Whether anything
@@ -547,9 +658,9 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
-    // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
-        .with_dom_conditions_of(context, globals, metadata, function);
+    // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
+    // those visited so far.
+    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
     let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

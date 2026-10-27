@@ -1,5 +1,7 @@
 //! A module's global variables as sections of an object: their bytes, and the
-//! relocations their pointers need.
+//! relocations their pointers need. `llvm.global_ctors` becomes the object's
+//! init-function pointers (`__mod_init_func`, `.init_array`); `llvm.used` and
+//! `llvm.compiler.used` are not laid out.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{ConstantId, ConstantKind, GlobalKind, Linkage, Module, Type, TypeId};
@@ -24,6 +26,9 @@ pub struct Placed {
     pub constant: bool,
     /// Only zeros: a section without contents holds it.
     pub zero: bool,
+    /// Pointers the loader calls before `main`: `llvm.global_ctors` after
+    /// [`constructors`]. It has no symbol.
+    pub init_functions: bool,
 }
 
 pub fn symbol_name(
@@ -50,8 +55,29 @@ pub fn globals(
         let mut relocs = Vec::new();
         let writer = Writer { module, layout, platform };
         writer.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
-        let align = layout.global_align(types, variable.ty, variable.align, false, true) as usize;
+        let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
         let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
+        // LLVM keeps these two for the compiler and the linker only.
+        if matches!(name.as_str(), "llvm.used" | "llvm.compiler.used") {
+            continue;
+        }
+        if name == "llvm.global_dtors" {
+            return Err("llvm.global_dtors: destructors are not supported".to_owned());
+        }
+        if name == "llvm.global_ctors" {
+            let (bytes, relocs) = constructors(&bytes, &relocs);
+            out.push(Placed {
+                public: false,
+                name: String::new(),
+                zero: false,
+                bytes,
+                relocs,
+                align: 8,
+                constant: false,
+                init_functions: true,
+            });
+            continue;
+        }
         out.push(Placed {
             public: !matches!(global.linkage, Linkage::Internal | Linkage::Private),
             name: symbol_name(platform, &name),
@@ -60,9 +86,35 @@ pub fn globals(
             align: align.max(1),
             constant: variable.constant,
             zero,
+            init_functions: false,
         });
     }
     Ok(out)
+}
+
+/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function,
+/// ptr data }` entries (24 bytes each on a 64-bit target), lowest priority
+/// first and in order within one, as `AsmPrinter::emitXXStructorList` sorts
+/// them; an entry without a function is dropped.
+fn constructors(
+    bytes: &[u8],
+    relocs: &[DataReloc],
+) -> (Vec<u8>, Vec<DataReloc>) {
+    let mut entries: Vec<(u32, &DataReloc)> = bytes
+        .chunks(24)
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let function = relocs.iter().find(|reloc| reloc.at == index * 24 + 8)?;
+            Some((u32::from_le_bytes(entry[..4].try_into().expect("four bytes")), function))
+        })
+        .collect();
+    entries.sort_by_key(|(priority, _)| *priority);
+    let relocs = entries
+        .iter()
+        .enumerate()
+        .map(|(index, (_, function))| DataReloc { at: index * 8, ..(*function).clone() })
+        .collect();
+    (vec![0; entries.len() * 8], relocs)
 }
 
 struct Writer<'a> {

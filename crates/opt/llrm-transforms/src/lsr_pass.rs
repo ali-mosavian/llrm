@@ -20,12 +20,13 @@
 //! In the pipeline's strength slot, after `fixednarrow`.
 //!
 //! # Limits
-//! DEVIATE: not yet ported: `replaceCongruentIVs` (waits on the expander's
-//! #2773) and the debug value salvage. `DeleteDeadPHIs` reads the header's
-//! phis only. A loop of more than 200 IV users is left (`MaxIVUsers`).
+//! DEVIATE: not yet ported: the debug value salvage. `DeleteDeadPHIs` reads
+//! the header's phis only. `replaceCongruentIVs` runs on every loop in
+//! simplify form, as `ReduceLoopStrength` does. A loop of more than 200 IV
+//! users is left (`MaxIVUsers`).
 
 use llrm_analysis::scev::ScalarEvolution;
-use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
 use llrm_analysis::scev::expr::Scev;
 use llrm_mir::context::Context;
@@ -48,16 +49,23 @@ thread_local! {
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
 
-/// LLVM's loop strength reduction.
-pub struct LoopStrengthReduce;
+/// LLVM's loop strength reduction. `size`: the compile is for size, which the
+/// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
+pub struct LoopStrengthReduce {
+    pub size: bool,
+}
 
 impl FunctionPass for LoopStrengthReduce {
     fn name(&self) -> &'static str {
         "lsr"
     }
 
+    /// True: the pin's `LoopStrengthReducePass::run` returns
+    /// `getLoopPassPreservedAnalyses()`, which does not preserve GlobalsAA. A
+    /// pointer induction variable over a global array makes its address
+    /// escape, so the module's `GlobalsModRef` is worked out again after `lsr`.
     fn adds_memory_operations(&self) -> bool {
-        false
+        true
     }
 
     fn run(
@@ -67,10 +75,28 @@ impl FunctionPass for LoopStrengthReduce {
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let Some(tti) = outer.target().tti() else { return PreservedAnalyses::all() };
-        if reduced(unit.context, unit.layout, unit.function, unit.declared, &outer, &*tti) {
-            PreservedAnalyses::none()
-        } else {
-            PreservedAnalyses::all()
+        // The expressions of the passes before, as the pin keeps one SE for
+        // the loop passes; handed back below where the CFG is as it was.
+        let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
+        let (changed, scev) = reduced_held(
+            unit.context,
+            unit.layout,
+            unit.function,
+            unit.declared,
+            &outer,
+            &*tti,
+            false,
+            self.size,
+            Some(held.take()),
+        );
+        let kept = scev.is_some();
+        if let Some(scev) = scev {
+            held.put(scev);
+        }
+        match (changed, kept) {
+            (false, _) => PreservedAnalyses::all(),
+            (true, true) => PreservedAnalyses::none().preserve::<Scevs>(),
+            (true, false) => PreservedAnalyses::none(),
         }
     }
 }
@@ -123,6 +149,13 @@ fn nearest_common_dominator(
     }
 }
 
+/// DEVIATE IU7: the loop is planned twice when the exit tests are edited: the
+/// first look (`marked` none) finds the edits, the second builds `IvUsers`
+/// again over the edited loop and marks the tests with `transformToPostInc`.
+/// The pin keeps one `IVUsers` through `OptimizeLoopTermCond`. Reason: the edit
+/// changes the IR that `IvUsers` was built over. Cost: d_faces -O2, 38
+/// constructions against the pin's 32, about 0.5 M of 16.8 M instructions (3%).
+/// Exit: reuse `IvUsers` across the IR edit. Owner w-5. Review 2026-11-19.
 /// What `LSRInstance`'s constructor decides for the loop with header `header`:
 /// the plan, or none where the loop is left as it is. `marked` are the exit
 /// tests already edited to take the post-incremented value; none until the
@@ -243,10 +276,29 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
+    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, None).0
+}
+
+/// [`reduced_with`], continuing the expressions `held` of the passes before;
+/// they are handed back, current, where no edit changed the CFG.
+#[allow(clippy::too_many_arguments)]
+pub fn reduced_held(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+    tti: &dyn Tti,
+    stress_chains: bool,
+    size: bool,
+    held: Option<ScalarEvolution>,
+) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
     // entered by a conditional branch gets the preheader its invariants'
     // induction variables are made in.
     let mut changed = crate::loopsimplify::simplified(function);
+    // The held expressions are read in the CFG they were made in.
+    let mut stable = !changed;
     // The dominator tree, loops and assumptions of the function are made once:
     // an edit of the loop does not change the CFG. Only splitting an edge does;
     // then they are made again.
@@ -256,6 +308,9 @@ pub fn reduced_with(
         ScevSession::within(context, &outer.globals, &outer.metadata, function)
     };
     let mut session = new_session(context, function);
+    if let (Some(scev), true) = (held, stable) {
+        session.adopt(scev);
+    }
     // Where the function stood when the expressions were last made current.
     let mut mark = function.mark();
     let headers: Vec<BlockId> = {
@@ -332,17 +387,38 @@ pub fn reduced_with(
                         rewriter: &mut rewriter,
                         tti,
                         l: header,
+                        body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
                         changed: false,
                     };
                     run.implement_solution(&plan);
-                    let mut dead = std::mem::take(&mut run.dead);
+                    let dead = std::mem::take(&mut run.dead);
+                    let rewrote = run.changed;
+                    // `ImplementSolution`: the dead instructions go first, so
+                    // the increments move over only the
+                    // uses that are left.
+                    crate::dead::dead_from(context, outer.callees(), function, dead);
+                    let mut run = Implement {
+                        context,
+                        function,
+                        declared,
+                        se,
+                        env: &env,
+                        rewriter: &mut rewriter,
+                        tti,
+                        l: header,
+                        body: &lp_blocks,
+                        iv_inc_insert_pos: plan.iv_inc_insert_pos,
+                        dead: Vec::new(),
+                        changed: false,
+                    };
                     run.move_increments();
-                    changed |= run.changed;
-                    if run.changed {
+                    changed |= rewrote | run.changed;
+                    if rewrote | run.changed {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrRewritten);
                     }
+                    let mut dead = Vec::new();
                     // `DeleteDeadPHIs`: the phis nothing reads any more, those
                     // of a cycle included.
                     dead.extend(
@@ -356,10 +432,76 @@ pub fn reduced_with(
                 }
             }
             if split {
+                stable = false;
                 session = new_session(context, function);
                 mark = function.mark();
             }
         }
+        // `Rewriter.replaceCongruentIVs(L, &DT, DeadInsts, &TTI)`: after the
+        // loop's strength reduction, or none, a phi of the loop that an equal
+        // or wider one makes (a narrower counter beside the one it truncates)
+        // is that one, cast.
+        session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+        mark = function.mark();
+        let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
+        let simple = {
+            let cx = env.cx(&*context, &*function);
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
+        };
+        if simple {
+            let mut rewriter = Expander::new("lsr");
+            rewriter.set_canonical_mode(false);
+            let mut folded_away = Vec::new();
+            if rewriter.replace_congruent_ivs(&env, context, function, se, header, &mut folded_away, Some(tti)) > 0 {
+                changed = true;
+                let seeds: Vec<_> =
+                    folded_away.into_iter().filter_map(|inst| function.instruction(inst).result).collect();
+                crate::dead::dead_from(context, outer.callees(), function, seeds);
+            }
+        }
+        // `rewriteLoopExitValues(..., UnusedIndVarInLoop, ...)`: LSR may have
+        // removed every use of an induction variable from the loop; the exit
+        // phi is the only one left, and the final value replaces it.
+        let lcssa_exit = {
+            let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
+            env.loops
+                .get_loop_for(header)
+                .is_some_and(
+                    |found| found.get_exit_block(function).is_some()
+                        && crate::loopversioning::is_recursively_lcssa_form(function, env.loops, env.tree, found),
+                )
+        };
+        if lcssa_exit && crate::exitvalues::enabled() {
+            let mut rewriter = Expander::new("lsr");
+            rewriter.set_canonical_mode(true);
+            if crate::exitvalues::rewritten_unused_ivs(
+                context,
+                layout,
+                function,
+                declared,
+                outer,
+                &mut session,
+                &mut rewriter,
+                header,
+                size,
+            ) > 0
+            {
+                changed = true;
+                session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+                mark = function.mark();
+                // `DeleteDeadPHIs`.
+                let phis: Vec<_> = function
+                    .iter_block(header)
+                    .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                    .filter_map(|inst| function.instruction(inst).result)
+                    .collect();
+                crate::dead::dead_from(context, outer.callees(), function, phis);
+            }
+        }
     }
-    changed
+    if !stable {
+        return (changed, None);
+    }
+    session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+    (changed, Some(session.into_scev()))
 }

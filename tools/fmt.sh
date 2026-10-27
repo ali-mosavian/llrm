@@ -28,7 +28,7 @@ config=$root/rustfmt.toml
 # rustfmt's `ignore` applies to files it is handed; stdin and the per-file workers have to honour it themselves.
 ignored() {
     local rel=${1#"$root"/} one
-    for one in $(sed -n 's/^ignore *= *\[\(.*\)\]/\1/p' "$config" | tr -d '", '); do
+    for one in $(sed -n 's/^ignore *= *\[\(.*\)\]/\1/p' "$config" | tr -d '"' | tr ',' ' '); do
         [ "$rel" = "$one" ] && return 0
     done
     return 1

@@ -6,6 +6,7 @@
 #[cfg(all(test, not(feature = "toolchain")))]
 compile_error!("llrm-c's lib tests need --features toolchain: cargo test -p llrm-c --features toolchain");
 
+pub mod builtins;
 #[cfg(test)]
 mod callconv_tests;
 pub mod compile;

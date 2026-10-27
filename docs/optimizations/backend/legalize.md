@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/legalize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/legalize.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/legalize.rs sha256:e1d5013691639aefd8b560a7420adf34a1af2a5c656a5fd03a55430e4d70b6d6 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/legalize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/legalize.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/legalize.rs sha256:4047880443a146e77c2b2af933c28e803e5ef9b23f66d28167a72b94e72cd1eb -->
 
 # legalize
 

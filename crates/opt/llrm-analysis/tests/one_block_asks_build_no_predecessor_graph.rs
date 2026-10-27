@@ -41,7 +41,7 @@ fn test_unreachable_stranded_ranges_and_consts_build_no_predecessor_graph() {
     {
         let function = llrm_analysis::testing::function(&module, "f");
         let unit = with_registers(Unit::of(&module, &layout, function));
-        ranges::bounded(&unit).expect("bounds");
+        ranges::dominated_edges(&unit).expect("edges");
         consts::known(&unit);
         let header = cfg::id(function.layout()[1]);
         noreturn::stranded(function, header);

@@ -509,6 +509,10 @@ str_enum!(Op {
     Fatan("FATAN") = "fatan",
     Flog2("FLOG2") = "flog2",
     Fexp2("FEXP2") = "fexp2",
+    // The natural logarithm and exponential, each one x87 sequence with the
+    // constant loaded at the unit's own precision (FLDLN2, FLDL2E).
+    Fln("FLN") = "fln",
+    Fexp("FEXP") = "fexp",
     // A float rounded to an integral float as the environment rounds: x87
     // FRNDINT.
     Fround("FROUND") = "fround",
@@ -1094,6 +1098,9 @@ pub struct RuntimePromises {
     pub reads_arguments: Vec<String>,
     /// The routines that keep no pointer argument past their return.
     pub no_retain: Vec<String>,
+    /// The routines whose result is the machine flags, so only a comparison
+    /// reads it; read from the runtime's description, not carried in text.
+    pub flags_results: Vec<String>,
     /// The routines that never come back to their caller: END, SYSTEM, the
     /// error funnel. Their calls end their block.
     pub no_return: Vec<String>,
@@ -1105,6 +1112,12 @@ pub struct RuntimePromises {
     /// Whether a routine raises its error: the program asks for run-time
     /// checks, or handles errors.
     pub checked: bool,
+    /// The runtime is a host's, linked as C: the PC's low memory (DEF SEG,
+    /// PEEK, POKE) is its image of it, which `B$REAL` places a byte in (a
+    /// host has no memory there, whatever its pointers' width), and its
+    /// stack-block routines are C varargs the caller cleans up. Not carried
+    /// in a program's text.
+    pub hosted: bool,
 }
 
 impl RuntimePromises {
@@ -1128,10 +1141,12 @@ impl RuntimePromises {
             nounwind: nounwind.into_iter().map(str::to_owned).collect(),
             reads_arguments: Vec::new(),
             no_retain: Vec::new(),
+            flags_results: Vec::new(),
             no_return: Vec::new(),
             descriptor: None,
             routines: Vec::new(),
             checked: false,
+            hosted: false,
         }
     }
 

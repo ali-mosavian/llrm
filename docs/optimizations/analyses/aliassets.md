@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/aliassets.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/aliassets.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/aliassets.rs sha256:813c7683b21625af81e37931d67c7b2cc29a8cf1183e7e42022bf7b200894e49 -->
+<!-- src: crates/opt/llrm-analysis/src/aliassets.rs sha256:2698ec213e11b3785b912a06edc765993c4c190b682726cf8ae1a9cb2d04a36b -->
 
 # aliassets
 
@@ -22,3 +22,6 @@ that cannot alias they are two sets:
 store i32 1, ptr %a
 store i32 2, ptr %b   ; one set if %a and %b may alias, two if they do not
 ```
+
+## Used by
+Named by `accessanalysis`, `promote`.
