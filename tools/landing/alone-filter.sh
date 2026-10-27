@@ -13,9 +13,9 @@ alone_filter() {
   echo "alone check failed twice: holding the cycle, no unfiltered batch" >&2
 }
 
-# alone_warm N...: the verdict cache filled for N... in the background while a batch squashes. ALONE_CMD (echo = precheck off) is respected, like alone_filter; the default runs at nice 19.
+# alone_warm N...: (ends after ALONE_WARM_TIMEOUT, default 3600 s) the verdict cache filled for N... in the background while a batch squashes. ALONE_CMD (echo = precheck off) is respected, like alone_filter; the default runs at nice 19.
 alone_warm() {
-  ALONE_CAP=${ALONE_WARM_CAP:-3000} nohup ${ALONE_CMD:-nice -n 19 python3 "${HERE:-.}/../parity_squash.py" alone} "$@" > /dev/null 2>> "${LAND_TMP:-/tmp/landing}/alone.log" &
+  ALONE_CAP=${ALONE_WARM_CAP:-3000} nohup timeout "${ALONE_WARM_TIMEOUT:-3600}" ${ALONE_CMD:-nice -n 19 python3 "${HERE:-.}/../parity_squash.py" alone} "$@" > /dev/null 2>> "${LAND_TMP:-/tmp/landing}/alone.log" &
 }
 
 # alone_warm_at_squash LOG N...: alone_warm once LOG shows the batch's squash stage, never while its lib-tests run (the next batch's precheck beside them took 6 of 8 cargo processes at load 108);
