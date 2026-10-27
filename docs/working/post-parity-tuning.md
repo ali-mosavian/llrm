@@ -41,3 +41,14 @@ that select to `setb al; shl eax, 12` (its `llc -O2`, i486, `uadd.with.overflow.
 `SETCC_CARRY` only fires for an all-ones select. The old selector's `sbb r, r; and r, 4096` prices 2 clocks against `setb`+`shl` 5 on a 486.
 `tests/run/huge/pairs.c` m16 -Os loop: dag 16 instructions (`setb dl; shl dx, 12; add dx, cx` twice), old 17 (`sbb dx, dx; and dx, 4096; add dx, cx` twice).
 Fix: a documented deviation for 486-class targets, priced from the CPU profile, with a fail-first isel test and the m16 -Os sweep in clocks.
+
+## m16 -Os rows where the DAG selector is larger than the old one and the pin does the same
+
+Owner: w12. Do after switch-over. `~/scratch/handoff/c-m16os-dag-procs.md` lists procedures where `--isel=dag` has more instructions than `--isel=old`. Checked against the
+pin's `opt` + `llc` on the same IR (one procedure each, `llvm-extract`):
+- `lea`: `jpeg_fixed` `extend` is 17 instructions dag, 12 old, and the pin emits the same `leal 1(%eax,%esi), %eax`; `emit` 34/34, `next` 26/24, `message` 15/16, `clamp` 10/9 against
+  the pin's 40, 26, 15, 12 (its count includes a 32-bit frame). No procedure above the pin.
+- `imul r, r, 31` becoming `shl 5; sub` in `div_constants_*`: the pin does it at `optsize` (clang's -Os) and keeps `imull $31` at `minsize` (`llc -O2`, i486, `mul i16 %x, 31`).
+  On a 486 `imul` is 13 to 42 clocks against 2 for `shl; sub`; bytes grow. Same decision as D35 above.
+- `seta`/`setae`, `setle`/`setge`: polarity of a compare the old selector had swapped; not measured against the pin.
+Fix when tuned: a `minsize`-style price for the 16-bit target in the profile, not a per-row patch.
