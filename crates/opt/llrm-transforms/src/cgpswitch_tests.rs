@@ -5,7 +5,7 @@ use crate::cgpaddr::CgpAddr;
 use crate::testing::{parsed, printed};
 
 const HEAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\n";
-const HEAD16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+const HEAD16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
 
 /// `text` through `cgpaddr` with a 32-bit pointer layout and x86's lowering:
 /// the text after.
