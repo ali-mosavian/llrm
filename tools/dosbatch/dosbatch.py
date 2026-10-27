@@ -231,6 +231,12 @@ def link_loaders(target: str) -> tuple[Path, ...]:
     return (Path(link["loader"].replace("{ow}", str(ow_root()))),) if "loader" in link else ()
 
 
+def objects_directory(work: Path, target: str, defines: tuple[str, ...]) -> Path:
+    """Where a link's runtime objects are made. The start-up named for another entry (`LL_MAIN=main_`) is another object: one directory per
+    entry, or it replaces the object the other programs of the run link (`main_` undefined for 230 of 463 programs)."""
+    return work / (target + "".join(f"-{one.split('=')[1]}" for one in defines if one.startswith("LL_MAIN=")))
+
+
 def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | None = None, after: tuple[str, ...] = (), before: tuple[str, ...] = (), runtime: tuple[list[str], list[str]] | None = None, objects_after: tuple[Path, ...] = (), defines: tuple[str, ...] | None = None, image: Path | None = None) -> tuple[Path, ...]:
     """A C object with its start-up and `report(long)`, which prints a signed decimal and a newline, linked as
     `target` says; the files its executable needs beside it (an extender's loader). `image`: the same objects linked again as a flat ELF,
@@ -239,7 +245,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     if defines is None:
         defines = os_defines(target, "c")
     fill = lambda text: text.replace("{ow}", str(ow_root()))  # noqa: E731
-    made = work / target
+    made = objects_directory(work, target, defines)
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:

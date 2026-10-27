@@ -251,3 +251,10 @@ def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_
     with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
         dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
     assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()
+
+
+def test_a_start_up_for_another_entry_is_made_in_a_directory_of_its_own(tmp_path):
+    """run_tests built START.OBJ for `LL_MAIN=main_` over the one every other program of the run links: 230 of 463 failed with `main_` undefined."""
+    plain = dosbatch.objects_directory(tmp_path, "x86-m16", ("A=1",))
+    watcom = dosbatch.objects_directory(tmp_path, "x86-m16", ("A=1", "LL_MAIN=main_"))
+    assert plain != watcom and watcom.parent == plain.parent == tmp_path
