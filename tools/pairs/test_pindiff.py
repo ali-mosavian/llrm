@@ -78,3 +78,12 @@ def test_a_module_retargeted_twice_names_the_stack_alignment_once():
     twice = pin.retarget(once, of)
     assert once.count("override-stack-alignment") == 1
     assert twice.count("override-stack-alignment") == 1
+
+
+def test_the_default_gives_clang_no_passes_and_reopt_gives_it_the_level():
+    """The first ladder ran ours over clang -O3 IR the pin's opt had already run: ours then optimised twice, and nbody_single, crc and recchop
+    read as growth that the raw IR (w3's table: crc 58 vs 62) does not show."""
+    pindiff = load("pindiff")
+    raw = pindiff.front_end_flags("O2", reopt=False)
+    assert "-disable-llvm-passes" in raw and "-O2" in raw
+    assert "-disable-llvm-passes" not in pindiff.front_end_flags("O2", reopt=True)

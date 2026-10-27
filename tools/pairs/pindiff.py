@@ -4,8 +4,9 @@
     pindiff.py m32|m16 LEVEL --src DIR --llc LLRM_LLC --work DIR [--jobs N] [--old]
 
 LEVEL is O1, O2, O3 or Os. Each `DIR/*.c` goes through the pinned clang with the flags llrm-cc gives the machine (`crates/driver/llrm-cc/targets.toml`) and
-`-march` of the pin's target CPU, then the pin's `opt` (Os is O2 with `optsize`; the pin's opt no longer takes Os), so both sides read one
-IR and neither re-optimises a different one. `irguard` refuses an IR whose `target-cpu` is not the CPU both llcs run with. Ours is `LLRM_LLC` with
+`-march` of the pin's target CPU, to IR with no pass run (as llrm-cc writes it). Ours takes that IR; the pin's side runs its `opt` on it
+(Os is O2 with `optsize`; the pin's opt no longer takes Os) and its llc: each compiler's whole pipeline once, from one front end. `--reopt`
+instead gives both llcs the pin-optimised IR, which measures the back ends only if ours does not re-optimise it (it does). `irguard` refuses an IR whose `target-cpu` is not the CPU both llcs run with. Ours is `LLRM_LLC` with
 `--isel=dag` and the pin's default convention (cdecl at m16, sysv at m32), the pin's llc is `LLVM_BIN`'s.
 
 The table has, per program, the instructions of ours and of the pin's asm (directives, labels and comments not counted) and the code bytes of
@@ -76,14 +77,24 @@ def pin_text_size(obj: Path) -> int:
     return sum(int(line.split()[1]) for line in out.splitlines() if line.startswith(".text"))
 
 
-def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool) -> dict | str:
+def front_end_flags(level: str, reopt: bool) -> list[str]:
+    """What clang is told besides the machine's flags. Raw (default): the front end's IR with no pass run, as llrm-cc writes it, so each
+    side runs its whole pipeline once. `reopt`: clang's own `-O` IR, then the pin's opt, then both llcs; ours re-optimises that IR, so it
+    measures a different thing (w3, 2026-10-27: the pin's -O3 output is not a fixpoint of its own -O3)."""
+    common = ["-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
+    if reopt:
+        return [f"-{level}", *common]
+    return [f"-{level}", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *common]
+
+
+def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool, reopt: bool = False) -> dict | str:
     """The figures of one program, or why it has none."""
     cfg = MACHINES[machine]
     target = pin.target(machine, optsize=level == "Os")
     stem = source.stem
     binary, flags = clang_flags(machine)
     raw = work / f"{stem}.raw.ll"
-    done = subprocess.run([binary, *flags, f"-march={target.cpu}", f"-{level}", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm", "-o", str(raw), str(source)], capture_output=True, text=True)
+    done = subprocess.run([binary, *flags, f"-march={target.cpu}", *front_end_flags(level, reopt), "-o", str(raw), str(source)], capture_output=True, text=True)
     if done.returncode:
         return "clang: " + (done.stderr.strip().splitlines() or ["failed"])[0]
     text = raw.read_text()
@@ -91,11 +102,12 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool)
     opted = pin.opt("default<O2>" if level == "Os" else f"default<{level}>", text, target)
     if opted.returncode:
         return "pin opt: " + (opted.stderr.strip().splitlines() or ["failed"])[0]
+    ours_text = opted.stdout if reopt else text
     text = opted.stdout
     ours_in = work / f"{stem}.ll"
-    text = re.sub(r"^target triple.*\n", "", text, flags=re.M)
-    text = re.sub(r"^target datalayout.*$", f'target datalayout = "{cc_entry(machine)["datalayout"]}"', text, flags=re.M)
-    ours_in.write_text(text)
+    ours_text = re.sub(r"^target triple.*\n", "", ours_text, flags=re.M)
+    ours_text = re.sub(r"^target datalayout.*$", f'target datalayout = "{cc_entry(machine)["datalayout"]}"', ours_text, flags=re.M)
+    ours_in.write_text(ours_text)
     level_flag = "-O2" if level in ("O2", "Os") else f"-{level}"
     pin_asm, pin_obj = work / f"{stem}.pin.s", work / f"{stem}.pin.o"
     for args, out in ((["-x86-asm-syntax=intel", "-filetype=asm"], pin_asm), (["-filetype=obj"], pin_obj)):
@@ -159,6 +171,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--work", required=True)
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--old", action="store_true")
+    parser.add_argument("--reopt", action="store_true", help="clang's -O IR re-run through the pin's opt, then both llcs (not the default: see front_end_flags)")
     args = parser.parse_args(argv)
     work = Path(args.work)
     work.mkdir(parents=True, exist_ok=True)
@@ -168,7 +181,7 @@ def main(argv: list[str]) -> int:
     print(f"# pindiff {args.machine} -{args.level}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
     sources = sorted(Path(args.src).glob("*.c"))
     with ThreadPoolExecutor(args.jobs) as pool:
-        results = list(pool.map(lambda source: one(source, args.machine, args.level, args.llc, work, args.old), sources))
+        results = list(pool.map(lambda source: one(source, args.machine, args.level, args.llc, work, args.old, args.reopt), sources))
     rows = [r for r in results if isinstance(r, dict)]
     for source, result in zip(sources, results):
         if isinstance(result, str):
