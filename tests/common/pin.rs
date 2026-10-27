@@ -16,7 +16,8 @@ pub fn listing(
     source: &Path,
     flags: &[&str],
 ) -> String {
-    let scratch = tempfile::tempdir().unwrap();
+    // On disk: `--dump` refuses a tmpfs (thousands of small files).
+    let scratch = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).unwrap();
     let dump = scratch.path().join("dump");
     let output = super::cc::llrm_c()
         .current_dir(scratch.path())
