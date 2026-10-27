@@ -32,6 +32,7 @@ use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::fold::mask;
 use super::isd::ISD;
 use super::known_bits::{KnownBits, known_bits};
+use super::mvt::EVT;
 
 /// `TargetLoweringOpt`: the value to replace and what replaces it.
 type Tlo = Option<(SDValue, SDValue)>;
@@ -446,6 +447,24 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     (k.zero & in_mask & !sign, k.one & in_mask & !sign)
                 };
                 KnownBits { zero, one, width }
+            }
+            ISD::BSwap => {
+                let src = self.dag.operand(op, 0);
+                // One demanded byte of the swap is the source byte shifted into
+                // place, and the swap goes.
+                let lead = (width - (128 - demanded.leading_zeros()).min(width)) & !7;
+                let trail = demanded.trailing_zeros().min(width) & !7;
+                if width - lead - trail == 8 {
+                    let (shift, by) = if lead > trail { (ISD::Srl, lead - trail) } else { (ISD::Shl, trail - lead) };
+                    if !legal_operations || self.tli.is_some_and(|t| t.is_operation_legal(shift, vt)) {
+                        let by = self.dag.get_constant(u128::from(by), EVT::I8);
+                        let new = self.dag.get_node(shift, vt, &[src, by]);
+                        return Self::combine_to(tlo, op, new);
+                    }
+                }
+                let swap = |v: u128| v.swap_bytes() >> (128 - width);
+                let k = self.sdb(src, swap(demanded), depth + 1, false, tlo)?;
+                KnownBits { zero: swap(k.zero), one: swap(k.one), width }
             }
             _ => known_bits(self.dag, op),
         };
