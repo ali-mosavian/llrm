@@ -804,6 +804,10 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
     if not prs:
         return
     if passes(prs):
+        try:
+            land.group = list(prs)  # the members that land together: a rescan after a drop covers them once
+        except AttributeError:  # a builtin as `land` (tests) has no attributes
+            pass
         for pr in prs:
             land(pr)
         return
@@ -1049,6 +1053,37 @@ def rescan_alone(number: str, info: dict) -> set[str]:
         subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
         return set()  # a conflict is the squash's to refuse
     return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+
+
+def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
+    """The new red always-on scanners of the tree `numbers` make together on the head as it is now (the members still to land, merged one after another; a conflict is the squash's to refuse)."""
+    git("fetch", "-q", "origin", "feat/parity")
+    clean_checkout(BASE)
+    for number in numbers:
+        git("fetch", "-q", "origin", infos[number]["headRefOid"])
+        if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+            subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+
+
+def make_rescan_check(rescan_group=rescan_group_alone, rescan_one=rescan_alone):
+    """`check(number, infos, late_drops, group) -> why`: after the batch dropped a PR whose scan had passed, the remaining members' tree is scanned ONCE per new drop, not once per PR (~30 s each:
+    10:48-10:50 squashes ran 35 s apart, 4 s of it the squash). Green: the rest land without a rescan until another PR is dropped. Red: each PR is rescanned alone, as before, to find the one."""
+    state = {"green": -1, "tried": -1}
+
+    def check(number: str, infos: dict[str, dict], late_drops: list[str], group: list[str]) -> str:
+        if not late_drops:
+            return ""
+        if state["green"] == len(late_drops):
+            return ""
+        if state["tried"] != len(late_drops):
+            state["tried"] = len(late_drops)
+            if not rescan_group(group, infos):
+                state["green"] = len(late_drops)
+                return ""
+        return rescanned_refusal(number, infos[number], late_drops, rescan=rescan_one)
+
+    return check
 
 
 def rescanned_refusal(number: str, info: dict, late_drops: list[str], rescan=rescan_alone) -> str:
@@ -1750,6 +1785,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print("\n".join(f"REFUSED: {w}" for w in why))
         return not why
 
+    rescan_check = make_rescan_check()
+
     def land(number: str) -> None:
         if number in left_out:
             print(f"#{number}: REFUSED: left out: {left_out[number]}")
@@ -1760,7 +1797,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             held.append(number)
             late_drops.append(number)
             return
-        if why := rescanned_refusal(number, infos[number], late_drops):
+        group = [one for one in getattr(land, "group", [number]) if one not in landed and one not in refused and one not in held]
+        if why := rescan_check(number, infos, late_drops, group):
             print(f"#{number}: REFUSED: {why}")
             refused.append(number)
             late_drops.append(number)

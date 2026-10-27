@@ -1094,7 +1094,7 @@ def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
     assert ps.rescanned_refusal("4039", {}, ["4042"], rescan=lambda n, i: set()) == ""
     import inspect
 
-    assert "rescanned_refusal(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
+    assert "rescan_check(number" in inspect.getsource(ps.merge_batch), "land() calls it before pushing"
 
 
 def test_a_squash_github_refuses_prints_the_reason(capsys):
@@ -1425,3 +1425,24 @@ def test_merge_batch_takes_as_many_prs_as_batch_cap_says():
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.MAX_BATCH)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "BATCH_CAP"}, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"LAND_FAST": "1", "BATCH_CAP": "100"}) == "100"
     assert read({"LAND_FAST": "1"}) == "16" and read({}) == "8"
+
+
+def test_a_drop_after_the_scan_costs_one_rescan_for_the_rest_not_one_per_pr():
+    """10:48-10:50: after a PR was dropped at the squash every later PR got its own rescan (~30 s of 35 s per PR): 141 PRs would take 80 min. The remaining members are scanned once per new drop."""
+    groups, ones = [], []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(list(g)) or set(), rescan_one=lambda n, info: ones.append(n) or set())
+    infos = {n: {"headRefOid": n} for n in "abcd"}
+    assert check("a", infos, [], ["a", "b", "c", "d"]) == ""
+    assert [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"] == ["", "", ""]
+    assert len(groups) == 1 and not ones, "one group scan, no per-PR rescans"
+    assert check("d", infos, ["x", "y"], ["d"]) == "" and len(groups) == 2, "a new drop is scanned again"
+
+
+def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
+    """When the remaining tree is red the culprit is still found one PR at a time, and the group is not rescanned for every PR."""
+    groups, ones = [], []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(1) or {"integration x::t"}, rescan_one=lambda n, info: ones.append(n) or ({"integration x::t"} if n == "c" else set()))
+    infos = {n: {"headRefOid": n} for n in "bcd"}
+    whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
+    assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
+    assert len(groups) == 1 and ones == ["b", "c", "d"]
