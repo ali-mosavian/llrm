@@ -10,7 +10,7 @@ DIR holds a built llrm-cc (default target/release). One row per program and conf
     pin Minstr   - `clang -cc1 -O2 ... -emit-obj` of the pinned clang: the compile a user would run (m32 only). Its
                    bytes are not printed: it optimises the C itself and inlines and folds differently from llrm-cc's IR.
     pin B        - `.text` of the pin on llrm-cc's own IR: clang -S -emit-llvm -disable-llvm-passes (the front end
-                   llrm-cc runs, datalayout rewritten to llrm's table) -> pin `opt default<O2>` -> pin `llc -O2`.
+                   llrm-cc runs, with -march: without it clang targets pentium4 +sse2; datalayout rewritten to llrm's table) -> pin `opt default<O2>` -> pin `llc -O2`.
                    Its instruction count is not printed: it round-trips the IR through text twice.
     ratio        - ours / pin
     ours B, pin B - `.text` bytes of the two objects (m32 ELF via `size -A`), alignment padding included
@@ -68,7 +68,7 @@ def pin_same_ir(src: Path, level: str, march: str, includes: list[str], tmp: Pat
     bins = PIN.parent
     total = instructions(
         [str(PIN), "-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector",
-         "-fno-asynchronous-unwind-tables", level, "-fno-builtin", *includes, "-S", "-emit-llvm", "-Xclang",
+         "-fno-asynchronous-unwind-tables", f"-march={march}", level, "-fno-builtin", *includes, "-S", "-emit-llvm", "-Xclang",
          "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o", str(ll), str(src)], env)
     text = ll.read_text()
     ll.write_text(re.sub(r'target datalayout = "[^"]*"', f'target datalayout = "{DATALAYOUT}"', text, count=1))
