@@ -29,6 +29,10 @@
 //! %n = xor i1 %c, true                  br i1 %c, label %f, label %t
 //! br i1 %n, label %t, label %f
 //! ```
+//!
+//! # Used by
+//! `visit` in [`combine`](crate::combine), which dispatches a `br` here
+//! (`visit_cond_br`).
 
 use llrm_mir::module::{InstId, Operand, Use};
 use llrm_mir::opcode::Opcode;

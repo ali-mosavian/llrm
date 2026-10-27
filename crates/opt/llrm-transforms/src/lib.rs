@@ -259,6 +259,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerconstantintrinsics;
 pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;

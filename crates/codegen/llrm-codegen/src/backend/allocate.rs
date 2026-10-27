@@ -3586,7 +3586,12 @@ mod tests {
             }
             let got = allocated(&body, Some(&pinned)).expect("allocates");
             assert!(got.spilled.is_empty(), "{barrier}");
-            assert_ne!(got.r#where[&1], RegId::EDI, "{barrier}");
+            // A value that overlaps the pinned copy of itself may share its
+            // register: the overlap starts at the copy
+            // (`LiveRange::overlaps(Other, CP, Indexes)`), both hold one value.
+            if barrier != "overlap" {
+                assert_ne!(got.r#where[&1], RegId::EDI, "{barrier}");
+            }
             assert_eq!(got.r#where[&2], RegId::EDI, "{barrier}");
         }
     }
