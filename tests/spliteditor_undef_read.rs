@@ -20,3 +20,20 @@ fn a_split_register_read_as_undef_by_its_own_def_compiles() {
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(output.status.success(), "{said}");
 }
+
+/// `bench/crc/crc.c` at -O2 (dag), m16: the allocator panicked in
+/// `calcspillweights` "Copy from non-existing value" on a copy of a value no
+/// instruction defines (`eliminateUndefCopy` was not translated).
+#[test]
+fn a_copy_of_an_undefined_value_does_not_panic_the_spill_weights() {
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bench/crc/crc.c");
+    let scratch = tempfile::tempdir().unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        .current_dir(scratch.path())
+        .args(["--isel=dag", "-O2", "-o", "x.obj"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
+}
