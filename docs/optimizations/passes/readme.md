@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 204 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 206 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -88,6 +88,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | exitsink | An add, subtract or extension in a loop that only exit phis read, moved to those exits: LLVM's LICM sinking an instruction only used outside the loop. | Step 4 of [`crate::indvars`](indvars.md): on whenever `indvars` is, in the fixed point | [exitsink](exitsink.md) |
 | exitvalues | A value a loop computes and the code after it reads becomes an expression of the loop's trip count, written where the loop is left. | [`crate::indvars`](indvars.md), first of its steps. It replaced indvars' own | [exitvalues](exitvalues.md) |
 | expand | Values placed from their sums (LLVM's `SCEVExpander`): a `Scev` is built from its terms, each scaled and added once, before one instruction. | [`crate::lsr_pass`](lsr_pass.md), while it rewrites a loop, and | [expand](expand.md) |
+| expansion | What the MIR expansions of an intrinsic share: finding its calls, and the instructions made before one. | Under codegen's `bitcounts`, `bytes` and `compares`, from | [expansion](expansion.md) |
 | extload | One extending load for a narrow load and its extension: LLVM's DAGCombiner [`ExtendUsesToFormExtLoad`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15365) and [`ExtendSetCCUses`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15421), as the rewrite of MIR before isel. | Once per body, after `cgpaddr`, where the other passes that make the | [extload](extload.md) |
 | extpromotion | CodeGenPrepare's extension promotion: `optimizeExt`, `tryToPromoteExts`, `TypePromotionHelper` and `canFormExtLd` ([CodeGenPrepare.cpp#L7250](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7250)). | In `cgpaddr`'s run, before `optimizeExtUses`, where the target enables the | [extpromotion](extpromotion.md) |
 | fixednarrow | A 32-bit fixed-point product whose operands' product fits 32 bits is a `mul` and an `ashr`. | Once, after the loop-header copy and before `lsr`, which would hide such a | [fixednarrow](fixednarrow.md) |
@@ -152,6 +153,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mem2reg | `mem2reg`: an alloca read and written only by direct loads and stores becomes SSA values and phis, and its loads, stores and the alloca go. | [`crate::pipeline`](pipeline.md): the round's `Promote` is swapped for `Mem2Reg` when | [mem2reg](mem2reg.md) |
 | memcpyopt | MemCpyOpt on MemorySSA: LLVM's `MemCpyOptPass` apart from the memset merging of `processStore` and `processMemSet`, which [`crate::memcpyoptimizer`] does (stage 1). | In the slot of `memcpyopt@818`. | [memcpyopt](memcpyopt.md) |
 | memcpyoptimizer | Adjacent stores of one repeated byte become a `llvm.memset`: LLVM's `MemCpyOptPass`, stage 1 (`runImpl`, `iterateOnFunction`, `processStore`, `processMemSet`, `tryMergingIntoMemset`, `MemsetRanges`). | In the slot of `merge@818`, where `loopidioms::Merge` ran. | [memcpyoptimizer](memcpyoptimizer.md) |
+| memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | narrowspace | A far pointer parameter that every call fills from one near space becomes a near pointer parameter: the caller passes the offset, and neither segment is pushed or loaded. | In [`crate::interprocedural`](../analyses/interprocedural.md) as stage `narrow.`, after argument promotion | [narrowspace](narrowspace.md) |
 | parity | The parity pipeline's slot registry: for each slot of LLVM's function pipeline that `Options::llvm_order` builds, whether llrm's pass there is translated from LLVM's, an older stand-in, or missing. | `pipeline` (`Fixed::linear`), the registry tests. | [parity](parity.md) |

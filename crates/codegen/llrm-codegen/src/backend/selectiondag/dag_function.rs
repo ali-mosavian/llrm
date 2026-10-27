@@ -705,8 +705,11 @@ fn selected_in(
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        // llrm's -Os keeps the divide too, as the old selector does (the pin:
-        // minsize only)
+        // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
+        // only). Flipping it grows m32 -Os +250 B and m16 -Os +301 B; only
+        // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
+        // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
+        // +59 B in 4 spill slots).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
@@ -865,6 +868,8 @@ fn selected_in(
         conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
+        strings: arch.string_registers(),
+        registers: arch.registers(),
         globals: &globals,
         block_at: &block_at,
         frame: &frame,
