@@ -37,7 +37,7 @@ while true; do
       solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
       # PRs in $LAND_TMP/urgent.txt (landing fixes) are a batch of their own, in that order; the rest wait one cycle
       urgent=($(urgent_listed "${LAND_TMP:-/tmp/landing}/urgent.txt" "${cand[@]}")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
-      cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
+      cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(HEAD_MIN_AGE=$(batch_head_age $([ -z "$solo" ] && echo ${#urgent[@]} || echo 0)) aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
       # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
       cand=($(alone_filter "${cand[@]:0:16}"))
       asm_start=$(date +%s)
