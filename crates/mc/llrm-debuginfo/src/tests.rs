@@ -335,7 +335,7 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             let bytes = match bits {
                 32 => llrm_elf32::write(&made),
                 64 => llrm_elf64::write(&made),
-                _ => llrm_macho::write(&made),
+                _ => llrm_macho::write(&made, &llrm_x86::mc::macho::X8664MachO),
             }
             .unwrap();
             let path = scratch.path().join("x.o");

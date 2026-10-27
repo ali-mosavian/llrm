@@ -13,4 +13,5 @@ llrm-object = { workspace = true }
 llrm-elf32 = { workspace = true }
 llrm-elf64 = { workspace = true }
 llrm-macho = { workspace = true }
+llrm-x86 = { workspace = true }
 tempfile = { workspace = true }

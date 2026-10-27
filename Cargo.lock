@@ -410,6 +410,7 @@ dependencies = [
  "llrm-macho",
  "llrm-object",
  "llrm-support",
+ "llrm-x86",
  "tempfile",
 ]
 
