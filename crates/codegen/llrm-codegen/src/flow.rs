@@ -164,7 +164,7 @@ pub fn machine_with<'a>(
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
         // Before the phis go: a value nothing defines is read as undef.
-        Box::new(crate::processimpdefs::ProcessImplicitDefs),
+        Box::new(crate::processimpdefs::ProcessImplicitDefs { ignored_inputs: target.in_order }),
         // On SSA, ahead of the cmov conversion and EarlyMachineLICM (the pin's
         // addILPOpts): a chain of one integer operation rebuilt so its late
         // operand joins last.
