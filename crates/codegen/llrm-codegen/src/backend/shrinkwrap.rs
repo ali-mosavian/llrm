@@ -238,7 +238,9 @@ pub fn wrapped(
         let split = placement.split.as_deref().unwrap_or_default();
         // Under `size` the split changes where the early exit lands, and a
         // branch over the epilogue grows past its short form (QCport m16 -Os
-        // +9 B, nothing smaller): the registers stay saved at the entry.
+        // +9 B, nothing smaller): the registers stay saved at the entry. The
+        // caller states `size` only for a target that says so (the pin has no
+        // such check).
         if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
             continue;
         }

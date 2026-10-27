@@ -121,6 +121,7 @@ pub mod div_combine;
 pub mod div_const;
 pub mod dump;
 pub mod emit;
+pub mod expand_divrem_const;
 pub mod fold;
 pub mod fp_combine;
 pub mod fp_value;
