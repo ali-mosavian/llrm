@@ -533,3 +533,56 @@ fn test_an_offset_and_mask_overflow_check_is_a_zero_test() {
     let other = "  %s = add i16 %b, 5\n  %m = and i16 %s, 3\n  %r = icmp ult i16 %m, %b\n  ret i1 %r\n";
     check("i16 %b", other, other);
 }
+
+/// `foldICmpMulConstant`; every shape pinned by `opt -passes=instcombine`
+/// (i16). A square against a constant is a compare of roots: the sieve's
+/// `i * i < n` kept its multiply, 150 B over the pin on the QCport family.
+#[test]
+fn test_a_square_against_a_constant_is_a_compare_of_roots() {
+    let sq = |flags: &str, pred: &str, c: i32| {
+        format!("  %m = mul {flags} i16 %x, %x\n  %r = icmp {pred} i16 %m, {c}\n  ret i1 %r\n")
+    };
+    let cases = [
+        ("nuw nsw", "ult", 1024, "  %0 = icmp ult i16 %x, 32\n  ret i1 %0\n"),
+        ("nuw", "ult", 1000, "  %0 = icmp ult i16 %x, 32\n  ret i1 %0\n"),
+        ("nuw", "ugt", 1000, "  %0 = icmp ugt i16 %x, 31\n  ret i1 %0\n"),
+        ("nuw", "eq", 1000, "  ret i1 false\n"),
+        ("nuw", "ne", 900, "  %0 = icmp ne i16 %x, 30\n  ret i1 %0\n"),
+    ];
+    for (flags, pred, c, after) in cases {
+        check("i16 %x", &sq(flags, pred, c), after);
+    }
+}
+
+/// `foldICmpMulConstant`'s constant-factor arms (pinned, i16): equality
+/// divides the compare constant, an `nuw`/`nsw` multiply divides it rounding
+/// the way the predicate needs, and a sign test drops the multiply.
+#[test]
+fn test_a_product_with_a_constant_against_a_constant_divides_the_constant() {
+    let run = |body: &str, after: &str| check("i16 %x", body, after);
+    run(
+        "  %m = mul nuw i16 %x, 6\n  %r = icmp ult i16 %m, 20\n  ret i1 %r\n",
+        "  %0 = icmp ult i16 %x, 4\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nuw i16 %x, 6\n  %r = icmp ugt i16 %m, 20\n  ret i1 %r\n",
+        "  %0 = icmp ugt i16 %x, 3\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nsw i16 %x, -4\n  %r = icmp slt i16 %m, 10\n  ret i1 %r\n",
+        "  %0 = icmp sgt i16 %x, -3\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nsw i16 %x, 4\n  %r = icmp sgt i16 %m, -10\n  ret i1 %r\n",
+        "  %0 = icmp sgt i16 %x, -3\n  ret i1 %0\n",
+    );
+    run("  %m = mul i16 %x, 5\n  %r = icmp eq i16 %m, 100\n  ret i1 %r\n", "  %0 = icmp eq i16 %x, 20\n  ret i1 %0\n");
+    run(
+        "  %m = mul nsw i16 %x, 6\n  %r = icmp ne i16 %m, -18\n  ret i1 %r\n",
+        "  %0 = icmp ne i16 %x, -3\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nsw i16 %x, -3\n  %r = icmp slt i16 %m, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i16 %x, 0\n  ret i1 %0\n",
+    );
+}
