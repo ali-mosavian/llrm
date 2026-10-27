@@ -150,3 +150,10 @@ fn fverify_ir_reaches_the_backend() {
     assert_eq!(one.llc, words("-fverify-ir"));
     assert!(one.clang.is_empty(), "{:?}", one.clang);
 }
+
+/// `-Og` reached the backend as `-O1`, so the scroll loops of o1_fill.rs were
+/// turned into memmoves and a memset: -Og is -O1 without loop idioms.
+#[test]
+fn og_reaches_the_backend_as_og_not_o1() {
+    assert_eq!(built("-Og -c x.c").level, "g");
+}

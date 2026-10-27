@@ -279,6 +279,35 @@ fn test_stack_usage_options_reach_the_driver() {
     assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
 }
 
+/// `--memory-model=real16|flat32|flat64` is the long form of `-m16|-m32|-m64`.
+#[test]
+fn the_memory_model_has_a_long_form_for_each_m_flag() {
+    for (model, mode) in [("real16", 16), ("flat32", 32), ("flat64", 64)] {
+        assert_eq!(parsed(&[&format!("--memory-model={model}")]).unwrap().mode(), Some(mode));
+        assert_eq!(parsed(&["--memory-model", model]).unwrap().mode(), Some(mode));
+    }
+    assert!(parsed(&["--memory-model=huge"]).unwrap_err().contains("expected real16, flat32 or flat64"));
+    assert!(parsed(&["--memory-model"]).is_err());
+}
+
+/// Two spellings of different models were taken silently, the last one winning.
+#[test]
+fn two_memory_models_that_differ_are_refused_and_equal_ones_are_not() {
+    assert!(parsed(&["-m16", "--memory-model=flat32"]).unwrap_err().contains("conflicts with -m16"));
+    assert!(parsed(&["--memory-model=flat64", "-m32"]).unwrap_err().contains("conflicts with -m64"));
+    assert_eq!(parsed(&["-m32", "--memory-model=flat32"]).unwrap().mode(), Some(32));
+}
+
+/// `-mcmodel=` names real mode's code model; absent, the target's own applies.
+#[test]
+fn mcmodel_names_one_of_three_code_models() {
+    assert_eq!(parsed(&[]).unwrap().code_model(), None);
+    for model in ["small", "medium", "large"] {
+        assert_eq!(parsed(&["-m16", &format!("-mcmodel={model}")]).unwrap().code_model(), Some(model));
+    }
+    assert!(parsed(&["-mcmodel=huge"]).unwrap_err().contains("expected small, medium or large"));
+}
+
 #[test]
 fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
     assert_eq!(pipeline(&[]).limits.milliclocks_per_byte, 16_000);

@@ -331,6 +331,8 @@ pub fn compiled_module(
             &options.libcalls,
         )
     })?;
+    let mut assembled = assembled;
+    data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }
@@ -528,7 +530,9 @@ pub fn optimized(
                 |module| crate::backend::compares::expanded(module, |operation| options.arch.expands(operation)),
             )
     })?;
-    timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    if options.isel != crate::backend::shadow::Selector::Dag {
+        timed("mir legalize", || program.modules.iter_mut().try_for_each(crate::backend::legalize::legalized))?;
+    }
     let layout = options.arch.layout();
     if layout.expands_some("select") {
         let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));

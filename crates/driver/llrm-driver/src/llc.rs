@@ -202,27 +202,57 @@ fn decorate(
 /// Convention 0 is LLVM's `ccc`, which clang writes for every function it gave
 /// no convention: here the one `-mabi` chose, in the functions and in their
 /// calls. LLVM's and llrm's own intrinsics stay as they are.
+///
+/// With `regcall_default` the front end marked the unmarked ones
+/// `x86_regcallcc` itself, so those take the ABI's convention and `ccc` is an
+/// explicit `__cdecl`, which stays C's. A variadic function stays on the ABI's:
+/// clang never marks one, and Open Watcom spells it as its own.
 fn with_default_convention(
     module: &mut llrm_mir::module::Module,
     default: &llrm_target::calling::Convention,
+    regcall_default: bool,
 ) {
     let Some(number) = llrm_target::calling::Calling::number_of(default.cc.as_deref()).filter(|number| *number != 0)
     else {
         return;
     };
+    let takes = |convention: u32, variadic: bool| {
+        match (regcall_default, convention) {
+            (false, 0) => true,
+            (true, llrm_mir::opcode::REGCALL) => true,
+            (true, 0) => variadic,
+            _ => false,
+        }
+    };
+    // Under the register-size convention `main` is C's: the start-up calls `_main`.
+    let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    let types = &module.context.types;
+    let is_variadic = |ty| matches!(types.get(ty), llrm_mir::types::Type::Function { variadic: true, .. });
     for global in &mut module.globals {
         if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
             continue;
         }
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
-        if function.calling_convention == 0 {
+        // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
+        let entry = global.name.as_deref() == Some("main");
+        if !(entry && keeps_main) && takes(function.calling_convention, is_variadic(function.ty) || entry) {
+            // clang spells a regcall function `__regcall3__NAME`.
+            if function.calling_convention == llrm_mir::opcode::REGCALL {
+                if let Some(plain) = global.name.as_deref().and_then(|name| name.strip_prefix("__regcall3__")) {
+                    let plain = plain.to_owned();
+                    if let Some(section) = module.sections.remove(global.name.as_deref().unwrap_or_default()) {
+                        module.sections.insert(plain.clone(), section);
+                    }
+                    global.name = Some(plain).into();
+                }
+            }
             function.calling_convention = number;
         }
         let calls: Vec<_> = function
             .walk()
             .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                 llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                    if info.calling_convention == 0 =>
+                    if takes(info.calling_convention, is_variadic(info.function_type)) =>
                 {
                     Some(inst)
                 }
@@ -259,7 +289,10 @@ pub fn compiled_dumping(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
-    with_default_convention(&mut module, default);
+    refuse_weak(&module, format.name())?;
+    refuse_foreign_conventions(&module)?;
+    allow_near_calls(&mut module);
+    with_default_convention(&mut module, default, flags.regcall_default);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     if let Some(dump) = dump {
@@ -267,6 +300,72 @@ pub fn compiled_dumping(
         options.dump = Some(dump.to_path_buf());
     }
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+}
+
+/// A C `static` function may be entered by a near call wherever only its own
+/// module calls it, as the other frontends allow (`nearcode`); the pass
+/// that moves it checks the calls.
+fn allow_near_calls(module: &mut llrm_mir::module::Module) {
+    use llrm_mir::module::{GlobalKind, Linkage};
+    for global in &mut module.globals {
+        if !matches!(global.linkage, Linkage::Internal | Linkage::Private) {
+            continue;
+        }
+        let GlobalKind::Function(function) = &mut global.kind else { continue };
+        if !function.is_declaration() {
+            function.attrs.push(llrm_mir::opcode::Attribute::Flag(llrm_mir::callgraph::NEAR_CODE.to_owned()));
+        }
+    }
+}
+
+/// Refuses `__stdcall` and `__fastcall` (clang's `x86_stdcallcc`,
+/// `x86_fastcallcc`): no target here has either, and the backend would
+/// say only "calling convention 64".
+fn refuse_foreign_conventions(module: &llrm_mir::module::Module) -> Result<(), String> {
+    for global in &module.globals {
+        let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { continue };
+        let Some((name, _)) = llrm_mir::opcode::CONVENTIONS
+            .iter()
+            .find(|(name, number)| *number == function.calling_convention && matches!(*name, "x86_stdcallcc" | "x86_fastcallcc"))
+        else {
+            continue;
+        };
+        let function_name = global.name.as_deref().unwrap_or("?");
+        return Err(format!(
+            "@{function_name}: {} is not a calling convention this target has; use __cdecl or the target's own",
+            name.trim_start_matches("x86_").trim_end_matches("cc")
+        ));
+    }
+    Ok(())
+}
+
+/// The object formats that cannot say a symbol is weak or merged: a definition
+/// would link as a strong one and change what the program means.
+const NO_WEAK_SYMBOLS: [&str; 1] = ["omf"];
+
+/// Refuses a weak, `linkonce` or `extern_weak` symbol where the object format
+/// has no way to say so (`__attribute__((weak))`, `#pragma weak`), naming it.
+fn refuse_weak(
+    module: &llrm_mir::module::Module,
+    format: &str,
+) -> Result<(), String> {
+    use llrm_mir::module::Linkage;
+    if !NO_WEAK_SYMBOLS.contains(&format) {
+        return Ok(());
+    }
+    for global in &module.globals {
+        let kind = match global.linkage {
+            Linkage::Weak | Linkage::WeakOdr => "weak",
+            Linkage::LinkOnce | Linkage::LinkOnceOdr => "linkonce",
+            Linkage::ExternWeak => "extern_weak",
+            _ => continue,
+        };
+        let name = global.name.as_deref().unwrap_or("?");
+        return Err(format!(
+            "@{name}: {kind} linkage cannot be written in the {format} object format; the symbol would link as a strong one"
+        ));
+    }
+    Ok(())
 }
 
 /// The driver's options for IR from the pinned clang: what the Watcom front
