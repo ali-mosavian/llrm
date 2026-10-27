@@ -23,8 +23,8 @@
 //!   [`regions`], [`alias`] (points-to, summaries), [`effects`],
 //!   [`frameescape`], [`globalsaa`], [`sliceset`] and [`cellmap`] (containers),
 //!   [`memoryssa`], [`avail`] (the cells loads and stores name).
-//! - Calls and control: [`interprocedural`], [`noreturn`],
-//!   [`parameter_ranges`], [`branchprob`] (static frequencies).
+//! - Calls and control: [`interprocedural`], [`noreturn`], [`branchprob`]
+//!   (static frequencies).
 //! - [`manager`] caches the facts that are expensive or asked repeatedly.
 //!   `testing` and `generated` are test support, behind the `testing` feature.
 //!
@@ -44,7 +44,7 @@
 //!   ind["<b>induction</b>"]:::mid
 //!   loop["<b>peelsize, depanalysis</b>"]:::out
 //!   mem["<b>memory, regions, pointerfacts,</b><br/><small>alias, effects, frameescape,<br/>globalsaa, sliceset, cellmap</small>"]:::opt
-//!   ssa["<b>memoryssa, avail,</b><br/><small>noreturn,<br/>interprocedural,<br/>parameter_ranges</small>"]:::out
+//!   ssa["<b>memoryssa, avail,</b><br/><small>noreturn,<br/>interprocedural</small>"]:::out
 //!   man["<b>manager (cache)</b>"]:::data
 //!   use["<b>llrm-transforms passes,</b><br/><small>backend</small>"]:::src
 //!   mir --> base
@@ -76,9 +76,9 @@
 //! pass the result is kept if the pass named it preserved; or, for an entry
 //! that reads only the function, if the function is unchanged; or, for an entry
 //! with `depends`, if the change log cannot have altered it; or it is updated
-//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`, `Bounded`,
+//! from the log (`INCREMENTAL`: `Counted`, `DominatedEdges`,
 //! `Accesses`); else it is dropped and recomputed on the next ask. Module
-//! entries (`GlobalsAA`, `Summaries`, `Callbacks`) are dropped unless every run
+//! entries (`GlobalsAA`, `Summaries`) are dropped unless every run
 //! of a pass preserved them. `LLRM_CHECK_REPLAY` asserts that kept and updated
 //! results equal a fresh solve. Free-standing analyses (not manager entries)
 //! are recomputed per call; a `Unit` (see [`memory`]) carries the cached ones
@@ -92,6 +92,7 @@ pub mod aa;
 pub mod accessanalysis;
 pub mod aggregate;
 pub mod alias;
+pub mod aliasdiff;
 pub mod aliassets;
 pub mod argumentattrs;
 pub mod assumptions;
@@ -148,10 +149,11 @@ pub mod memoryssa;
 pub mod mssa;
 pub mod mustexecute;
 pub mod nearest;
+#[cfg(test)]
+mod nocapture_agreement_tests;
 pub mod noreturn;
 pub mod num;
 pub mod occurrence;
-pub mod parameter_ranges;
 pub mod peelsize;
 pub mod pointerfacts;
 pub mod ranger;

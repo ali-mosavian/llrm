@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_logic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_logic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:6addb7cf2032f9eae0993da10a97eb8255adfee511a438ac9263a506c987dc69 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:43713305d152a59c6e27f2ce2dbb68dcb6dea35ce5240a07dc48c62c95a072bf -->
 
 # combine_icmp_logic
 
@@ -46,10 +46,10 @@ DEVIATE 2: of `foldAndOrOfICmps` only the compare-code merge, the sign-bit
 pair, `(ne A, 0) | (ne B, 0)` and `(ne A, -1) | (ne B, -1)` are here. Not
 yet: `foldAndOrOfICmpEqConstantAndICmp`, `foldAndOrOfICmpsWithConstEq`,
 `foldIsPowerOf2OrZero`, `simplifyRangeCheck`, `foldSignedTruncationCheck`,
-`foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`, `foldUnsignedUnderflowCheck`,
-`foldAndOrOfICmpsWithPow2AndWithZero`, the `trunc`/`and` fold, the `isnormal`
-fold and `foldAndOrOfICmpsUsingRanges`; also `foldLogicOfFCmps` and
-`foldEqOfParts`.
+`foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`,
+`foldUnsignedUnderflowCheck`, `foldAndOrOfICmpsWithPow2AndWithZero`, the
+`trunc`/`and` fold, the `isnormal` fold and `foldAndOrOfICmpsUsingRanges`;
+also `foldLogicOfFCmps` and `foldEqOfParts`.
 
 ## Used by
 `visit_and` and `visit_or` (the bitwise forms).

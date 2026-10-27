@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/exitpredicate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/exitpredicate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/exitpredicate.rs sha256:c22a66ee1c6fcd6169b927084800950d4be332dab00fe43b5a739f48fea0add7 -->
+<!-- src: crates/opt/llrm-transforms/src/exitpredicate.rs sha256:70357d823013f8fc40a87d30f943fa365c47890d3b2b939d5fd4c5b55d7c74b7 -->
 
 # exitpredicate
 
@@ -24,7 +24,7 @@ A loop with exits at counts `a` and `b`, backedge count `b`: the exit at `a`
 tests `a != b` before the loop's first trip, the exit at `b` is `false`.
 
 ## Used by
-Not wired in: [`crate::indvars`](indvars.md) will run `predicated` after
+Not wired in: [`crate::indvars`](indvars.md) will run [`predicated`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/scev/predicated.rs) after
 [`crate::exitopt`](exitopt.md), as `IndVarSimplify::run` does.
 
 ## See also

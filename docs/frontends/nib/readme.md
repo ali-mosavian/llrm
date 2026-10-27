@@ -101,7 +101,7 @@ error.
 
 | Path | Holds |
 |---|---|
-| `crates/frontends/llrm-nib/src/lexer.rs`, `parser/`, `syntax.rs` | tokens and the syntax tree |
+| `crates/frontends/nib/src/lexer.rs`, `parser/`, `syntax.rs` | tokens and the syntax tree |
 | `.../desugar.rs`, `modules.rs`, `scopes.rs`, `consts.rs` | rewrites before checking, import loading and linking, local scopes, constants |
 | `.../semantic/` | the type checker, HIR emission, the borrow checker (`borrows.rs`, `liveness.rs`, `moves.rs`, `ownership.rs`, `writable.rs`, `modref.rs`, `escaping.rs`, `captures.rs`) |
 | `.../resumable.rs`, `semantic/generators.rs` | generators as resumable state |

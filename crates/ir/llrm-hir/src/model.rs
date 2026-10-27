@@ -509,6 +509,10 @@ str_enum!(Op {
     Fatan("FATAN") = "fatan",
     Flog2("FLOG2") = "flog2",
     Fexp2("FEXP2") = "fexp2",
+    // The natural logarithm and exponential, each one x87 sequence with the
+    // constant loaded at the unit's own precision (FLDLN2, FLDL2E).
+    Fln("FLN") = "fln",
+    Fexp("FEXP") = "fexp",
     // A float rounded to an integral float as the environment rounds: x87
     // FRNDINT.
     Fround("FROUND") = "fround",
@@ -1108,6 +1112,12 @@ pub struct RuntimePromises {
     /// Whether a routine raises its error: the program asks for run-time
     /// checks, or handles errors.
     pub checked: bool,
+    /// The runtime is a host's, linked as C: the PC's low memory (DEF SEG,
+    /// PEEK, POKE) is its image of it, which `B$REAL` places a byte in (a
+    /// host has no memory there, whatever its pointers' width), and its
+    /// stack-block routines are C varargs the caller cleans up. Not carried
+    /// in a program's text.
+    pub hosted: bool,
 }
 
 impl RuntimePromises {
@@ -1136,6 +1146,7 @@ impl RuntimePromises {
             descriptor: None,
             routines: Vec::new(),
             checked: false,
+            hosted: false,
         }
     }
 

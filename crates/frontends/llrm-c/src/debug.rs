@@ -2,8 +2,8 @@
 //! front end described under -d2, mapped onto `llrm_hir::debug`, which
 //! builds the rest.
 
-use llrm_core::hir::debug::Builder;
-use llrm_core::hir::model::{Debug, DebugKind, DebugReach, DebugScalar};
+use llrm_codegen::hir::debug::Builder;
+use llrm_codegen::hir::model::{Debug, DebugKind, DebugReach, DebugScalar};
 use llrm_support::hash::HashMap;
 
 use super::hir::{self, DebugType};
@@ -24,8 +24,8 @@ impl<'u> Described<'u> {
             unit,
             debug: unit.debug.as_ref()?,
             builder: Builder::for_language(
-                llrm_core::hir::model::DebugLanguage::C,
-                llrm_core::hir::model::DebugDialect::Cv4,
+                llrm_codegen::hir::model::DebugLanguage::C,
+                llrm_codegen::hir::model::DebugDialect::Cv4,
             ),
             made: HashMap::default(),
         })

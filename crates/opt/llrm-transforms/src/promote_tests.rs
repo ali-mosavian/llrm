@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/promote_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/promote_tests.rs`, the port of
 //! `tests/test_promote.py`, each body now MIR text.
 //!
 //! Ported as behaviour where the old test read internals: the singleton

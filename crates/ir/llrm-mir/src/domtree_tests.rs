@@ -560,3 +560,59 @@ fn a_block_deleted_under_a_lazy_updater_leaves_the_trees_at_the_flush() {
     assert!(!updater.has_pending_deleted_bb());
     updater.into_trees(&cfg);
 }
+
+fn builds() -> (u64, u64) {
+    use crate::counts::{Event, get};
+    (get(Event::Dominators), get(Event::DominatorsReused))
+}
+
+/// 394 trees were built for d_faces, 322 of them for a CFG built before: 5 M Ir
+/// of SemiNCA for answers already held.
+#[test]
+fn a_tree_of_an_unchanged_cfg_is_copied_not_built() {
+    let function = function(
+        "define i32 @f(i1 %c, i32 %x) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %m\nb:\n  br label %m\nm:\n  %y = add i32 %x, 1\n  ret i32 %y\n}\n",
+    );
+    let (built, reused) = builds();
+    let first = DomTree::of(&function);
+    let second = DomTree::of(&function);
+    let (built_now, reused_now) = builds();
+    assert_eq!((built_now - built, reused_now - reused), (1, 1), "one build, one copy");
+    assert!(first == second);
+    second.verify(&function, VerificationLevel::Full).expect("the copy is a tree of the function");
+}
+
+/// What the copy must never do: hand the tree of the CFG as it was.
+#[test]
+fn a_tree_after_an_edit_of_the_cfg_is_built_again_and_follows_it() {
+    let mut function = function(
+        "define void @f(i1 %c) {\nentry:\n  br i1 %c, label %a, label %b\na:\n  br label %m\nb:\n  br label %m\nm:\n  br label %n\nn:\n  ret void\n}\n",
+    );
+    let before = DomTree::of(&function);
+    let layout = function.layout().to_vec();
+    let entry_branch = function.terminator(layout[0]).expect("a branch");
+    function.set_operand(entry_branch, 2, Operand::Block(layout[1]));
+    let (built, _) = builds();
+    let after = DomTree::of(&function);
+    assert_eq!(builds().0 - built, 1, "built again");
+    assert!(after == DomTree::built(&function), "the tree of the CFG now");
+    assert!(before != after, "b is no longer reached from the entry");
+}
+
+/// An edit that leaves the blocks and edges alone leaves the tree.
+#[test]
+fn a_tree_after_an_edit_that_keeps_the_cfg_is_copied() {
+    let mut function = function(
+        "define i32 @f(i32 %x) {\nentry:\n  br label %a\na:\n  br label %b\nb:\n  br label %c\nc:\n  %y = add i32 %x, 1\n  ret i32 %y\n}\n",
+    );
+    DomTree::of(&function);
+    let layout = function.layout().to_vec();
+    let add = function.iter_block(layout[3]).next().expect("the add");
+    let operands = function.instruction(add).operands.clone();
+    function.set_operand(add, 0, operands[1]);
+    function.set_operand(add, 1, operands[0]);
+    let (built, reused) = builds();
+    let tree = DomTree::of(&function);
+    assert_eq!((builds().0 - built, builds().1 - reused), (0, 1));
+    tree.verify(&function, VerificationLevel::Full).expect("still a tree of the function");
+}

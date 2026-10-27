@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/constraintelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/constraintelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/constraintelim.rs sha256:b520d49a499518f9ea8ab0646c0bf9cca2480c1907c043564c18786892e61219 -->
+<!-- src: crates/opt/llrm-transforms/src/constraintelim.rs sha256:34b58bcc82c13218f9c5c3851b2eea1ae5fa342dad25b1768b37b75d7c52f416 -->
 
 # constraintelim
 
@@ -34,16 +34,15 @@ DEVIATE (anything MIR lacks):
    `replaceCmpWithConstant` are not translated.
 4. `takeName` has no counterpart: the `usub.sat` and overflow replacements
    get fresh names.
-5. Induction facts (`addBoundsForHeaderInductions`, `addInfoForInductions`,
-   `getMonotonicityInfo`) are not translated: they need ScalarEvolution,
-   which scev-port owns. Exit: join them once it lands. Measured effect:
-   every file of the pass's tests that differs from the pinned `opt` is a
-   loop one (`tools/llvmport/cecompare.py`).
-6. Memory-access facts (`getConstraintFromMemoryAccess`) are not translated:
-   they need `getBaseObjectSize`, which MIR lacks.
+5. Induction facts are in `constraintelim_induction`; every function of the
+   pass is translated but the reproducer and the memory-access facts (6).
+6. `getBaseObjectSize` (`valuetracking::objectsize`) does not know the size
+   of an allocation call, so no fact comes from an access into one.
 
 ## Example
 `if (x < 5) { if (x < 10) ... }`: the inner compare is decided true.
 
 ## Used by
-Nothing yet: `difference` and `guards::Given::holds` move here.
+The pipeline's `constraint-elimination@699` slot, after Reassociate
+(-O2, -O3, -Os; the pin's -O1 has none). `difference` and
+`guards::Given::holds` have yet to move here.

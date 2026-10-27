@@ -1,4 +1,4 @@
-//! Real-mode DOS as a machine: the built-in description (`dos.toml`), the
+//! Real-mode DOS as a machine: the built-in description (`real16.toml`), the
 //! BASIC runtime's variant of it and the processors it prices. The type and its
 //! parser are `llrm-target`'s.
 
@@ -6,9 +6,11 @@ use std::sync::LazyLock;
 
 pub use llrm_target::machine::*;
 
-/// `dos.toml` and the PC ports it shares with every PC platform.
-pub const DOS: &str =
-    concat!(include_str!("machines/dos.toml"), include_str!("../../llrm-target/src/machines/pc-ports.toml"));
+/// `real16.toml` and the PC ports it shares with every PC platform.
+pub const DOS: &str = concat!(
+    include_str!("../../../../machine/platform/dos/real16.toml"),
+    include_str!("../../../../machine/platform/dos/ports.toml")
+);
 
 /// The built-in description, which nothing can change.
 pub static BUILT_IN: LazyLock<Machine> = LazyLock::new(|| {
@@ -46,7 +48,7 @@ mod tests {
         assert_eq!(dos.foreign_span((0xE000, 0xE000), (0, 0), 1), None);
     }
 
-    /// `dos.toml` keeps the PC ports in the file every PC platform shares:
+    /// `real16.toml` keeps the PC ports in the file every PC platform shares:
     /// the machine it describes is the one it was with them inline.
     #[test]
     fn test_dos_has_its_ports_from_the_shared_file() {

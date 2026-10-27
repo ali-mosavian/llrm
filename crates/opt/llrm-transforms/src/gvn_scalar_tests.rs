@@ -204,7 +204,7 @@ b0:
   %b = getelementptr i8, ptr %p, i16 5
   %x = ptrtoint ptr %a to i16
   %y = ptrtoint ptr %b to i16
-  %r = sub i16 %x, %y
+  %r = add i16 %x, %y
   ret i16 %r
 }
 ",
@@ -377,7 +377,8 @@ b3:
         false,
     );
     assert!(changed);
-    assert!(text.contains("%p = phi i16 [ 1, %b1 ], [ poison, %b2 ]"), "{text}");
+    // The poisoned phi is then the constant of the live arm.
+    assert!(text.contains("ret i16 1"), "{text}");
 }
 
 #[test]
@@ -462,11 +463,10 @@ b0:
     assert!(text.contains("ret i16 0"), "{text}");
 }
 
-/// `lcssa` makes `phi [%v, %b1]` in a loop's exit each round and the pass would
-/// simplify it to `%v` each round: the pipeline's fixed point cycled.
+/// A phi of one input is that input.
 #[test]
-fn test_a_phi_with_one_input_is_kept() {
-    kept(
+fn test_a_phi_with_one_input_is_its_input() {
+    let (text, changed) = numbered(
         "define i16 @f(i16 %n) {
 b0:
   br label %b1
@@ -482,7 +482,9 @@ b2:
   ret i16 %out
 }
 ",
+        &[&[5], &[9]],
     );
+    assert!(changed && !text.contains("%out") && text.contains("ret i16 %j"), "{text}");
 }
 
 /// matrix printed T=0 for T=380 after CSE deleted a zero still named by its
@@ -643,13 +645,11 @@ b0:
     assert!(text.contains("%s = fadd double %a, %a"), "{text}");
 }
 
-/// A loop's invariant phi (`phi [%x, entry], [itself, latch]`) stays:
-/// simplified to `%x`, the loop's expressions merged with copies outside it and
-/// a live range ran across the loop (x_hanoi2 -O2 +22.8% clocks, quicksort
-/// +1.5%).
+/// A loop's invariant phi (`phi [%x, entry], [itself, latch]`) is `%x`, as
+/// `simplifyInstruction` has it.
 #[test]
-fn test_a_loops_invariant_phi_is_kept() {
-    kept(
+fn test_a_loops_invariant_phi_is_its_input() {
+    let (text, changed) = numbered(
         "define i16 @f(i16 %n, i16 %x) {
 b0:
   %outside = mul i16 %x, 64
@@ -668,7 +668,9 @@ b2:
   ret i16 %r
 }
 ",
+        &[&[5, 1], &[9, 2]],
     );
+    assert!(changed && !text.contains("%inv = phi") && text.contains("mul i16 %x, 64"), "{text}");
 }
 
 /// A GEP of offset zero stays (DEVIATE 18): simplified to its pointer, the
@@ -707,4 +709,58 @@ b0:
     let before = crate::gvn::table::clears();
     assert!(!run_impl(context, &layout, function, &outer));
     assert_eq!(crate::gvn::table::clears() - before, 1);
+}
+
+/// A phi of a constant and poison is the constant. The pass asked no phi of
+/// `simplifyInstruction`, so matmul at -O3 kept 44 such phis; the `sext` and
+/// `mul` of each stayed and made the copies of the unrolled `j` loop too long
+/// for memdep's scan: 8 `a[i][k]` were loaded again (16 `movsx` for the pin's
+/// 8).
+#[test]
+fn test_a_phi_of_a_constant_and_poison_is_the_constant() {
+    let (text, changed) = numbered(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %c = icmp slt i16 %x, 1000
+  br i1 %c, label %b2, label %b1
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ poison, %b1 ], [ 2, %b2 ]
+  %r = add i16 %p, %y
+  ret i16 %r
+}
+",
+        &[&[3, 5], &[-7, 2]],
+    );
+    assert!(changed && !text.contains("phi") && text.contains("add i16 2, %y"), "{text}");
+}
+
+/// Two different constants stay a phi.
+#[test]
+fn test_a_phi_of_two_constants_stays() {
+    kept(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %c = icmp slt i16 %x, 3
+  br i1 %c, label %b2, label %b1
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ]
+  %r = add i16 %p, %y
+  ret i16 %r
+}
+",
+    );
 }

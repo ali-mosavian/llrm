@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:339ee2ef847819ec2aab8b1e369b15cc2ad5932a5116f452f3c3a580d13d5937 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:8b9406a62e6120bbf4c1e02be7f7ecf9d552e7cee0fe8c9047ac709b336a788e -->
 
 # combine_icmp_const
 
@@ -22,7 +22,7 @@ OWED, each at its place as a `// OWED:` comment: the other opcodes of
 `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
 `foldICmpMulConstant`, `foldICmpShlConstant`, `foldICmpShrConstant`,
 `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
-`foldICmpSubConstant`, `foldICmpAddConstant`),
+`foldICmpSubConstant`),
 `foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
 truncate, intrinsic and `extractvalue` arms of `foldICmpInstWithConstant`.
 

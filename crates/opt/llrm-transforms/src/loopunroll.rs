@@ -203,11 +203,14 @@ pub fn unroll_loop_blocks(
     // Set once per phi after the copies: a phi rewritten per copy is quadratic.
     let mut exit_arms = IdMap::<InstId, Vec<(Operand, BlockId)>>::new();
 
+    // The copies stand in order right after the latch (LoopUnroll.cpp:1214).
+    let mut after = latch;
     for it in 1..count {
         let mut fresh = Vec::<BlockId>::new();
         for &at in &order {
             let new = function.create_block(None);
-            function.insert_block(new, None)?;
+            function.insert_block(new, Some(after))?;
+            after = new;
             let mut map = Vec::<(ValueId, Operand)>::new();
             if at == header {
                 // The header's phis take what the latch gave them last

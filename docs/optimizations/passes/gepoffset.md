@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gepoffset.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gepoffset.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gepoffset.rs sha256:cd0d9aae8e6efb2fc47dc9a6546eb669b307d21a2e9d4688d65303759e2d4d5d -->
+<!-- src: crates/opt/llrm-transforms/src/gepoffset.rs sha256:47af1195ce5f00b6e3f615d4d949f415de6905ed795a7b37b1c3800273778ac3 -->
 
 # gepoffset
 
@@ -23,6 +23,11 @@ A sum that an add or a compare also reads stays: the address would read `i`
 where it read the sum, one register more. Neither new `gep` is `inbounds`:
 the constant may take the first outside the object. A negative constant
 drops `inbounds` too.
+
+DEVIATE LP-2 (no pin pass: LLVM gets `a[i + 8]` as a displacement from
+InstCombine's gep canonicalization, LSR and CodeGenPrepare's address-mode
+matching (row CG DEVIATE C1); exit: that matching translated, then deleted;
+owner w-6; review 2026-11-13).
 
 ## Example
 Before:

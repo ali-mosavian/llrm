@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/callregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/callregs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/callregs.rs sha256:8fcac917aa233e63d8fe78feb029d2b727379146b414034ca0e151abced6859a -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/callregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/callregs.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/callregs.rs sha256:a8d94d8f2bbee6cd6d7f2d26f7458341a19ed4ba1f6c987e1fd9ccd84a8b4dbd -->
 
 # callregs
 
@@ -37,7 +37,7 @@ call   clobbers EAX,ECX,EDX,EBX,ES,FS,GS
 `FS` and `GS` are in the set though no 8086 contract names them.
 
 From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
--fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-fno-inline-functions-called-once -fno-ipa-cp-clone
 -march=i386` of `examples/pass-docs/calleefacts.nib`, stage
 `FarIndirectCalls`.
 

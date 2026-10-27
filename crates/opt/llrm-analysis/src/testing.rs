@@ -4,7 +4,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, Module, ValueId};
 
 /// The layout HIR's modules state, as a module's first line.
-pub const DOS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+pub const DOS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
 
 pub fn parsed(text: &str) -> Module {
     llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"))
@@ -100,4 +100,12 @@ pub fn with_registers(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> 
     let known = Box::leak(Box::new(crate::consts::known(&crate::memory::Unit { registers: None, ..unit })));
     let shape = Box::leak(Box::new(crate::cfg::Shape::of(unit.function)));
     unit.with_registers(known).with_shape(shape)
+}
+
+/// `unit` carrying where its pointer values point and which frames are
+/// exposed, as the manager's `Writes` and `ThroughMemory` read them.
+pub fn with_points(unit: crate::memory::Unit<'_>) -> crate::memory::Unit<'_> {
+    let values = Box::leak(Box::new(crate::alias::point_values(&unit).expect("points-to")));
+    let exposed = Box::leak(Box::new(crate::memory::exposed_frames(&unit)));
+    unit.with_point_values(values).with_exposed(exposed)
 }

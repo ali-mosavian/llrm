@@ -243,7 +243,8 @@ pub fn grouped(
         _ => unreachable!("a phi's block operand"),
     };
     let bridge = function.create_block(None);
-    function.insert_block(bridge, None).expect("a new block");
+    // Right before `destination`, as `SplitBlockPredecessors` lays it out.
+    function.insert_block_before(bridge, destination).expect("a new block");
     for phi in phis {
         let pairs = incoming(function, phi);
         let (grouped, kept): (Vec<_>, Vec<_>) = pairs.into_iter().partition(|&(_, block)| sources.contains(&at(block)));
@@ -330,6 +331,70 @@ fn _reached_only_from(
     function.predecessors(cfg::block(target)).into_iter().all(|from| body.contains(&cfg::id(from)))
 }
 
+/// `placeSplitBlockCarefully`
+/// ([LoopSimplify.cpp:80](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L80)):
+/// a preheader stands right after an outside predecessor, so the jump into
+/// the loop falls through and the block is not inside the loop's run.
+fn place_carefully(
+    function: &mut Function,
+    new: BlockId,
+    entries: &[BlockId],
+    body: &llrm_mir::forest::Body,
+) {
+    let layout = function.layout();
+    let at = layout.iter().position(|&one| one == new).expect("a placed block");
+    if at > 0 && entries.contains(&layout[at - 1]) {
+        return;
+    }
+    let next_in_loop = |pred: &BlockId| {
+        let at = layout.iter().position(|one| one == pred).expect("a placed block");
+        layout.get(at + 1).is_some_and(|next| body.contains(&cfg::id(*next)))
+    };
+    let after = entries.iter().find(|pred| next_in_loop(pred)).unwrap_or(&entries[0]);
+    function.move_block_after(new, *after).expect("placed blocks");
+}
+
+/// The headers in the order `simplifyLoop` works through them: the top-level
+/// loops in `LoopInfo`'s order (reverse program order, program order being
+/// the header's place in reverse postorder), and in each nest its loops from
+/// the back of a breadth-first list, so the deepest and latest first.
+fn visit_order(
+    function: &Function,
+    loops: &[loops::Loop],
+) -> Vec<i64> {
+    let Some(entry) = function.entry() else { return Vec::new() };
+    let program: Vec<i64> = loops::reverse_postorder(&cfg::graph(function), cfg::id(entry));
+    let place = |header: i64| program.iter().position(|&one| one == header).unwrap_or(usize::MAX);
+    // A loop's parent is the smallest other loop holding its header.
+    let parent = |loop_: &loops::Loop| {
+        loops
+            .iter()
+            .filter(|other| other.header != loop_.header && other.body.contains(&loop_.header))
+            .min_by_key(|other| other.body.len())
+            .map(|other| other.header)
+    };
+    let mut children: std::collections::BTreeMap<Option<i64>, Vec<i64>> = Default::default();
+    for loop_ in loops {
+        children.entry(parent(loop_)).or_default().push(loop_.header);
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_by_key(|&header| place(header));
+    }
+    let mut order = Vec::new();
+    let tops = children.get(&None).cloned().unwrap_or_default();
+    for &top in tops.iter().rev() {
+        let mut worklist = vec![top];
+        let mut at = 0;
+        while at < worklist.len() {
+            let own = children.get(&Some(worklist[at])).cloned().unwrap_or_default();
+            worklist.extend(own);
+            at += 1;
+        }
+        order.extend(worklist.into_iter().rev());
+    }
+    order
+}
+
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
     let shape = cfg::Shape::of(function);
@@ -345,12 +410,12 @@ fn _simplified(
     // nothing is grouped whether the body is irreducible or not.
     if function.entry().is_none()
         || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_))
-        || !shape.dominance.irreducible(function).is_empty()
+        || shape.dominance.is_irreducible(function)
     {
         return false;
     }
     let mut changed = false;
-    let headers = shape.loops.iter().map(|loop_| loop_.header).collect::<Vec<_>>();
+    let headers = visit_order(function, &shape.loops);
     for header in headers {
         let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
         // A loop that is already in the form has nothing to group.
@@ -385,11 +450,25 @@ fn _simplified(
         if plan.is_empty() || !plan.iter().all(|(target, sources)| groupable(function, *target, sources)) {
             continue;
         }
+        // The order LLVM visits the header's predecessors in places the new
+        // blocks, so it is taken before any is grouped.
+        let header = cfg::block(original.header);
+        let (entries, latches): (Vec<BlockId>, Vec<BlockId>) =
+            function.predecessors(header).into_iter().partition(|&one| !original.body.contains(&cfg::id(one)));
         let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         for (target, sources) in plan {
             let Some(bridge) = grouped(function, target, &sources) else {
                 unreachable!("groupable said it could be made");
             };
+            if target == original.header {
+                if sources.contains(&cfg::id(entries[0])) {
+                    place_carefully(function, bridge, &entries, &original.body);
+                } else if let Some(&last) = latches.last() {
+                    // `insertUniqueBackedgeBlock`: right after the last
+                    // backedge block.
+                    function.move_block_after(bridge, last).expect("placed blocks");
+                }
+            }
             bridges.push((cfg::id(bridge), target, sources));
         }
         changed = true;

@@ -1,11 +1,12 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchvalue.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchvalue.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchvalue.rs sha256:bbd783a7d64c4523dcced4ec7352677c1949641eb901598cdbab6946a4ab9191 -->
+<!-- src: crates/opt/llrm-transforms/src/switchvalue.rs sha256:1e4a529a73cd325abdcd5cb6825b4eb50b8170f457fa5005dda43b37dc0fd408 -->
 
 # switchvalue
 
 The value-comparison steps of `simplifySwitch`
-([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)): a `switch` on a value its predecessors compare with
-constants too, folded with them, and a `switch` on a `select`. LLVM's
+([L8591](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8591)):
+a `switch` on a value its predecessors compare with constants too, folded
+with them, and a `switch` on a `select`. LLVM's
 [`simplifyEqualityComparisonWithOnlyPredecessor`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L973),
 [`foldValueComparisonIntoPredecessors`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L1475)
 with
@@ -19,8 +20,10 @@ and
 with the helpers
 [`isValueEqualityComparison`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L866),
 [`getValueEqualityComparisonCases`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L899),
-`eliminateBlockCases` ([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
-and `valuesOverlap` ([L935](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L935)).
+`eliminateBlockCases`
+([L929](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L929))
+and `valuesOverlap`
+([L935](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L935)).
 
 ## How it works
 A block with one predecessor that compares the same value (a `switch`, or
@@ -51,7 +54,7 @@ to the folded block goes to a new block that loops.
 |---|---|
 | D1 | No branch weights, no `DomTreeUpdater`. |
 | D2 | A pointer compared with `inttoptr` of a constant is not a value comparison (`getConstantInt`'s `inttoptr` arm); `null` is. |
-| D3 | The calls from `simplifyCondBranch` ([L8963](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8963)) are not made: only a `switch` is rewritten, a conditional branch is only read as a predecessor. Exit: call them from `simplifycfg::block_simplified` (llrm-w-4, 2026-10-27). |
 
 ## Used by
-`switchopt::simplified`, the first step.
+`switchopt::simplified`, the first step, and `simplifycfg::block_simplified`
+for a conditional branch (`simplifyCondBranch`'s value comparisons).

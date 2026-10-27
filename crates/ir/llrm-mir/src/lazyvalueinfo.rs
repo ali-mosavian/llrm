@@ -959,7 +959,14 @@ impl LazyValueInfoImpl {
         // quickly find a path to function entry.  TODO: We should
         // consider explicitly canonicalizing to make this true rather
         // than relying on this happy accident.
-        for pred in predecessors(env.function, bb) {
+        // The use list in place, as the pin walks it: a block named twice by
+        // one terminator is visited twice, and merges to the same value.
+        let function = env.function;
+        for one in function.block_users(bb) {
+            if !function.instruction(one.user).opcode.is_terminator() {
+                continue;
+            }
+            let Some(pred) = function.parent(one.user) else { continue };
             // Skip self loops.
             if pred == bb {
                 continue;
@@ -1395,6 +1402,13 @@ impl LazyValueInfoImpl {
         Some(Lattice::get_overdefined())
     }
 
+    /// Counts one pattern of an `icmp` operand tried; true, to sit in a
+    /// condition.
+    fn pattern_tried() -> bool {
+        crate::counts::bump(crate::counts::Event::LviIcmpPatterns);
+        true
+    }
+
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LazyValueInfo.cpp#L1252>
     fn match_icmp_operand(
         env: &Env,
@@ -1402,15 +1416,35 @@ impl LazyValueInfoImpl {
         lhs: Operand,
         val: Operand,
         pred: IntPredicate,
+        val_add: Option<(Operand, Operand)>,
     ) -> bool {
         if lhs == val {
             return true;
         }
         let q = env.query();
 
+        // Every pattern of `lhs` below is an add, an or or an and: the kind of
+        // its defining instruction says which can match, and a load, a phi,
+        // a constant or an argument matches none.
+        let (is_add, is_or, is_and) = q
+            .instruction_of(lhs)
+            .map_or(
+                (false, false, false),
+                |(_, instruction)| {
+                    let or = instruction.opcode == Opcode::Binary(BinaryOp::Or);
+                    (
+                        or || instruction.opcode == Opcode::Binary(BinaryOp::Add),
+                        or,
+                        instruction.opcode == Opcode::Binary(BinaryOp::And),
+                    )
+                },
+            );
+
         // Handle range checking idiom produced by InstCombine. We will subtract
         // the offset from the allowed range for RHS in this case.
-        if let Some((a, b)) = add_like(&q, lhs, Flags::default())
+        if is_add
+            && Self::pattern_tried()
+            && let Some((a, b)) = add_like(&q, lhs, Flags::default())
             && a == val
             && let Some((c, _)) = q.int_constant(b)
         {
@@ -1419,8 +1453,9 @@ impl LazyValueInfoImpl {
         }
 
         // Handle the symmetric case. This appears in saturation patterns like
-        // (x == 16) ? 16 : (x + 1).
-        if let Some((a, b)) = add_like(&q, val, Flags::default())
+        // (x == 16) ? 16 : (x + 1). `val_add` is `val` as an add, found once
+        // for the condition.
+        if let Some((a, b)) = val_add
             && a == lhs
             && let Some((c, width)) = q.int_constant(b)
         {
@@ -1429,14 +1464,18 @@ impl LazyValueInfoImpl {
         }
 
         // If (x | y) < C, then (x < C) && (y < C).
-        if commutative_with(&q, lhs, BinaryOp::Or, |x| x == val).is_some()
+        if is_or
+            && Self::pattern_tried()
+            && commutative_with(&q, lhs, BinaryOp::Or, |x| x == val).is_some()
             && (pred == IntPredicate::Ult || pred == IntPredicate::Ule)
         {
             return true;
         }
 
         // If (x & y) > C, then (x > C) && (y > C).
-        if commutative_with(&q, lhs, BinaryOp::And, |x| x == val).is_some()
+        if is_and
+            && Self::pattern_tried()
+            && commutative_with(&q, lhs, BinaryOp::And, |x| x == val).is_some()
             && (pred == IntPredicate::Ugt || pred == IntPredicate::Uge)
         {
             return true;
@@ -1593,30 +1632,48 @@ impl LazyValueInfoImpl {
             return Some(Lattice::get_overdefined());
         }
 
-        let bit_width = env.scalar_size_in_bits(val);
         if let Some(range) = Self::get_range_for_nuw_mul_square(env, val, edge_pred, lhs, rhs) {
             return Some(Lattice::get_range(range, false));
         }
 
         let mut offset = 0u128;
-        if Self::match_icmp_operand(env, &mut offset, lhs, val, edge_pred) {
+        let val_add = if matches!(
+            env.query().instruction_of(val).map(|(_, instruction)| &instruction.opcode),
+            Some(Opcode::Binary(BinaryOp::Add | BinaryOp::Or))
+        ) {
+            Self::pattern_tried();
+            add_like(&env.query(), val, Flags::default())
+        } else {
+            None
+        };
+        if Self::match_icmp_operand(env, &mut offset, lhs, val, edge_pred, val_add) {
             return self.get_value_from_simple_icmp_condition(env, edge_pred, rhs, offset, ici, use_block_value);
         }
 
         let swapped_pred = edge_pred.swapped();
-        if Self::match_icmp_operand(env, &mut offset, rhs, val, swapped_pred) {
+        if Self::match_icmp_operand(env, &mut offset, rhs, val, swapped_pred, val_add) {
             return self.get_value_from_simple_icmp_condition(env, swapped_pred, lhs, offset, ici, use_block_value);
         }
 
+        let bit_width = env.scalar_size_in_bits(val);
         let q = env.query();
-        if let Some((_, args)) = intrinsic_call(&q, lhs, "llvm.ctpop")
+        // The probes of `lhs` below each match one kind of instruction: its
+        // defining opcode is read once, and a constant or an argument (the
+        // usual left side here) matches none.
+        let lhs_op = q.instruction_of(lhs).map(|(_, instruction)| &instruction.opcode);
+        let lhs_is = |wanted: fn(&Opcode) -> bool| lhs_op.is_some_and(wanted);
+        if lhs_is(|op| matches!(op, Opcode::Call(_)))
+            && Self::pattern_tried()
+            && let Some((_, args)) = intrinsic_call(&q, lhs, "llvm.ctpop")
             && args.len() == 1
             && args[0] == val
         {
             return Some(Self::get_value_from_icmp_ctpop(env, edge_pred, rhs));
         }
 
-        if let Some((_, _, a, b)) = binary(&q, lhs, BinaryOp::And)
+        if lhs_is(|op| matches!(op, Opcode::Binary(BinaryOp::And)))
+            && Self::pattern_tried()
+            && let Some((_, _, a, b)) = binary(&q, lhs, BinaryOp::And)
             && a == val
             && let Some((mask_bits, _)) = q.int_constant(b)
             && let Some((c, _)) = q.int_constant(rhs)
@@ -1639,8 +1696,12 @@ impl LazyValueInfoImpl {
         // If (X urem Modulus) >= C, then X >= C.
         // If trunc X >= C, then X >= C.
         // TODO: An upper bound could be computed as well.
-        let urem_or_trunc = binary(&q, lhs, BinaryOp::URem).is_some_and(|(_, _, a, _)| a == val)
-            || cast(&q, lhs, CastOp::Trunc).is_some_and(|(_, _, x)| x == val);
+        let urem_or_trunc = lhs_is(|op| matches!(op, Opcode::Binary(BinaryOp::URem)))
+            && Self::pattern_tried()
+            && binary(&q, lhs, BinaryOp::URem).is_some_and(|(_, _, a, _)| a == val)
+            || lhs_is(|op| matches!(op, Opcode::Cast(CastOp::Trunc)))
+                && Self::pattern_tried()
+                && cast(&q, lhs, CastOp::Trunc).is_some_and(|(_, _, x)| x == val);
         if urem_or_trunc && let Some((c, c_width)) = q.int_constant(rhs) {
             // Use the icmp region so we don't have to deal with different
             // predicates.
@@ -1657,6 +1718,8 @@ impl LazyValueInfoImpl {
             edge_pred,
             IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
         )
+            && lhs_is(|op| matches!(op, Opcode::Binary(BinaryOp::AShr)))
+            && Self::pattern_tried()
             && let Some((_, _, a, b)) = binary(&q, lhs, BinaryOp::AShr)
             && a == val
             && let Some((sh_amt, _)) = q.int_constant(b)
@@ -1676,7 +1739,11 @@ impl LazyValueInfoImpl {
         }
 
         // a - b or ptrtoint(a) - ptrtoint(b) ==/!= 0 if a ==/!= b
-        if is_equality && let Some((_, _, mut x, mut y)) = binary(&q, val, BinaryOp::Sub) {
+        if is_equality
+            && q.instruction_of(val).is_some_and(|(_, instruction)| instruction.opcode == Opcode::Binary(BinaryOp::Sub))
+            && Self::pattern_tried()
+            && let Some((_, _, mut x, mut y)) = binary(&q, val, BinaryOp::Sub)
+        {
             // Peek through ptrtoints
             if let Some(a) = ptr_to_int_same_size(env, x) {
                 x = a;
@@ -2215,8 +2282,9 @@ impl LazyValueInfoImpl {
 pub(crate) fn predecessors(
     function: &Function,
     bb: BlockId,
-) -> Vec<BlockId> {
-    function.predecessors(bb).iter().copied().collect()
+) -> crate::blocklist::BlockList {
+    crate::counts::bump(crate::counts::Event::LviPredecessorLists);
+    function.predecessors(bb)
 }
 
 /// `Constant::toConstantRange` of an integer constant.

@@ -3,6 +3,8 @@
 //! callee. An explicit `cdecl32` keeps the stack. Each expectation was read
 //! from `wcc386 -3r`'s own output for the same signature.
 
+mod common;
+
 use std::process::Command;
 
 /// The listing of `source` for -m32.
@@ -63,11 +65,10 @@ fn arguments_past_the_fourth_are_on_the_stack_and_the_callee_pops_them() {
         "@export(\"watcall32\")\nfn sixth(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32) -> i32:\n    return e + f\n",
     );
     let lines = procedure(&text, "sixth_");
-    assert!(
-        lines.contains(&"mov eax, dword ptr [esp+4]".to_owned())
-            && lines.contains(&"add eax, dword ptr [esp+8]".to_owned()),
-        "{lines:?}"
-    );
+    // The pin loads the later one and adds the earlier (`a + b` at i386 is
+    // `mov eax, [esp+8]` then `add eax, [esp+4]`): either order is the two.
+    let from = |disp: &str| lines.iter().filter(|line| line.ends_with(&format!("dword ptr [esp+{disp}]"))).count();
+    assert_eq!((from("4"), from("8")), (1, 1), "{lines:?}");
     assert_eq!(lines.last().map(String::as_str), Some("ret 8"));
 }
 
@@ -132,7 +133,7 @@ fn c_listing(
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-S"])
         .arg(&path)
@@ -147,8 +148,8 @@ fn c_listing(
 /// Under `-mabi=sysv` a `static` function took the stack too, though no one
 /// outside sees it (gcc passes it in registers, `regparm` for a `local` one):
 /// its arguments were read from [esp+4..], each call pushed them and popped
-/// them after. It takes the description's `private` convention; the exported
-/// function keeps sysv's.
+/// them after. It takes the description's `private` convention (the pin's
+/// `fastcc`: ECX, EDX, then the stack); the exported function keeps sysv's.
 #[test]
 fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_stack() {
     let text = c_listing(
@@ -156,7 +157,11 @@ fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_s
         "static int add3(int a, int b, int c) { return a * 3 + b * 5 + c; }\nint twice(int a, int b, int c) { return a * 2 + b + c; }\nint use(int x) { return add3(x, 2, 3) + add3(3, x, 1); }\n",
     );
     let private = procedure(&text, "_add3");
-    assert!(!private.iter().any(|line| line.contains("[esp+")), "{private:?}");
+    // The pin's `fastcc` for a private function: the first two arguments in
+    // ECX and EDX, the third on the stack (c785d0488).
+    let stack: Vec<_> = private.iter().filter(|line| line.contains("[esp+")).collect();
+    assert_eq!(stack.len(), 1, "{private:?}");
+    assert!(stack[0].contains("[esp+4]"), "{private:?}");
     let exported = procedure(&text, "_twice");
     assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
     let caller = procedure(&text, "_use");

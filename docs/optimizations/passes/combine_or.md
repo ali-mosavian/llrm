@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_or.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_or.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:51dc3d86dafb167e9a7bf0ea7046e9caa87047975706e3696933f5ffa253076e -->
+<!-- src: crates/opt/llrm-transforms/src/combine_or.rs sha256:e3a1b79fc01d38a45a079a72e75b1edb44d98190b40eacdfdbcfd7851112295d -->
 
 # combine_or
 
@@ -17,12 +17,10 @@ other order), and the one-use conditions.
 DEVIATE 1: no vectors, and only integer constants.
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `SimplifyDemandedInstructionBits`
-(`combine_demanded`), `foldOrToXor`, `foldComplexAndOrPatterns`,
-`foldIntegerPackFromVector`, `foldOrOfInversions`,
-`foldUsingDistributiveLaws`, the `i1` select folds
+each named where it stood: `foldOrToXor`, `foldComplexAndOrPatterns`,
+`foldIntegerPackFromVector`, `foldOrOfInversions`, the `i1` select folds
 (`foldAndOrOfSelectUsingImpliedCond`, `FoldOrOfLogicalAnds`),
-`matchBSwapOrBitReverse`, `matchOrConcat`, `foldBinOpShiftWithShift`,
+`matchOrConcat`,
 `tryFoldInstWithCtpopWithNot`, the disjoint-`or` folds, the `trunc`/`lshr`
 mask fold, `matchSelectFromAndOr` and everything after it.
 
@@ -35,3 +33,6 @@ mask fold, `matchSelectFromAndOr` and everything after it.
 %q = and i32 %b, -13            ==>
 %r = or i32 %p, %q
 ```
+
+## Used by
+Named by `combine`.

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/relayout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/relayout.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/relayout.rs sha256:c54f52ce3449a53f3a3030d8326192e26e883ffcdbbd1342bf8f73eb3d9d3616 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/relayout.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/relayout.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/relayout.rs sha256:a48fa5d98595dceb12bff37e753293e5150966db3ba503b4c991e9d423d9d6f5 -->
 
 # relayout
 
@@ -35,6 +35,15 @@ variables, and the displacement bytes of inline code (`inline_places`).
 encodability decisions treat a frame cell as near whatever its slot, so the
 two layouts decide alike (a frame cell priced by its displacement once made
 them differ).
+
+`ordered` is the other relayout: the pin's
+`X86FrameLowering::orderFrameObjects` (the use-density order
+`PrologEpilogInserter` asks for at every optimisation level), applied to the
+first layout when it has far operands and the order reaches fewer of them.
+Objects sort by uses per byte, highest first, ties by alignment and then by
+later creation, and are laid from BP downward; a BASIC frame reorders the
+selector's slots only, since the runtime zero-fills them and the spill slots
+lie outside what it fills.
 
 It gives up and returns `None`, and the first layout stands, on a frame cell
 in no known slot, on inline-code bytes it cannot move, on call-private

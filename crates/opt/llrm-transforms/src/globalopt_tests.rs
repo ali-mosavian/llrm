@@ -131,3 +131,101 @@ b0:
     );
     assert!(volatile.contains("store volatile i8 %x, ptr @t"), "{volatile}");
 }
+
+/// tests/run/c/local_initializers.c: a local aggregate's initializer is a
+/// `memcpy` from an internal global (the C front end's `.X`), which no load
+/// took until SROA split the copy; GlobalOpt had run by then, so the global
+/// stayed a variable and `main` kept its 100 instructions (58 -> 354 B at -O2)
+/// where it was 12 before #3621. A `memcpy` from it is a read
+/// (`AnalyzeGlobal`).
+#[test]
+fn a_global_only_copied_from_is_constant_and_its_copy_folds() {
+    let after = piped(
+        "@x = internal global [4 x i8] c\"\\05\\00\\0c\\00\"
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f() {
+b0:
+  %s = alloca [4 x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr @x, i16 4, i1 false)
+  %p = getelementptr i8, ptr %s, i16 2
+  %v = load i16, ptr %p
+  ret i16 %v
+}
+",
+    );
+    assert!(after.contains("ret i16 12") && !after.contains("call void @llvm.memcpy"), "{after}");
+}
+
+/// Each global asked about scanned every body again: `never_stored` made
+/// globals x functions scans, 5.4 M of a `d_faces` compile in `reach` over 253
+/// runs. One scan of a body serves every global.
+#[test]
+fn the_uses_of_every_global_are_found_in_one_scan_of_each_body() {
+    let module = parsed(&format!(
+        "{}@a = internal global i16 1
+@b = internal global i16 2
+@c = internal global i16 3
+
+define i16 @f() {{
+b0:
+  %x = load i16, ptr @a
+  %y = load i16, ptr @b
+  %s = add i16 %x, %y
+  ret i16 %s
+}}
+
+define i16 @g() {{
+b0:
+  %z = load i16, ptr @c
+  ret i16 %z
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let before = crate::globalopt::scans();
+    let found = crate::globalopt::never_stored(&module);
+    assert_eq!(found.len(), 3, "the three globals are only loaded");
+    assert_eq!(crate::globalopt::scans() - before, 2, "one scan for each of the two bodies");
+}
+
+/// QB's `PTS$descriptor` names `PTS`, and nothing takes the descriptor: a
+/// variable only an unreached variable names was still "named by another
+/// initializer", so it kept its stores and its loads (udt.bas -Os m16: six
+/// `mov dword ptr PTS+n, imm`, 24 bytes of data and `push dword ptr PTS+n`
+/// where main pushes constants, +66 B).
+#[test]
+fn a_variable_only_an_unreached_descriptor_names_still_loses_its_stores() {
+    let after = piped(
+        "@a = internal global [8 x i8] zeroinitializer
+@a.d = internal constant <{ ptr }> <{ ptr @a }>
+
+define void @f() {
+b0:
+  store i32 5, ptr @a
+  ret void
+}
+",
+    );
+    assert!(!after.contains("@a"), "the variable or its store stayed:\n{after}");
+}
+
+/// A descriptor some code takes keeps what it names.
+#[test]
+fn a_variable_a_reached_descriptor_names_keeps_its_stores() {
+    let after = piped(
+        "@a = internal global [8 x i8] zeroinitializer
+@a.d = internal constant <{ ptr }> <{ ptr @a }>
+@out = global ptr null
+
+define void @f() {
+b0:
+  store i32 5, ptr @a
+  store volatile ptr @a.d, ptr @out
+  ret void
+}
+",
+    );
+    assert!(after.contains("store i32 5, ptr @a"), "a store to a variable a live descriptor names went:\n{after}");
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_formula.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_formula.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_formula.rs sha256:53a5998e81f42f5ba99736d10778029c24c7350666c495f3f6615a3e50ee014a -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_formula.rs sha256:693b00331ac49936ec9ffbedd513fa8e7a6d8130858b609fea4749ba9d2f66d8 -->
 
 # lsr_formula
 

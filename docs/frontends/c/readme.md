@@ -38,6 +38,8 @@ generates code there. What the stream carries and what `llrm-c` does with it
 is in [the front end contract](ow-contract.md). `llrm-c` also accepts a
 recorded stream (`.cgs`) as its input.
 
+[`llrm-cc`](clang-route.md) is the same pipeline from clang's front end instead of Open Watcom's; [its calling conventions](calling-conventions.md).
+
 ## Targets and ABI
 
 `-m16` compiles for real-mode DOS and `-m32` for flat 32-bit DOS; the target
@@ -164,6 +166,8 @@ The front end is built by `build.rs` from an Open Watcom tree: `$OWROOT` when
 set, otherwise a tree cached per commit (`toolchain/owshim/ow-commit`) and
 bootstrapped once. `--no-default-features --features wccq` builds only the front
 end. Without the toolchain feature `llrm-c` still reads `.cgs` streams.
+
+[GNU C builtins](builtins.md): how a `__builtin_*` call compiles.
 
 ## Tests
 

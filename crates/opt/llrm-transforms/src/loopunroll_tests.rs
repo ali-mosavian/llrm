@@ -245,3 +245,15 @@ fn test_unroll_scans_double_with_the_count() {
     let (a, b, c) = (unroll_scanned(256), unroll_scanned(512), unroll_scanned(1024));
     assert!(b * 100 <= a * 250 && c * 100 <= b * 250, "256: {a}, 512: {b}, 1024: {c}");
 }
+
+/// The copies of an unrolled loop stand in order right after its latch, before
+/// the exit (LoopUnroll.cpp:1214). They stood at the end of the function.
+#[test]
+fn test_the_copies_stand_after_the_latch_before_the_exit() {
+    let mut module = parsed(ROTATED);
+    assert_eq!(unrolled(&mut module, "b1", 2, &[]), Unrolled::Fully);
+    let function = f(&mut module);
+    let order: Vec<String> =
+        function.layout().iter().map(|&one| function.block(one).name.clone().unwrap_or("new".into())).collect();
+    assert_eq!(order, ["b0", "b1", "b2", "new", "new", "b3"], "{}", printed(&module));
+}

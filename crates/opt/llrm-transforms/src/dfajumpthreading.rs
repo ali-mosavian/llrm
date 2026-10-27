@@ -38,11 +38,15 @@
 //! - DF3. A path through a block that starts with a `landingpad` is not
 //!   threaded: the copy would be a second pad, and the one module handler
 //!   (`ehprepare`) cannot choose between two (J10 of `jumpthreading.rs`).
-//! - DF5 (parity, not a deviation). `x_switch` m16 -O2/-O3 is +17 B (320 vs
-//!   303) and 70 vs 63 asm lines: the pass threads the state cycle and peels
-//!   two iterations, as `opt -passes=dfa-jump-threading` does on the same
-//!   entering IR (m16 target, identical per `difftest.py dumps`). The source is
-//!   UB at m16 (`r >> 16` on 16 bits); -Os is identical (size gate).
+//! - DF5 (parity at the IR, a row in the lowering). On the kernel written for
+//!   32 bits (`i32` is `long`, #3535) `x_switch` m16 -O2/-O3 is 709 B with the
+//!   pass and 629 B without (+80 B); -O1 and -Os are identical (size gate). The
+//!   pass's decision is the pin's: `bench_x_switch` is 86 IR instructions with
+//!   it and 50 without, and `opt -passes='default<O2>'` (m16 target,
+//!   `-enable-dfa-jump-thread` true/false) gives 93 and 48. The loss is in
+//!   lowering the threaded state machine: 198 asm instructions with the pass
+//!   and 178 without, where the pin's `llc` has 108 and 131 (the pin gains, we
+//!   lose). Owner w-4, exit 2026-11-09. The earlier +17 B was UB code.
 //!
 //! # Example
 //! The state is set to 1 on one path and to 2 on the other, and the `switch`
