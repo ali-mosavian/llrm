@@ -662,7 +662,18 @@ impl Builder<'_> {
         let chain = match which {
             Intrinsic::MemCpy | Intrinsic::MemMove => {
                 let limit = if opt_size { 4 } else { 8 };
+                // DEVIATE SD225 (real mode): tuned for size, a copy of more
+                // than `limit` pieces (dwords, then a word and
+                // a byte: no overlap) is string moves; the pin
+                // counts the overlapping last dword as one more
+                // piece of the same size and keeps four pairs, 8 bytes
+                // each here (15 bytes: 43 against 27). The old selector's rule.
+                // Owner w12. Exit: a cost hook on the target.
+                let strings = opt_size
+                    && self.arch.string_registers().is_some()
+                    && constant.is_some_and(|bytes| bytes / 4 + u64::from((bytes % 4).count_ones()) > limit as u64);
                 let inline = match constant {
+                    Some(_) if strings => None,
                     Some(bytes) if matches!(which, Intrinsic::MemCpy) => {
                         self.inline_memcpy(root, dst, other, bytes, limit, dst_align, src_align)?
                     }
@@ -1075,6 +1086,28 @@ impl Builder<'_> {
             );
         if left == 0 {
             return Ok(rep);
+        }
+        // DEVIATE SD224 (real mode): tuned for size, the bytes past the last
+        // block are `movsw` and `movsb` glued after the move, not a load and a
+        // store from addresses made again (the pin's tail): 1 byte each. The
+        // old selector's tail. Owner w12. Exit: a cost hook on the target.
+        if self.has_opt_size() && self.arch.string_registers().is_some() {
+            let mut last = rep;
+            let mut rest = left;
+            for width in [2u64, 1] {
+                if rest >= width {
+                    let kind = self.dag.get_value_type_node(EVT::integer(width as u32 * 8));
+                    last = self
+                        .dag
+                        .get_node_multi(
+                            x86isd::REP_MOVS,
+                            &[EVT::OTHER, EVT::GLUE],
+                            &[SDValue { node: last.node, res: 0 }, kind, SDValue { node: last.node, res: 1 }],
+                        );
+                    rest -= width;
+                }
+            }
+            return Ok(SDValue { node: last.node, res: 0 });
         }
         // the bytes past the last block: a copy of their own, from the original
         // chain
