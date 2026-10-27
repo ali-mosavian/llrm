@@ -225,6 +225,9 @@ pub fn machine_with<'a>(
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress {
             lea: match target.dword_address_form() {
+                None if target.address_forms.iter().any(|form| form.index_width == 8) => {
+                    crate::twoaddress::ThreeAddress::Wide
+                }
                 None => crate::twoaddress::ThreeAddress::Off,
                 Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
                 Some(_) => crate::twoaddress::ThreeAddress::All,
