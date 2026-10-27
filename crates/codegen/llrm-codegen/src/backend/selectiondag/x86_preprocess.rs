@@ -52,7 +52,7 @@ fn in_sse(
     sse2 && matches!(vt, EVT::Simple(MVT::F32 | MVT::F64))
 }
 
-/// DEVIATE D15: a store of an x87 `fp_round` that nothing else reads is one
+/// DEVIATE SD222: a store of an x87 `fp_round` that nothing else reads is one
 /// truncating store (`fst`) of the rounded value. The pin's `visitSTORE` makes
 /// the same fold but only where the truncating store is legal, and X86 marks
 /// `f64 -> f32` Expand, so it keeps the round trip through a stack temporary
