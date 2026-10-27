@@ -232,7 +232,7 @@ def check_tree(root: Path) -> list[str]:
     for label, text in documents(root):
         for line, lang, body in fences(text):
             if lang == "fig":
-                errs.append(f"{label}:{line}: legacy ```fig fence; convert it with tools/docsbuild/mdfigs.py")
+                errs.append(f"{label}:{line}: legacy ```fig fence; convert it with tools/docs/docsbuild/mdfigs.py")
             elif lang == "mermaid":
                 errs += [f"{label}:{line}: {e}" for e in check(body)]
     return errs

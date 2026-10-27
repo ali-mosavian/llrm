@@ -15,6 +15,10 @@
 //! %p = phi ptr [ %a, %l ], [ %b, %r ]       %i = phi i64 [ %x, %l ], [ %y, %r ]
 //!   (%a, %b: gep i32, ptr %base, i64 %x/%y)  %g = gep i32, ptr %base, i64 %i
 //! ```
+//!
+//! # Used by
+//! The `getelementptr` visit of [`combine_gep`](crate::combine_gep), which
+//! tries `fold_gep_of_phi` on a pointer that is a phi.
 
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::Opcode;
