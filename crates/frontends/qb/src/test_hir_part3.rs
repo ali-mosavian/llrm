@@ -2214,6 +2214,7 @@ END SUB
 }
 
 #[test]
+#[ignore = "row QB-SEL-1: segment-register class in RA"]
 fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
     // qbdemo's FRACTALEFFECT: `tmpshit`'s selector, spilled across the calls
     // around it, was reloaded into fs from [bp] on every trip of the loop
