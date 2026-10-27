@@ -649,4 +649,5 @@ define i32 @f(i32 %x) {
 fn a_bswap_of_which_one_byte_is_demanded_is_a_shift() {
     let made = super::dag_function_tests::names(BITREVERSE_OF_A_HIGH_BYTE).unwrap_or_else(|why| panic!("{why}"));
     assert!(!made.iter().any(|name| name == "bswap"), "{made:?}");
+    assert!(made.len() <= 17, "{made:?}");
 }
