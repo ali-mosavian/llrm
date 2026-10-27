@@ -10,6 +10,10 @@
 //! `MOVSX16rr8` (the `rm8` forms when its load folds), divides by `DIV8r`, and
 //! copies the remainder out of `AH` through `MOV[SZ]X32rr8_NOREX`.
 //!
+//! Numbered deviation: **SD302** the emitter reads that `AH` as `shr ax, 8`
+//! of the word `AX`: the LIR names no `AH`. Owner sdag-c. Exit: an `AH`
+//! operand in the LIR. Review 2026-12-10.
+//!
 //! # Used by
 //! [`crate::x86_select::select_node`].
 //!
