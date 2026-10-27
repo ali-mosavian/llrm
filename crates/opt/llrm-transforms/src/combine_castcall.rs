@@ -106,7 +106,7 @@ impl Combiner<'_> {
             // what `va_arg` reads
             for &operand in &operands[parameters.len()..actual] {
                 let ty = self.type_of(operand);
-                if self.context.types.int_bits(ty).is_some_and(|bits| bits < 32) {
+                if self.context.types.int_bits(ty).is_some_and(|width| width < 32) {
                     return Visit::None;
                 }
             }
