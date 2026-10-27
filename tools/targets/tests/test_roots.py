@@ -1,19 +1,16 @@
 """Moving a tool one directory down broke its way to the repository root: the arm64 tools looked for `crates/` under `tools/`."""
 import re
-import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parent))
-
-import arm64_compare  # noqa: E402
-import arm64_fuzz  # noqa: E402
 
 
 def test_python_tools_find_the_repository_root():
-    for tool in (arm64_compare, arm64_fuzz):
-        assert (tool.ROOT / "Cargo.toml").is_file(), tool.__name__
-        assert tool.CRATE.is_dir(), tool.__name__
+    """Read from the source: arm64_fuzz runs main() on import."""
+    for name in ("arm64_compare.py", "arm64_fuzz.py"):
+        found = re.search(r"^ROOT = Path\(__file__\)\.resolve\(\)\.parents\[(\d)\]$", (HERE.parent / name).read_text(), re.M)
+        assert found, name
+        assert (HERE.parent.parents[int(found.group(1)) - 1] / "Cargo.toml").is_file(), name
 
 
 def test_shell_tools_find_the_repository_root():
