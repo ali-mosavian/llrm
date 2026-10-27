@@ -1624,6 +1624,8 @@ pub struct Row {
     direct_writes: Option<&'static str>,
     direct_reads: Option<&'static str>,
     pub captures: Option<&'static str>,
+    /// The routine hands control back to the program (`calls_back = true`).
+    calls_back: bool,
 }
 
 include!(concat!(env!("OUT_DIR"), "/rows.rs"));
@@ -1738,13 +1740,13 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
 pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
     LazyLock::new(|| _contracts(None).expect("runtime.toml loads"));
 
-// Routines that hand control back to the program. What they write is what
-// the code they call writes, which is anything -- GCC's modref gives up on
-// an indirect call for the same reason. B$CENP ends the program, B$EVCK
-// polls for an event and may run an event GOSUB, B$OEGA and B$RESN are the
-// ON ERROR machinery.
+// Routines that hand control back to the program: their rows say
+// `calls_back = true`. What they write is what the code they call writes,
+// which is anything -- GCC's modref gives up on an indirect call for the same
+// reason. B$CENP ends the program, B$EVCK polls for an event and may run an
+// event GOSUB, B$OEGA and B$RESN are the ON ERROR machinery.
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
-    LazyLock::new(|| BTreeSet::from(["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]));
+    LazyLock::new(|| ROWS.iter().filter(|row| row.calls_back).map(|row| row.name).collect());
 
 /// The runtime entries whose row says `captures = "NONE"`: they keep no
 /// pointer argument past their return.
@@ -1958,6 +1960,12 @@ mod tests {
     #[test]
     fn test_erase_keeps_no_pointer_it_is_handed() {
         assert_eq!(captures_nothing(), ["B$ERAS"]);
+    }
+
+    /// The set was a literal; the rows' `calls_back` must name the same four.
+    #[test]
+    fn test_the_routines_that_enter_user_code_are_the_rows_that_say_so() {
+        assert_eq!(ENTERS_USER_CODE.iter().copied().collect::<Vec<_>>(), ["B$CENP", "B$EVCK", "B$OEGA", "B$RESN"]);
     }
 
     #[test]
