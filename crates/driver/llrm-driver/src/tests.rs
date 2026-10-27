@@ -872,3 +872,25 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
+
+const SMALL_STRUCT_BY_VALUE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    declare i16 @wc_small(ptr byval(%struct.T) align 2, i16) addrspace(1)\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  store i8 5, ptr %t, align 1\n  \
+    %r = call addrspace(1) i16 @wc_small(ptr byval(%struct.T) align 2 %t, i16 6)\n  ret i16 %r\n}\n\
+    define i16 @g(ptr byval(%struct.T) align 2 %t, i16 %a) addrspace(1) {\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  %r = add i16 %w, %a\n  ret i16 %r\n}\n";
+
+/// clang passes `struct { char x; }` `byval`, in memory; Open Watcom's register
+/// convention takes it in AL with the next argument in DX. The call pushed it
+/// and the callee read memory, so wc16_mixed.c's `wc_small(t, 6)` was 50, not
+/// 56, against Watcom's own object.
+#[test]
+fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
+    let (built, _) = crate::llc::compiled(&flags(&["-mabi=watcom", "-m16"]), SMALL_STRUCT_BY_VALUE, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov ax, 5") && listing.contains("mov dx, 6"), "{listing}");
+    assert!(!listing.contains("sub sp") && !listing.contains("push 6") && !listing.contains("pushw 6"), "{listing}");
+    assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
+}

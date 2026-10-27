@@ -295,6 +295,7 @@ pub fn compiled_dumping(
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
+    crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let mut options = options_for(&bound, flags, machine, format.name(), default);

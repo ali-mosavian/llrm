@@ -2,6 +2,7 @@
 //! name, among those it supports; nothing else in the tree matches on a
 //! target's name.
 
+mod coerce;
 pub mod llc;
 
 use std::rc::Rc;
