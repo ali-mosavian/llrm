@@ -206,6 +206,19 @@ pub struct Object {
     pub debug: Option<debug::Info>,
 }
 
+/// What a target says of the object files it writes, so the code that holds an
+/// [`Object`] names no writer crate (LLVM's `MCObjectTargetWriter` dispatch, in
+/// one place per target).
+pub trait ObjectTarget {
+    /// `object` as a file of `format` (`"elf"`, `"coff"`, `"macho"`); a format
+    /// the target has no writer for is [`Unsupported`].
+    fn write_object(
+        &self,
+        format: &str,
+        object: &Object,
+    ) -> Result<Vec<u8>, Unsupported>;
+}
+
 /// What a writer cannot say. A writer returns it; it never writes something
 /// near.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -1,7 +1,8 @@
 //! An [`Object`] as an ELF relocatable file, of either class. What a machine
 //! adds is its ELF machine number, its relocation types, and whether its
 //! relocations carry an addend (RELA) or leave it in the field (REL): see
-//! [`Machine`]. `llrm-elf32` and `llrm-elf64` are the machines.
+//! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
+//! `mc::elf` are the machines.
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 

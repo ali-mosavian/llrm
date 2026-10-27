@@ -170,7 +170,7 @@ fn dump(
 }
 
 fn written() -> Vec<u8> {
-    llrm_coff32::write(&object()).unwrap()
+    llrm_x86::mc::coff32::write(&object()).unwrap()
 }
 
 /// Every record of both sections reads, and says what the model said: the
@@ -267,7 +267,7 @@ fn function(made: &mut Object) -> &mut Function {
 fn refusal(change: impl FnOnce(&mut Object)) -> String {
     let mut made = object();
     change(&mut made);
-    llrm_coff32::write(&made).unwrap_err().0
+    llrm_x86::mc::coff32::write(&made).unwrap_err().0
 }
 
 /// What C13 as written cannot say is refused by name, never written as
@@ -332,7 +332,7 @@ fn a_variable_over_a_long_function_is_written_in_pieces() {
     info.functions[0].body = Some((3, 129_990));
     info.functions[0].blocks.clear();
     info.lines.clear();
-    let bytes = llrm_coff32::write(&made).unwrap();
+    let bytes = llrm_x86::mc::coff32::write(&made).unwrap();
     let text = dump("llvm-readobj", &["--codeview"], &bytes).unwrap();
     let lengths: Vec<usize> = text
         .lines()
@@ -369,6 +369,6 @@ fn what_overflows_a_field_is_refused_not_wrapped() {
 fn a_column_is_written_with_its_line() {
     let mut made = object();
     made.debug.as_mut().unwrap().lines[1].column = 9;
-    let text = dump("llvm-readobj", &["--codeview"], &llrm_coff32::write(&made).unwrap()).unwrap();
+    let text = dump("llvm-readobj", &["--codeview"], &llrm_x86::mc::coff32::write(&made).unwrap()).unwrap();
     assert!(text.contains("Flags: 0x1") && text.contains("ColStart: 9"), "{text}");
 }

@@ -1,6 +1,7 @@
 //! An [`Object`] as a COFF object file, the format link.exe, lld-link and wlink
 //! read. What a machine adds is its COFF machine number and its relocation
-//! types: see [`Machine`]. `llrm-coff32` and `llrm-coff64` are the machines.
+//! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
+//! machines.
 
 /// C13 gives each local the ranges its place holds over.
 pub const LOCATION_RANGES: bool = true;

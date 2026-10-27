@@ -62,7 +62,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use llrm_lir::registers::Regs;
-use llrm_object::{Arch, Binding, Definition, Kind, Object, OmfGroup, Reloc, Role, Section, Symbol, Target};
+use llrm_object::{
+    Arch, Binding, Definition, Kind, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target,
+};
 use llrm_target::object::{CodeModel, Format};
 
 use crate::backend::masm;
@@ -538,16 +540,7 @@ pub fn serialized(
 ) -> Result<Vec<u8>, Error> {
     match format {
         Format::Omf => Ok(llrm_omf::write::write(object)?),
-        Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(object)?),
-        Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(object)?),
-        Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(object, &llrm_x86::mc::macho::X8664MachO)?),
-        Format::Coff if object.arch == Arch::I386 => Ok(llrm_coff32::write(object)?),
-        Format::Coff if object.arch == Arch::X8664 => Ok(llrm_coff64::write(object)?),
-        Format::Elf | Format::MachO | Format::Coff => Err(Error::Unsupported(llrm_object::Unsupported(format!(
-            "no {} writer for {:?} yet",
-            format.name(),
-            object.arch
-        )))),
+        other => Ok(llrm_x86::mc::X86Objects.write_object(other.name(), object)?),
     }
 }
 

@@ -239,7 +239,7 @@ dependencies = [
 name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
- "llrm-elf-arm64",
+ "llrm-elf",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",
@@ -329,16 +329,11 @@ dependencies = [
  "llrm-analysis",
  "llrm-codegen",
  "llrm-coff",
- "llrm-coff32",
- "llrm-coff64",
  "llrm-dagisel",
  "llrm-debuginfo",
- "llrm-elf32",
- "llrm-elf64",
  "llrm-hir",
  "llrm-iselgen",
  "llrm-lir",
- "llrm-macho",
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
@@ -371,24 +366,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-coff32"
-version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
-name = "llrm-coff64"
-version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
 name = "llrm-dagisel"
 version = "0.1.0"
 
@@ -405,8 +382,6 @@ dependencies = [
 name = "llrm-debuginfo"
 version = "0.1.0"
 dependencies = [
- "llrm-elf32",
- "llrm-elf64",
  "llrm-macho",
  "llrm-object",
  "llrm-support",
@@ -438,32 +413,6 @@ version = "0.1.0"
 dependencies = [
  "llrm-debuginfo",
  "llrm-object",
-]
-
-[[package]]
-name = "llrm-elf-arm64"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
-name = "llrm-elf32"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
-]
-
-[[package]]
-name = "llrm-elf64"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
- "tempfile",
 ]
 
 [[package]]
@@ -665,12 +614,15 @@ name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
+ "llrm-coff",
+ "llrm-elf",
  "llrm-lir",
  "llrm-macho",
  "llrm-mir",
  "llrm-object",
  "llrm-support",
  "llrm-target",
+ "tempfile",
  "toml",
 ]
 

@@ -1,4 +1,30 @@
 //! What an x86 object writer asks of its target: the Mach-O writer's
 //! description of x86-64.
 
+pub mod coff32;
+pub mod coff64;
+pub mod elf32;
+pub mod elf64;
 pub mod macho;
+
+use llrm_object::{Arch, Object, ObjectTarget, Unsupported};
+
+/// x86's object writers: the ELF, COFF and Mach-O tables of i386 and x86-64.
+pub struct X86Objects;
+
+impl ObjectTarget for X86Objects {
+    fn write_object(
+        &self,
+        format: &str,
+        object: &Object,
+    ) -> Result<Vec<u8>, Unsupported> {
+        match (format, object.arch) {
+            ("elf", Arch::I386) => elf32::write(object),
+            ("elf", Arch::X8664) => elf64::write(object),
+            ("macho", Arch::X8664) => llrm_macho::write(object, &macho::X8664MachO),
+            ("coff", Arch::I386) => coff32::write(object),
+            ("coff", Arch::X8664) => coff64::write(object),
+            _ => Err(Unsupported(format!("no {format} writer for {:?} yet", object.arch))),
+        }
+    }
+}
