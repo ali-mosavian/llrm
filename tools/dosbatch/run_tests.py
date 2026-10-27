@@ -301,7 +301,10 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 else:
                     dosbatch._host(c_command(source, extra, target, dosbatch.c_include(target, work), [dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level], isel=False))
                 others.append(extra)
-            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
+            # A Watcom-ABI program defines `main_`, which llrm-cc leaves as the symbol; the start-up calls what LL_MAIN names.
+            watcom = c_frontend() == "llrm-cc" and "-mabi=watcom" in program.flags
+            defines = (*dosbatch.os_defines(target, "c"), *(["LL_MAIN=main_"] if watcom else []))
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others), defines=defines)
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"
