@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod isa;
 pub mod layout;
 pub mod machine;
 pub mod object;

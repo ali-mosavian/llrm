@@ -14,7 +14,7 @@ flowchart TB
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
   obj["<b>BC .OBJ ...</b><br/><small>[runtime .LIB]</small>"]:::src
-  bc["<b>llrm-x86-bc</b><br/><small>decode: declen, blocks, extent<br/>find the module header<br/>raise each body to MIR</small>"]:::opt
+  bc["<b>llrm-bcobj</b><br/><small>decode: declen, blocks, extent<br/>find the module header<br/>raise each body to MIR</small>"]:::opt
   mir["<b>MIR: one function per body</b><br/><small>main, each procedure by name<br/>DGROUP variables are globals<br/>runtime routines are<br/>@llrm.qb.* declarations</small>"]:::mid
   sh["<b>shared optimizer, isel,</b><br/><small>machine phases<br/>(as for any frontend)</small>"]:::mid
   out["<b>fresh BASIC-envelope OMF</b><br/><small>object, one per input</small>"]:::out
@@ -55,7 +55,7 @@ header word relocated other than as BASIC relocates it is refused.
 
 - The FP emulator's interrupts `34h` to `3Bh` stand in for x87 ESC opcodes
   with the operand inline; `3Ch` stands in for a segment-override prefix and
-  `3Dh` for `WAIT`. `crates/target/llrm-x86-bcmachine/src/frontends/bc/declen.rs`
+  `3Dh` for `WAIT`. `crates/frontends/bcobj/src/frontends/bc/declen.rs`
   and `fppatches.rs` decode each for what it is.
 - `ON k GOTO` is `call far B$OGTA` followed by inline data: a count byte and
   that many offsets. The runtime reads the return address to find the table, so
