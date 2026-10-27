@@ -30,7 +30,14 @@ pub fn symbol_name(
     platform: Platform,
     name: &str,
 ) -> String {
-    if platform.underscore() { format!("_{name}") } else { name.to_owned() }
+    // `\01` marks a name to be used as written, with no platform prefix.
+    if let Some(verbatim) = name.strip_prefix('\u{1}') {
+        verbatim.to_owned()
+    } else if platform.underscore() {
+        format!("_{name}")
+    } else {
+        name.to_owned()
+    }
 }
 
 /// Every global variable `module` defines, laid out.
