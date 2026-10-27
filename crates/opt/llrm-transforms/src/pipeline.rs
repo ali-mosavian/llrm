@@ -1961,6 +1961,8 @@ impl Run {
             metadata: unit.metadata.to_vec(),
             named_metadata: Vec::new(),
             sections: Default::default(),
+            special: Default::default(),
+            global_metadata: Default::default(),
         };
         std::fs::create_dir_all(file.parent().expect("a file in a directory"))
             .and_then(|()| std::fs::write(file, llrm_mir::print::module(&module)))
