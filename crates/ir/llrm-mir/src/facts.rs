@@ -305,6 +305,12 @@ facts! {
         // Of a routine: it raises nothing, comes back, calls nothing of the
         // module, is rare.
         NoUnwind no_unwind "nounwind" on [Callable];
+        // Of a routine: it frees no memory, directly or through what it calls;
+        // of a pointer argument: it is not freed through it.
+        NoFree no_free "nofree" on [Callable, Param];
+        // Of a routine: it does no synchronizing, directly or through what it
+        // calls.
+        NoSync no_sync "nosync" on [Callable];
         WillReturn will_return "willreturn" on [Callable];
         // It is never entered again while it runs: in no cycle of calls, and
         // nothing it reaches calls what may call back.

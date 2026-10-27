@@ -24,8 +24,10 @@ fn all_of(
     no_unwind: bool,
     will_return: bool,
     no_return: bool,
+    no_free: bool,
+    no_sync: bool,
 ) -> Inferred {
-    Inferred { no_recurse, no_unwind, will_return, no_return }
+    Inferred { no_recurse, no_unwind, will_return, no_return, no_free, no_sync }
 }
 
 #[test]
@@ -39,7 +41,7 @@ b0:
   ret i32 %b
 }
 ";
-    assert_eq!(inferred(text, &["f"]), [all_of(true, true, true, false)]);
+    assert_eq!(inferred(text, &["f"]), [all_of(true, true, true, false, false, false)]);
 }
 
 /// A call to a body nothing states leaves the function recursive, throwing and
@@ -61,8 +63,8 @@ b0:
   ret void
 }
 ";
-    assert_eq!(inferred(text, &["calls_unknown"]), [all_of(false, false, false, false)]);
-    assert_eq!(inferred(text, &["itself"]), [all_of(false, true, false, false)]);
+    assert_eq!(inferred(text, &["calls_unknown"]), [all_of(false, false, false, false, false, false)]);
+    assert_eq!(inferred(text, &["itself"]), [all_of(false, true, false, false, true, true)]);
 }
 
 /// Mutual recursion: norecurse needs a one-member SCC; nounwind is the whole
@@ -81,7 +83,7 @@ b0:
   ret void
 }
 ";
-    assert_eq!(inferred(quiet, &["a", "b"]), [all_of(false, true, false, false), all_of(false, true, false, false)]);
+    assert_eq!(inferred(quiet, &["a", "b"]), [all_of(false, true, false, false, true, true), all_of(false, true, false, false, true, true)]);
     let throwing = "declare void @unknown()
 
 define void @a() {
@@ -99,7 +101,7 @@ b0:
 ";
     assert_eq!(
         inferred(throwing, &["a", "b"]),
-        [all_of(false, false, false, false), all_of(false, false, false, false)]
+        [all_of(false, false, false, false, false, false), all_of(false, false, false, false, false, false)]
     );
 }
 
@@ -389,4 +391,37 @@ fn a_loop_that_may_not_end_is_not_willreturn() {
         let attrs = &module.global(id).function().unwrap().attrs;
         assert!(!Facts::of(attrs).will_return(), "{name}: {attrs:?}");
     }
+}
+
+/// `nofree` and `nosync` were never inferred: 111 functions of 180 in the
+/// dyn-work programs had neither where the pin gives both (a body that calls
+/// only what states them), and a call that states neither keeps them off.
+#[test]
+fn test_nofree_and_nosync_follow_what_the_calls_state() {
+    let text = "declare void @quiet() nofree nosync nounwind
+declare void @loud()
+
+define void @a() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @b() {
+b0:
+  call void @loud()
+  ret void
+}
+
+define i32 @leaf(i32 %x) {
+b0:
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+";
+    let flags = |name: &str| {
+        let one = inferred(text, &[name])[0];
+        (one.no_free, one.no_sync)
+    };
+    assert_eq!((flags("a"), flags("b"), flags("leaf")), ((true, true), (false, false), (true, true)));
 }
