@@ -215,6 +215,19 @@ def test_a_new_compile_failure_outside_the_known_list_is_unexpected():
     assert [entry.name for entry in sweep.fixed(seen[:1])] == ["x_ll_div", "x_ll_div", "lru"]
 
 
+def test_a_known_failure_that_is_gone_is_reported_not_failed():
+    """The sweep exited 1 when #5202 fixed x_ll_div's Freeze crash: the fixing PR could not land until it edited KNOWN in step, and w9/w13
+    could not drop the entry at all while crashsweep.py was not on feat/parity (2026-10-27). A fix is reported (`FIXED?`); only a new crash fails."""
+    sweep = load("crashsweep")
+    crc = ("m16", "O2", "crc", "dag", "thread 'main' panicked at crates/codegen/llrm-codegen/src/liveness/calcspillweights.rs:267:40:")
+    lru = ("m16", "O0", "lru", "-", "clang: lru.c:5:22: error")
+    code, lines = sweep.verdict([crc, lru])
+    assert code == 0 and any(line.startswith("FIXED? x_ll_div dag") for line in lines)
+    new = ("m32", "O2", "fib", "dag", "thread 'main' panicked at x.rs:1:1")
+    code, lines = sweep.verdict([crc, lru, new])
+    assert code == 1 and any(line.startswith("UNEXPECTED m32 O2 fib dag") for line in lines)
+
+
 def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
     """An A/B of two builds was one-off awk and a scratch script (x_radix O2, 2026-10-27); it must read the table pindiff prints."""
     pindiff = load("pindiff")
