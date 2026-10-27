@@ -24,7 +24,8 @@ use llrm_support::pyrepr::{self, Repr};
 // So an entry is a two-byte offset into this same segment, the count is one
 // byte in front of them. Selectors 0 or count+1..255 fall through; values
 // above 255 enter B$FrameFC instead. These are normal CFG successors only.
-pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> = LazyLock::new(|| BTreeSet::from(["B$OGTA"]));
+pub static INLINE_TABLE: LazyLock<BTreeSet<&'static str>> =
+    LazyLock::new(|| ROWS.iter().filter(|row| row.control == "inline-table").map(|row| row.name).collect());
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Reg {
@@ -1647,7 +1648,7 @@ impl Row {
             names.iter().map(|one| Reg::from_value(one).expect("a register of the table")).collect()
         };
         let memory = |name: &str| Memory::from_name(name).expect("a memory of the table");
-        let one = Contract {
+        Contract {
             name: self.name.to_owned(),
             cleanup: (self.cleanup >= 0).then_some(self.cleanup),
             control: Control::from_value(self.control).expect("a control of the table"),
@@ -1668,8 +1669,7 @@ impl Row {
             direct_writes: self.direct_writes.map(memory),
             flags_result: flags_result(self.name),
             direct_reads: self.direct_reads.map(memory),
-        };
-        if INLINE_TABLE.contains(self.name) { Contract { control: Control::InlineTable, ..one } } else { one }
+        }
     }
 }
 
@@ -1729,10 +1729,7 @@ pub fn _contracts(path: Option<&std::path::Path>) -> Result<IndexMap<String, Con
                 None
             },
         };
-        out.insert(
-            name.clone(),
-            if INLINE_TABLE.contains(name.as_str()) { Contract { control: Control::InlineTable, ..one } } else { one },
-        );
+        out.insert(name.clone(), one);
     }
     Ok(out)
 }
@@ -2043,6 +2040,7 @@ mod tests {
             .map(|(name, _)| name.as_str())
             .collect();
         assert_eq!(reflected, *INLINE_TABLE);
+        assert_eq!(reflected, BTreeSet::from(["B$OGTA"]));
     }
 
     #[test]
