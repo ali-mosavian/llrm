@@ -406,3 +406,61 @@ fn an_srem_compared_with_its_divisor_is_decided_by_the_divisor() {
         "  %0 = icmp sgt i32 %y, -1\n  ret i1 %0\n",
     );
 }
+
+/// `foldICmpBinOp`, two operators of one opcode with the same second operand
+/// (`opt`: `icmp eq i32 %a, %b`, `icmp slt i32 %a, %b`).
+#[test]
+fn two_operators_with_a_shared_second_operand_compare_their_first_operands() {
+    check(
+        "i32 %a, i32 %b, i32 %x",
+        "  %p = add i32 %a, %x\n  %q = add i32 %b, %x\n  %r = icmp eq i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = icmp eq i32 %a, %b\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %a, i32 %b",
+        "  %p = xor i32 %a, -2147483648\n  %q = xor i32 %b, -2147483648\n  %r = icmp ult i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %a, %b\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %a, i32 %b",
+        "  %p = xor i32 %a, 2147483647\n  %q = xor i32 %b, 2147483647\n  %r = icmp slt i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = icmp ugt i32 %a, %b\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %a, i32 %b, i32 %y",
+        "  %p = udiv exact i32 %a, %y\n  %q = udiv exact i32 %b, %y\n  %r = icmp ult i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = icmp ult i32 %a, %b\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %a, i32 %b, i32 %y",
+        "  %p = shl nuw i32 %a, %y\n  %q = shl nuw i32 %b, %y\n  %r = icmp ult i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = icmp ult i32 %a, %b\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits
+/// (`opt` goes on to `icmp eq i32 (xor %a, %b) & 1073741823, 0`).
+#[test]
+fn an_even_shared_multiplier_in_an_equality_compares_the_low_bits() {
+    check(
+        "i32 %a, i32 %b",
+        "  %p = mul i32 %a, 12\n  %q = mul i32 %b, 12\n  %r = icmp eq i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = and i32 %a, 1073741823\n  %1 = and i32 %b, 1073741823\n  %2 = icmp eq i32 %0, %1\n  ret i1 %2\n",
+    );
+}
+
+/// `foldICmpBinOp`, `x << 1` against `x` is the sign of `x`, and
+/// `A & (L - 1) u< L` is `L != 0`.
+#[test]
+fn a_doubling_and_a_masked_value_are_compared_by_sign_and_zero() {
+    check(
+        "i32 %x",
+        "  %p = shl i32 %x, 1\n  %r = icmp ult i32 %p, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %a, i32 %l",
+        "  %m = add i32 %l, -1\n  %p = and i32 %a, %m\n  %r = icmp ult i32 %p, %l\n  ret i1 %r\n",
+        "  %0 = icmp ne i32 %l, 0\n  ret i1 %0\n",
+    );
+}
