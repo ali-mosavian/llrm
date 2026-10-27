@@ -270,3 +270,14 @@ def test_the_dynamic_columns_rank_by_clocks_and_flag_what_runs_slower_or_differs
     assert "CLK>pin" in lines[1] and "OUTPUT-DIFFERS" not in lines[1]
     assert "OUTPUT-DIFFERS" in lines[2] and "CLK>pin" not in lines[2]
     assert "clk" in lines[0]
+
+
+def test_the_dynamic_run_compiles_ours_at_the_level_asked_not_os_as_o2():
+    """--dyn built ours at -O2 for Os: x_reverse -Os ran 19.7% slower than the pin (a `movzx` byte load the size gate removes), a gap its static columns
+    (compiled at -Os) did not have."""
+    dyn = load("dyn")
+    from pathlib import Path
+
+    assert "-Os" in dyn.ours_command("llc", "Os", Path("a.ll"), Path("a.o"))
+    assert "-O2" not in dyn.ours_command("llc", "Os", Path("a.ll"), Path("a.o"))
+    assert "-O3" in dyn.ours_command("llc", "O3", Path("a.ll"), Path("a.o"))

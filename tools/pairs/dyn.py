@@ -25,6 +25,11 @@ def stub(work: Path) -> None:
     harness.record_stub(work)
 
 
+def ours_command(llc: str, level: str, ll: Path, out: Path) -> list[str]:
+    """Ours at the level asked: -Os is -Os (the static columns compile it so; -O2 here gave Os a `movzx` load the pin's optsize code lacks)."""
+    return [llc, "-m32", f"-{level}", "-march=i486", "--isel=dag", "-mabi=sysv", "-fobject-format=elf", "-o", str(out), str(ll)]
+
+
 def measure(names: list[str], level: str, llc: str, work: Path, one) -> dict[str, dict | str]:
     """name -> {ins, pin_ins, clk, pin_clk, same} or why there is none. `one` is pindiff's `one`."""
     work.mkdir(parents=True, exist_ok=True)
@@ -50,7 +55,7 @@ def measure(names: list[str], level: str, llc: str, work: Path, one) -> dict[str
             out[name] = built
             continue
         ours = work / f"{name}.dyn.o"
-        ran = subprocess.run([llc, "-m32", f"-{'O2' if level == 'Os' else level}", "-march=i486", "--isel=dag", "-mabi=sysv", "-fobject-format=elf", "-o", str(ours), str(work / f"{name}.ll")], capture_output=True, text=True)
+        ran = subprocess.run(ours_command(llc, level, work / f"{name}.ll", ours), capture_output=True, text=True)
         if ran.returncode:
             out[name] = "ours elf: " + (ran.stderr.strip().splitlines() or ["?"])[0][:100]
             continue
