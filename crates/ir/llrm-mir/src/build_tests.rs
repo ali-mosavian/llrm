@@ -295,3 +295,15 @@ fn test_attributes_stamp_is_fx_and_moves_with_an_attribute() {
     module.function_mut("f").unwrap().1.attrs.push(crate::opcode::Attribute::Flag("nounwind".into()));
     assert_ne!(module.function_mut("f").unwrap().1.attributes_stamp(), before);
 }
+
+/// A declaration grew its parameter vectors by doubling (235 growths on
+/// d_faces): five parameters left room for eight.
+#[test]
+fn test_a_declaration_holds_room_for_its_parameters_only() {
+    let mut module = Module::default();
+    let i16 = module.context.types.int(16);
+    let void = module.context.types.void();
+    let ty = module.context.types.intern(Type::Function { returns: void, parameters: vec![i16; 5], variadic: false });
+    let declaration = crate::build::function_declaration(&module.context, "f", ty).expect("a function type");
+    assert_eq!(declaration.parameter_attrs.capacity(), 5);
+}
