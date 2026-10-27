@@ -492,6 +492,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if cond_vt != EVT::I1 {
             return None;
         }
+        // The pin reaches the sign mask through `or (sext (setle x, -1)), 1`:
+        // `SimplifySetCC` makes the compare `x < 0` and `visitSIGN_EXTEND`
+        // folds `sext (setlt x, 0)` to `sra`. Neither is translated, so the
+        // sign folds run first, with the same result.
+        if let Some(mask) = self.select_sign_folds(n0, n1, n2) {
+            return Some(mask);
+        }
         if let Some(math) = self.fold_select_of_constants(n0, n1, n2, vt) {
             return Some(math);
         }

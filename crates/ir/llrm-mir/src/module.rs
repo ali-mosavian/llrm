@@ -798,12 +798,20 @@ impl Function {
         self.uses.users(crate::uselist::Held::Value(value.0))
     }
 
-    /// The operand slots naming `block`: terminators' and phis'.
+    /// The operand slots naming `block`: terminators'.
     pub fn block_users(
         &self,
         block: BlockId,
     ) -> crate::uselist::Users<'_> {
         self.uses.users(crate::uselist::Held::Block(block.0))
+    }
+
+    /// The incoming-block slots of phis naming `block`.
+    pub fn phi_block_users(
+        &self,
+        block: BlockId,
+    ) -> crate::uselist::Users<'_> {
+        self.uses.users(crate::uselist::Held::PhiBlock(block.0))
     }
 
     pub fn terminator(
