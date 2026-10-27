@@ -213,4 +213,5 @@ def test_pindiff_pin_side_has_no_forced_frame_pointer():
     pindiff = load("pindiff")
     assert pindiff.forced_frame("f:\n\tpush\tebp\n\tmov\tebp, esp\n", "define void @f() {\n  ret void\n}\n")
     assert not pindiff.forced_frame("f:\n\tret\n", "define void @f() {\n  ret void\n}\n")
+    assert not pindiff.forced_frame("f:\n\tpush\tebp\n\tmov\tebp, esp\n\tand\tesp, -8\n", "define void @f() {\n  ret void\n}\n")
     assert "-frame-pointer=all" not in (HERE / "pindiff.py").read_text()

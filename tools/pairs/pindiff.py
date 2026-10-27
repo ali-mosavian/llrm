@@ -173,8 +173,8 @@ def front_end_flags(level: str, reopt: bool) -> list[str]:
 
 
 def forced_frame(asm: str, ir: str) -> bool:
-    """`push ebp; mov ebp, esp` in the pin's asm for IR that does not ask for one (frame-pointer=all made hanoi2/queens -Os look 4 bytes bigger)."""
-    return bool(re.search(r"push\s+ebp\n\s+mov\s+ebp, esp", asm)) and '"frame-pointer"' not in ir and "alloca i8, i32 %" not in ir and "dynamic_alloca" not in ir
+    """`push ebp; mov ebp, esp` in the pin's asm for IR that does not ask for one (frame-pointer=all made hanoi2/queens -Os look 4 bytes bigger). Stack realignment (`and esp, -N`) needs one."""
+    return bool(re.search(r"push\s+ebp\n\s+mov\s+ebp, esp", asm)) and not re.search(r"and\s+esp, -\d+", asm) and '"frame-pointer"' not in ir and "alloca i8, i32 %" not in ir and "dynamic_alloca" not in ir
 
 
 def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool, reopt: bool = False) -> dict | str:
