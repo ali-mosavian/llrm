@@ -1242,3 +1242,14 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_pr_the_cap_cuts_off_is_reported_unchecked_not_checked():
+    """The 00:32 batch's line said "9 checked, 0 dropped" while a single scanners check took 620 s against ALONE_CAP=600: #5050 and #5051, red alone, went into the batch."""
+    import threading
+
+    release = threading.Event()
+    kept, dropped = ps.alone(["1", "2"], {"1": "h1", "2": "h2"}, refusals=lambda head, base: [] if head == "h1" else (release.wait(5), [])[1], jobs=2, cap=0.2)
+    release.set()
+    assert kept == ["1", "2"] and dropped == {}, "kept unfiltered, as designed"
+    assert ps.UNCHECKED == ["2"], "but named as unchecked"
