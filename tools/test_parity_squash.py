@@ -1810,3 +1810,10 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+def test_a_scanner_refusal_names_the_prs_and_files_behind_it():
+    """sqb-5378 refused on target_facts with three files and no PR; the owners were found by hand (the file list was the only clue)."""
+    failing = {"integration target_facts::shared_code_holds_no_copy_of_a_target_fact: read the target's description instead of copying it: [crates/codegen/llrm-codegen/src/backend/funnel.rs: 1 copies of a target fact, none allowed; crates/codegen/llrm-codegen/src/backend/latecleanup.rs: 3 copies; tools/other.py: 1]"}
+    members = lambda: {"5424": ["crates/codegen/llrm-codegen/src/backend/funnel.rs"], "5428": ["crates/codegen/llrm-codegen/src/backend/latecleanup.rs", "x.rs"], "5409": ["unrelated.rs"]}
+    got = ps.offender_detail(failing, members)
+    assert got == " [offending files: #5424 crates/codegen/llrm-codegen/src/backend/funnel.rs; #5428 crates/codegen/llrm-codegen/src/backend/latecleanup.rs; no PR of the batch: tools/other.py]", got
+    assert ps.offender_detail({"lib x::t: failed"}, members) == ""
