@@ -6,15 +6,17 @@
 //! folds.
 //!
 //! OWED, in place as `// OWED:` comments: `foldICmpXNegX`, the sign-mask and
-//! low-bit-mask forms, the equality forms of `foldICmpOrXX`, the shared
-//! multiplier, `srem`, and every arm after them (`udiv`, `shl`, `lshr`,
-//! `and`...).
+//! low-bit-mask forms, the equality forms of `foldICmpOrXX`, and every arm
+//! after `srem` (the shared second operand, `udiv`, `shl`, `lshr`, `and`...).
 //!
 //! DEVIATE 1: `ShareCommonDivisor` takes only its fast path (the offset is 1,
 //! or -1 for the negative forms); the general case needs `isMultipleOf`, which
 //! MIR's value tracking does not have. Exit: `isMultipleOf`.
 //!
 //! DEVIATE 2: no vectors; the constants of the equality fold are integers.
+//!
+//! DEVIATE 3: the shared multiplier asks `simplifyICmpInst` without the
+//! instruction as its context.
 //!
 //! # How it works
 //! With `Op0 = A + B` and `Op1 = C + D` (an `or disjoint` is an add), a
@@ -33,7 +35,8 @@
 use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::valuetracking::{nonzero, pattern};
+use llrm_mir::simplify::simplify_icmp_operands;
+use llrm_mir::valuetracking::{known, nonzero, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{has_one_use, query};
@@ -395,8 +398,124 @@ pub fn fold_icmp_bin_op(
     if let Some(r) = fold_icmp_or_xx(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: the shared multiplier, srem and the arms after it.
+    if let Some(r) = fold_shared_multiplier(c, inst, pred, op0, op1, &side0, &side1) {
+        return Some(r);
+    }
+    if let Some(r) = fold_srem_against_divisor(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    // OWED: the arms after srem (the shared second operand, `udiv`, `shl`,
+    // `lshr`, `and`...).
     None
+}
+
+/// `X * Z pred Y * Z`: the shared multiplier is removed from the compare.
+///
+/// DEVIATE 3 (header).
+fn fold_shared_multiplier(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+    side0: &Side,
+    side1: &Side,
+) -> Option<Visit> {
+    let (_, m0, m1, _) = binary_operator(c, op0).filter(|&(op, ..)| op == BinaryOp::Mul)?;
+    // m_Mul(m_Value(X), m_Value(Z)) or m_Mul(m_Value(Z), m_Value(X)), against
+    // m_c_Mul(m_Specific(Z), m_Value(Y)).
+    let (x, z, y) = [(m0, m1), (m1, m0)]
+        .into_iter()
+        .find_map(|(x, z)| commutative_with_specific(c, inst, op1, BinaryOp::Mul, z).map(|y| (x, z, y)))?;
+    let q = query(c, Some(inst));
+    let (nsw, nuw) = (side0.has_nsw && side1.has_nsw, side0.has_nuw && side1.has_nuw);
+    let ty = c.type_of(z);
+    if is_signed(pred) {
+        if !nsw {
+            return None;
+        }
+        let known = known::compute_known_bits(&q, z, 0);
+        if known.is_strictly_positive() {
+            return Some(new_icmp(c, inst, pred, x, y));
+        }
+        if known.is_negative() {
+            return Some(new_icmp(c, inst, swapped(pred), x, y));
+        }
+        let simplified = |c: &Combiner, p| {
+            simplify_icmp_operands(c.context, c.env.layout, c.function, p, x, y).and_then(|r| const_bits(c, r))
+        };
+        let zero = c.int(ty, 0);
+        if simplified(c, IntPredicate::Slt) == Some(1) {
+            return Some(new_icmp(c, inst, swapped(pred), z, zero));
+        }
+        if simplified(c, IntPredicate::Sgt) == Some(1) {
+            return Some(new_icmp(c, inst, pred, z, zero));
+        }
+        return None;
+    }
+    let non_zero;
+    if is_equality(pred) {
+        // If X != Y, fold (X *nw Z) eq/ne (Y *nw Z) -> Z eq/ne 0
+        if (nsw || nuw) && nonzero::is_known_non_equal(&q, x, y, 0) {
+            let zero = c.int(ty, 0);
+            return Some(new_icmp(c, inst, pred, z, zero));
+        }
+        let known = known::compute_known_bits(&q, z, 0);
+        // if Z % 2 != 0: X * Z eq/ne Y * Z -> X eq/ne Y
+        if known.count_max_trailing_zeros() == 0 {
+            return Some(new_icmp(c, inst, pred, x, y));
+        }
+        non_zero = known.one != 0 || nonzero::is_known_non_zero(&q, z, 0);
+        // if Z != 0 and nsw(X * Z) and nsw(Y * Z): X * Z eq/ne Y * Z -> X eq/ne
+        // Y
+        if non_zero && nsw {
+            return Some(new_icmp(c, inst, pred, x, y));
+        }
+    } else {
+        non_zero = nonzero::is_known_non_zero(&q, z, 0);
+    }
+    // If Z != 0 and nuw(X * Z) and nuw(Y * Z):
+    //    X * Z u{lt/le/gt/ge}/eq/ne Y * Z -> X u{lt/le/gt/ge}/eq/ne Y
+    if non_zero && nuw {
+        return Some(new_icmp(c, inst, pred, x, y));
+    }
+    None
+}
+
+/// `icmp (srem X, Y), Y` and `icmp Y, (srem X, Y)`: the sign of `Y` decides.
+fn fold_srem_against_divisor(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let srem_of = |c: &Combiner, rem: Operand, divisor: Operand| {
+        binary_operator(c, rem).filter(|&(op, _, d, _)| op == BinaryOp::SRem && d == divisor)
+    };
+    // We don't check hasOneUse to avoid increasing register pressure because
+    // the value we use is the same value this instruction was already using.
+    let (divisor, pred) = if let Some((_, _, d, _)) = srem_of(c, op0, op1) {
+        (d, swapped(pred))
+    } else {
+        let (_, _, d, _) = srem_of(c, op1, op0)?;
+        (d, pred)
+    };
+    let ty = c.type_of(divisor);
+    let i1 = c.context.types.int(1);
+    match pred {
+        IntPredicate::Eq => Some(Visit::Replace(c.int(i1, 0))),
+        IntPredicate::Ne => Some(Visit::Replace(c.int(i1, 1))),
+        IntPredicate::Sgt | IntPredicate::Sge => {
+            let ones = c.all_ones(ty);
+            Some(new_icmp(c, inst, IntPredicate::Sgt, divisor, ones))
+        }
+        IntPredicate::Slt | IntPredicate::Sle => {
+            let zero = c.int(ty, 0);
+            Some(new_icmp(c, inst, IntPredicate::Slt, divisor, zero))
+        }
+        _ => None,
+    }
 }
 
 /// `ICmpInst::getSwappedPredicate`.

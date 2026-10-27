@@ -367,3 +367,42 @@ fn a_negation_compared_with_a_constant_is_the_negated_compare() {
         "  %0 = icmp sgt i32 %x, -5\n  ret i1 %0\n",
     );
 }
+
+/// `foldICmpBinOp`, the shared multiplier: `x * z` against `y * z` is `x`
+/// against `y` once `z` is known not to flip or collapse the compare
+/// (`opt`: `icmp slt i32 %x, %y`).
+#[test]
+fn a_shared_multiplier_is_dropped_from_the_compare() {
+    check(
+        "i32 %x, i32 %y, i32 %z0",
+        "  %z = or i32 %z0, 1\n  %zp = and i32 %z, 255\n  %a = mul nsw i32 %x, %zp\n  %b = mul nsw i32 %y, %zp\n  %r = icmp slt i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, %y\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y, i32 %z0",
+        "  %z = or i32 %z0, 1\n  %a = mul i32 %x, %z\n  %b = mul i32 %y, %z\n  %r = icmp eq i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = icmp eq i32 %x, %y\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y, i32 %z0",
+        "  %z = add nuw i32 %z0, 1\n  %a = mul nuw i32 %x, %z\n  %b = mul nuw i32 %y, %z\n  %r = icmp ult i32 %a, %b\n  ret i1 %r\n",
+        "  %0 = icmp ult i32 %x, %y\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpBinOp`, `srem`: `x srem y` against `y` is decided by the sign of
+/// `y` (`opt`: `ret i1 false`, `icmp slt i32 %y, 0`).
+#[test]
+fn an_srem_compared_with_its_divisor_is_decided_by_the_divisor() {
+    check("i32 %x, i32 %y", "  %s = srem i32 %x, %y\n  %r = icmp eq i32 %s, %y\n  ret i1 %r\n", "  ret i1 false\n");
+    check(
+        "i32 %x, i32 %y",
+        "  %s = srem i32 %x, %y\n  %r = icmp sge i32 %s, %y\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %y, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y",
+        "  %s = srem i32 %x, %y\n  %r = icmp sgt i32 %y, %s\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %y, -1\n  ret i1 %0\n",
+    );
+}
