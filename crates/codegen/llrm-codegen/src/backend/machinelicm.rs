@@ -103,6 +103,22 @@ fn keeps_loads(one: &Insn) -> bool {
         })
 }
 
+/// Floating values a loop may already hold before a constant load is hoisted
+/// into it: the x87 stack has eight slots and an operation needs two.
+const X87_SPARE: usize = 6;
+
+/// `fld1` or `fldz`: a constant that reads nothing and defines one value.
+fn x87_constant(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::FloatLoad
+            && what.sources.is_empty()
+            && matches!(what.name.as_deref(), Some("fld1" | "fldz"))
+    }) && one.defines.len() == 1
+        && one.uses.is_empty()
+        && !one.volatile()
+        && one.group.is_none()
+}
+
 /// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
 /// that keeps a load in it, and the load's block runs on every trip.
 fn candidate(
@@ -208,6 +224,23 @@ pub fn hoisted(
             })
             .filter(|value| !floating.contains(value))
             .collect();
+        // The same count for the x87 stack: a constant load joins them (the pin
+        // hoists `FLD1`, `FLDZ` while `RFP` has registers to spare).
+        let named_floats = inside
+            .iter()
+            .flat_map(|at| {
+                let block = &blocks[place[at]];
+                block
+                    .insns
+                    .iter()
+                    .flat_map(|one| one.uses.iter().copied())
+                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
+                    .chain(block.phis.iter().map(|phi| phi.result))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|value| floating.contains(value))
+            .collect::<HashSet<u32>>()
+            .len();
         let limit = classes.available.len();
         // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
         // the loop, its inner loops among it.
@@ -237,7 +270,10 @@ pub fn hoisted(
                     let mut movable = candidate(one, classes, loads_here)
                         && invariant
                         && value.is_some_and(|value| !floating.contains(&value))
-                        && named.len() < limit;
+                        && named.len() < limit
+                        || x87_constant(one)
+                            && value.is_some_and(|value| floating.contains(&value))
+                            && named_floats < X87_SPARE;
                     if movable {
                         let effect = liveness::effect(regs, body.bits, one);
                         let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
@@ -434,5 +470,44 @@ mod tests {
             run(true),
             (vec!["lea".to_owned(), "jmp".into()], vec!["mov".to_owned(), "mov".into(), "jcxz".into()])
         );
+    }
+
+    /// recfloat's `decay` at -O1: `fld1` was made on every trip of the loop
+    /// that adds it (28% more instructions executed than the pin, which holds
+    /// the constant on the x87 stack across the loop). It is made once, before.
+    #[test]
+    fn test_an_x87_constant_a_loop_adds_is_made_before_the_loop() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let one = insn(10, Operation::FloatLoad, "fld1", vec![wide(10)], vec![], vec![10], vec![]);
+        let add =
+            insn(11, Operation::FloatArith, "fadd", vec![wide(11)], vec![wide(1), wide(10)], vec![11], vec![1, 10]);
+        let mut body = LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![1], vec![jump(0)]).into(),
+                block(1, vec![1, 2], vec![one, add, branch(12)]).into(),
+                block(2, vec![], vec![insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [1].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let classes = RegisterClasses::m16();
+        let done = hoisted(&body, &classes);
+        let names = |at: usize| -> Vec<String> {
+            done.blocks[at]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect()
+        };
+        assert_eq!(names(0), ["fld1", "jmp"]);
+        assert_eq!(names(1), ["fadd", "jcxz"]);
     }
 }
