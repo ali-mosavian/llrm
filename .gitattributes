@@ -17,3 +17,6 @@ docs/working/codegen-slot-table.md merge=union
 *_tests.rs merge=tests-append
 crates/frontends/qb/tests/parser.rs merge=tests-append
 tests.rs merge=tests-append
+
+# Append-only table: two PRs that each add rows at the end merge without a conflict.
+docs/working/above-main-rows.md merge=union
