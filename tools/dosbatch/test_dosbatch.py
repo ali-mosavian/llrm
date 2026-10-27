@@ -48,6 +48,19 @@ class RuntimeObjectTests(unittest.TestCase):
 
 
 class LinkTests(unittest.TestCase):
+    def test_two_start_ups_with_one_stem_both_reach_the_link(self):
+        """The QB m32 link names a platform start.asm and the OS layer's: both were START.OBJ, the second overwrote the first and the link lost a start-up."""
+        platform, shared = "runtime/qb/dos/m32/start.asm", "runtime/shared/dos/m32/start.asm"
+        said = []
+        link = {"first": [], "last": [], "final": [], "format": []}
+        with tempfile.TemporaryDirectory() as work, mock.patch.object(dosbatch, "target_link", return_value=link), mock.patch.object(
+            dosbatch, "runtime_object", side_effect=lambda name, path, defines=(): path
+        ), mock.patch.object(dosbatch, "_host", side_effect=said.append), mock.patch.object(dosbatch, "link_loaders", return_value=()):
+            dosbatch.link_target("m32", Path(work) / "P.OBJ", Path(work) / "P.EXE", Path(work), runtime=([platform, shared], []), defines=())
+        files = [word for word in said[0] if word.endswith(".OBJ") and word != str(Path(work) / "P.OBJ")]
+        self.assertEqual(len(files), 2)
+        self.assertEqual(len(set(files)), 2, files)
+
     def test_a_candidate_runtime_is_copied_and_never_falls_back_to_the_toolchain_library(self):
         """The first candidate link silently used BCOM45 after its replacement archive was not mounted."""
         with tempfile.TemporaryDirectory() as work:

@@ -5,10 +5,10 @@
    or a pipe, and cntext.c the text screen, linked only by a program that uses
    the screen statements. */
 #include "cndriver.h"
-#include "device.h"
+#include "dev.h"
 #include "llrm_os.h"
 
-enum { STREAM_WIDTH = 80, CHUNK = 64 };
+enum { STREAM_WIDTH = 80, CHUNK = 64, BEEP_HERTZ = 800, BEEP_LENGTH = 25 /* hundredths of a second */, DAY = 8640000L };
 
 const Driver *cn_text_driver;
 const Driver *cn_gfx_driver;
@@ -20,6 +20,17 @@ static const Driver *redirected;
 static byte column;
 static char pending[CHUNK];
 static unsigned used;
+
+/* The bell: a tone for a quarter of a second, on the text screen and on the graphics screen alike. */
+void cn_bell(void)
+{
+    long start = dev_clock();
+
+    dev_tone(BEEP_HERTZ);
+    while ((dev_clock() - start + DAY) % DAY < BEEP_LENGTH)
+        ;
+    dev_tone(0);
+}
 
 static void flush(void)
 {

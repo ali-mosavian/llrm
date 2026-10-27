@@ -37,7 +37,8 @@ ROW = re.compile(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total
 
 def own_work(compiler: Path, flags: list[str], source: Path, level: str) -> dict[str, float]:
     """One file's steps, by own Minstr; raises NoCounter where the rows are CPU time."""
-    done = subprocess.run([str(compiler), level, *flags, str(source), "-o", os.devnull], capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
+    with llrmbin.with_object([str(compiler), level, *flags, str(source), "-o", llrmbin.OBJECT]) as command:
+        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, "LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})
     if done.returncode:
         raise SystemExit(f"{source.name}: exit {done.returncode}\n{done.stderr[-400:]}")
     rows = ROW.findall(done.stderr)

@@ -1,0 +1,46 @@
+# How a statement is written, for the help line of a syntax error: statement | form.
+# [x] is optional, x ... repeats, a | b chooses.
+PRINT|PRINT [#file,] [USING format;] [expression] [; | ,] ...
+LPRINT|LPRINT [USING format;] [expression] [; | ,] ...
+INPUT|INPUT [;] ["prompt" ; | ,] variable [, variable] ...
+LINE|LINE [[STEP](x1, y1)]-[STEP](x2, y2) [, color [, B[F] [, style]]]   (or LINE INPUT [#file,] [prompt;] variable$)
+DIM|DIM [SHARED] name[(bounds)] [AS type] [, name ...]
+REDIM|REDIM [SHARED] name(bounds) [AS type] [, name ...]
+CONST|CONST name = constant-expression [, name = constant-expression] ...
+FOR|FOR counter = start TO end [STEP step]
+NEXT|NEXT [counter [, counter] ...]
+IF|IF condition THEN statements [ELSE statements]   (or a block: IF condition THEN, then END IF)
+WHILE|WHILE condition
+DO|DO [WHILE | UNTIL condition]
+LOOP|LOOP [WHILE | UNTIL condition]
+SELECT|SELECT CASE expression
+CASE|CASE value [, value ...] | CASE a TO b | CASE IS operator value | CASE ELSE
+GOTO|GOTO label
+GOSUB|GOSUB label
+ON|ON expression GOTO | GOSUB label [, label] ...   (or ON ERROR GOTO label, ON TIMER(n) GOSUB label)
+OPEN|OPEN file$ [FOR mode] [ACCESS access] [lock] AS #number [LEN = record-length]
+CLOSE|CLOSE [[#]number [, [#]number] ...]
+READ|READ variable [, variable] ...
+DATA|DATA constant [, constant] ...
+SUB|SUB name [(parameters)] [STATIC]
+FUNCTION|FUNCTION name [(parameters)] [STATIC]
+DECLARE|DECLARE SUB | FUNCTION name [(parameters)]
+CALL|CALL name [(arguments)]
+TYPE|TYPE name, then field AS type lines, then END TYPE
+DEF|DEF FNname[(parameters)] = expression   (or DEF SEG [= segment])
+COLOR|COLOR [foreground] [, [background] [, border]]
+LOCATE|LOCATE [row] [, [column] [, [cursor] [, start [, stop]]]]
+SCREEN|SCREEN [mode] [, [colorswitch] [, [activepage] [, visiblepage]]]
+PUT|PUT [#]file [, record] [, variable]   (graphics: PUT (x, y), array [, action])
+GET|GET [#]file [, record] [, variable]   (graphics: GET (x1, y1)-(x2, y2), array)
+SWAP|SWAP variable1, variable2
+RANDOMIZE|RANDOMIZE [seed]
+SHARED|SHARED variable [, variable] ...
+COMMON|COMMON [SHARED] [/block/] variable [, variable] ...
+EXIT|EXIT FOR | DO | SUB | FUNCTION | DEF
+END|END [IF | SELECT | SUB | FUNCTION | DEF | TYPE]
+WRITE|WRITE [#file,] [expression [, expression] ...]
+LOOP|LOOP [WHILE | UNTIL condition]
+SELECT|SELECT CASE expression
+ERASE|ERASE array [, array] ...
+OPTION|OPTION BASE 0 | 1

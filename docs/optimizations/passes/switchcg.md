@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchcg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchcg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchcg.rs sha256:8c7ee12619d3f12dfc16e1713cdd0761136c4af21a470caded62ddc94c20ad90 -->
+<!-- src: crates/opt/llrm-transforms/src/switchcg.rs sha256:61737052eba20956c46ed4571cf305ca729f6ac49e5fc7ccc75dd752d5c33d52 -->
 
 # switchcg
 
@@ -41,3 +41,6 @@ refused and the run is one bit-test cluster.
   The cluster keeps its summed probability.
 - `findJumpTables` is quadratic in the clusters, as the pin is. It is exact,
   so the decisions match; the switch it runs behind is off.
+
+## Used by
+Named by `builder`, `mergedcond`, `switch`, `switches`, `switchlower`.

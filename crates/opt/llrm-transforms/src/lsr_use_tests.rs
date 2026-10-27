@@ -304,6 +304,8 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
             scaled_index_insns: 2,
             address_registers: None,
             huge_space: None,
+            inline_size_guard: false,
+            float_code_size_percent: 100,
         };
         let real = X86::of_cpu("i486").unwrap().in_real_mode(real);
         let flat = X86::of_cpu("i486").unwrap();

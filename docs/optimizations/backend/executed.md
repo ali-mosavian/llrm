@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/executed.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/executed.rs sha256:6446b581feedb2e9463049286eb32a444f0b49bd43b9493ab11df149fb807475 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/executed.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/executed.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/executed.rs sha256:1de49df108c7c0d8570c17829bbff88da3828ab4ec6bbc51bce8b9c8d4f99c8c -->
 
 # executed
 
@@ -35,7 +35,7 @@ prices the branches and jumps on a CPU profile: taken branches, untaken
 branches and short jumps each at their form's cost.
 
 `predict` records what the MIR spill model forecast for a function;
-`pressure` prints that forecast beside the reloads and stores the
+[`pressure`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/pressure.rs) prints that forecast beside the reloads and stores the
 allocator left.
 
 ## Example
@@ -73,7 +73,7 @@ between routes, at every -O level; `LLRM_DEBUG=cost` and
 
 ## Provides
 `Executed`, `work`, `summary` (the `cost` debug channel's line,
-`LLRM_DEBUG=cost`) and `pressure` (`LLRM_DEBUG=pressure`).
+`LLRM_DEBUG=cost`) and [`pressure`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/licm/pressure.rs) (`LLRM_DEBUG=pressure`).
 Consumers: `allocate.rs`, `assemble.rs`.
 
 ## Needs

@@ -20,6 +20,7 @@ use crate::registers::RegId;
 
 pub mod flag;
 mod root;
+pub mod valuelanes;
 
 pub use root::root;
 
@@ -65,6 +66,15 @@ impl Reg {
 pub struct Held {
     pub value: u32,
     pub width: u32,
+}
+
+impl Held {
+    /// The bytes of the value this operand names: the low `width` (the high
+    /// byte of a register, AH, is not yet a way to spell an operand; C1
+    /// step 1).
+    pub const fn lanes(&self) -> valuelanes::ValueLanes {
+        valuelanes::ValueLanes::low(self.width)
+    }
 }
 
 /// An immediate instruction operand.
@@ -496,7 +506,7 @@ impl fmt::Display for Operation {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Semantics {
     pub op: Operation,
-    pub name: Option<String>,
+    pub name: Option<std::sync::Arc<str>>,
     pub dests: Vec<Loc>,
     pub sources: Vec<Loc>,
     pub target: Option<i64>,
@@ -504,6 +514,9 @@ pub struct Semantics {
     /// A table jump (`indirect`, its one source the table's cell): the block
     /// each index of the table goes to. Empty for any other instruction.
     pub table: Vec<i64>,
+    /// A `rep` prefix on an instruction that is not a string operation
+    /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
+    pub repeat: bool,
 }
 
 impl Semantics {
@@ -526,6 +539,7 @@ impl Semantics {
             && self.target == other.target
             && self.indirect == other.indirect
             && self.table == other.table
+            && self.repeat == other.repeat
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
     }
@@ -554,6 +568,7 @@ impl Semantics {
             target: None,
             indirect: false,
             table: Vec::new(),
+            repeat: false,
         }
     }
 }
@@ -564,12 +579,13 @@ pub static UNMODELLED: LazyLock<Semantics> = LazyLock::new(|| Semantics::new(Ope
 /// Python `RESTORE_IDIOM`.
 pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     op: Operation::Restore,
-    name: Some("restore".to_owned()),
+    name: Some("restore".into()),
     dests: Vec::new(),
     sources: Vec::new(),
     target: None,
     indirect: false,
     table: Vec::new(),
+    repeat: false,
 });
 
 /// Python `TABLE_DATA`.
@@ -659,12 +675,13 @@ pub fn restoring(
 ) -> Semantics {
     Semantics {
         op: Operation::Restore,
-        name: Some("restore".to_owned()),
+        name: Some("restore".into()),
         dests: vec![low, high],
         sources: vec![wide],
         target: None,
         indirect: false,
         table: Vec::new(),
+        repeat: false,
     }
 }
 
@@ -1004,7 +1021,7 @@ impl Repr for Semantics {
             "Semantics",
             &[
                 ("op", self.op.repr()),
-                ("name", self.name.repr()),
+                ("name", self.name.as_deref().map(str::to_owned).repr()),
                 ("dests", pyrepr::tuple(&self.dests)),
                 ("sources", pyrepr::tuple(&self.sources)),
                 ("target", self.target.repr()),
@@ -1032,7 +1049,7 @@ mod repr_tests {
         );
         assert_eq!(Held { value: 3, width: 2 }.repr(), "Held(value=3, width=2)");
         let semantics = Semantics {
-            name: Some("mov".to_owned()),
+            name: Some("mov".into()),
             dests: vec![Loc::Reg(Reg { register: RegId::AX, width: 2 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 2, address: None })],
             ..Semantics::new(Operation::Move)

@@ -498,7 +498,7 @@ def changed_tests(files: list[str]) -> str:
             python.append(str(beside.relative_to(ROOT)))
     commands = []
     if python:
-        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit")
+        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport")
     if binaries:
         commands.append("cargo test --release -q --no-fail-fast " + " ".join(f"--test {b}" for b in sorted(set(binaries))))
     return " && ".join(commands) or "true"
@@ -526,14 +526,14 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # twice, 160 s of a loaded host)
         own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
         tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
-        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit"
+        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport"
 
     steps = {
         "build": BUILD,
         "facts": f"{cargo} --test target_facts",
         # #1777 tracked d1.o, d4.o and d8.o and was smoke-green: the check of tests/tracked_build_products.rs, without a build.
         "products": "python3 -c \"import sys; sys.path.insert(0, 'tools/gate'); import gate; sys.exit(gate.products_main())\"",
-        "docs": "python3 tools/docsbuild/build.py --check && python3 tools/passdocs.py --check",
+        "docs": "python3 tools/docs/docsbuild/build.py --check && python3 tools/docs/passdocs.py --check",
         "changed-tests": changed_tests(p.files),
         "lib": f"{cargo} {libs} --lib -- -Zunstable-options {shuffle()}" if libs else "true",
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
@@ -565,7 +565,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # the build the cost gate measures (tools/measure.py).
         "pytest-perf": "LLRM_BIN=$(python3 tools/measure.py dist) PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
         + " ".join(perf_files())
-        + " -- -q -p no:cacheprovider -p pytest_cpulimit",
+        + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider',

@@ -15,7 +15,7 @@ echo "$dry" | grep -q "busy/target: in use" || { echo "FAIL: an in-use target wa
 echo "$dry" | grep -q "fresh71" && { echo "FAIL: a 71 h target was listed: $dry"; exit 1; }
 [ -e "$r/old73/target/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib" ] || { echo "FAIL: the dry run deleted"; exit 1; }
 out=$(SWEEP_ROOTS=$r "$here/clean-idle-targets.sh" --hours 72 --apply)
-[ ! -e "$r/old73/target/debug" ] && [ ! -e "$r/old73/target/release" ] || { echo "FAIL: profile dirs of the 73 h target remain: $out"; exit 1; }
+[ ! -e "$r/old73/target/debug" ] && [ ! -e "$r/old73/target/$(echo release)" ] || { echo "FAIL: profile dirs of the 73 h target remain: $out"; exit 1; }
 [ -e "$r/old73/target/run.log" ] && [ -e "$r/old73/target/gate-bins/llrm-c" ] && [ -e "$r/old73/target/.rustc_info.json" ] || { echo "FAIL: non-cargo files or the marker were removed"; exit 1; }
 for kept in fresh71/target busy/target; do [ -e "$r/$kept/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib" ] || { echo "FAIL: $kept was cleaned"; exit 1; }; done
 echo "$out" | grep -q "total: 10000 bytes freed" || { echo "FAIL: bytes freed not reported: $out"; exit 1; }

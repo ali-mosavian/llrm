@@ -31,6 +31,21 @@ fn combined(text: &str) -> String {
     printed(&module)
 }
 
+/// `combined` with `visitLoadInst` too.
+fn combined_with_loads(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, |c, inst| {
+        match c.function.instruction(inst).opcode {
+            Opcode::Load { .. } => c.visit_load(inst),
+            _ => Visit::None,
+        }
+    });
+    printed(&module)
+}
+
 fn stores(text: &str) -> usize {
     combined(text).matches("store ").count()
 }
@@ -323,4 +338,118 @@ b0:
     combine_with(context, &globals, &metadata, &DataLayout::default(), function, crate::combine::visit);
     let out = printed(&module);
     assert!(!out.contains("alloca") && !out.contains("store"), "{out}");
+}
+
+/// QCport `_host_changelevel@3` (with the C front end's `memcpy`, #3621): a
+/// local written by a `memcpy` and by lifetime markers, never read, stayed with
+/// its 64 to 258 bytes of `rep movsd` until the end. `isAllocSiteRemovable`
+/// takes the alloca and every user of it away.
+#[test]
+fn an_alloca_written_by_a_memcpy_and_marked_by_lifetimes_is_erased() {
+    let after = combined(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @llvm.lifetime.end.p0(i64, ptr)
+
+define i16 @f(ptr %src) {
+b0:
+  %s = alloca [64 x i8]
+  call void @llvm.lifetime.start.p0(i64 64, ptr %s)
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr %src, i16 64, i1 false)
+  call void @llvm.lifetime.end.p0(i64 64, ptr %s)
+  ret i16 0
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("call void"), "{after}");
+}
+
+/// A `memcpy` into the alloca followed by a load of it is a use: it stays.
+#[test]
+fn an_alloca_a_memcpy_wrote_and_a_load_reads_is_kept() {
+    let after = combined(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f(ptr %src) {
+b0:
+  %s = alloca [64 x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr %src, i16 64, i1 false)
+  %v = load i16, ptr %s
+  ret i16 %v
+}
+",
+    );
+    assert!(
+        after.contains("alloca") && after.contains("call void @llvm.memcpy") && after.contains("load i16"),
+        "{after}"
+    );
+}
+
+/// A volatile `memcpy` is not removable.
+#[test]
+fn a_volatile_memcpy_keeps_its_alloca() {
+    let after = combined(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f(ptr %src) {
+b0:
+  %s = alloca [64 x i8]
+  call void @llvm.memcpy.p0.p0.i16(ptr %s, ptr %src, i16 64, i1 true)
+  ret i16 0
+}
+",
+    );
+    assert!(after.contains("alloca") && after.contains("call void @llvm.memcpy"), "{after}");
+}
+
+/// LICM leaves `%x = load @I` right behind `store 1, @I` and the stores of
+/// other globals; the loop's trip count stayed unknown (split.bas -Os m16).
+#[test]
+fn a_load_behind_a_store_of_its_global_and_stores_of_others_reads_the_stored_value() {
+    let out = combined_with_loads(
+        "@a = global i16 0
+@b = global i16 0
+define i16 @f() {
+b0:
+  store i16 1, ptr @a
+  store i16 2, ptr @b
+  %x = load i16, ptr @a
+  ret i16 %x
+}
+",
+    );
+    assert!(!out.contains("load"), "{out}");
+    assert!(out.contains("ret i16 1"), "{out}");
+}
+
+/// A store through a pointer that may alias the global ends the forwarding.
+#[test]
+fn a_store_through_an_unknown_pointer_between_keeps_the_load() {
+    let out = combined_with_loads(
+        "@a = global i16 0
+define i16 @f(ptr %p) {
+b0:
+  store i16 1, ptr @a
+  store i16 2, ptr %p
+  %x = load i16, ptr @a
+  ret i16 %x
+}
+",
+    );
+    assert!(out.contains("load"), "{out}");
+}
+
+#[test]
+fn a_volatile_load_is_kept() {
+    let out = combined_with_loads(
+        "@a = global i16 0
+define i16 @f() {
+b0:
+  store i16 1, ptr @a
+  %x = load volatile i16, ptr @a
+  ret i16 %x
+}
+",
+    );
+    assert!(out.contains("load volatile"), "{out}");
 }

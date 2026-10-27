@@ -124,6 +124,12 @@ impl Dos {
 }
 
 impl Machine for Dos {
+    /// Real mode's C: a 16-bit `int` and `size_t`, under C's decorated symbols
+    /// (`_sin@3`).
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        Some(std::rc::Rc::new(llrm_mir::libfunc::Cdecl { int_bits: 16, size_t_bits: 16 }))
+    }
+
     /// LLVM prices 16-bit code with the i386 X86 model (`-code16`: the same
     /// subtarget, operand-size prefixes), and every CPU the target accepts
     /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
@@ -153,6 +159,8 @@ impl Machine for Dos {
                 .find(|form| !form.secondary)
                 .and_then(|form| Some((form.bases? + form.indices?) as u32)),
             huge_space: crate::spaces().huge,
+            inline_size_guard: true,
+            float_code_size_percent: 200,
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
@@ -160,7 +168,7 @@ impl Machine for Dos {
     }
 
     fn lowering(&self) -> Option<std::rc::Rc<dyn llrm_mir::lowering::Lowering>> {
-        Some(std::rc::Rc::new(llrm_x86::lowering::X86))
+        Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false }))
     }
 
     fn private_convention(&self) -> Option<llrm_mir::target::PrivateConvention> {
@@ -191,7 +199,7 @@ impl Machine for Dos {
         crate::spaces()
     }
 
-    /// The description's foreign memory: `dos.toml` states it once.
+    /// The description's foreign memory: `real16.toml` states it once.
     fn foreign_span(
         &self,
         selectors: (i64, i64),
@@ -203,6 +211,14 @@ impl Machine for Dos {
 
     fn costs(&self) -> OperationCosts {
         self.costs.clone()
+    }
+
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        llrm_target::keeps_division(i64::from(bits / 8), size)
     }
 
     fn size_costs(&self) -> OperationCosts {
@@ -248,7 +264,7 @@ impl Machine for Dos {
         self.address_forms.clone()
     }
 
-    /// The description's: `dos.toml` states when an access faults.
+    /// The description's: `real16.toml` states when an access faults.
     fn load_may_trap(
         &self,
         width: u64,
@@ -264,7 +280,7 @@ impl Machine for Dos {
         Some((crate::spaces().far, (1 << 16) - (step - 1)))
     }
 
-    /// The description's: `dos.toml` states each device's reach.
+    /// The description's: `real16.toml` states each device's reach.
     fn port_touches_memory(
         &self,
         ports: (i64, i64),
@@ -337,6 +353,19 @@ mod tests {
     use llrm_mir::target::Machine;
 
     use super::Dos;
+
+    /// BASIC's convention (MIR's cc 1000, `pascal far`) had no row in
+    /// calling.toml, so the DAG path took a call of it to destroy every
+    /// register, SI and DI too, and spilled the pointer it kept in SI (the
+    /// ABI's contract kept them). The row states what it destroys.
+    #[test]
+    fn basic_has_a_calling_row_that_keeps_si_and_di() {
+        use llrm_target::Target;
+        let found = super::super::M16.calling().by_number(llrm_mir::opcode::BASIC).expect("a row for cc 1000");
+        assert_eq!(found.cc.as_deref(), Some("basic"));
+        assert!(found.clobbered.iter().all(|name| !matches!(name.as_str(), "si" | "di")), "{:?}", found.clobbered);
+        assert!(found.clobbered.iter().any(|name| name == "bx"), "{:?}", found.clobbered);
+    }
 
     /// LSR reads the addressing hooks of the model: real mode's `[bx+si]` is
     /// free, a scaled or any-register address pays the prefix and its stall,

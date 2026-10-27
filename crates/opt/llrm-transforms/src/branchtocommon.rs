@@ -111,6 +111,8 @@ fn safe_to_merge_terminators(
     first: BlockId,
     second: BlockId,
 ) -> bool {
+    #[cfg(test)]
+    SAFE_TO_MERGE_ASKS.with(|count| count.set(count.get() + 1));
     first != second && incompatible_successors(function, first, second).is_empty()
 }
 
@@ -184,10 +186,12 @@ pub fn folded(
     let mut preds = Vec::new();
     for &pred in function.predecessors(block).iter() {
         let Some((_, pcondition, ptaken, pother)) = conditional(function, pred) else { continue };
+        // The recipe is the cheaper test, and neither reads what the other
+        // writes: the pin asks `safeToMergeTerminators` first.
+        let Some(plan) = recipe((taken, other), (ptaken, pother)) else { continue };
         if !safe_to_merge_terminators(function, block, pred) {
             continue;
         }
-        let Some(plan) = recipe((taken, other), (ptaken, pother)) else { continue };
         let ty = Ty::of(&context.types, cond_ty);
         if let Some(ty) = ty {
             let op = if plan.join == Join::Or { ArithOp::Or } else { ArithOp::And };
@@ -427,3 +431,10 @@ fn performed(
 #[cfg(test)]
 #[path = "branchtocommon_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+thread_local! {
+    /// Predecessor pairs `safe_to_merge_terminators` has been asked about on
+    /// this thread.
+    pub(crate) static SAFE_TO_MERGE_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}

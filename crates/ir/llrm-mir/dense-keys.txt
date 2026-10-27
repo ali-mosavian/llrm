@@ -1,9 +1,10 @@
 # Files with maps and sets keyed by ValueId/InstId/BlockId, and how many: a ceiling that only falls. New ones use llrm_mir::dense.
 # The count includes each use of a type alias of a keyed map (Intervals, Knowns, Facts, Calls, HeldCells): 16 files rose when the scan learned that (2026-10-09), none gained a map.
-crates/backend/llrm-core/src/backend/ehprepare.rs	12
-crates/backend/llrm-core/src/backend/isel.rs	42
-crates/backend/llrm-core/src/backend/isel/matcher.rs	4
-crates/backend/llrm-core/src/backend/lifetimes.rs	9
+crates/codegen/llrm-codegen/src/backend/ehprepare.rs	12
+crates/codegen/llrm-codegen/src/backend/isel.rs	42
+crates/codegen/llrm-codegen/src/backend/isel/matcher.rs	4
+crates/codegen/llrm-codegen/src/backend/lifetimes.rs	9
+crates/frontends/bcobj/src/emit.rs	5
 crates/ir/llrm-mir/src/interpret.rs	2
 crates/ir/llrm-mir/src/lint.rs	3
 crates/ir/llrm-mir/src/loops.rs	3
@@ -59,4 +60,3 @@ crates/opt/llrm-transforms/src/rotate.rs	2
 crates/opt/llrm-transforms/src/spill.rs	19
 crates/opt/llrm-transforms/src/transform.rs	8
 crates/opt/llrm-transforms/src/unroll.rs	2
-crates/target/llrm-x86-bc/src/emit.rs	5

@@ -250,3 +250,48 @@ b2:
     assert_eq!(block.as_deref(), Some("b1"), "{after}");
     assert!(after.contains("call void @llvm.assume(i1 true)"), "{after}");
 }
+
+/// Old: `sink_block` looked up the callee of every user of every visited
+/// instruction to tell an assume from the rest (11,159 visits in d_faces -O2),
+/// and built a predecessor list for the user's block. `isDroppable` reads a
+/// callee only of a call.
+#[test]
+fn test_a_user_that_is_not_a_call_costs_no_callee_lookup() {
+    use llrm_mir::counts::{Event, get};
+    let plain = "define i32 @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  br label %b\nb:\n  ret i32 %a\n}\n";
+    let before = get(Event::SinkAssumeLookups);
+    let (_, moved) = sunk(plain, "a");
+    assert_eq!(moved.as_deref(), Some("b"));
+    assert_eq!(get(Event::SinkAssumeLookups), before);
+
+    let call = "declare void @use(i32)\ndefine void @f(i32 %x) {\nentry:\n  %a = add i32 %x, 1\n  br label %b\nb:\n  call void @use(i32 %a)\n  ret void\n}\n";
+    let before = get(Event::SinkAssumeLookups);
+    let (_, moved) = sunk(call, "a");
+    assert_eq!(moved.as_deref(), Some("b"));
+    assert_eq!(get(Event::SinkAssumeLookups), before + 1);
+}
+
+/// `IF a$ < b$ THEN ... WHILE a$(j%) < "C" AND ...`: InstCombine sank the
+/// compare of B$SCMP's flags into its user's block, and isel refused the
+/// function ("a call's flags read apart from its compare with zero") at -O2
+/// (`string_compare_shapes.bas`). A compare of a flags result stays by its
+/// call.
+#[test]
+fn a_compare_of_a_flags_result_is_not_sunk() {
+    let text = "declare i16 @llrm.qb.B$SCMP(ptr, ptr) flagsresult
+define i16 @f(ptr %a, ptr %b, i1 %p) {
+b0:
+  %s = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)
+  %c = icmp slt i16 %s, 0
+  br i1 %p, label %b1, label %b2
+
+b1:
+  %r = zext i1 %c to i16
+  ret i16 %r
+
+b2:
+  ret i16 0
+}
+";
+    assert_eq!(sunk(text, "c").1, None);
+}

@@ -22,13 +22,16 @@ use super::expr::{Scev, Use};
 use super::{Cx, ScalarEvolution};
 
 /// `ScalarEvolution::ExitLimit`: how many times a loop's exit is not taken.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExitLimit {
     pub exact_not_taken: Scev,
     pub constant_max_not_taken: Scev,
     pub symbolic_max_not_taken: Scev,
     /// The backedge is taken either `constant_max_not_taken` or zero times.
     pub max_or_zero: bool,
+    /// `Predicates`: the run-time checks the counts hold under (empty unless
+    /// the limit was computed with `AllowPredicates`).
+    pub predicates: Vec<super::wrap_predicate::Predicate>,
 }
 
 impl ExitLimit {
@@ -55,7 +58,13 @@ impl ExitLimit {
         symbolic_max_not_taken: Scev,
         max_or_zero: bool,
     ) -> Self {
-        let mut limit = Self { exact_not_taken: e, constant_max_not_taken, symbolic_max_not_taken, max_or_zero };
+        let mut limit = Self {
+            exact_not_taken: e,
+            constant_max_not_taken,
+            symbolic_max_not_taken,
+            max_or_zero,
+            predicates: Vec::new(),
+        };
         // If we prove the max count is zero, so is the symbolic bound. This
         // happens in practice due to differences in a) how context sensitive
         // we've chosen to be and b) how we reason about bounds implied by UB.
@@ -83,6 +92,23 @@ impl ExitLimit {
         limit
     }
 
+    /// `ExitLimit(..., Predicates)`.
+    pub fn with_predicates(
+        mut self,
+        predicates: Vec<super::wrap_predicate::Predicate>,
+    ) -> Self {
+        self.predicates = predicates;
+        self
+    }
+
+    /// `ExitLimit::hasFullInfo`.
+    pub fn has_full_info(
+        &self,
+        se: &ScalarEvolution,
+    ) -> bool {
+        self.exact_not_taken != se.get_could_not_compute()
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8994
     /// `ExitLimit::hasAnyInfo`.
     pub fn has_any_info(
@@ -93,13 +119,14 @@ impl ExitLimit {
     }
 }
 
-/// `ScalarEvolution::ExitNotTakenInfo`, without predicates.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// `ScalarEvolution::ExitNotTakenInfo`.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExitNotTakenInfo {
     pub exiting_block: BlockId,
     pub exact_not_taken: Scev,
     pub constant_max_not_taken: Scev,
     pub symbolic_max_not_taken: Scev,
+    pub predicates: Vec<super::wrap_predicate::Predicate>,
 }
 
 /// `ScalarEvolution::BackedgeTakenInfo`.
@@ -148,11 +175,12 @@ impl BackedgeTakenInfo {
         Self {
             exit_not_taken: exit_counts
                 .iter()
-                .map(|&(exiting_block, limit)| ExitNotTakenInfo {
-                    exiting_block,
+                .map(|(exiting_block, limit)| ExitNotTakenInfo {
+                    exiting_block: *exiting_block,
                     exact_not_taken: limit.exact_not_taken,
                     constant_max_not_taken: limit.constant_max_not_taken,
                     symbolic_max_not_taken: limit.symbolic_max_not_taken,
+                    predicates: limit.predicates.clone(),
                 })
                 .collect(),
             constant_max,
@@ -240,6 +268,8 @@ impl BackedgeTakenInfo {
 #[derive(Clone, Default)]
 pub struct TripState {
     counts: IdMap<BlockId, BackedgeTakenInfo>,
+    /// `PredicatedBackedgeTakenCounts`.
+    predicated: IdMap<BlockId, BackedgeTakenInfo>,
     /// `LoopPropertiesCache`.
     properties: IdMap<BlockId, LoopProperties>,
 }
@@ -261,12 +291,14 @@ impl TripState {
         header: BlockId,
     ) {
         self.counts.remove(&header);
+        self.predicated.remove(&header);
         self.properties.remove(&header);
     }
 
     /// `BackedgeTakenCounts.clear()`.
     pub fn clear(&mut self) {
         self.counts = IdMap::new();
+        self.predicated = IdMap::new();
         self.properties = IdMap::new();
     }
 }
@@ -302,7 +334,7 @@ impl ScalarEvolution {
         self.trips.counts.insert(header, invalid);
 
         COMPUTATIONS.with(|one| one.set(one.get() + 1));
-        let result = self.compute_backedge_taken_count(cx, header);
+        let result = self.compute_backedge_taken_count(cx, header, false);
 
         // Now that we know more about the trip count for this loop, forget any
         // existing SCEV values for PHI nodes in this loop since they are only
@@ -317,6 +349,28 @@ impl ScalarEvolution {
         result
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8569
+    /// `getPredicatedBackedgeTakenInfo(L)`: the count with the predicates it
+    /// needs, where the unpredicated one is not complete.
+    pub fn get_predicated_backedge_taken_info(
+        &mut self,
+        cx: &Cx,
+        header: BlockId,
+    ) -> BackedgeTakenInfo {
+        let info = self.get_backedge_taken_info(cx, header);
+        if info.has_full_info() {
+            return info;
+        }
+        if let Some(found) = self.trips.predicated.get(&header) {
+            return found.clone();
+        }
+        let invalid = BackedgeTakenInfo::invalid(self);
+        self.trips.predicated.insert(header, invalid);
+        let result = self.compute_backedge_taken_count(cx, header, true);
+        self.trips.predicated.insert(header, result.clone());
+        result
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9027
     /// `computeBackedgeTakenCount(L)`: the number of times the backedge of the
     /// loop will execute.
@@ -324,6 +378,7 @@ impl ScalarEvolution {
         &mut self,
         cx: &Cx,
         header: BlockId,
+        allow_predicates: bool,
     ) -> BackedgeTakenInfo {
         let loop_ = cx.loops.get_loop_for(header).expect("the header of a loop");
         let exiting_blocks = loop_.get_exiting_blocks(cx.function);
@@ -347,7 +402,11 @@ impl ScalarEvolution {
                 continue;
             }
 
-            let el = self.compute_exit_limit(cx, header, exit_bb, is_only_exit);
+            let el = self.compute_exit_limit(cx, header, exit_bb, is_only_exit, allow_predicates);
+            debug_assert!(
+                allow_predicates || el.predicates.is_empty(),
+                "Predicated exit limit when predicates are not allowed!"
+            );
 
             // 1. For each exit that can be computed, add an entry to
             // ExitCounts. CouldComputeBECount is true only if all exits can be
@@ -360,7 +419,7 @@ impl ScalarEvolution {
             // Remember exit count if either exact or symbolic is known.
             // Because Exact always implies symbolic, only check symbolic.
             if el.symbolic_max_not_taken != unknown {
-                exit_counts.push((exit_bb, el));
+                exit_counts.push((exit_bb, el.clone()));
             } else {
                 debug_assert!(el.exact_not_taken == unknown, "Exact is known but symbolic isn't?");
             }
@@ -615,6 +674,17 @@ impl ScalarEvolution {
         header: BlockId,
         info: &BackedgeTakenInfo,
     ) -> Scev {
+        self.info_exact_with(cx, header, info, None)
+    }
+
+    /// `BackedgeTakenInfo::getExact(L, SE, Preds)`.
+    pub(super) fn info_exact_with(
+        &mut self,
+        cx: &Cx,
+        header: BlockId,
+        info: &BackedgeTakenInfo,
+        mut preds: Option<&mut Vec<super::wrap_predicate::Predicate>>,
+    ) -> Scev {
         // If any exits were not computable, the loop is not computable.
         if !info.is_complete || info.exit_not_taken.is_empty() {
             return self.get_could_not_compute();
@@ -636,6 +706,10 @@ impl ScalarEvolution {
                 "We should only have known counts for exiting blocks that dominate latch!"
             );
             ops.push(Use::of(one.exact_not_taken));
+            if let Some(preds) = preds.as_deref_mut() {
+                preds.extend(one.predicates.iter().copied());
+            }
+            debug_assert!(preds.is_some() || one.predicates.is_empty(), "Predicate should be always true!");
         }
 
         // If an earlier exit exits on the first iteration (exit count zero),
@@ -679,5 +753,80 @@ impl ScalarEvolution {
             held.symbolic_max = Some(symbolic_max);
         }
         symbolic_max
+    }
+}
+
+impl BackedgeTakenInfo {
+    /// `getExitNotTaken(ExitingBlock, Predicates)`.
+    fn exit_not_taken_with(
+        &self,
+        exiting_block: BlockId,
+        predicates: Option<&mut Vec<super::wrap_predicate::Predicate>>,
+    ) -> Option<&ExitNotTakenInfo> {
+        for one in &self.exit_not_taken {
+            if one.exiting_block == exiting_block {
+                if one.predicates.is_empty() {
+                    return Some(one);
+                } else if let Some(predicates) = predicates {
+                    predicates.extend(one.predicates.iter().copied());
+                    return Some(one);
+                }
+                return None;
+            }
+        }
+        None
+    }
+
+    /// `getExact`, `getSymbolicMax` or `getConstantMax(ExitingBlock, SE,
+    /// Predicates)`, by `kind`.
+    pub fn exit_count_with(
+        &self,
+        se: &ScalarEvolution,
+        exiting_block: BlockId,
+        predicates: Option<&mut Vec<super::wrap_predicate::Predicate>>,
+        kind: super::backedge::ExitCountKind,
+    ) -> Scev {
+        use super::backedge::ExitCountKind;
+        self.exit_not_taken_with(exiting_block, predicates).map_or(se.get_could_not_compute(), |one| match kind {
+            ExitCountKind::Exact => one.exact_not_taken,
+            ExitCountKind::SymbolicMaximum => one.symbolic_max_not_taken,
+            ExitCountKind::ConstantMaximum => one.constant_max_not_taken,
+        })
+    }
+
+    /// `getConstantMax(SE, Predicates)`.
+    pub fn constant_max_with(
+        &self,
+        se: &ScalarEvolution,
+        predicates: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> Scev {
+        if self.constant_max == se.get_could_not_compute() {
+            return self.constant_max;
+        }
+        for one in &self.exit_not_taken {
+            predicates.extend(one.predicates.iter().copied());
+        }
+        self.constant_max
+    }
+}
+
+impl ScalarEvolution {
+    /// `getSymbolicMax(L, SE, Predicates)` of `info`, which is not cached
+    /// here: the predicates are appended every time.
+    pub(super) fn info_symbolic_max_with(
+        &mut self,
+        cx: &Cx,
+        info: &BackedgeTakenInfo,
+        predicates: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> Scev {
+        let unknown = self.get_could_not_compute();
+        let mut exit_counts = Vec::new();
+        for one in &info.exit_not_taken {
+            if one.symbolic_max_not_taken != unknown {
+                exit_counts.push(Use::of(one.symbolic_max_not_taken));
+                predicates.extend(one.predicates.iter().copied());
+            }
+        }
+        if exit_counts.is_empty() { unknown } else { self.get_umin_from_mismatched_types(cx, exit_counts, true) }
     }
 }

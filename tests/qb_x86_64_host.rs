@@ -1,0 +1,79 @@
+//! A QB program compiled for x86-64 (`llrm-qb -m64`, ELF64), linked with the
+//! host runtime on the headless device and run natively: the object, its module
+//! header, the runtime's start-up and the screen it leaves.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+/// Compiles `source` for x86-64, links it with the runtime, runs it; the text
+/// its screen shows.
+fn run(
+    name: &str,
+    source: &str,
+) -> String {
+    let dir: PathBuf = std::env::temp_dir().join(format!("{name}_{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    let bas = dir.join(format!("{name}.bas"));
+    fs::write(&bas, source).unwrap();
+    let object = dir.join(format!("{name}.o"));
+    let compiled = Command::new(env!("CARGO_BIN_EXE_llrm-qb"))
+        .args(["-m64", "-O2", "-fobject-format=elf"])
+        .arg(&bas)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .expect("llrm-qb runs");
+    assert!(compiled.status.success(), "llrm-qb: {}", String::from_utf8_lossy(&compiled.stderr));
+
+    let qb = root().join("runtime/qb");
+    let mut sources: Vec<PathBuf> = fs::read_dir(&qb)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "c"))
+        .collect();
+    for extra in [
+        "posix/startup.c",
+        "posix/block.c",
+        "posix/ad.c",
+        "posix/mathops.c",
+        "posix/paintq.c",
+        "posix/module.c",
+        "posix/program.c",
+        "posix/real.c",
+        "dev/headless/headless.c",
+        "dev/headless/main.c",
+        "dev/host/video.c",
+        "dev/host/vgadata.c",
+        "dev/host/tick.c",
+        "../shared/posix/os.c",
+    ] {
+        sources.push(qb.join(extra));
+    }
+    let program = dir.join(name);
+    let mut link = Command::new("cc");
+    link.args(["-std=gnu11", "-w", "-g", "-pthread", "-no-pie", "-D__cdecl="]);
+    for include in ["posix", ".", "dev", "dev/headless", "dev/host", "../shared/posix"] {
+        link.arg("-I").arg(qb.join(include));
+    }
+    let linked = link.args(&sources).arg(&object).arg("-lm").arg("-o").arg(&program).output().expect("cc runs");
+    assert!(linked.status.success(), "link: {}", String::from_utf8_lossy(&linked.stderr));
+
+    let done = Command::new(&program).output().expect("the program runs");
+    let screen = String::from_utf8_lossy(&done.stdout).into_owned();
+    assert!(done.status.success(), "the program failed:\n{screen}{}", String::from_utf8_lossy(&done.stderr));
+    fs::remove_dir_all(&dir).ok();
+    screen
+}
+
+/// `-m64` wrote an OMF-style object that no ELF linker takes (no module header
+/// symbol, `$` in the runtime's names): the program could not be linked at all.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn print_hello_runs_natively_on_x86_64() {
+    assert_eq!(run("hello64", "PRINT \"HELLO\"\nEND\n").trim_end(), "HELLO");
+}

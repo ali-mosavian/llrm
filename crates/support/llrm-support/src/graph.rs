@@ -27,24 +27,31 @@ pub fn reverse_postorder<N: Node>(
     blocks: &[N],
     entry: i64,
 ) -> Vec<i64> {
-    let known = blocks.iter().map(|block| (block.at(), block)).collect::<BTreeMap<_, _>>();
-    let mut seen = BTreeSet::from([entry]);
+    let mut index = crate::hash::HashMap::with_capacity_and_hasher(blocks.len(), Default::default());
+    index.extend(blocks.iter().enumerate().map(|(at, block)| (block.at(), at)));
+    let mut seen = vec![false; blocks.len()];
     let mut post = Vec::with_capacity(blocks.len());
-    let mut stack = known.get(&entry).map(|block| vec![(*block, 0usize)]).unwrap_or_default();
+    let mut stack = Vec::new();
+    if let Some(&first) = index.get(&entry) {
+        seen[first] = true;
+        stack.push((first, 0usize));
+    }
     while let Some((block, next)) = stack.last_mut() {
         let block = *block;
-        if let Some(successor) = block.succ().get(*next) {
+        if let Some(successor) = blocks[block].succ().get(*next) {
             *next += 1;
-            if let Some(child) = known.get(successor).filter(|_| seen.insert(*successor)) {
-                stack.push((*child, 0));
+            if let Some(&child) = index.get(successor)
+                && !std::mem::replace(&mut seen[child], true)
+            {
+                stack.push((child, 0));
             }
         } else {
-            post.push(block.at());
+            post.push(blocks[block].at());
             stack.pop();
         }
     }
     post.reverse();
-    post.extend(blocks.iter().map(Node::at).filter(|at| !seen.contains(at)));
+    post.extend(blocks.iter().enumerate().filter(|(at, _)| !seen[*at]).map(|(_, block)| block.at()));
     post
 }
 

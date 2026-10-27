@@ -33,6 +33,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
 import corpora  # noqa: E402
+import pin_clang  # noqa: E402
 import llrmbin  # noqa: E402
 
 QCPORT = Path(os.environ.get("QCPORT", Path.home() / "scratch/qbq-llrm/src"))
@@ -56,7 +57,7 @@ ROWS = [
     (r"^isel|^lir (far|schedule|shrink|duplicated)", "isel", None),
     (r"^(facts (hints|sibling prices|fold prices)|siblings )", "regalloc: hints", "hint-slope"),
     (r"^(facts |classes |intervals |regalloc |split |spill |after |lir (regalloc|ssaspill)|candidate |ssa |siblings )", "regalloc", "allocator"),
-    (r"^lir (peephole|jumps|floatassign|floatalloc|floatfold|coalesce|phielim|twoaddr|parcopy|loopslots|pressuresink|frame)", "lir passes", None),
+    (r"^lir (peephole|jumps|floatassign|floatalloc|floatfold|coalesce|phielim|twoaddr|parcopy|loopslots|frame)", "lir passes", None),
     (r"^(assemble|machine|objbuild|emit|frame laid|masm|stack checks)", "emit", None),
 ]
 # The same categories in gcc's timers and clang's trace events.
@@ -234,7 +235,7 @@ def build_map(args) -> dict:
     own_sum = sum(r[1] for r in rows)
     result = {
         "header": {"commit": commit(), "llrm": " ".join(base), "output": args.output, "gcc": f"gcc {' '.join(FOREIGN)} {args.level} {' '.join(foreign_out)} {source}",
-                   "clang": f"clang {' '.join(FOREIGN)} {args.level} {' '.join(foreign_out)} {source}"},
+                   "clang": f"{pin_clang.path()} {' '.join(FOREIGN)} {args.level} {' '.join(foreign_out)} {source}"},
         "total_M": total / 1e6, "instrumented_M": instrumented / 1e6, "rows_sum_M": own_sum, "debug_total_M": step_total[0] if step_total else None, "startup_M": startup,
         "outside_every_step_M": step_total[2] if step_total else None,
         "load_average": list(os.getloadavg()),
@@ -252,9 +253,9 @@ def build_map(args) -> dict:
         work = Path(tmp)
         many = copies(source, work)
         gcc_one = instructions(["gcc", *FOREIGN, args.level, *foreign_out, str(source)], env) / 1e6
-        clang_one = instructions(["clang", *FOREIGN, args.level, *foreign_out, str(source)], env) / 1e6
+        clang_one = instructions([pin_clang.path(), *FOREIGN, args.level, *foreign_out, str(source)], env) / 1e6
         for name in ("gcc", "clang"):
-            timing[name] = cycles([name, *FOREIGN, args.level, *foreign_out, str(source)], env)
+            timing[name] = cycles([pin_clang.path() if name == "clang" else name, *FOREIGN, args.level, *foreign_out, str(source)], env)
         # Their timers are time, not instructions: three runs, summed.
         sums, gtotal = collections.Counter(), 0.0
         for _ in range(REPEATS):
@@ -271,7 +272,7 @@ def build_map(args) -> dict:
         for k in range(REPEATS):
             trace = work / f"trace{k}"
             trace.mkdir()
-            run(["clang", *FOREIGN, args.level, *(["-S", "-o", trace / "o.s"] if args.output == "asm" else ["-c", "-o", trace / "o.o"]), "-ftime-trace", "-ftime-trace-granularity=20", str(many)])
+            run([pin_clang.path(), *FOREIGN, args.level, *(["-S", "-o", trace / "o.s"] if args.output == "asm" else ["-c", "-o", trace / "o.o"]), "-ftime-trace", "-ftime-trace-granularity=20", str(many)])
             selfs.update(self_times(json.loads(next(trace.glob("*.json")).read_text())["traceEvents"]))
         ccat = collections.defaultdict(float)
         for name, micro in selfs.items():

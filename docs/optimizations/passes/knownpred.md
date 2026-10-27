@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/knownpred.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/knownpred.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/knownpred.rs sha256:dd30b0fb2fd930103788aec6830efa4c0f062d76634052fa365bcb8c95cde439 -->
+<!-- src: crates/opt/llrm-transforms/src/knownpred.rs sha256:6e4e7229692f9794168cd4af860c6ffa50b1856beb38dd82a7d5d8e541a30410 -->
 
 # knownpred
 
@@ -34,3 +34,6 @@ than 24 blocks stops it (`max-jump-threading-live-blocks`).
 | D3 | The new block is not moved before the destination; it is merged into its predecessor when it can be, and otherwise stays last in the layout. |
 | D4 | No indirect branches exist, so none is skipped. |
 | D5 | `mayHaveSideEffects` of a folded copy reads no module globals: a call is kept. |
+
+## Used by
+Named by `simplifycfg`.

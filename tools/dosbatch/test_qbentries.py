@@ -43,7 +43,7 @@ def test_every_runtime_entry_is_called_by_a_probe_under_llrm(tmp_path_factory):
     exported = set()
     # What a program can call is what the frontend's runtime table names; the rest of the B$ names are
     # the target's helpers and handlers.
-    table = (qbruntime.dosbatch.ROOT / "crates/frontends/llrm-qbruntime/src/runtime.toml").read_text()
+    table = (qbruntime.dosbatch.ROOT / "crates/frontends/qb/runtime.toml").read_text()
     entries = set(re.findall(r"B\$\w+", table))
     for obj in objects.values():
         # The *USED names are markers the compiler refers to, not routines to call.
