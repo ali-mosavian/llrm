@@ -1288,6 +1288,17 @@ def test_a_squash_github_declines_for_a_moved_head_is_left_out_not_refused(capsy
     assert ps.batch_summary([], [], [], ["5087"]) == "LANDED: -  REFUSED: -  LEFT OUT (head moved): #5087"
 
 
+def test_a_pr_the_cap_cuts_off_is_reported_unchecked_not_checked():
+    """The 00:32 batch's line said "9 checked, 0 dropped" while a single scanners check took 620 s against ALONE_CAP=600: #5050 and #5051, red alone, went into the batch."""
+    import threading
+
+    release = threading.Event()
+    kept, dropped = ps.alone(["1", "2"], {"1": "h1", "2": "h2"}, refusals=lambda head, base: [] if head == "h1" else (release.wait(5), [])[1], jobs=2, cap=0.2)
+    release.set()
+    assert kept == ["1", "2"] and dropped == {}, "kept unfiltered, as designed"
+    assert ps.UNCHECKED == ["2"], "but named as unchecked"
+
+
 def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
     """The 02:34 sub-batch merged #5088's 01:18 head (sinkcast.md stale) 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head w14 had moved."""
     infos = {"5088": {"headRefOid": "old" * 13 + "o", "title": "t"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
@@ -1296,6 +1307,22 @@ def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
     assert list(moved) == ["5088"] and moved["5088"][1].startswith("newnew")
     assert infos["5088"]["headRefOid"].startswith("newnew") and infos["5088"]["title"] == "t2", "infos holds the new read"
     assert ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number]) == {}, "nothing moved the second time"
+
+
+def test_a_pr_whose_head_moved_is_left_out_and_not_held_as_its_own_refusal():
+    """A halved batch kept merging a head the owner had replaced, or (with the re-read alone) a new head that had not waited its 15 minutes."""
+    infos = {"5088": {"headRefOid": "o" * 40}, "5087": {"headRefOid": "s" * 40}}
+    views = {"5088": {"headRefOid": "n" * 40}, "5087": {"headRefOid": "s" * 40}}
+    left_out = {}
+    moved = ps.defer_moved(infos, ["5088", "5087"], left_out, view=lambda number: views[number])
+    assert list(moved) == ["5088"] and list(left_out) == ["5088"] and "waits its own head age" in left_out["5088"]
+    assert not ps.own_refusal(left_out["5088"]), "a moved head is not the PR's own refusal"
+
+
+def test_a_merge_batch_older_than_twenty_minutes_is_expired():
+    """The 01:45 batch ran 65+ minutes on the heads it assembled with, refusing PRs whose owners had fixed them."""
+    assert not ps.batch_expired(100.0, 100.0 + ps.BATCH_MAX_SECONDS) and ps.batch_expired(100.0, 100.0 + ps.BATCH_MAX_SECONDS + 1)
+    assert ps.BATCH_MAX_SECONDS == 1200
 
 
 def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
