@@ -124,7 +124,15 @@ pub fn fold_icmp_inst_with_constant(
     let (value, width) = query(c, None).int_constant(op1)?;
     // foldICmpBinOpWithConstant, the `and` and `add` cases.
     // OWED: the other opcodes, foldICmpBinOpEqualityWithConstant and the
-    // truth-table fold; the select, trunc, intrinsic and extractvalue arms.
+    // truth-table fold; the select, intrinsic and extractvalue arms, and the
+    // rest of the trunc arm.
+    let trunc = {
+        let q = query(c, None);
+        pattern::cast(&q, op0, CastOp::Trunc).map(|(_, trunc, x)| (trunc.flags, x))
+    };
+    if let Some((flags, x)) = trunc {
+        return fold_icmp_trunc_constant(c, inst, pred, (flags, x), value, width);
+    }
     let and = {
         let q = query(c, None);
         pattern::binary(&q, op0, BinaryOp::And).map(|(_, _, x, y)| (x, y))
@@ -137,6 +145,36 @@ pub fn fold_icmp_inst_with_constant(
         pattern::binary(&q, op0, BinaryOp::Add).map(|(_, add, x, y)| (add.flags, x, y))?
     };
     fold_icmp_add_constant(c, inst, pred, op0, flags, (x, y), value, width)
+}
+
+/// `foldICmpTruncConstant`'s first arm: `icmp pred (trunc nsw X), C` is the
+/// compare on `X` with `C` sign-extended; `trunc nuw` with an unsigned or
+/// equality predicate, with `C` zero-extended, when `shouldChangeType` allows
+/// computing in the wider type.
+///
+/// OWED: the `signum`, `shl` power-of-two and equality-mask arms.
+fn fold_icmp_trunc_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    (flags, x): (Flags, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let src = c.type_of(x);
+    let src_bits = c.context.types.int_bits(src)?;
+    if !crate::combine_shared::should_change_type(c.env.layout, width, src_bits) {
+        return None;
+    }
+    let wide = if flags.contains(Flags::NSW) {
+        llrm_mir::context::signed(value, width) as u128 & mask(src_bits)
+    } else if !is_signed(pred) && flags.contains(Flags::NUW) {
+        value
+    } else {
+        return None;
+    };
+    let bound = c.int(src, wide);
+    Some(new_icmp(c, inst, pred, x, bound))
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3231

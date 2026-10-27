@@ -817,6 +817,7 @@ fn selected_in(
             work.push((id, block, extra));
         }
     }
+    let (fixed_objects, fixed_depth) = (frame.locals.borrow().len(), frame.depth.get());
     // The stack objects the builder made (a rounded float's slot) follow the
     // static allocas in the frame.
     for (at, (size, align)) in info.objects.iter().enumerate() {
@@ -881,7 +882,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
             &selector,
             &mut hooks,
             &Info { source_order: bitness == 32 },
@@ -1152,8 +1153,9 @@ fn selected_in(
         inline_symbols: IndexMap::default(),
         far,
         pops: IndexMap::default(),
-        depth: frame.depth.get(),
+        depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
+        temporaries: frame.locals.borrow().len() - fixed_objects,
         landing,
     })
 }
