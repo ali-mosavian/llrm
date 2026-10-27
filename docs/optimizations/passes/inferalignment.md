@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferalignment.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferalignment.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferalignment.rs sha256:1f74f4f84defad519df0ae6afb67d3d62e28a20c3a49c2b3ccf25b9aa55a6d88 -->
+<!-- src: crates/opt/llrm-transforms/src/inferalignment.rs sha256:db4950fef7684ace80d1120f8d4d28370ef52ecaf1877820faa2cbf453fb1957 -->
 
 # inferalignment
 
@@ -42,3 +42,6 @@ not the callee declaration's.
 ## Keeps
 Only alignments, and the operands of the folds above, change: blocks and
 edges are unchanged.
+
+## Used by
+Named by `pipeline`.

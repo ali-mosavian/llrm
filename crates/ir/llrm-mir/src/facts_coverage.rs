@@ -67,6 +67,8 @@ const COVERAGE: &[(&str, Shown)] = &[
             "purity_refuses_nontermination_nonlocal_accesses_and_what_callees_do_not_state",
         ]),
     ),
+    ("nofree", By(&["test_nofree_and_nosync_follow_what_the_calls_state"])),
+    ("nosync", By(&["test_nofree_and_nosync_follow_what_the_calls_state"])),
     (
         "willreturn",
         Unread("ow-frontend-contract: no frontend states it; functionattrs infers it (test for the inference only)"),
