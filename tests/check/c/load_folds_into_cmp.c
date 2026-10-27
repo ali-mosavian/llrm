@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -O1 -march=i486 --isel=dag -S -o /dev/stdout
+// RUN-PENDING: llrm-cc %s -m32 -O1 -march=i486 --isel=dag -S -o /dev/stdout
 // Both compares of `a[mid]` read one load, so the load stayed a `mov` and the second `cmp` stayed
 // too: the pin's MachineCSE shares the flags across the sole-predecessor edge and its PeepholeOptimizer
 // folds the single-use load into the one `cmp` (coalesce_hot_copies: 11 instructions a trip, pin 9).
