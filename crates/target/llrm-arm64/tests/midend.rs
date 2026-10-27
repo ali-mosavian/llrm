@@ -108,3 +108,11 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
     let flags = u32::from_le_bytes(file[at + 64..at + 68].try_into().unwrap());
     assert_eq!(flags, 9, "S_MOD_INIT_FUNC_POINTERS");
 }
+
+/// A `{ T, i1 }` carried round a back edge in a phi (a cmpxchg retry loop has one) was refused with
+/// "a phi with no register": an aggregate phi is copied member by member.
+#[test]
+fn an_aggregate_phi_lowers() {
+    let asm = driver::assembly(include_str!("data/agg_phi.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.matches("bl _step").count() >= 2, "{asm}");
+}
