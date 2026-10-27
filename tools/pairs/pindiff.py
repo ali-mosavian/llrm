@@ -121,6 +121,9 @@ def pin_padding_free(obj: Path, bits: int) -> int:
     return pin_text_size(obj) - nop_bytes(listing)
 
 
+I64_DIVIDE = {"__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__divmoddi4", "__udivmoddi4"}
+
+
 def archive_members(archive: Path) -> dict[str, str]:
     """Symbol -> the archive member defining it."""
     out = subprocess.run(["nm", "-g", "--defined-only", str(archive)], capture_output=True, text=True).stdout
@@ -154,7 +157,7 @@ def libgcc_cost(obj: Path, bits: int, work: Path) -> tuple[int, int, int, list[s
     None are counted at m16: there is no 16-bit libgcc, so the pin's calls stay unresolved there."""
     found = subprocess.run(["gcc", "-m32", "-print-libgcc-file-name"], capture_output=True, text=True).stdout.strip()
     if bits != 32 or not found or not Path(found).exists():
-        return 0, 0, 0, []
+        return 0, 0, 0, sorted(s for s in nm_undefined(obj) if s in I64_DIVIDE) if bits != 32 else []
     archive, defined = Path(found), archive_members(Path(found))
     extracted: dict[str, Path] = {}
 
@@ -286,7 +289,8 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
         "name": stem,
         "ins": instructions(asm.read_text()),
         "pin_ins": instructions(pin_asm.read_text()) + lib_ins,
-        "lib": lib_names,
+        "lib": lib_names if int(cfg["bits"]) == 32 else [],
+        "nolib": lib_names if int(cfg["bits"]) != 32 else [],
         "bytes": ours_bytes and ours_bytes[0],
         "free": ours_bytes and ours_bytes[1],
         "pin_bytes": pin_text_size(pin_obj) + lib_bytes,
@@ -302,9 +306,10 @@ def table(rows: list[dict], old: bool) -> list[str]:
     flagged = 0
     for row in sorted(rows, key=lambda one: one["name"]):
         flags = []
-        if row["ins"] > row["pin_ins"]:
+        compared = not row.get("nolib")
+        if compared and row["ins"] > row["pin_ins"]:
             flags.append("INS>pin")
-        if row["free"] and row["pin_free"] and row["free"] > row["pin_free"]:
+        if compared and row["free"] and row["pin_free"] and row["free"] > row["pin_free"]:
             flags.append("BYTES>pin")
         if old and row["free"] and row["old_free"] and row["free"] > row["old_free"]:
             flags.append("BYTES>old")
@@ -312,7 +317,7 @@ def table(rows: list[dict], old: bool) -> list[str]:
         text = f"{row['name']:16} {row['ins']:5} {row['pin_ins']:5} {row['ins'] - row['pin_ins']:+5} | {row['bytes'] or -1:6} {row['pin_bytes']:6} {(row['bytes'] or 0) - row['pin_bytes']:+5} | {row['free'] or -1:6} {row['pin_free']:6} {(row['free'] or 0) - row['pin_free']:+5}"
         if old:
             text += f" | {row['old_free'] or -1:6} {((row['free'] or 0) - row['old_free']) if row['old_free'] else 0:+5}"
-        lines.append(text + "  " + " ".join(flags) + (f" +libgcc[{','.join(m.removesuffix('.o').strip('_') for m in row['lib'])}]" if row.get("lib") else ""))
+        lines.append(text + "  " + " ".join(flags) + (f" +libgcc[{','.join(m.removesuffix('.o').strip('_') for m in row['lib'])}]" if row.get("lib") else "") + (" no pin comparison (no 16-bit libgcc)" if row.get("nolib") else ""))
     lines.append(
         f"programs {len(rows)} flagged {flagged} | ins {sum(r['ins'] for r in rows)} vs {sum(r['pin_ins'] for r in rows)}"
         f" | bytes {sum(r['bytes'] or 0 for r in rows)} vs {sum(r['pin_bytes'] for r in rows)}"

@@ -292,3 +292,11 @@ def test_the_front_end_is_told_fno_builtin_so_its_ir_matches_the_pins_attributes
     pindiff = load("pindiff")
     assert "-fno-builtin" in pindiff.front_end_flags("O2", False)
     assert "-fno-builtin" in pindiff.front_end_flags("O2", True)
+
+
+def test_an_m16_row_whose_pin_object_calls_an_i64_divide_is_marked_not_compared(tmp_path):
+    """At m16 the pin's object calls __udivdi3 with no 16-bit libgcc to add: the row's bytes compared ours-with-helpers to a bare call (x_ll_div, 2026-10-27)."""
+    pindiff = load("pindiff")
+    row = {"name": "x", "ins": 5, "pin_ins": 5, "bytes": 9, "pin_bytes": 9, "free": 9, "pin_free": 9, "lib": [], "nolib": ["__udivdi3"]}
+    line = pindiff.table([{**row, "ins": 50}], False)[1]
+    assert "no pin comparison (no 16-bit libgcc)" in line and "INS>pin" not in line
