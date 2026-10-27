@@ -47,6 +47,7 @@ mod global_address;
 mod i1_branch;
 mod i1_m16;
 mod int_to_fp;
+mod known_load;
 mod legalize_dag;
 mod legalize_pending;
 mod legalize_types;
