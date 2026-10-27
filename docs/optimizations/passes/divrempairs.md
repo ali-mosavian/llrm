@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/divrempairs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/divrempairs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:72364a0307138e8f615de86e52f1205374981c3ade4df764f866df7473b680be -->
+<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:09e744c49de7de762fccab21ea8e57a1fa63dc6268f5473a16213ac51229260a -->
 
 # divrempairs
 
@@ -21,6 +21,7 @@ either can fail to reach it. Where the target has none, a `srem`/`urem`
 becomes `x - (x / y) * y` of the quotient already made, and the quotient
 moves up to the remainder when it stood below it.
 
+## Example
 ```text
  before                          after (no divide-remainder instruction)
  %d = sdiv i32 %x, %y            %d = sdiv i32 %x, %y

@@ -16,6 +16,7 @@
 //! becomes `x - (x / y) * y` of the quotient already made, and the quotient
 //! moves up to the remainder when it stood below it.
 //!
+//! # Example
 //! ```text
 //!  before                          after (no divide-remainder instruction)
 //!  %d = sdiv i32 %x, %y            %d = sdiv i32 %x, %y
