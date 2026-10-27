@@ -157,7 +157,7 @@ oracle = "none"
 match = "qb/pow_unrolled.bas"
 cause = "correctness-driven: the same ^ domain check as data_after_checked (+1 fcmp, +1 unreachable, IR 9 -> 12)"
 owner = "w-2"
-status = "cause known"
+status = "accept: behaviour change"
 oracle = "none"
 
 [[program]]
