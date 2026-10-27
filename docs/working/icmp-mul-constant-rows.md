@@ -1,4 +1,4 @@
-# Rows of `foldICmpMulConstant` (#5666)
+# Rows of `foldICmpMulConstant` (#5670)
 
 QCport growers of comparing a product with a constant as the pin does.
 
