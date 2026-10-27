@@ -107,7 +107,7 @@ impl ProgramPass for ModuleIpo {
         // body's stack slot, while the loads are still there to be seen.
         for at in 0..count {
             let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
-                crate::globalsra::split(module, &program.layout)
+                crate::globalsra::split(module, &program.layout, program.target.spaces())
             });
             changed |= !ids.is_empty();
             for id in ids {

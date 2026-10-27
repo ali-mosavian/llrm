@@ -122,7 +122,14 @@ fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Rea
 pub fn split(
     module: &mut Module,
     layout: &DataLayout,
+    spaces: llrm_mir::spaces::Spaces,
 ) -> Vec<GlobalId> {
+    // A body that forges a pointer into the data segment (`DEF SEG = VARSEG(w)`
+    // then POKE) may write any variable by its address: none is a register
+    // (GlobalsAA's `forged`, 188fd3905).
+    if llrm_analysis::forging::forges_selector(module, spaces) {
+        return Vec::new();
+    }
     let mut changed = BTreeSet::new();
     let held = held(module);
     let candidates: Vec<GlobalId> = module
