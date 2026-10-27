@@ -759,6 +759,7 @@ impl<'a> TypeLegalizer<'a> {
                     (lo, self.dag.get_node(ISD::SignExtendInReg, half, &[hi, ty]))
                 }
             }
+            ISD::Load if vt == EVT::Simple(MVT::Far) && !self.addresses_memory(value) => self.expand_load(value, half),
             ISD::Load if vt == EVT::Simple(MVT::Far) => {
                 // A far pointer is `les`: the offset, with the selector left in
                 // `ES` and read back on the chain (SD2).
@@ -1378,6 +1379,35 @@ impl<'a> TypeLegalizer<'a> {
         let chains = self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
         self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
         (lo, hi)
+    }
+
+    /// Whether a far pointer is the address of a load, store or call: then
+    /// its selector must be in `ES` (`les`). A pointer only read as data
+    /// (a huge-pointer difference, a value passed on) loads as two words,
+    /// which a `movzx` or an `add` folds.
+    fn addresses_memory(
+        &self,
+        pointer: SDValue,
+    ) -> bool {
+        let value = SDValue { node: pointer.node, res: 0 };
+        self.dag
+            .users(value)
+            .any(
+                |user| {
+                    let user = SDValue { node: user, res: 0 };
+                    let ops = &self.dag.node(user).ops;
+                    ops.iter()
+                        .enumerate()
+                        .any(
+                            |(at, &op)| op == value
+                                && match self.dag.opcode(user) {
+                                    ISD::Load | x86isd::LES | x86isd::LDS | super::x86isd::CALL => at == 1,
+                                    ISD::Store => at == 2,
+                                    _ => false,
+                                },
+                        )
+                },
+            )
     }
 
     /// `ptr + step` for the second half of a split access. A far pointer moves
