@@ -10,3 +10,5 @@ aged() {
     if [ $((now - committed)) -ge "${HEAD_MIN_AGE:-900}" ]; then echo "$m"; else echo "$m: waits, head younger than 15 min" >&2; fi
   done
 }
+# batch_head_age N: the head age a batch needs: URGENT_HEAD_MIN_AGE (default 300) when N > 0 urgent PRs (landing fixes: their owners do not push during a batch), else HEAD_MIN_AGE (900).
+batch_head_age() { if [ "${1:-0}" -gt 0 ]; then echo "${URGENT_HEAD_MIN_AGE:-300}"; else echo "${HEAD_MIN_AGE:-900}"; fi; }
