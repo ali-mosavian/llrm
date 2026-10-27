@@ -739,7 +739,7 @@ b0:
 #[test]
 fn test_ipa_cp_clones_a_tree_recursion_before_it_is_copied_into_itself() {
     let mut module = parsed(CHOP);
-    let options = crate::pipeline::Options::speed();
+    let options = crate::pipeline::Options::aggressive();
     let applied = crate::pipeline::Applied { options, ..Default::default() };
     llrm_mir::program::Program::lend(
         &mut module,
