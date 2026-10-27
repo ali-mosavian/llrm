@@ -2,7 +2,7 @@
 //! register's fixed range, not an allocatable one, so a loop counter used as a
 //! shift count lives in ecx (the pin's `$cl = COPY k`).
 
-use std::process::Command;
+mod common;
 
 const SOURCE: &str = "int f(int x, int y, int n)
 {
@@ -19,7 +19,7 @@ const SOURCE: &str = "int f(int x, int y, int n)
 fn listing(fixed: bool) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let mut run = Command::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let mut run = common::cc::llrm_c();
     run.current_dir(scratch.path()).args([
         "-m32",
         "-mabi=sysv",

@@ -607,6 +607,7 @@ SCANNERS = {
     "no_partial_ecx_counts": "scans the 32-bit runtime assembly",
     "selectiondag_registry": "reads the SD registry in the plan and every source's SD numbers",
     "no_local_paths": "scans docs",
+    "target_facts": "reads the target descriptions' facts",
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }

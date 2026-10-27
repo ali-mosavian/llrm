@@ -264,6 +264,17 @@ impl AllocationOrder {
             };
             // Don't add the same reg twice; check Phys is in the allocation
             // order.
+            // A pin names a root; a byte value takes the byte register of it
+            // that comes first in its order (`copyHint` reads the copy's
+            // sub-register index).
+            let phys = phys.map(|phys| {
+                if order.contains(&phys) {
+                    phys
+                } else {
+                    let root = crate::model::ir::root(phys);
+                    order.iter().copied().find(|one| crate::model::ir::root(*one) == root).unwrap_or(phys)
+                }
+            });
             if let Some(phys) = phys {
                 if !found.contains(&phys) && order.contains(&phys) {
                     found.push(phys);
