@@ -3568,15 +3568,24 @@ fn test_a_call_that_never_returns_saves_no_register_under_the_dag_selector() {
     assert!(!fill.contains("push si") && !fill.contains("push di"), "{fill}");
 }
 
-/// CLEAR was parsed as a call of a SUB named CLEAR: "`CLEAR` is not a known
-/// procedure or runtime routine", as if misspelt. A valid statement this
-/// compiler does not lower says so, as CHAIN does (row QB-CLEAR-1).
+/// CLEAR was refused ("cannot generate code for it yet"): it is
+/// B$SCLR(stack, stack-given), two zero words for the bare statement.
 #[test]
-fn test_clear_is_refused_as_not_yet_generated() {
-    let directory = tempfile::tempdir().expect("a temporary directory");
-    let source = written(&directory, "T.BAS", b"x% = 1\r\nCLEAR\r\nPRINT x%\r\n");
-    let error = qb_driver::parsed(&source, &qb_driver::Frontend::new("qb45", "qb45"), None).expect_err("refused");
-    assert!(error.to_string().contains("CLEAR is valid, but this compiler cannot generate code for it yet"), "{error}");
+fn test_clear_calls_the_runtime_clear() {
+    let text = listing_in("qb45", &[], "clearcall", "x% = 1\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$SCLR").expect("the call");
+    assert!(main[..call].trim_end().ends_with("pushw 0\n    pushw 0"), "{main}");
+}
+
+/// A variable set before CLEAR and printed after it was folded to its old
+/// value: the call zeroes BC_DATA behind the optimiser's back.
+#[test]
+fn test_a_variable_is_read_again_after_clear() {
+    let text = listing_in("qb45", &[], "clearreads", "x% = 5\r\nCLEAR\r\nPRINT x%\r\nEND\r\n");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let after = &main[main.find("call far ptr B$SCLR").expect("the call")..];
+    assert!(after.contains("ptr X%") || after.contains("[X%"), "x% is loaded after the call: {main}");
 }
 
 /// A string compare in one block read by a select in the next (`WHILE a$(j%) <

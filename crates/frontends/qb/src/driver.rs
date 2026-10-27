@@ -215,6 +215,25 @@ pub fn decoded(
             object_.addressed = false;
         }
     }
+    // CLEAR zeroes the data segment the program's variables live in, so the
+    // optimiser must not take them for private.
+    let clears = program
+        .modules
+        .iter()
+        .flat_map(|module| &module.functions)
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| instruction.callee.as_deref() == Some("B$SCLR"));
+    if clears {
+        for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
+            if object_.linkage == model::DataLinkage::Internal
+                && !object_.readonly
+                && object_.address == model::AddressKind::Near
+            {
+                object_.exposed = true;
+            }
+        }
+    }
     // The runtime enters a module at its body, through the module header.
     program.entries = vec!["__main".to_owned()];
     // Where the program handles errors, any routine may run its handler.

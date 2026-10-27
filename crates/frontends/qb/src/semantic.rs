@@ -3662,10 +3662,18 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
-                    // Row QB-CLEAR-1: BC lowers it to B$SCLR, which zeroes the
-                    // runtime's data ranges; the program's variables would
-                    // have to sit in BC's blank-COMMON and BSS ranges for that.
-                    "CLEAR" => return self.fail("CLEAR is valid, but this compiler cannot generate code for it yet"),
+                    // B$SCLR(stack, stack given) zeroes BC_DATA, closes the
+                    // files and starts the heaps afresh.
+                    "CLEAR" => {
+                        if arguments.iter().any(|argument| !matches!(argument, Expr::Omitted(_))) {
+                            return self.unsupported("CLEAR with a memory or stack size");
+                        }
+                        self.emit_runtime_call(
+                            "B$SCLR",
+                            Vec::new(),
+                            vec![Operand::Constant(INTEGER, Number::Integer(0)), Operand::Constant(INTEGER, Number::Integer(0))],
+                        );
+                    }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
                             return self.fail(format!("{name} takes no arguments"));
