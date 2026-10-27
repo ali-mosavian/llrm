@@ -462,19 +462,28 @@ pub fn emit_in(
                 emitter.state,
                 &mut emitter.classes,
                 &reads,
-                ctx.opt_size && ctx.address_mode == AddrMode::Real16,
+                (ctx.opt_size && ctx.address_mode == AddrMode::Real16)
+                    .then(|| llrm_lir::registers::Regs(ctx.registers).width_of(ctx.stack_pointer))
+                    .flatten(),
             )?;
         }
     }
     Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
 }
 
-/// The high and low words of a dword constant when pushing them one at a
-/// time is shorter than `pushd imm32`: a half fits a sign-extended byte.
-fn word_halves(imm: &Imm) -> Option<(i16, i16)> {
-    (imm.address.is_none() && imm.width == 4)
-        .then(|| (((imm.value >> 16) & 0xFFFF) as u16 as i16, (imm.value & 0xFFFF) as u16 as i16))
-        .filter(|&(high, low)| i8::try_from(high).is_ok() || i8::try_from(low).is_ok())
+/// The high and low words (`word` bytes each) of a constant of two words when
+/// pushing them one at a time is shorter than a push of the whole: a half fits
+/// a sign-extended byte.
+fn word_halves(
+    imm: &Imm,
+    word: i64,
+) -> Option<(i64, i64)> {
+    let bits = word * 8;
+    let mask = (1_i64 << bits) - 1;
+    let small = |half: i64| i8::try_from(((half << (64 - bits)) >> (64 - bits)) as i64).is_ok();
+    (imm.address.is_none() && imm.width == 2 * word as u32)
+        .then(|| ((imm.value >> bits) & mask, imm.value & mask))
+        .filter(|&(high, low)| small(high) || small(low))
 }
 
 /// A push of a register whose only use it is, and which a `mov` of an
@@ -486,7 +495,7 @@ fn fold_immediate_pushes(
     insns: &mut Vec<Arc<Insn>>,
     reads: &HashMap<u32, usize>,
     state: &mut EmitState,
-    split_wide: bool,
+    split_wide: Option<i64>,
 ) {
     let mut at = 0;
     while at < insns.len() {
@@ -523,9 +532,9 @@ fn fold_immediate_pushes(
         // byte-sized half is two `pushw` (high, then low), 4 or 5 bytes
         // against `pushd imm32`'s 6; the pin has no 16-bit push. The old
         // selector's pair. Owner w12. Exit: a cost hook on the target.
-        let halves = word_halves(&imm).filter(|_| split_wide);
+        let halves = split_wide.and_then(|word| word_halves(&imm, word).map(|halves| (halves, word)));
         let split_at = place < at;
-        let Some((high, low)) = halves else {
+        let Some(((high, low), word)) = halves else {
             what.sources[0] = Loc::Imm(imm);
             insns[at] = Arc::new(Insn::new(old.at, old.covers, Some(what), old.defines.clone(), Vec::new()));
             insns.remove(place);
@@ -535,7 +544,7 @@ fn fold_immediate_pushes(
             at += 1;
             continue;
         };
-        let word = |half: i16| Loc::Imm(Imm { value: i64::from(half as u16), width: 2, address: None });
+        let word = |half: i64| Loc::Imm(Imm { value: half, width: word as u32, address: None });
         let mut first = what.clone();
         first.sources[0] = word(high);
         let mut second = what;
@@ -568,7 +577,7 @@ fn pushed_arguments(
     state: &mut EmitState,
     classes: &mut Vec<(u32, &'static str)>,
     reads: &HashMap<u32, usize>,
-    split_wide: bool,
+    split_wide: Option<i64>,
 ) -> Result<(), EmitError> {
     let through_sp =
         |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
@@ -677,8 +686,8 @@ fn pushed_arguments(
             let what = old.what.as_ref().expect("a store");
             let source = what.sources[0].clone();
             let uses = old.uses.clone();
-            let halves = match &source {
-                Loc::Imm(imm) if split_wide => word_halves(imm),
+            let halves = match (&source, split_wide) {
+                (Loc::Imm(imm), Some(word)) => word_halves(imm, word).map(|halves| (halves, word)),
                 _ => None,
             };
             let pusher = |source| Semantics {
@@ -686,12 +695,12 @@ fn pushed_arguments(
                 sources: vec![source],
                 ..Semantics::new(Operation::Push)
             };
-            let Some((high, low)) = halves else {
+            let Some(((high, low), width)) = halves else {
                 pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(pusher(source)), vec![], uses)));
                 continue;
             };
             // DEVIATE SD243: see `fold_immediate_pushes`
-            let word = |half: i16| Loc::Imm(Imm { value: i64::from(half as u16), width: 2, address: None });
+            let word = |half: i64| Loc::Imm(Imm { value: half, width: width as u32, address: None });
             let made = state.next_address();
             pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(pusher(word(high))), vec![], uses)));
             pushes.push(Arc::new(Insn::new(made, Some((made, made)), Some(pusher(word(low))), vec![], vec![])));
@@ -3303,10 +3312,13 @@ impl Emitter<'_, '_> {
                     let disp = self.constant(group[3])?;
                     // a bare offset in a 16-bit segment is unsigned:
                     // `es:[36766]`, not `es:[-28770]`
-                    let disp = if base.is_none() && index.is_none() && self.ctx.address_mode == AddrMode::Real16 {
-                        disp & 0xFFFF
-                    } else {
-                        disp
+                    let disp = match llrm_lir::registers::Regs(self.ctx.registers).width_of(self.ctx.stack_pointer) {
+                        Some(word)
+                            if base.is_none() && index.is_none() && self.ctx.address_mode == AddrMode::Real16 =>
+                        {
+                            disp & ((1_i64 << (word * 8)) - 1)
+                        }
+                        _ => disp,
                     };
                     (
                         disp,
