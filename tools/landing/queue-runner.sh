@@ -12,6 +12,9 @@ R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/l
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
 group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
 while true; do
+  # a merged change to the runner or a helper, or to runner.env, takes effect here, between batches (same pid and process group, so stop.sh still works)
+  runner_env_load "${LAND_TMP:-/tmp/landing}/runner.env"
+  [ "$(runner_scripts_sha "$HERE")" = "$SELF_SHA" ] || { echo "runner scripts changed: reloading"; exec "$0" "$@"; }
   # never run beside another landing (old runner's land.sh)
   while landing_busy; do sleep 20; done
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
