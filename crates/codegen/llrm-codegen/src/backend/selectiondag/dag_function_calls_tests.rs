@@ -949,7 +949,7 @@ entry:
 /// (`mov dx, ax; shl edx, 16; add edx, ecx; push edx`, 11 bytes) and pushed;
 /// its two words are pushed as they are (`push es; push bx`). The pin keeps
 /// int halves merged (`isMultiStoresCheaperThanBitsMerge`); m16 deviates
-/// (SD312). QCport -Os: 131 stack arguments.
+/// (SD240). QCport -Os: 131 stack arguments.
 #[test]
 fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
