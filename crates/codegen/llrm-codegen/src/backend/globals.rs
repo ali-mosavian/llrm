@@ -229,6 +229,7 @@ impl Initializer<'_> {
                 Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
+            ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes
