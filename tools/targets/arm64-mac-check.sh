@@ -2,9 +2,9 @@
 # On an arm64 Mac: builds llrm-arm64-llc, compiles each tests/darwin/*.ll to a
 # Mach-O object, links it with the system clang and runs it; its output and
 # exit status must be the ones recorded in tests/darwin/*.out and *.status.
-#   tools/arm64_mac_check.sh
+#   tools/targets/arm64-mac-check.sh
 set -uo pipefail
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 dir=$root/crates/target/llrm-arm64/tests/darwin
 cargo build --release -p llrm-arm64 --bin llrm-arm64-llc || exit 1
 llc=$(python3 "$root/tools/llrmbin.py" bin)/llrm-arm64-llc

@@ -63,7 +63,7 @@ def test_a_change_in_any_crate_runs_the_lib_tests_that_read_the_sources_of_the_o
 
 
 def test_a_python_only_change_runs_the_python_tests_and_not_the_build():
-    p = gate.plan(["tools/msp430.py"])
+    p = gate.plan(["tools/targets/msp430.py"])
     assert p.tier == "fast" and "pytest" in p.steps and "build" not in p.steps
 
 
@@ -155,7 +155,7 @@ def test_a_step_that_runs_the_binaries_builds_them_first_even_when_no_rust_chang
     for path in ("tools/qcport-run.py", "tools/torture/torture.py"):
         p = gate.plan([path])
         assert p.steps[0] == "build", (path, p.steps)
-    assert "build" not in gate.plan(["tools/msp430.py"]).steps
+    assert "build" not in gate.plan(["tools/targets/msp430.py"]).steps
 
 
 def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():

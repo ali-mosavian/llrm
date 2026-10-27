@@ -272,7 +272,19 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {
-            return Err(format!("{flag}: debug info is not carried yet; use -g0"));
+            // clang writes the debug metadata, the backend the format `flag`
+            // names.
+            if !build.clang.iter().any(|one| one == "-g") {
+                // No `#dbg_assign`: the importer reads `#dbg_value` and
+                // `#dbg_declare` only.
+                build
+                    .clang
+                    .extend(
+                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
+                            .map(str::to_owned),
+                    );
+            }
+            build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {
             build.level = match level {
                 "" => "1".into(),
@@ -606,6 +618,10 @@ fn build(
         link.args(&command[1..]);
         if near_code {
             link.env("LLRM_NEAR_CODE", "1");
+        }
+        // The recipes' tools build the float support with this driver.
+        if let Ok(me) = std::env::current_exe() {
+            link.env("LLRM_CC_BIN", me);
         }
         match link.status() {
             Ok(status) if status.success() => {}
