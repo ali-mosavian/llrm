@@ -274,9 +274,9 @@ pub struct ScalarEvolution {
     pub(super) predicated_rewrites: HashMap<(Scev, BlockId), (Scev, Vec<wrap_predicate::Predicate>)>,
     /// `LoopDispositions`: by expression, as LLVM's, so that forgetting one
     /// does not scan them all.
-    pub(super) loop_dispositions: HashMap<Scev, Vec<(Option<BlockId>, disposition::LoopDisposition)>>,
+    pub(super) loop_dispositions: HashMap<Scev, disposition::Held<Option<BlockId>, disposition::LoopDisposition>>,
     /// `BlockDispositions`.
-    pub(super) block_dispositions: HashMap<Scev, Vec<(BlockId, disposition::BlockDisposition)>>,
+    pub(super) block_dispositions: HashMap<Scev, disposition::Held<BlockId, disposition::BlockDisposition>>,
     /// `ValueExprMap`: the SCEV of each value that has one. Constants are not
     /// held: their SCEV is a constant node, made again for the price of a
     /// lookup.
