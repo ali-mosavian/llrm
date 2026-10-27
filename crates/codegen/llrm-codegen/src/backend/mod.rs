@@ -77,7 +77,7 @@
 //! `spillplacement`, `slots` and `postings` for live-range splitting and
 //! spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
-//! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
+//! `peephole` calls the sub-passes `machinecp`, `copysink`,
 //! `postrasink`, `storecombine`, `sharedstores`,
 //! `exactaddress`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
