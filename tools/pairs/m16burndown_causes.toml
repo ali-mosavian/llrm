@@ -113,8 +113,8 @@ owner = "w-13"
 
 [[program]]
 match = "grep/grep.c"
-cause = "pre-ISel IR differs (phi -12, gep +8, select +5, mul -> shl) and the asm grows with it; first the IR, then RA"
-owner = "w-5"
+cause = "same pre-ISel IR shape as grep.bas (IR 158 vs 155, 12 fewer phis, asm +6 insns): loop-carried counters held in frame slots [bp-2],[bp-4],[bp-12] and reloaded; RA"
+owner = "w-13"
 status = "cause known"
 oracle = "none"
 
@@ -190,8 +190,8 @@ oracle = "none"
 
 [[program]]
 match = "recchop/recchop.c"
-cause = "pre-ISel IR differs (+3 phi, +2 zext, -2 ashr; IR 38 -> 41), asm +4"
-owner = "w-5"
+cause = "TailCallElim (pin-faithful) turned the accumulating tail recursion into a loop; the frame grows (recpow power: push bp/si and a spill on the entry path, main exits frameless) so shrink-wrap and the frame are the cost; the `tail` marker alone changes no code (recchop frame 6 -> 10, count-to-zero loop)"
+owner = "w-10"
 status = "cause known"
 oracle = "none"
 
@@ -232,8 +232,8 @@ oracle = "none"
 
 [[program]]
 match = "recpow/recpow.c"
-cause = "pre-ISel IR differs (+5 phi, +3 add, +2 urem; IR 27 -> 35), asm +6"
-owner = "w-5"
+cause = "TailCallElim (pin-faithful) turned the accumulating tail recursion into a loop; the frame grows (recpow power: push bp/si and a spill on the entry path, main exits frameless) so shrink-wrap and the frame are the cost; the `tail` marker alone changes no code"
+owner = "w-10"
 status = "cause known"
 oracle = "none"
 
