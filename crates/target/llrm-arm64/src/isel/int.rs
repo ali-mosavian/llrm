@@ -166,6 +166,11 @@ impl Selector<'_> {
                 .insert(super::value_def(self.function, instruction.result.expect("checked")).expect("an instruction"));
             return Ok(());
         }
+        if op == BinaryOp::Mul && result.is_some_and(|result| self.is_widened_product(result)) {
+            // `smull` or `smaddl` reads the factors where the extension is.
+            self.fused.insert(super::value_def(self.function, result.expect("checked")).expect("an instruction"));
+            return Ok(());
+        }
         if op == BinaryOp::Mul && result.is_some_and(|result| self.accumulated(result)) {
             // `madd` or `msub` reads the operands where the add or subtract is.
             self.fused.insert(super::value_def(self.function, result.expect("checked")).expect("an instruction"));
@@ -325,15 +330,25 @@ impl Selector<'_> {
         bits: u32,
         instruction: &Instruction,
     ) -> Selected<Option<G>> {
+        // A product, or the extension of a 32-bit one (`widemul`): its factors, and whether it widens.
         let product = |operand: Operand| match operand {
             Operand::Value(value) => super::value_def(self.function, value)
                 .filter(|def| self.fused.contains(def))
                 .map(|def| self.function.instruction(def).clone())
-                .filter(|one| one.opcode == llrm_mir::Opcode::Binary(BinaryOp::Mul)),
+                .and_then(|one| match one.opcode {
+                    llrm_mir::Opcode::Binary(BinaryOp::Mul) => Some((one, None)),
+                    llrm_mir::Opcode::Cast(llrm_mir::CastOp::SExt) => {
+                        self.widened_product(&one).map(|mul| (mul, Some(true)))
+                    }
+                    llrm_mir::Opcode::Cast(llrm_mir::CastOp::ZExt) => {
+                        self.widened_product(&one).map(|mul| (mul, Some(false)))
+                    }
+                    _ => None,
+                }),
             _ => None,
         };
         let [first, second] = instruction.operands[..] else { return Ok(None) };
-        let (found, other) = match (product(first), product(second)) {
+        let ((found, wide), other) = match (product(first), product(second)) {
             (Some(found), _) if !subtract => (found, second),
             (_, Some(found)) => (found, first),
             _ => return Ok(None),
@@ -343,7 +358,14 @@ impl Selector<'_> {
         let addend = self.src(other)?;
         let c = self.gpr_of(addend)?;
         let (rd, known) = self.result_g(bits);
-        let op = if subtract { Mul3::Msub } else { Mul3::Madd };
+        let op = match (wide, subtract) {
+            (None, false) => Mul3::Madd,
+            (None, true) => Mul3::Msub,
+            (Some(true), false) => Mul3::Smaddl,
+            (Some(true), true) => Mul3::Smsubl,
+            (Some(false), false) => Mul3::Umaddl,
+            (Some(false), true) => Mul3::Umsubl,
+        };
         self.inst(Inst::ThreeSource { op, width: width_of(bits), rd, rn: a.reg, rm: b.reg, ra: c.reg });
         Ok(Some(G { reg: rd, bits, known }))
     }
@@ -566,6 +588,15 @@ impl Selector<'_> {
         if matches!(op, CastOp::FPToSI | CastOp::FPToUI) {
             // Its operand may be a multiply left to it (`fixedpoint`), with no value.
             return self.float_cast(op, instruction);
+        }
+        if let Some(product) = self.widened_product(instruction) {
+            let inst = super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
+            if self.accumulated(result.expect("checked")) {
+                // `smaddl` or `smsubl` reads the product where the add or subtract is.
+                self.fused.insert(inst);
+                return Ok(());
+            }
+            return self.widening_multiply(instruction, &product);
         }
         let from_type = self.operand_type(instruction.operands[0])?;
         let source = self.src(instruction.operands[0])?;

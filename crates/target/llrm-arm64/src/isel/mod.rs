@@ -25,6 +25,7 @@ mod mem;
 mod memops;
 mod shifted;
 mod val;
+mod widemul;
 
 use std::collections::{HashMap, HashSet};
 
