@@ -1282,6 +1282,23 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
+def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs_and_the_prs_that_changed_the_source(tmp_path):
+    """Four refusals of the 03:03 batch said `docs_in_sync::test_no_generated_page_is_stale` and nothing else; owners guessed which page and which PR."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("head\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    (tmp_path / "docs/a.md").write_text("<!-- src: crates/x/precse.rs sha256:0 -->\nstale in the batch\n")
+    head_blob, batch_blob = git("rev-parse", "main:docs/a.md")[:9], git("hash-object", "docs/a.md")[:9]
+    got = ps.docs_detail({"integration docs_in_sync::test_no_generated_page_is_stale"}, tmp_path, "main", stale=lambda root: {"docs/a.md", "docs/gone.md"}, members=lambda: {"5094": ["crates/x/precse.rs"], "5071": ["other.rs"]})
+    assert got == f" [stale pages: docs/a.md (batch tree {batch_blob}, head {head_blob}; source crates/x/precse.rs, changed by #5094); docs/gone.md (batch tree absent, head absent)]", got
+    assert ps.docs_detail({"integration docs_links::t"}, tmp_path, "main", stale=lambda root: pytest.fail("not a docs refusal")) == ""
+
+
 def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
     """#5092 was refused alone at 02:31 for two scanners the head already had red, and the cached refusal (keyed by the PR head only) was replayed at 02:53 and 03:03 while parity moved."""
     ran = []
