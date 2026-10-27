@@ -828,6 +828,29 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
 
 
+def docs_detail(names, root: Path = ROOT, base: str = BASE, stale=None, members=None) -> str:
+    """` [stale pages: <path> (batch tree <blob>, head <blob>; source <file>, changed by #N #M); ...]` when `docs_in_sync` is among `names`: the refusal said which test failed and owners guessed
+    which page (03:03 batch, four refusals). The blobs are the page as the batch tree has it and as the head has it; the source is the file named in the page's `<!-- src: ... -->` line, and
+    `members()` -> {PR: files its diff touches} names the PRs that changed it."""
+    if not any("test_no_generated_page_is_stale" in name for name in names):
+        return ""
+
+    def blob(*args: str) -> str:
+        done = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True)
+        return done.stdout.strip()[:9] if done.returncode == 0 and done.stdout.strip() else "absent"
+
+    pages = sorted((stale or docs_stale)(root))
+    touched = members() if members else {}
+    shown = []
+    for page in pages[:5]:
+        text = (root / page).read_text(errors="replace") if (root / page).exists() else ""
+        source = (re.search(r"<!-- src: (\S+)", text) or re.search(r"header of \[`([^`]+)`", text) or [None, ""])[1]
+        owners = [f"#{number}" for number, files in touched.items() if source and any(one == source or one.startswith(source.rstrip("/") + "/") for one in files)]
+        extra = f"; source {source}, changed by {' '.join(owners) or 'no PR of the batch'}" if source else ""
+        shown.append(f"{page} (batch tree {blob('hash-object', page) if (root / page).exists() else 'absent'}, head {blob('rev-parse', '--verify', '-q', f'{base}:{page}')}{extra})")
+    return f" [stale pages: {'; '.join(shown)}{'; ...' if len(pages) > 5 else ''}]" if shown else ""
+
+
 def warn_xpass(names, report: Path | None = None) -> None:
     """A listed (xfail) test that now passes is a warning and a line in `report`, not a refusal: land tempo first, the owner removes the row next. 25 refusals and ~106 batch-minutes in 24 h
     (2026-10-27) were these."""
@@ -1622,6 +1645,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         git("fetch", "-q", "origin", "feat/parity")
         clean_checkout(BASE)
 
+        def members_files() -> dict[str, list[str]]:
+            return {number: git("diff", "--name-only", f"{BASE}...{infos[number]['headRefOid']}").split() for number in group}
+
         def merge_one(number: str) -> str:
             if number in left_out:
                 return left_out[number]
@@ -1668,24 +1694,24 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
                 stage("scanners-early")
                 if new := sorted(landing_scanner_failures(changed, False)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("scanners")
                 if new := sorted(new_scanner_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                 failed_units.update(new)
                 blame(new)
                 return False
