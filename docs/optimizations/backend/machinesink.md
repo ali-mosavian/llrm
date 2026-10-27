@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:225275fb29acf86121f61f925aea023690360657a1189f6736f54e59edd4e9bd -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:3325dd2b1134d3aa8f91b0dae5aa94dbc7dba6ffdd15e65c18f6f04163c5c549 -->
 
 # machinesink
 
@@ -85,6 +85,13 @@ The flags are the pin's rule in full: a def moves only if dead (read by no
 later instruction of its block and no successor), and not into a block that
 reads them (`SinkInstruction`'s zombie check).
 Exit: honor a dead implicit def when LIR marks one.
+
+DEVIATE M7 (no number): an instruction whose pinned operands are all
+sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
+makes it read a physical register; ours names the pin only in the register
+class, so `touches_machine_state` asks the classes. One with a pinned result
+(a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
+in its block grew switch.c 16 B at m16 -Os. Exit: none.
 
 DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an
