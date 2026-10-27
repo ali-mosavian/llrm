@@ -164,6 +164,18 @@ impl Function {
         }
     }
 
+    /// Room for `count` more instructions and their results, for a builder that
+    /// knows how many it will make.
+    pub fn reserve_instructions(
+        &mut self,
+        count: usize,
+    ) {
+        self.instructions.reserve(count);
+        self.parent.reserve(count);
+        self.erased.reserve(count);
+        self.values.reserve(count);
+    }
+
     /// A new instruction, placed nowhere yet; its result, if its type is not
     /// `void`, is named `name` or numbered.
     pub fn create_instruction(
