@@ -378,6 +378,19 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
 }
 
+/// A `select` of a loaded value stopped the matcher at m64 ("node transform
+/// `GetOppositeBranchCondition` is not translated"): the table folds the load
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+#[test]
+fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]
