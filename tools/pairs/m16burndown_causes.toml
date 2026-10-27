@@ -32,9 +32,18 @@ status = "cause known"
 oracle = "m32 llc"
 
 [[program]]
-match = "*/log_exp*"
-cause = "tree-pre"
+match = "*/data_after_checked*"
+cause = "correctness-driven: EXP overflow and LOG domain checks (B$SERR 6 and 5) that main did not emit, +24 insns in $QB$MAIN"
 owner = "w-2"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "*/log_exp*"
+cause = "correctness-driven: the same EXP/LOG range checks (+21 insns in $QB$MAIN)"
+owner = "w-2"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/mandel*"
