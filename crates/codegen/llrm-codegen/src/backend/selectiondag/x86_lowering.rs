@@ -1277,9 +1277,10 @@ fn lower_constant_pool(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let NodeData::PoolIndex(index) = dag.node(node).data else { return None };
+    let NodeData::PoolIndex(index, offset) = dag.node(node).data else { return None };
     let vt = dag.value_type(node);
-    let target = dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index));
+    let target =
+        dag.intern(ISD::TargetConstantPool, &[vt], &[], SDNodeFlags::default(), NodeData::PoolIndex(index, offset));
     Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
 }
 
@@ -1509,7 +1510,7 @@ fn lower_int_to_fp(
     let (zero_offset, four_offset) = (dag.get_constant(0, pointer), dag.get_constant(4, pointer));
     let offset = dag.get_select(pointer, sign_set, four_offset, zero_offset);
     let fudge_ptr = dag.get_node(ISD::Add, pointer, &[fudge, offset]);
-    let NodeData::PoolIndex(entry) = dag.node(fudge).data else { return None };
+    let NodeData::PoolIndex(entry, _) = dag.node(fudge).data else { return None };
     let fudge_info = MemInfo {
         mem_vt: EVT::Simple(MVT::F32),
         align: 8,
