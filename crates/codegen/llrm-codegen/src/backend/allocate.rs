@@ -3391,6 +3391,32 @@ mod tests {
         assert!(!matches!(read.register, RegId::SI | RegId::ESI), "{sources:?}");
     }
 
+    /// `sbb x, x` reads its flags and nothing else: both sources are undef. The
+    /// rewrite gave them the first register of the class (`ax`) beside a
+    /// destination `dx`, `sbb dx, ax`: the CRC-32 mask came out 1309022537, not
+    /// -873187034 (tests/sbb_undef_source.rs, whose fixture the pin-shaped
+    /// `shl`/`sar` mask no longer turns into an `sbb`).
+    #[test]
+    fn test_an_undef_sbb_source_is_the_destination_register() {
+        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let what = Semantics {
+            name: Some("sbb".into()),
+            dests: vec![held(2)],
+            sources: vec![held(9), held(9)],
+            ..Semantics::new(Operation::Binary)
+        };
+        let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
+        one.undefs = vec![9];
+        let placed =
+            _placed(&Arc::new(one), &IndexMap::from_iter([(2, RegId::DX)]), &RegisterClasses::m16()).expect("placed");
+        let sources = &placed.what.as_ref().expect("semantics").sources;
+        let read = |at: usize| match &sources[at] {
+            Loc::Reg(read) => read.register,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!((read(0), read(1)), (RegId::DX, RegId::DX), "{sources:?}");
+    }
+
     #[test]
     fn test_a_value_required_in_two_registers_gets_one_fresh_value_per_site() {
         let cwd = Insn::new(
