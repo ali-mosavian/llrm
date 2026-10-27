@@ -348,3 +348,14 @@ fn the_operands_of_a_removed_store_go_with_it() {
         .expect("the function lowers");
     assert!(!asm.contains("ldr"), "{asm}");
 }
+
+/// Two internal globals one function stores before it loads (`acc = 0.0`
+/// ahead of `acc += step`) stayed in memory: float_in_memory_loop kept the
+/// loads and stores of both, 1.59x the pin, which makes them stack slots and
+/// promotes them away.
+#[test]
+fn a_global_dead_on_entry_to_its_only_function_leaves_memory() {
+    let asm = driver::assembly(include_str!("data/global_dead_on_entry.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("adrp"), "{asm}");
+}

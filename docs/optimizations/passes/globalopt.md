@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globalopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalopt.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:eeb41ee49c0a05b7a4aed3e04cfe9ca64230163d70e99acb803f53f4c4e86106 -->
+<!-- src: crates/opt/llrm-transforms/src/globalopt.rs sha256:b519d9eba081be9b321f5b2f183a0118e8c39195cc08da11ae8d16a02cdf1992 -->
 
 # globalopt
 
-Mark internal globals that are only ever loaded from as `constant`, and drop
-the stores of those only ever stored to.
+Mark internal globals that are only ever loaded from as `constant`, drop
+the stores of those only ever stored to, and make a global one function
+always writes before it reads that function's stack slot.
 
 ## How it works
 A variable qualifies when it is internal or private, initialized, not yet
@@ -18,6 +19,12 @@ A qualifying variable gets `constant = true`. A load of it is then its
 initializer's bytes (`memory::constant_bits`), which the body passes fold.
 Every defined function is reported as changed so each body is run through
 its pipeline again.
+
+`localize` (LLVM's `processInternalGlobal`, last step) turns an internal
+variable of one value that a single function uses, every load of which a
+store of that function precedes, into the function's own stack slot; the
+per-body passes promote it. The function must not recurse (no call but to
+intrinsics, or `norecurse`).
 
 `WriteOnly`, after the pipeline has forwarded what loads it could, is the
 other half (LLVM's GlobalOpt: "if the global is never loaded (but may be

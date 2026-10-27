@@ -1,5 +1,6 @@
-//! Mark internal globals that are only ever loaded from as `constant`, and drop
-//! the stores of those only ever stored to.
+//! Mark internal globals that are only ever loaded from as `constant`, drop
+//! the stores of those only ever stored to, and make a global one function
+//! always writes before it reads that function's stack slot.
 //!
 //! # How it works
 //! A variable qualifies when it is internal or private, initialized, not yet
@@ -13,6 +14,12 @@
 //! initializer's bytes (`memory::constant_bits`), which the body passes fold.
 //! Every defined function is reported as changed so each body is run through
 //! its pipeline again.
+//!
+//! `localize` (LLVM's `processInternalGlobal`, last step) turns an internal
+//! variable of one value that a single function uses, every load of which a
+//! store of that function precedes, into the function's own stack slot; the
+//! per-body passes promote it. The function must not recurse (no call but to
+//! intrinsics, or `norecurse`).
 //!
 //! `WriteOnly`, after the pipeline has forwarded what loads it could, is the
 //! other half (LLVM's GlobalOpt: "if the global is never loaded (but may be
@@ -70,8 +77,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
+use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand};
-use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::types::Type;
+use llrm_mir::opcode::{CastOp, Flags, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 
 pub struct GlobalOpt;
@@ -92,12 +101,134 @@ impl ModulePass for GlobalOpt {
                 variable.constant = true;
             }
         }
-        if found.is_empty() {
+        let localized = localize(module);
+        if found.is_empty() && !localized {
             Vec::new()
         } else {
             module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| id).collect()
         }
     }
+}
+
+/// `processInternalGlobal`'s last step: an internal variable of one value that
+/// a single function uses, every load of which a store of that function
+/// precedes (so its initial value is never read), is that function's own stack
+/// slot (`isPointerValueDeadOnEntryToFunction`). The function cannot recurse:
+/// it makes no call, or says `norecurse`. The variable is left unnamed for
+/// `globaldce`; the slot is for the per-body passes to promote.
+///
+/// DEVIATE: LLVM also stores the initializer at the function's entry, which
+/// nothing reads here; the function-attribute pass has not run yet where this
+/// does, so "cannot recurse" is read from the body.
+fn localize(module: &mut Module) -> bool {
+    let held = held_by_live(module);
+    let mut named = BTreeMap::new();
+    let mut users: BTreeMap<GlobalId, Vec<(GlobalId, Reach)>> = BTreeMap::new();
+    let mut unusable: BTreeSet<GlobalId> = BTreeSet::new();
+    for (id, _, function) in module.functions() {
+        for (global, reach) in reach_all(&module.context, function, &mut named) {
+            match reach {
+                Some(reach) => users.entry(global).or_default().push((id, reach)),
+                None => {
+                    unusable.insert(global);
+                }
+            }
+        }
+    }
+    let mut chosen: Vec<(GlobalId, GlobalId, Reach)> = Vec::new();
+    for (global, mut found) in users {
+        let [(function, _)] = &found[..] else { continue };
+        let function = *function;
+        if unusable.contains(&global) || held.contains(&global) {
+            continue;
+        }
+        let value = &module.global(global);
+        let GlobalKind::Variable(variable) = &value.kind else { continue };
+        let single = matches!(module.context.types.get(variable.ty), Type::Int(_) | Type::Float(_) | Type::Pointer(_));
+        let internal = matches!(value.linkage, Linkage::Internal | Linkage::Private);
+        if !(single && internal && !variable.constant && !variable.externally_initialized && value.address_space == 0) {
+            continue;
+        }
+        let GlobalKind::Function(body) = &module.global(function).kind else { continue };
+        let (_, reach) = found.pop().expect("one user");
+        if reach.moved.is_empty()
+            && cannot_recurse(module, body)
+            && dead_on_entry(&module.context, body, global, variable.ty, &reach)
+        {
+            chosen.push((global, function, reach));
+        }
+    }
+    let changed = !chosen.is_empty();
+    let Module { context, globals, .. } = module;
+    for (global, function, reach) in chosen {
+        let (ty, align) = match &globals[global.0 as usize].kind {
+            GlobalKind::Variable(variable) => (variable.ty, variable.align),
+            GlobalKind::Function(_) => continue,
+        };
+        let GlobalKind::Function(body) = &mut globals[function.0 as usize].kind else { continue };
+        let Some(entry) = body.entry() else { continue };
+        let Some(first) = body.iter_block(entry).next() else { continue };
+        let pointer = context.types.ptr(0);
+        let slot = body.create_instruction(
+            Opcode::Alloca { allocated: ty, align, address_space: 0 },
+            pointer,
+            Vec::new(),
+            Flags::default(),
+            None,
+        );
+        if body.insert(slot, Position::Before(first)).is_err() {
+            continue;
+        }
+        let address = Operand::Value(body.instruction(slot).result.expect("an alloca has a value"));
+        for (inst, index) in reach.uses {
+            body.set_operand(inst, index, address);
+        }
+    }
+    changed
+}
+
+/// Whether `body` cannot be re-entered: `norecurse`, or no call but to
+/// intrinsics.
+fn cannot_recurse(
+    module: &Module,
+    body: &Function,
+) -> bool {
+    if body.attrs.iter().any(|one| matches!(one, llrm_mir::opcode::Attribute::Flag(name) if name == "norecurse")) {
+        return true;
+    }
+    body.walk().all(|(_, inst)| {
+        !matches!(body.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+            || llrm_mir::memory::callee(&module.context, body, inst)
+                .and_then(|one| module.global(one).intrinsic())
+                .is_some()
+    })
+}
+
+/// Whether every use of `global` in `body` is a plain load or store of its
+/// own type through its address, and a store precedes each load.
+fn dead_on_entry(
+    context: &Context,
+    body: &Function,
+    global: GlobalId,
+    ty: llrm_mir::types::TypeId,
+    reach: &Reach,
+) -> bool {
+    let (mut loads, mut stores) = (Vec::new(), Vec::new());
+    for &(inst, index) in &reach.uses {
+        let op = body.instruction(inst);
+        let direct = matches!(op.operands[index], Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(one) if one == global));
+        match op.opcode {
+            Opcode::Load { volatile: false, .. } if index == 0 && direct && op.ty == ty => loads.push(inst),
+            Opcode::Store { volatile: false, .. }
+                if index == 1 && direct && body.operand_type(context, op.operands[0]) == Some(ty) =>
+            {
+                stores.push(inst)
+            }
+            _ => return false,
+        }
+    }
+    let tree = llrm_mir::domtree::DomTree::of(body);
+    loads.iter().all(|&load| stores.iter().any(|&store| tree.instruction_dominates(body, store, load)))
 }
 
 /// The internal, initialized, not yet constant globals every use of which,
