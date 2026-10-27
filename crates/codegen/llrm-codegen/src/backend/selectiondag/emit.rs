@@ -1648,7 +1648,7 @@ impl Emitter<'_, '_> {
         // The convention's destroyed registers and the ones the arguments
         // went in (the callee's to use); a result joins them in `deliver`.
         let written = self.ctx.conventions.written(callee);
-        let mut clobbers = match &written {
+        let clobbers = match &written {
             Some((whole, _)) => whole.clone(),
             None => {
                 let mut clobbers =
