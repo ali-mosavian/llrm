@@ -682,6 +682,12 @@ fn load_folded(
         return None;
     };
     let Some(Loc::Mem(cell)) = insns[loads[&load]].what.as_ref().and_then(|w| w.sources.first()) else { return None };
+    // The memory operand has the instruction's width: a word read as its low
+    // byte, or a byte as a word, is not the same instruction.
+    let read = if load == second.value { second } else { first };
+    if read.width != cell.width || kept.width != cell.width {
+        return None;
+    }
     let held = if swapped {
         [Loc::Held(kept), Loc::Mem(cell.clone())]
     } else if load == second.value {
@@ -1094,5 +1100,30 @@ mod tests {
             insn(2, Operation::Compare, "cmp", vec![], vec![held(8), held(3)], vec![], vec![8, 3]),
         ]);
         assert!(matches!(loads_folded(&past).blocks[0].insns[2].what.as_ref().unwrap().sources[0], Loc::Held(_)));
+    }
+
+    /// regparm3_matrix_22 and _4: a word load read by a byte `add`/`xor` (the
+    /// low byte of the value) folded to `add al, word ptr [bp+0xc]`, a width
+    /// the encoder refuses (compile failure). The memory operand is the
+    /// instruction's width, so only a load of that width folds.
+    #[test]
+    fn test_a_word_load_read_as_a_byte_is_not_folded() {
+        let cell = llrm_lir::Mem::new(None, 2);
+        let load = insn(
+            0,
+            Operation::Move,
+            "mov",
+            vec![Loc::Held(Held { value: 8, width: 2 })],
+            vec![Loc::Mem(cell)],
+            vec![8],
+            vec![],
+        );
+        let byte = |value| Loc::Held(Held { value, width: 1 });
+        let body = body_of(vec![
+            load,
+            insn(1, Operation::Binary, "add", vec![byte(4)], vec![byte(3), byte(8)], vec![4], vec![3, 8]),
+        ]);
+        let done = loads_folded(&body);
+        assert!(matches!(done.blocks[0].insns[1].what.as_ref().unwrap().sources[..], [Loc::Held(_), Loc::Held(_)]));
     }
 }
