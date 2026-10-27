@@ -694,3 +694,24 @@ fn a_fake_use_compiles_to_no_code() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("fake"), "{listing}");
 }
+
+/// A variable of zeros in LLVM IR (`@c = internal global i32 0`) went into
+/// `_DATA` as `db 0,0,0,0`: every zero static stored its bytes in the image,
+/// and `-mbss-begin` found no `_BSS` to open. It is uninitialised data, as
+/// LLVM's `getKindForGlobal` makes it; a constant of zeros and a nonzero
+/// initial value stay in `_DATA`.
+#[test]
+fn a_zero_static_in_llvm_ir_is_uninitialised_data() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                @zero = internal global i32 0, align 4\n\
+                @three = internal global i32 3, align 4\n\
+                @ro = internal constant i32 0, align 4\n\
+                define i32 @f() {\n  store volatile i32 1, ptr @zero\n  %a = load volatile i32, ptr @zero\n  store volatile i32 1, ptr @three\n  %b = load volatile i32, ptr @three\n  %c = load volatile i32, ptr @ro\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  ret i32 %t\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bss = listing.split(".data?").nth(1).unwrap_or_default().split(".code").next().unwrap();
+    assert!(bss.contains("_zero") && bss.contains("dup (?)"), "{listing}");
+    assert!(!bss.contains("_three") && !bss.contains("_ro"), "{listing}");
+    assert!(listing.split(".data?").next().unwrap().contains("_three"), "{listing}");
+}
