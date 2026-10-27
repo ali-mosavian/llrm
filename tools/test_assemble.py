@@ -532,3 +532,25 @@ def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
     assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed
+
+
+def test_the_last_alone_slot_is_for_urgent_prs_only(tmp_path, monkeypatch):
+    import pytest  # noqa: PLC0415
+
+    """Every alone slot was held by checks of ordinary PRs (and by orphaned warm-ups) while landing fixes waited; the last slot is reserved for the PRs of urgent.txt."""
+    root = tmp_path / "slots"
+    held = [ps._claim_slot(root, 3) for _ in range(2)]
+    assert sorted(slot for slot, _ in held) == [0, 1]
+
+    def sleep(_):
+        raise TimeoutError("an ordinary PR waits for a slot")
+
+    monkeypatch.setattr(ps.time, "sleep", sleep)
+    with pytest.raises(TimeoutError):
+        ps._claim_slot(root, 3)
+    slot, lock = ps._claim_slot(root, 3, urgent=True)
+    assert slot == 2, "the reserved slot goes to an urgent PR"
+    lock.close()
+    (tmp_path / "urgent.txt").write_text("# fixes\n5073 5125 # docs\n5123\n")
+    assert ps.urgent_numbers({"LAND_TMP": str(tmp_path)}) == {"5073", "5125", "5123"}
+    assert ps.urgent_numbers({"LAND_TMP": str(tmp_path / "none")}) == set()
