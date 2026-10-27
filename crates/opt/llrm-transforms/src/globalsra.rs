@@ -161,7 +161,97 @@ pub fn split(
             changed.insert(function);
         }
     }
+    let reached = reaching(module);
+    changed.extend(forwarded(module, &reached, &mut trees));
     changed.into_iter().collect()
+}
+
+/// `forwardStoredOnceStore`: an internal variable stored once, a constant that
+/// is not its initializer, has each load in the storing function that the store
+/// dominates replaced by the constant.
+fn forwarded(
+    module: &mut Module,
+    reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
+    trees: &mut BTreeMap<GlobalId, DomTree>,
+) -> BTreeSet<GlobalId> {
+    let held = held(module);
+    let mut plans: Vec<(GlobalId, Vec<InstId>, llrm_mir::context::ConstantId)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Variable(variable) = &global.kind else { continue };
+        let id = GlobalId(at as u32);
+        let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+        let Some(initializer) = variable.initializer else { continue };
+        if !internal || variable.constant || variable.externally_initialized || held.contains(&id) {
+            continue;
+        }
+        // Every use a direct, simple load or store (`GlobalStatus`), one store.
+        let mut store: Option<(GlobalId, InstId, llrm_mir::context::ConstantId)> = None;
+        let mut loads: Vec<(GlobalId, InstId)> = Vec::new();
+        let mut plain = true;
+        for (&function_id, table) in reached {
+            let Some(reach) = table.get(&id) else { continue };
+            let Some(reach) = reach else {
+                plain = false;
+                break;
+            };
+            let GlobalKind::Function(function) = &module.globals[function_id.0 as usize].kind else { continue };
+            if !reach.moved.is_empty() {
+                plain = false;
+                break;
+            }
+            for &(inst, index) in &reach.uses {
+                match function.instruction(inst).opcode {
+                    Opcode::Load { volatile: false, .. } if index == 0 => loads.push((function_id, inst)),
+                    Opcode::Store { volatile: false, .. } if index == 1 => {
+                        let Operand::Constant(value) = function.instruction(inst).operands[0] else {
+                            plain = false;
+                            break;
+                        };
+                        if store.replace((function_id, inst, value)).is_some() {
+                            plain = false;
+                            break;
+                        }
+                    }
+                    _ => plain = false,
+                }
+            }
+            if !plain {
+                break;
+            }
+        }
+        let Some((owner, store, value)) = store.filter(|_| plain && !loads.is_empty()) else { continue };
+        if value == initializer {
+            continue;
+        }
+        let GlobalKind::Function(function) = &module.globals[owner.0 as usize].kind else { continue };
+        let value_ty = module.context.get(value).ty;
+        let tree = trees.entry(owner).or_insert_with(|| DomTree::of(function));
+        let dominated: Vec<InstId> = loads
+            .iter()
+            .filter(|&&(function_id, load)| {
+                function_id == owner
+                    && function.instruction(load).ty == value_ty
+                    && tree.instruction_dominates(function, store, load)
+            })
+            .map(|&(_, load)| load)
+            .collect();
+        if !dominated.is_empty() {
+            plans.push((owner, dominated, value));
+        }
+    }
+    let mut changed = BTreeSet::new();
+    for (owner, loads, value) in plans {
+        let GlobalKind::Function(function) = &mut module.globals[owner.0 as usize].kind else { continue };
+        for load in loads {
+            let Some(result) = function.instruction(load).result else { continue };
+            function.replace_all_uses_with(result, Operand::Constant(value));
+            if function.erase(load).is_ok() {
+                changed.insert(owner);
+            }
+        }
+        trees.remove(&owner);
+    }
+    changed
 }
 
 /// The globals another global's initializer names.
