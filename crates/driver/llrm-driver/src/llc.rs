@@ -346,6 +346,7 @@ pub fn compiled_dumping(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
+    refuse_debug_format(flags, format.name(), bound.target.name())?;
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
@@ -385,6 +386,32 @@ fn libm_calls(
             (name, number, symbol)
         })
         .collect()
+}
+
+/// `-gcodeview` and `-gtd` where the object format cannot carry them, with the
+/// words the debug writers use: an object that holds another flavor than the
+/// one asked for must not be written.
+fn refuse_debug_format(
+    flags: &Flags,
+    format: &str,
+    target: &str,
+) -> Result<(), String> {
+    use llrm_object::debug::Format;
+    if !flags.debug {
+        return Ok(());
+    }
+    match flags.debug_format {
+        Format::CodeView if !matches!(format, "omf" | "coff") => {
+            Err(format!("-gcodeview: the {format} object format cannot carry CodeView"))
+        }
+        Format::TurboDebugger if format != "omf" => {
+            Err(format!("-gtd: the {format} object format cannot carry Turbo Debugger's information"))
+        }
+        Format::TurboDebugger if !target.ends_with("m16") => {
+            Err("-gtd: Borland's records are 16-bit; use a 16-bit target".to_owned())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A C `static` function may be entered by a near call wherever only its own
