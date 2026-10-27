@@ -1312,7 +1312,7 @@ fn set_odds(
     let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
     // The pieces a block became: it, then the blocks after it in the body that
     // no IR block starts.
-    let first_of_ir: std::collections::HashSet<i64> = block_at.values().copied().collect();
+    let first_of_ir: HashSet<i64> = block_at.values().copied().collect();
     let mut piece_of: HashMap<i64, i64> = HashMap::default();
     let mut current = None;
     for one in &body.blocks {
