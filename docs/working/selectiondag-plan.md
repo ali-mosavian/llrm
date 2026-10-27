@@ -216,7 +216,6 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
-| SD204 | sdag-b | wide `SETCC` ordering as a select of two compares, not the `SETCCCARRY` form | `selectiondag/legalize_types.rs` |
 | SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form) | `selectiondag/div_combine.rs` |
 | SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
 | SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86/src/dag/x86isd.rs` |
@@ -232,9 +231,11 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD227 | sdag-b | `visitBSWAP`: no half-width `bswap (shl x, c)` form, no `bswap (bitreverse x)` canonicalisation | `selectiondag/bswap_combine.rs` |
 | SD219 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
+| SD223 | sdag-b | w12, m16: tuned for size, a constant memset whose stores take more bytes than a `rep stosb` fill is the fill; the pin counts stores (`MaxStoresPerMemsetOptSize`) | `selectiondag/builder/memops.rs` |
 | SD226 | sdag-b | w11: a store of an x87 `fp_round` that nothing else reads is one truncating `fst`; the pin keeps the stack round trip (`f64 -> f32` is Expand), the old selector stores once | `selectiondag/x86_preprocess.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
 | SD312 | sdag-b | `visitBSWAP` has no half-width `shl` fold (no truncate-free query) and no `foldBitOrderCrossLogicOp` | `selectiondag/dag_combiner.rs` |
+| DIV-OPTSIZE-1 | sdag-b | deliberate, size-driven: at `-Os` a constant divide stays a `div` (`isIntDivCheap` is true for `optsize` as well as `minsize`; the pin: `minsize` only). Flipping it: m32 -Os +250 B, m16 -Os +301 B, only matmul -3 and x_life -18/-13 gain. Exit: keep the divide unless the expansion forces spills (matmul's `urem i16 %x,3` +59 B, 4 spill slots) | `selectiondag/dag_function.rs` |
 | SD222 | sdag-b | w12, QB: the entry block's `store 0` / `memset 0` to a local nothing has touched yet are not lowered when the runtime builds and zero-fills the frame (`B$ENRA`); the pin has no such runtime | `backend/prezeroed.rs` |
 | SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
 

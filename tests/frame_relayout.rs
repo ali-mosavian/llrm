@@ -4,7 +4,7 @@
 //! whole backend (a quarter to a third of the backend's time on QCport); it is
 //! made from the first run's frame now (docs/optimizations/second-frame.md).
 
-use std::process::Command;
+mod common;
 
 /// (program, flags) whose frames reach past one-byte displacements and spill.
 // shellsort -m32 left the list: with EBP a value register (no frame pointer) it
@@ -20,7 +20,7 @@ fn compiled(
 ) -> (Vec<u8>, String) {
     let scratch = tempfile::tempdir().unwrap();
     let source = format!("{}/bench/{program}/{program}.c", env!("CARGO_MANIFEST_DIR"));
-    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let mut command = common::cc::llrm_c();
     command
         .current_dir(scratch.path())
         .args(flags)

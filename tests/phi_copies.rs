@@ -1,7 +1,7 @@
 //! A loop's phi results are its arguments' registers where they do not
 //! interfere.
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -9,7 +9,7 @@ fn listing(
 ) -> String {
     let source = format!("{}/{source}", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486"])
         .args(if flags.iter().any(|flag| flag.starts_with("-O")) { &[][..] } else { &["-O2"][..] })
