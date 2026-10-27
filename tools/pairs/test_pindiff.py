@@ -240,3 +240,19 @@ def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
     after = "\n".join(pindiff.table([row("a", 124, 379), row("b", 50, 100), row("new", 1, 1)], old=False))
     assert rowdelta.parse(before)["a"] == (134, 100, 462, 296)
     assert rowdelta.deltas(before, after) == ["a: ins 134->124 (pin 100), nopad 462->379 (pin 296)"]
+
+
+def test_drift_lists_only_rows_that_grew_the_most_instructions_first():
+    """crc went 70 -> 129 instructions between two parity commits (2026-10-27) and nothing but a hand diff of two tables showed it; the others here held, shrank or grew only in padding-free bytes."""
+    pindiff = load("pindiff")
+    drift = load("drift")
+
+    def row(name, ins, free):
+        return {"name": name, "ins": ins, "pin_ins": 69, "bytes": free + 4, "free": free, "pin_bytes": 300, "pin_free": 191, "old_bytes": None, "old_free": None}
+
+    before = "\n".join(pindiff.table([row("crc", 70, 189), row("fib", 20, 90), row("gcd", 50, 120), row("sort", 80, 300), row("new_only", 5, 5)][:4], old=False))
+    after = "\n".join(pindiff.table([row("crc", 129, 359), row("fib", 20, 90), row("gcd", 45, 100), row("sort", 80, 320), row("new_only", 9, 9)], old=False))
+    listed = drift.grown(before, after)
+    assert [name for name, *_ in listed] == ["crc", "sort"]
+    assert listed[0][1:3] == (59, 170)
+    assert drift.grown(after, before) == [("gcd", 5, 20, "gcd: ins 45->50 (+5, pin 69), nopad 100->120 (+20, pin 191)")]
