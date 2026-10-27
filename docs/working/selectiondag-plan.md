@@ -233,6 +233,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
 | SD313 | sdag-b | `visitSIGN_EXTEND_INREG` has no vector in-reg forms and no `reduceLoadWidth` narrowing of the load | `selectiondag/dag_combiner.rs` |
+| SD316 | sdag-b | tuned for size, a constant memset whose stores take more bytes than the `rep stosb` setup (`FILL_BYTES`, the old selector's rule) is a fill; the pin counts stores | `selectiondag/builder/memops.rs` |
 | SD312 | sdag-b | `visitBSWAP` has no half-width `shl` fold (no truncate-free query) and no `foldBitOrderCrossLogicOp` | `selectiondag/dag_combiner.rs` |
 | SD220 | sdag-b | w12, m16: `SinkCast` also sinks an `addrspacecast` from the segment space to the far or huge one (the pin leaves address-space casts alone, x86 has none); left in one block its zero offset crosses every block edge in a register | `llrm-transforms/src/sinkcast.rs` |
 

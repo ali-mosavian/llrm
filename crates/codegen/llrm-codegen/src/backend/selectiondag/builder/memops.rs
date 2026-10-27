@@ -19,6 +19,9 @@ use crate::backend::memcpycall::inline_widths;
 
 /// `X86Subtarget::getMaxInlineSizeThreshold`.
 const MAX_INLINE_SIZE: u64 = 128;
+/// The bytes of a constant memset's `rep stosb` setup (the old selector's
+/// `FILL_BYTES`).
+const FILL_BYTES: u64 = 3 + 4 + 2 + 3 + 2 + 2;
 
 impl Builder<'_> {
     pub(super) fn visit_intrinsic(
@@ -437,6 +440,14 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&chains)))
     }
 
+    /// The bytes of `length` bytes of constant stores: dwords (a setup and four
+    /// each, eight when alone), then a word and a byte.
+    fn stored_bytes(length: u64) -> u64 {
+        let dwords = length / 4;
+        let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
+        setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 }
+    }
+
     /// `getMemsetValue`.
     fn memset_value(
         &mut self,
@@ -720,13 +731,20 @@ impl Builder<'_> {
             }
             _ => {
                 let limit = if opt_size { 8 } else { 16 };
+                // DEVIATE SD316: tuned for size, stores that take more bytes
+                // than the fill's setup are a fill (the old selector's rule;
+                // the pin counts stores, and at m16 an 18-byte local was five
+                // dword stores, ~24 B over `rep stosb`)
+                let dear = opt_size && constant.is_some_and(|bytes| Self::stored_bytes(bytes) > FILL_BYTES);
                 let inline = match constant {
-                    Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
-                    None => None,
+                    Some(bytes) if !dear => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
+                    _ => None,
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
-                    (None, Some(bytes)) if self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) => {
+                    (None, Some(bytes))
+                        if dear || self.has_min_size() || (bytes <= MAX_INLINE_SIZE && alignment >= 4) =>
+                    {
                         self.rep_stos(root, dst, other, bytes, alignment)?
                     }
                     _ if !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
