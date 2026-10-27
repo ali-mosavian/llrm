@@ -83,7 +83,10 @@ b0:
   ret void
 }
 ";
-    assert_eq!(inferred(quiet, &["a", "b"]), [all_of(false, true, false, false, true, true), all_of(false, true, false, false, true, true)]);
+    assert_eq!(
+        inferred(quiet, &["a", "b"]),
+        [all_of(false, true, false, false, true, true), all_of(false, true, false, false, true, true)]
+    );
     let throwing = "declare void @unknown()
 
 define void @a() {
