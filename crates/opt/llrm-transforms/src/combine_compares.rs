@@ -57,7 +57,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_icmp_const::fold_icmp_inst_with_constant;
-use crate::combine_shared::{get_complexity, query};
+use crate::combine_shared::{get_complexity, has_one_use, query};
 
 /// `ICmpInst::isSigned`.
 fn is_signed(pred: IntPredicate) -> bool {
@@ -212,6 +212,9 @@ pub fn visit_icmp(
     if let Some(r) = fold_icmp_inst_with_constant(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = fold_icmp_with_ext_of_ext(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_with_cast_op_of_constant(c, inst, pred, op0, op1) {
         return r;
     }
@@ -219,6 +222,78 @@ pub fn visit_icmp(
     // foldICmpCommutative, matchSymmetricPair, foldCmpSelectOfConstants and
     // the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `foldICmpWithZextOrSext`'s extension-against-extension arm
+/// ([:6724](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp)):
+/// `icmp pred (ext X), (ext Y)` is the compare on `X` and `Y`, the narrower
+/// one extended to the wider's type when they differ (one extension must have
+/// one use). Equality, and a signed compare of two `sext`, keep the predicate;
+/// the other cases are unsigned. A `zext nneg` against a `sext` is a `sext`.
+///
+/// DEVIATE: no vectors.
+fn fold_icmp_with_ext_of_ext(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    use llrm_mir::opcode::CastOp;
+    let ext_of = |c: &Combiner, op: Operand| {
+        [CastOp::ZExt, CastOp::SExt].into_iter().find_map(|kind| {
+            pattern::cast(&query(c, Some(inst)), op, kind).map(|(_, instruction, x)| (kind, instruction.flags, x))
+        })
+    };
+    let (kind0, flags0, mut x) = ext_of(c, op0)?;
+    let (kind1, flags1, mut y) = ext_of(c, op1)?;
+    let mut signed_ext = kind0 == CastOp::SExt;
+    if kind0 != kind1 {
+        let (x_ty, y_ty) = (c.type_of(x), c.type_of(y));
+        if matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
+            && c.context.types.int_bits(x_ty) == Some(1)
+            && c.context.types.int_bits(y_ty) == Some(1)
+        {
+            let or = c.create_binop(inst, BinaryOp::Or, x, y, Flags::default());
+            let zero = c.int(x_ty, 0);
+            return Some(new_icmp(c, inst, pred, or, zero));
+        }
+        // A `zext nneg` reads as a `sext`; any other mismatch is not folded.
+        let nneg = |kind: CastOp, flags: Flags| kind == CastOp::ZExt && flags.contains(Flags::NNEG);
+        if nneg(kind0, flags0) || nneg(kind1, flags1) {
+            signed_ext = true;
+        } else {
+            return None;
+        }
+    }
+    let (x_ty, y_ty) = (c.type_of(x), c.type_of(y));
+    if x_ty != y_ty {
+        if !has_one_use(c, op0) && !has_one_use(c, op1) {
+            return None;
+        }
+        let cast = if signed_ext { CastOp::SExt } else { CastOp::ZExt };
+        let (x_bits, y_bits) = (c.context.types.int_bits(x_ty)?, c.context.types.int_bits(y_ty)?);
+        if x_bits < y_bits {
+            x = c.create_cast(inst, cast, x, y_ty, Flags::default());
+        } else if y_bits < x_bits {
+            y = c.create_cast(inst, cast, y, x_ty, Flags::default());
+        } else {
+            return None;
+        }
+    }
+    let signed_pred = matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle);
+    let narrowed = if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (signed_pred && signed_ext) {
+        pred
+    } else {
+        match pred {
+            IntPredicate::Sgt => IntPredicate::Ugt,
+            IntPredicate::Sge => IntPredicate::Uge,
+            IntPredicate::Slt => IntPredicate::Ult,
+            IntPredicate::Sle => IntPredicate::Ule,
+            other => other,
+        }
+    };
+    Some(new_icmp(c, inst, narrowed, x, y))
 }
 
 /// `foldICmpWithCastOp`'s constant arm
@@ -230,8 +305,7 @@ pub fn visit_icmp(
 /// predicate (the extended value and `C` are both non-negative), and for
 /// `sext` with an unsigned one when `C` is non-negative in the narrow type.
 ///
-/// DEVIATE: no vectors; the `trunc` arm and the extension-against-extension
-/// arm (`foldICmpWithZextOrSext`) are owed.
+/// DEVIATE: no vectors; the `trunc` arm is owed.
 fn fold_icmp_with_cast_op_of_constant(
     c: &mut Combiner,
     inst: InstId,
