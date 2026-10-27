@@ -9,6 +9,7 @@ tests/target_facts.baseline merge=union
 crates/ir/llrm-mir/src/idf_golden.txt whitespace=-trailing-space
 # Expected program output: lines end with the space printf left, which the diff check must not flag.
 crates/target/llrm-arm64/tests/darwin/*.out whitespace=-trailing-space
+tests/run/qb/*.out whitespace=-trailing-space
 # PRs that each add a row to a plan table merge as both rows.
 docs/working/selectiondag-plan.md merge=union
 docs/working/codegen-slot-table.md merge=union
@@ -17,3 +18,6 @@ docs/working/codegen-slot-table.md merge=union
 *_tests.rs merge=tests-append
 crates/frontends/qb/tests/parser.rs merge=tests-append
 tests.rs merge=tests-append
+
+# Append-only table: two PRs that each add rows at the end merge without a conflict.
+docs/working/above-main-rows.md merge=union

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_into_op.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_into_op.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_into_op.rs sha256:fe781927cf238f615b58bfcac5f4dfed113c2d2d4f168c8c1a1fa28a09f1cd82 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_into_op.rs sha256:0897bc5a41724b3a725be59763fc5959a721f4d64f93dec89f3bd86eab7ca584 -->
 
 # combine_select_into_op
 
@@ -31,3 +31,6 @@ MIR has no rename.
 %d = sub i32 %x, %y                      %s = select i1 %c, i32 %y, i32 0
 %r = select i1 %c, i32 %d, i32 %x   ==>  %r = sub i32 %x, %s
 ```
+
+## Used by
+Named by `combine_visit_select`.

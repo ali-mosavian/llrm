@@ -514,6 +514,17 @@ pub trait Target {
         wide_divisor: bool,
     ) -> Result<routines::Divide, String>;
 
+    /// `divide_routine` for a caller that reads only `used` of the results: a
+    /// target may have a shorter routine that leaves the rest unfixed.
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        _used: routines::Used,
+    ) -> Result<routines::Divide, String> {
+        self.divide_routine(signed, wide_divisor)
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(
@@ -636,6 +647,7 @@ pub trait Target {
             align: self.stack_alignment(),
             optional: self.frame_optional(),
             enter: self.frame_enter(),
+            wrap_split_size: self.frame_wrap_split_size(),
             free: false,
         }
     }
@@ -649,6 +661,12 @@ pub trait Target {
     /// Whether a frame tuned for size opens with `enter` (`calling.toml`'s
     /// `frame_enter`).
     fn frame_enter(&self) -> bool {
+        false
+    }
+
+    /// Whether a size build wraps a frame around a shared return
+    /// (`calling.toml`'s `frame_wrap_split_size`).
+    fn frame_wrap_split_size(&self) -> bool {
         false
     }
 }
@@ -672,6 +690,8 @@ pub struct FrameRegisters {
     pub optional: bool,
     /// A frame tuned for size opens with `enter`.
     pub enter: bool,
+    /// A size build may skip the frame on an early exit into a shared return.
+    pub wrap_split_size: bool,
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,

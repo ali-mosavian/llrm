@@ -36,7 +36,11 @@
 //! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
 //! to themselves). Reason: they need register classes of the matcher's output
 //! for copies. Exit: before the switch gate. Owner: sdag-d. Review
-//! 2026-12-03.
+//! 2026-12-03. Hits (vsgcc corpus, `--isel=dag`, m32 and m16, O1/O2/Os,
+//! 2026-10-27): the held unit going anyway 0, the clone 0, `BacktrackBottomUp`
+//! 15; the comparator (`BURRSort`, `checkSpecialNodes`, `BUCompareLatency`
+//! without the virtual-register cycle, `calcMaxScratches`, `closestSucc`) is
+//! the pin's.
 //!
 //! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
 //! break in `BURRSort` never fires. Reason: SD10 drops `SDLoc` and IR order.
@@ -216,6 +220,12 @@ fn is_passive(opcode: ISD) -> bool {
             | ISD::ExternalSymbol
             | ISD::FrameIndex
             | ISD::ConstantPool
+            | ISD::TargetConstantPool
+            | ISD::TargetFrameIndex
+            | ISD::TargetExternalSymbolNode
+            | ISD::JumpTable
+            | ISD::TargetJumpTable
+            | ISD::RegisterMask
             | ISD::BasicBlock
             | ISD::EntryToken
     )
