@@ -91,3 +91,18 @@ def test_start_up_objects_built_with_different_entries_do_not_share_a_path(tmp_p
     a = dosbatch.runtime_path(tmp_path, "runtime/shared/dos/m32/start.asm", ("A=1",))
     b = dosbatch.runtime_path(tmp_path, "runtime/shared/dos/m32/start.asm", ("A=1", "LL_MAIN=main_"))
     assert a != b and a.parent == b.parent == tmp_path
+
+
+def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path):
+    """A -I of llrm-c's llrm_os.h came before the row's -isystem one: os_files, os_find, os_more... called the OS layer by llrm-c's
+    pragmas and read -6 for 6 (7 programs of the DOSBox pass)."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
+    monkeypatch.delenv("LLRM_ISEL", raising=False)
+    source = tmp_path / "p.c"
+    source.write_text("int main(void) { return 0; }\n")
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: Path("/llrm-c-header-dir"))
+    command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
+    assert "/llrm-c-header-dir" not in command, command
+    assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]

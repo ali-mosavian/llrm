@@ -163,7 +163,8 @@ def compile_command(program: Program, obj: Path) -> list[str]:
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
-        dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
+        # llrm-cc reads the row's own llrm_os.h (-isystem); llrm-c's is for llrm-c's pragmas
+        dialect = [] if os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else ["-I", str(dosbatch.c_include(target, obj.parent))]
     # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
     excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
     extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
