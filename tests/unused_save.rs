@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();

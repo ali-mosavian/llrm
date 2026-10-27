@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 // The arguments are read (`a`), so the two calls stay two: with the swapped
 // arguments dead they were one call twice, `h + 1 + h`, which is `2h + 1`, and
 // the function no longer has the shape this tests.

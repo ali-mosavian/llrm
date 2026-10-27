@@ -7,8 +7,9 @@ mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/urgent.sh"; source "$HERE/tooling-current.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/refusal-lines.sh"; source "$HERE/urgent.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"; source "$HERE/runner-reload.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
+SELF_SHA=$(runner_scripts_sha "$HERE")
 while true; do
   # a merged change to the runner or a helper, or to runner.env, takes effect here, between batches (same pid and process group, so stop.sh still works)
   runner_env_load "${LAND_TMP:-/tmp/landing}/runner.env"
@@ -28,7 +29,8 @@ while true; do
   fi
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
   batch=("$n")
-  cand=($(sed -n '1,40p' $Q))
+  BATCH_CAP=${BATCH_CAP:-48}  # PRs per batch (runner.env); the window read from the queue is 24 more
+  cand=($(sed -n "1,$((BATCH_CAP + 24))p" $Q))
   # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
   if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
     # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
@@ -37,13 +39,13 @@ while true; do
     solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
     # PRs in $LAND_TMP/urgent.txt (landing fixes) are a batch of their own, in that order; the rest wait one cycle
     urgent=($(urgent_listed "${LAND_TMP:-/tmp/landing}/urgent.txt" "${cand[@]}")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
-    cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
+    cand=($(open_only "${cand[@]:0:BATCH_CAP}" 2>/dev/null)); cand=($(HEAD_MIN_AGE=$(batch_head_age $([ -z "$solo" ] && echo ${#urgent[@]} || echo 0)) aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
     # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
     tooling_current "$HERE/.." 2>>"${LAND_TMP:-/tmp/landing}/assemble.log" || echo "tooling not refreshed" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
-    cand=($(alone_filter "${cand[@]:0:16}"))
+    cand=($(alone_filter "${cand[@]:0:BATCH_CAP}"))
     asm_start=$(date +%s)
     if [ -n "$solo" ]; then batch=("${cand[@]}"); else
-    batch=($(python3 "$HERE/../parity_squash.py" assemble 16 "${cand[@]:0:40}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:16}"); fi
+    batch=($(python3 "$HERE/../parity_squash.py" assemble $BATCH_CAP "${cand[@]:0:BATCH_CAP + 24}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:BATCH_CAP}"); fi
     asm_s=$(( $(date +%s) - asm_start ))
   else
     cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
@@ -62,13 +64,14 @@ while true; do
   done
   log=${LAND_TMP:-/tmp/landing}/sqb-${batch[0]}.log
   rm -f "$log.done"
-  [ "${LAND_FAST:-}" = 1 ] && alone_warm_at_squash "$log" $(sed -n '1,16p' $Q)  # warms the verdict cache while the batch squashes, not while it tests
+  stale_batch_watch "$log"
+  [ "${LAND_FAST:-}" = 1 ] && alone_warm_at_squash "$log" $(sed -n "1,${BATCH_CAP}p" $Q)  # warms the verdict cache while the batch squashes, not while it tests
   ( flock -n 9 || { echo "waiting for the landing lock (another landing holds the checkout)" >&2; flock -x 9; }; cd $W && git fetch -q origin && git reset -q --hard && git clean -fdq && git checkout -q --detach ${LAND_TOOLS_REF:-origin/feat/parity} \
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | stamp_lines > $log ) 9>"$W.checkout.lock"
   touch "$log.done"
   for m in "${batch[@]}"; do
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
-    else why=$(grep -E "#$m: REFUSED" $log | head -1); [ -n "$why" ] || why=$(grep -E "#$m|REFUSED" $log | head -2 | tr '\n' ' '); echo "$m: REFUSED: batch $log: $(echo "$why" | cut -c1-400)"; fi
+    else echo "$m: REFUSED: batch $log: $(batch_refusal_reason "$log" "$m")"; fi
   done
 done

@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// x_hanoi2's `mv`, as cdecl: `n` is tested at once, and `from`, `to` and `via`
 /// are read after the early return for `n == 0`.
 const SOURCE: &str = r#"static long moves; static int peg[3][16], top[3];

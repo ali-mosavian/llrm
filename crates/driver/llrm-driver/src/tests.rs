@@ -769,7 +769,8 @@ fn an_explicit_cdecl_stays_cdecl_when_regcall_is_the_default() {
     );
     let (built, _) = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom", "-mregcall-default"]), &text, "c").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let body = |name: &str| listing.split(&format!("{name} proc")).nth(1).unwrap_or_default().split("endp").next().unwrap();
+    let body =
+        |name: &str| listing.split(&format!("{name} proc")).nth(1).unwrap_or_default().split("endp").next().unwrap();
     assert!(body("_a").contains("[esp+4]") || body("_a").contains("[ebp+8]"), "{listing}");
     for name in ["b_", "use_", "main_"] {
         assert!(listing.contains(&format!("{name} proc")), "{name}: {listing}");

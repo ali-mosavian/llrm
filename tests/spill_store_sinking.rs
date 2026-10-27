@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// hanoi's `n == 0` exit stored the slot of the accumulator before the test, a
 /// slot only the loop path reads: the exit touched the frame, so no prologue
 /// could be placed after it (x_hanoi at -O2 ran 19 instructions for each leaf

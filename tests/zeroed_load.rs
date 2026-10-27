@@ -4,8 +4,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();

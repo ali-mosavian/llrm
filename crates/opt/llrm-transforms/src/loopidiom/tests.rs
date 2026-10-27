@@ -322,6 +322,18 @@ fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
     assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
 }
 
+/// A function with `"no-builtins"` has every library function disabled in the
+/// pin's `TargetLibraryInfo`: x_radix (Open Watcom, `-fno-builtin`) had its
+/// zeroing loop made a memset, which the pin leaves a loop, and the unroll
+/// after it then sized the enclosing loop differently (90 to 179 bytes).
+#[test]
+fn test_a_no_builtins_function_gets_no_memset() {
+    let text = FILL.replace("define void @f(ptr %p, i32 %n) {", "define void @f(ptr %p, i32 %n) \"no-builtins\" {");
+    let after = pass_output(&text);
+    assert!(!after.contains("llvm.memset"), "{after}");
+    assert!(pass_output(FILL).contains("llvm.memset"));
+}
+
 /// The load/store/default dispatch of `getModRefInfo(Instruction)`: BasicAA
 /// answered ModRef for every instruction, so no loop with a phi could pass
 /// `mayLoopAccessLocation` and the fill above stayed a loop.

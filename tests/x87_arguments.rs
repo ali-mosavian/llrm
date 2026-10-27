@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 const KERNEL: &str = "
 extern double f(double a, float b, int n);
 double g(double x, float y) { return f(x * 0.5 + 1.0, y + 1.0f, 3); }

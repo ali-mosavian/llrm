@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// Under `LLRM_VERIFY` (the gate's) `fstp qword [esp]` had no byte price: the
 /// stack token is `sp`, which has no 32-bit-mode encoding, and the compile
 /// panicked ("no byte price for FloatStore") on qb's gcirc.c, fin.c and fout.c;

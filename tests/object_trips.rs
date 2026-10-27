@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// `dot` walks `A[i][k]` and `B[k][j]` of two 12 x 12 arrays for a run-time
 /// `n`; `through` walks pointers of unknown extent.
 const KERNEL: &str = "

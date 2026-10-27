@@ -20,6 +20,10 @@ use crate::backend::memcpycall::inline_widths;
 /// `X86Subtarget::getMaxInlineSizeThreshold`.
 const MAX_INLINE_SIZE: u64 = 128;
 
+/// The bytes of a `rep stosb` fill in real mode: `lea di`, ES set, the byte,
+/// the count, the fill, DI's save.
+const FILL_BYTES: u64 = 3 + 4 + 2 + 3 + 2 + 2;
+
 impl Builder<'_> {
     pub(super) fn visit_intrinsic(
         &mut self,
@@ -397,6 +401,26 @@ impl Builder<'_> {
         Ok(Some(self.dag.get_token_factor(&stores)))
     }
 
+    /// DEVIATE SD223 (real mode): tuned for size, a constant memset whose
+    /// stores take more bytes than a `rep stosb` fill is the fill. The pin
+    /// counts stores (`MaxStoresPerMemsetOptSize`); in real mode each dword
+    /// store carries a `66` prefix and the fill costs `FILL_BYTES`. Mirrors the
+    /// old selector's `stored_bytes` rule. Owner w12. Exit: a store-cost
+    /// hook on the target description.
+    fn fill_is_smaller(
+        &self,
+        length: u64,
+        opt_size: bool,
+    ) -> bool {
+        if !opt_size || self.target.dag.pointer.size_in_bits() != 16 {
+            return false;
+        }
+        let dwords = length / 4;
+        let (each, setup) = if dwords > 1 { (4, 6) } else { (8, 0) };
+        let stored = setup + dwords * each + if length % 4 >= 2 { 5 } else { 0 } + if length % 2 == 1 { 4 } else { 0 };
+        stored > FILL_BYTES
+    }
+
     /// `getMemsetStores`: the fill value splatted to the widest operation,
     /// truncated for the narrower ones.
     fn inline_memset(
@@ -666,7 +690,18 @@ impl Builder<'_> {
                     (true, _) => 4,
                     _ => 8,
                 };
+                // DEVIATE SD225 (real mode): tuned for size, a copy of more
+                // than `limit` pieces (dwords, then a word and
+                // a byte: no overlap) is string moves; the pin
+                // counts the overlapping last dword as one more
+                // piece of the same size and keeps four pairs, 8 bytes
+                // each here (15 bytes: 43 against 27). The old selector's rule.
+                // Owner w12. Exit: a cost hook on the target.
+                let strings = opt_size
+                    && self.arch.string_registers().is_some()
+                    && constant.is_some_and(|bytes| bytes / 4 + u64::from((bytes % 4).count_ones()) > limit as u64);
                 let inline = match constant {
+                    Some(_) if strings => None,
                     Some(bytes) if matches!(which, Intrinsic::MemCpy) => {
                         self.inline_memcpy(root, dst, other, bytes, limit, dst_align, src_align)?
                     }
@@ -729,8 +764,10 @@ impl Builder<'_> {
                     _ => 16,
                 };
                 let inline = match constant {
-                    Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, alignment)?,
-                    None => None,
+                    Some(bytes) if !self.fill_is_smaller(bytes, opt_size) => {
+                        self.inline_memset(root, dst, other, bytes, limit, alignment)?
+                    }
+                    _ => None,
                 };
                 match (inline, constant) {
                     (Some(chain), _) => chain,
@@ -776,7 +813,7 @@ impl Builder<'_> {
         if self.is_far(dst) || self.is_far(src) {
             return self.rep_movsb(chain, dst, src, size);
         }
-        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let (cx, di, si) = self.string_registers();
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let two = self.dag.get_constant(2, EVT::I8);
         let dwords = self.dag.get_node(ISD::Srl, pointer, &[count, two]);
@@ -821,7 +858,7 @@ impl Builder<'_> {
         size: SDValue,
     ) -> SDValue {
         let pointer = self.target.dag.pointer;
-        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let (cx, di, si) = self.string_registers();
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, cx, count, None);
         let mut glue = SDValue { node: copy.node, res: 1 };
@@ -877,22 +914,27 @@ impl Builder<'_> {
         };
         let (from, to) = (last(self, src), last(self, dst));
         let tail = self.constant_size(count).is_none_or(|bytes| bytes % 4 != 0);
-        let mut code = vec![0xFD, 0xF3, 0x66, 0xA5];
+        // `push ds; pop es`: both pointers are near, in DS
+        let mut code = vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5];
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
         code.push(0xFC);
-        let mut names = vec!["cx", "si", "di"];
+        let Some(strings) = self.arch.string_registers() else {
+            return self.backward_rep_movsb(chain, dst, src, size);
+        };
+        let name_of = |register| self.arch.registers().name(register).expect("a described register");
+        let mut names = vec![name_of(strings.count), name_of(strings.source), name_of(strings.destination)];
         let mut values = vec![dwords, from, to];
         if tail {
-            names.push("dx");
+            names.push(name_of(strings.tail));
             values.push(rest);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
-            clobbers: names.iter().map(|name| (*name).into()).collect(),
+            clobbers: names.iter().copied().chain(["es"]).map(Into::into).collect(),
             memory: true,
             fixups: Vec::new(),
         };
@@ -927,10 +969,12 @@ impl Builder<'_> {
         };
         let (from, to) = (last(self, src), last(self, dst));
         let block = llrm_mir::intrinsics::AsmBlock {
-            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            // `push ds; pop es`: both pointers are near, in DS; ES holds
+            // whatever the last far access left
+            code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
             inputs: vec!["cx".into(), "si".into(), "di".into()],
             outputs: Vec::new(),
-            clobbers: vec!["cx".into(), "si".into(), "di".into()],
+            clobbers: vec!["cx".into(), "si".into(), "di".into(), "es".into()],
             memory: true,
             fixups: Vec::new(),
         };
@@ -950,7 +994,7 @@ impl Builder<'_> {
         size: SDValue,
     ) -> SDValue {
         let pointer = self.target.dag.pointer;
-        let (cx, di) = (self.reg("ecx", "cx"), self.reg("edi", "di"));
+        let (cx, di, _) = self.string_registers();
         let al = self.arch.register_named("al");
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, al, value, None);
@@ -1011,6 +1055,11 @@ impl Builder<'_> {
         Ok(self.dag.get_root())
     }
 
+    /// The count, destination and source registers of a string operation.
+    fn string_registers(&self) -> (llrm_lir::registers::RegId, llrm_lir::registers::RegId, llrm_lir::registers::RegId) {
+        (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"))
+    }
+
     fn reg(
         &self,
         wide: &str,
@@ -1030,6 +1079,29 @@ impl Builder<'_> {
         self.dag.value_type(pointer) == EVT::Simple(super::super::mvt::MVT::Far)
     }
 
+    /// `getMemcpy` with `AlwaysInline` (a byval argument's copy): the loads
+    /// and stores while they fit the store limit, then X86's
+    /// `emitConstantSizeRepmov` (`rep movs`, whatever the size or alignment),
+    /// and the loads and stores whatever their number only where `rep movs`
+    /// does not apply (a far pointer).
+    pub(super) fn always_inline_memcpy(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: u64,
+        align: u64,
+    ) -> Result<Option<SDValue>, Refused> {
+        let limit = if self.has_opt_size() { 4 } else { 8 };
+        if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
+            return Ok(Some(copy));
+        }
+        if self.is_far(dst) || self.is_far(src) {
+            return self.inline_memcpy(chain, dst, src, size, usize::MAX, align, align);
+        }
+        self.rep_movs(chain, dst, src, size, align.min(4), align, align).map(Some)
+    }
+
     /// `emitRepmovs` with the block width of `emitConstantSizeRepmov`.
     fn rep_movs(
         &mut self,
@@ -1045,7 +1117,7 @@ impl Builder<'_> {
         let pointer = self.target.dag.pointer;
         let block = if self.has_min_size() { 1 } else { alignment };
         let (count, left) = (size / block, size % block);
-        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let (cx, di, si) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, cx, count, None);
         let copy = self
@@ -1074,6 +1146,28 @@ impl Builder<'_> {
             );
         if left == 0 {
             return Ok(rep);
+        }
+        // DEVIATE SD224 (real mode): tuned for size, the bytes past the last
+        // block are `movsw` and `movsb` glued after the move, not a load and a
+        // store from addresses made again (the pin's tail): 1 byte each. The
+        // old selector's tail. Owner w12. Exit: a cost hook on the target.
+        if self.has_opt_size() && self.arch.string_registers().is_some() {
+            let mut last = rep;
+            let mut rest = left;
+            for width in [2u64, 1] {
+                if rest >= width {
+                    let kind = self.dag.get_value_type_node(EVT::integer(width as u32 * 8));
+                    last = self
+                        .dag
+                        .get_node_multi(
+                            x86isd::REP_MOVS,
+                            &[EVT::OTHER, EVT::GLUE],
+                            &[SDValue { node: last.node, res: 0 }, kind, SDValue { node: last.node, res: 1 }],
+                        );
+                    rest -= width;
+                }
+            }
+            return Ok(SDValue { node: last.node, res: 0 });
         }
         // the bytes past the last block: a copy of their own, from the original
         // chain
@@ -1125,7 +1219,7 @@ impl Builder<'_> {
             2 => self.arch.register_named("ax"),
             _ => self.arch.register_named("eax"),
         };
-        let (cx, di) = (self.reg("ecx", "cx"), self.reg("edi", "di"));
+        let (cx, di, _) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);
         let copy = self

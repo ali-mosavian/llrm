@@ -42,7 +42,11 @@ fn cdecl_is_the_stack_convention_on_x86_32_wat() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-cdecl-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("c.c"), "int __cdecl a(int x, int y) { return x + y; }\nint b(int x, int y) { return x - y; }\n").unwrap();
+    std::fs::write(
+        dir.join("c.c"),
+        "int __cdecl a(int x, int y) { return x + y; }\nint b(int x, int y) { return x - y; }\n",
+    )
+    .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
