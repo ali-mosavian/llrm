@@ -1270,7 +1270,7 @@ thread_local! {
 /// (`srcorder`), IR order first. On at every width, as the pin has it: off at
 /// m16 a select could fall inside a call frame and `jumps` grew 28 B.
 fn src_order(info: &dyn SchedInfo) -> bool {
-    info.source_order() || SRC_ORDER.get() || llrm_support::env_set("LLRM_SRC_ORDER")
+    info.source_order() || SRC_ORDER.get() || llrm_support::env_flag!("LLRM_SRC_ORDER")
 }
 
 /// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman

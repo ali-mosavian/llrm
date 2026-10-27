@@ -294,7 +294,7 @@ impl Profile {
             register_capacity: arch.register_capacity(),
             general: general_registers(arch),
             spaces: arch.layout().spaces.roles,
-            private: private_convention(arch, llrm_support::env_set("LLRM_PRIVATE_WATCALL")),
+            private: private_convention(arch, llrm_support::env_flag!("LLRM_PRIVATE_WATCALL")),
             calling: Some(llrm_target::calling::Stated(arch.calling())),
             foreign: arch.flat_foreign(),
             ports: arch.flat_ports(),
