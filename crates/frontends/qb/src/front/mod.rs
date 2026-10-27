@@ -8,7 +8,7 @@ pub mod classes;
 pub mod explain;
 pub mod kw;
 mod kw_data;
-pub mod lexer;
+pub mod lines;
 pub mod quickr;
 pub mod reserved;
 pub mod scan;

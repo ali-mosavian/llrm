@@ -41,7 +41,7 @@ enum Cost {
 const MAX_DEPTH: u32 = 6;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
-    fn legal_operations(&self) -> bool {
+    pub(super) fn legal_operations(&self) -> bool {
         self.level >= CombineLevel::AfterLegalizeVectorOps
     }
 
@@ -54,7 +54,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(op, vt))
     }
 
-    fn fp_op_legal(
+    pub(super) fn fp_op_legal(
         &self,
         op: ISD,
         vt: EVT,

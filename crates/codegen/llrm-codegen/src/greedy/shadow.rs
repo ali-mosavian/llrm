@@ -1004,6 +1004,10 @@ pub fn decide_with_split(
     // Under RFP the x87 values take FP0..FP6 (LLVM's RFP
     // classes); a stack position an instruction names is the stackifier's.
     let floats = crate::backend::floatassign::_floating_values(body);
+    // A value named only as a byte is of the GR8 class, whose order names the
+    // high bytes too (X86RegisterInfo.td); the others hold their root.
+    let widest = crate::backend::allocate::_widest(body);
+    let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
             crate::backend::allocate::RFP.to_vec()
@@ -1011,6 +1015,14 @@ pub fn decide_with_split(
             (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
         };
         order.dedup();
+        if widest.get(&reg) == Some(&1) && !inputs.pins.contains_key(&reg) && !bytes.is_empty() {
+            let roots = order.clone();
+            let lanes: Vec<RegId> =
+                bytes.iter().copied().filter(|byte| roots.contains(&crate::model::ir::root(*byte))).collect();
+            if !lanes.is_empty() {
+                order = lanes;
+            }
+        }
         tables.orders.borrow_mut().insert(reg, order);
     }
     // DEVIATE C-LANE (the pin's regmask is per whole GR32 register): where a
