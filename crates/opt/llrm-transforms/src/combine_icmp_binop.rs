@@ -421,9 +421,53 @@ pub fn fold_icmp_bin_op(
     if let Some(r) = fold_icmp_and_xx(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: foldICmpWithTruncSignExtendedVal and
-    // foldShiftIntoShiftInAnotherHandOfAndInICmp.
+    if let Some(r) = fold_icmp_with_trunc_sign_extended_val(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    // OWED: foldShiftIntoShiftInAnotherHandOfAndInICmp.
     None
+}
+
+/// `foldICmpWithTruncSignExtendedVal`: `((x << K) a>> K) == x` is a check for
+/// a lossy signed truncation:
+/// `(add x, (1 << (KeptBits-1))) u< (1 << KeptBits)`, `KeptBits = width - K`.
+fn fold_icmp_with_trunc_sign_extended_val(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    // We are ok with 'shl' having multiple uses, but 'ashr' must be one-use.
+    let extended = |c: &Combiner, ashr: Operand, x: Operand| {
+        let (op, shl, amount, _) = binary_operator(c, ashr)?;
+        let (inner, shifted, amount0, _) = binary_operator(c, shl)?;
+        if op != BinaryOp::AShr || inner != BinaryOp::Shl || shifted != x || !has_one_use(c, ashr) {
+            return None;
+        }
+        let (masked, width) = query(c, None).int_constant(amount)?;
+        let (masked0, _) = query(c, None).int_constant(amount0)?;
+        // The shift amounts must be equal.
+        (masked == masked0 && masked != 0 && masked < u128::from(width)).then_some((masked as u32, width))
+    };
+    let (masked_bits, width) = extended(c, op0, op1).or_else(|| extended(c, op1, op0))?;
+    let dst = match pred {
+        IntPredicate::Eq => IntPredicate::Ult,
+        IntPredicate::Ne => IntPredicate::Uge,
+        _ => return None,
+    };
+    let x = if extended(c, op0, op1).is_some() { op1 } else { op0 };
+    let ty = c.type_of(x);
+    // KeptBits = bitwidth(%x) - MaskedBits
+    let kept_bits = width - masked_bits;
+    // ICmpCst = (1 << KeptBits), AddCst = (1 << (KeptBits-1))
+    let icmp_cst = 1u128 << kept_bits;
+    let add_cst = icmp_cst >> 1;
+    let add_cst = c.int(ty, add_cst);
+    let t0 = c.create_add(inst, x, add_cst);
+    let limit = c.int(ty, icmp_cst);
+    let t1 = c.create_icmp(inst, dst, t0, limit);
+    Some(Visit::Replace(t1))
 }
 
 /// `foldMultiplicationOverflowCheck`: `(-1 u/ x) u< y` and
