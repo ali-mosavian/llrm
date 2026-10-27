@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegSet;
 use llrm_lir::registers::{RegId, Regs};
+use llrm_support::hash::HashMap;
 
 use super::greedy::{GreedyEnv, RAGreedy, Stats};
 use super::inlinespiller::{InlineSpiller, Tables};
@@ -478,8 +479,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
 
 /// The successors of each block, by position.
 fn successors(body: &LirBody) -> Vec<Vec<usize>> {
-    let position: std::collections::HashMap<i64, usize> =
-        body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
+    let position: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
     body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| position.get(to).copied()).collect()).collect()
 }
 
