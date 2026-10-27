@@ -284,8 +284,11 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             build.clang.push(if level == "max" { "-O3".to_owned() } else { flag.to_owned() });
         } else if flag.starts_with("-mabi=") {
             // The backend's convention (clang's own -mabi is for other
-            // targets); it follows the table's.
+            // targets); it follows the table's. Watcom's plain `char` is unsigned.
             build.llc.push(flag.to_owned());
+            if flag == "-mabi=watcom" {
+                build.clang.push("-funsigned-char".to_owned());
+            }
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());
