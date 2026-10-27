@@ -3351,7 +3351,7 @@ fn peek_and_poke_touch_memory_every_time() {
     // in place), and a jump back to it. The address is 108 or, hoisted into bx
     // (a shorter encoding in the loop), `bx`.
     let read = regex::Regex::new(
-        r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[(?:108|bx)\]|cmp byte ptr es:\[(?:108|bx)\], \w+)\n",
+        r"(L\d+_\d+):\n\s+(?:movzx \w+, byte ptr es:\[(?:108|bx)\]|cmp byte ptr es:\[(?:108|bx)\], \w+|cmp \w+, byte ptr es:\[(?:108|bx)\])\n",
     )
     .unwrap();
     let back = |label: &str| regex::Regex::new(&format!(r"\s+j\w+ {label}\n")).unwrap().is_match(&text);
