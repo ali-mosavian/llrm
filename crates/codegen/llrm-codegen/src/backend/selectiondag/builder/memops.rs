@@ -768,7 +768,7 @@ impl Builder<'_> {
         if self.is_far(dst) || self.is_far(src) {
             return self.rep_movsb(chain, dst, src, size);
         }
-        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let (cx, di, si) = self.string_registers();
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let two = self.dag.get_constant(2, EVT::I8);
         let dwords = self.dag.get_node(ISD::Srl, pointer, &[count, two]);
@@ -813,7 +813,7 @@ impl Builder<'_> {
         size: SDValue,
     ) -> SDValue {
         let pointer = self.target.dag.pointer;
-        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let (cx, di, si) = self.string_registers();
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, cx, count, None);
         let mut glue = SDValue { node: copy.node, res: 1 };
@@ -874,10 +874,14 @@ impl Builder<'_> {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
         code.push(0xFC);
-        let mut names = vec!["cx", "si", "di"];
+        let Some(strings) = self.arch.string_registers() else {
+            return self.backward_rep_movsb(chain, dst, src, size);
+        };
+        let name_of = |register| self.arch.registers().name(register).expect("a described register");
+        let mut names = vec![name_of(strings.count), name_of(strings.source), name_of(strings.destination)];
         let mut values = vec![dwords, from, to];
         if tail {
-            names.push("dx");
+            names.push(name_of(strings.tail));
             values.push(rest);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
@@ -942,7 +946,7 @@ impl Builder<'_> {
         size: SDValue,
     ) -> SDValue {
         let pointer = self.target.dag.pointer;
-        let (cx, di) = (self.reg("ecx", "cx"), self.reg("edi", "di"));
+        let (cx, di, _) = self.string_registers();
         let al = self.arch.register_named("al");
         let count = self.dag.get_zext_or_trunc(size, pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, al, value, None);
@@ -1003,6 +1007,11 @@ impl Builder<'_> {
         Ok(self.dag.get_root())
     }
 
+    /// The count, destination and source registers of a string operation.
+    fn string_registers(&self) -> (llrm_lir::registers::RegId, llrm_lir::registers::RegId, llrm_lir::registers::RegId) {
+        (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"))
+    }
+
     fn reg(
         &self,
         wide: &str,
@@ -1037,7 +1046,7 @@ impl Builder<'_> {
         let pointer = self.target.dag.pointer;
         let block = if self.has_min_size() { 1 } else { alignment };
         let (count, left) = (size / block, size % block);
-        let (cx, di, si) = (self.reg("ecx", "cx"), self.reg("edi", "di"), self.reg("esi", "si"));
+        let (cx, di, si) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, cx, count, None);
         let copy = self
@@ -1117,7 +1126,7 @@ impl Builder<'_> {
             2 => self.arch.register_named("ax"),
             _ => self.arch.register_named("eax"),
         };
-        let (cx, di) = (self.reg("ecx", "cx"), self.reg("edi", "di"));
+        let (cx, di, _) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);
         let copy = self

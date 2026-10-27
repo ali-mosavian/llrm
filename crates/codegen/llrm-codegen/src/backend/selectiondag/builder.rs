@@ -713,32 +713,6 @@ impl Builder<'_> {
         }
     }
 
-    /// The byte register of a dword one: `EAX` -> `AL`; none for `ESI`, `EDI`.
-    fn byte_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
-        use llrm_lir::registers::RegId;
-        Some(match reg {
-            RegId::EAX => RegId::AL,
-            RegId::EBX => RegId::BL,
-            RegId::ECX => RegId::CL,
-            RegId::EDX => RegId::DL,
-            _ => return None,
-        })
-    }
-
-    /// The word register of a dword one: `EAX` -> `AX`.
-    fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
-        use llrm_lir::registers::RegId;
-        Some(match reg {
-            RegId::EAX => RegId::AX,
-            RegId::EBX => RegId::BX,
-            RegId::ECX => RegId::CX,
-            RegId::EDX => RegId::DX,
-            RegId::ESI => RegId::SI,
-            RegId::EDI => RegId::DI,
-            _ => return None,
-        })
-    }
-
     /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
     /// `Convention`: a stack parameter is a load from a fixed object (indices
     /// -1, -2, ... in parameter order), a register parameter the copy of a
@@ -1290,7 +1264,7 @@ impl Builder<'_> {
                         // required in a dword register is a dword to the
                         // allocator.
                         let word = (vt == EVT::I16 && self.target.dag.pointer == EVT::I16)
-                            .then(|| Self::word_register(reg))
+                            .then(|| self.arch.registers().view(self.arch.registers().root(reg), 16))
                             .flatten();
                         if let Some(word) = word {
                             copies.push((word, piece));
@@ -1301,7 +1275,7 @@ impl Builder<'_> {
                         // it, so extending it is a 6-byte
                         // `mov edx, 12` for a 2-byte `mov dl, 12`
                         let byte = (vt == EVT::I8 && self.target.dag.pointer == EVT::I16)
-                            .then(|| Self::byte_register(reg))
+                            .then(|| self.arch.registers().view(self.arch.registers().root(reg), 8))
                             .flatten();
                         if let Some(byte) = byte {
                             copies.push((byte, piece));

@@ -168,6 +168,10 @@ pub struct EmitContext<'a> {
     pub caller_saved: &'a std::collections::BTreeSet<llrm_lir::registers::RegId>,
     /// The stack pointer: a `CopyFromReg` of it is the base `SP`, not a value.
     pub stack_pointer: llrm_lir::registers::RegId,
+    /// The registers a string operation names, where the target fixes them.
+    pub strings: Option<llrm_target::StringRegisters>,
+    /// The target's registers: which one a narrower view of another is.
+    pub registers: &'static llrm_lir::registers::Info,
     pub conventions: &'a dyn Conventions,
     pub constants: &'a dyn ConstantCells,
     pub globals: &'a dyn GlobalMap,
@@ -771,7 +775,7 @@ impl Emitter<'_, '_> {
                     value
                 };
                 let held = self.held_operand(source)?;
-                self.arguments.push((held, Self::argument_register(register, held.width)));
+                self.arguments.push((held, self.argument_register(register, held.width)));
                 Ok(())
             }
             // A value returned in a register is required there by the `RET`,
@@ -1374,19 +1378,15 @@ impl Emitter<'_, '_> {
     /// word value required in `EAX` is a dword to the allocator, which spilled
     /// every pointer live across a call as a dword (QCport -Os: +16%).
     fn argument_register(
+        &self,
         register: llrm_lir::registers::RegId,
         width: u32,
     ) -> llrm_lir::registers::RegId {
-        use llrm_lir::registers::RegId;
-        match (width, register) {
-            (2, RegId::EAX) => RegId::AX,
-            (2, RegId::EBX) => RegId::BX,
-            (2, RegId::ECX) => RegId::CX,
-            (2, RegId::EDX) => RegId::DX,
-            (2, RegId::ESI) => RegId::SI,
-            (2, RegId::EDI) => RegId::DI,
-            _ => register,
+        let registers = self.ctx.registers;
+        if width == 2 && register.is_gpr32() {
+            return registers.view(registers.root(register), 16).unwrap_or(register);
         }
+        register
     }
 
     /// The call instruction: it destroys the caller-saved registers and may
@@ -2150,20 +2150,26 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "REP_MOVSB_16" | "REP_MOVSW_16" | "REP_MOVSD_16" => {
-                use llrm_lir::registers::RegId;
+                let Some(strings) = self.ctx.strings else {
+                    return Err(EmitError::Unsupported(
+                        "a segmented string operation at a target without segments".to_owned(),
+                    ));
+                };
+                let (counter, to_offset, from_offset, from_segment) =
+                    (strings.count, strings.destination, strings.source, strings.source_segment);
                 let (count, source, destination) = (
-                    self.accumulated(RegId::CX)?,
-                    self.offset_of_pointer(RegId::SI)?,
-                    self.offset_of_pointer(RegId::DI)?,
+                    self.accumulated(counter)?,
+                    self.offset_of_pointer(from_offset)?,
+                    self.offset_of_pointer(to_offset)?,
                 );
                 // a source in DGROUP is read through DS, which holds it: no
                 // segment to load and no override
-                let from = if self.is_dgroup_pointer(RegId::SI) {
-                    Loc::Reg(Reg { register: RegId::DS, width: 2 })
+                let from = if self.is_dgroup_pointer(from_offset) {
+                    Loc::Reg(Reg { register: from_segment, width: 2 })
                 } else {
-                    Loc::Held(self.segment_of_pointer(RegId::SI)?)
+                    Loc::Held(self.segment_of_pointer(from_offset)?)
                 };
-                let to = self.segment_of_pointer(RegId::DI)?;
+                let to = self.segment_of_pointer(to_offset)?;
                 let (source_after, destination_after, emptied) = (self.fresh(2), self.fresh(2), self.fresh(2));
                 self.push(
                     Operation::Copy,
@@ -2177,9 +2183,9 @@ impl Emitter<'_, '_> {
                     vec![Loc::Held(count), Loc::Held(source), Loc::Held(destination), from, Loc::Held(to)],
                 );
                 // a `rep` glued after this one goes on from where it stopped
-                self.accumulator.insert(RegId::CX, emptied);
-                self.accumulator.insert(RegId::SI, source_after);
-                self.accumulator.insert(RegId::DI, destination_after);
+                self.accumulator.insert(counter, emptied);
+                self.accumulator.insert(from_offset, source_after);
+                self.accumulator.insert(to_offset, destination_after);
                 return Ok(Some(()));
             }
             "REP_MOVSB_32" | "REP_MOVSW_32" | "REP_MOVSD_32" | "REP_MOVSB_64" | "REP_MOVSW_64" | "REP_MOVSD_64"
