@@ -51,7 +51,7 @@ Ours from the `ISEL_DUMP=1` stage names on render/dl: FarIndirectCalls, Optimize
 
 ## DEVIATE PASS-ORDER-1: the scheduler runs before TwoAddress and the coalescer
 
-Pin: PHIElimination, TwoAddressInstruction, RegisterCoalescer, MachineScheduler, greedy (`llc -O2 -debug-pass=Structure`, positions 14, 15, 16 of the machine passes). Ours: MachineScheduler (19), TwoAddress (24), Coalescer (25), RegAlloc (26) in `flow.rs`. The table of every machine pass, pin index against ours, is `~/scratch/w2-fe/pass-order.md` (w2, 2026-10-27): FixupSetCC also follows the scheduler here and precedes PHI elimination in the pin; ProcessImplicitDefs runs early; no PostRA sink.
+Pin: PHIElimination, TwoAddressInstruction, RegisterCoalescer, MachineScheduler, greedy (`llc -O2 -debug-pass=Structure`, positions 14, 15, 16 of the machine passes). Ours: MachineScheduler (19), TwoAddress (24), Coalescer (25), RegAlloc (26) in `flow.rs`. Measured 2026-10-27, every machine pass, pin index against ours: FixupSetCC also follows the scheduler here and precedes PHI elimination in the pin; ProcessImplicitDefs runs early; no PostRA sink.
 
 Evidence of cost: the branch `w2-poc-sched-order` (env `LLRM_POC_ORDER`, the scheduler after the coalescer, unmerged) changes 27 of 284 vsgcc objects, -735 B net; the m16 -Os program table (309) goes 144300 -> 144326 B, 8 grew, 8 shrank. The pin's three-address conversion (DEC32r to LEA32r, no flags) before the scheduler lets it move a test above the lea; ours schedules the flag-writing add.
 
