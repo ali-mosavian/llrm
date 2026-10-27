@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 207 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 209 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -44,6 +44,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_index | The rewrites of `visitGetElementPtrInst` that read its indices and flags (:3513-3705): a scaled single index, `inbounds` and `nuw` the object or the indices prove, a sum split in two GEPs, a select of constants, and `srem` as `urem`. |  | [combine_gep_index](combine_gep_index.md) |
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. |  | [combine_gep_merge](combine_gep_merge.md) |
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. |  | [combine_gep_phi](combine_gep_phi.md) |
+| combine_icmp_binop | InstCombine's `foldICmpBinOp`, the add and subtract arms ([`InstCombineCompares.cpp:5301`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L5301) at d1106deb71cc). |  | [combine_icmp_binop](combine_icmp_binop.md) |
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
 | combine_icmp_logic | `foldBooleanAndOr`: an `and` or `or` of two `i1` compares, folded to one compare. | `visit_and` and `visit_or` (the bitwise forms). | [combine_icmp_logic](combine_icmp_logic.md) |
 | combine_loadstore | InstCombine's stores and allocas: the store that cannot matter is erased, the one that cannot execute stores poison; an alloca's count is an array type and a zero-size alloca is one at the top of the entry block. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
@@ -106,6 +107,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
 | icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). |  | [icmpchain](icmpchain.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs | [indvars](indvars.md) |
+| inferalignment | Loads, stores and memory intrinsics get the alignment their pointer is known to have, as LLVM's `InferAlignment`. |  | [inferalignment](inferalignment.md) |
 | inferfunctionattrs | A library function the module only declares (`sin`, `strlen`, `memcmp`) gets the attributes the C library promises of it, as LLVM's `InferFunctionAttrsPass`. | Once, at the start of the module pipeline | [inferfunctionattrs](inferfunctionattrs.md) |
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
