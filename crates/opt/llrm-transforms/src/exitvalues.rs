@@ -55,6 +55,16 @@ pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_EXITVALUES")
 }
 
+/// `ReplaceExitVal`: which exit values a rewrite takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Replace {
+    /// `OnlyCheapRepl` (DEVIATE 11).
+    OnlyCheap,
+    /// `UnusedIndVarInLoop`: only an induction phi or its update that nothing
+    /// else in the loop reads (LSR's call, after it has removed the uses).
+    UnusedIndVarInLoop,
+}
+
 /// `RewritePhi`: an exit phi's incoming value to rewrite.
 struct RewritePhi {
     /// `PN`.
@@ -129,14 +139,47 @@ pub fn rewritten_in(
             &tti,
             size,
             header,
+            Replace::OnlyCheap,
         ) > 0;
     }
     changed
 }
 
+/// LSR's call, `rewriteLoopExitValues(L, ..., UnusedIndVarInLoop, ...)`, for
+/// the loop headed by `header`: the number of exit values replaced.
+#[allow(clippy::too_many_arguments)]
+pub fn rewritten_unused_ivs(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+    session: &mut ScevSession,
+    rewriter: &mut Expander,
+    header: BlockId,
+    size: bool,
+) -> usize {
+    let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
+    let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
+    rewrite_loop_exit_values(
+        context,
+        layout,
+        function,
+        declared,
+        outer,
+        session,
+        rewriter,
+        &tti,
+        size,
+        header,
+        Replace::UnusedIndVarInLoop,
+    )
+}
+
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1876
 /// `rewriteLoopExitValues(L, ...)` for the loop headed by `header`: the number
-/// of exit values replaced. The policy is `OnlyCheapRepl` (DEVIATE 11).
+/// of exit values replaced. The policy is `OnlyCheapRepl` (DEVIATE 11), or
+/// `replace`.
 #[allow(clippy::too_many_arguments)]
 fn rewrite_loop_exit_values(
     context: &mut Context,
@@ -149,6 +192,7 @@ fn rewrite_loop_exit_values(
     tti: &dyn ExpansionTti,
     size: bool,
     header: BlockId,
+    replace: Replace,
 ) -> usize {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let declarations: &Declarations = &outer.globals;
@@ -182,6 +226,14 @@ fn rewrite_loop_exit_values(
                     }
                     // Check that InVal is defined in the loop.
                     if !found.contains_instruction(function, inst) {
+                        continue;
+                    }
+                    // Find exit values which are induction variables in the
+                    // loop, and are unused in the loop, with the only use being
+                    // the exit block PhiNode, and the induction variable update
+                    // binary operator.
+                    if replace == Replace::UnusedIndVarInLoop && !unused_induction(&cx, se, &found, function, phi, inst)
+                    {
                         continue;
                     }
                     // Okay, this instruction has a user outside of the current
@@ -315,6 +367,69 @@ fn rewrite_loop_exit_values(
     // that the rewriter doesn't trip over it later.
     rewriter.clear_insert_point();
     replaced
+}
+
+/// `checkIsIndPhi`: `phi` is an induction phi of `l`.
+fn is_ind_phi(
+    cx: &llrm_analysis::scev::Cx,
+    se: &mut llrm_analysis::scev::ScalarEvolution,
+    l: &Loop,
+    phi: InstId,
+) -> Option<llrm_analysis::ivdescriptors::InductionDescriptor> {
+    if cx.function.instruction(phi).opcode != Opcode::Phi || l.get_loop_preheader(cx.function).is_none() {
+        return None;
+    }
+    if cx.function.parent(phi) != Some(l.get_header()) {
+        return None;
+    }
+    llrm_analysis::ivdescriptors::is_induction_phi(cx, se, phi, l.clone())
+}
+
+/// The `UnusedIndVarInLoop` test of `rewriteLoopExitValues` for `inst`, the
+/// value exit phi `pn` reads: an induction phi, or the update of one, that
+/// nothing else in the loop reads.
+fn unused_induction(
+    cx: &llrm_analysis::scev::Cx,
+    se: &mut llrm_analysis::scev::ScalarEvolution,
+    l: &Loop,
+    function: &Function,
+    pn: InstId,
+    inst: InstId,
+) -> bool {
+    let Some(result) = function.instruction(inst).result else { return false };
+    let users: Vec<InstId> = function.users(result).into_iter().map(|user| user.user).collect();
+    if function.instruction(inst).opcode == Opcode::Phi {
+        let Some(id) = is_ind_phi(cx, se, l, inst) else { return false };
+        // The only users are phis and the induction variable's update.
+        return !users
+            .iter()
+            .any(
+                |&user| match function.instruction(user).opcode {
+                    Opcode::Phi => false,
+                    Opcode::Binary(_) => Some(user) != id.induction_bin_op,
+                    _ => true,
+                },
+            );
+    }
+    // Not an induction phi: an update with an induction phi user.
+    if !matches!(function.instruction(inst).opcode, Opcode::Binary(_)) {
+        return false;
+    }
+    let mut id = None;
+    for &user in &users {
+        if user != pn {
+            if function.instruction(user).opcode != Opcode::Phi {
+                return false;
+            }
+            match is_ind_phi(cx, se, l, user) {
+                Some(found) => id = Some(found),
+                None => return false,
+            }
+        }
+    }
+    // `ID` is the last induction phi checked: with none, the update is not
+    // the induction's.
+    id.is_some_and(|id| id.induction_bin_op == Some(inst))
 }
 
 /// The instructions of `l` that are code: not a phi or a terminator, which are
