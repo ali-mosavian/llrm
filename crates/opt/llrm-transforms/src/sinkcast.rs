@@ -22,7 +22,14 @@
 //!
 //! MIRROR: `SinkCast`, the two entry conditions, the promotion of a narrow
 //! integer to the register that holds it. The address-space cast (a free one
-//! is a target's: x86 has none) is left alone.
+//! is a target's: x86 has none) is left alone, except as below.
+//!
+//! DEVIATE CGP3 (owner sdag-c; exit: a target hook for a free or cheap
+//! address-space cast, as the pin's): a cast of an `inttoptr` (a
+//! segment number) to a wider pointer, a selector and a zero offset, is made
+//! again in each block that reads it. Held across a loop its zero offset sat in
+//! a register (`xor bx,bx; es:[bx+si+88]`, nbody frame 94 -> 206 B); made in
+//! the reading block the address matcher drops it.
 //!
 //! # Example
 //! `test_a_pointer_cast_read_in_another_block_is_made_there` in
@@ -34,7 +41,7 @@
 use llrm_mir::context::Context;
 use llrm_mir::edit::Position;
 use llrm_mir::lowering::Lowering;
-use llrm_mir::module::{BlockId, Function, InstId, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::types::Type;
 
@@ -148,7 +155,16 @@ pub fn casts_sunk(
             && promoted(lowering, from) == promoted(lowering, to)
             && !matches!(kind, CastOp::FPExt | CastOp::FPTrunc);
         let expands = matches!(kind, CastOp::ZExt | CastOp::SExt) && to > widest(lowering);
-        if (noop || expands) && sunk(function, cast) {
+        let farther = kind == CastOp::AddrSpaceCast
+            && to > from
+            && matches!(
+                one.operands[0],
+                Operand::Value(value) if matches!(
+                    function.value(value).def,
+                    ValueDef::Instruction(made) if function.instruction(made).opcode == Opcode::Cast(CastOp::IntToPtr)
+                )
+            );
+        if (noop || expands || farther) && sunk(function, cast) {
             changed = true;
         }
     }
