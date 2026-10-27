@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [list(ps.ALWAYS_SCANNERS)] and asked[0][:3] == ["docs_in_sync", "docs_links", "no_local_paths"]
+    assert asked == [sorted(ps.ALWAYS_SCANNERS)] and {"docs_in_sync", "docs_links", "no_local_paths"} <= set(asked[0])
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1707,3 +1707,36 @@ def test_the_head_red_limit_is_read_from_the_environment():
     """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"
+
+
+def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
+    """Ten batches showed `workspace-check 58%`, but the scanners (a cargo test build of the integration targets) ran inside it with no stage line, so its split was a guess.
+    The default path now prints `STAGE scanners` after the build check."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
+    assert gate in source, "the default path has a scanners stage"
+    assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
+
+
+def test_the_drift_prone_scanners_run_every_batch():
+    """A red scanner outside the default scan hid on parity for hours (the SD registry, 12:03 on). no_todo, tracked_build_products, block_list_ratchet and no_kill_by_pattern read
+    sources and the file list (0.02-5.6 s each on parity, all green) and are in the default scan."""
+    assert {"no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern"} <= set(ps.ALWAYS_SCANNERS)
+
+
+def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and_not_otherwise():
+    """It runs three release bin builds (67 s at load 80) and was in no default scan; it now runs on a diff that touches a build.rs, a Cargo.toml/lock or a selector-generator input,
+    and the full scan (tests=True) always runs it."""
+    assert "build_script_reruns" not in ps.scanners_for(["docs/a.md", "crates/opt/llrm-transforms/src/x.rs"])
+    for touched in ["crates/codegen/llrm-codegen/build.rs", "Cargo.lock", "crates/opt/llrm-x/Cargo.toml", "crates/target/llrm-x86/src/isel/patterns.isel", "crates/backend/llrm-iselgen/src/build.rs"]:
+        assert "build_script_reruns" in ps.scanners_for([touched]), touched
+    asked = []
+    ps.landing_scanner_failures(["crates/codegen/llrm-codegen/build.rs"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    ps.landing_scanner_failures(["docs/a.md"], False, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0] and "build_script_reruns" not in asked[1]
+    asked.clear()
+    ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
+    assert "build_script_reruns" in asked[0]
+
