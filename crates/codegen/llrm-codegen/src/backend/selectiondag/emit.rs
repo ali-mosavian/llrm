@@ -1928,7 +1928,7 @@ impl Emitter<'_, '_> {
         // The stack pointer itself (a byval argument's address) is in SS.
         if self.sp_values.contains(&origin) {
             let held = self.fresh(2);
-            let ss = Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 });
+            let ss = Loc::Reg(Reg { register: self.ctx.registers.stack_segment_register(), width: 2 });
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![ss]);
             return Ok(held);
         }
@@ -2394,7 +2394,7 @@ impl Emitter<'_, '_> {
                 } else if self.is_frame_pointer(from_offset) {
                     // a frame object or the argument area: SS, read with an
                     // override and no selector copied
-                    Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
+                    Loc::Reg(Reg { register: self.ctx.registers.stack_segment_register(), width: 2 })
                 } else {
                     Loc::Held(self.segment_of_pointer(from_offset)?)
                 };
