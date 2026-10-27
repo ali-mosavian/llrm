@@ -909,7 +909,10 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
+            // `combineMul` asks `hasMinSize` (-Oz) only. DEVIATE SD248: at
+            // m16 -Os also keeps the `imul` (a 66-prefixed `lea` chain costs
+            // more bytes).
+            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.min_size || (cpu.size && m16) },
             &selector,
             &mut hooks,
             &Info { source_order: true },

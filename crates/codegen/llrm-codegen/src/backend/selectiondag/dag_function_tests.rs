@@ -728,11 +728,12 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
     assert!(names(true).iter().any(|n| n == "idiv"), "-Os: the divide stays: {:?}", names(true));
 }
 
-/// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
-/// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
-/// first): bench/mandel.nib m16 -Os, +8 B.
+/// `x * 24` at m32 `-Os` stayed one `imul` (`cpu.size` was taken for
+/// `hasMinSize`), where the pin decomposes it at optsize and keeps the `imul`
+/// only at `-Oz` (`combineMul`): x_dct 11 imul against the pin's 0, bintree 5
+/// against 2 (m32 -Os, +60% and +51% clocks). m16 -Os keeps the `imul` (SD248).
 #[test]
-fn at_os_a_multiply_by_a_constant_stays_one_imul() {
+fn a_multiply_by_a_constant_keeps_its_imul_only_at_minsize_or_m16_os() {
     let module = llrm_mir::parse::module(
         "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a) {
@@ -742,15 +743,21 @@ define i32 @f(i32 %a) {
 ",
     )
     .expect("parses");
-    let names = |size: bool| {
+    let names = |size: bool, min_size: bool| {
         let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
         cpu.size = size;
+        cpu.min_size = min_size;
         let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
     };
     let count = |names: &[String], one: &str| names.iter().filter(|n| *n == one).count();
-    assert_eq!((count(&names(false), "imul"), count(&names(false), "shl")), (0, 1), "speed: lea and shift");
-    assert_eq!((count(&names(true), "imul"), count(&names(true), "shl")), (1, 0), "-Os: {:?}", names(true));
+    assert_eq!((count(&names(false, false), "imul"), count(&names(false, false), "shl")), (0, 1), "speed");
+    assert_eq!(
+        (count(&names(true, false), "imul"), count(&names(true, false), "shl")),
+        (0, 1),
+        "-Os: the pin decomposes"
+    );
+    assert_eq!(count(&names(true, true), "imul"), 1, "-Oz: {:?}", names(true, true));
 }
 
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
