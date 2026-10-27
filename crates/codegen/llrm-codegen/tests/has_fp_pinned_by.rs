@@ -107,3 +107,37 @@ fn test_a_jump_table_is_not_an_opaque_sp_adjustment() {
     assert_eq!(pinned(jump(vec![]), &registers), Some(Pinned::OpaqueSpAdjustment), "premise: a bare indirect jump");
     assert_eq!(pinned(jump(vec![1, 2]), &registers), None);
 }
+
+/// An indirect call inside a call frame was read as an opaque stack adjustment
+/// ("the callee may pop"): `long through(long x) { return chosen(x + 1); }`
+/// kept `ebp` (tail_calls_edges, 3 instructions over the pin). The frame's
+/// pseudos name the bytes the callee pops.
+#[test]
+fn test_an_indirect_call_in_a_call_frame_is_a_depth_the_walk_follows() {
+    let registers = llrm_x86_m32::M32.frame_registers();
+    let imm = |value| Loc::Imm(llrm_codegen::model::ir::Imm { value, width: 4, address: None });
+    let pseudo =
+        |name: &str, sources| Semantics { name: Some(name.into()), sources, ..Semantics::new(Operation::Barrier) };
+    let call = Semantics { indirect: true, ..Semantics::new(Operation::Call) };
+    let body = |whats: Vec<Semantics>| {
+        let insns = whats
+            .into_iter()
+            .enumerate()
+            .map(|(at, what)| {
+                Arc::new(Insn::new(at as i64, Some((at as i64, at as i64 + 1)), Some(what), vec![], vec![]))
+            })
+            .collect();
+        LirBody {
+            bits: 32,
+            registers: Some(llrm_codegen::backend::registerinfo::Regs(llrm_x86_m32::M32.registers())),
+            ..LirBody::new("f", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default())
+        }
+    };
+    let framed = body(vec![
+        pseudo("call_frame_setup", vec![imm(4), imm(0), imm(0)]),
+        call.clone(),
+        pseudo("call_frame_destroy", vec![imm(4), imm(0)]),
+    ]);
+    assert_eq!(pinned_by(&body(vec![call]), &registers, &Default::default()), Some(Pinned::OpaqueSpAdjustment), "premise: no frame");
+    assert_eq!(pinned_by(&framed, &registers, &Default::default()), None);
+}
