@@ -269,3 +269,20 @@ fn test_the_difference_of_huge_pointers_is_not_an_address_difference() {
     let printed = print_module_values(&module);
     assert!(!printed.contains("ptrtoaddr"), "{printed}");
 }
+
+/// A constant `getelementptr` was an unknown, so IVUsers (examples/mandel -Os,
+/// +23 bytes) followed a load the pin leaves alone: its offset is `(6 + @g)`
+/// there.
+#[test]
+fn test_a_constant_gep_is_an_offset_of_its_base() {
+    let text = "target datalayout = \"e-p:16:16-i16:16\"\n\
+        @g = constant [16 x i8] zeroinitializer\n\
+        define ptr @f(i16 %x) {\n\
+          %p = getelementptr inbounds nuw i8, ptr getelementptr inbounds nuw (i8, ptr @g, i16 6), i16 %x\n\
+          ret ptr %p\n\
+        }\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let line = printed.lines().find(|l| l.starts_with("%p")).expect("%p is printed");
+    assert!(line.contains("6 + %x + @g"), "{printed}");
+}
