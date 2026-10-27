@@ -339,3 +339,12 @@ fn an_unread_result_is_not_computed() {
         .expect("the function lowers");
     assert!(!asm.contains("#200"), "{asm}");
 }
+
+/// The loads that fed a store to a write-only global stayed after the store
+/// was removed: byvalue_struct_address kept five `ldr` the pin does not have.
+#[test]
+fn the_operands_of_a_removed_store_go_with_it() {
+    let asm = driver::assembly(include_str!("data/loads_of_written_only_global.ll"), Platform::Darwin, true)
+        .expect("the function lowers");
+    assert!(!asm.contains("ldr"), "{asm}");
+}
