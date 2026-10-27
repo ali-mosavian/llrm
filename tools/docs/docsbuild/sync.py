@@ -27,7 +27,7 @@ sys.path.insert(0, str(HERE.parent))
 import passdocs  # noqa: E402
 
 OUT = "docs/optimizations"
-COMMAND = "python3 tools/docsbuild/build.py --sync"
+COMMAND = "python3 tools/docs/docsbuild/build.py --sync"
 URL = f"{passdocs.REPO}/blob/main"
 SECTIONS = ("Runs", "Used by", "Provides")
 KEY = re.compile(r"^<!-- src: (\S+) sha256:([0-9a-f]{64}) -->$")
