@@ -1455,14 +1455,26 @@ def test_a_drop_after_the_scan_costs_one_rescan_for_the_rest_not_one_per_pr():
     assert check("d", infos, ["x", "y"], ["d"]) == "" and len(groups) == 2, "a new drop is scanned again"
 
 
-def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
-    """When the remaining tree is red the culprit is still found one PR at a time, and the group is not rescanned for every PR."""
-    groups, ones = [], []
-    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(1) or {"integration x::t"}, rescan_one=lambda n, info: ones.append(n) or ({"integration x::t"} if n == "c" else set()))
+def test_a_red_group_scan_finds_its_culprit_by_halving_and_refuses_only_that_pr():
+    """11:35-11:43: a red group scan fell back to a rescan of every PR in turn (60-90 s each, a PR a minute); halving finds the one in log2(n) scans."""
+    scans, ones = [], []
+    red = {"integration x::t"}
+    rescan_group = lambda g, infos: scans.append(list(g)) or (red if "f" in g else set())
+    check = ps.make_rescan_check(rescan_group=rescan_group, rescan_one=lambda n, info: ones.append(n) or (red if n == "f" else set()))
+    group = list("bcdefghi")
+    infos = {n: {"headRefOid": n} for n in group}
+    whys = {n: check(n, infos, ["x"], group) for n in group}
+    assert [n for n, why in whys.items() if why] == ["f"] and "fails integration x::t" in whys["f"]
+    assert len(scans) <= 1 + 3, f"one group scan and log2(8) halvings, got {len(scans)}"
+    assert ones == ["f"], f"one alone check of the culprit, not one per PR: {ones}"
+
+
+def test_a_red_group_with_no_single_culprit_falls_back_to_a_rescan_per_pr():
+    """An interaction: no half is red alone, so each PR is rescanned alone, as before."""
+    ones = []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: {"integration x::t"} if len(g) > 2 else set(), rescan_one=lambda n, info: ones.append(n) or set())
     infos = {n: {"headRefOid": n} for n in "bcd"}
-    whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
-    assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
-    assert len(groups) == 1 and ones == ["b", "c", "d"]
+    assert [check(n, infos, ["x"], list("bcd")) for n in "bcd"] == ["", "", ""] and ones[1:] == ["b", "c", "d"], "after one alone check of the last candidate"
 
 
 def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):

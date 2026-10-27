@@ -1074,10 +1074,23 @@ def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
     return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
 
 
+def rescan_culprit(group: list[str], infos: dict[str, dict], rescan_group, rescan_one) -> tuple[str, set[str]] | None:
+    """(member, its red scanners) when halving the red `group` ends on a member that is red alone, else None (an interaction): log2(n) group scans and one alone, where each member was rescanned in turn
+    (~60-90 s each: 11:35-11:43 landed one PR a minute)."""
+    pool = list(group)
+    while len(pool) > 1:
+        half = pool[: len(pool) // 2]
+        pool = half if rescan_group(half, infos) else pool[len(pool) // 2 :]
+    if pool and (failed := rescan_one(pool[0], infos[pool[0]])):
+        return pool[0], failed
+    return None
+
+
 def make_rescan_check(rescan_group=rescan_group_alone, rescan_one=rescan_alone):
     """`check(number, infos, late_drops, group) -> why`: after the batch dropped a PR whose scan had passed, the remaining members' tree is scanned ONCE per new drop, not once per PR (~30 s each:
-    10:48-10:50 squashes ran 35 s apart, 4 s of it the squash). Green: the rest land without a rescan until another PR is dropped. Red: each PR is rescanned alone, as before, to find the one."""
-    state = {"green": -1, "tried": -1}
+    10:48-10:50 squashes ran 35 s apart, 4 s of it the squash). Green: the rest land without a rescan until another PR is dropped. Red: the member that turns it red is found by halving and refused when
+    its turn comes, the others land; when halving finds none (an interaction), each PR is rescanned alone, as before."""
+    state = {"green": -1, "tried": -1, "culprit": None}
 
     def check(number: str, infos: dict[str, dict], late_drops: list[str], group: list[str]) -> str:
         if not late_drops:
@@ -1086,9 +1099,16 @@ def make_rescan_check(rescan_group=rescan_group_alone, rescan_one=rescan_alone):
             return ""
         if state["tried"] != len(late_drops):
             state["tried"] = len(late_drops)
+            state["culprit"] = None
             if not rescan_group(group, infos):
                 state["green"] = len(late_drops)
                 return ""
+            state["culprit"] = rescan_culprit(group, infos, rescan_group, rescan_one)
+        if state["culprit"]:
+            member, failed = state["culprit"]
+            if number != member:
+                return ""
+            return rescanned_refusal(number, infos[number], late_drops, rescan=lambda *_: failed)
         return rescanned_refusal(number, infos[number], late_drops, rescan=rescan_one)
 
     return check
