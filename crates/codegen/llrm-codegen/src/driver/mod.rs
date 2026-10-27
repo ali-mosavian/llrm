@@ -517,7 +517,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::funnel::expanded(module, |operation| options.arch.expands(operation)),
+                |module| crate::backend::funnel::expanded(
+                    module,
+                    |operation| options.arch.expands(operation),
+                    |bits| crate::backend::funnel::kept_for_isel(options.isel, bits),
+                ),
             )
     })?;
     timed("mir absolute values", || {
