@@ -78,6 +78,21 @@ evidence = '''
 rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exceptions: Does not return.` -- END and SYSTEM. It zeroes b$errnum and branches to the END executor, closing files and terminating the runtime.
 '''
 
+["B$CENC"]
+cleanup = 2
+control = "never"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+rt/rtterm.asm (PDS 7.1 BCL71ENR.LIB module rtterm, disassembled): B$CENC is `push bp; mov bp,sp; mov ax,[bp+6]; mov b$ExitCode,al` and falls into B$CEND's body, so it takes one word (the exit code, low byte used) and never returns. BC 7.1 and VBDOS emit `mov ax,n; push ax; call far B$CENC` for `END n` and `SYSTEM n`; QB 4.5 BC rejects `END 3` as a syntax error.
+'''
+
 ["B$CENP"]
 cleanup = 0
 control = "never"
