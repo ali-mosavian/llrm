@@ -263,6 +263,7 @@ static void close_fdb(Fdb *fdb)
     buffer_release();
     llrm_os_close(fdb->handle);
     lh_free(fdb);
+    lh_compact(); /* B$LHDALC_CPCT: no hole is left in the heap */
 }
 
 /* B$CLOS: CLOSE #a, #b ... closes those channels, and a bare CLOSE every file.
