@@ -7,12 +7,6 @@
 //!
 //! A fact DWARF as written here cannot say is refused by name, never dropped.
 
-/// Location lists say where a value is over each range of the code.
-pub const LOCATION_RANGES: bool = true;
-/// A frame cell is placed from the canonical frame address, which call frame
-/// information gives at every address: `-g` keeps no frame register for it.
-pub const CFA_LOCATIONS: bool = true;
-
 mod buffer;
 mod die;
 mod frame;

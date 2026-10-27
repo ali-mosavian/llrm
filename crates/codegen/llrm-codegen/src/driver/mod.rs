@@ -129,23 +129,13 @@ impl Options {
     /// Whether the debug writer this object format and `-g` flavor pick says
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
-        use llrm_object::debug::Format;
-        match self.debug_format {
-            Format::TurboDebugger => llrm_omf::LOCATION_RANGES,
-            Format::Dwarf { .. } => llrm_dwarf::LOCATION_RANGES,
-            _ => self.format_info().location_ranges,
-        }
+        self.debug_format.location_ranges().unwrap_or_else(|| self.format_info().location_ranges)
     }
 
     /// Whether that writer places a frame cell from the canonical frame
     /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
-        use llrm_object::debug::Format;
-        match self.debug_format {
-            Format::TurboDebugger => llrm_omf::CFA_LOCATIONS,
-            Format::Dwarf { .. } => llrm_dwarf::CFA_LOCATIONS,
-            _ => self.format_info().cfa_locations,
-        }
+        self.debug_format.cfa_locations().unwrap_or_else(|| self.format_info().cfa_locations)
     }
 
     /// What the object format says of the debug writer it picks by default; a
