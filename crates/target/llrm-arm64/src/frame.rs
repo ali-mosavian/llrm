@@ -338,12 +338,12 @@ pub fn lower(
     function: &MFunc,
     allocation: &Allocation,
 ) -> Result<Vec<Lowered>, String> {
-    let duplicated = duplicate_returns(function);
-    let function = &duplicated;
     let frame = layout(function, allocation);
-    let (save, wrapped) = match save_point(function).filter(|_| frame.size > 0) {
-        Some((at, region)) => (Some(at), Some(region)),
-        None => (None, None),
+    // The copies of the return blocks stay only where they let the frame be made later.
+    let duplicated = duplicate_returns(function);
+    let (function, save, wrapped) = match save_point(&duplicated).filter(|_| frame.size > 0) {
+        Some((at, region)) => (&duplicated, Some(at), Some(region)),
+        None => (function, None, None),
     };
     let mut out = Vec::new();
     for (index, block) in function.blocks.iter().enumerate() {
