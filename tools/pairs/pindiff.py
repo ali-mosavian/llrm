@@ -226,7 +226,7 @@ def front_end_flags(level: str, reopt: bool) -> list[str]:
     """What clang is told besides the machine's flags. Raw (default): the front end's IR with no pass run, as llrm-cc writes it, so each
     side runs its whole pipeline once. `reopt`: clang's own `-O` IR, then the pin's opt, then both llcs; ours re-optimises that IR, so it
     measures a different thing (w3, 2026-10-27: the pin's -O3 output is not a fixpoint of its own -O3)."""
-    common = ["-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
+    common = ["-fno-builtin", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
     if reopt:
         return [f"-{level}", *common]
     return [f"-{level}", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *common]
@@ -355,7 +355,7 @@ def main(argv: list[str]) -> int:
     version = subprocess.run([args.llc, "--version"], capture_output=True, text=True).stdout.strip()
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
-    print(f"# pindiff {args.machine} -{args.level}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
+    print(f"# pindiff {args.machine} -{args.level} frontend clang -fno-builtin isel=dag libgcc-divide-helpers=pin side: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
     note = layout_note(pin.target(args.machine).datalayout, pin_llc_datalayout(pin.target(args.machine)))
     if note:
         print(note)

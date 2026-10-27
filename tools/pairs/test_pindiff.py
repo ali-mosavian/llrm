@@ -285,3 +285,10 @@ def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
     cfg = pindiff.MACHINES["m32"]
     assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
     assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
+
+
+def test_the_front_end_is_told_fno_builtin_so_its_ir_matches_the_pins_attributes():
+    """The wat rows are hosted on purpose: without -fno-builtin builtins fold into memcpy/memmove and the IR, hence every count, differs from the pin's (clang-frontend session, 2026-10-27)."""
+    pindiff = load("pindiff")
+    assert "-fno-builtin" in pindiff.front_end_flags("O2", False)
+    assert "-fno-builtin" in pindiff.front_end_flags("O2", True)
