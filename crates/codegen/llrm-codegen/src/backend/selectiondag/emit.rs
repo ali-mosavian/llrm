@@ -239,6 +239,11 @@ struct Emitter<'a, 'd> {
     pending_fcom: HashMap<u32, (Held, Held)>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
+    /// The `fld1`/`fldz` already loaded for a constant, valid until the next
+    /// call or barrier (the x87 stack is empty across one) or block.
+    loaded: HashMap<SDValue, (Held, usize, usize)>,
+    /// Calls and barriers pushed so far.
+    stack_breaks: usize,
     /// The selector each `LES16rm` loaded beside its offset, by node: a cell
     /// based on that offset takes it as its segment.
     selectors: HashMap<u32, Held>,
@@ -375,6 +380,8 @@ pub fn emit_in(
         ss_copies: llrm_support::hash::HashSet::default(),
         selectors: HashMap::default(),
         lazy: HashMap::default(),
+        loaded: HashMap::default(),
+        stack_breaks: 0,
         last_select: None,
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
@@ -2703,8 +2710,8 @@ impl Emitter<'_, '_> {
                 .ok_or_else(|| EmitError::Unsupported(format!("a short {name}")))
         };
         match prefix {
-            // A constant is loaded where it is read, once for each reader: a
-            // value held on the x87 stack across a call cannot stay there.
+            // A constant is loaded where it is read: a value held on the x87
+            // stack across a call cannot stay there (see `operand`).
             "LD" if rest.len() == 3 && rest.starts_with(['0', '1']) => {
                 let mnemonic = if rest.starts_with('0') { "fldz" } else { "fld1" };
                 self.lazy.insert(result, (mnemonic, None));
@@ -3187,8 +3194,22 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
+            // DEVIATE SD317: the pin loads `LD_F1` once for all its readers; a
+            // call or block end is the only place the stack cannot hold it
+            let at = (self.stack_breaks, self.blocks.len());
+            let constant = cell.is_none();
+            if constant {
+                if let Some(&(held, breaks, blocks)) = self.loaded.get(&value) {
+                    if (breaks, blocks) == at {
+                        return Ok(Loc::Held(held));
+                    }
+                }
+            }
             let held = self.fresh(10);
             self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
+            if constant {
+                self.loaded.insert(value, (held, at.0, at.1));
+            }
             return Ok(Loc::Held(held));
         }
         if self.dag.opcode(value) == ISD::Register {
@@ -3316,6 +3337,9 @@ impl Emitter<'_, '_> {
         &mut self,
         what: Semantics,
     ) {
+        if matches!(what.op, Operation::Call | Operation::Barrier) {
+            self.stack_breaks += 1;
+        }
         let (defines, uses) = (_written(&what.dests), _read(&what));
         let at = self.next_address();
         let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses));
