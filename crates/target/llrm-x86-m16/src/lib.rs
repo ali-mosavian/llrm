@@ -298,6 +298,16 @@ impl llrm_target::Target for M16 {
         llrm_x86::calling::stack(CALLING.native())
     }
 
+    fn string_registers(&self) -> Option<llrm_target::StringRegisters> {
+        Some(llrm_target::StringRegisters {
+            count: RegId::CX,
+            source: RegId::SI,
+            destination: RegId::DI,
+            source_segment: RegId::DS,
+            tail: RegId::DX,
+        })
+    }
+
     /// A Borland caller keeps SI and DI, not their upper halves.
     fn callee_saved(&self) -> Vec<(RegId, RegId)> {
         llrm_x86::calling::callee_saved(CALLING.native())

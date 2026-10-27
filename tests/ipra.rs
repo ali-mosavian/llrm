@@ -3,8 +3,6 @@
 //! register the callee did not write, and a function that is not private tells
 //! nothing.
 
-use std::process::Command;
-
 pub mod common;
 
 /// The listing of C `source` and the facts the compiler found
@@ -17,7 +15,7 @@ fn compiled(
     let path = directory.path().join("t.c");
     std::fs::write(&path, source).unwrap();
     let out = directory.path().join("t.asm");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .env("LLRM_DEBUG", "facts")
         .args(flags)
         .args(["-O2", "-fno-inline-functions", "-fno-inline-functions-called-once", "-S"])
