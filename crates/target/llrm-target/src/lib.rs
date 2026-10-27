@@ -491,6 +491,17 @@ pub trait Target {
         wide_divisor: bool,
     ) -> Result<routines::Divide, String>;
 
+    /// `divide_routine` for a caller that reads only `used` of the results: a
+    /// target may have a shorter routine that leaves the rest unfixed.
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        _used: routines::Used,
+    ) -> Result<routines::Divide, String> {
+        self.divide_routine(signed, wide_divisor)
+    }
+
     /// The width a float value of `bytes` bytes is held at: x87 holds every one
     /// as its stack register, a vector file as its own size.
     fn float_width(
