@@ -43,10 +43,10 @@ fn procedure(
         .collect()
 }
 
-/// The Watcom spelling of a C name in a listing (`twice_`), as the tests
-/// without `-mabi=sysv` meet it; `common::symbol` is the default target's.
+/// The m16 default's spelling of a C name in a listing (`_twice@3`, regparm3), as
+/// the tests without `-mabi=sysv` meet it; `common::symbol` is the default target's.
 fn watcom(name: &str) -> String {
-    format!("{name}_")
+    format!("_{name}@3")
 }
 
 const SYSV: &[&str] = &["-m32", "-mabi=sysv"];
