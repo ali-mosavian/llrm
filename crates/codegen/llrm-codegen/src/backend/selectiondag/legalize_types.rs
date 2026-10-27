@@ -1458,13 +1458,14 @@ impl<'a> TypeLegalizer<'a> {
         }) {
             let (negative, magnitude) = step;
             let amount = self.dag.get_constant(magnitude, half);
-            let moved = self.dag.get_node(if negative { ISD::Sub } else { ISD::Add }, half, &[offset, amount]);
+            // the wrap is the add's own carry (`UADDO`, `add; setb`), not a
+            // compare against the offset before the step, which keeps that
+            // offset alive across the loop
             let bool_vt = self.tli.types.set_cc_result_type(half);
-            let wrapped = if negative {
-                self.dag.get_setcc(bool_vt, offset, amount, CondCode::SetULt)
-            } else {
-                self.dag.get_setcc(bool_vt, moved, offset, CondCode::SetULt)
-            };
+            let both = self
+                .dag
+                .get_node_multi(if negative { ISD::USubO } else { ISD::UAddO }, &[half, bool_vt], &[offset, amount]);
+            let (moved, wrapped) = (both, SDValue { node: both.node, res: 1 });
             let stride = self.dag.get_constant(1u128 << shift, half);
             let zero = self.dag.get_constant(0, half);
             let carry = self.dag.get_select(half, wrapped, stride, zero);

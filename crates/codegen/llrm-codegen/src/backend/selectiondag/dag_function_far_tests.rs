@@ -918,3 +918,32 @@ fn a_constant_step_of_a_huge_pointer_is_the_offset_wrap() {
     let names = mnemonics(&done);
     assert!(!names.iter().any(|m| m == "sar"), "{names:?}");
 }
+
+/// The wrap of a constant step was a compare of the new offset against the
+/// old one (`sub`), which kept the old offset live across the step
+/// (`huge_copy.c` 54 -> 82 bytes); it is the carry flag of the add.
+#[test]
+fn a_constant_step_of_a_huge_pointer_wraps_by_the_carry_of_the_add() {
+    let module = llrm_mir::parse::module(HUGE_STEP).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names = mnemonics(&done);
+    assert!(!names.iter().any(|m| m == "sub"), "{names:?}");
+}
+
+/// A load through a huge pointer plus a constant read ES from the old
+/// selector: the carry into it was computed and dropped (`hugelp.bas`
+/// 264 bytes against the old selector's 303), wrong once the offset wraps.
+#[test]
+fn a_load_through_a_stepped_huge_pointer_reads_the_carried_selector() {
+    let load = HUGE_STEP
+        .replace("define ptr addrspace(3) @f", "define i16 @f")
+        .replace("ret ptr addrspace(3) %q", "%v = load i16, ptr addrspace(3) %q\n  ret i16 %v");
+    let module = llrm_mir::parse::module(&load).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named = |what: &str| insns.iter().rposition(|i| i.what.as_ref().and_then(|w| w.name.as_deref()) == Some(what));
+    let (load, carried) = (named("mov").expect("the load"), named("add").expect("the selector sum"));
+    assert!(insns[load].uses.iter().any(|v| insns[carried].defines.contains(v)), "the load reads the old selector");
+}
