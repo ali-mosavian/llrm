@@ -1,4 +1,4 @@
-# Rows of SimplifyCFG's `requestResimplify` (#5651)
+# Rows of SimplifyCFG's `requestResimplify` (#5662)
 
 QCport growers of repeating a block's visit after `simplifyCondBranch` folds it, as the pin's `SimplifyCFGOpt::run` does.
 
