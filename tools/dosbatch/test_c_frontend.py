@@ -81,6 +81,7 @@ def test_a_sysv_or_cdecl_program_keeps_the_start_ups_default_entry(monkeypatch):
     monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     assert dosbatch.os_defines("x86-m32", "c", "sysv") == ("A=1",)
     assert dosbatch.os_defines("x86-m32", "c", "cdecl") == ("A=1",)
+    assert dosbatch.os_defines("x86-m16", "c", "ia16") == ("A=1",)  # ia16_abi: "main_ is an undefined reference"
     assert dosbatch.os_defines("x86-m32", "c", None) == ("A=1", "LL_MAIN=main_")
 
 

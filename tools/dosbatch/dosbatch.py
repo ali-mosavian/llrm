@@ -300,7 +300,7 @@ def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str,
     """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
     defines = tuple(os_layer(target, "defines", language).split())
     # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
-    return (*defines, "LL_MAIN=main_") if language == "c" and abi not in ("sysv", "cdecl") and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else defines
+    return (*defines, "LL_MAIN=main_") if language == "c" and abi not in ("sysv", "cdecl", "ia16") and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else defines
 
 
 def os_start(target: str, language: str) -> list[str]:
