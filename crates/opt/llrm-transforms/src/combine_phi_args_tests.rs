@@ -173,3 +173,26 @@ declare void @g(i16)
     );
     assert!(!after.contains("phi") && after.contains("ret i1 %c"), "{after}");
 }
+
+/// `simplifyUsingControlFlow`'s switch form: a phi of the case values, each
+/// from its own case's block, is the switch's condition.
+#[test]
+fn a_phi_of_case_values_is_the_switch_condition() {
+    let after = combined(
+        "define i8 @f(i8 %s) {
+b0:
+  switch i8 %s, label %d [ i8 1, label %a i8 2, label %b ]
+a:
+  br label %j
+b:
+  br label %j
+d:
+  ret i8 0
+j:
+  %p = phi i8 [ 1, %a ], [ 2, %b ]
+  ret i8 %p
+}
+",
+    );
+    assert!(!after.contains("phi") && after.contains("ret i8 %s"), "{after}");
+}

@@ -1447,6 +1447,132 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
 
 
+def test_a_rate_limited_squash_does_not_hold_the_pr_at_its_head(tmp_path):
+    """A 403 'API rate limit exceeded' at the squash read as the PR's own refusal and held it until its head changed: GitHub's quota, not the PR, cost the landing."""
+    state = tmp_path / "held.state"
+    reason = "the squash was refused by GitHub: GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)"
+    assert ps.hold_own_refusals(["5290"], {"5290": reason}, {"5290": "abc123"}, state) == []
+    assert not state.exists()
+
+
+def test_a_403_at_the_squash_waits_for_the_reset_and_neither_refuses_nor_holds_the_pr(monkeypatch, tmp_path, capsys):
+    """09:2x: the quota ran out and a squash read `API rate limit exceeded` as the PR's own refusal: REFUSED line, held at its head. It waits for the reset and squashes."""
+    monkeypatch.setattr(ps, "FAST", True)
+    waits, merges = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def run(cmd, **_):
+        merges.append(cmd)
+        if len(merges) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "GraphQL: API rate limit exceeded for user ID 1. (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    info = {"headRefOid": "abc123", "headRefName": "pr", "title": "t", "mergeable": "MERGEABLE"}
+    assert ps.squash("5290", info, "body", run=run, settle=0) is True
+    assert waits == [1] and len(merges) == 2
+    assert "REFUSED" not in capsys.readouterr().out
+    held = tmp_path / "held.state"
+    assert ps.hold_own_refusals([], {}, {"5290": "abc123"}, held) == [] and not held.exists()
+
+
+def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
+    """`pr_info` ran with check=True: a 403 raised CalledProcessError and the batch died 'a tool fault' for every member."""
+    waits, calls = [], []
+    monkeypatch.setattr(ps, "rate_limit_wait", lambda *a, **k: waits.append(1) or 0)
+
+    def fake(cmd, **_):
+        calls.append(cmd)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(cmd, 1, "", "gh: API rate limit exceeded (HTTP 403)")
+        return subprocess.CompletedProcess(cmd, 0, '{"headRefOid": "abc"}', "")
+
+    monkeypatch.setattr(ps.subprocess, "run", fake)
+    assert ps.pr_info("5290") == {"headRefOid": "abc"} and waits == [1]
+
+
+def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
+    """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
+    tool = tmp_path / "tools/docsbuild/build.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
+    assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
+
+
+def _fake_docs_repo(tmp_path):
+    """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    def git(*args, cwd=tmp_path):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
+
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "tools/docsbuild/build.py").write_text(
+        "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
+        "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
+    )
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    return git
+
+
+def test_a_stale_generated_page_is_synced_and_committed_not_refused(tmp_path):
+    """Generated docs out of date refused #5129, #5131 and #5119 (27 PRs were conflicting after each tip move): the batch regenerates the page (build.py --sync) and commits it on top."""
+    git = _fake_docs_repo(tmp_path)
+    assert ps.docs_stale(tmp_path) == {"docs/a.md"}
+    assert ps.docs_sync_commit(tmp_path) == ""
+    assert (tmp_path / "docs/a.md").read_text() == "generated\n" and git("log", "--format=%s", "-1").startswith("docs: ")
+    assert ps.docs_stale(tmp_path) == set()
+    git("reset", "-q", "--hard", "HEAD~1")
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("5129") == "" and "5129" in gated.synced and ps.docs_stale(tmp_path) == set(), "synced in the batch tree, not refused"
+    git("reset", "-q", "--hard", "HEAD~1")
+    refused = ps.docs_gated(lambda number: "", set(), tmp_path, sync=lambda root: "docsbuild --sync failed")
+    assert "docs/a.md" in refused("5131") and ps.docs_stale(tmp_path) == {"docs/a.md"} and not refused.synced, "a failed sync still refuses and resets"
+
+
+def test_the_append_only_rows_table_merges_without_a_conflict_when_two_prs_add_rows(tmp_path):
+    """Two PRs each adding a row at the end of docs/working/above-main-rows.md conflicted (#5282, #5156, #5242, #5294): the repo's .gitattributes says merge=union for it."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs/working").mkdir(parents=True)
+    (tmp_path / ".gitattributes").write_text((ps.ROOT / ".gitattributes").read_text())
+    table = tmp_path / "docs/working/above-main-rows.md"
+    table.write_text("| row | n |\n| a | 1 |\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    for name, row in (("one", "| b | 2 |\n"), ("two", "| c | 3 |\n")):
+        git("checkout", "-q", "-b", name, "main")
+        table.write_text(table.read_text() + row)
+        git("commit", "-qam", name)
+    git("checkout", "-q", "one")
+    merged = git("merge", "--no-edit", "two")
+    assert merged.returncode == 0, merged.stdout + merged.stderr
+    assert "| b | 2 |" in table.read_text() and "| c | 3 |" in table.read_text()
+
+
+def test_a_head_that_leaves_a_page_stale_is_synced_on_its_branch_before_the_squash(tmp_path):
+    """The batch tree was synced, but the squash lands the PR head: the same sync is pushed to the PR's branch (as the formatted head is), or the squash would land the stale page."""
+    work = tmp_path / "work"
+    work.mkdir()
+    git = _fake_docs_repo(work)
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    git("remote", "add", "origin", str(origin))
+    git("branch", "-M", "feat/parity")
+    git("push", "-q", "origin", "feat/parity")
+    git("checkout", "-q", "-b", "pr")
+    (work / "pr.txt").write_text("x\n")
+    git("add", ".")
+    git("commit", "-qm", "pr")
+    head = git("rev-parse", "HEAD")
+    sha, why = ps.sync_docs_head(head, "pr", "origin/feat/parity", work)
+    assert why == "" and sha and sha != head, (sha, why)
+    assert git("--git-dir", str(origin), "rev-parse", "refs/heads/pr") == sha, "pushed to the PR's branch"
+    assert git("--git-dir", str(origin), "show", f"{sha}:docs/a.md") == "generated"
+
+
 def _repo_with_commit(path):
     path.mkdir(parents=True)
     for cmd in (["init", "-q"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"]):
@@ -1581,3 +1707,14 @@ def test_the_head_red_limit_is_read_from_the_environment():
     """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
     read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
     assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"
+
+
+def test_the_scanner_run_has_its_own_stage_so_workspace_check_is_not_its_cost():
+    """Ten batches showed `workspace-check 58%`, but the scanners (a cargo test build of the integration targets) ran inside it with no stage line, so its split was a guess.
+    The default path now prints `STAGE scanners` after the build check."""
+    import inspect
+
+    source = inspect.getsource(ps.merge_batch)
+    gate = 'if os.environ.get("LAND_FAST_TESTS") != "1":\n                stage("scanners")'
+    assert gate in source, "the default path has a scanners stage"
+    assert source.find(gate) < source.find("landing_scanner_failures(git("), "and it comes before the always-on scanner run"
