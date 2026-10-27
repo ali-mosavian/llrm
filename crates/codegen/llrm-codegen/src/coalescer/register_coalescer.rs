@@ -160,6 +160,11 @@ pub fn join_copy(
         lis.remove_interval(cp.dst_reg());
         return JoinResult::Joined;
     }
+    // Eliminate undefs.
+    if eliminate_undef_copy(lis, state, copy) {
+        // An IMPLICIT_DEF is left alone, and neither is coalescable.
+        return JoinResult::Rejected;
+    }
     // Coalesced copies are normally removed immediately, but a join can leave
     // an identity copy. When that happens, just join the values and remove the
     // copy.
@@ -326,6 +331,17 @@ fn re_materialize_def(
     let def = lis.defining_instr(&value.def(), src.value);
     let def_insn = Arc::clone(lis.instr(def));
     if !env.rematerializable(&def_insn) {
+        return false;
+    }
+    // `LiveRangeEdit::allUsesAvailableAt`: each register the definition reads
+    // holds the value it read, at the copy.
+    let def_use = lis.indexes.get_instruction_index(def).get_reg_slot(true);
+    let copy_use = at.get_reg_slot(true);
+    if !def_insn.uses.iter().all(|&used| {
+        let li = lis.interval(used);
+        li.get_vn_info_at(&def_use)
+            .is_none_or(|read| li.get_vn_info_at(&copy_use).is_some_and(|now| Rc::ptr_eq(&read, &now)))
+    }) {
         return false;
     }
     // DEVIATE C10: in a build for size the copy (2 bytes) becomes the move
@@ -776,5 +792,78 @@ fn remove_partial_redundancy(
     lis.shrink_to_uses(b_reg);
     // Finally, the range of A.
     lis.shrink_to_uses(a_reg);
+    true
+}
+
+/// `eliminateUndefCopy`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegisterCoalescer.cpp#L1742>),
+/// without sub-registers: `%1 = COPY undef %2` is deleted and its value number
+/// removed from `%1`, whose reads of it are undef; where the value flows into
+/// a phi-def it becomes an `implicit_def` instead. True where the copy is gone
+/// or changed.
+fn eliminate_undef_copy(
+    lis: &mut LiveIntervals,
+    state: &mut State,
+    copy: InstrKey,
+) -> bool {
+    let insn = Arc::clone(lis.instr(copy));
+    let Some((dst, src)) = full_copy(&insn) else { return false };
+    let width = dst.width;
+    let (dst, src) = (dst.value, src.value);
+    let idx = lis.indexes.get_instruction_index(copy);
+    // CopyMI is undef iff SrcReg is not live before the instruction.
+    if lis.interval(src).live_at(&idx) {
+        return false;
+    }
+    let block = lis.indexes.get_mbb_from_index(&idx);
+    let reg_index = idx.get_reg_slot(false);
+    let mut li = (*lis.interval_rc(dst)).clone();
+    let end = li.get_segment_containing(&reg_index).expect("No segment for defining instruction").end.clone();
+    let vni = li.get_vn_info_at(&end);
+    // If the undef copy defines a live-out value (i.e. an input to a PHI
+    // def), then replace it with an IMPLICIT_DEF.
+    if vni.as_ref().is_some_and(|v| v.is_phi_def()) || (vni.is_none() && !li.live_at(&idx)) {
+        let mut made = (*insn).clone();
+        made.uses.retain(|v| *v != src);
+        made.undefs.clear();
+        made.what = Some(crate::model::ir::Semantics {
+            op: crate::model::ir::Operation::Nothing,
+            name: Some(crate::processimpdefs::IMPLICIT_DEF.into()),
+            dests: vec![Loc::Held(crate::model::ir::Held { value: dst, width })],
+            sources: Vec::new(),
+            ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Nothing)
+        });
+        lis.rewrite_instr(block, copy, Arc::new(made));
+        return true;
+    }
+    // Remove value or merge with previous one in case of a subregister def.
+    if let Some(prev) = li.get_vn_info_at(&idx) {
+        let vni = li.get_vn_info_at(&reg_index).expect("the copy defines a value");
+        li.merge_value_number_into(vni, prev);
+    } else {
+        LiveIntervals::remove_vreg_def_at(&mut li, &reg_index);
+    }
+    // Mark uses as undef.
+    let readers: Vec<InstrKey> = lis.operands(dst).iter().filter(|op| op.reads_reg).map(|op| op.instr).collect();
+    lis.insert_interval(li);
+    for reader in readers {
+        if reader == copy || !lis.has_instr(reader) {
+            continue;
+        }
+        let at = lis.indexes.get_instruction_index(reader);
+        if lis.interval(dst).live_at(&at) {
+            continue;
+        }
+        let one = Arc::clone(lis.instr(reader));
+        let mut made = (*one).clone();
+        made.uses.retain(|v| *v != dst);
+        if !made.undefs.contains(&dst) {
+            made.undefs.push(dst);
+        }
+        let reader_block = lis.indexes.get_mbb_from_index(&at);
+        lis.rewrite_instr(reader_block, reader, Arc::new(made));
+    }
+    state.erased.insert(copy);
+    lis.remove_instr(block, copy);
     true
 }

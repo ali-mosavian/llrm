@@ -108,6 +108,7 @@ pub mod combine_and_select;
 pub mod combine_bitorder;
 pub mod combine_branch;
 pub mod combine_build;
+pub mod combine_castcall;
 pub mod combine_casts;
 #[cfg(test)]
 mod combine_casts_tests;
@@ -185,6 +186,7 @@ pub mod exitpredicate;
 pub mod exitsink;
 pub mod exitvalues;
 pub mod expand;
+pub mod expansion;
 pub mod extload;
 pub mod extpromotion;
 pub mod fixednarrow;
@@ -278,6 +280,9 @@ mod lsr_use_tests;
 pub mod mem2reg;
 pub mod memcpyopt;
 pub mod memcpyoptimizer;
+pub mod memsetpattern;
+#[cfg(test)]
+mod memsetpattern_tests;
 pub mod mergestores;
 pub mod narrowspace;
 #[cfg(test)]
