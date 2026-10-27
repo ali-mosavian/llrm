@@ -201,6 +201,8 @@ mod gaps_tests;
 #[cfg(test)]
 mod invoke_tests;
 #[cfg(test)]
+mod match_rotate_tests;
+#[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]
 mod memconst_tests;

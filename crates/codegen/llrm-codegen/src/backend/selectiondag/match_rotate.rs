@@ -5,7 +5,7 @@
 //! copies; with `x == y` it is `(rotl x, 4)`. Either half may be masked by a
 //! constant `and`; the mask moves to the result.
 //!
-//! DEVIATE SD460: only the constant shift amounts are matched. Not translated:
+//! DEVIATE SD321: only the constant shift amounts are matched. Not translated:
 //! `extractShiftForRotate` (a shift hidden in an `add`, `mul` or `udiv` by
 //! InstCombine), the disguised rotate of a target without funnel shifts, the
 //! variable amounts (`MatchRotatePosNeg`, `MatchFunnelPosNeg`) and the
@@ -60,7 +60,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return None;
         }
         let ((mut left, mut left_mask), (mut right, mut right_mask)) =
-            (rotate_half(self, lhs).map(|(s, m)| (s, m))?, rotate_half(self, rhs)?);
+            (rotate_half(self, lhs)?, rotate_half(self, rhs)?);
         if self.dag.opcode(left) == self.dag.opcode(right) {
             return None;
         }
@@ -91,7 +91,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if left_mask.is_none() && right_mask.is_none() {
             return Some(result);
         }
-        // `ApplyMasks`: an `and` of either shifted operand applies to the result.
+        // `ApplyMasks`: an `and` of either shifted operand applies to the
+        // result.
         let all_ones = self.dag.get_constant(super::fold::mask(vt.size_in_bits()), vt);
         let mut mask = all_ones;
         if let Some(left_mask) = left_mask {
