@@ -1267,15 +1267,10 @@ thread_local! {
 /// scheduler role (`enableMachineScheduler() &&
 /// enableMachineSchedDefaultSched()`), so the pin's DAG scheduler is
 /// `createSourceListDAGScheduler`: a `SrcRegReductionPriorityQueue`
-/// (`srcorder`), IR order first. DEVIATE: on for m32 only
-/// (`SchedInfo::source_order`), elsewhere off unless `LLRM_SRC_ORDER`: at m16
-/// our machine scheduler is not the pin's `GenericScheduler` and the source
-/// order costs bytes (QCport -Os +0.30%); at m32 it saves 0.99%. Static
-/// instructions over the 71 vsgcc programs at m32, source order against the
-/// queue without it: -O2 +58 (pin +18 over the queue without it), -Os +17 (pin
-/// 57 fewer).
+/// (`srcorder`), IR order first. On at every width, as the pin has it: off at
+/// m16 a select could fall inside a call frame and `jumps` grew 28 B.
 fn src_order(info: &dyn SchedInfo) -> bool {
-    info.source_order() || SRC_ORDER.get() || llrm_support::env_set("LLRM_SRC_ORDER")
+    info.source_order() || SRC_ORDER.get() || llrm_support::env_flag!("LLRM_SRC_ORDER")
 }
 
 /// `RegReductionPQBase` with `SrcRegReductionPriorityQueue`: Sethi-Ullman

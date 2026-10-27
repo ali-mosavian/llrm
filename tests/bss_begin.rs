@@ -3,7 +3,7 @@
 //! first byte of all of it whatever order the linker met the objects in (the QB
 //! runtime's start.asm, #1488).
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -11,7 +11,7 @@ fn listing(
 ) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m16", "-Os"])
         .args(flags)

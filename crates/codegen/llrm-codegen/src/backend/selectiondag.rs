@@ -104,6 +104,7 @@
 
 pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
 pub mod address_analysis;
+pub mod bswap_combine;
 pub mod builder;
 mod chain_combine;
 pub mod combine_load;
