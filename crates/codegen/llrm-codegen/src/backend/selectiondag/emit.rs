@@ -2681,7 +2681,7 @@ impl Emitter<'_, '_> {
                 if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
                     self.narrow_definition(source.value, 2);
                 }
-                // DEVIATE SD219 (m16): the pin's `(i8 0)` and `(i16 0)` are the
+                // DEVIATE SD237 (m16): the pin's `(i8 0)` and `(i16 0)` are the
                 // low part of a `MOV32r0`; a dword `xor` is 3 bytes here (the
                 // 66 prefix), the word's or byte's 2. A zero read only narrow
                 // is made narrow.
@@ -3389,14 +3389,10 @@ impl Emitter<'_, '_> {
             .ok_or_else(|| EmitError::Unsupported(format!("frame index {index_of}")))?;
         // A displacement past the object (an index that makes up the rest,
         // `[ebp+ecx+126]` for 8192 bytes below) is a position of its own in the
-        // frame, where `home_of` would name the nearest slot: the cell says
+        // frame, where `home_of` would name the nearest slot; so is one exactly
+        // at its end, which is the next object's first byte: the cell says
         // which object it was made from, and the layout moves it with that.
-        let outside = self
-            .ctx
-            .frame
-            .extent(index_of)
-            .filter(|&(start, size)| !(start..=start + size).contains(&(start + disp)))
-            .map(|(start, _)| start);
+        let made_from = self.ctx.frame.extent(index_of).map(|(start, _)| start);
         // The object's place is its `addr`; the displacement moves that, as
         // `offset` of a cell with an `addr` is only how it is encoded.
         let addr = cell
@@ -3404,7 +3400,7 @@ impl Emitter<'_, '_> {
             .map(
                 |addr| {
                     let moved = Addr { disp: addr.disp + disp, ..addr };
-                    outside.map_or(moved, |home| moved.in_slot(home))
+                    made_from.map_or(moved, |home| moved.in_slot(home))
                 },
             );
         // With an index the frame register is the base of the address and,
@@ -3479,7 +3475,7 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
-            // DEVIATE SD317: the pin loads `LD_F1` once for all its readers; a
+            // DEVIATE SD234: the pin loads `LD_F1` once for all its readers; a
             // call or block end is the only place the stack cannot hold it
             let at = (self.stack_breaks, self.blocks.len());
             let constant = cell.is_none();

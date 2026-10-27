@@ -827,7 +827,7 @@ fn lower_select(
         code = cond_code(dag, cond::NE);
         flags = emit_test(dag, cond, cond::NE);
     }
-    // DEVIATE SD313: where the pointer is a word (m16) an `i16` select stays
+    // DEVIATE SD239: where the pointer is a word (m16) an `i16` select stays
     // a word: widened to `i32` every move takes an operand-size prefix. Owner
     // w10. Exit: none (machine fact). Review 2026-12-10.
     let word16 = dag.config.pointer == EVT::I16;
@@ -985,7 +985,7 @@ fn combine_setcc(
 
 /// `combineCarryThroughADD`: flags of `(add carry, -1)`, where the carry is a
 /// `setb` (through extends, truncates and `and 1`), are the flags the `setb`
-/// read. DEVIATE SD315: the `COND_A` form (a swapped `sub`) is not
+/// read. DEVIATE SD242: the `COND_A` form (a swapped `sub`) is not
 /// translated. Reason: nothing produces it at 32 bits yet. Exit: with
 /// `combineSBB`'s remaining folds. Owner: sdag-b. Review 2026-12-10.
 fn carry_through_add(
