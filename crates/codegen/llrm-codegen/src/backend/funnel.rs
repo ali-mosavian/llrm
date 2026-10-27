@@ -65,13 +65,13 @@ pub fn expanded(
 }
 
 /// Whether the selector takes a funnel shift of `bits` as it is: the DAG
-/// selects a dword one as `SHLD`/`SHRD`, as the pin does; the narrower ones
-/// (`LowerFunnelShift`) are still expanded here.
+/// lowers a funnel shift of a byte, word or dword itself (`LowerFunnelShift`,
+/// `SHLD`/`SHRD`), as the pin does.
 pub fn kept_for_isel(
     isel: crate::backend::shadow::Selector,
     bits: u32,
 ) -> bool {
-    isel == crate::backend::shadow::Selector::Dag && bits == 32
+    isel == crate::backend::shadow::Selector::Dag && matches!(bits, 8 | 16 | 32)
 }
 
 /// The integer constant `operand` is.

@@ -59,6 +59,8 @@ pub mod x86isd {
     /// (`sbb r, r`), else `0`.
     pub const SETCC_CARRY: ISD = ISD::Target(740);
     pub const BSF: ISD = ISD::Target(495);
+    pub const FSHL: ISD = ISD::Target(625);
+    pub const FSHR: ISD = ISD::Target(626);
     pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
@@ -321,6 +323,7 @@ impl Hooks for X86Lowering {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
@@ -1763,6 +1766,64 @@ fn combine_mul(
         }
     }
     new_mul
+}
+
+/// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
+/// is done in a dword: `fshl(x,y,z)` is `(((aext x << 8) | zext y) << (z & 7))
+/// >> 8`. An `i8` by a constant is two shifts and an `or`
+/// (`expandFunnelShift`). An `i16` is the target node with the amount modulo
+/// 16 (`SHLD16`/`SHRD16`); the dword is already legal.
+///
+/// DEVIATE SD247: the `isSHLDSlow` expansion of `i16` is not translated (no
+/// target of ours sets it). Owner sdag-b.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L32188
+fn lower_funnel_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let is_fshr = dag.opcode(node) == ISD::FShr;
+    let (op0, op1, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let amount_vt = dag.value_type(amount);
+    let bits = vt.size_in_bits();
+    if vt == EVT::I8 {
+        if let Some(by) = dag.constant(amount) {
+            let by = (by % u128::from(bits)) as u32;
+            if by == 0 {
+                return Some(if is_fshr { op1 } else { op0 });
+            }
+            let (left, right) = if is_fshr { (bits - by, by) } else { (by, bits - by) };
+            let high = dag.get_constant(u128::from(left), amount_vt);
+            let low = dag.get_constant(u128::from(right), amount_vt);
+            let high = dag.get_node(ISD::Shl, vt, &[op0, high]);
+            let low = dag.get_node(ISD::Srl, vt, &[op1, low]);
+            return Some(dag.get_node(ISD::Or, vt, &[high, low]));
+        }
+        let wide = EVT::I32;
+        let mask = dag.get_constant(u128::from(bits - 1), amount_vt);
+        let shift = dag.get_constant(u128::from(bits), amount_vt);
+        let hi = dag.get_node(ISD::AnyExtend, wide, &[op0]);
+        let lo = dag.get_zext_or_trunc(op1, wide);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let hi = dag.get_node(ISD::Shl, wide, &[hi, shift]);
+        let mut result = dag.get_node(ISD::Or, wide, &[hi, lo]);
+        if is_fshr {
+            result = dag.get_node(ISD::Srl, wide, &[result, amount]);
+        } else {
+            result = dag.get_node(ISD::Shl, wide, &[result, amount]);
+            result = dag.get_node(ISD::Srl, wide, &[result, shift]);
+        }
+        return Some(dag.get_node(ISD::Truncate, vt, &[result]));
+    }
+    if vt == EVT::I16 {
+        let mask = dag.get_constant(15, amount_vt);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let op = if is_fshr { x86isd::FSHR } else { x86isd::FSHL };
+        return Some(dag.get_node(op, vt, &[op0, op1, amount]));
+    }
+    None
 }
 
 /// `LowerShiftParts` (`TargetLowering::expandShiftParts`): a double-width

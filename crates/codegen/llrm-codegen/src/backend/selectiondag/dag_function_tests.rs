@@ -926,28 +926,33 @@ define void @f() {
     assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
 }
 
-/// `llvm.fshl.i32` by a variable was expanded in MIR to `shl`, `shr 1`, `not`,
-/// `and` and `shr` before selection (8 instructions); the pin selects one
-/// `shld`.
+/// `llvm.fshl` by a variable was expanded in MIR to `shl`, `shr 1`, `not`,
+/// `and` and `shr` before selection (8 instructions at i32); the pin selects
+/// one `shld` for a word or a dword, and for a byte (`LowerFunnelShift`)
+/// widens to a dword, shifts and takes the high byte.
 #[test]
-fn a_dword_funnel_shift_is_one_shld() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
-declare i32 @llvm.fshl.i32(i32, i32, i32)
-define i32 @f(i32 %a, i32 %b, i32 %y) {
+fn a_word_or_dword_funnel_shift_is_one_shld_and_a_byte_one_selects() {
+    for (bits, shld) in [(32, 1), (16, 1), (8, 0)] {
+        let ir = format!(
+            "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+declare i{bits} @llvm.fshl.i{bits}(i{bits}, i{bits}, i{bits})
+define i{bits} @f(i{bits} %a, i{bits} %b, i{bits} %y) {{
 b0:
-  %r = call i32 @llvm.fshl.i32(i32 %a, i32 %b, i32 %y)
-  ret i32 %r
-}
-";
-    let mut module = llrm_mir::parse::module(ir).expect("parses");
-    crate::backend::funnel::expanded(
-        &mut module,
-        |_| true,
-        |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, bits),
-    )
-    .expect("expands");
-    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
-        .unwrap_or_else(|e| panic!("{}", e.0));
-    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
-    assert_eq!(names.iter().filter(|n| &***n == "shld").count(), 1, "{names:?}");
+  %r = call i{bits} @llvm.fshl.i{bits}(i{bits} %a, i{bits} %b, i{bits} %y)
+  ret i{bits} %r
+}}
+"
+        );
+        let mut module = llrm_mir::parse::module(&ir).expect("parses");
+        crate::backend::funnel::expanded(
+            &mut module,
+            |_| true,
+            |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, bits),
+        )
+        .expect("expands");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("i{bits}: {}", e.0));
+        let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().filter(|n| &***n == "shld").count(), shld, "i{bits}: {names:?}");
+    }
 }
