@@ -684,7 +684,7 @@ fn selected_in(
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
-        TargetLowering::x86_64(Features::default(), MVT::I64)
+        TargetLowering::x86_64(Features { sse2: true, ..Features::default() }, MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -909,7 +909,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
+            &mut X86Lowering { cmov: false, sse2: m64, min_size: cpu.size || cpu.min_size },
             &selector,
             &mut hooks,
             &Info { source_order: true },
