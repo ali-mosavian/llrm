@@ -771,6 +771,9 @@ fn llvm_opcode(
         O::Load { .. } => 33,
         O::Store { .. } => 34,
         O::GetElementPtr { .. } => 35,
+        O::Fence { .. } => 36,
+        O::CmpXchg { .. } => 37,
+        O::AtomicRmw { .. } => 38,
         O::Cast(op) => match op {
             C::Trunc => 39,
             C::ZExt => 40,

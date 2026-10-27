@@ -1440,8 +1440,10 @@ pub fn sound_edits(
                     | crate::opcode::Opcode::Invoke(_)
                     | crate::opcode::Opcode::LandingPad { .. }
                     | crate::opcode::Opcode::Resume
-                    | crate::opcode::Opcode::Load { volatile: true, .. }
-            )
+                    | crate::opcode::Opcode::AtomicRmw { .. }
+                    | crate::opcode::Opcode::CmpXchg { .. }
+                    | crate::opcode::Opcode::Fence { .. }
+            ) || opcode.is_ordered_load()
     };
     for change in changes {
         match *change {

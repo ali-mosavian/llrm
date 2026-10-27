@@ -501,7 +501,7 @@ fn _store(
     let value = context.constant(Constant { ty: store.ty, kind: store.constant });
     let void = context.types.void();
     let made = function.create_instruction(
-        Opcode::Store { align: None, volatile: false },
+        Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
         void,
         vec![Operand::Constant(value), store.pointer],
         Flags::default(),

@@ -584,7 +584,7 @@ fn propagate_stored_value_to_load_users(
     let initial = rw
         .function
         .create_instruction(
-            Opcode::Load { align, volatile: false },
+            Opcode::Load { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
             load_ty,
             vec![initial_ptr],
             Flags::default(),

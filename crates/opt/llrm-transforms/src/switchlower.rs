@@ -444,7 +444,7 @@ impl Lowering<'_, '_> {
                 address,
                 vec![Operand::Constant(base), zero, index],
             );
-            let mut loaded = self.put(load, Opcode::Load { align: None, volatile: false }, cell, vec![place]);
+            let mut loaded = self.put(load, Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic }, cell, vec![place]);
             if width < bits {
                 loaded = self.put(load, Opcode::Cast(extend), ty, vec![loaded]);
             }

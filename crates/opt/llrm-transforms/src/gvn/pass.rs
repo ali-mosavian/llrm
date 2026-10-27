@@ -964,7 +964,7 @@ impl GvnPass<'_> {
                 let store = self
                     .function
                     .create_instruction(
-                        Opcode::Store { align: None, volatile: false },
+                        Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
                         void,
                         vec![poison, null],
                         Flags::default(),

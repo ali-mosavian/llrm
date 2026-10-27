@@ -89,7 +89,8 @@ fn may_have_side_effects(
     inst: InstId,
 ) -> bool {
     match &q.function.instruction(inst).opcode {
-        Opcode::Store { .. } | Opcode::Load { volatile: true, .. } => true,
+        Opcode::Store { .. } | Opcode::AtomicRmw { .. } | Opcode::CmpXchg { .. } | Opcode::Fence { .. } => true,
+        opcode if opcode.is_ordered_load() => true,
         Opcode::Call(info) => {
             let callee = callee_attrs(q, inst);
             let declared = callee.map_or(crate::memory::Effects::ANY, crate::memory::stated);

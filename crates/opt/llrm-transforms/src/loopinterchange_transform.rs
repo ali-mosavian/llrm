@@ -251,7 +251,7 @@ fn reduction_to_memory(
     // memory the previous outer iteration stored to.
     let align = layout.align(&context.types, reduction.elem_ty);
     let load = function.create_instruction(
-        Opcode::Load { align: Some(align), volatile: false },
+        Opcode::Load { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
         reduction.elem_ty,
         vec![reduction.mem_ref],
         Flags::default(),

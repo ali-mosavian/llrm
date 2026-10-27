@@ -1155,7 +1155,9 @@ impl<'a> Solver<'a> {
             // `ret`-like and void instructions with nothing to compute.
             Opcode::Resume | Opcode::Unreachable => {}
             Opcode::Store { .. } => self.visit_store(inst),
-            Opcode::LandingPad { .. } => self.visit_instruction(inst),
+            Opcode::LandingPad { .. } | Opcode::AtomicRmw { .. } | Opcode::CmpXchg { .. } | Opcode::Fence { .. } => {
+                self.visit_instruction(inst)
+            }
         }
     }
 

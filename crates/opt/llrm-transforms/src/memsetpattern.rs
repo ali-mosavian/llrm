@@ -127,7 +127,7 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
                 None,
             );
             let store = function.create_instruction(
-                Opcode::Store { align: Some(align), volatile },
+                Opcode::Store { align: Some(align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
                 void,
                 vec![value, Operand::Value(function.instruction(address).result.ok_or("an address")?)],
                 Flags::default(),

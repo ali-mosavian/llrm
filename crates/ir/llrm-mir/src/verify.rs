@@ -7,7 +7,7 @@ use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
-use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
+use crate::opcode::{Attribute, AtomicOp, AtomicOrdering, BinaryOp, CastOp, Opcode};
 use crate::types::{Type, TypeId};
 
 pub fn verify(module: &Module) -> Vec<String> {
@@ -463,9 +463,15 @@ impl Checker<'_> {
                     self.fail(format!("{at} switches on {}", self.show(ty(0))));
                 }
             }
-            Opcode::Load { .. } => {
+            Opcode::Load { align, ordering, .. } => {
                 if !is_pointer(self, ty(0)) {
                     self.fail(format!("{at} loads through {}", self.show(ty(0))));
+                }
+                if ordering.is_atomic() {
+                    if matches!(ordering, AtomicOrdering::Release | AtomicOrdering::AcquireRelease) {
+                        self.fail(format!("{at}: Load cannot have Release ordering"));
+                    }
+                    self.atomic_access(&at, "atomic load", result, *align);
                 }
                 if matches!(
                     self.ty(result),
@@ -474,8 +480,54 @@ impl Checker<'_> {
                     self.fail(format!("{at} loads a {}", self.show(result)));
                 }
             }
-            Opcode::Store { .. } if !is_pointer(self, ty(1)) => {
-                self.fail(format!("{at} stores through {}", self.show(ty(1))))
+            Opcode::Store { align, ordering, .. } => {
+                if !is_pointer(self, ty(1)) {
+                    self.fail(format!("{at} stores through {}", self.show(ty(1))));
+                }
+                if ordering.is_atomic() {
+                    if matches!(ordering, AtomicOrdering::Acquire | AtomicOrdering::AcquireRelease) {
+                        self.fail(format!("{at}: Store cannot have Acquire ordering"));
+                    }
+                    self.atomic_access(&at, "atomic store", ty(0), *align);
+                }
+            }
+            // LLVM's `visitLoadInst` / `visitStoreInst` / `visitFenceInst` / `visitAtomicCmpXchgInst` /
+            // `visitAtomicRMWInst`.
+            Opcode::Fence { ordering } => {
+                if matches!(ordering, AtomicOrdering::NotAtomic | AtomicOrdering::Unordered | AtomicOrdering::Monotonic) {
+                    self.fail(format!("{at}: fence instructions may only have acquire, release, acq_rel, or seq_cst ordering."));
+                }
+            }
+            Opcode::AtomicRmw { op, align, ordering, .. } => {
+                if matches!(ordering, AtomicOrdering::Unordered) {
+                    self.fail(format!("{at}: atomicrmw instructions cannot be unordered."));
+                }
+                if !is_pointer(self, ty(0)) {
+                    self.fail(format!("{at}: atomicrmw operand must have pointer type!"));
+                }
+                if matches!(op, AtomicOp::FAdd | AtomicOp::FSub | AtomicOp::FMax | AtomicOp::FMin) {
+                    if !matches!(self.ty(result), Type::Float(_)) {
+                        self.fail(format!("{at}: atomicrmw {} operand must have floating-point type!", self.show(ty(1))));
+                    }
+                } else if !is_int(self, ty(1)) && !(*op == AtomicOp::Xchg && matches!(self.ty(result), Type::Pointer(_) | Type::Float(_))) {
+                    self.fail(format!("{at}: atomicrmw operand must have integer type!"));
+                }
+                self.atomic_access(&at, "atomicrmw", result, *align);
+            }
+            Opcode::CmpXchg { align, success, failure, .. } => {
+                if !is_pointer(self, ty(0)) {
+                    self.fail(format!("{at}: First cmpxchg operand must be a pointer."));
+                }
+                if matches!(success, AtomicOrdering::NotAtomic | AtomicOrdering::Unordered) {
+                    self.fail(format!("{at}: cmpxchg instructions must be at least monotonic."));
+                }
+                if matches!(failure, AtomicOrdering::NotAtomic | AtomicOrdering::Unordered) {
+                    self.fail(format!("{at}: cmpxchg instructions must be at least monotonic."));
+                }
+                if matches!(failure, AtomicOrdering::Release | AtomicOrdering::AcquireRelease) {
+                    self.fail(format!("{at}: cmpxchg failure ordering cannot include release semantics"));
+                }
+                self.atomic_access(&at, "cmpxchg", ty(1), *align);
             }
             Opcode::Alloca { address_space, .. } => {
                 if let Some(count) = types.first().copied().flatten()
@@ -575,6 +627,28 @@ impl Checker<'_> {
             _ => false,
         };
         if ok { Ok(()) } else { Err(format!("cannot take {} to {}", self.show(from), self.show(to))) }
+    }
+
+    /// An atomic access of `ty`: an integer of a power-of-two number of bytes, a pointer or a
+    /// float; and, for a load or store, an explicit alignment.
+    fn atomic_access(
+        &mut self,
+        at: &At<'_>,
+        what: &str,
+        ty: TypeId,
+        align: Option<u64>,
+    ) {
+        if align.is_none() && matches!(what, "atomic load" | "atomic store") {
+            self.fail(format!("{at}: atomic {} must have explicit non-zero alignment", &what[7..]));
+        }
+        let fits = match self.ty(ty) {
+            Type::Int(bits) => *bits >= 8 && bits.is_power_of_two(),
+            Type::Pointer(_) | Type::Float(_) => true,
+            _ => false,
+        };
+        if !fits {
+            self.fail(format!("{at}: {what} operand must have integer, pointer or floating point type!"));
+        }
     }
 
     /// Struct indices are constant `i32`s, and each index steps into its type.

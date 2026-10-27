@@ -10,8 +10,21 @@ use crate::module::{
     BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataOperand, Module, Operand,
     UnnamedAddr, ValueId,
 };
-use crate::opcode::{Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, Tail, spelling};
+use crate::opcode::{
+    ATOMIC_OPS, Attribute, AtomicOrdering, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, ORDERINGS, Opcode, Tail,
+    spelling,
+};
 use crate::types::{FloatKind, Type, TypeId, struct_text};
+
+/// `atomic ` before the type of an atomic load or store.
+fn atomic_word(ordering: AtomicOrdering) -> &'static str {
+    if ordering.is_atomic() { "atomic " } else { "" }
+}
+
+/// ` seq_cst` after an atomic access's pointer; nothing for a plain one.
+fn ordering_text(ordering: AtomicOrdering) -> String {
+    if ordering.is_atomic() { format!(" {}", spelling(&ORDERINGS, ordering)) } else { String::new() }
+}
 
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
@@ -682,14 +695,53 @@ impl Printer<'_> {
                 }
                 text
             }
-            Opcode::Load { align, volatile } => {
+            Opcode::Load { align, volatile, ordering } => {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
-                format!("load {}{}, {}{align}", if *volatile { "volatile " } else { "" }, self.ty(inst.ty), typed(0))
+                format!(
+                    "load {}{}{}, {}{}{align}",
+                    atomic_word(*ordering),
+                    if *volatile && !ordering.is_atomic() { "volatile " } else { "" },
+                    self.ty(inst.ty),
+                    typed(0),
+                    ordering_text(*ordering)
+                )
             }
-            Opcode::Store { align, volatile } => {
+            Opcode::Store { align, volatile, ordering } => {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
-                format!("store {}{}, {}{align}", if *volatile { "volatile " } else { "" }, typed(0), typed(1))
+                format!(
+                    "store {}{}{}, {}{}{align}",
+                    atomic_word(*ordering),
+                    if *volatile && !ordering.is_atomic() { "volatile " } else { "" },
+                    typed(0),
+                    typed(1),
+                    ordering_text(*ordering)
+                )
             }
+            Opcode::AtomicRmw { op, align, volatile, ordering } => {
+                let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
+                format!(
+                    "atomicrmw {}{} {}, {}{}{align}",
+                    if *volatile { "volatile " } else { "" },
+                    spelling(&ATOMIC_OPS, *op),
+                    typed(0),
+                    typed(1),
+                    ordering_text(*ordering)
+                )
+            }
+            Opcode::CmpXchg { align, volatile, weak, success, failure } => {
+                let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
+                format!(
+                    "cmpxchg {}{}{}, {}, {}{}{}{align}",
+                    if *weak { "weak " } else { "" },
+                    if *volatile { "volatile " } else { "" },
+                    typed(0),
+                    typed(1),
+                    typed(2),
+                    ordering_text(*success),
+                    ordering_text(*failure)
+                )
+            }
+            Opcode::Fence { ordering } => format!("fence{}", ordering_text(*ordering)),
             Opcode::GetElementPtr { source } => {
                 let rest: Vec<String> = (0..ops.len()).map(typed).collect();
                 format!("getelementptr{flags} {}, {}", self.ty(*source), rest.join(", "))

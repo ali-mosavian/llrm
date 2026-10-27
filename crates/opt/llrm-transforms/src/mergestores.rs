@@ -272,7 +272,7 @@ pub fn merged_copies(
         let lowest = chunk.iter().min_by_key(|one| one.dst_low).expect("a run has copies");
         let last = chunk.iter().max_by_key(|one| one.store_order).expect("a run has copies");
         let load = function.create_instruction(
-            Opcode::Load { align: None, volatile: false },
+            Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
             ty,
             vec![lowest.src_pointer],
             Flags::default(),
@@ -282,7 +282,7 @@ pub fn merged_copies(
         let void = context.types.void();
         let wide = function.instruction(load).result.expect("a load's value");
         let store = function.create_instruction(
-            Opcode::Store { align: None, volatile: false },
+            Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
             void,
             vec![Operand::Value(wide), lowest.dst_pointer],
             Flags::default(),
@@ -505,7 +505,7 @@ pub fn merged_constants(
         let void = context.types.void();
         let last = wide.last;
         let store = function.create_instruction(
-            Opcode::Store { align: None, volatile: false },
+            Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
             void,
             vec![value, wide.pointer],
             Flags::default(),

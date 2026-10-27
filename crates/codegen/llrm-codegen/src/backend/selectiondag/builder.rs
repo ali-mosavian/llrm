@@ -1725,8 +1725,8 @@ impl Builder<'_> {
             Opcode::Freeze => self.visit_freeze(&instruction)?,
             Opcode::ExtractValue(indices) => self.visit_extract_value(&instruction, indices)?,
             Opcode::InsertValue(indices) => self.visit_insert_value(&instruction, indices)?,
-            Opcode::Load { align, volatile } => self.visit_load(inst, &instruction, *align, *volatile)?,
-            Opcode::Store { align, volatile } => self.visit_store(&instruction, *align, *volatile)?,
+            Opcode::Load { align, volatile, .. } => self.visit_load(inst, &instruction, *align, *volatile)?,
+            Opcode::Store { align, volatile, .. } => self.visit_store(&instruction, *align, *volatile)?,
             Opcode::GetElementPtr { source } => self.visit_gep(&instruction, *source)?,
             Opcode::Br => self.visit_br(&instruction)?,
             Opcode::Alloca { .. }

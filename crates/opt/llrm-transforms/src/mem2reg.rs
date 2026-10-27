@@ -287,7 +287,7 @@ fn remove_intrinsic_users(
         {
             let value = uninitialized(context, ty);
             let store = function.create_instruction(
-                Opcode::Store { align, volatile: false },
+                Opcode::Store { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
                 void,
                 vec![value, Operand::Value(address)],
                 Flags::default(),

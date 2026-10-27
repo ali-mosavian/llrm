@@ -4,6 +4,79 @@ use std::cmp::Ordering;
 
 use crate::types::TypeId;
 
+/// `AtomicOrdering`: how a memory access orders the others around it. `NotAtomic` is a plain
+/// access; `Unordered` and up are atomic.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum AtomicOrdering {
+    #[default]
+    NotAtomic,
+    Unordered,
+    Monotonic,
+    Acquire,
+    Release,
+    AcquireRelease,
+    SequentiallyConsistent,
+}
+
+/// The spellings of the atomic orderings, as LLVM IR writes them.
+pub const ORDERINGS: [(AtomicOrdering, &str); 6] = [
+    (AtomicOrdering::Unordered, "unordered"),
+    (AtomicOrdering::Monotonic, "monotonic"),
+    (AtomicOrdering::Acquire, "acquire"),
+    (AtomicOrdering::Release, "release"),
+    (AtomicOrdering::AcquireRelease, "acq_rel"),
+    (AtomicOrdering::SequentiallyConsistent, "seq_cst"),
+];
+
+impl AtomicOrdering {
+    pub fn is_atomic(self) -> bool {
+        self != AtomicOrdering::NotAtomic
+    }
+}
+
+/// `AtomicRMWInst::BinOp`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AtomicOp {
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Nand,
+    Or,
+    Xor,
+    Max,
+    Min,
+    UMax,
+    UMin,
+    FAdd,
+    FSub,
+    FMax,
+    FMin,
+    UIncWrap,
+    UDecWrap,
+}
+
+/// The spellings of the `atomicrmw` operations.
+pub const ATOMIC_OPS: [(AtomicOp, &str); 17] = [
+    (AtomicOp::Xchg, "xchg"),
+    (AtomicOp::Add, "add"),
+    (AtomicOp::Sub, "sub"),
+    (AtomicOp::And, "and"),
+    (AtomicOp::Nand, "nand"),
+    (AtomicOp::Or, "or"),
+    (AtomicOp::Xor, "xor"),
+    (AtomicOp::Max, "max"),
+    (AtomicOp::Min, "min"),
+    (AtomicOp::UMax, "umax"),
+    (AtomicOp::UMin, "umin"),
+    (AtomicOp::FAdd, "fadd"),
+    (AtomicOp::FSub, "fsub"),
+    (AtomicOp::FMax, "fmax"),
+    (AtomicOp::FMin, "fmin"),
+    (AtomicOp::UIncWrap, "uinc_wrap"),
+    (AtomicOp::UDecWrap, "udec_wrap"),
+];
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -649,8 +722,15 @@ pub enum Opcode {
     ExtractValue(Vec<u32>),
     InsertValue(Vec<u32>),
     Alloca { allocated: TypeId, align: Option<u64>, address_space: u32 },
-    Load { align: Option<u64>, volatile: bool },
-    Store { align: Option<u64>, volatile: bool },
+    /// An atomic access is also `volatile`: that keeps every pass's hands off it (`atomic volatile`
+    /// prints as `atomic`).
+    Load { align: Option<u64>, volatile: bool, ordering: AtomicOrdering },
+    Store { align: Option<u64>, volatile: bool, ordering: AtomicOrdering },
+    /// `atomicrmw`: operands `[pointer, value]`, the value the memory held.
+    AtomicRmw { op: AtomicOp, align: Option<u64>, volatile: bool, ordering: AtomicOrdering },
+    /// `cmpxchg`: operands `[pointer, expected, new]`, the pair `{ old, success }`.
+    CmpXchg { align: Option<u64>, volatile: bool, weak: bool, success: AtomicOrdering, failure: AtomicOrdering },
+    Fence { ordering: AtomicOrdering },
     GetElementPtr { source: TypeId },
     ICmp(IntPredicate),
     FCmp(FloatPredicate),
@@ -689,6 +769,21 @@ impl PartialEq for Opcode {
 }
 
 impl Opcode {
+    /// A load or store that is neither volatile nor atomic: what a pass may delete, repeat, merge or
+    /// move as the memory it touches allows (LLVM's `isSimple()`; `unordered` counts as atomic here).
+    pub fn is_simple_access(&self) -> bool {
+        matches!(
+            self,
+            Self::Load { volatile: false, ordering: AtomicOrdering::NotAtomic, .. }
+                | Self::Store { volatile: false, ordering: AtomicOrdering::NotAtomic, .. }
+        )
+    }
+
+    /// A load that does something besides make its value: volatile or atomic.
+    pub fn is_ordered_load(&self) -> bool {
+        matches!(self, Self::Load { volatile, ordering, .. } if *volatile || ordering.is_atomic())
+    }
+
     /// The variants whose payload is more than a small enum.
     #[inline(always)]
     fn carries_fields(&self) -> bool {
@@ -701,6 +796,9 @@ impl Opcode {
                 | Self::Alloca { .. }
                 | Self::Load { .. }
                 | Self::Store { .. }
+                | Self::AtomicRmw { .. }
+                | Self::CmpXchg { .. }
+                | Self::Fence { .. }
                 | Self::GetElementPtr { .. }
                 | Self::LandingPad { .. }
         )
@@ -719,8 +817,19 @@ impl Opcode {
                 Self::Alloca { allocated: a, align: b, address_space: c },
                 Self::Alloca { allocated: d, align: e, address_space: f },
             ) => a == d && b == e && c == f,
-            (Self::Load { align: a, volatile: b }, Self::Load { align: c, volatile: d })
-            | (Self::Store { align: a, volatile: b }, Self::Store { align: c, volatile: d }) => a == c && b == d,
+            (Self::Load { align: a, volatile: b, ordering: e }, Self::Load { align: c, volatile: d, ordering: f })
+            | (Self::Store { align: a, volatile: b, ordering: e }, Self::Store { align: c, volatile: d, ordering: f }) => {
+                a == c && b == d && e == f
+            }
+            (
+                Self::AtomicRmw { op: a, align: b, volatile: c, ordering: d },
+                Self::AtomicRmw { op: e, align: f, volatile: g, ordering: h },
+            ) => a == e && b == f && c == g && d == h,
+            (
+                Self::CmpXchg { align: a, volatile: b, weak: c, success: d, failure: e },
+                Self::CmpXchg { align: f, volatile: g, weak: h, success: i, failure: j },
+            ) => a == f && b == g && c == h && d == i && e == j,
+            (Self::Fence { ordering: a }, Self::Fence { ordering: b }) => a == b,
             (Self::GetElementPtr { source: a }, Self::GetElementPtr { source: b }) => a == b,
             (Self::LandingPad { cleanup: a, clauses: b }, Self::LandingPad { cleanup: c, clauses: d }) => {
                 a == c && b == d
@@ -752,6 +861,9 @@ impl Opcode {
             Self::Alloca { .. } => "alloca",
             Self::Load { .. } => "load",
             Self::Store { .. } => "store",
+            Self::AtomicRmw { .. } => "atomicrmw",
+            Self::CmpXchg { .. } => "cmpxchg",
+            Self::Fence { .. } => "fence",
             Self::GetElementPtr { .. } => "getelementptr",
             Self::ICmp(_) => "icmp",
             Self::FCmp(_) => "fcmp",
@@ -799,10 +911,21 @@ mod tests {
             Opcode::Cast(CastOp::SExt),
             Opcode::ICmp(IntPredicate::Eq),
             Opcode::ICmp(IntPredicate::Ne),
-            Opcode::Load { align: None, volatile: false },
-            Opcode::Load { align: Some(2), volatile: false },
-            Opcode::Load { align: None, volatile: true },
-            Opcode::Store { align: None, volatile: false },
+            Opcode::Load { align: None, volatile: false, ordering: AtomicOrdering::NotAtomic },
+            Opcode::Load { align: Some(2), volatile: false, ordering: AtomicOrdering::NotAtomic },
+            Opcode::Load { align: None, volatile: true, ordering: AtomicOrdering::NotAtomic },
+            Opcode::Load { align: None, volatile: false, ordering: AtomicOrdering::Acquire },
+            Opcode::Store { align: None, volatile: false, ordering: AtomicOrdering::NotAtomic },
+            Opcode::Store { align: None, volatile: false, ordering: AtomicOrdering::Release },
+            Opcode::AtomicRmw { op: AtomicOp::Add, align: None, volatile: false, ordering: AtomicOrdering::Monotonic },
+            Opcode::CmpXchg {
+                align: None,
+                volatile: false,
+                weak: false,
+                success: AtomicOrdering::SequentiallyConsistent,
+                failure: AtomicOrdering::Monotonic,
+            },
+            Opcode::Fence { ordering: AtomicOrdering::SequentiallyConsistent },
             Opcode::ExtractValue(vec![0]),
             Opcode::ExtractValue(vec![1]),
             Opcode::InsertValue(vec![0]),

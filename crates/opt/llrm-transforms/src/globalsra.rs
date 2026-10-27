@@ -383,7 +383,7 @@ fn rewrite(
             let part = (bits >> ((*offset - low) * 8)) & llrm_mir::context::mask(width);
             let value = context.constant(Constant { ty: *ty, kind: ConstantKind::Int(part) });
             let store = function.create_instruction(
-                Opcode::Store { align: None, volatile: false },
+                Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
                 void,
                 vec![Operand::Constant(value), Operand::Constant(made[n].1)],
                 Flags::default(),
@@ -545,7 +545,7 @@ fn localize(
         ConstantKind::Undef | ConstantKind::Poison
     ) {
         let init = function.create_instruction(
-            Opcode::Store { align: None, volatile: false },
+            Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
             void,
             vec![Operand::Constant(initializer), Operand::Value(result)],
             Flags::default(),

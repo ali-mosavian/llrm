@@ -68,7 +68,7 @@ fn store_speculated(
     store: InstId,
     block: BlockId,
 ) -> Option<Operand> {
-    let Opcode::Store { align, volatile: false } = function.instruction(store).opcode else { return None };
+    let Opcode::Store { align, volatile: false , .. } = function.instruction(store).opcode else { return None };
     let (value, pointer) = (function.instruction(store).operands[0], function.instruction(store).operands[1]);
     let ty = function.operand_type(context, value)?;
     // The nine instructions before the branch.
@@ -80,7 +80,7 @@ fn store_speculated(
             return None;
         }
         match operation.opcode {
-            Opcode::Store { align: held, volatile } => {
+            Opcode::Store { align: held, volatile, .. } => {
                 // The previous store of the location, as simple and as aligned.
                 return (operation.operands[1] == pointer
                     && function.operand_type(context, operation.operands[0]) == Some(ty)
@@ -88,7 +88,7 @@ fn store_speculated(
                     && held >= align)
                     .then_some(operation.operands[0]);
             }
-            Opcode::Load { align: held, volatile: false }
+            Opcode::Load { align: held, volatile: false , .. }
                 if operation.operands[0] == pointer && operation.ty == ty && held >= align =>
             {
                 let query = Query::bare(context, function, spec.layout);

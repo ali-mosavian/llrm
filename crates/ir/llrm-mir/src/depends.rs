@@ -36,12 +36,15 @@ pub fn effectful(opcode: &Opcode) -> bool {
     matches!(
         opcode,
         Opcode::Store { .. }
-            | Opcode::Load { volatile: true, .. }
+            | Opcode::AtomicRmw { .. }
+            | Opcode::CmpXchg { .. }
+            | Opcode::Fence { .. }
             | Opcode::Call(_)
             | Opcode::Invoke(_)
             | Opcode::LandingPad { .. }
             | Opcode::Resume
-    ) || opcode.is_terminator()
+    ) || opcode.is_ordered_load()
+        || opcode.is_terminator()
 }
 
 impl Depends {
