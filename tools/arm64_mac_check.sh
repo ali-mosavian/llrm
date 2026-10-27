@@ -2,6 +2,7 @@
 # On an arm64 Mac: builds llrm-arm64-llc, compiles each tests/darwin/*.ll to a
 # Mach-O object, links it with the system clang and runs it; its output and
 # exit status must be the ones recorded in tests/darwin/*.out and *.status.
+# A fixture NAME.flags holds the flags llrm-arm64-llc gets for it.
 #   tools/arm64_mac_check.sh
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -12,7 +13,8 @@ tmp=$(mktemp -d)
 failed=0
 for ir in "$dir"/*.ll; do
   name=$(basename "$ir" .ll)
-  if ! "$llc" -o "$tmp/$name.o" "$ir"; then echo "FAIL $name: compile"; failed=1; continue; fi
+  flags=$(cat "$dir/$name.flags" 2>/dev/null || true)  # optional: llc flags of this fixture
+  if ! "$llc" $flags -o "$tmp/$name.o" "$ir"; then echo "FAIL $name: compile"; failed=1; continue; fi
   if ! clang -arch arm64 -o "$tmp/$name" "$tmp/$name.o"; then echo "FAIL $name: link"; failed=1; continue; fi
   "$tmp/$name" > "$tmp/$name.out"; status=$?
   if cmp -s "$tmp/$name.out" "$dir/$name.out" && [ "$status" = "$(cat "$dir/$name.status")" ]; then

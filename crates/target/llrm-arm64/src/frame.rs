@@ -68,8 +68,8 @@ fn layout(
         saves.push((Save::FprPair(first, second), top));
         top += 16;
     }
-    let frame_record = function
-        .calls
+    // A moving stack pointer is addressed from, and put back by, the frame pointer: a leaf with a dynamic alloca too.
+    let frame_record = (function.calls || function.dynamic)
         .then(
             || {
                 let at = top;
@@ -330,8 +330,8 @@ fn save_registers(
             let inst = match (second, store) {
                 (Some(second), true) => Inst::StorePair { first, second, addr },
                 (Some(second), false) => Inst::LoadPair { first, second, addr },
-                (None, true) => Inst::Store { mem: first, addr },
-                (None, false) => Inst::Load { mem: first, addr },
+                (None, true) => Inst::Store { mem: first, addr, mmo: MemOperand::default() },
+                (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
             };
             emitter.insts.push(inst);
             continue;
@@ -348,8 +348,8 @@ fn save_registers(
         let inst = match (second, store) {
             (Some(second), true) => Inst::StorePair { first, second, addr },
             (Some(second), false) => Inst::LoadPair { first, second, addr },
-            (None, true) => Inst::Store { mem: first, addr },
-            (None, false) => Inst::Load { mem: first, addr },
+            (None, true) => Inst::Store { mem: first, addr, mmo: MemOperand::default() },
+            (None, false) => Inst::Load { mem: first, addr, mmo: MemOperand::default() },
         };
         emitter.insts.push(inst);
     }
@@ -364,7 +364,7 @@ fn lower_inst(
 ) -> Result<(), String> {
     let mut inst = inst.clone();
     match &mut inst {
-        Inst::Load { mem, addr } | Inst::Store { mem, addr } => {
+        Inst::Load { mem, addr, .. } | Inst::Store { mem, addr, .. } => {
             if let Addr::Slot { slot, offset } = *addr {
                 let bytes = accessed_bytes(mem);
                 let (base, total) = frame.place(slot, offset);

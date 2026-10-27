@@ -27,6 +27,50 @@ impl Width {
     }
 }
 
+use llrm_analysis::aa::AliasResult;
+use llrm_analysis::placealias::{Object, alias_of};
+
+/// The object an access is relative to, as far as telling two accesses apart: what `MachinePointerInfo` names.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum MemObject {
+    #[default]
+    Unknown,
+    /// A global, by symbol.
+    Global(String),
+    /// A frame object.
+    Slot(u32),
+}
+
+/// What a load or store reaches (`MachineMemOperand`): its object and the byte offset in it, where both are known.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MemOperand {
+    pub object: MemObject,
+    pub offset: Option<i64>,
+}
+
+impl MemOperand {
+    /// Whether an access of `bytes` here and one of `other_bytes` at `other` cannot touch the same byte
+    /// (`AliasAnalysis`' `NoAlias`, as `BaseIndexOffset::computeAliasing` reads it from the objects): two
+    /// different objects never overlap; one object's accesses do not when their ranges do not.
+    pub fn disjoint(
+        &self,
+        bytes: i64,
+        other: &MemOperand,
+        other_bytes: i64,
+    ) -> bool {
+        fn object(memory: &MemOperand) -> Option<Object<&str>> {
+            match &memory.object {
+                MemObject::Unknown => None,
+                MemObject::Global(name) => Some(Object::Global(name.as_str())),
+                MemObject::Slot(slot) => Some(Object::Frame { id: i64::from(*slot), fixed: false }),
+            }
+        }
+        let distance = (self.object == other.object).then(|| Some(other.offset? - self.offset?)).flatten();
+        alias_of(distance, object(self).as_ref(), u64::try_from(bytes).ok(), object(other).as_ref(), u64::try_from(other_bytes).ok())
+            == AliasResult::NoAlias
+    }
+}
+
 /// A general-purpose register, `x0`..`x30`, or number 31, which is the zero
 /// register or the stack pointer as the operand's role says.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -470,10 +514,12 @@ pub enum Inst {
     Load {
         mem: Memory,
         addr: Addr,
+        mmo: MemOperand,
     },
     Store {
         mem: Memory,
         addr: Addr,
+        mmo: MemOperand,
     },
     LoadPair {
         first: Memory,
@@ -544,6 +590,16 @@ pub enum Inst {
         gpr: Gpr,
         fpr: Vreg,
     },
+    /// `scvtf`/`ucvtf` from an integer or `fcvtzs`/`fcvtzu` to one, with `fbits` fractional bits
+    /// (the value scaled by 2^fbits); `op` is `ToFp` or `ToIntZero`.
+    FpFixed {
+        op: FpConvert,
+        width: Width,
+        size: FpSize,
+        gpr: Gpr,
+        fpr: Vreg,
+        fbits: u8,
+    },
     Svc {
         imm16: u16,
     },
@@ -551,6 +607,11 @@ pub enum Inst {
         imm16: u16,
     },
     Nop,
+    /// `prfm <op>, [<base>]`: a hint that the line at `base` is wanted; `op` is the 5-bit prefetch operation.
+    Prefetch {
+        op: u8,
+        base: Gpr,
+    },
 }
 
 /// The second operand of a conditional compare.

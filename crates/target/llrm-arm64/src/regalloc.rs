@@ -458,7 +458,7 @@ fn spill_access(
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
         Reg::Fpr(reg) => Memory::Fp { bytes: 8, reg },
     };
-    Op::I(if load { Inst::Load { mem, addr } } else { Inst::Store { mem, addr } })
+    Op::I(if load { Inst::Load { mem, addr, mmo: MemOperand::default() } } else { Inst::Store { mem, addr, mmo: MemOperand::default() } })
 }
 
 #[allow(dead_code)]

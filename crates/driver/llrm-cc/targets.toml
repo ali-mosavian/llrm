@@ -117,7 +117,7 @@ datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128
 clang = ["-ffp-contract=off", "-target", "arm64-apple-macos"]
 llc = []
 llc_program = "llrm-arm64-llc"
-llc_level = false
+llc_level = true
 object = "macho"
 link = ["clang", "-arch", "arm64", "-o", "{output}", "{objects}"]
 run = []

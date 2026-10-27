@@ -268,6 +268,9 @@ fn branches() {
         all.push(Inst::BranchReg { link, rn: Gpr(16) });
     }
     all.push(Inst::Ret { rn: Gpr::LR });
+    for op in [0, 1, 0b00011, 0b10001, 0b11000] {
+        all.push(Inst::Prefetch { op, base: Gpr(9) });
+    }
     all.push(Inst::Ret { rn: Gpr(5) });
     all.push(Inst::Svc { imm16: 0x80 });
     all.push(Inst::Brk { imm16: 1 });
@@ -290,10 +293,12 @@ fn symbolic_targets_leave_zero_fields() {
         Inst::Load {
             mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(2) },
             addr: Addr::PageOffset { base: Gpr(1), target: symbol("_count", 0), got: false },
+            mmo: MemOperand::default(),
         },
         Inst::Load {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(3) },
             addr: Addr::PageOffset { base: Gpr(3), target: symbol("_ext", 0), got: true },
+            mmo: MemOperand::default(),
         },
     ]);
 }
@@ -332,17 +337,17 @@ fn loads_and_stores() {
     for (width, bytes, sign) in ints {
         let mem = Memory::Int { width, bytes, sign, reg: Gpr(5) };
         for addr in addrs(i64::from(bytes)) {
-            all.push(Inst::Load { mem, addr: addr.clone() });
+            all.push(Inst::Load { mem, addr: addr.clone(), mmo: MemOperand::default() });
             if !sign {
-                all.push(Inst::Store { mem, addr });
+                all.push(Inst::Store { mem, addr, mmo: MemOperand::default() });
             }
         }
     }
     for bytes in [1u8, 2, 4, 8, 16] {
         let mem = Memory::Fp { bytes, reg: Vreg(6) };
         for addr in addrs(i64::from(bytes)) {
-            all.push(Inst::Load { mem, addr: addr.clone() });
-            all.push(Inst::Store { mem, addr });
+            all.push(Inst::Load { mem, addr: addr.clone(), mmo: MemOperand::default() });
+            all.push(Inst::Store { mem, addr, mmo: MemOperand::default() });
         }
     }
     for (first, second, bytes) in [
@@ -424,6 +429,9 @@ fn floating_point() {
                 FpConvert::ToIntZero { signed: false },
             ] {
                 all.push(Inst::FpInt { op, width, size, gpr: Gpr(1), fpr: Vreg(2) });
+                for fbits in [1, 2, 31, width.bits() as u8] {
+                    all.push(Inst::FpFixed { op, width, size, gpr: Gpr(1), fpr: Vreg(2), fbits });
+                }
             }
         }
         all.push(Inst::FpInt {

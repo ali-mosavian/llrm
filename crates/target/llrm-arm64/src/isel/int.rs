@@ -171,6 +171,21 @@ impl Selector<'_> {
             self.fused.insert(super::value_def(self.function, result.expect("checked")).expect("an instruction"));
             return Ok(());
         }
+        if op == BinaryOp::Shl && self.folds_into_index(instruction) {
+            // The `getelementptr` that reads it indexes by the unshifted value.
+            let inst = super::value_def(self.function, result.expect("a shift has a result")).expect("an instruction");
+            self.fused.insert(inst);
+            self.indexed.insert(inst);
+            return Ok(());
+        }
+        if matches!(op, BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) && self.folds_into_reader(instruction) {
+            // The reader shifts its operand itself.
+            self.fused.insert(super::value_def(self.function, result.expect("a shift has a result")).expect("an instruction"));
+            return Ok(());
+        }
+        if let Some(done) = self.shifted_operand(op, bits, instruction)? {
+            return self.define(result, Src::Val(Val::Int(done)));
+        }
         if matches!(op, BinaryOp::Add | BinaryOp::Sub)
             && let Some(done) = self.multiply_accumulate(op == BinaryOp::Sub, bits, instruction)?
         {
@@ -548,6 +563,10 @@ impl Selector<'_> {
     ) -> Selected<()> {
         let result = instruction.result;
         let to = instruction.ty;
+        if matches!(op, CastOp::FPToSI | CastOp::FPToUI) {
+            // Its operand may be a multiply left to it (`fixedpoint`), with no value.
+            return self.float_cast(op, instruction);
+        }
         let from_type = self.operand_type(instruction.operands[0])?;
         let source = self.src(instruction.operands[0])?;
         match op {
@@ -561,6 +580,13 @@ impl Selector<'_> {
                 };
                 let known = if bits == 32 && known == Known::Hi32Zero { Known::Zero } else { known };
                 self.define(result, Src::Val(Val::Int(G { reg: g.reg, bits, known })))
+            }
+            CastOp::ZExt | CastOp::SExt if self.folds_into_index(instruction) => {
+                // The `getelementptr` that reads it extends the index in its addressing mode.
+                let inst = super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
+                self.fused.insert(inst);
+                self.indexed.insert(inst);
+                Ok(())
             }
             CastOp::ZExt | CastOp::SExt => {
                 let (Some(from_bits), Some(bits)) = (self.types().int_bits(from_type), self.types().int_bits(to))
@@ -837,7 +863,7 @@ impl Selector<'_> {
         operand: Operand,
     ) -> Selected<Cond> {
         if let Operand::Value(value) = operand
-            && self.fusable(value)
+            && (self.fusable(value) || self.chains.contains(value))
             && let Some(inst) = super::value_def(self.function, value)
         {
             let compare = self.function.instruction(inst).clone();

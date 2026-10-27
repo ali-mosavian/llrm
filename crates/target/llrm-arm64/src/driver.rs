@@ -158,7 +158,9 @@ pub fn optimized_at(
     let dump = std::env::var_os("LLRM_MIR_STAGES").filter(|one| !one.is_empty()).map(Into::into);
     let mut options = level.options();
     options.library = c_library();
-    llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })
+    llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
+    // The selector has no pattern store: it is a loop of single stores, as for the DAG selectors.
+    program.modules.iter_mut().try_for_each(llrm_codegen::backend::memsetpattern::expanded)
 }
 
 /// The routines the C link of this target resolves, by their IR names (the
@@ -184,6 +186,8 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         let mut machine =
             crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
         crate::prepass::run(&mut machine);
+        crate::flagcse::run(&mut machine);
+        crate::storecluster::run(&mut machine);
         crate::sibcall::run(&mut machine);
         crate::prepass::order_copies(&mut machine);
         if llrm_support::debug::enabled("arm64") {

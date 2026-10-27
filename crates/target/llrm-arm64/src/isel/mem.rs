@@ -3,12 +3,23 @@
 //! a load or store takes the base, scaled index and offset into its addressing
 //! mode (`AArch64DAGToDAGISel::SelectAddrModeIndexed` and its relatives).
 
-use llrm_mir::{Instruction, Operand, Type, TypeId};
+use llrm_mir::{CastOp, InstId, Instruction, Opcode, Operand, Type, TypeId};
 
 use super::val::{AddrExpr, Base, G, Index, Known, Val};
 use super::{Selected, Selector, Src, refuse};
 use crate::mc::inst::*;
 use crate::mfunc::Op;
+
+/// What an access at `address` reaches, so that two accesses can be told apart later (`pairs`): the global or
+/// frame object it starts from and, where no index moves it, the byte offset in it.
+fn memory_operand(address: &AddrExpr) -> MemOperand {
+    let offset = address.index.is_none().then_some(address.offset);
+    match &address.base {
+        Base::Global { name, .. } => MemOperand { object: MemObject::Global(name.clone()), offset },
+        Base::Slot(slot) => MemOperand { object: MemObject::Slot(*slot), offset },
+        Base::Reg(_) => MemOperand::default(),
+    }
+}
 
 impl Selector<'_> {
     /// Whether `inst`, an `alloca`, is a frame object: a constant count, in the
@@ -121,6 +132,9 @@ impl Selector<'_> {
                 return self.with_index(dst, address);
             }
             Base::Global { name, got } => {
+                if let Some(shared) = self.shared_global(name, *got) {
+                    return self.add_offset_and_index(shared, address);
+                }
                 let page = self.mf.gpr();
                 // the page and the page offset name the same address: a GOT
                 // slot has no offset
@@ -140,6 +154,7 @@ impl Selector<'_> {
                             target: Target::Symbol { name: name.clone(), addend: 0 },
                             got: true,
                         },
+                        mmo: MemOperand::default(),
                     });
                     // The offset is added to the loaded address.
                     return self.add_offset_and_index(dst, address);
@@ -156,6 +171,38 @@ impl Selector<'_> {
             register = self.add_constant(register, address.offset);
         }
         self.with_index(register, address)
+    }
+
+    /// The address of global `name` in a register this block already holds it in, or makes now, where the function
+    /// names it more than once (clang's `adrp` + `add` once, each access then `[x, #offset]`); `None` where one
+    /// access folds the symbol's offset into its own `adrp` for less.
+    fn shared_global(
+        &mut self,
+        name: &str,
+        got: bool,
+    ) -> Option<Gpr> {
+        if self.global_uses.get(name).copied().unwrap_or(0) < 2 {
+            return None;
+        }
+        let key = (name.to_owned(), self.current);
+        if let Some(register) = self.global_regs.get(&key) {
+            return Some(*register);
+        }
+        let target = Target::Symbol { name: name.to_owned(), addend: 0 };
+        let page = self.mf.gpr();
+        self.inst(Inst::Adr { page: true, rd: page, target: target.clone(), got });
+        let register = self.mf.gpr();
+        if got {
+            self.inst(Inst::Load {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: register },
+                addr: Addr::PageOffset { base: page, target, got: true },
+                mmo: MemOperand::default(),
+            });
+        } else {
+            self.inst(Inst::AddPageOffset { rd: register, rn: page, target });
+        }
+        self.global_regs.insert(key, register);
+        Some(register)
     }
 
     fn add_offset_and_index(
@@ -247,6 +294,11 @@ impl Selector<'_> {
         bytes: u8,
     ) -> Selected<Addr> {
         let scale = i64::from(bytes);
+        if let (Base::Global { name, got }, None) = (&address.base, address.index) {
+            if let Some(shared) = self.shared_global(name, *got) {
+                return self.base_offset(shared, address.offset, scale);
+            }
+        }
         match (&address.base, address.index) {
             (Base::Slot(slot), None) => Ok(Addr::Slot { slot: *slot, offset: address.offset }),
             (Base::Reg(base), None) => self.base_offset(*base, address.offset, scale),
@@ -314,7 +366,7 @@ impl Selector<'_> {
         })
     }
 
-    fn pointer_operand(
+    pub(super) fn pointer_operand(
         &mut self,
         operand: Operand,
     ) -> Selected<AddrExpr> {
@@ -335,8 +387,52 @@ impl Selector<'_> {
         instruction: &Instruction,
     ) -> Selected<()> {
         let address = self.pointer_operand(instruction.operands[0])?;
+        if let Some((cast, to)) = self.extended_by_reader(instruction) {
+            let g = self.load_signed(instruction.ty, &address, to)?;
+            let result = self.function.instruction(cast).result;
+            self.fused.insert(cast);
+            return self.define(result, Src::Val(Val::Int(g)));
+        }
         let value = self.load_typed(instruction.ty, &address)?;
         self.define(instruction.result, Src::Val(value))
+    }
+
+    /// The `sext` that is the only reader of `load`, in its block, and the bits it extends to: it is
+    /// part of the load (`ldrsb`, `ldrsh`, `ldrsw`), as the pin's DAGCombiner makes an extending load of it.
+    fn extended_by_reader(
+        &self,
+        load: &Instruction,
+    ) -> Option<(InstId, u32)> {
+        let result = load.result?;
+        if self.use_count(result) != 1 || !matches!(self.ty(load.ty), Type::Int(8 | 16 | 32)) {
+            return None;
+        }
+        let user = self.function.users(result).into_iter().next()?.user;
+        let reader = self.function.instruction(user);
+        let own = super::value_def(self.function, result).and_then(|inst| self.function.parent(inst));
+        let to = self.types().int_bits(reader.ty)?;
+        // An extension the addressing mode takes is not part of the load.
+        (reader.opcode == Opcode::Cast(CastOp::SExt)
+            && matches!(to, 32 | 64)
+            && own == self.function.parent(user)
+            && !self.folds_into_index(reader))
+        .then_some((user, to))
+    }
+
+    /// A scalar integer of type `ty` read from `address` and sign-extended to `to` bits (32 or 64).
+    fn load_signed(
+        &mut self,
+        ty: TypeId,
+        address: &AddrExpr,
+        to: u32,
+    ) -> Selected<G> {
+        let (bytes, _) = self.access(ty)?;
+        let addr = self.addressing(address, bytes)?;
+        let reg = self.mf.gpr();
+        let width = if to == 64 { Width::X } else { Width::W };
+        self.inst(Inst::Load { mem: Memory::Int { width, bytes, sign: true, reg }, addr, mmo: memory_operand(address) });
+        // A 32-bit result of a `w` register leaves bits 32 and above zero.
+        Ok(G { reg, bits: to, known: if to == 32 { Known::Zero } else { Known::Nothing } })
     }
 
     /// A scalar of type `ty` read from `address`.
@@ -349,12 +445,12 @@ impl Selector<'_> {
         let addr = self.addressing(address, bytes)?;
         Ok(if float {
             let reg = self.mf.fpr();
-            self.inst(Inst::Load { mem: Memory::Fp { bytes, reg }, addr });
+            self.inst(Inst::Load { mem: Memory::Fp { bytes, reg }, addr, mmo: memory_operand(address) });
             Val::Float { reg, size: if bytes == 4 { FpSize::S } else { FpSize::D } }
         } else {
             let reg = self.mf.gpr();
             let width = if bytes == 8 { Width::X } else { Width::W };
-            self.inst(Inst::Load { mem: Memory::Int { width, bytes, sign: false, reg }, addr });
+            self.inst(Inst::Load { mem: Memory::Int { width, bytes, sign: false, reg }, addr, mmo: memory_operand(address) });
             let bits = match self.ty(ty) {
                 Type::Int(bits) => *bits,
                 _ => 64,
@@ -384,6 +480,22 @@ impl Selector<'_> {
         if self.is_aggregate(ty) {
             let Src::Val(value) = value else { return refuse("a constant aggregate stored") };
             return self.store_typed(ty, &value, &address);
+        }
+        // A float constant `fmov` cannot make is stored as the integer of its bits, from the zero register where it
+        // is zero (`DAGCombiner::visitSTORE`'s `store fpconst` -> `store iconst`): no trip through a float register.
+        if let Src::Float { size, bits } = &value {
+            let double = match size {
+                FpSize::S => f64::from(f32::from_bits(*bits as u32)),
+                _ => f64::from_bits(*bits),
+            };
+            if crate::mc::immediate::fp_immediate(double).is_none() {
+                let (bytes, int_bits) = if *size == FpSize::S { (4, 32) } else { (8, 64) };
+                let reg = if *bits == 0 { Gpr::R31 } else { self.gpr_of(Src::Int { bits: int_bits, value: u128::from(*bits) })?.reg };
+                let mem = Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg };
+                let addr = self.addressing(&address, bytes)?;
+                self.inst(Inst::Store { mem, addr, mmo: memory_operand(&address) });
+                return Ok(());
+            }
         }
         self.store_scalar_src(ty, value, &address)
     }
@@ -417,7 +529,7 @@ impl Selector<'_> {
             Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg }
         };
         let addr = self.addressing(address, bytes)?;
-        self.inst(Inst::Store { mem, addr });
+        self.inst(Inst::Store { mem, addr, mmo: memory_operand(address) });
         Ok(())
     }
 
@@ -432,6 +544,10 @@ impl Selector<'_> {
         // element sizes.
         let mut indices = Vec::new();
         for operand in &instruction.operands[1..] {
+            if self.is_folded_index(*operand) {
+                indices.push(None);
+                continue;
+            }
             indices.push(match self.src(*operand)? {
                 Src::Int { bits, value } => Some(llrm_mir::context::signed(value, bits)),
                 _ => None,
@@ -440,6 +556,13 @@ impl Selector<'_> {
         let (offset, variable) = self.layout.collect_offset(self.types(), source, &indices);
         address.offset += offset as i64;
         for (position, scale) in variable {
+            if let Some(index) = self.folded_index(instruction.operands[1 + position], scale)? {
+                if address.index.is_some() {
+                    return refuse("a folded index on an address that has one");
+                }
+                address.index = Some(index);
+                continue;
+            }
             let g = self.operand_g(instruction.operands[1 + position])?;
             address = self.add_scaled_index(address, g, scale)?;
         }
