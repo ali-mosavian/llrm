@@ -127,6 +127,11 @@ impl Lanes {
         Self(u128::from(mask))
     }
 
+    /// The flags emitted code reads (`Flag::READ`).
+    pub fn read_flags() -> Self {
+        Self::flags(llrm_lir::flag::Flag::READ.bits())
+    }
+
     /// Bytes `start..start + len` of a register: the lanes `(register, byte)`
     /// for each, without a table lookup per byte.
     pub fn span(

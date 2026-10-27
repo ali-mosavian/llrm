@@ -13,8 +13,8 @@
 //! result.
 //!
 //! # Runs
-//! Under [`crate::backend::bitcounts`], [`crate::backend::bytes`] and
-//! [`crate::backend::compares`], from `driver::optimized`.
+//! Under codegen's `bitcounts`, `bytes` and `compares`, from
+//! `driver::optimized`.
 //!
 //! # See also
 //! LLVM's `TargetLowering::expand*` family, which these follow
