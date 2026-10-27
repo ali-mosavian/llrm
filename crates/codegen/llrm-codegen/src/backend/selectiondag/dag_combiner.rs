@@ -1726,7 +1726,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// `visitSIGN_EXTEND_INREG` ([pin][pin]): an operand that is already
     /// sign-extended, nested in-regs, a `sext`/`aext`/`zext` of a value no
     /// wider than the type, a clear sign bit; then the demanded bits.
-    /// SD313: not the vector in-reg forms, nor `reduceLoadWidth`.
+    /// SD230: not the vector in-reg forms, nor `reduceLoadWidth`.
     ///
     /// [pin]:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17400
