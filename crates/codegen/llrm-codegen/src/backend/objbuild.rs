@@ -376,7 +376,7 @@ fn pack_field(
     } else if kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
-        pack_into(buffer, at, value & 0xFFFF);
+        pack_into(buffer, at, i64::from(value as u16));
     }
 }
 
@@ -846,7 +846,7 @@ pub fn _part(
             fixups: vec![Fixup::new(0, OFFSET32, name.clone())],
         }),
         masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" => Ok(Piece {
-            code: ((offset & 0xFFFF) as u16).to_le_bytes().to_vec(),
+            code: (*offset as u16).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET, name.clone())],
         }),
         masm::InlinePart::Fixup(kind, name, _) if kind == "segment" => {

@@ -205,6 +205,9 @@ pub mod latecleanup;
 pub mod layout;
 pub mod leaopt;
 pub mod legalize;
+pub mod libmcalls;
+#[cfg(test)]
+mod libmcalls_tests;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;

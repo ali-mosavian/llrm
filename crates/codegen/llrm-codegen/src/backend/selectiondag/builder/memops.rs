@@ -1079,6 +1079,29 @@ impl Builder<'_> {
         self.dag.value_type(pointer) == EVT::Simple(super::super::mvt::MVT::Far)
     }
 
+    /// `getMemcpy` with `AlwaysInline` (a byval argument's copy): the loads
+    /// and stores while they fit the store limit, then X86's
+    /// `emitConstantSizeRepmov` (`rep movs`, whatever the size or alignment),
+    /// and the loads and stores whatever their number only where `rep movs`
+    /// does not apply (a far pointer).
+    pub(super) fn always_inline_memcpy(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: u64,
+        align: u64,
+    ) -> Result<Option<SDValue>, Refused> {
+        let limit = if self.has_opt_size() { 4 } else { 8 };
+        if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
+            return Ok(Some(copy));
+        }
+        if self.is_far(dst) || self.is_far(src) {
+            return self.inline_memcpy(chain, dst, src, size, usize::MAX, align, align);
+        }
+        self.rep_movs(chain, dst, src, size, align.min(4), align, align).map(Some)
+    }
+
     /// `emitRepmovs` with the block width of `emitConstantSizeRepmov`.
     fn rep_movs(
         &mut self,

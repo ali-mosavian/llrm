@@ -143,7 +143,8 @@ impl Combiner<'_> {
         }
         let function = &*self.function;
         let mask = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
-        // `BasicBlockEdge(IDom, successor)` dominates `BasicBlockEdge(pred, block)`.
+        // `BasicBlockEdge(IDom, successor)` dominates `BasicBlockEdge(pred,
+        // block)`.
         let correct = |value: u128, from: BlockId| {
             let Some(&(_, successor)) = succ_for.iter().rev().find(|&&(one, _)| one == value) else { return false };
             edges.iter().any(|&(one, n)| one == successor && n == 1)
