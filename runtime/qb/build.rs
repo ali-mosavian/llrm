@@ -69,6 +69,31 @@ fn main() {
         writeln!(out, "    ({name:?}, {at}),").expect("a string takes text");
     }
     out.push_str("];\n");
+    out.push_str("\n/// The audited stack cleanup per routine, by group: (group, [(routine, bytes)]).\npub static POPS: &[(&str, &[(&str, i64)])] = &[\n");
+    if let Some(groups) = rows.get("pops").and_then(|one| one.as_table()) {
+        for (group, pops) in groups {
+            let pops = pops.as_table().expect("a pops group is a table");
+            let all: Vec<String> = pops
+                .iter()
+                .map(|(name, bytes)| format!("({name:?}, {})", bytes.as_integer().expect("bytes is an int")))
+                .collect();
+            writeln!(out, "    ({group:?}, &[{}]),", all.join(", ")).expect("a string takes text");
+        }
+    }
+    out.push_str("];\n");
+    out.push_str("\n/// Fixed stack blocks with their evidence: (routines, bytes, evidence).\npub static POP_NOTES: &[(&[&str], i64, &str)] = &[\n");
+    for one in rows.get("pop").and_then(|one| one.as_array()).into_iter().flatten() {
+        let one = one.as_table().expect("a pop entry is a table");
+        writeln!(
+            out,
+            "    ({}, {}, {:?}),",
+            list(one, "names"),
+            one["bytes"].as_integer().expect("bytes is an int"),
+            string(one, "evidence").trim()
+        )
+        .expect("a string takes text");
+    }
+    out.push_str("];\n");
     out.push_str("\n/// The cells a program names by EXTDEF and the routines that write each: (cell, family, routines).\npub static WRITERS_ROWS: &[(&str, &str, &[&str])] = &[\n");
     for one in rows.get("writers").and_then(|one| one.as_array()).expect("[[writers]]") {
         let one = one.as_table().expect("a writers entry is a table");

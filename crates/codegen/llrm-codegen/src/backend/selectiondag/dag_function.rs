@@ -43,6 +43,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
 use llrm_target::Target;
+use llrm_target::routines::Used;
 
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
@@ -354,6 +355,17 @@ impl super::emit::Conventions for CallConventions<'_> {
             .filter(|(full, pushed)| regs.bytes(*pushed) < regs.bytes(*full))
             .map(|(full, _)| full)
             .collect()
+    }
+
+    fn disturbs(
+        &self,
+        callee: Option<&Callee>,
+        clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        match self.contract(callee) {
+            Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            _ => clobbers.clone(),
+        }
     }
 
     fn clobbers(
@@ -900,7 +912,7 @@ fn selected_in(
             &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
             &selector,
             &mut hooks,
-            &Info { source_order: bitness == 32 },
+            &Info { source_order: true },
             &ctx,
             &mut state,
             block_at[&block.0],
@@ -1121,9 +1133,11 @@ fn selected_in(
     for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::DIVIDE_PREFIX)) {
         for signed in [true, false] {
             for wide in [true, false] {
-                if let Ok(routine) = arch.divide_routine(signed, wide) {
-                    if routine.name == name.as_str() {
-                        inline.insert(*at, routine.code);
+                for used in [Used::Both, Used::Quotient, Used::Remainder] {
+                    if let Ok(routine) = arch.divide_routine_used(signed, wide, used) {
+                        if routine.name == name.as_str() {
+                            inline.insert(*at, routine.code);
+                        }
                     }
                 }
             }
@@ -1296,13 +1310,33 @@ fn set_odds(
     block_at: &HashMap<u32, i64>,
 ) {
     let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
-    for &(from, to, probability) in edges {
-        let (Some(&at), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
-        let Some(lir) = body.blocks.iter().find(|one| one.at == at) else { continue };
-        if lir.succ.len() < 2 || !lir.succ.contains(&to_at) {
-            continue;
+    // The pieces a block became: it, then the blocks after it in the body that
+    // no IR block starts.
+    let first_of_ir: std::collections::HashSet<i64> = block_at.values().copied().collect();
+    let mut piece_of: HashMap<i64, i64> = HashMap::default();
+    let mut current = None;
+    for one in &body.blocks {
+        if first_of_ir.contains(&one.at) {
+            current = Some(one.at);
         }
-        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+        if let Some(current) = current {
+            piece_of.insert(one.at, current);
+        }
+    }
+    for &(from, to, probability) in edges {
+        let (Some(&first), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
+        // A select made into branches splits the block, and the branch ends
+        // the last piece (`transferSuccessorsAndUpdatePHIs`): the edges are
+        // that piece's.
+        let Some(lir) = body
+            .blocks
+            .iter()
+            .filter(|one| piece_of.get(&one.at) == Some(&first) && one.succ.len() >= 2 && one.succ.contains(&to_at))
+            .last()
+        else {
+            continue;
+        };
+        *stated.entry((lir.at, to_at)).or_insert(0) += u64::from(probability);
     }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();

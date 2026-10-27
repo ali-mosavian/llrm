@@ -1329,6 +1329,7 @@ fn built(
             })
             .collect();
     let cells = blocks_arguments(&procedure.body);
+    let mut split_edges: Vec<(i64, Option<i64>, Vec<crate::backend::shrinkwrap::Piece>)> = Vec::new();
     let mut out: Vec<Item> = line
         .map(&mut marked)
         .into_iter()
@@ -1356,6 +1357,7 @@ fn built(
         // paths that took nothing reach the restore's label past it.
         let closing = wrap.as_ref().and_then(|wrap| wrap.closes_after.get(&block.at));
         let last_printed = block.insns.iter().rev().find(|one| prints(one));
+        let taken = wrap.as_ref().and_then(|wrap| wrap.closes_taken.get(&block.at));
         let ends_in_jump =
             last_printed.is_some_and(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Jump));
         let mut closed = false;
@@ -1470,6 +1472,14 @@ fn built(
                     };
                     out.push(Item::Semantics(Semantics { name: Some(name.into()), ..what.clone() }));
                 }
+                Operation::Branch if taken.is_some_and(|_| last_printed.is_some_and(|last| Arc::ptr_eq(last, one))) => {
+                    // The taken edge into the restore goes through a block of
+                    // its own, past the procedure's last, that takes the
+                    // pieces back (`tryToSplitRestore`).
+                    let edge = cold_at(&procedure.body) + 1 + split_edges.len() as i64;
+                    split_edges.push((edge, what.target, taken.cloned().unwrap_or_default()));
+                    out.push(Item::Semantics(Semantics { target: Some(edge), ..what.clone() }));
+                }
                 _ => out.push(Item::Semantics(what.clone())),
             }
             // Where the values it made went, for a debugger: the register or
@@ -1499,6 +1509,11 @@ fn built(
                 }));
             }
         }
+    }
+    for (edge, restore, pieces) in split_edges {
+        out.push(Item::Label(Label { name: label(number, edge) }));
+        out.extend(pieces.iter().flat_map(|piece| item(piece).1).map(Item::Semantics));
+        out.push(Item::Semantics(Semantics { target: restore, ..semantics(Operation::Jump, "jmp", vec![], vec![]) }));
     }
     // Last, where nothing falls into it: the call that does not return.
     if let Some(check) = &procedure.stack_check {

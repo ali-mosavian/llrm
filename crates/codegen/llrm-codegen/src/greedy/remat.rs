@@ -93,6 +93,9 @@ pub fn is_trivially_re_materializable(
         (Operation::FloatLoad, Some("fld"), [Loc::Mem(_)]) => {
             invariant && def.uses.is_empty() && def.spread.is_empty() && !def.volatile
         }
+        // `LD_Fp064` / `LD_Fp164`
+        // (X86InstrFPStack.td#L526): `isReMaterializable`.
+        (Operation::FloatLoad, Some("fld1" | "fldz"), []) => def.uses.is_empty() && !def.volatile,
         _ => false,
     }
 }
@@ -281,6 +284,17 @@ mod tests {
         let load = def(vec![Loc::Mem(cell)], Operation::Move, "mov");
         assert!(!is_trivially_re_materializable(&load, false), "a load nothing proves invariant stays");
         assert!(is_trivially_re_materializable(&load, true));
+    }
+
+    /// nbody_single -Os: a hoisted `fld1` with the x87 stack full was stored
+    /// to a frame cell and reloaded in the loop (+18 B); the pin remakes
+    /// `LD_Fp164` where it is read.
+    #[test]
+    fn test_an_x87_constant_load_is_made_again() {
+        let mut one = def(vec![], Operation::FloatLoad, "fld1");
+        assert!(is_trivially_re_materializable(&one, false));
+        one.what = Some(Semantics { name: Some("fldz".into()), ..one.what.clone().unwrap() });
+        assert!(is_trivially_re_materializable(&one, false));
     }
 
     /// queens `_place`: `lea t, [row+1]` was spilled and reloaded across the

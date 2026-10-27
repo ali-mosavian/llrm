@@ -934,7 +934,7 @@ impl Builder<'_> {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
-            clobbers: names.iter().copied().chain(["es"]).map(Into::into).collect(),
+            clobbers: names.iter().copied().chain([name_of(strings.destination_segment)]).map(Into::into).collect(),
             memory: true,
             fixups: Vec::new(),
         };
@@ -968,19 +968,34 @@ impl Builder<'_> {
             this.dag.get_node(ISD::Add, pointer, &[end, minus_one])
         };
         let (from, to) = (last(self, src), last(self, dst));
+        let strings = self.arch.string_registers();
+        let name_of = |register| self.arch.registers().name(register).expect("a described register");
+        // A flat target names no string registers: `cx`, `si` and `di` are
+        // its operands, and ES already holds what `pop es` loads.
+        let operands = match strings {
+            Some(strings) => {
+                [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
+            }
+            None => [("cx", count), ("si", from), ("di", to)],
+        };
         let block = llrm_mir::intrinsics::AsmBlock {
             // `push ds; pop es`: both pointers are near, in DS; ES holds
             // whatever the last far access left
             code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
-            inputs: vec!["cx".into(), "si".into(), "di".into()],
+            inputs: operands.iter().map(|(name, _)| (*name).into()).collect(),
             outputs: Vec::new(),
-            clobbers: vec!["cx".into(), "si".into(), "di".into(), "es".into()],
+            clobbers: operands
+                .iter()
+                .map(|(name, _)| *name)
+                .chain(strings.map(|strings| name_of(strings.destination_segment)))
+                .map(Into::into)
+                .collect(),
             memory: true,
             fixups: Vec::new(),
         };
         let name = llrm_mir::intrinsics::asm_name(&block);
-        let registers = [("cx", count), ("si", from), ("di", to)]
-            .map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
+        let registers =
+            operands.map(|(name, value)| (self.sized_register(self.arch.register_named(name), pointer), value));
         let (chain, _) = lower_asm(&mut self.dag, chain, &name, &[], &registers, &[]);
         chain
     }
