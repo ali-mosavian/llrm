@@ -286,6 +286,8 @@ pub struct Matcher<'a, D: AddrDag> {
     pub dag: &'a mut D,
     pub pointer_type: Vt,
     pub mode: AddrMode,
+    /// Optimizing for size (`shouldOptForSize`).
+    pub size: bool,
 }
 
 impl<D: AddrDag> Matcher<'_, D> {
@@ -677,7 +679,7 @@ impl<D: AddrDag> Matcher<'_, D> {
             }
         }
         // x + x is x * 2.
-        if self.mode != AddrMode::Real16
+        if self.takes_scale(n, am)
             && self.opcode(n) == isd::ADD
             && self.operand(n, 0) == self.operand(n, 1)
             && am.scale <= 4
@@ -686,6 +688,20 @@ impl<D: AddrDag> Matcher<'_, D> {
             return self.match_index_recursively(self.operand(n, 0), am, depth + 1);
         }
         n
+    }
+
+    /// Whether the address may carry a scale: real mode has none, except in a
+    /// dword `lea`, which takes the 386's 32-bit form.
+    ///
+    /// DEVIATE SD250 (m16): not when optimizing for size; that `lea` carries
+    /// both the 0x66 and 0x67 prefixes and is longer than the `imul` or the
+    /// `shl; add` it replaces (+214 bytes over the corpus at -Os).
+    fn takes_scale(
+        &self,
+        n: SDValue,
+        am: &AddressMode,
+    ) -> bool {
+        self.mode != AddrMode::Real16 || (am.is_for_lea && !self.size && vt_bits(self.dag.value_type(n)) == 32)
     }
 
     /// `matchAddressRecursively` ([L2677][rec]).
@@ -734,7 +750,7 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::SHL => {
-                if self.mode != AddrMode::Real16 && am.index_reg.is_none() && am.scale == 1 {
+                if self.takes_scale(n, am) && am.index_reg.is_none() && am.scale == 1 {
                     if let Some(shift) = self.constant(self.operand(n, 1)) {
                         if (1..=3).contains(&(shift as u64)) {
                             let sh_val = self.operand(n, 0);
@@ -782,7 +798,9 @@ impl<D: AddrDag> Matcher<'_, D> {
                 }
             }
             isd::MUL | x86isd::MUL_IMM => {
-                if self.mode != AddrMode::Real16
+                // Real mode has no scaled index; a dword `lea` takes the 386's
+                // 32-bit form.
+                if self.takes_scale(n, am)
                     && am.base_type == BaseType::Reg
                     && am.base_reg.is_none()
                     && am.index_reg.is_none()
