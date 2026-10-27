@@ -297,12 +297,3 @@ fn a_tail_call_through_a_pointer_is_a_register_jump() {
     let asm = driver::assembly(include_str!("data/tail_indirect.ll"), Platform::Darwin, true).expect("lowers");
     assert!(asm.contains("br x") && !asm.contains("blr") && !asm.contains("stp"), "{asm}");
 }
-
-/// `x / y` and `x % y` in different blocks each divided: two `sdiv` where the pin hoists the
-/// division and takes the remainder as `x - (x / y) * y` (`div_constants`: 2228 instructions
-/// against 1424).
-#[test]
-fn a_division_and_a_remainder_of_the_same_operands_share_one_divide() {
-    let asm = driver::assembly(include_str!("data/div_rem_pair.ll"), Platform::Darwin, true).expect("lowers");
-    assert_eq!(asm.matches("sdiv").count(), 1, "{asm}");
-}

@@ -209,7 +209,6 @@ pub mod inline;
 pub mod inlinecost;
 #[cfg(test)]
 mod inlinecost_tests;
-pub mod divrempairs;
 pub mod instsimplify;
 pub mod simplifylibcalls;
 pub mod instworklist;

@@ -312,6 +312,7 @@ const ROWS: &[Disposition] = &[
         "w-4, 11-09",
     ),
     row(Late, "loop-sink", Why::Missing, "ablation 0 of 12 IRs", "w-3 (w-5 if silent at 09:00), 11-09"),
+    row(Late, "div-rem-pairs", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
     row(Late, "mergeicmps", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
     row(Late, "expand-memcmp", Why::Missing, "ablation 0 of 12 IRs", "w-4, 11-09"),
     row(

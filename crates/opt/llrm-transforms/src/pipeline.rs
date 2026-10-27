@@ -802,15 +802,12 @@ pub(crate) fn llvm_order(
             combine("combine@1499"),
             licm("licm@1508", true),
             slot("instsimplify@1662", Box::new(crate::instsimplify::InstSimplify)),
-            // DivRemPairsPass (l.1667): hoists and decomposes div/rem pairs
-            // before the SimplifyCFG that it lets flatten blocks.
-            slot("divrempairs@1667", Box::new(crate::divrempairs::DivRemPairs)),
             // TailCallElim (l.1677, the module optimization pipeline's
             // "calls created during optimization"), at every level: at -O1 it
             // is the only one, so a self-recursive tail call is a loop there
             // (recmany -O1 -m32 ran 1500 frames deep, 60 KB, where the pin's
-            // runs in one). ExpandMemCmp, between the two at the pin, is not a
-            // slot.
+            // runs in one). DivRemPairs and ExpandMemCmp, between the two at
+            // the pin, are not slots.
             slot("tailrec@1677", Box::new(tailcallelim::TailCallElim)),
             simplify_cfg_with("simplifycfg@1682", simplifycfg::Options::L1682),
         ],
