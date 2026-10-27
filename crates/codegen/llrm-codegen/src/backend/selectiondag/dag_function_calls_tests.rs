@@ -1026,3 +1026,53 @@ fn a_pushed_segment_of_a_global_is_an_immediate() {
         insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("push")).collect();
     assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
 }
+
+const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+@\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
+@\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
+@$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c\"\\04\\00\", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c\"DONE\" }>
+define cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
+b1:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI4(ptr addrspace(1) addrspacecast (ptr @\"INPUTVALUE&\" to ptr addrspace(1)))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI2(ptr addrspace(1) addrspacecast (ptr @\"BRANCHCHOICE%\" to ptr addrspace(1)))
+  %0 = load i32, ptr @\"INPUTVALUE&\"
+  %1 = add i32 %0, 1
+  store i32 %1, ptr @\"INPUTVALUE&\"
+  %2 = load i16, ptr @\"BRANCHCHOICE%\"
+  %3 = icmp eq i16 %2, 0
+  %4 = mul i32 %1, %1
+  %5 = select i1 %3, i32 -1, i32 1
+  %6 = add i32 %5, %4
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %6)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %4)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI4(ptr addrspace(1) addrspacecast (ptr @\"INPUTVALUE&\" to ptr addrspace(1)))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI2(ptr addrspace(1) addrspacecast (ptr @\"BRANCHCHOICE%\" to ptr addrspace(1)))
+  %7 = load i32, ptr @\"INPUTVALUE&\"
+  %8 = add i32 %7, 1
+  store i32 %8, ptr @\"INPUTVALUE&\"
+  %9 = load i16, ptr @\"BRANCHCHOICE%\"
+  %10 = icmp eq i16 %9, 0
+  %11 = mul i32 %8, %8
+  %12 = select i1 %10, i32 -1, i32 1
+  %13 = add i32 %12, %11
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %13)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %11)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string4)
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$RDI4(ptr addrspace(1)) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$RDI2(ptr addrspace(1)) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PSI4(i32) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
+";
+
+/// One segment pushed by two calls with a select between them: the second
+/// push is in a block after the select's arms, so the first block saw one read
+/// and pushed the immediate, removing the `mov` the second push read
+/// (`value 1 is read and not defined on every path`): `qb/gvnjn.bas` and
+/// `gvnphi.bas` stopped compiling at -O2 m16.
+#[test]
+fn a_segment_pushed_by_two_calls_around_a_select_is_still_defined() {
+    select_with_contracts(CONSTANT_PUSHED_AROUND_A_SELECT).unwrap_or_else(|e| panic!("{e}"));
+}
