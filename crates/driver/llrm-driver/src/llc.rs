@@ -233,6 +233,7 @@ pub fn compiled(
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
     with_default_convention(&mut module, default);
+    llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let options = llrm_codegen::driver::Options { object_format: format.name(), ..bound.options(flags, machine) };
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
