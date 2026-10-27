@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// x_hanoi2's `mv`, called from outside so that it takes its first two
 /// arguments in registers: the loop falls into the return the `n == 0` test
 /// jumps to.

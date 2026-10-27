@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn rotate_size_listing(
     source: &str,
     flags: &[&str],

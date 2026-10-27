@@ -3,8 +3,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// A value kept across a call in a function that has too few registers for all
 /// it holds.
 const KERNEL: &str = "

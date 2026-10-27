@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// x_isqrt: `n` is read at the entry and again by every trip of the outer loop,
 /// where the loop's own values hold the registers.
 const SOURCE: &str = r#"extern void report(long value);

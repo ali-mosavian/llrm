@@ -2,8 +2,6 @@
 
 mod common;
 
-use std::process::Command;
-
 /// nbody at -O2 under RFP kept every `fp := fp` RegAlloc made, and
 /// the stackifier turned each into a `fld st(i)` and a pop: 101 floating
 /// instructions where copy propagation leaves 95, 97 since the pin's order
