@@ -404,7 +404,8 @@ fn a_float_load_from_the_constant_pool_folds_the_entry_into_the_address() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let f64_vt = EVT::Simple(super::mvt::MVT::F64);
     dag.constant_pool.push((0x3FF8_0000_0000_0000, f64_vt));
-    let entry = dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0));
+    let entry =
+        dag.intern(ISD::TargetConstantPool, &[EVT::I32], &[], SDNodeFlags::default(), NodeData::PoolIndex(0, 0));
     let address = dag.get_node(super::x86_lowering::x86isd::WRAPPER, EVT::I32, &[entry]);
     let chain = dag.entry_node();
     let info =

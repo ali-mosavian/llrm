@@ -167,6 +167,34 @@ pub fn far_pointer(
     }
 }
 
+/// The alignment a variable is emitted at: `AsmPrinter::getGVAlignment` on the
+/// module's data layout, none where that is a byte. DEVIATE E1: MIR has no
+/// section attribute; a global the frontend placed in a named segment counts
+/// as one in a section (`in_section`). DEVIATE E2: where data lives in 64K
+/// segments (`segmented`), an initialized global over 16 bytes is not raised to
+/// 16 (`DataLayout::getPreferredAlign`, DataLayout.cpp#L1175): the object's
+/// segment would become paragraph aligned, up to 15 dead bytes of the scarce
+/// DGROUP per object (QB runtime `input.c`: +32 B, `dgroup_nearly_full`).
+pub fn alignment(
+    module: &Module,
+    layout: Option<&llrm_mir::datalayout::DataLayout>,
+    variable: &llrm_mir::module::GlobalVariable,
+    in_section: bool,
+    segmented: bool,
+) -> Option<i64> {
+    // A module with no data layout states its own alignments only.
+    let Some(layout) = layout else { return variable.align.map(|to| to as i64) };
+    let to = layout.global_align(
+        &module.context.types,
+        variable.ty,
+        variable.align,
+        in_section,
+        variable.initializer.is_some(),
+        !segmented,
+    );
+    (to > 1).then_some(to as i64)
+}
+
 /// A defined variable's data: its label, then its initializer's bytes and
 /// relocations.
 pub fn datums(

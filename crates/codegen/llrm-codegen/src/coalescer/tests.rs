@@ -730,3 +730,76 @@ fn test_a_copy_after_a_commutable_two_address_def_goes_by_commuting_it() {
     );
     assert_consistent(&lis, &was, 2);
 }
+
+/// The terminal rule (`applyTerminalRule`, on by default at the pin). A loop
+/// that rotates `y2 := y1; y1 := y`: the header copy `v4 := v25` of `y2` has a
+/// destination no other copy names, and `v25`'s other copy in the block
+/// (`v25 := v1`) is of a value that overlaps it, so the header copy is tried
+/// last and the bottom copy joins. Joined first, the header copy stretched
+/// `v25` over the body, the bottom copy conflicted and stayed, and x_iir had a
+/// `mov` at each end of its loop (one more per trip than the pin).
+#[test]
+fn test_a_header_copy_of_a_terminal_value_is_tried_after_the_copy_it_overlaps() {
+    let (pre25, pre22) = (def(25), def(22));
+    let (y2, y1) = (copy(4, 25), copy(1, 22));
+    let (read_y2, read_y1, new_y) = (read(4), read(1), def(6));
+    let (to22, to25) = (copy(22, 6), copy(25, 1));
+    let was = body(&[
+        (&[pre25, pre22], &[1]),
+        (&[y2, y1, read_y2, read_y1, new_y, to22, Arc::clone(&to25)], &[1, 2]),
+        (&[read(25), read(22)], &[]),
+    ]);
+    let mut lis = LiveIntervals::new(&was);
+    run(&mut lis, &AnyClass, &[0, 1, 0]);
+    let copies: Vec<(Vec<u32>, Vec<u32>)> = lis.blocks()[1]
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Move) && !one.uses.is_empty())
+        .map(|one| (one.defines.clone(), one.uses.clone()))
+        .collect();
+    assert_eq!(copies, vec![(vec![4], vec![25]), (vec![25], vec![22])], "both copies at the top: {:?}", names(&lis));
+}
+
+/// `copy` with its source an undef read: `v2 := mov undef v1`.
+fn undef_copy(
+    dst: u32,
+    src: u32,
+) -> Arc<Insn> {
+    let mut one = (*copy(dst, src)).clone();
+    one.uses.clear();
+    one.undefs = vec![src];
+    Arc::new(one)
+}
+
+/// `v2 := mov undef v1; read v2` (`eliminateUndefCopy`): the copy of nothing
+/// becomes `v2 := implicit_def` and is not coalesced. Without the port the
+/// copy stayed and spill-weight calculation panicked "Copy from non-existing
+/// value" on bench/crc at -O2.
+#[test]
+fn test_a_copy_of_an_undefined_value_becomes_an_implicit_def() {
+    let (c, r) = (undef_copy(2, 1), read(2));
+    let was = body(&[(&[Arc::clone(&c), Arc::clone(&r)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+    let kept: Vec<_> = lis.blocks().iter().flatten().cloned().collect();
+    assert_eq!(kept.len(), 2);
+    let name = kept[0].what.as_ref().and_then(|what| what.name.clone());
+    assert_eq!(name.as_deref(), Some(crate::processimpdefs::IMPLICIT_DEF), "{:?}", kept[0]);
+    assert!(kept[0].uses.is_empty() && kept[0].undefs.is_empty() && kept[0].defines == vec![2]);
+    assert_eq!(kept[1].uses, vec![2]);
+}
+
+/// `v1 := mov undef v1; read v1`: the same, with one value (the crc shape).
+#[test]
+fn test_a_copy_of_an_undefined_value_to_itself_becomes_an_implicit_def() {
+    let (c, r) = (undef_copy(1, 1), read(1));
+    let was = body(&[(&[Arc::clone(&c), Arc::clone(&r)], &[])]);
+    let mut lis = LiveIntervals::new(&was);
+    let result = join_copy(&mut lis, &AnyClass, &mut State::new(), &mut Default::default(), c.id());
+    assert_eq!(result, JoinResult::Rejected);
+    let first = lis.blocks().iter().flatten().next().cloned().unwrap();
+    assert_eq!(
+        first.what.as_ref().and_then(|what| what.name.clone()).as_deref(),
+        Some(crate::processimpdefs::IMPLICIT_DEF)
+    );
+}

@@ -1,11 +1,10 @@
-; A dword divisor (not negative): only the dividend's sign matters; ebp holds 1 if it was negative.
+; A dword divisor (not negative): only the dividend's sign matters; ebp holds its sign mask, 0 or -1.
     push ebp
-    xor ebp, ebp
-    test edx, edx
-    jns signs32_done
-    neg edx
-    neg eax
-    sbb edx, 0
-    mov ebp, 1
-signs32_done:
+    mov ebp, edx
+    add ebp, ebp
+    sbb ebp, ebp
+    xor eax, ebp
+    xor edx, ebp
+    sub eax, ebp
+    sbb edx, ebp
     xor ecx, ecx
