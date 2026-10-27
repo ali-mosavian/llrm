@@ -149,7 +149,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{BlockId, Function, InstId, MetadataNode, Operand, ValueId};
-use llrm_mir::opcode::{BinaryOp, CallInfo, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::{Type, TypeId};
 use llrm_support::hash::IndexMap;
@@ -175,6 +175,11 @@ impl FunctionPass for LoopIdioms {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // `TargetLibraryInfo` of a `"no-builtins"` function has no library
+        // function.
+        if unit.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(name, None) if name == "no-builtins")) {
+            return PreservedAnalyses::all();
+        }
         let registers = analyses.get::<llrm_analysis::manager::Registers>(unit.context, unit.layout, unit.function);
         let changed = filled_with(
             unit.context,

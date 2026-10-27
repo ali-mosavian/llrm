@@ -322,6 +322,17 @@ fn test_the_pass_turns_a_byte_fill_loop_into_a_memset() {
     assert!(after.contains("call void @llvm.memset.p0.i64(ptr align 1 %p, i8 0, i64 %1, i1 false)"), "{after}");
 }
 
+/// A function with `"no-builtins"` has no library function (`TargetLibraryInfo`
+/// disables them all): the fill stays a loop. The pass took the default
+/// `memset` and made `memset_overlap`'s memmoves (arm64, 964 B against 352 B).
+#[test]
+fn test_a_no_builtins_function_gets_no_memset_from_a_fill_loop() {
+    let text = FILL.replace("define void @f(ptr %p, i32 %n) {", "define void @f(ptr %p, i32 %n) \"no-builtins\" {");
+    let after = pass_output(&text);
+    assert!(after.contains("no-builtins"), "the attribute parsed: {after}");
+    assert!(!after.contains("llvm.memset"), "{after}");
+}
+
 /// The load/store/default dispatch of `getModRefInfo(Instruction)`: BasicAA
 /// answered ModRef for every instruction, so no loop with a phi could pass
 /// `mayLoopAccessLocation` and the fill above stayed a loop.

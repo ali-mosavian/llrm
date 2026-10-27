@@ -142,6 +142,18 @@ impl FunctionPass for LoopIdiom {
             tree: &tree,
             assumptions: &assumptions,
         };
+        // `TargetLibraryInfo` of a `"no-builtins"` function has no library
+        // function.
+        let library = if unit.function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                llrm_mir::Attribute::Str(name, None) if name == "no-builtins"
+            )
+        }) {
+            Library { memset: false, memset_pattern16: false, memcpy: false }
+        } else {
+            self.library
+        };
         let tti = outer.target().tti();
         let provider = BasicAaProvider { layout: unit.layout, metadata: unit.metadata, globals: &outer.globals };
         let mut se = ScalarEvolution::new();
@@ -161,7 +173,7 @@ impl FunctionPass for LoopIdiom {
                 bytes: size_costs.as_ref().map(|costs| (costs, outer.callees())),
                 tti: tti.as_deref(),
             };
-            let mut idiom = LoopIdiomRecognize::new(self.options, self.library);
+            let mut idiom = LoopIdiomRecognize::new(self.options, library);
             idiom.routines = self.routines.clone();
             idiom.for_size = self.for_size;
             if idiom.run_on_loop(&mut run) == Some(true) {

@@ -112,6 +112,20 @@ fn a_byte_loop_is_one_memset() {
     );
 }
 
+/// A `"no-builtins"` function has no library function (`TargetLibraryInfo`
+/// disables them all): the pin forms no memset, memcpy or memmove there. The
+/// pass formed them anyway (memmove_overlap on arm64: three `bl _memmove`, 964
+/// B against the pin's 352 B).
+#[test]
+fn a_no_builtins_function_keeps_its_fill_loop() {
+    let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
+    let text = looped("i8", "%n", body, "%e")
+        .replace("define i16 @f(i16 %n, i16 %q) {", "define i16 @f(i16 %n, i16 %q) \"no-builtins\" {");
+    let after = managed_fill(&text, TRIPS);
+    assert!(after.contains("no-builtins"), "{after}");
+    assert!(!after.contains("call void @llvm.memset"), "{after}");
+}
+
 /// A known positive count enters without a test; a word of one repeated
 /// byte fills as bytes, twice the trips.
 #[test]
