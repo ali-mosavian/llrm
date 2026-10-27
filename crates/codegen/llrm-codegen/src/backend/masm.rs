@@ -791,7 +791,7 @@ pub(crate) fn wrap_of(
     let movable = procedure.entry == 0
         && procedure.interrupt.is_none()
         && procedure.stack_check.is_none()
-        && procedure.callees.values().all(|one| one.code.is_empty());
+        && procedure.callees.values().all(|one| !may_address_frame(&one.code));
     let registers = &procedure.registers;
     crate::backend::shrinkwrap::wrapped(
         body,
@@ -985,6 +985,33 @@ fn lowered(
     (enter, leave)
 }
 
+/// Whether inline code, bytes this printer cannot read, may address the frame.
+/// Not the string moves the selector writes itself (`push ds; pop es; std; rep
+/// movsd; cld`, `add si, 3; add di, 3; mov cx, dx; rep movsb`): of the few
+/// opcodes below, none has a memory operand, so a frame is not needed for them
+/// (scroll.c: `push bp; mov bp, sp` on a function with no locals).
+fn may_address_frame(parts: &[InlinePart]) -> bool {
+    let mut bytes = Vec::new();
+    for part in parts {
+        match part {
+            InlinePart::Bytes(more) => bytes.extend(more),
+            _ => return true,
+        }
+    }
+    let code = &bytes[..];
+    let mut at = 0;
+    while at < code.len() {
+        match code[at] {
+            0x1E | 0x07 | 0xFD | 0xFC | 0xF3 | 0x66 | 0xA4 | 0xA5 => at += 1,
+            // `add r, imm8`, `mov r, r`: register operands only (mod = 11)
+            0x83 if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 3,
+            0x89 | 0x8B if code.get(at + 1).is_some_and(|modrm| modrm >> 6 == 3) => at += 2,
+            _ => return true,
+        }
+    }
+    false
+}
+
 /// The implicit entry and return sequences shared by text and OMF emission.
 pub fn _frame_parts(procedure: &Procedure) -> (Vec<Semantics>, Vec<Semantics>) {
     parts(procedure, frame_omitted(procedure, 0, frame_held(procedure)).is_some())
@@ -1011,7 +1038,7 @@ fn parts(
             && procedure.entry == 0
             && (reserve != 0
                 || roots.contains(&procedure.body.regs().root(procedure.registers.pointer))
-                || procedure.callees.values().any(|one| !one.code.is_empty()))
+                || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
     let locals = reserve != 0;
     let held = |reserve: i64| if omit && locals { reserve + slot } else { reserve };
