@@ -1446,3 +1446,8 @@ def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
     whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
     assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
     assert len(groups) == 1 and ones == ["b", "c", "d"]
+
+
+def test_target_facts_is_a_scanner_every_batch_runs():
+    """Parity went red on tests/target_facts.rs (11:09) and no batch noticed: the always-on scanners were docs_in_sync, docs_links and no_local_paths, and target_facts was in prepush only."""
+    assert "target_facts" in ps.ALWAYS_SCANNERS
