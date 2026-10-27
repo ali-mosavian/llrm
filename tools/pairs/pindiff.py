@@ -114,6 +114,25 @@ def pin_padding_free(obj: Path, bits: int) -> int:
     return pin_text_size(obj) - nop_bytes(listing)
 
 
+def layout_note(wanted: str, used: str) -> str:
+    """A header line when the pin's llc runs with another pointer size than the target's datalayout states."""
+
+    def pointer(layout: str) -> str:
+        found = re.search(r"(?:^|-)(p:\d+:\d+)", layout)
+        return found.group(1) if found else "p:64:64"
+
+    if pointer(wanted) == pointer(used):
+        return ""
+    return f"# NOTE: the pin's llc replaces the module datalayout (it takes its triple's): pointers are {pointer(used)} there, {pointer(wanted)} in ours and in the pin's opt"
+
+
+def pin_llc_datalayout(of: pin.Target) -> str:
+    """The datalayout the pin's llc really runs with, read from the IR it prints after CodeGenPrepare."""
+    ran = pin.llc(["-O1", "-stop-after=codegenprepare", "-o", "-"], "define void @f() {\n  ret void\n}\n", of)
+    found = re.search(r'target datalayout = "([^"]*)"', ran.stdout)
+    return found.group(1) if found else of.datalayout
+
+
 def front_end_flags(level: str, reopt: bool) -> list[str]:
     """What clang is told besides the machine's flags. Raw (default): the front end's IR with no pass run, as llrm-cc writes it, so each
     side runs its whole pipeline once. `reopt`: clang's own `-O` IR, then the pin's opt, then both llcs; ours re-optimises that IR, so it
@@ -246,6 +265,9 @@ def main(argv: list[str]) -> int:
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
     print(f"# pindiff {args.machine} -{args.level}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
+    note = layout_note(pin.target(args.machine).datalayout, pin_llc_datalayout(pin.target(args.machine)))
+    if note:
+        print(note)
     stale = staleness(version, args.ref, str(Path(__file__).resolve().parents[2]), args.max_behind)
     if stale:
         print(stale)

@@ -133,3 +133,14 @@ def test_a_shift_by_the_type_width_in_raw_ir_is_flagged():
         "ashr exact i32 %v, 32",
     ]
     assert guard.undefined_shifts("  %1 = lshr i16 %0, 15\n  %2 = shl i32 %a, 16\n  %3 = lshr i32 %b, %c") == []
+
+
+def test_a_pin_llc_that_replaces_the_datalayout_is_stated():
+    """The pin's llc takes the datalayout from its triple, whatever the module says: at m16 it runs ISel, LSR and CodeGenPrepare with
+    `p:32:32` pointers (w3, particle's GEP shape), while ours has p:16. The m16 pin column carried that bias unsaid."""
+    pindiff = load("pindiff")
+    wanted = "e-p:16:16-p1:32:16:16:16-i32:16-n8:16:32"
+    used = "e-m:e-p:32:32-p270:32:32-i128:128-f64:32:64-n8:16:32-S128"
+    note = pindiff.layout_note(wanted, used)
+    assert "p:32:32" in note and "p:16:16" in note and note.startswith("# NOTE")
+    assert pindiff.layout_note(wanted, wanted) == ""
