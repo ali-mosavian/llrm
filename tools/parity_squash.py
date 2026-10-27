@@ -794,7 +794,7 @@ def beside(background, foreground):
         return front, future.result()
 
 
-MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
 def batch(prs: list, passes, land, refuse, offenders=None) -> None:
@@ -942,6 +942,9 @@ def new_link_failures(
 ) -> list[str]:
     """The programs that do not link on the merged tree, when the batch changes what programs link against (`link_check.touches_runtime`): a QB program and C programs built
     and linked, not run. qbrt went 183/218 on 50387f114 and the gate was green because nothing linked the QB runtime (a `libcalls` fact made its C sources call `memcpy_`)."""
+    if os.environ.get("LAND_SKIP_LINK") == "1":  # the user's call while a break already on feat/parity is fixed forward: it refused every batch that touched the runtime
+        print("link: skipped (LAND_SKIP_LINK=1)")
+        return []
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import link_check  # noqa: PLC0415
 
@@ -958,6 +961,25 @@ def new_link_failures(
 
 
 _BUILT: set[str] = set()
+
+
+def alone_link_failures(files: list[str], cwd: Path, target: Path | None, run=subprocess.run) -> list[str]:
+    """`tools/link_check.py` of the scratch tree `cwd` (its own release bins, built under `target/link`), when the PR touches the runtime or a frontend; the failing `qb <name>: why` / `c <name>: why` lines."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import link_check  # noqa: PLC0415
+    from buildslot import slotted  # noqa: PLC0415
+
+    if not (link_check.touches_runtime(files) or any(one.startswith("crates/frontends/") for one in files)):
+        return []
+    out = (target or cwd / "target") / "link"
+    env = {**os.environ, "CARGO_TARGET_DIR": str(out)}
+    built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    if built.returncode:
+        return [f"release: {(built.stdout + built.stderr).strip().splitlines()[-1:] or ['the bins do not build']}"]
+    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+        (out / "release" / name).touch()  # the runners refuse a binary older than its sources
+    done = run([sys.executable, "tools/link_check.py", str(out / "link-check")], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release")}, capture_output=True, text=True, errors="replace")
+    return [line for line in done.stdout.splitlines() if line.startswith(("qb ", "c "))]
 
 
 def _build_release() -> None:
@@ -1126,7 +1148,7 @@ def own_test_targets(files: list[str], root: Path) -> set[str]:
     return {Path(f).stem for f in files if f.startswith("tests/") and f.endswith(".rs") and "/" not in f[len("tests/") :] and (root / f).exists()}
 
 
-def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None) -> list[str]:
+def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, scanners=None, differs=None, target: Path | None = None, units=None, on_base=None, docs=None, docs_on_base=None, links=None) -> list[str]:
     """Why the PR at `head`, alone on `base` (a scratch checkout at `base` in `cwd`), fails the cheap checks a batch would fail on: the merge, the workspace build, the
     always-on scanners (fmt differences only warn: the squash formats every PR). The 15:34 batch spent 62% of its time on reruns of PRs that failed these."""
     smoke = parity_smoke_module()
@@ -1163,6 +1185,9 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
         new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
         if new:
             return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
+    # the QB and C programs, built and linked: #4822 and #4839 (frontend changes) reached three batches and cost 19 refusals because only a batch member touching the runtime made the batch link
+    if broken := (links or alone_link_failures)(files, cwd, target):
+        return [f"programs do not link: {', '.join('link ' + line.split(':')[0] for line in broken[:5])}"]
     # the unit tests of the crates the PR changes, less what the base fails: round 3 died on llrm-nib::test_pipeline::... and no PR was blamed
     def lib_failures(changed: list[str]) -> set[str]:
         packages, graph = smoke.workspace_graph(cwd)
@@ -1446,7 +1471,7 @@ def refresh_heads(infos: dict[str, dict], numbers: list[str], view=pr_info) -> d
     return moved
 
 
-BATCH_MAX_SECONDS = 1200  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
+BATCH_MAX_SECONDS = int(os.environ.get("BATCH_MAX_SECONDS", "1200"))  # a merge-batch older than this stops: its assembly (who is eligible, at which head) is no longer the queue's
 
 
 class BatchTooOld(Exception):
