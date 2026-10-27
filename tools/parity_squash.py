@@ -1217,6 +1217,12 @@ def halve_red(members: list[str], red_with) -> list[str]:
     return halve_red(members[:mid], red_with) + halve_red(members[mid:], red_with)
 
 
+def red_members(members: list[str], red_with, alone_red) -> list[str]:
+    """The red `members` by halving, else (an interaction: no half is red) each one merged alone and asked."""
+    found = halve_red(members, red_with) if red_with else []
+    return found or [number for number in members if alone_red(number)]
+
+
 def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -> list[str]:
     """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else the backend PRs found by halving (`red_with`),
     else (an interaction: no half is red) each backend PR merged alone and asked."""
@@ -1226,8 +1232,7 @@ def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -
     backend = [number for number in group if behavioural.touches(files_of(number))]
     if len(backend) <= 1:
         return backend
-    found = halve_red(backend, red_with) if red_with else []
-    return found or [number for number in backend if alone_red(number)]
+    return red_members(backend, red_with, alone_red)
 
 
 def _link_programs() -> list[str]:
@@ -2058,7 +2063,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if not probe:
                 return []
             targets = sorted({name.split("::", 1)[0] for name in probe})
-            return [number for number in group if merge_alone(number) and probe & parity_smoke_module().integration_failures(targets)]
+            red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            return red_members(group, red_with, lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets)))
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
