@@ -853,7 +853,8 @@ def beside(background, foreground):
         return front, future.result()
 
 
-OVERLAP_MAX_LOAD = float(os.environ.get("OVERLAP_MAX_LOAD") or 60)  # 1-minute load above this: the two builds would only fight over the CPUs
+OVERLAP_MAX_LOAD = float(os.environ.get("OVERLAP_MAX_LOAD") or 3 * (os.cpu_count() or 1))  # 1-minute load above this: the two builds would only fight over the CPUs; the host runs at ~2.4 x its cores with other sessions' builds
+OVERLAP_MIN_FREE_GB = 8  # two cargo builds at once; oomd kills sessions when memory runs out
 OVERLAP_OFF_SECONDS = 3600
 
 
@@ -861,12 +862,32 @@ def overlap_flag() -> Path:
     return Path(os.environ.get("LAND_TMP", "/tmp")) / "overlap-off"
 
 
-def check_beside_scanners(load=os.getloadavg, now=time.time, flag: Path | None = None) -> bool:
-    """Whether the workspace check and the scanner build run together: not at a load above OVERLAP_MAX_LOAD, nor for an hour after an overlapped run took longer than its two halves in a row."""
+def free_gb() -> float:
+    """MemAvailable in GB; a host that does not say counts as plenty."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return float("inf")
+
+
+def overlap_verdict(load=os.getloadavg, now=time.time, flag: Path | None = None, free=free_gb) -> str:
+    """Why the workspace check and the scanner build run in a row, or "" when they run together: for an hour after an overlapped run took longer than its two halves in a row, at a load
+    above OVERLAP_MAX_LOAD, or with under OVERLAP_MIN_FREE_GB of memory free."""
     flag = flag or overlap_flag()
     if flag.exists() and now() - flag.stat().st_mtime < OVERLAP_OFF_SECONDS:
-        return False
-    return load()[0] <= OVERLAP_MAX_LOAD
+        return "the last overlapped run was slower than its halves in a row"
+    if (current := load()[0]) > OVERLAP_MAX_LOAD:
+        return f"load {current:.0f} is above {OVERLAP_MAX_LOAD:.0f}"
+    if (spare := free()) < OVERLAP_MIN_FREE_GB:
+        return f"{spare:.0f} GB free is under {OVERLAP_MIN_FREE_GB}"
+    return ""
+
+
+def check_beside_scanners(load=os.getloadavg, now=time.time, flag: Path | None = None, free=free_gb) -> bool:
+    return not overlap_verdict(load, now, flag, free)
 
 
 def note_overlap(wall: float, serial: float, flag: Path | None = None) -> None:
@@ -1924,7 +1945,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
         else:
             # the dev-profile check (its own target dir) and the release scanner build share nothing: 60 s + 100 s in a row in sqb-5342
-            if check_beside_scanners():
+            why_serial = overlap_verdict()
+            print(f"check beside scanners: {'serial (' + why_serial + ')' if why_serial else 'on'}")
+            if not why_serial:
                 took: dict[str, float] = {}
                 begun = time.monotonic()
                 broken, tests_ok = beside(timed(took, "check", lambda: _workspace_check(ROOT)), timed(took, "scanners", tests_pass))

@@ -1726,7 +1726,7 @@ def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
     import inspect
 
     source = inspect.getsource(ps.merge_batch)
-    assert "beside(timed(took" in source and "check_beside_scanners()" in source
+    assert "beside(timed(took" in source and "overlap_verdict()" in source
     assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
 
 
@@ -1734,14 +1734,14 @@ def test_the_overlap_falls_back_to_serial_at_a_high_load_and_after_a_slower_run(
     """The host runs at a load near 60: two cargo builds at once could be slower than one after the other. Above OVERLAP_MAX_LOAD the checks run in a row, and an overlapped run
     that took longer than its halves' sum turns the overlap off for an hour."""
     flag = tmp_path / "overlap-off"
-    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag)
-    assert not ps.check_beside_scanners(load=lambda: (61.0, 0, 0), flag=flag)
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    assert not ps.check_beside_scanners(load=lambda: (ps.OVERLAP_MAX_LOAD + 1, 0, 0), flag=flag, free=lambda: 64)
     ps.note_overlap(100, 160, flag=flag)
     assert not flag.exists(), "a faster overlap stays on"
     ps.note_overlap(170, 160, flag=flag)
-    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag)
+    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
     later = flag.stat().st_mtime + ps.OVERLAP_OFF_SECONDS + 1
-    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag)
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag, free=lambda: 64)
 
 
 def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
@@ -1779,4 +1779,18 @@ def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and
     asked.clear()
     ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "build_script_reruns" in asked[0]
+
+
+def test_the_overlap_says_why_it_is_serial_and_keeps_to_memory_and_the_core_count(tmp_path):
+    """The audit of five landings showed check then scanners: the overlap never engaged (load 78 on 32 cores against a limit of 60) and nothing in the log said so. The limit is 3 x cores,
+    the verdict names its reason, and under 8 GB free (oomd kills sessions) the builds run in a row."""
+    flag = tmp_path / "overlap-off"
+    assert ps.OVERLAP_MAX_LOAD == 3 * (os.cpu_count() or 1) or "OVERLAP_MAX_LOAD" in os.environ
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD, 0, 0), flag=flag, free=lambda: 64) == "", "a load at the limit overlaps"
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD + 5, 0, 0), flag=flag, free=lambda: 64).startswith("load ")
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 3.0) == "3 GB free is under 8"
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 64) == ""
+    import inspect
+
+    assert "check beside scanners: {" in inspect.getsource(ps.merge_batch), "the decision is logged either way"
 
