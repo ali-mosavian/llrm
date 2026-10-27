@@ -413,13 +413,17 @@ impl<'a> Builder<'a> {
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
-                // globals the IR marks local, an ELF target's only ones
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
+                // every symbol under the static relocation
+                // model, which these targets (DOS objects, no
+                // PIC) always use.
                 super::function_lowering::Tables {
                     global_names: std::rc::Rc::new(
                         module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
                     ),
-                    local_symbols: std::rc::Rc::new(
+                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
+                        vec![true; module.globals.len()]
+                    } else {
                         module
                             .globals
                             .iter()
@@ -429,8 +433,8 @@ impl<'a> Builder<'a> {
                                     llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
                                 )
                             })
-                            .collect(),
-                    ),
+                            .collect()
+                    }),
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
