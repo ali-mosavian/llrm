@@ -116,7 +116,8 @@ impl Collection<'_, '_> {
             && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         if self.baseline_cost.is_less(self.tti, &solution_cost)
-            && (self.tti.should_drop_lsr_solution_if_less_profitable() || spills && self.tti.lsr_drops_spilling_solution())
+            && (self.tti.should_drop_lsr_solution_if_less_profitable()
+                || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }
