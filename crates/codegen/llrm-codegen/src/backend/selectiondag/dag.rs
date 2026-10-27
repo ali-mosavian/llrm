@@ -118,6 +118,9 @@ pub enum MemBase {
     Unknown,
     Global(u32),
     Stack(i32),
+    /// An outgoing call argument at this offset from the stack pointer
+    /// (`MachinePointerInfo::getStack`, `X86TargetLowering::LowerCall`).
+    CallArgument(i32),
     /// A constant pool entry (`MachinePointerInfo::getConstantPool`).
     ConstantPool(u32),
     /// A jump table entry (`MachinePointerInfo::getJumpTable`).

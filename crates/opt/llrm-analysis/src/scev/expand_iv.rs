@@ -945,13 +945,67 @@ impl Run<'_> {
     }
 
     /// `rememberFlags`: keep the first flags seen, for a cleanup to restore.
-    fn remember_flags(
+    pub(super) fn remember_flags(
         &mut self,
         inst: InstId,
     ) {
         if self.x.orig_flags.get(&inst).is_none() {
             let flags = self.function.instruction(inst).flags;
             self.x.orig_flags.insert(inst, flags);
+        }
+    }
+
+    /// The flags of a reused `inst` that `canReuseInstruction` could not keep,
+    /// dropped, then the ones first principles still give put back
+    /// (`expand`).
+    pub(super) fn drop_reused_poison_flags(
+        &mut self,
+        inst: InstId,
+    ) {
+        self.remember_flags(inst);
+        self.function.drop_poison_generating_annotations(inst);
+        // See if we can re-infer from first principles any of the flags we
+        // just dropped.
+        let opcode = self.function.instruction(inst).opcode.clone();
+        if matches!(
+            opcode,
+            Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl)
+        ) {
+            let strengthened = {
+                let cx = cx!(self);
+                self.se.get_strengthened_no_wrap_flags_from_bin_op(&cx, inst)
+            };
+            if let Some((nuw, nsw)) = strengthened {
+                let mut f = self.function.instruction(inst).flags;
+                for (flag, on) in [(IrFlags::NUW, nuw), (IrFlags::NSW, nsw)] {
+                    if on {
+                        f.insert(flag);
+                    } else {
+                        f.remove(flag);
+                    }
+                }
+                self.function.set_flags(inst, f);
+            }
+        }
+        if matches!(opcode, Opcode::Cast(CastOp::ZExt | CastOp::UIToFP)) {
+            let src = self.function.instruction(inst).operands[0];
+            let ty = self.ty_of_operand(src);
+            let zero = Operand::Constant(self.context.int(ty, 0));
+            let implied = {
+                let cx = cx!(self);
+                llrm_mir::valuetracking::context::is_implied_by_dom_condition(
+                    &cx.query(None),
+                    llrm_mir::opcode::IntPredicate::Sge,
+                    src,
+                    zero,
+                    inst,
+                )
+            };
+            if implied.unwrap_or(false) {
+                let mut f = self.function.instruction(inst).flags;
+                f.insert(IrFlags::NNEG);
+                self.function.set_flags(inst, f);
+            }
         }
     }
 

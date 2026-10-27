@@ -503,6 +503,18 @@ impl<'a> BasicAA<'a> {
         self.unit.space(pointer).is_some_and(|space| self.unit.spaces().is_fixed(space))
     }
 
+    /// Whether `size` bytes at the constant address `pointer` lie wholly in
+    /// memory the target states no program data occupies (video, ROM).
+    fn in_foreign_memory(
+        &self,
+        pointer: Operand,
+        size: LocationSize,
+    ) -> bool {
+        let (Some(program), Some(width)) = (self.unit.program, size.value()) else { return false };
+        crate::memory::flat_constant(self.unit, pointer)
+            .is_some_and(|at| program.target.foreign_span((0, 0), (at, at), width as i64).is_some())
+    }
+
     /// A global variable or an alloca outside the fixed-address space.
     fn program_object(
         &self,
@@ -691,8 +703,9 @@ impl<'a> BasicAA<'a> {
         if o1 != o2 {
             // A fixed-address pointer is no global or frame object (not LLVM's:
             // it has no such space, #2555).
-            if (self.in_fixed_space(v1) && self.program_object(o2))
-                || (self.in_fixed_space(v2) && self.program_object(o1))
+            // The same of a constant address the target states is foreign.
+            if ((self.in_fixed_space(v1) || self.in_foreign_memory(v1, a.size)) && self.program_object(o2))
+                || ((self.in_fixed_space(v2) || self.in_foreign_memory(v2, b.size)) && self.program_object(o1))
             {
                 return AliasResult::NoAlias;
             }
