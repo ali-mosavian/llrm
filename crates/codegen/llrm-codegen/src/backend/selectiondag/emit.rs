@@ -3089,32 +3089,25 @@ impl Emitter<'_, '_> {
             .cell(index_of, cell_width)
             .ok_or_else(|| EmitError::Unsupported(format!("frame index {index_of}")))?;
         // A displacement past the object (an index that makes up the rest,
-        // `[ebp+ecx+126]` for 8192 bytes below) is no frame position: the
-        // layout takes a positive one for the arguments' and does not move
-        // it. The object's address is made, and the cell is based on it.
-        if let Some((start, size)) = self.ctx.frame.extent(index_of)
-            && !(start..=start + size).contains(&(start + disp))
-        {
-            let object = self.fresh(match self.ctx.address_mode {
-                AddrMode::Real16 => 2,
-                AddrMode::Flat64 => 8,
-                _ => 4,
-            });
-            let whole = Mem { index: None, ..cell.clone() };
-            self.push(Operation::Address, "lea", vec![Loc::Held(object)], vec![Loc::Address(whole.address())]);
-            let address = Addr::new(crate::model::ir::Space::Literal, disp);
-            return Ok(Mem {
-                base: Some(object),
-                index,
-                scale,
-                offset: disp,
-                disp_width: 2,
-                ..Mem::new(Some(address), cell_width)
-            });
-        }
+        // `[ebp+ecx+126]` for 8192 bytes below) is a position of its own in the
+        // frame, where `home_of` would name the nearest slot: the cell says
+        // which object it was made from, and the layout moves it with that.
+        let outside = self
+            .ctx
+            .frame
+            .extent(index_of)
+            .filter(|&(start, size)| !(start..=start + size).contains(&(start + disp)))
+            .map(|(start, _)| start);
         // The object's place is its `addr`; the displacement moves that, as
         // `offset` of a cell with an `addr` is only how it is encoded.
-        let addr = cell.addr.map(|addr| Addr { disp: addr.disp + disp, ..addr });
+        let addr = cell
+            .addr
+            .map(
+                |addr| {
+                    let moved = Addr { disp: addr.disp + disp, ..addr };
+                    outside.map_or(moved, |home| moved.in_slot(home))
+                },
+            );
         // With an index the frame register is the base of the address and,
         // for a dword index, EBP (the 67h form's base).
         let through = match &index {
