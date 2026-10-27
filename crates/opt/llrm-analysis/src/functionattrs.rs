@@ -55,6 +55,8 @@
 //! DEVIATE F1: `willreturn` also where a loop's trip count is proved or the
 //! language promises each loop ends, in a function that does nothing
 //! observable (`will_return_by_loops`).
+//! Exit: once llrm-cc over clang is the only C frontend its IR carries
+//! `mustprogress`, and LLVM's rule gives the same answer; F1 goes then.
 //!
 //! # See also
 //! LLVM `FunctionAttrs.cpp` (`addNoRecurseAttrs`, `addNoReturnAttrs`,
