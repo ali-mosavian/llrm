@@ -66,6 +66,30 @@ def test_the_offender_is_the_one_backend_pr_or_the_one_that_is_red_alone():
     assert ps.behavioural_culprits(["4146", "4170", "4171"], files.__getitem__, lambda n: n == "4146") == ["4146"], "two backend PRs: each merged alone and asked"
 
 
+def test_a_red_among_many_backend_prs_is_found_by_halving_not_one_by_one():
+    """The 23:53 batch tested its backend members alone at ~2 min each; a 48-PR batch would take 48 runs. Halving finds the one red member in about 2 log2(n)."""
+    import parity_squash as ps
+
+    members = [str(n) for n in range(5000, 5048)]
+    files = {n: ["crates/codegen/llrm-codegen/src/backend/machinesched.rs"] for n in members}
+    asked = []
+    alone = []
+
+    def red_with(subset):
+        asked.append(len(subset))
+        return "5031" in subset
+
+    assert ps.behavioural_culprits(members, files.__getitem__, lambda n: alone.append(n) or False, red_with) == ["5031"]
+    assert len(asked) <= 2 * 6 + 1 and not alone, "about 2 log2(48) runs, no alone runs"
+
+
+def test_halving_that_finds_no_red_half_falls_back_to_alone():
+    import parity_squash as ps
+
+    files = {"1": ["crates/codegen/llrm-codegen/src/backend/a.rs"], "2": ["crates/codegen/llrm-codegen/src/backend/b.rs"]}
+    assert ps.behavioural_culprits(["1", "2"], files.__getitem__, lambda n: n == "2", lambda subset: False) == ["2"], "an interaction: no subset is red, each is asked alone"
+
+
 # What run_tests.py printed for PROGRAMS on the tree of #4146 (a1d904596), 2026-10-24: 10 of 68 configurations, the 10 the 01:00 sweep counted (1004/1014).
 FOUR_ONE_FOUR_SIX = """FAIL  c/memfuncs_runtime.c [-O2 -march=i486 -m32 -mabi=sysv]: line 1: want '0', got '56'
 FAIL  c/regparm3_matrix_22.c: line 13: want '45840', got '11208'
