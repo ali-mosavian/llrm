@@ -13,7 +13,7 @@ A translation of LLVM `d1106deb71cc`
 and `inferNonMandatoryLibFuncAttrs` of `BuildLibCalls.cpp`. A declaration
 whose name and prototype are a `LibFunc` the target's runtime has
 (`TargetLibraryInfo`) takes the attributes of its case in
-`libfunc/attrs.rs` (generated from the pin by `tools/gen_libattrs.py`):
+`libfunc/attrs.rs` (generated from the pin by `tools/gen/gen_libattrs.py`):
 `nounwind`, `willreturn`, `nofree`, `nosync`, `nocallback`, what it does to
 memory (`memory(errnomem: write)` for `sin`: it sets `errno` and touches
 nothing else) and what each pointer parameter is. A call of `sin(x)` twice
