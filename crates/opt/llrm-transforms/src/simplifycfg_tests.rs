@@ -1080,3 +1080,56 @@ fn test_a_branch_the_dominating_conditions_do_not_imply_keeps_its_compare() {
     let out = printed(&module);
     assert!(out.contains("icmp sgt i32 %n, 5"), "{out}");
 }
+
+/// A ladder of `n` conditional blocks, each reached from the one before and
+/// leaving to a common exit.
+fn ladder(n: usize) -> String {
+    let mut text = String::from("declare i1 @h(i16)\ndefine i16 @f(i16 %x) {\nb0:\n  br label %c0\n");
+    for i in 0..n {
+        text += &format!("c{i}:\n  %v{i} = call i1 @h(i16 {i})\n  br i1 %v{i}, label %c{}, label %e\n", i + 1);
+    }
+    text += &format!("c{n}:\n  ret i16 1\ne:\n  ret i16 0\n}}\n");
+    text
+}
+
+/// A block with one predecessor asked for its predecessor's predecessor by
+/// building a list (`all_predecessors_come_from_same_source`): 4 lists a block
+/// over the pass's two sweeps for 2 (5,723 lists, 1.05 M Ir in d_faces -O2,
+/// beside the pin's 0.05 M). Seen to fail first with the list built (398 for
+/// 100 blocks).
+#[test]
+fn test_a_ladder_of_conditional_blocks_builds_two_predecessor_lists_a_block() {
+    let mut module = parsed(&ladder(100));
+    super::PREDECESSOR_LISTS.with(|lists| lists.set(0));
+    simplify(&mut module);
+    let lists = super::PREDECESSOR_LISTS.with(std::cell::Cell::get);
+    assert!((100..=250).contains(&lists), "100 blocks, {lists} predecessor lists: 4 a block would be 400");
+}
+
+/// The blocks that hold a loop's form up were found for every function with a
+/// loop (each loop's exits scanned: 197 scans, 1.5 M Ir in d_faces -O2, the
+/// pin has none); they are found when a jump alone in a block comes up.
+/// Seen to fail first with the set found at the start of every pass.
+#[test]
+fn test_a_loop_with_no_jump_alone_in_a_block_scans_no_exits() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "declare i1 @h(i16)
+define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  br label %b1
+b1:
+  %i = phi i16 [ %a, %b0 ], [ %n, %b1 ]
+  %n = add i16 %i, 1
+  %c = call i1 @h(i16 %n)
+  br i1 %c, label %b1, label %b2
+b2:
+  ret i16 %n
+}
+",
+    );
+    let before = get(Event::LoopExitScans);
+    simplify(&mut module);
+    assert_eq!(get(Event::LoopExitScans) - before, 0);
+}
