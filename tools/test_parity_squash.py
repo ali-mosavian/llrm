@@ -1252,6 +1252,7 @@ def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others
     assert not (tmp_path / "pr2.txt").exists() and run("log", "--format=%s").splitlines() == ["pr 1", "base"], "the merge of the refused PR is reset"
     assert gated("3") == "" and (tmp_path / "pr3.txt").exists(), "a later PR still joins"
 
+
 def test_a_build_error_that_names_a_file_builds_only_the_prs_touching_it_alone():
     """The 00:49 batch of 8 failed at lsr_pass_tests.rs:816; the runner built all 8 alone (about 50 s each) to find the one PR that touched it."""
     built = []
