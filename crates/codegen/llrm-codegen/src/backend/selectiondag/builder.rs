@@ -409,7 +409,17 @@ impl<'a> Builder<'a> {
         next_synthetic: u32,
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
-        let mut dag = SelectionDAG::new(target.dag);
+        let fp_extended = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::Attribute::Str(name, Some(value))
+                        if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
+                ),
+            );
+        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag });
         let tables = info
             .tables
             .get_or_insert_with(|| {

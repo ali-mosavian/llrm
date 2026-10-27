@@ -557,6 +557,7 @@ impl SelfInline {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
                         moved: false,
+                        last_call: false,
                         callee: None,
                         self_calls: None,
                         self_sites: 0,

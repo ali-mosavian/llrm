@@ -936,6 +936,7 @@ define cc1000 void @MAIN() addrspace(1) {
             "",
             "public MAIN",
             ".data",
+            "align 2",
             "count label byte",
             "db 005h,000h",
             "extern B$PEI2:far",
@@ -7032,6 +7033,22 @@ define void @f() addrspace(1) {
     assert!(got.iter().any(|line| line == "push offset x+4"), "{got:?}");
     assert!(got.iter().any(|line| line == "push offset x+6"), "{got:?}");
     assert!(!got.iter().any(|line| line.starts_with("lea") || line.starts_with("add si")), "{got:?}");
+}
+
+/// `llvm.abs` of an i64 is expanded with a `freeze` of its operand; where i64
+/// is two words the old selector refused it ("freeze"), which stopped the QB
+/// runtime's `_i8_output` from building. A frozen value is the value.
+#[test]
+fn test_a_frozen_i64_is_its_two_words() {
+    let text = "define i64 @frozen(i64 %0) addrspace(1) {
+b1:
+  %1 = freeze i64 %0
+  %2 = add i64 %1, 1
+  ret i64 %2
+}
+";
+    let got = selected(text, "frozen").unwrap_or_else(|why| panic!("{}", why.0));
+    assert!(!got.body.insns().is_empty());
 }
 
 /// `candidates` found each instruction's opcode, types and kinds by string

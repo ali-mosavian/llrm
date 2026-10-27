@@ -257,6 +257,11 @@ struct Emitter<'a, 'd> {
     pending_fcom: HashMap<u32, (Held, Held)>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
+    /// The `fld1`/`fldz` already loaded for a constant, valid until the next
+    /// call or barrier (the x87 stack is empty across one) or block.
+    loaded: HashMap<SDValue, (Held, usize, usize)>,
+    /// Calls and barriers pushed so far.
+    stack_breaks: usize,
     /// The selector each `LES16rm` loaded beside its offset, by node: a cell
     /// based on that offset takes it as its segment.
     selectors: HashMap<u32, Held>,
@@ -394,6 +399,8 @@ pub fn emit_in(
         ss_copies: llrm_support::hash::HashSet::default(),
         selectors: HashMap::default(),
         lazy: HashMap::default(),
+        loaded: HashMap::default(),
+        stack_breaks: 0,
         last_select: None,
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
@@ -1332,7 +1339,7 @@ impl Emitter<'_, '_> {
             dests.push(Loc::Held(held));
         }
         let cell_width =
-            super::opcodes::memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+            self.ctx.map.memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
         let mut operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
         // A memory destination (`ADD32mr`, no result): the cell is the
         // destination and its tied source.
@@ -1559,7 +1566,16 @@ impl Emitter<'_, '_> {
         let memory = Arc::new(crate::model::lir::CallMemory {
             effects: llrm_mir::memory::Effects::ANY,
             private: Vec::new(),
-            disturbs: self.ctx.conventions.disturbs(callee, &clobbers),
+            // A callee that pops its own arguments lists SP among what it
+            // disturbs; the pushes and the call account for that, and a
+            // disturbed SP makes the epilogue restore it (`moves_stack`).
+            disturbs: self
+                .ctx
+                .conventions
+                .disturbs(callee, &clobbers)
+                .into_iter()
+                .filter(|register| *register != self.ctx.stack_pointer)
+                .collect(),
         });
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
@@ -1921,7 +1937,7 @@ impl Emitter<'_, '_> {
         // The stack pointer itself (a byval argument's address) is in SS.
         if self.sp_values.contains(&origin) {
             let held = self.fresh(2);
-            let ss = Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 });
+            let ss = Loc::Reg(Reg { register: self.ctx.registers.stack_segment_register(), width: 2 });
             self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![ss]);
             return Ok(held);
         }
@@ -2387,7 +2403,7 @@ impl Emitter<'_, '_> {
                 } else if self.is_frame_pointer(from_offset) {
                     // a frame object or the argument area: SS, read with an
                     // override and no selector copied
-                    Loc::Reg(Reg { register: llrm_lir::registers::RegId::SS, width: 2 })
+                    Loc::Reg(Reg { register: self.ctx.registers.stack_segment_register(), width: 2 })
                 } else {
                     Loc::Held(self.segment_of_pointer(from_offset)?)
                 };
@@ -2975,8 +2991,8 @@ impl Emitter<'_, '_> {
                 .ok_or_else(|| EmitError::Unsupported(format!("a short {name}")))
         };
         match prefix {
-            // A constant is loaded where it is read, once for each reader: a
-            // value held on the x87 stack across a call cannot stay there.
+            // A constant is loaded where it is read: a value held on the x87
+            // stack across a call cannot stay there (see `operand`).
             "LD" if rest.len() == 3 && rest.starts_with(['0', '1']) => {
                 let mnemonic = if rest.starts_with('0') { "fldz" } else { "fld1" };
                 self.lazy.insert(result, (mnemonic, None));
@@ -3460,8 +3476,22 @@ impl Emitter<'_, '_> {
             return Ok(Loc::Imm(Imm { value: sign_extend(bits, w * 8), width: w, address: None }));
         }
         if let Some((mnemonic, cell)) = self.lazy.get(&value).cloned() {
+            // DEVIATE SD317: the pin loads `LD_F1` once for all its readers; a
+            // call or block end is the only place the stack cannot hold it
+            let at = (self.stack_breaks, self.blocks.len());
+            let constant = cell.is_none();
+            if constant {
+                if let Some(&(held, breaks, blocks)) = self.loaded.get(&value) {
+                    if (breaks, blocks) == at {
+                        return Ok(Loc::Held(held));
+                    }
+                }
+            }
             let held = self.fresh(10);
             self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], cell.map(Loc::Mem).into_iter().collect());
+            if constant {
+                self.loaded.insert(value, (held, at.0, at.1));
+            }
             return Ok(Loc::Held(held));
         }
         if self.dag.opcode(value) == ISD::Register {
@@ -3601,6 +3631,9 @@ impl Emitter<'_, '_> {
         &mut self,
         what: Semantics,
     ) {
+        if matches!(what.op, Operation::Call | Operation::Barrier) {
+            self.stack_breaks += 1;
+        }
         let (defines, uses) = (_written(&what.dests), _read(&what));
         let at = self.next_address();
         let insn = Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses));

@@ -206,6 +206,96 @@ fn a_compare_of_extensions_of_different_widths_extends_the_narrower_source() {
     );
 }
 
+/// `foldICmpBinOp`, the offset-by-one flips (`opt`: `icmp sge i32 %s, %n`).
+/// x_heapsort kept `or disjoint %s, 1` live across its sift loop for the guard.
+#[test]
+fn an_offset_by_one_compare_steps_its_strictness_instead() {
+    check(
+        "i32 %x, i32 %n",
+        "  %s = shl nuw nsw i32 %x, 1\n  %o = or disjoint i32 %s, 1\n  %r = icmp sgt i32 %o, %n\n  ret i1 %r\n",
+        "  %s = shl nuw nsw i32 %x, 1\n  %0 = icmp sge i32 %s, %n\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %n",
+        "  %m = add nsw i32 %n, -1\n  %r = icmp sgt i32 %x, %m\n  ret i1 %r\n",
+        "  %0 = icmp sge i32 %x, %n\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpBinOp`, the sums and differences that cancel an operand.
+#[test]
+fn a_sum_or_difference_compared_with_its_operand_drops_it() {
+    check(
+        "i32 %a, i32 %b",
+        "  %s = sub i32 %a, %b\n  %r = icmp ugt i32 %s, %a\n  ret i1 %r\n",
+        "  %0 = icmp ugt i32 %b, %a\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %a, i32 %x",
+        "  %s = add i32 %a, %x\n  %r = icmp ult i32 %s, %a\n  ret i1 %r\n",
+        "  %0 = xor i32 %a, -1\n  %1 = icmp ugt i32 %x, %0\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %a, i32 %x",
+        "  %s = urem i32 %a, %x\n  %r = icmp eq i32 %s, %a\n  ret i1 %r\n",
+        "  %0 = icmp ult i32 %a, %x\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpBinOp`, two offsets: the larger one stays on its side.
+#[test]
+fn two_offsets_are_compared_by_their_difference() {
+    check(
+        "i32 %a, i32 %c",
+        "  %p = add i32 %a, 5\n  %q = add i32 %c, 3\n  %r = icmp eq i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = add i32 %a, 2\n  %1 = icmp eq i32 %0, %c\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %a, i32 %c",
+        "  %p = add nsw i32 %a, 5\n  %q = add nsw i32 %c, 3\n  %r = icmp slt i32 %p, %q\n  ret i1 %r\n",
+        "  %0 = add nsw i32 %a, 2\n  %1 = icmp slt i32 %0, %c\n  ret i1 %1\n",
+    );
+}
+
+/// `foldSignBitTest`: the sign bit shifted down and compared with zero is a
+/// compare of the value with zero (a `shr` by the width less one, a `trunc` of
+/// it, or two shifts that add up to it).
+#[test]
+fn test_a_sign_bit_extraction_compared_with_zero_is_a_sign_test() {
+    check(
+        "i32 %x",
+        "  %s = lshr i32 %x, 31\n  %r = icmp eq i32 %s, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = ashr i32 %x, 31\n  %r = icmp ne i32 %s, 0\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = lshr i32 %x, 31\n  %t = trunc i32 %s to i8\n  %r = icmp eq i8 %t, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+}
+
+/// `foldGEPICmp`: a pointer compared with the GEP off it is the offset
+/// compared with zero (`p != end` loops on `p + n`).
+#[test]
+fn test_a_gep_compared_with_its_base_is_the_offset_against_zero() {
+    let text = "define i1 @f(ptr %p, i32 %n) {
+b0:
+  %g = getelementptr inbounds i32, ptr %p, i32 %n
+  %r = icmp ne ptr %g, %p
+  ret i1 %r
+}
+";
+    let after = combined(text);
+    assert!(!after.contains("getelementptr") && after.contains("icmp ne i32"), "{after}");
+    let signed = combined(&text.replace("icmp ne", "icmp slt"));
+    assert!(signed.contains("getelementptr"), "a signed compare is left alone: {signed}");
+}
+
 /// A compare of a phi of constants against a constant stayed a compare: the
 /// phi's block ended in `br (icmp eq (phi [1, 1, 0]), 0)` that SimplifyCFG
 /// cannot thread (its fold needs the phi itself as the condition), so queens

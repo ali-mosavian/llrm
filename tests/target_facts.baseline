@@ -47,7 +47,7 @@
 2 crates/codegen/llrm-codegen/src/backend/pushfold.rs
 1 crates/codegen/llrm-codegen/src/backend/rewriter.rs
 16 crates/codegen/llrm-codegen/src/backend/selectiondag/builder.rs
-22 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
+14 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/memops.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/switch.rs
 3 crates/codegen/llrm-codegen/src/backend/selectiondag/builder/tailcall.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/dag.rs
