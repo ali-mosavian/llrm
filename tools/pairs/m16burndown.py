@@ -177,7 +177,8 @@ def main() -> None:
         return cause, owner
 
     rows = [(n, base[n], new[n], new[n] - base[n], clock_ratio(n, level, before, after), *classified(n), *status_of(n, rules)) for n in grew]
-    out = [f"# m16 {args.level} burn-down", "", f"base {m16os.identify(args.base)}", f"new  {m16os.identify(args.new)}", f"sources: this checkout at {source_state()}; the set is tools/sizes.py's programs, demos left out, {len(base)} programs",
+    excess = os.environ.get("SIZES_EXCESS") or "unset: main compiles SINGLE as fast and the tip as standard, so the BASIC SINGLE rows read the deliberate rounding as growth (fpbench 126 B -> 74 B set to fast)"
+    out = [f"# m16 {args.level} burn-down", "", f"base {m16os.identify(args.base)}", f"new  {m16os.identify(args.new)}", f"SIZES_EXCESS {excess}", f"sources: this checkout at {source_state()}; the set is tools/sizes.py's programs, demos left out, {len(base)} programs",
            f"compared {len(both)}; base cannot compile {len(base) - sum(map(bool, base.values()))}, new cannot compile {len(new) - sum(map(bool, new.values()))}",
            f"TOTAL {sum(base[n] for n in both)} -> {sum(new[n] for n in both)} B ({sum(new[n] - base[n] for n in both):+}); {len(grew)} programs grew, {sum(new[n] < base[n] for n in both)} shrank, {sum(new[n] == base[n] for n in both)} same",
            f"LEFT {sum(r[3] for r in rows)} B in {len(rows)} growers (the bar: none)", ""]

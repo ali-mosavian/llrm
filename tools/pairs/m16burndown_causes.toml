@@ -19,8 +19,10 @@ owner = "w-2"
 
 [[program]]
 match = "*/nbody.*"
-cause = "untriaged"
-owner = "w-2"
+cause = "BASIC SINGLE rounding at excess standard (SIZES_EXCESS=fast: 91 -> 70 B); the rest as fpbench"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/stft_single.*"
@@ -51,8 +53,10 @@ owner = "w-2"
 
 [[program]]
 match = "*/fpbench*"
-cause = "untriaged"
-owner = "w-2"
+cause = "BASIC SINGLE rounding at excess standard (set SIZES_EXCESS=fast on both: 126 -> 74 B); the rest is far-array selector spills and a second counter (RA/LSR), x87 ops equal"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/memory.nib"
