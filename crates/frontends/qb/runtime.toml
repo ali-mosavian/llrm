@@ -1259,3 +1259,31 @@ inputs = ["ax", "bx", "cx", "dx", "si", "di"]
 evidence = '''
 rt/stcore.asm `cProc SCMP,<FAR>,<ES,SI,DI>` with `parmW psdL` and `parmW psdR`, so RETF 4 and es, si and di come back. It sets ES=DS, compares the shorter length with REPE CMPSB, saves the flags with PUSHF and frees each operand as a temporary only, which raises nothing; no error comes out of it, so a string comparison under ON ERROR is a plain call. The result is the flags (flags_result).
 '''
+
+["B$BSAV"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/bload.asm: `cProc B$BSAV,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, third), so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$BLOD"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/bload.asm: `cProc B$BLOD,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, third), so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''

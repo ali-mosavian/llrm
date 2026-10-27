@@ -3529,3 +3529,13 @@ fn a_dividend_of_long_min_keeps_the_minus_one_guard() {
         listing_of("min_dividend", "DEFINT A-Z\r\nDIM d AS LONG\r\nINPUT d\r\nPRINT (-2147483647& - 1&) \\ d\r\n");
     assert!(tests_against_minus_one(&text), "{text}");
 }
+
+/// BSAVE and BLOAD called B$BSAV and B$BLOD, rows of no table: "runtime call
+/// B$BSAV has no complete stack-cleanup contract" refused `vgabsave.bas`.
+#[test]
+fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
+    let directory = tempfile::tempdir().expect("a temporary directory");
+    for text in ["BSAVE \"V.BIN\", 0, 16\r\n", "BLOAD \"V.BIN\", 0\r\n"] {
+        records(&parsed_as(&written(&directory, "T.BAS", text.as_bytes()), "vbdos", "vbdos"), "T.BAS");
+    }
+}
