@@ -335,6 +335,10 @@ impl Hooks for X86Lowering {
             }
             // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
             // `f32` to `f64` is returned as is and selected by pattern.
+            // DEVIATE SD107. `lowerFaddFsub`: the node itself unless an operand
+            // pair is a horizontal add (SSE3 `haddps`), which the target does
+            // not describe; so the scalar op is selected by pattern.
+            ISD::FAdd | ISD::FSub => Some(node),
             ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
