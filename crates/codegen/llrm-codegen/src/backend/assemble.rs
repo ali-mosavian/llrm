@@ -1141,7 +1141,7 @@ fn phased(
     let pinned = body.pins.clone();
     let mut in_ssa = true;
     let preserved: std::collections::BTreeSet<RegId> =
-        registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
+        registers.saved.iter().map(|(whole, _)| classes.registers.root(*whole)).collect();
     let mut allocated = false;
     for mut phase in flow::machine_with(
         &pinned,
