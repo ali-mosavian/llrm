@@ -216,7 +216,7 @@ pub fn assembled_by(
         }
     }
     let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
-    // DEVIATE SD314: a routine one site calls is pasted there, as the old
+    // DEVIATE SD231: a routine one site calls is pasted there, as the old
     // selector does: its procedure, call and return cost more than it saves.
     // The pin has no such routine (a libcall in the library).
     let mut sites: IndexMap<String, usize> = IndexMap::default();
@@ -1141,7 +1141,7 @@ fn phased(
     let pinned = body.pins.clone();
     let mut in_ssa = true;
     let preserved: std::collections::BTreeSet<RegId> =
-        registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
+        registers.saved.iter().map(|(whole, _)| classes.registers.root(*whole)).collect();
     let mut allocated = false;
     for mut phase in flow::machine_with(
         &pinned,

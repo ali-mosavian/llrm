@@ -78,6 +78,7 @@ mod sub_simplify;
 mod switch_dags;
 mod switches;
 mod token_factor;
+mod trunc_binop;
 mod type_actions;
 mod undef_float;
 mod vastart;
