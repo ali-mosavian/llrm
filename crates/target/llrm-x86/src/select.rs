@@ -2319,7 +2319,8 @@ pub fn emit_in(
     let op = what.op;
     let seg = |register: RegId| SEGMENTS.contains_key(&register);
 
-    if all().any(|operand| reg_of(operand).is_some_and(RegId::is_xmm)) {
+    // `cvttss2si rax, [slot]` names no xmm register.
+    if name.starts_with("cvtt") || all().any(|operand| reg_of(operand).is_some_and(RegId::is_xmm)) {
         return scalar_sse(what, at);
     }
 

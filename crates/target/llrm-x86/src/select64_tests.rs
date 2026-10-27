@@ -293,3 +293,11 @@ fn a_move_between_an_integer_and_an_xmm_register_encodes() {
     let from_xmm = sem(Operation::Extend, Some("movd"), vec![rg(RegId::EAX, 4)], vec![rg(x, 16)], None, false);
     assert_eq!(bytes(&from_xmm), [0x66, 0x0f, 0x7e, 0xc0]);
 }
+
+/// `cvttss2si rax, [slot]` had no encoding: an object file of a float read
+/// from the frame and converted (`fconv`) failed.
+#[test]
+fn a_float_to_integer_convert_reads_a_frame_cell() {
+    let load = sem(Operation::Extend, Some("cvttss2si"), vec![rg(RegId::RAX, 8)], vec![frame(-4, 4)], None, false);
+    assert_eq!(bytes(&load), [0xf3, 0x48, 0x0f, 0x2c, 0x45, 0xfc]);
+}
