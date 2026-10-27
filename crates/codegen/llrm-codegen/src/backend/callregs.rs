@@ -93,9 +93,17 @@ fn _named_clobbers(
     names: &IndexMap<RegId, BTreeSet<String>>,
     disturbed: &BTreeSet<runtime::Reg>,
 ) -> BTreeSet<RegId> {
+    let wanted: Vec<String> = disturbed
+        .iter()
+        .map(|named| {
+            #[cfg(test)]
+            LOWERED.with(|one| one.set(one.get() + 1));
+            named.value().to_lowercase()
+        })
+        .collect();
     names
         .iter()
-        .filter(|(_, spelled)| disturbed.iter().any(|named| spelled.contains(&named.value().to_lowercase())))
+        .filter(|(_, spelled)| wanted.iter().any(|name| spelled.contains(name)))
         .map(|(register, _)| *register)
         .collect()
 }
@@ -134,6 +142,8 @@ thread_local! {
     /// `_names` by the `general` set it was built for: every call of a body
     /// asks for the same one.
     static NAMES: RefCell<HashMap<Vec<RegId>, Rc<Names>>> = RefCell::default();
+    #[cfg(test)]
+    static LOWERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     #[cfg(test)]
     static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -181,5 +191,19 @@ mod tests {
             _names(&large);
         }
         assert_eq!(BUILT.with(std::cell::Cell::get) - before, 2);
+    }
+
+    /// `_named_clobbers` lowercased each disturbed register's name once per
+    /// register of the table, a string allocation each (3.3 M Ir on d_faces):
+    /// once per disturbed register.
+    #[test]
+    fn test_a_disturbed_name_is_lowercased_once_not_once_per_register() {
+        let general = [RegId::AX, RegId::BX, RegId::CX, RegId::DX];
+        let names = _names(&general);
+        let disturbed = BTreeSet::from([runtime::Reg::Ax, runtime::Reg::Bx]);
+        let before = LOWERED.with(std::cell::Cell::get);
+        let clobbered = _named_clobbers(&names, &disturbed);
+        assert_eq!(LOWERED.with(std::cell::Cell::get) - before, 2);
+        assert_eq!(clobbered, BTreeSet::from([RegId::AX, RegId::BX]));
     }
 }

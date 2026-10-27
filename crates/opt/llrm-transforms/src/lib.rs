@@ -93,6 +93,9 @@ pub mod canonical;
 pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
+pub mod cgpmemalign;
+#[cfg(test)]
+mod cgpmemalign_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -173,6 +176,7 @@ pub mod decide;
 pub mod dfajumpthreading;
 #[cfg(test)]
 mod dfajumpthreading_tests;
+pub mod divrempairs;
 pub mod earlycse;
 pub mod edges;
 pub mod emptyblocks;

@@ -1221,6 +1221,49 @@ def test_the_always_on_scanners_run_before_the_lib_tests_of_a_batch():
     assert source.find('stage("scanners")') > lib, "the full scanner set still runs after the lib tests"
 
 
+def test_a_page_a_pr_leaves_stale_is_named_even_when_the_head_already_has_stale_pages():
+    """#5031, #5049 and #4988 changed a `//!` header, passed alone and landed with six pages stale: the head's red docs_in_sync was excused, so no check saw a new one."""
+    why, now = ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: {"docs/a.md", "docs/b.md", "docs/c.md"})
+    assert "docs/b.md" in why and "docs/c.md" in why and "docs/a.md" not in why and now == {"docs/a.md", "docs/b.md", "docs/c.md"}
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: {"docs/a.md"})[0] == ""
+    assert ps.docs_refusal({"docs/a.md"}, Path("."), docs=lambda root: set())[0] == "", "a PR that regenerates a page is not refused"
+
+
+def test_a_pr_that_stales_a_page_is_refused_and_its_merge_reset_while_the_others_stay(tmp_path):
+    """#5031, #5049 and #4988 each changed a `//!` header and landed with six pages stale: nothing refused the PR whose merge made a page new-stale."""
+    def run(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+
+    def merge_one(number):
+        (tmp_path / f"pr{number}.txt").write_text(number)
+        run("add", ".")
+        run("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"pr {number}")
+        return ""
+
+    stale_after = {"1": {"docs/old.md"}, "2": {"docs/old.md", "docs/new.md"}, "3": {"docs/old.md"}}
+    current = []
+    gated = ps.docs_gated(lambda number: (current.append(number), merge_one(number))[1], {"docs/old.md"}, tmp_path, docs=lambda root: stale_after[current[-1]])
+    assert gated("1") == ""
+    why = gated("2")
+    assert "docs/new.md" in why and "docs/old.md" not in why
+    assert not (tmp_path / "pr2.txt").exists() and run("log", "--format=%s").splitlines() == ["pr 1", "base"], "the merge of the refused PR is reset"
+    assert gated("3") == "" and (tmp_path / "pr3.txt").exists(), "a later PR still joins"
+
+
+def test_a_build_error_that_names_a_file_builds_only_the_prs_touching_it_alone():
+    """The 00:49 batch of 8 failed at lsr_pass_tests.rs:816; the runner built all 8 alone (about 50 s each) to find the one PR that touched it."""
+    built = []
+    group = [str(number) for number in range(1, 9)]
+    culprits = ps.build_offenders(group, lambda number: built.append(number) or True, lambda: "error" if built[-1] == "8" else "", {}, suspects=["8"])
+    assert culprits == ["8"] and built == ["8"], "one suspect at fault: one alone-build"
+    built.clear()
+    culprits = ps.build_offenders(group, lambda number: built.append(number) or True, lambda: "error" if built[-1] == "5" else "", {}, suspects=["8"])
+    assert culprits == ["5"] and built[0] == "8" and len(built) == 8, "no suspect at fault: every other PR is built alone, as before"
+    assert ps.error_files("crates/opt/llrm-transforms/src/lsr_pass_tests.rs:816:16: error[E0063]") == {"crates/opt/llrm-transforms/src/lsr_pass_tests.rs"}
+
 def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_refused(capsys):
     """#5039 was REFUSED with `GraphQL: Something went wrong` (00:14, request A186:1A8971): GitHub's own error, the PR open, mergeable and unchanged; it cost a batch cycle."""
     run, calls = _gh(["GraphQL: Something went wrong while executing your query.", ""])
@@ -1231,3 +1274,59 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_pr_whose_head_moved_during_a_batch_is_merged_at_its_new_head():
+    """The 02:34 sub-batch merged #5088's 01:18 head (sinkcast.md stale) 30 min after w12 pushed the fix, and the squash of #5085 was refused for a head w14 had moved."""
+    infos = {"5088": {"headRefOid": "old" * 13 + "o", "title": "t"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
+    views = {"5088": {"headRefOid": "new" * 13 + "n", "title": "t2"}, "5087": {"headRefOid": "same" * 10, "title": "t"}}
+    moved = ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number])
+    assert list(moved) == ["5088"] and moved["5088"][1].startswith("newnew")
+    assert infos["5088"]["headRefOid"].startswith("newnew") and infos["5088"]["title"] == "t2", "infos holds the new read"
+    assert ps.refresh_heads(infos, ["5088", "5087"], view=lambda number: views[number]) == {}, "nothing moved the second time"
+
+
+def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tree_it_judged(tmp_path):
+    """docs_in_sync was refused four times on trees the next check reset and nobody could reproduce: no evidence was kept."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "x")
+    (tmp_path / "stray.txt").write_text("left over")
+    kept = tmp_path.parent / (tmp_path.name + "-refused")
+    ps.keep_refused_evidence("abcdef0123456789", tmp_path, ["scanner red alone: integration docs_in_sync::test_no_generated_page_is_stale"], kept)
+    out = kept / "abcdef012345"
+    assert f"tree {run('rev-parse', 'HEAD')}" in (out / "head.txt").read_text() and "pr head abcdef0123456789" in (out / "head.txt").read_text() and "stray.txt" in (out / "status.txt").read_text() and "docs/a.md" in (out / "check.txt").read_text()
+    ps.keep_refused_evidence("1111111111111111", tmp_path, ["unit tests fail alone"], kept)
+    assert not (kept / "111111111111").exists(), "only a docs refusal keeps its tree's evidence"
+
+
+def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
+    """"Stale heads or the runner's tree" could not be answered at the 02:26 refusal: the batch kept no list of the heads it judged."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "x")
+    head = run("rev-parse", "HEAD")
+    kept = tmp_path.parent / (tmp_path.name + "-batch")
+    ps.keep_batch_evidence({"5085": head}, tmp_path, kept, "022633")
+    heads = (kept / "batch-022633" / "heads.txt").read_text()
+    assert f"#5085 {head} committed 20" in heads and "docs/a.md" in (kept / "batch-022633" / "check.txt").read_text()
+
+
+def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names_the_exception(tmp_path):
+    """05:18: `docs_refusal` called `docs()` while the default `docs_stale` needs the root: every batch died with a TypeError and all 13 PRs were refused with an empty reason; #5073's tests mocked `docs`."""
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base"], cwd=tmp_path, check=True)
+    gated = ps.docs_gated(lambda number: "", set(), tmp_path)
+    assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
+    line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
+    assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
