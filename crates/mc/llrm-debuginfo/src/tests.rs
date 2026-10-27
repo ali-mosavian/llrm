@@ -165,6 +165,20 @@ fn a_bodys_start_and_end_are_marked_in_the_line_table() {
     assert!(program.contains(&10) && program.contains(&11), "{program:?}");
 }
 
+/// A merged location is line 0 (`merged_line`): the row is DWARF's "no line",
+/// a signed advance back from line 3 and forward to line 4, the addresses still
+/// rising.
+#[test]
+fn a_line_zero_row_is_a_valid_no_line_row_in_the_line_table() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Default);
+    made.debug.as_mut().unwrap().lines.insert(1, Line { section: 0, offset: 4, file: 0, line: 0, column: 0 });
+    let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    let (_, line) = named(&made, ".debug_line");
+    // DW_LNS_advance_line is 3: line 3 to 0 is -3 (0x7D), 0 to 4 is +4.
+    assert!(line.image.windows(2).any(|pair| pair == [3, 0x7D]), "{:?}", line.image);
+    assert!(line.image.windows(2).any(|pair| pair == [3, 4]), "{:?}", line.image);
+}
+
 /// The name of a variable is in the unit's strings if its DIE was written.
 fn names(
     object: &Object,
