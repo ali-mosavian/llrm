@@ -104,8 +104,11 @@ impl SelectionDAG {
             NodeData::ValueType(vt) => {
                 write!(text, ":{}", type_text(vt)).ok();
             }
-            NodeData::PoolIndex(index) => {
+            NodeData::PoolIndex(index, offset) => {
                 write!(text, "<{index}>").ok();
+                if offset != 0 {
+                    write!(text, "{offset:+}").ok();
+                }
             }
             NodeData::Symbol(id) => {
                 write!(text, "'{}'", self.symbol_names[id as usize]).ok();

@@ -203,3 +203,31 @@ b3:
     assert!(!simplified_with(&branching(true), context, &spec, &mut declared, function));
     assert_eq!(printed(&module), text);
 }
+
+/// Arms that end differently collected both bodies before the all-equal test
+/// said no: the early-out on the terminators takes none.
+#[test]
+fn test_arms_that_end_differently_are_not_collected_without_hoist_common_insts() {
+    let text = "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, 1
+  ret i16 %a
+
+b2:
+  %b = add i16 %x, 1
+  ret i16 %b
+}
+";
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let (context, function) = module.function_mut("f").expect("@f");
+    let before = crate::hoistcommon::BODY_COLLECTS.with(|count| count.get());
+    let branch = function.terminator(function.entry().expect("an entry")).expect("a branch");
+    assert!(!crate::hoistcommon::hoisted(context, &spec, function, branch, true));
+    assert_eq!(crate::hoistcommon::BODY_COLLECTS.with(|count| count.get()), before);
+}

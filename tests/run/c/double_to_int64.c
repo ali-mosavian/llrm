@@ -1,11 +1,12 @@
 // flags: -O0 | -O2 | -Os
 // A double or float converted to a signed 64-bit integer (gcc.c-torture 930622-2, pr49218: "FPToSI to an i64"), truncating
 // toward zero, over values below, at and above 2^32. The unsigned conversion is #829's other half.
+#include <stdint.h>
 extern void report(long value);
 
 typedef long long s64;
 
-union halves { s64 whole; unsigned long word[2]; };
+union halves { s64 whole; uint32_t word[2]; };
 
 static s64 trunc_double(double d) { return (s64)d; }
 static s64 trunc_float(float f) { return (s64)f; }

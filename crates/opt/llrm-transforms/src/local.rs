@@ -845,19 +845,18 @@ pub fn merge_block_into_predecessor(
 
     // Move all definitions in the successor to the predecessor...
     let moved: Vec<InstId> = function.iter_block(bb).filter(|one| *one != sti).collect();
-    for inst in moved {
-        function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
-    }
-
-    // DEVIATE 24: the pin erases `PTI` after redirecting the uses of BB. The
-    // records said before the branch go with `sti` when it takes the branch's
-    // place (the pin: the trailing records `PTI` leaves, which
-    // `moveBeforePreserving` hands to `STI`); `settle_records` does that only
-    // while the branch still names BB as the one block it enters, so it is
-    // erased first.
     if fall_thru.is_none() {
-        // Delete the unconditional branch from the predecessor.
+        // DEVIATE 24: the pin erases `PTI` after redirecting the uses of BB.
+        // Its records stand before what `BB` starts with, as the pin's IR
+        // keeps them among the code, and each moved instruction takes its own
+        // along; `settle_records` does that only while `PTI` still names BB as
+        // the one block it enters, so it is erased first.
         function.erase(pti).expect("a jump defines nothing");
+        function.move_run(&moved, pred_bb).expect("a placed instruction");
+    } else {
+        for inst in moved {
+            function.move_to(inst, Position::Before(pti)).expect("a placed instruction");
+        }
     }
 
     // Make all PHI nodes that referred to BB now refer to Pred as their

@@ -1,10 +1,12 @@
-//! `visitFADD`, `visitFSUB` and `visitFMUL`, with `simplifyFPBinop`,
-//! `canIgnoreSignBitOfZero` and the `fneg` part of
+//! `visitFADD`, `visitFSUB`, `visitFMUL` and `visitFDIV`, with
+//! `simplifyFPBinop`, `canIgnoreSignBitOfZero` and the `fneg` part of
 //! `TargetLowering::getNegatedExpression`.
 //!
 //! DEVIATE FP2: no vector forms, no `foldBinOpIntoSelect`, no FMA fusion
 //! (`visit*ForFMACombine`: the targets have no FMA), no
-//! `combineFMulOrFDivWithIntPow2`, no `fmul` of a signed select, and
+//! `combineFMulOrFDivWithIntPow2`, no `fmul` of a signed select, no
+//! `combineRepeatedFPDivisors`, rsqrt or reciprocal estimates in `visitFDIV`
+//! (x87 has none), and
 //! `getNegatedExpression` knows `fneg`, constants, `fadd`, `fsub`, `fmul` and
 //! `fdiv` only (not `fma`, `fp_extend`, `fp_round`, `select`).
 //! `isKnownNeverLogicalZero` is "a non-zero constant". Exit: those. Owner
@@ -26,7 +28,7 @@ use super::dag::{NodeData, SDNodeFlags, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
 use super::fp_value::{self, FpClass};
 use super::isd::ISD;
-use super::mvt::{EVT, MVT};
+use super::mvt::EVT;
 
 /// `TargetLowering::NegatibleCost`, in the pin's order; `Expensive` is `None`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,7 +41,7 @@ enum Cost {
 const MAX_DEPTH: u32 = 6;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
-    fn legal_operations(&self) -> bool {
+    pub(super) fn legal_operations(&self) -> bool {
         self.level >= CombineLevel::AfterLegalizeVectorOps
     }
 
@@ -52,7 +54,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(op, vt))
     }
 
-    fn fp_op_legal(
+    pub(super) fn fp_op_legal(
         &self,
         op: ISD,
         vt: EVT,
@@ -451,7 +453,90 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         Some(self.dag.get_node_flags(ISD::FAdd, vt, &[n0, neg], flags))
     }
 
-    /// `visitFMUL`.
+    /// `visitFNEG`: a constant, an expression that negates for free, and
+    /// `-(x - y)` as `y - x` where signed zeros do not matter.
+    pub(super) fn visit_fneg(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        let flags = self.dag.node(node).flags;
+        if !vt.is_floating_point() {
+            return None;
+        }
+        if let Some(bits) = self.fp_bits(n0) {
+            return Some(self.dag.get_constant_fp(fp_value::negate(vt, bits)?, vt));
+        }
+        if let Some((negated, _)) = self.negated_expression(n0, 0) {
+            return Some(negated);
+        }
+        (self.dag.opcode(n0) == ISD::FSub
+            && flags.has(SDNodeFlags::NO_SIGNED_ZEROS)
+            && self.dag.use_count(n0.node) == 1)
+            .then(|| {
+                let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                self.dag.get_node_flags(ISD::FSub, vt, &[y, x], flags)
+            })
+    }
+
+    /// `visitFABS`: a constant.
+    pub(super) fn visit_fabs(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        let bits = self.fp_bits(n0).filter(|_| vt.is_floating_point())?;
+        Some(self.dag.get_constant_fp(fp_value::abs(vt, bits)?, vt))
+    }
+
+    /// `visitFDIV`: the reciprocal multiply, `x / sqrt(x)` and `-x / -y`.
+    pub(super) fn visit_fdiv(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let flags = self.dag.node(node).flags;
+        if !vt.is_floating_point() {
+            return None;
+        }
+        if let Some(r) = self.simplify_fp_binop(ISD::FDiv, n0, n1, flags) {
+            return Some(r);
+        }
+        if let Some(c) = self.dag.fold_constant_fp(ISD::FDiv, vt, n0, n1) {
+            return Some(c);
+        }
+        // fold (fdiv X, c2) -> (fmul X, 1/c2) if there is no loss in
+        // precision, or the loss is acceptable with AllowReciprocal.
+        if let Some((recip, exact)) = self.fp_bits(n1).and_then(|b| fp_value::reciprocal(vt, b)) {
+            let legal_imm = !self.legal_operations()
+                || self.fp_op_legal(ISD::ConstantFP, vt)
+                || matches!(
+                    vt,
+                    EVT::Simple(m) if self.tli.is_some_and(|tli| tli.is_fp_imm_legal(m, recip))
+                );
+            if (exact || flags.has(SDNodeFlags::ALLOW_RECIPROCAL)) && legal_imm {
+                let c = self.dag.get_constant_fp(recip, vt);
+                return Some(self.dag.get_node_flags(ISD::FMul, vt, &[n0, c], flags));
+            }
+        }
+        // fold X/Sqrt(X) -> Sqrt(X)
+        if self.can_ignore_sign_bit_of_zero(node)
+            && flags.has(SDNodeFlags::ALLOW_REASSOC)
+            && self.dag.opcode(n1) == ISD::FSqrt
+            && n0 == self.dag.operand(n1, 0)
+        {
+            return Some(n1);
+        }
+        // (fdiv (fneg X), (fneg Y)) -> (fdiv X, Y)
+        let (neg0, cost0) = self.negated_expression(n0, 0)?;
+        let (neg1, cost1) = self.negated_expression(n1, 0)?;
+        (cost0 == Cost::Cheaper || cost1 == Cost::Cheaper)
+            .then(|| self.dag.get_node_flags(ISD::FDiv, vt, &[neg0, neg1], flags))
+    }
+
     fn int_const(
         &self,
         value: SDValue,
@@ -550,44 +635,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         Some(self.dag.get_constant(value as u128 & super::fold::mask(vt.size_in_bits()), vt))
     }
 
-    /// `visitFNEG`: a constant, an expression that negates for free, and
-    /// `-(x - y)` as `y - x` where signed zeros do not matter.
-    pub(super) fn visit_fneg(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let n0 = self.dag.operand(node, 0);
-        let vt = self.dag.value_type(node);
-        let flags = self.dag.node(node).flags;
-        if !vt.is_floating_point() {
-            return None;
-        }
-        if let Some(bits) = self.fp_bits(n0) {
-            return Some(self.dag.get_constant_fp(fp_value::negate(vt, bits)?, vt));
-        }
-        if let Some((negated, _)) = self.negated_expression(n0, 0) {
-            return Some(negated);
-        }
-        (self.dag.opcode(n0) == ISD::FSub
-            && flags.has(SDNodeFlags::NO_SIGNED_ZEROS)
-            && self.dag.use_count(n0.node) == 1)
-            .then(|| {
-                let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-                self.dag.get_node_flags(ISD::FSub, vt, &[y, x], flags)
-            })
-    }
-
-    /// `visitFABS`: a constant.
-    pub(super) fn visit_fabs(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let n0 = self.dag.operand(node, 0);
-        let vt = self.dag.value_type(node);
-        let bits = self.fp_bits(n0).filter(|_| vt.is_floating_point())?;
-        Some(self.dag.get_constant_fp(fp_value::abs(vt, bits)?, vt))
-    }
-
+    /// `visitFMUL`.
     pub(super) fn visit_fmul(
         &mut self,
         node: SDValue,

@@ -188,6 +188,66 @@ pub fn to_signed(
         .then_some(value.trunc() as i64)
 }
 
+/// [`fold`], but only where the result is exact: what a function that
+/// evaluates at the x87's extended precision may fold (it rounds once, at the
+/// store).
+pub fn fold_exact(
+    opcode: ISD,
+    vt: EVT,
+    a: u128,
+    b: u128,
+) -> Option<u128> {
+    let bits = fold(opcode, vt, a, b)?;
+    let exact = match vt {
+        EVT::Simple(MVT::F32) => {
+            let (x, y) = (f64::from(f32::from_bits(a as u32)), f64::from(f32::from_bits(b as u32)));
+            let r = f64::from(f32::from_bits(bits as u32));
+            let wide = match opcode {
+                ISD::FAdd => x + y,
+                ISD::FSub => x - y,
+                ISD::FMul => x * y,
+                _ => x / y,
+            };
+            r == wide
+        }
+        EVT::Simple(MVT::F64) => {
+            let (x, y) = (f64::from_bits(a as u64), f64::from_bits(b as u64));
+            let r = f64::from_bits(bits as u64);
+            match opcode {
+                ISD::FAdd => (r - x) - y == 0.0 && (r - y) - x == 0.0,
+                ISD::FSub => (r - x) + y == 0.0 && (x - r) - y == 0.0,
+                ISD::FMul => (-x).mul_add(y, r) == 0.0 || x.mul_add(y, -r) == 0.0,
+                _ => (-r).mul_add(y, x) == 0.0,
+            }
+        }
+        _ => false,
+    };
+    exact.then_some(bits)
+}
+
+/// `1.0 / x` when it is a normal finite value; `exact` is `opOK` (a power of
+/// two), otherwise `opInexact`. `None` where `APFloat` reports overflow,
+/// underflow or a denormal, or the type does not fold.
+pub fn reciprocal(
+    vt: EVT,
+    bits: u128,
+) -> Option<(u128, bool)> {
+    let (r, exact_input) = match vt {
+        EVT::Simple(MVT::F32) => {
+            let x = f32::from_bits(bits as u32);
+            let r = 1.0f32 / x;
+            (r.is_normal().then(|| u128::from(r.to_bits()))?, x.is_normal() && bits & 0x7F_FFFF == 0)
+        }
+        EVT::Simple(MVT::F64) => {
+            let x = f64::from_bits(bits as u64);
+            let r = 1.0f64 / x;
+            (r.is_normal().then(|| u128::from(r.to_bits()))?, x.is_normal() && bits & ((1 << 52) - 1) == 0)
+        }
+        _ => return None,
+    };
+    Some((r, exact_input))
+}
+
 /// The quiet NaN `getConstantFP(APFloat::getNaN(..))` makes.
 pub fn quiet_nan(vt: EVT) -> Option<u128> {
     match vt {
