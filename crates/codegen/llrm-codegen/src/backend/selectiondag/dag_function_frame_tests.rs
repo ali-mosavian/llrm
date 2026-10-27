@@ -1172,3 +1172,33 @@ entry:
     assert!(names.iter().any(|n| n == "setge"), "{names:?}");
     assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }
+
+const M16_FAR_TO_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+declare void @llvm.memcpy.p1.p1.i16(ptr addrspace(1), ptr addrspace(1), i16, i1)
+
+define void @f(ptr addrspace(1) %d, ptr addrspace(1) %s) {
+entry:
+  call void @llvm.memcpy.p1.p1.i16(ptr addrspace(1) %d, ptr addrspace(1) %s, i16 12, i1 false)
+  ret void
+}
+";
+
+/// A far string move left the dword each pointer was joined into for the string
+/// registers (`or(movzx off, shl sel, 16)`) in the body, read by no one. Its
+/// `shl` read the selector at four bytes, the allocator held the word in a
+/// dword register, and QCport gib/ent -Os grew by dword spills and
+/// `mov eax,[bp-N]; mov ax,..; mov [bp-N],eax` inserts (gib +161 B).
+#[test]
+fn a_far_string_move_leaves_no_dword_join_once_dead_code_is_gone() {
+    let module = llrm_mir::parse::module(M16_FAR_TO_FAR_COPY).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let joins = |body: &crate::model::lir::LirBody| {
+        body.insns().iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("shl")).count()
+    };
+    assert!(joins(&done.body) > 0, "the premise: selection builds the joined dword");
+    let cleaned = crate::backend::deadmi::eliminated(&done.body);
+    assert_eq!(joins(&cleaned), 0, "the unread join is gone");
+}

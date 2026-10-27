@@ -189,6 +189,7 @@ pub mod selectors {
 pub mod booleans;
 pub mod callframe;
 pub mod cmpsub;
+pub mod deadmi;
 pub mod earlytaildup;
 pub mod edges;
 pub mod fixupbw;
