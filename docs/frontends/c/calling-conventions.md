@@ -19,3 +19,7 @@ Rows without `-mregcall-default` (`x86_16-wat`, `x86_32-linux`, ...) keep the ol
 - **weak**: `weak`, `linkonce` and `extern_weak` are refused where the object format cannot say them (OMF), naming the symbol. No corpus program uses one.
 - **Zero statics**: a non-constant zero static in the data space moves to `_BSS` (`zero_to_bss`), after `BSSB` under `-mbss-begin`. Constants and nonzero values stay in `_DATA`.
 - **Foreign memory**: a load or store at a constant address the target lists as foreign (`foreign_span`: video, ROM, BIOS data) is apart from every global and local, so a global is not reloaded after a store to video.
+
+# m16
+
+`x86_16-wat` takes the target's default convention, regparm3, as llrm-c did: unmarked functions are `_name@3` (callee clobbers CX and DX), variadic ones too, `main` is C's `_main`, `__cdecl` is the stack convention. The row once forced `-mabi=watcom`, whose callee saves BX, CX and DX in every function: -Os programs came out 16% larger. `-mabi=watcom` stays available for interop.

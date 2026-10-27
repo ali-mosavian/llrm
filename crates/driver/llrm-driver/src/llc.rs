@@ -224,6 +224,8 @@ fn with_default_convention(
             _ => false,
         }
     };
+    // Under the register-size convention `main` is C's: the start-up calls `_main`.
+    let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
     let types = &module.context.types;
     let is_variadic = |ty| matches!(types.get(ty), llrm_mir::types::Type::Function { variadic: true, .. });
     for global in &mut module.globals {
@@ -233,7 +235,7 @@ fn with_default_convention(
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
         let entry = global.name.as_deref() == Some("main");
-        if takes(function.calling_convention, is_variadic(function.ty) || entry) {
+        if !(entry && keeps_main) && takes(function.calling_convention, is_variadic(function.ty) || entry) {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
                 if let Some(plain) = global.name.as_deref().and_then(|name| name.strip_prefix("__regcall3__")) {

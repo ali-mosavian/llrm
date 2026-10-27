@@ -787,3 +787,20 @@ fn stdcall_is_refused_by_name() {
     let refused = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom"]), &text, "c").map(|_| ()).unwrap_err();
     assert!(refused.contains("@c") && refused.contains("stdcall") && refused.contains("__cdecl"), "{refused}");
 }
+
+/// At m16 an unmarked function takes the register-size convention (`_f@3`,
+/// callee clobbers CX and DX), as llrm-c's did, and `main` stays C's (`_main`).
+/// `-mabi=watcom` forced on the Watcom row made every function save BX, CX and
+/// DX and call `main_`: the m16 -Os programs came out 16% larger.
+#[test]
+fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n\
+                target triple = \"i386-unknown-unknown-code16\"\n\
+                define i16 @f(i16 %x) {\n  %d = sdiv i16 %x, 7\n  ret i16 %d\n}\n\
+                define i16 @main() {\n  ret i16 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m16", "-Os"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("_f@3 proc") && listing.contains("_main proc"), "{listing}");
+    let body = listing.split("_f@3 proc").nth(1).unwrap().split("endp").next().unwrap();
+    assert!(!body.contains("push cx") && !body.contains("push dx"), "{listing}");
+}

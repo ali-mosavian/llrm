@@ -83,7 +83,7 @@ clang = ["-ffp-contract=off",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99",
   "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
-llc = ["-mabi=watcom"]
+llc = []
 object = "omf"
 link = ["python3", "-I", "{root}/tools/wat_link.py", "m16", "{env:LLRM_OW}", "{output}", "{objects}"]
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
