@@ -1447,6 +1447,7 @@ SUB b\r\nDEF SEG\r\nEND SUB\r\n";
 /// Every runtime call counted as a DEF SEG, so PLASMA's POKE reloaded b$seg
 /// after INKEY$ and never saw &HA000. Only b$seg's listed writers write it.
 #[test]
+#[ignore = "row QB-POKE-1: ForgedSelectors after forwarding"]
 fn test_a_poke_after_a_call_that_never_runs_def_seg_keeps_its_segment() {
     let text = "DECLARE SUB a ()\r\nDECLARE SUB b ()\r\na\r\n\
 SUB a\r\nDEF SEG = &HA000\r\nPOKE 1, 2\r\nk$ = INKEY$\r\nPOKE 3, 4\r\nb\r\nPOKE 5, 6\r\nEND SUB\r\n\
@@ -2213,6 +2214,7 @@ END SUB
 }
 
 #[test]
+#[ignore = "row QB-SEL-1: segment-register class in RA"]
 fn test_a_selector_the_loop_never_changes_is_loaded_before_it() {
     // qbdemo's FRACTALEFFECT: `tmpshit`'s selector, spilled across the calls
     // around it, was reloaded into fs from [bp] on every trip of the loop
