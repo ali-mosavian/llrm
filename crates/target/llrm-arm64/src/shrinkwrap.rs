@@ -12,7 +12,7 @@ use llrm_mir::blocklist::BlockList;
 use llrm_mir::cycleinfo::FlowGraph;
 use llrm_mir::domtree::{DomGraph, DomTreeBase};
 use llrm_mir::module::BlockId;
-use llrm_mir::saverestore::{self, Frame, Frequencies};
+use llrm_analysis::saverestore::{self, Frame, Frequencies};
 
 use crate::mc::inst::{Addr, Inst};
 use crate::mfunc::{MFunc, Op, successors_of};

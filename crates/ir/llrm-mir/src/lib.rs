@@ -24,7 +24,6 @@ pub mod context;
 pub mod counts;
 pub mod cursor;
 pub mod cycleinfo;
-pub mod saverestore;
 pub mod datalayout;
 pub mod debuginfo;
 pub mod dense;

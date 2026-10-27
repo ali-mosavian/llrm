@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:0dbf18d821414a9e06fcfc9d491ad6d33822fbb15bfe0d79cb6f5abf831a7cfb -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:8dedf8cfce79cee402ed0de762cdff24e94dc42b9216b18aa3afed6e3b3a37b5 -->
 
 # shrinkwrap
 
@@ -9,7 +9,7 @@ not at the entry, and takes them back only on the returns that path reaches.
 ## How it works
 The frame and the registers a procedure keeps are one piece of work: set up
 at the top of one Save block, taken back before the return of one Restore
-block. `crate::backend::saverestore` finds the two blocks as LLVM's
+block. [`crate::backend::saverestore`](../analyses/saverestore.md) finds the two blocks as LLVM's
 `ShrinkWrapImpl` does (the nearest blocks that dominate and post-dominate
 every use, outside any loop, no hotter than the entry); this module says
 which blocks use the frame or a kept register and lays the result out for

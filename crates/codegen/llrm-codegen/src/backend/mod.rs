@@ -249,7 +249,7 @@ pub mod regthrash;
 pub mod relayout;
 pub mod returnsplit;
 pub mod rmw;
-pub use llrm_mir::saverestore;
+pub use llrm_analysis::saverestore;
 pub mod schedule;
 pub mod selectconstants;
 pub mod selectiondag;
