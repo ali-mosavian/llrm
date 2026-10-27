@@ -27,3 +27,26 @@ class SummarizeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_two_sweeps_do_not_share_an_object_path(monkeypatch):
+    """sizesweep wrote every object to /tmp/sizesweep.obj: two sweeps at once (or another session) read each other's object and printed another's size."""
+    import subprocess
+    import sys
+    import types
+
+    paths = []
+    program = types.SimpleNamespace(source=Path("a.c"), flags=[], dialect="")
+    monkeypatch.setitem(sys.modules, "run_tests", types.SimpleNamespace(discover=lambda args: [program]))
+    monkeypatch.setitem(sys.modules, "sizes", types.SimpleNamespace(code_bytes=lambda obj: 10))
+
+    def fake_run(command, **kwargs):
+        obj = Path(command[command.index("-o") + 1])
+        paths.append(obj)
+        obj.write_bytes(b"x")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    sizesweep.sweep("/before", "/after", "dag", "-Os")
+    sizesweep.sweep("/before", "/after", "dag", "-Os")
+    assert Path("/tmp/sizesweep.obj") not in paths and paths[0] != paths[2], "each sweep has an object path of its own"
+    assert not any(path.exists() for path in paths), "the scratch directory is removed"

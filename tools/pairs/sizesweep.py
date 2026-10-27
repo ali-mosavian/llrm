@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROW = re.compile(r"^(\S+) \[(\d+), (\d+)\]\s*$")
@@ -43,11 +45,19 @@ def sweep(before: str, after: str, isel: str, level: str) -> list[str]:
     import sizes
 
     out, totals = [], [0, 0]
+    scratch = Path(tempfile.mkdtemp(prefix="sizesweep-"))  # one per run: a fixed /tmp path was shared by concurrent sweeps
+    try:
+        return _sweep(run_tests, sizes, scratch, before, after, isel, level, out, totals)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _sweep(run_tests, sizes, scratch: Path, before: str, after: str, isel: str, level: str, out: list[str], totals: list[int]) -> list[str]:
     for program in run_tests.discover([]):
         tool = {".bas": "llrm-qb", ".nib": "llrm-nib", ".c": "llrm-c"}[program.source.suffix]
         measured = []
         for dist in (before, after):
-            obj = Path("/tmp/sizesweep.obj")
+            obj = scratch / "sizesweep.obj"
             obj.unlink(missing_ok=True)
             dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
             flags = [flag for flag in program.flags if not flag.startswith("-O")]
