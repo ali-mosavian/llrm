@@ -127,11 +127,11 @@ def test_a_docs_check_that_only_counts_lint_hits_is_not_a_failed_regeneration():
 def test_a_long_alone_refusal_is_written_whole_to_a_file_the_log_line_names(tmp_path):
     """#4991's refusal printed three failing tests and cut the third mid-name; the author could not tell which others failed."""
     why = "unit tests fail alone: " + ", ".join(f"unit llrm-qb::test_{i}_a_long_enough_name_to_need_cutting" for i in range(12))
-    line = ps.refusal_line("4991", why, "9c833bc12abc", tmp_path)
+    line = ps.alone_refusal_line("4991", why, "9c833bc12abc", tmp_path)
     assert len(line) < 400
     path = next(tmp_path.glob("4991-*.txt"))
     assert path.read_text().strip() == why and str(path) in line and f"{len(why)} chars" in line
-    assert ps.refusal_line("1", "short", "abc", tmp_path) == "1: REFUSED: alone: short"
+    assert ps.alone_refusal_line("1", "short", "abc", tmp_path) == "1: REFUSED: alone: short"
 def test_a_pr_that_leaves_generated_docs_stale_alone_is_refused_but_not_for_what_the_base_has_stale(tmp_path):
     """#4972 landed with 411 stale pages: LAND_FAST skips the precheck and the alone layer had no docs check."""
     repo = tmp_path / "repo"
