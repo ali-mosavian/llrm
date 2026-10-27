@@ -7,7 +7,7 @@ mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/urgent.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
 STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
 group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
@@ -35,6 +35,8 @@ while true; do
       # closed PRs are dropped and a head younger than 15 minutes waits (a fix may be on its way) before the assembly
       # a PR listed in solo.txt at the head of the queue is a batch of its own (the others wait one cycle)
       solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
+      # PRs in $LAND_TMP/urgent.txt (landing fixes) are a batch of their own, in that order; the rest wait one cycle
+      urgent=($(urgent_listed "${LAND_TMP:-/tmp/landing}/urgent.txt" "${cand[@]}")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
       cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
       # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
       cand=($(alone_filter "${cand[@]:0:16}"))
