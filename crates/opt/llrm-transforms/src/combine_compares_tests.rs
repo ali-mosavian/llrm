@@ -545,3 +545,33 @@ fn a_value_compared_with_its_negation_is_compared_with_zero() {
         "  %0 = and i32 %x, 2147483647\n  %1 = icmp ne i32 %0, 0\n  ret i1 %1\n",
     );
 }
+
+/// `foldMultiplicationOverflowCheck`: `(-1 /u x) u< y` and `((x * y) / x) != y`
+/// were a division the target cannot do cheaply; the pin asks the multiply for
+/// its overflow bit (`opt`: `%mul.ov = extractvalue ... @llvm.umul.with.overflow.i32`).
+#[test]
+fn a_division_overflow_check_is_a_multiply_with_overflow() {
+    let wrap = |body: &str| format!("define i1 @f(i32 %x, i32 %y, ptr %p) {{\nb0:\n{body}}}\n");
+    let out = combined(&wrap("  %d = udiv i32 -1, %x\n  %r = icmp ult i32 %d, %y\n  ret i1 %r\n"));
+    assert!(out.contains("call { i32, i1 } @llvm.umul.with.overflow.i32(i32 %x, i32 %y)"), "{out}");
+    assert!(out.contains("%mul.ov = extractvalue { i32, i1 } %mul, 1\n  ret i1 %mul.ov"), "{out}");
+    assert!(!out.contains("udiv"), "{out}");
+
+    // The inverted predicate asks for the opposite answer.
+    let out = combined(&wrap("  %d = udiv i32 -1, %x\n  %r = icmp uge i32 %d, %y\n  ret i1 %r\n"));
+    assert!(out.contains("%mul.not.ov = xor i1 %mul.ov, true\n  ret i1 %mul.not.ov"), "{out}");
+
+    let out = combined(&wrap("  %m = mul i32 %x, %y\n  %d = udiv i32 %m, %x\n  %r = icmp ne i32 %d, %y\n  ret i1 %r\n"));
+    assert!(out.contains("@llvm.umul.with.overflow.i32") && !out.contains("udiv"), "{out}");
+    assert!(out.contains("ret i1 %mul.ov"), "{out}");
+
+    let out = combined(&wrap("  %m = mul i32 %y, %x\n  %d = sdiv i32 %m, %x\n  %r = icmp eq i32 %y, %d\n  ret i1 %r\n"));
+    assert!(out.contains("@llvm.smul.with.overflow.i32") && out.contains("%mul.not.ov"), "{out}");
+
+    // A multiply read elsewhere is replaced by the intrinsic's result.
+    let out = combined(&wrap(
+        "  %m = mul i32 %x, %y\n  store i32 %m, ptr %p\n  %d = udiv i32 %m, %x\n  %r = icmp ne i32 %d, %y\n  ret i1 %r\n",
+    ));
+    assert!(out.contains("%mul.val = extractvalue { i32, i1 } %mul, 0"), "{out}");
+    assert!(out.contains("store i32 %mul.val, ptr %p") && !out.contains("= mul i32"), "{out}");
+}
