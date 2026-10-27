@@ -162,6 +162,8 @@ fn _segment(object_: &model::DataObject) -> &'static str {
         "FSL_CONST"
     } else if object_.readonly {
         "BC_CN"
+    } else if object_.segment.as_deref() == Some("COMMON") {
+        "COMMON"
     } else {
         "BC_DATA"
     }
@@ -443,7 +445,7 @@ fn rich_assembled(
         .map(|((_, id), name)| (id, name))
         .collect();
     let mut placed: IndexMap<&str, Vec<basic::Item>> =
-        ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
+        ["BC_DATA", "BC_CN", "FSL_CONST", "COMMON"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {
         placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
@@ -483,7 +485,7 @@ fn rich_assembled(
     let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
-        ("COMMON", vec![]),
+        ("COMMON", placed.swap_remove("COMMON").unwrap_or_default()),
         (
             "BC_DATA",
             [

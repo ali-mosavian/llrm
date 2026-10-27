@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# tools/arm64_link.sh OUT OBJECT...: a static arm64 Linux program for qemu-aarch64: the objects and the freestanding runtime
+# tools/targets/arm64-link.sh OUT OBJECT...: a static arm64 Linux program for qemu-aarch64: the objects and the freestanding runtime
 # the arm64 tests use, built once by the pinned clang with the AArch64 backend (LLVM_BUILD, default llvm-build-aarch64).
 set -euo pipefail
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/../.." && pwd)
 build=${LLVM_BUILD:-$HOME/scratch/llvm-build-aarch64}
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/llrm-arm64-rt
 mkdir -p "$cache"

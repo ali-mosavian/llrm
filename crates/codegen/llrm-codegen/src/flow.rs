@@ -176,7 +176,11 @@ pub fn machine_with<'a>(
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
-        Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
+        Box::new(crate::backend::machinesink::MachineSink {
+            size: target.size,
+            limit: classes.available.len(),
+            classes: Rc::clone(classes),
+        }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer { size: target.size }),
