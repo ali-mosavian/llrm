@@ -1072,7 +1072,7 @@ def test_the_docs_scanner_runs_at_landing_without_the_lib_tests_switch():
         return {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
 
     assert ps.landing_scanner_failures(["docs/working/x.md"], False, on_merged=on_merged, on_head=lambda t: set()) == {"integration docs_links::test_every_doc_is_reachable_from_the_root_readme"}
-    assert asked == [["docs_in_sync", "docs_links", "no_local_paths"]]
+    assert asked == [list(ps.ALWAYS_SCANNERS)] and asked[0][:3] == ["docs_in_sync", "docs_links", "no_local_paths"]
     asked.clear()
     ps.landing_scanner_failures(["docs/working/x.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "docs_links" in asked[0] and len(asked[0]) > 1
@@ -1282,6 +1282,23 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
+def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
+    """#5092 was refused alone at 02:31 for two scanners the head already had red, and the cached refusal (keyed by the PR head only) was replayed at 02:53 and 03:03 while parity moved."""
+    ran = []
+
+    def refusals(head, base):
+        ran.append(base)
+        return ["scanner red alone: x"] if base == "old" else []
+
+    heads = {"5092": "h" * 40}
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)
+    assert dropped == {"5092": "scanner red alone: x"} and ran == ["old"]
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="old", base_sha="a" * 40)[1] and ran == ["old"], "the same base replays the refusal"
+    kept, dropped = ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="b" * 40)
+    assert kept == ["5092"] and not dropped and ran == ["old", "new"], "a moved base checks the PR again"
+    assert ps.alone(["5092"], heads, refusals=refusals, cache=tmp_path, base="new", base_sha="c" * 40)[0] == ["5092"] and ran == ["old", "new"], "a pass is kept per head"
+
+
 def test_a_cached_pass_is_rechecked_for_stale_pages_against_the_base_as_it_is_now(tmp_path):
     """#5062, #5085 and #5088 passed alone against an older parity, the verdict was reused per head sha, and each made a generated page fail once merged with what landed since."""
     cache = tmp_path / "cache"
@@ -1481,11 +1498,60 @@ def test_a_drop_after_the_scan_costs_one_rescan_for_the_rest_not_one_per_pr():
     assert check("d", infos, ["x", "y"], ["d"]) == "" and len(groups) == 2, "a new drop is scanned again"
 
 
-def test_a_red_group_scan_falls_back_to_a_rescan_per_pr():
-    """When the remaining tree is red the culprit is still found one PR at a time, and the group is not rescanned for every PR."""
-    groups, ones = [], []
-    check = ps.make_rescan_check(rescan_group=lambda g, infos: groups.append(1) or {"integration x::t"}, rescan_one=lambda n, info: ones.append(n) or ({"integration x::t"} if n == "c" else set()))
+def test_a_red_group_scan_finds_its_culprit_by_halving_and_refuses_only_that_pr():
+    """11:35-11:43: a red group scan fell back to a rescan of every PR in turn (60-90 s each, a PR a minute); halving finds the one in log2(n) scans."""
+    scans, ones = [], []
+    red = {"integration x::t"}
+    rescan_group = lambda g, infos: scans.append(list(g)) or (red if "f" in g else set())
+    check = ps.make_rescan_check(rescan_group=rescan_group, rescan_one=lambda n, info: ones.append(n) or (red if n == "f" else set()))
+    group = list("bcdefghi")
+    infos = {n: {"headRefOid": n} for n in group}
+    whys = {n: check(n, infos, ["x"], group) for n in group}
+    assert [n for n, why in whys.items() if why] == ["f"] and "fails integration x::t" in whys["f"]
+    assert len(scans) <= 1 + 3, f"one group scan and log2(8) halvings, got {len(scans)}"
+    assert ones == ["f"], f"one alone check of the culprit, not one per PR: {ones}"
+
+
+def test_a_red_group_with_no_single_culprit_falls_back_to_a_rescan_per_pr():
+    """An interaction: no half is red alone, so each PR is rescanned alone, as before."""
+    ones = []
+    check = ps.make_rescan_check(rescan_group=lambda g, infos: {"integration x::t"} if len(g) > 2 else set(), rescan_one=lambda n, info: ones.append(n) or set())
     infos = {n: {"headRefOid": n} for n in "bcd"}
-    whys = [check(n, infos, ["x"], ["b", "c", "d"]) for n in "bcd"]
-    assert whys[0] == "" and "c lands on fails" in whys[1].replace("#c", "c") and whys[2] == ""
-    assert len(groups) == 1 and ones == ["b", "c", "d"]
+    assert [check(n, infos, ["x"], list("bcd")) for n in "bcd"] == ["", "", ""] and ones[1:] == ["b", "c", "d"], "after one alone check of the last candidate"
+
+
+def test_target_facts_is_a_scanner_every_batch_runs():
+    """Parity went red on tests/target_facts.rs (11:09) and no batch noticed: the always-on scanners were docs_in_sync, docs_links and no_local_paths, and target_facts was in prepush only."""
+    assert "target_facts" in ps.ALWAYS_SCANNERS
+
+
+def test_the_files_of_a_head_pushed_after_the_fetch_are_fetched_not_a_crash(tmp_path):
+    """11:04: the culprit probe ran `git diff origin/feat/parity...<head of #5183>`, a head pushed after the batch's fetch: 'Invalid symmetric difference', the merge-batch process died with no LANDED line."""
+    def sh(cwd, *a):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+    origin, clone = tmp_path / "origin", tmp_path / "clone"
+    origin.mkdir()
+    sh(origin, "init", "-q", "-b", "main")
+    (origin / "a.txt").write_text("a\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "a")
+    sh(tmp_path, "clone", "-q", str(origin), str(clone))
+    (origin / "b.txt").write_text("b\n")
+    sh(origin, "add", "-A")
+    sh(origin, "commit", "-q", "-m", "b")
+    head = sh(origin, "rev-parse", "HEAD")
+    sh(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+    base = sh(clone, "rev-parse", "origin/main")
+    assert ps.head_files(head, base=base, cwd=clone) == ["b.txt"]
+
+
+def test_the_group_rescan_regenerates_the_pages_before_it_scans(monkeypatch):
+    """11:35, 11:38, 11:42, 11:49: the group scan was red while every member was green alone: the merged members' pass counts leave docs/optimizations/passes/readme.md stale, which only a sync fixes."""
+    order = []
+    monkeypatch.setattr(ps, "git", lambda *a, **k: "")
+    monkeypatch.setattr(ps, "clean_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(ps.subprocess, "run", lambda cmd, **k: order.append("sync" if "--sync" in cmd else "git") or subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(ps, "new_scanner_failures", lambda *a, **k: order.append("scan") or set())
+    assert ps.rescan_group_alone(["1", "2"], {"1": {"headRefOid": "a"}, "2": {"headRefOid": "b"}}) == set()
+    assert order[-2:] == ["sync", "scan"]

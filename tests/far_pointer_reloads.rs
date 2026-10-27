@@ -1,7 +1,7 @@
 //! A far pointer live across a call is reloaded where the call needs the
 //! registers, not before every use.
 
-use std::process::Command;
+mod common;
 
 const KERNEL: &str = "
 typedef struct { float x, y, z, d; } P;
@@ -28,11 +28,8 @@ void f(P far *fr, float *m)
 fn test_a_far_pointer_live_across_a_call_is_not_reloaded_before_every_use() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(["-Os", "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(["-Os", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let loads = text.lines().filter(|line| line.trim_start().starts_with("les ")).count();
@@ -47,11 +44,8 @@ fn test_a_far_pointer_live_across_a_call_is_not_reloaded_before_every_use() {
 fn test_the_stores_before_the_loop_do_not_reload_the_offset_from_a_slot() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(["-Os", "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(["-Os", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let reloads =
@@ -71,11 +65,8 @@ fn test_the_stores_before_the_loop_do_not_reload_the_offset_from_a_slot() {
 fn test_a_pointer_live_across_a_call_is_fetched_once_on_each_side_of_it() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), KERNEL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(["-Os", "-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(["-Os", "-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let loads = text.lines().filter(|line| line.trim_start().starts_with("les ")).count();
