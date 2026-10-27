@@ -37,11 +37,11 @@ fn value(place: &Loc) -> u32 {
     }
 }
 
-/// A register read is the value last written to it: the stackifier follows
-/// values, and a register rewritten while it is read would name one value
-/// twice.
+/// A register is one value for the whole function, as `X86FloatingPoint`
+/// follows registers: a write to `fp1` and the read of it name the same value,
+/// and no number is made per definition.
 #[test]
-fn test_a_register_read_is_the_value_last_written_to_it() {
+fn test_a_register_is_one_value_whatever_writes_it() {
     let mut first = LirBlock::new(
         0,
         vec![
@@ -53,15 +53,11 @@ fn test_a_register_read_is_the_value_last_written_to_it() {
     first.succ = Vec::new().into();
     let made = valued(&body(vec![first])).expect("registers named");
     let what = |at: usize| made.blocks[0].insns[at].what.clone().unwrap();
-    let loaded = value(&what(0).dests[0]);
-    let sum = value(&what(1).dests[0]);
-    assert_eq!(value(&what(1).sources[0]), loaded);
-    assert_ne!(sum, loaded);
-    assert_eq!(value(&what(2).sources[0]), sum);
-    // fp0 is read with nothing written: its border value.
-    assert_ne!(value(&what(1).sources[1]), loaded);
-    assert_eq!(made.blocks[0].insns[1].uses, vec![loaded, value(&what(1).sources[1])]);
-    assert_eq!(made.blocks[0].insns[1].defines, vec![sum]);
+    let one = value(&what(0).dests[0]);
+    assert_eq!(value(&what(1).sources[0]), one);
+    assert_eq!(value(&what(1).dests[0]), one);
+    assert_eq!(value(&what(2).sources[0]), one);
+    assert_ne!(value(&what(1).sources[1]), one);
 }
 
 /// A register live out of a block ends it as one value, whatever wrote it: the

@@ -1718,6 +1718,16 @@ pub static CONTRACTS: LazyLock<IndexMap<String, Contract>> =
 pub static ENTERS_USER_CODE: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| ROWS.iter().filter(|row| row.calls_back).map(|row| row.name).collect());
 
+/// The bytes a call of `name` pops, where runtime.toml's `[pops.<group>]`
+/// audits them.
+pub fn audited_pop(
+    group: &str,
+    name: &str,
+) -> Option<i64> {
+    let (_, pops) = POPS.iter().find(|(one, _)| *one == group)?;
+    pops.iter().find(|(one, _)| *one == name).map(|&(_, bytes)| bytes)
+}
+
 /// The runtime entries whose row says `captures = "NONE"`: they keep no
 /// pointer argument past their return.
 /// The routines whose result is the flags.
@@ -1947,6 +1957,17 @@ mod tests {
             ["ABSOLUTE", "B$DSEG", "B$DSG0", "B$IINIT", "B$Init", "B$RUNINI", "B$RUNL", "B$SCLR", "B$StackReset"]
         );
         assert_eq!(WRITERS.len(), 1);
+    }
+
+    /// The pop tables were literals in abi/qb.rs; spot values must survive.
+    #[test]
+    fn test_the_audited_pops_come_from_the_toml() {
+        assert_eq!(audited_pop("string", "B$ASSN"), Some(12));
+        assert_eq!(audited_pop("string", "B$SCMP"), Some(4));
+        assert_eq!(audited_pop("string", "B$SCAT"), None);
+        assert_eq!(audited_pop("graphics", "B$VIEW"), Some(14));
+        assert_eq!(audited_pop("graphics", "B$PSET"), Some(0));
+        assert_eq!(audited_pop("nothing", "B$ASSN"), None);
     }
 
     /// The set was a literal; the rows' `calls_back` must name the same four.

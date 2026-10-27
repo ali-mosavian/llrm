@@ -784,7 +784,7 @@ impl Function {
         what: DebugWhat,
     ) {
         let at = self.debug_records.iter().position(|one| one.before == before).unwrap_or(self.debug_records.len());
-        self.debug_records.insert(at, DebugRecord { before, variable, what });
+        self.debug_records.insert(at, DebugRecord { before, variable, what, expression: None, location: None });
     }
 
     /// Says what `variable` is from just before `before` on, after the records
@@ -795,7 +795,7 @@ impl Function {
         variable: MetadataId,
         what: DebugWhat,
     ) {
-        self.debug_records.push(DebugRecord { before, variable, what });
+        self.debug_records.push(DebugRecord { before, variable, what, expression: None, location: None });
     }
 
     /// The records of what `value` was now say `with`.
@@ -1277,7 +1277,13 @@ impl Function {
                 }
                 other => other,
             };
-            self.debug_records.push(DebugRecord { before: copy, variable: one.variable, what });
+            self.debug_records.push(DebugRecord {
+                before: copy,
+                variable: one.variable,
+                what,
+                expression: one.expression,
+                location: one.location,
+            });
         }
         self.instructions[copy.0 as usize].metadata = original.metadata;
         self.log(Change::Cloned { from: inst, to: copy });

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 206 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 208 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -33,6 +33,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_bitorder | A byte or bit reversal written as shifts, masks and `or`s is the `bswap` or `bitreverse` intrinsic, and a bitwise operation on a reversed value is the reversal of the operation: LLVM's `matchBSwapOrBitReverse` (with `recognizeBSwapOrBitReverseIdiom` and `collectBitParts` of `Local.cpp`) and `foldBitwiseLogicWithIntrinsics` of InstCombine. |  | [combine_bitorder](combine_bitorder.md) |
 | combine_branch | `visitCondBrInst`: the canonical forms of a conditional branch. |  | [combine_branch](combine_branch.md) |
 | combine_build | `InstCombiner::Builder`: the `IRBuilder` over `InstSimplifyFolder` that InstCombine's `visit*` functions build new instructions with. | `combine_addsub` and the families after it. | [combine_build](combine_build.md) |
+| combine_castcall | InstCombine's call through a mismatched prototype: a call whose function type is not the callee's, to a function defined here, takes the callee's type. | `combine_memintrinsics` (`visit_call`). | [combine_castcall](combine_castcall.md) |
 | combine_casts | InstCombine's `visitTrunc`, `visitZExt`, `visitSExt` and the helpers they call, from [`InstCombineCasts.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp) at d1106deb71cc. | `combine::visit`, once the casts family's slot is flipped. | [combine_casts](combine_casts.md) |
 | combine_compares | InstCombine's `visitICmpInst` and the helpers it calls, from [`InstCombineCompares.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp) at d1106deb71cc. | `combine::visit`, once the compares slot is flipped. | [combine_compares](combine_compares.md) |
 | combine_demanded | `SimplifyDemandedUseBits`: an integer instruction is rewritten, or its operands are, when the users read only some of its bits. | The `visit*` of the integer families (`visitAnd`, `visitAdd`, `visitTrunc`, | [combine_demanded](combine_demanded.md) |
@@ -106,6 +107,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). |  | [icmpchain](icmpchain.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs | [indvars](indvars.md) |
 | inferalignment | Loads, stores and memory intrinsics get the alignment their pointer is known to have, as LLVM's `InferAlignment`. |  | [inferalignment](inferalignment.md) |
+| inferfunctionattrs | A library function the module only declares (`sin`, `strlen`, `memcmp`) gets the attributes the C library promises of it, as LLVM's `InferFunctionAttrsPass`. | Once, at the start of the module pipeline | [inferfunctionattrs](inferfunctionattrs.md) |
 | inferspace | Replaces a far pointer made from a near one by the near one where its users allow it, so an access needs no segment register loaded and held for it. | In every body's pipeline before `gvn`, so a far pointer cast from a near one | [inferspace](inferspace.md) |
 | inline | Whole-module MIR inlining: chooses the calls worth replacing by a copy of the callee's body, and makes the copies. | Library of [`crate::interprocedural`](../analyses/interprocedural.md), which runs it once every body has | [inline](inline.md) |
 | inlinecost | LLVM's inline cost: what inlining one call site costs, and the threshold it is held to, translated from `InlineCost.cpp` and `InlineAdvisor.cpp`. | Off by default. With `LLRM_EXP_INLINECOST` the interprocedural stage prints | [inlinecost](inlinecost.md) |
