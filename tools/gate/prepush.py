@@ -46,7 +46,7 @@ def run_all(commands: dict[str, str], env: dict[str, str], jobs: int = 4) -> tup
     def one(item: tuple[str, str]) -> tuple[str, int, float, str]:
         name, command = item
         started = time.perf_counter()
-        done = subprocess.run(slotted(command), shell=True, cwd=ROOT, env=env, capture_output=True, text=True)
+        done = subprocess.run(slotted(command), shell=True, cwd=ROOT, env=env, capture_output=True, text=True, errors="replace")
         return name, done.returncode, time.perf_counter() - started, done.stdout + done.stderr
 
     started = time.perf_counter()
