@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/instsimplify.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/instsimplify.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:a519b48f4b38a3ca94a33f2a70a8fb52765b8829f76c97f4f93bf39601352c63 -->
+<!-- src: crates/opt/llrm-transforms/src/instsimplify.rs sha256:ff1efa776c9b5496a16b9508c686899f7009497533584540b5961bd6d31dfbe0 -->
 
 # instsimplify
 
@@ -36,3 +36,6 @@ An instruction that equals an operand is replaced by it and then deleted:
 %a = add i32 %x, 0
 %b = mul i32 %a, 2   ; reads %x after the pass
 ```
+
+## Used by
+Named by `pipeline`.

@@ -16,6 +16,15 @@ ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h $parity" "$STA
 # a PR refused for its own head stays out until that head changes (held.state, written by the runner: `<PR> <head sha>`); a retry at the same head cost a batch each time
 HELD=${HELD_STATE:-${LAND_TMP:-/tmp/landing}/held.state}
 ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h" "$HELD" 2>/dev/null || echo "$n $m $o $h"; done)
+# GitHub reports UNKNOWN for every PR for a while after each landing, and only the literal CONFLICTING is dropped below: #5269 (CONFLICTING since 07:25) was batched at 13:41, 14:41 and 15:08.
+# A PR that is not MERGEABLE is merged against feat/parity locally (git merge-tree, no checkout); a conflict marks it CONFLICTING. A failed fetch keeps it (fail open).
+# PREFLIGHT_CMD overrides the check in tests: `$PREFLIGHT_CMD <PR>` exits 0 when the PR conflicts.
+REPO=${PREFLIGHT_REPO:-$(cd "$HERE/../.." && pwd)}
+conflicts_with_parity() {
+  [ -n "$PREFLIGHT_CMD" ] && { $PREFLIGHT_CMD "$1"; return; }
+  git -C "$REPO" fetch -q origin feat/parity 2>/dev/null && git -C "$REPO" fetch -q origin "refs/pull/$1/head" 2>/dev/null && ! git -C "$REPO" merge-tree --write-tree origin/feat/parity FETCH_HEAD >/dev/null 2>&1
+}
+ready=$(echo "$ready" | while read -r n m o h; do [ "$m" != MERGEABLE ] && [ "$m" != CONFLICTING ] && conflicts_with_parity "$n" && m=CONFLICTING; echo "$n $m $o $h"; done)
 # GitHub's mergeable flag is against the base: a PR that conflicts with feat/parity cannot land, alone or in a batch
 echo "$ready" | awk '$2=="CONFLICTING"{printf "%s: REFUSED: conflicts with feat/parity (GitHub mergeable=CONFLICTING); owner %s merges fresh feat/parity (push rejected? git pull --no-rebase, then push; never force)\n", $1, $3}' >&2
 # Owner: <session> in the PR body names who to tell. BODY_CHECKS=warn (the default, the user's call while the backend parts land) only warns in the log and the PR
