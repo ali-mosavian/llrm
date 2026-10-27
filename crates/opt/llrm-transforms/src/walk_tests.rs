@@ -1302,6 +1302,65 @@ fn at_o2(
     printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
 }
 
+/// `@top` after the -Os pipeline over `text`.
+fn at_os(
+    text: &str,
+    name: &str,
+) -> String {
+    let mut module = parsed(text);
+    let applied = crate::pipeline::Applied { options: crate::pipeline::Options::size(), ..Default::default() };
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| crate::pipeline::applied(program, &applied),
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let printed = llrm_mir::print::module(&module);
+    printed.split("define").find(|one| one.contains(name)).expect("the function").to_owned()
+}
+
+/// Two calls of a private tail-recursive `gcd`, one with a constant argument
+/// (it folds, so the -Os size bound passes it) and one without (the bound
+/// refused it, and the trial of it alone credited no callee body because the
+/// other call still counted as a reference): `call _gcd` stayed in
+/// `bench_recgcd` (m16 -Os, +20 B), where the pin inlines both and drops
+/// `gcd`.
+#[test]
+fn test_an_os_site_beside_an_inlined_site_of_a_private_callee_gets_the_callee_credit() {
+    let top = at_os(
+        "define internal i16 @gcd(i16 %a, i16 %b) {
+b0:
+  %z = icmp eq i16 %b, 0
+  br i1 %z, label %done, label %rec
+
+rec:
+  %r = srem i16 %a, %b
+  %t = call i16 @gcd(i16 %b, i16 %r)
+  ret i16 %t
+
+done:
+  ret i16 %a
+}
+
+define i16 @bench(i16 %n, i16 %m) {
+b0:
+  %x = mul i16 %n, 7
+  %y = add i16 %x, 3
+  %p = mul i16 %m, 5
+  %q = add i16 %p, 2
+  %g1 = call i16 @gcd(i16 %y, i16 %q)
+  %s = add i16 %n, 90
+  %g2 = call i16 @gcd(i16 %s, i16 360)
+  %t = add i16 %g1, %g2
+  ret i16 %t
+}
+",
+        "@bench(",
+    );
+    assert!(!top.contains("@gcd"), "a call of gcd stayed:\n{top}");
+}
+
 /// A private callee that is one 16-case switch over values 2..21 (a jump
 /// table on x86) was priced as a compare tree, 3n/2-1 compares, because the
 /// walk never gave the cost model the target's switch answer: cost 290 against
