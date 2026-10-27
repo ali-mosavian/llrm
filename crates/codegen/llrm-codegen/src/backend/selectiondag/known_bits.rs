@@ -171,12 +171,9 @@ fn walk(
             }
             _ => KnownBits::unknown(width),
         },
-        ISD::BSwap | ISD::BitReverse => {
+        ISD::BitReverse => {
             let inner = operand(0);
-            let flip = |v: u128| {
-                let flipped = if opcode == ISD::BSwap { v.swap_bytes() } else { v.reverse_bits() };
-                flipped >> (128 - width)
-            };
+            let flip = |v: u128| v.reverse_bits() >> (128 - width);
             KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
         }
         _ => KnownBits::unknown(width),
