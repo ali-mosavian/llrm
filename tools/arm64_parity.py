@@ -7,10 +7,11 @@ A .c is made one unoptimized .ll (scalar: -fno-vectorize -fno-slp-vectorize, unt
 a .ll is used as given. Both sides start from it: `clang -O<n> -x ir` and llrm-arm64-llc.
 Cells are __text bytes/instructions; ours/clang is the headline. Run time is the min of N runs
 and means nothing near the process-start floor. A sibling .out/.status is the expected output.
+A .c is also built by GCC (`gcc-13`, its own front end and optimizer, so the IR is not shared; LLRM_GCC overrides) as a fourth column.
 A .c also goes through `llrm-cc` (target arm64-macos: the pin's front end, then the backend), a third column: the driver end to end.
 Env: LLRM_PIN_ANY=1 (dry run with a non-pin clang), LLRM_PIN_BUILD (dir with bin/clang, bin/llc), LLRM_BIN (llrm binaries).
 """
-import argparse, hashlib, os, re, subprocess, sys, tempfile, time
+import argparse, hashlib, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -30,16 +31,23 @@ FRONT += ["-isysroot", sh(["xcrun", "--show-sdk-path"]).stdout.strip()]
 def text_size(obj):
     """__TEXT,__text size in bytes, from `size -m` (not the whole-file size)."""
     out = sh(["size", "-m", str(obj)]).stdout
-    m = re.search(r"Section \(__TEXT, __text\):\s+(\d+)", out)
-    return int(m.group(1)) if m else None
+    # Every code section: GCC puts `main` in __text_startup.
+    sizes = re.findall(r"Section \(__TEXT, (__text[a-z_]*)\):\s+(\d+)", out)
+    return sum(int(n) for _, n in sizes) if sizes else None
 
 
 def insn_count(obj):
-    out = sh(["otool", "-tv", str(obj)]).stdout
-    return sum(1 for l in out.splitlines() if re.match(r"^[0-9a-f]{16}\s", l))
+    size = text_size(obj)  # fixed-width instructions
+    return None if size is None else size // 4
 
 
-SHIM = "#include <stdio.h>\nvoid report(long v){printf(\"%ld\\n\",v);}\n"  # the benches' output hook
+# The benches' hooks: output; an opaque `keep`; and `input_read`, 1 MiB of a fixed text where the DOS benches read a file.
+SHIM = (
+    "#include <stdio.h>\nvoid report(long v){printf(\"%ld\\n\",v);}\n"
+    "int keep(int v){return v;}\n"
+    "int input_read(char *b,int n){static long at;static const char t[]=\"the quick brown fox jumps over the lazy dog\\nand then it was\\n\";"
+    "int i=0;while(i<n&&at<(1<<20)){b[i++]=t[at%(sizeof t-1)];at++;}return i;}\n"
+)
 
 
 def link(obj, exe):
@@ -84,6 +92,11 @@ def build_variants(src, lvl, tmp, ver):
         env = {**os.environ, "LLRM_CC_TARGET": "arm64-macos", "LLRM_PIN_CLANG": str(PIN / "bin/clang")}
         r = sh([str(BIN / "llrm-cc"), f"-{lvl}", *FRONT, "-c", str(src), "-o", str(o)], env=env)
         v["llrm-cc"] = o if r.returncode == 0 else "llrm-cc: " + (r.stderr or r.stdout)[:200]
+    gcc = os.environ.get("LLRM_GCC", "gcc-13")
+    if src.suffix == ".c" and shutil.which(gcc):
+        o = tmp / f"{name}.gcc.o"
+        r = sh([gcc, f"-{lvl}", "-mmacosx-version-min=15.0", "-fno-tree-vectorize", "-fno-tree-slp-vectorize", "-ffp-contract=off", "-ffreestanding", "-c", str(src), "-o", str(o)])
+        v["gcc"] = o if r.returncode == 0 else "gcc: " + r.stderr[:200]
     return v
 
 
@@ -103,8 +116,8 @@ def main():
     (tmp / "empty.c").write_text("int main(void){return 0;}")
     sh([str(PIN / "bin/clang"), *TARGET, "-isysroot", FRONT[-1], str(tmp / "empty.c"), "-o", str(tmp / "empty")])
     print(f"process-start floor (empty main, min of {a.runs}): {run(tmp / 'empty', a.runs)[0]*1000:.1f} ms; run times near it are noise")
-    cols = ["clang", "ours", "llrm-cc"]
-    print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/clang':>11}  run(ms) clang/ours  result")
+    cols = ["clang", "ours", "llrm-cc", "gcc"]
+    print(f"{'prog':<14}{'lvl':<4}" + "".join(f"{c:>16}" for c in cols) + f"{'ours/clang':>11}{'ours/gcc':>9}  run(ms) clang/ours/cc/gcc  result")
     worse = 0
     for f in a.files:
         lv = [l for l in a.O.split(",") if l == "O2" or Path(f).suffix == ".c"]
@@ -139,6 +152,8 @@ def main():
                 pb, ob = text_size(base), text_size(v["ours"])
                 ratio = f"{ob/pb:.3f}"
                 worse += ob > pb
+            gccb = v.get("gcc")
+            gr = f"{text_size(v['ours'])/text_size(gccb):.3f}" if isinstance(gccb, Path) and isinstance(v.get("ours"), Path) else "-"
             ref = outs.get("clang")
             exp = src.with_suffix(".out")
             if exp.exists() and src.suffix == ".ll":  # the recorded output beats any build's  # .ll with a recorded expectation
@@ -147,7 +162,7 @@ def main():
             res = "FAIL" if "ours" not in outs or "clang" not in outs else ("ok" if outs["ours"] == ref else "DIFF")
             if res == "ok" and "llrm-cc" in v:  # the driver's build must run as the others do
                 res = "ok" if outs.get("llrm-cc") == ref else "CC-FAIL"
-            print(f"{src.stem:<14}{lvl:<4}" + "".join(f"{c:>16}" for c in cells) + f"{ratio:>11}  " + "/".join(times) + f"  {res}")
+            print(f"{src.stem:<14}{lvl:<4}" + "".join(f"{c:>16}" for c in cells) + f"{ratio:>11}{gr:>9}  " + "/".join(times) + f"  {res}")
     print(f"rows where ours is bigger than clang (bytes): {worse}; FAIL rows count against the corpus")
 
 
