@@ -3,6 +3,7 @@
 //! pipeline and backend to an object. The target is the one whose `llvm_triple`
 //! the module's `target triple` names, or the `-m` flag's.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -29,7 +30,11 @@ fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
-        let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
+        let line = if line.contains(" dso_local") || line.contains(CLANG_PASCAL) {
+            Cow::Owned(line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 "))
+        } else {
+            Cow::Borrowed(line)
+        };
         kept.push_str(&port_intrinsic(&lifetime_markers_with_a_size(&line)));
         kept.push('\n');
     }
@@ -48,14 +53,18 @@ const PORTS: [(&str, &str, bool); 4] = [
 /// `line` with a Borland port function written as its intrinsic. An `out`
 /// answers the value written, which the C function returns and clang numbers
 /// even when unused, so the numbering stays dense.
-fn port_intrinsic(line: &str) -> String {
+fn port_intrinsic(line: &str) -> Cow<'_, str> {
+    // Every Borland name starts `__`: an ordinary line skips the four searches.
+    if !line.contains("@__") {
+        return Cow::Borrowed(line);
+    }
     for (borland, intrinsic, writes) in PORTS {
         let Some(at) = line.find(&format!("@{borland}(")) else { continue };
         let width = intrinsic.rsplit('.').next().unwrap_or("i16");
         let parameters = if writes { format!("i16, {width}") } else { "i16".to_owned() };
         if line.starts_with("declare") {
             let result = if writes { "void" } else { width };
-            return format!("declare {result} @{intrinsic}({parameters})");
+            return Cow::Owned(format!("declare {result} @{intrinsic}({parameters})"));
         }
         let arguments =
             line[at..].split_once('(').and_then(|(_, rest)| rest.split_once(')')).map_or("", |(inside, _)| inside);
@@ -65,7 +74,7 @@ fn port_intrinsic(line: &str) -> String {
             .collect();
         let call = typed.join(", ");
         let destination = line.split_once(" = ").map(|(name, _)| name.trim().to_owned());
-        return match (writes, destination) {
+        return Cow::Owned(match (writes, destination) {
             (true, Some(name)) => {
                 let value = typed.last().and_then(|one| one.split_whitespace().last()).unwrap_or("0");
                 format!("  call void @{intrinsic}({call})\n  {name} = add {width} {value}, 0")
@@ -73,27 +82,30 @@ fn port_intrinsic(line: &str) -> String {
             (true, None) => format!("  call void @{intrinsic}({call})"),
             (false, Some(name)) => format!("  {name} = call {width} @{intrinsic}({call})"),
             (false, None) => format!("  call {width} @{intrinsic}({call})"),
-        };
+        });
     }
-    line.to_owned()
+    Cow::Borrowed(line)
 }
 
 /// The pin's `llvm.lifetime.start.p0(ptr)` as MIR's `(i64 size, ptr)`: MIR's
 /// markers still take the size `Intrinsics.td` dropped, and a marker it cannot
 /// read is a call that makes its alloca escape (nothing is promoted). The size
 /// is -1, which LangRef calls unknown.
-fn lifetime_markers_with_a_size(line: &str) -> String {
+fn lifetime_markers_with_a_size(line: &str) -> Cow<'_, str> {
+    if !line.contains("@llvm.lifetime.") {
+        return Cow::Borrowed(line);
+    }
     for marker in ["@llvm.lifetime.start.p0(", "@llvm.lifetime.end.p0("] {
         if let Some(at) = line.find(marker) {
             let (head, tail) = line.split_at(at + marker.len());
             if tail.starts_with("i64") {
-                return line.to_owned();
+                return Cow::Borrowed(line);
             }
             let size = if line.starts_with("declare") { "i64 immarg, " } else { "i64 -1, " };
-            return format!("{head}{size}{tail}");
+            return Cow::Owned(format!("{head}{size}{tail}"));
         }
     }
-    line.to_owned()
+    Cow::Borrowed(line)
 }
 
 fn bound(
@@ -509,4 +521,29 @@ fn compile(
         write_output(&output, bytes)
     }
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod line_rewrite_tests {
+    use super::*;
+
+    /// Every IR line took ~8 allocations (two `replace`s, four `format!`
+    /// searches, two `to_owned`s) though almost none is rewritten: 36K on
+    /// jpeg_fixed (SD-free: compile-time profile 2026-10-27).
+    #[test]
+    fn an_ordinary_line_is_not_copied() {
+        let line = "  %x = add i32 %a, %b";
+        assert!(matches!(port_intrinsic(line), Cow::Borrowed(_)));
+        assert!(matches!(lifetime_markers_with_a_size(line), Cow::Borrowed(_)));
+        let (_, kept) = without_triple(&format!("{line}\n"));
+        assert_eq!(kept, format!("{line}\n"));
+    }
+
+    #[test]
+    fn a_borland_port_call_and_a_bare_lifetime_marker_are_still_rewritten() {
+        let call = "  %v = call i16 @__inportb__(i16 %p)";
+        assert_eq!(port_intrinsic(call), "  %v = call i8 @llrm.ia16.in.i8(i16 %p)");
+        let marker = "  call void @llvm.lifetime.start.p0(ptr %a)";
+        assert_eq!(lifetime_markers_with_a_size(marker), "  call void @llvm.lifetime.start.p0(i64 -1, ptr %a)");
+    }
 }
