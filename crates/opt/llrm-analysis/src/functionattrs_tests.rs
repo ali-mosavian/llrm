@@ -364,3 +364,29 @@ b2:
     );
     assert!(!Facts::of(&module.global(id).function().unwrap().attrs).will_return());
 }
+
+/// What F1 may not do: a loop nothing proves finite is no `willreturn`
+/// function (callers delete an unused call of one). An empty loop, a loop that
+/// ends on a loaded value and a `!=` loop stepping by two past its bound all
+/// can run for ever.
+#[test]
+fn a_loop_that_may_not_end_is_not_willreturn() {
+    let shapes = [
+        ("empty", "define i32 @f() {\nb0:\n  br label %b1\nb1:\n  br label %b1\n}\n"),
+        (
+            "loaded exit",
+            "define i32 @f(ptr %p) {\nb0:\n  br label %b1\nb1:\n  %q = phi ptr [ %p, %b0 ], [ %r, %b1 ]\n  %v = load i32, ptr %q\n  %r = getelementptr i32, ptr %q, i32 1\n  %z = icmp ne i32 %v, 0\n  br i1 %z, label %b1, label %b2\nb2:\n  ret i32 %v\n}\n",
+        ),
+        (
+            "step two",
+            "define i32 @f(i32 %n) {\nb0:\n  br label %b1\nb1:\n  %i = phi i32 [ 0, %b0 ], [ %j, %b1 ]\n  %j = add i32 %i, 2\n  %c = icmp ne i32 %j, %n\n  br i1 %c, label %b1, label %b2\nb2:\n  ret i32 %j\n}\n",
+        ),
+    ];
+    for (name, text) in shapes {
+        let mut module = parsed(text);
+        let id = module.named("f").unwrap();
+        post_order(&mut module, &DataLayout::default(), Spaces::FLAT, &[id]);
+        let attrs = &module.global(id).function().unwrap().attrs;
+        assert!(!Facts::of(attrs).will_return(), "{name}: {attrs:?}");
+    }
+}
