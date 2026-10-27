@@ -213,6 +213,9 @@ pub struct RuntimeContracts<'a> {
     /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
     /// then dropped.
     pub frame_zeroed: bool,
+    /// What the private functions already machined wrote: a direct call of one
+    /// destroys that and no more (`CalleeFacts`), as the old selector reads it.
+    pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -293,6 +296,17 @@ fn modelled(
 }
 
 impl CallConventions<'_> {
+    /// What the direct callee `callee` was found to write, where it takes part
+    /// in interprocedural register use and has been machined.
+    fn written(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<crate::backend::calleefacts::Written> {
+        let (facts, Some(Callee::Global(id))) = (self.contracts?.facts?, callee) else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned()?;
+        facts.written(&name)
+    }
+
     /// The contract of a call of `callee` where its convention has no
     /// description: the ABI's, named by the routine (`call_clobbers`).
     fn contract(
@@ -341,6 +355,9 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        if let Some(written) = self.written(callee) {
+            return written.high;
+        }
         let number = match callee {
             Some(Callee::Global(id)) => {
                 self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
@@ -362,6 +379,9 @@ impl super::emit::Conventions for CallConventions<'_> {
         callee: Option<&Callee>,
         clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        if let Some(written) = self.written(callee) {
+            return written.whole;
+        }
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
             _ => clobbers.clone(),
@@ -372,6 +392,10 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
+        // a private function that takes part changes what its body wrote
+        if let Some(written) = self.written(callee) {
+            return Some(written.whole);
+        }
         // inline assembly changes the registers its name states
         if let Some(Callee::Named(name)) = callee
             && let Some(block) = llrm_mir::intrinsics::asm(name)

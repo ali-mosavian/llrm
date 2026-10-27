@@ -116,6 +116,7 @@ pub(super) fn select_with_contracts(text: &str) -> Result<crate::backend::isel::
         segments: &crate::backend::target::BASIC,
         runtime: true,
         frame_zeroed: false,
+        facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     super::dag_function::selected_in_pool(
