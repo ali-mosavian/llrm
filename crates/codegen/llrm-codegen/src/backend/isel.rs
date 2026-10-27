@@ -722,6 +722,11 @@ pub struct Selected {
     /// arguments, stack temporaries. Temporaries of different statements
     /// may share bytes.
     pub extents: Vec<(i64, i64)>,
+    /// How many of the last `extents` are scratch temporaries that live only
+    /// between a store and a load (a rounded float's slot): they lie below
+    /// `depth` and are handed to the frame as spill slots, which
+    /// `slots::slots_colored` shares by their live ranges.
+    pub temporaries: usize,
     /// The `at` of what starts the landing pad, which the runtime enters.
     pub landing: Option<i64>,
 }
@@ -1195,6 +1200,7 @@ pub fn selected_with<'c>(
         pops: selector.pops,
         depth: selector.depth,
         extents: selector.extents,
+        temporaries: 0,
         landing: selector.landing,
     })
 }
