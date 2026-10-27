@@ -1231,3 +1231,42 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_cached_pass_is_rechecked_for_stale_pages_against_the_base_as_it_is_now(tmp_path):
+    """#5062, #5085 and #5088 passed alone against an older parity, the verdict was reused per head sha, and each made a generated page fail once merged with what landed since."""
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "h1").write_text("")  # passed alone earlier
+    (cache / "h2").write_text("")
+    checked = []
+    kept, dropped = ps.alone(["1", "2"], {"1": "h1", "2": "h2"}, refusals=lambda head, base: checked.append(head) or [], cache=cache, jobs=1,
+                             recheck=lambda head, base: "generated docs out of date: docs/a.md" if head == "h2" else "")
+    assert kept == ["1"] and dropped == {"2": "generated docs out of date: docs/a.md"} and checked == [], "a cached pass runs only the docs recheck"
+    assert (cache / "h2").read_text() == "", "the recheck does not overwrite the cached verdict"
+
+
+def test_a_head_whose_header_changed_without_its_page_is_named_once_merged_with_the_base(tmp_path):
+    """The recheck on a real merge: a head that changes a `//!` header and leaves its page alone."""
+    def run(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    run("init", "-q", "-b", "main")
+    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docsbuild/build.py").write_text(
+        "import sys, pathlib\nheader = pathlib.Path('a.rs').read_text().strip()\npage = pathlib.Path('docs/a.md').read_text().strip()\n"
+        "if header != page:\n    print('generated docs are out of date')\n    print('  docs/a.md')\n    sys.exit(1)\n"
+    )
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "a.rs").write_text("//! v1\n")
+    (tmp_path / "docs/a.md").write_text("//! v1\n")
+    run("add", ".")
+    run("commit", "-q", "-m", "base")
+    base = run("rev-parse", "HEAD")
+    run("checkout", "-q", "-b", "pr")
+    (tmp_path / "a.rs").write_text("//! v2\n")
+    run("commit", "-qam", "header changed, page not regenerated")
+    head = run("rev-parse", "HEAD")
+    run("checkout", "-q", "--detach", base)
+    assert "docs/a.md" in ps.docs_recheck(head, base, tmp_path, set())
+    assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
