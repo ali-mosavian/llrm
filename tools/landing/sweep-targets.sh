@@ -13,6 +13,8 @@ for root in $roots; do
       # were 18 dirs of 7-15 GB each, all under the cap, 139 GB idle for 6 h
       newest=$(find "$d" -printf '%T@\n' 2>/dev/null | sort -n | tail -1 | cut -d. -f1)
       [ "$size" -gt "${IDLE_CAP_KB:-1048576}" ] && [ -n "$newest" ] && [ $(( $(date +%s) - newest )) -gt $(( ${IDLE_HOURS:-3} * 3600 )) ] || continue
+      # a process with a file open under it (a running build or test) keeps it
+      [ -z "$(lsof -t +D "$d" 2>/dev/null | head -1)" ] || continue
     fi
     [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d"; continue; }
     out=$("$HERE/prune-target.sh" "$d" --apply) && echo "$d: pruned $out"
