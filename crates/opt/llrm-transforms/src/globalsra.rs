@@ -217,6 +217,21 @@ fn accesses(
     Some(found)
 }
 
+/// The bytes of a type a piece may be: an integer, a `float` or a `double`
+/// (`collectSRATypes` takes any first-class scalar; the x87 `fp80` is left).
+fn piece_bytes(
+    context: &llrm_mir::context::Context,
+    ty: TypeId,
+) -> Option<u64> {
+    use llrm_mir::types::{FloatKind, Type};
+    match context.types.get(ty) {
+        Type::Int(bits) => Some(u64::from(*bits).div_ceil(8)),
+        Type::Float(FloatKind::Float) => Some(4),
+        Type::Float(FloatKind::Double) => Some(8),
+        _ => None,
+    }
+}
+
 /// The pieces to split into, sorted by offset: (offset, type, initializer).
 fn sliced(
     module: &Module,
@@ -229,7 +244,7 @@ fn sliced(
     let GlobalKind::Variable(variable) = &module.globals[id.0 as usize].kind else { return None };
     let mut pieces: BTreeMap<i64, TypeId> = BTreeMap::new();
     for access in accesses.iter().filter(|one| !one.store) {
-        context.types.int_bits(access.ty)?;
+        piece_bytes(context, access.ty)?;
         if *pieces.entry(access.offset).or_insert(access.ty) != access.ty {
             return None;
         }
@@ -295,7 +310,12 @@ fn sliced(
             return None;
         }
         let bits = read.iter().rev().fold(0u128, |bits, &byte| (bits << 8) | u128::from(byte));
-        out.push((offset, ty, Constant { ty, kind: ConstantKind::Int(bits) }));
+        let kind = if context.types.int_bits(ty).is_some() {
+            ConstantKind::Int(bits)
+        } else {
+            ConstantKind::Float(bits as u64)
+        };
+        out.push((offset, ty, Constant { ty, kind }));
     }
     Some(out)
 }
@@ -309,7 +329,7 @@ fn rewrite(
     moved: &BTreeMap<GlobalId, Vec<InstId>>,
 ) -> BTreeSet<GlobalId> {
     let layout_sizes: Vec<i64> =
-        pieces.iter().map(|(_, ty, _)| i64::from(module.context.types.int_bits(*ty).unwrap_or(8)) / 8).collect();
+        pieces.iter().map(|(_, ty, _)| piece_bytes(&module.context, *ty).unwrap_or(1) as i64).collect();
     let name = module.globals[id.0 as usize].name.as_deref().unwrap_or("").to_owned();
     let (align, space) = match &module.globals[id.0 as usize].kind {
         GlobalKind::Variable(variable) => (variable.align, module.globals[id.0 as usize].address_space),
@@ -381,7 +401,12 @@ fn rewrite(
             let (offset, ty, _) = &pieces[n];
             let width = (layout_sizes[n] * 8) as u32;
             let part = (bits >> ((*offset - low) * 8)) & llrm_mir::context::mask(width);
-            let value = context.constant(Constant { ty: *ty, kind: ConstantKind::Int(part) });
+            let kind = if context.types.int_bits(*ty).is_some() {
+                ConstantKind::Int(part)
+            } else {
+                ConstantKind::Float(part as u64)
+            };
+            let value = context.constant(Constant { ty: *ty, kind });
             let store = function.create_instruction(
                 Opcode::Store { align: None, volatile: false },
                 void,
@@ -422,7 +447,7 @@ fn locals(module: &Module) -> Vec<GlobalId> {
         .filter_map(|(at, global)| {
             let GlobalKind::Variable(variable) = &global.kind else { return None };
             let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
-            let single = module.context.types.int_bits(variable.ty).is_some();
+            let single = piece_bytes(&module.context, variable.ty).is_some();
             let id = GlobalId(at as u32);
             (internal
                 && single
