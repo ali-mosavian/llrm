@@ -194,7 +194,7 @@ fn test_a_body_s_attributes_are_stated_on_its_declarations() {
     let mut modules = managers(&program, &mut ProgramAnalyses::default());
     stamped_all(&mut program, &mut modules).unwrap();
     assert!(
-        printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind norecurse\n"),
+        printed(&program.modules[1]).contains("declare i16 @double(i16) memory(none) willreturn nounwind nofree nosync norecurse\n"),
         "{}",
         printed(&program.modules[1])
     );
@@ -288,13 +288,13 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn nounwind norecurse {",
-            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn nounwind norecurse {",
-            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind norecurse {",
-            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind norecurse {",
+            "define internal i16 @read(ptr nocapture readonly %p) memory(argmem: read) willreturn nounwind nofree nosync norecurse {",
+            "define internal void @write(ptr nocapture writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn nounwind nofree nosync norecurse {",
+            "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
+            "define internal void @calls(ptr nocapture initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
             "define internal void @hides(ptr %p) {",
-            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind norecurse {",
-            "define i16 @f(i16 %a) memory(readwrite, argmem: write, inaccessiblemem: none) willreturn nounwind norecurse {",
+            "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind nofree nosync norecurse {",
+            "define i16 @f(i16 %a) memory(readwrite, argmem: write, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
         ],
         "{text}"
     );
