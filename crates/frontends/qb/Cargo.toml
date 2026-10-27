@@ -4,14 +4,9 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "The QuickBASIC-family source frontend"
-default-run = "qbfront"
 
 [lib]
 name = "llrm_qb"
-
-[[bin]]
-name = "qbfront"
-path = "src/bin/qbfront.rs"
 
 [dependencies]
 llrm-support = { workspace = true }

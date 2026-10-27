@@ -582,3 +582,55 @@ fn a_division_overflow_check_is_a_multiply_with_overflow() {
     assert!(out.contains("extractvalue { i32, i1 } %0, 0"), "{out}");
     assert!(out.contains("store i32 %1, ptr %p") && !out.contains("= mul i32"), "{out}");
 }
+
+/// `foldICmpBinOp`: `(x & -P2) == INT_MIN` is `x s< INT_MIN + P2`, `!=` is
+/// `s>=` (`opt`: `icmp slt i16 %x, -32764`, `icmp sgt i16 %x, -32765`). Left
+/// alone, the masked compare reached the selector as an and plus a compare.
+#[test]
+fn test_a_masked_compare_with_the_sign_mask_is_a_signed_bound() {
+    let m = "  %m = and i16 %x, -4\n";
+    check(
+        "i16 %x",
+        &format!("{m}  %r = icmp eq i16 %m, -32768\n  ret i1 %r\n"),
+        &format!("  %0 = icmp slt i16 %x, -32764\n  ret i1 %0\n"),
+    );
+    check(
+        "i16 %x",
+        &format!("{m}  %r = icmp ne i16 %m, -32768\n  ret i1 %r\n"),
+        &format!("  %0 = icmp sgt i16 %x, -32765\n  ret i1 %0\n"),
+    );
+    check(
+        "i16 %x",
+        &format!("{m}  %r = icmp eq i16 %m, 8\n  ret i1 %r\n"),
+        &format!("{m}  %r = icmp eq i16 %m, 8\n  ret i1 %r\n"),
+    );
+}
+
+/// `foldICmpBinOp`: `((b + M) & M) u< b` is `b != 0` for a low-bit mask `M`
+/// (`opt`: `icmp ne i16 %b, 0`); a different addend is not the idiom.
+#[test]
+fn test_an_offset_and_mask_overflow_check_is_a_zero_test() {
+    let m = "  %s = add i16 %b, 3\n  %m = and i16 %s, 3\n";
+    check(
+        "i16 %b",
+        &format!("{m}  %r = icmp ult i16 %m, %b\n  ret i1 %r\n"),
+        &format!("  %0 = icmp ne i16 %b, 0\n  ret i1 %0\n"),
+    );
+    check(
+        "i16 %b",
+        &format!("{m}  %r = icmp uge i16 %m, %b\n  ret i1 %r\n"),
+        &format!("  %0 = icmp eq i16 %b, 0\n  ret i1 %0\n"),
+    );
+    check(
+        "i16 %b",
+        &format!("{m}  %r = icmp ugt i16 %b, %m\n  ret i1 %r\n"),
+        &format!("  %0 = icmp ne i16 %b, 0\n  ret i1 %0\n"),
+    );
+    check(
+        "i16 %b",
+        &format!("{m}  %r = icmp ule i16 %b, %m\n  ret i1 %r\n"),
+        &format!("  %0 = icmp eq i16 %b, 0\n  ret i1 %0\n"),
+    );
+    let other = "  %s = add i16 %b, 5\n  %m = and i16 %s, 3\n  %r = icmp ult i16 %m, %b\n  ret i1 %r\n";
+    check("i16 %b", other, other);
+}

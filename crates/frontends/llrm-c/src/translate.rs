@@ -4487,11 +4487,22 @@ mod tests {
         assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
         let module = raised("longdouble.cgs");
         let printed = llrm_mir::print::module(&module);
-        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80", "sitofp i16"] {
+        // An integer constant converts at once (x86_fp80 constants fold
+        // exactly); the integer conversion is the next test's.
+        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80"] {
             assert!(printed.contains(conversion), "{conversion}: {printed}");
         }
         let main = defined(&module, "_main");
-        assert!(main.contains("sitofp") && main.contains("x86_fp80"), "{main}");
+        assert!(main.contains("fmul x86_fp80") && main.contains("4.000000e+00"), "{main}");
+    }
+
+    /// A short that is no constant converts to a long double by `sitofp`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_short_converts_to_a_long_double_by_sitofp() {
+        let text = raised_c("long double __cdecl f(short s) { return s; }\n", false);
+        assert!(text.contains("sitofp i16") && text.contains("x86_fp80"), "{text}");
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.
