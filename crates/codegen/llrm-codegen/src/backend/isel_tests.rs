@@ -4503,7 +4503,12 @@ define void @f(double %a, double %b) addrspace(1) {
 }
 ";
     let got = listing(text, "f");
-    assert!(got.iter().any(|one| one == "sub sp, 8"), "{got:#?}");
+    // `a` and `b` are loads of stack arguments that a split copies instead of
+    // making again (`isAsCheapAsAMove`), so the pin spills them too: three
+    // cells, two for them and one for every temporary.
+    let temporaries: std::collections::BTreeSet<&str> =
+        got.iter().filter_map(|one| one.strip_prefix("fstp qword ptr ")).collect();
+    assert_eq!(temporaries.len(), 1, "{got:#?}");
 }
 
 /// A far pointer passed as a long, as qcport's qgl calls take
