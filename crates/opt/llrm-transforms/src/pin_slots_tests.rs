@@ -410,7 +410,7 @@ const ROWS: &[Disposition] = &[
         "DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1)",
         "",
     ),
-    row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", "w-6, 11-09"),
+    row(Module, "called-value-propagation", Why::Executed, "ipo-early (after ipsccp; calledvaluepropagation)", ""),
     row(Module, "globalopt", Why::Executed, "globalopt (first), writeonly, calleepop: a subset of GlobalOpt", ""),
     row(Module, "always-inline", Why::Executed, "walk (the CGSCC walk's inliner)", ""),
     row(Module, "inline", Why::Executed, "walk, and interprocedural (inlines again after the clones)", ""),
