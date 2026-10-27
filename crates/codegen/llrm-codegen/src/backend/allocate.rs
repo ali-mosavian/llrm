@@ -3335,6 +3335,26 @@ mod tests {
         assert!(matches!(&sources[0], Loc::Reg(_)), "{sources:?}");
     }
 
+    /// A byte read as undef beside a def in `si`, which has no byte form: the
+    /// rewrite named `si` for the byte and the instruction printed
+    /// `movzx si, si`. The byte takes a register that has one.
+    #[test]
+    fn test_a_byte_read_as_undef_does_not_take_a_register_without_a_byte() {
+        let what = Semantics {
+            name: Some("movzx".into()),
+            dests: vec![Loc::Held(Held { value: 2, width: 2 })],
+            sources: vec![Loc::Held(Held { value: 9, width: 1 })],
+            ..Semantics::new(Operation::Extend)
+        };
+        let mut one = Insn::new(0, None, Some(what), vec![2], Vec::new());
+        one.undefs = vec![9];
+        let held: IndexMap<u32, RegId> = IndexMap::from_iter([(2, RegId::SI)]);
+        let placed = _placed(&Arc::new(one), &held, &RegisterClasses::m16()).expect("placed");
+        let sources = &placed.what.as_ref().expect("semantics").sources;
+        let Loc::Reg(read) = &sources[0] else { panic!("{sources:?}") };
+        assert!(!matches!(read.register, RegId::SI | RegId::ESI), "{sources:?}");
+    }
+
     #[test]
     fn test_a_value_required_in_two_registers_gets_one_fresh_value_per_site() {
         let cwd = Insn::new(

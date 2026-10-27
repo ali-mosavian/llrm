@@ -249,7 +249,20 @@ pub(crate) fn _placed(
         let mut more = held.clone();
         let own = one.defines.iter().find_map(|value| held.get(value)).copied();
         for value in one.undefs.iter().filter(|value| ignored(value)) {
-            more.insert(*value, own.or_else(|| held.get(value).copied()).unwrap_or(classes.available[0]));
+            // The register must have a form at the width the read names: esi
+            // has no byte.
+            let width = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .find_map(
+                    |place| match place {
+                        Loc::Held(read) if read.value == *value => Some(u32::from(read.width) * 8),
+                        _ => None,
+                    },
+                );
+            let fits = |register: &RegId| width.is_none_or(|bits| regs.view(regs.root(*register), bits).is_some());
+            more.insert(*value, own.filter(fits).or_else(|| held.get(value).copied()).unwrap_or(classes.available[0]));
         }
         undef_held = more;
         &undef_held
