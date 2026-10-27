@@ -258,6 +258,9 @@ struct DataObject {
     relocations: Vec<DataRelocation>,
     linkage: &'static str,
     address: &'static str,
+    /// Declared by a COMMON statement: BC's COMMON segment, which a CHAINed
+    /// program reads.
+    common: bool,
 }
 
 struct Function {
@@ -352,6 +355,8 @@ struct Compiler {
     common_repeats: BTreeSet<(usize, usize)>,
     /// The arrays COMMON declared without bounds, which a later DIM dimensions.
     common_arrays: BTreeSet<String>,
+    /// Set while a COMMON statement's variables are declared.
+    declaring_common: bool,
     next_value: u32,
     next_place: u32,
     next_instruction: u32,
@@ -1740,6 +1745,7 @@ impl Compiler {
                     relocations: Vec::new(),
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 },
                 DataObject {
                     align: 1,
@@ -1750,6 +1756,7 @@ impl Compiler {
                     relocations: Vec::new(),
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 },
             ],
             values: Vec::new(),
@@ -1778,6 +1785,7 @@ impl Compiler {
             next_type: 14,
             common_repeats: BTreeSet::new(),
             common_arrays: BTreeSet::new(),
+            declaring_common: false,
             next_value: 1,
             next_place: 1,
             next_instruction: 1,
@@ -2549,7 +2557,11 @@ impl Compiler {
                             dynamic.dynamic = true;
                             self.declare_as(&dynamic, storage)?;
                         } else {
-                            self.declare_as(item, storage)?;
+                            self.declaring_common =
+                                matches!(statement, Statement::Common { .. }) && storage == "module";
+                            let declared = self.declare_as(item, storage);
+                            self.declaring_common = false;
+                            declared?;
                         }
                         if matches!(statement, Statement::Common { .. }) && item.array && item.bounds.is_empty() {
                             self.common_arrays.insert(self.declaration_key(item)?);
@@ -3087,6 +3099,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: self.declaring_common,
             });
             (0, symbol)
         } else if storage == "module" {
@@ -3215,6 +3228,7 @@ impl Compiler {
             relocations: Vec::new(),
             linkage: "internal",
             address: "near",
+            common: self.declaring_common,
         });
         symbol
     }
@@ -3309,6 +3323,7 @@ impl Compiler {
             ],
             linkage: "internal",
             address: "near",
+            common: false,
         });
         symbol
     }
@@ -3662,10 +3677,25 @@ impl Compiler {
                         self.select_block(continuation);
                     }
                     "BLOAD" | "BSAVE" => self.binary_memory_statement(name, arguments)?,
-                    // Row QB-CLEAR-1: BC lowers it to B$SCLR, which zeroes the
-                    // runtime's data ranges; the program's variables would
-                    // have to sit in BC's blank-COMMON and BSS ranges for that.
-                    "CLEAR" => return self.fail("CLEAR is valid, but this compiler cannot generate code for it yet"),
+                    // B$SCLR(stack, stack given) zeroes BC_DATA, closes the
+                    // files and starts the heaps afresh.
+                    "CLEAR" => {
+                        // CLEAR [,[bytes][,stack]]: only the stack size is
+                        // lowered.
+                        if arguments.iter().take(2).any(|argument| !matches!(argument, Expr::Omitted(_)))
+                            || arguments.len() > 3
+                        {
+                            return self.unsupported("CLEAR with a memory size");
+                        }
+                        let (stack, given) = match arguments.get(2) {
+                            Some(size) if !matches!(size, Expr::Omitted(_)) => {
+                                let (size, size_type) = self.expression(size)?;
+                                (self.convert(size, size_type, INTEGER)?, Number::Integer(-1))
+                            }
+                            _ => (Operand::Constant(INTEGER, Number::Integer(0)), Number::Integer(0)),
+                        };
+                        self.emit_runtime_call("B$SCLR", Vec::new(), vec![stack, Operand::Constant(INTEGER, given)]);
+                    }
                     "STOP" | "RESET" => {
                         if !arguments.is_empty() {
                             return self.fail(format!("{name} takes no arguments"));
@@ -4011,6 +4041,7 @@ impl Compiler {
                             // DGROUP and pass DS:offset, as documented by
                             // QB45 runtime/rt/inptty.asm's pBlock contract.
                             address: if self.runtime == "vbdos" { "far" } else { "near" },
+                            common: false,
                         });
                         let place = self.next_place;
                         self.next_place += 1;
@@ -4705,6 +4736,13 @@ impl Compiler {
                         let continuation = self.new_block();
                         self.select_block(continuation);
                     }
+                    "CHAIN" => {
+                        let [file] = arguments.as_slice() else {
+                            return self.unsupported("CHAIN with a line, ALL, DELETE or MERGE");
+                        };
+                        let file = self.string_descriptor(file)?;
+                        self.emit_runtime_call("B$SCHN", Vec::new(), vec![file]);
+                    }
                     _ => {
                         return self
                             .fail(format!("{name} is valid, but this compiler cannot generate code for it yet"));
@@ -4757,6 +4795,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             self.data.len() - 1
         };
@@ -6118,6 +6157,7 @@ impl Compiler {
             relocations: Vec::new(),
             linkage: "internal",
             address: "near",
+            common: false,
         });
         let place = self.next_place;
         self.next_place += 1;
@@ -7565,6 +7605,25 @@ impl Compiler {
             );
             return Ok(Some((Operand::Value(result), SINGLE)));
         }
+        if intrinsic.lowering == Lowering::DateSerial {
+            // B$DTSR(year, month, day) returns AX = near address of an R8,
+            // the serial date.
+            let mut operands = Vec::new();
+            for argument in &arguments[..3] {
+                let (value, value_type) = self.expression(argument)?;
+                operands.push(self.convert(value, value_type, INTEGER)?);
+            }
+            let pointer_type = self.pointer_type(DOUBLE);
+            let pointer = self.value(pointer_type);
+            self.emit_runtime_call("B$DTSR", vec![pointer], operands);
+            let result = self.value(DOUBLE);
+            self.emit(
+                "load",
+                vec![result],
+                vec![Operand::Indirect { base: pointer, offset: 0, type_id: DOUBLE, volatile: false, inbounds: false }],
+            );
+            return Ok(Some((Operand::Value(result), DOUBLE)));
+        }
         if intrinsic.lowering == Lowering::Random {
             // VBDOS random.asm returns AX = near address of its current R4
             // value. RND1 consumes one SINGLE selector; RND0 consumes none.
@@ -7593,17 +7652,18 @@ impl Compiler {
         }
         if matches!(
             intrinsic.lowering,
-            Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble
+            Lowering::ToInteger | Lowering::ToLong | Lowering::ToSingle | Lowering::ToDouble | Lowering::ToCurrency
         ) {
             let target = match intrinsic.lowering {
                 Lowering::ToInteger => INTEGER,
                 Lowering::ToLong => LONG,
                 Lowering::ToSingle => SINGLE,
                 Lowering::ToDouble => DOUBLE,
+                Lowering::ToCurrency => CURRENCY,
                 _ => unreachable!(),
             };
             let (operand, source) = self.numeric_argument(&arguments[0])?;
-            if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN) {
+            if !matches!(source, INTEGER | LONG | SINGLE | DOUBLE | BOOLEAN | CURRENCY) {
                 return self.fail(format!(
                     "`{name}` needs a number here, but was given text; use VAL(text$) to turn text into a number"
                 ));
@@ -7657,6 +7717,13 @@ impl Compiler {
             let result = self.value(word);
             self.emit_runtime_call("B$SADD", vec![result], vec![descriptor]);
             return Ok(Some((Operand::Value(result), word)));
+        }
+        if intrinsic.lowering == Lowering::StringSegment {
+            // B$SSEG(descriptor): the segment of the characters.
+            let descriptor = self.string_descriptor(&arguments[0])?;
+            let result = self.value(INTEGER);
+            self.emit_runtime_call("B$SSEG", vec![result], vec![descriptor]);
+            return Ok(Some((Operand::Value(result), INTEGER)));
         }
         if matches!(intrinsic.lowering, Lowering::Abs | Lowering::Sqrt) {
             let (mut operand, mut type_id) = self.numeric_argument(&arguments[0])?;
@@ -9684,6 +9751,7 @@ impl Compiler {
                     relocations: Vec::new(),
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 });
                 (0, symbol)
             }
@@ -9699,6 +9767,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             (0, symbol)
         } else {
@@ -9768,6 +9837,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             self.def_segment_base_symbol = Some(symbol);
             symbol
@@ -9805,6 +9875,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "external",
                 address: "near",
+                common: false,
             });
             self.def_segment_symbol = Some(symbol);
             symbol
@@ -9878,6 +9949,7 @@ impl Compiler {
                 relocations: Vec::new(),
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             self.floating_literals.insert(key, symbol);
             symbol
@@ -9942,6 +10014,7 @@ impl Compiler {
                 }],
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             (payload_symbol, near.size as isize)
         } else {
@@ -9959,6 +10032,7 @@ impl Compiler {
                     relocations: vec![DataRelocation { at: 0, target: payload_symbol, addend: 0, address: "segment" }],
                     linkage: "internal",
                     address: "near",
+                    common: false,
                 });
                 self.far_string_segment_symbol = Some(symbol);
                 symbol
@@ -9979,6 +10053,7 @@ impl Compiler {
                 relocations: vec![DataRelocation { at: 2, target: payload_symbol, addend: 4, address: "near" }],
                 linkage: "internal",
                 address: "far",
+                common: false,
             });
 
             let descriptor_symbol = self.next_data;
@@ -9995,6 +10070,7 @@ impl Compiler {
                 ],
                 linkage: "internal",
                 address: "near",
+                common: false,
             });
             (descriptor_symbol, 6)
         };
@@ -10668,7 +10744,11 @@ impl Compiler {
                 )
                 .unwrap();
             }
-            out.push_str("]}");
+            out.push(']');
+            if object.common {
+                out.push_str(",\"segment\":\"COMMON\"");
+            }
+            out.push('}');
         }
         out.push_str("],\"id\":1,\"name\":");
         string(&mut out, &self.module_name);
