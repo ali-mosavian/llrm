@@ -95,6 +95,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [algebraic-696-note](algebraic-696-note.md) | algebraic@696 deleted: the pair by bucket, the costs and what is owed |
 | [qcport-o2-size](qcport-o2-size.md) | AM-QC-1: QCport -O2 size by cause (unrolling, inlining) and module |
 | [cleanup-bucket-by-pass](cleanup-bucket-by-pass.md) | The machine clean-up bucket (172.3 M vs the pin's 49.4) one row per pass, with a proposed owner |
+| [gap-like-for-like](gap-like-for-like.md) | The d_faces m32 -O2 gap to the pin by group, with the isel and combine work counted once, and an owner per row |
 | [compile-time-plan-scalar-ipo](compile-time-plan-scalar-ipo.md) | Scalar and module/IPO compile time: dated plan to the pin |
 | [emit-baselines](emit-baselines.md) | Compile costs measured to an object: old and new |
 | [emit-plan](emit-plan.md) | Emit compile-time bucket: dated plan to the pin's AsmPrinter and MC |
