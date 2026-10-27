@@ -602,7 +602,7 @@ fn constrain_local_copy(
     }
     if trace() {
         eprintln!(
-            "machinesched constraining copy {copy}: {local_uses:?} -> {global_def}, {global_uses:?} -> {first_local}"
+            "machinesched constraining copy {copy} (local {local_value}, global {global_value}): {local_uses:?} -> {global_def}, {global_uses:?} -> {first_local}"
         );
     }
     for user in local_uses {
