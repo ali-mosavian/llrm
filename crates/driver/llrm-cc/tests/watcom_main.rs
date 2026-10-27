@@ -111,7 +111,11 @@ fn a_program_links_whichever_target_directory_the_driver_is_in() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-link-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("m.c"), "volatile float v = 4.0f;\nint main(void) { return (int)__builtin_sqrtf(v) - 2; }\n").unwrap();
+    std::fs::write(
+        dir.join("m.c"),
+        "volatile float v = 4.0f;\nint main(void) { return (int)__builtin_sqrtf(v) - 2; }\n",
+    )
+    .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env_remove("LLRM_CC_BIN")
@@ -147,7 +151,10 @@ fn library_calls_are_the_watcom_names_at_both_models() {
     for target in ["x86_16-wat", "x86_32-wat"] {
         let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", target)
-            .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+            )
             .args(["-O1", "-w", "-S", "-o"])
             .arg(dir.join("l.s"))
             .arg(dir.join("l.c"))
@@ -187,5 +194,10 @@ fn an_m16_program_links_against_watcoms_start_up() {
         .unwrap();
     let linked = dir.join("m.exe").exists();
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(run.status.success() && linked, "{}{}", String::from_utf8_lossy(&run.stdout), String::from_utf8_lossy(&run.stderr));
+    assert!(
+        run.status.success() && linked,
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
 }

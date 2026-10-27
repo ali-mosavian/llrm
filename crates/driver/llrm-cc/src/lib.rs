@@ -272,13 +272,17 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {
-            // clang writes the debug metadata, the backend the format `flag` names.
+            // clang writes the debug metadata, the backend the format `flag`
+            // names.
             if !build.clang.iter().any(|one| one == "-g") {
-                // No `#dbg_assign`: the importer reads `#dbg_value` and `#dbg_declare` only.
-                build.clang.extend(
-                    ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
-                        .map(str::to_owned),
-                );
+                // No `#dbg_assign`: the importer reads `#dbg_value` and
+                // `#dbg_declare` only.
+                build
+                    .clang
+                    .extend(
+                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
+                            .map(str::to_owned),
+                    );
             }
             build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {

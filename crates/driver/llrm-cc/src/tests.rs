@@ -47,7 +47,8 @@ fn untranslated_features_are_refused_not_dropped() {
 }
 
 /// `-g` was refused ("debug info is not carried yet"), so no program could
-/// carry debug info: clang gets `-g`, the backend the flag that names the format.
+/// carry debug info: clang gets `-g`, the backend the flag that names the
+/// format.
 #[test]
 fn debug_flags_reach_clang_and_the_backend() {
     let one = built("-gcodeview -c x.c");

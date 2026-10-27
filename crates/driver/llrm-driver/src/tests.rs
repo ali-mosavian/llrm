@@ -849,9 +849,7 @@ fn a_defined_library_function_takes_the_default_convention_too() {
 #[test]
 fn a_debug_flavor_the_object_format_cannot_carry_is_refused() {
     let text = format!("{REGCALL_DATALAYOUT}define i32 @f(i32 %x) {{\n  ret i32 %x\n}}\n");
-    let refused = |arguments: &[&str]| {
-        crate::llc::compiled(&flags(arguments), &text, "c").map(|_| ()).unwrap_err()
-    };
+    let refused = |arguments: &[&str]| crate::llc::compiled(&flags(arguments), &text, "c").map(|_| ()).unwrap_err();
     assert!(refused(&["-m32", "-gcodeview", "-fobject-format=elf"]).contains("cannot carry CodeView"));
     assert!(refused(&["-m32", "-gtd", "-fobject-format=elf"]).contains("Turbo Debugger"));
     assert!(refused(&["-m32", "-gtd"]).contains("16-bit"));

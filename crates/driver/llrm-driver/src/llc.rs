@@ -234,12 +234,17 @@ fn with_default_convention(
             .globals
             .iter()
             .enumerate()
-            .filter(|(_, global)| matches!(&global.kind, llrm_mir::module::GlobalKind::Function(function)
-                if function.calling_convention == 0))
             .filter(|(_, global)| {
-                global.name.as_deref().is_some_and(|name| {
-                    llrm_mir::libfunc::TargetLibraryInfo::get_lib_func_by_name(name).is_some()
-                })
+                matches!(
+                    &global.kind,
+                    llrm_mir::module::GlobalKind::Function(function) if function.calling_convention == 0
+                )
+            })
+            .filter(|(_, global)| {
+                global
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| llrm_mir::libfunc::TargetLibraryInfo::get_lib_func_by_name(name).is_some())
             })
             .map(|(at, _)| llrm_mir::context::GlobalId(at as u32))
             .collect()
@@ -358,7 +363,8 @@ pub fn compiled_dumping(
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
         options.dump = Some(dump.to_path_buf());
     }
-    // The Watcom library is the register convention where the default is regparm3.
+    // The Watcom library is the register convention where the default is
+    // regparm3.
     let library = default
         .cc
         .as_deref()
