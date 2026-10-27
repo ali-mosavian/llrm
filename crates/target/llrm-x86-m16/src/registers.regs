@@ -17,6 +17,9 @@
 # @scratch: the words a pass may borrow for a moment, most preferred first (gcc's REG_ALLOC_ORDER): a
 # register the result is not left in comes last.
 @scratch cx dx bx ax
+# @asm: the registers inline asm may name in a constraint (`{ax}`, `={dx}`): the Watcom `#pragma aux` set. No bp, sp or ah..dh
+# (a register constraint names a whole value), and no segment register.
+@asm al bl cl dl ax bx cx dx si di eax ebx ecx edx esi edi
 #
 # name  bits root lane classes dwarf codeview [load: the mnemonic that loads a far pointer into a segment register]
 eax     32   eax  0    gpr,byte,int  0  17
