@@ -333,9 +333,9 @@ fn llvm_dwarfdump_verifies_the_unit_in_either_class_and_version() {
             );
             made.arch = arch;
             let bytes = match bits {
-                32 => llrm_x86::mc::elf32::write(&made),
-                64 => llrm_x86::mc::elf64::write(&made),
-                _ => llrm_macho::write(&made, &llrm_x86::mc::macho::X8664MachO),
+                32 => objects("elf", &made),
+                64 => objects("elf", &made),
+                _ => objects("macho", &made),
             }
             .unwrap();
             let path = scratch.path().join("x.o");
@@ -383,7 +383,7 @@ fn a_removed_variable_has_no_location_and_the_others_have_theirs() {
     let made = written(vec![removed, frame("x", 8)], vec![int()], Format::Default).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
-    std::fs::write(&path, llrm_x86::mc::elf32::write(&made).unwrap()).unwrap();
+    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
     let said = std::process::Command::new(&dump).arg("--verify").arg(&path).output().unwrap();
     assert!(
         String::from_utf8_lossy(&said.stdout).trim_end().ends_with("No errors."),
@@ -414,7 +414,7 @@ fn a_frame_cell_is_found_from_the_canonical_frame_address_where_the_code_keeps_n
     let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let path = scratch.path().join("x.o");
-    std::fs::write(&path, llrm_x86::mc::elf32::write(&made).unwrap()).unwrap();
+    std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
     let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
     let shown = String::from_utf8_lossy(&shown.stdout).into_owned();
     assert!(shown.contains("DW_AT_frame_base\t(DW_OP_call_frame_cfa)"), "{shown}");
@@ -440,7 +440,7 @@ fn a_function_called_far_finds_its_cells_from_the_longer_frame_address() {
         let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
         let scratch = tempfile::tempdir().unwrap();
         let path = scratch.path().join("x.o");
-        std::fs::write(&path, llrm_x86::mc::elf32::write(&made).unwrap()).unwrap();
+        std::fs::write(&path, objects("elf", &made).unwrap()).unwrap();
         let shown = std::process::Command::new(&dump).arg("--debug-info").arg(&path).output().unwrap();
         String::from_utf8_lossy(&shown.stdout).into_owned()
     };
@@ -517,4 +517,14 @@ fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let (_, info) = named(&written, ".debug_info");
     assert_eq!(info.image[7], 3, "the unit header's address size");
+}
+
+/// `object` through x86's writer for `format`, which expands its debug
+/// information first.
+fn objects(
+    format: &str,
+    object: &Object,
+) -> Result<Vec<u8>, llrm_object::Unsupported> {
+    use llrm_object::ObjectTarget;
+    llrm_x86::mc::X86Objects.write_object(format, object)
 }

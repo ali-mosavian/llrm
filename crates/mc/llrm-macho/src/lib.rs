@@ -140,16 +140,6 @@ pub fn write<W: MachTargetWriter>(
     object: &Object,
     flavor: &W,
 ) -> Result<Vec<u8>, Unsupported> {
-    // DWARF's sections are this writer's, made from the object's debug
-    // information.
-    let expanded;
-    let object = match &object.debug {
-        Some(info) => {
-            expanded = llrm_debuginfo::expanded(object, info)?;
-            &expanded
-        }
-        None => object,
-    };
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
     }

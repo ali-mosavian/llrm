@@ -4,7 +4,7 @@ use std::path::Path;
 use std::process::Command;
 
 use llrm_macho::{MachTargetWriter, write as write_with};
-use llrm_object::Arch;
+use llrm_object::{Arch, ObjectTarget};
 use llrm_object::{Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 use llrm_object::{Reloc, Symbol};
 
@@ -12,8 +12,8 @@ use llrm_object::{Reloc, Symbol};
 /// has none.
 fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     match object.arch {
-        Arch::X8664 => write_with(object, &llrm_x86::mc::macho::X8664MachO),
-        Arch::Arm64 => write_with(object, &llrm_arm64::mc::macho::Arm64MachO),
+        Arch::X8664 => llrm_x86::mc::X86Objects.write_object("macho", object),
+        Arch::Arm64 => llrm_arm64::mc::Arm64Objects.write_object("macho", object),
         other => Err(Unsupported(format!("{other:?} has no Mach-O writer"))),
     }
 }

@@ -24,6 +24,14 @@ impl ObjectTarget for Arm64Objects {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported> {
+        let expanded;
+        let object = match (format, &object.debug) {
+            ("elf" | "macho", Some(info)) => {
+                expanded = llrm_dwarf::expanded(object, info)?;
+                &expanded
+            }
+            _ => object,
+        };
         match format {
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),
             "elf" => elf::write(object),

@@ -44,6 +44,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 mod tests {
     use std::process::Command;
 
+    use llrm_object::ObjectTarget;
     use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -198,7 +199,7 @@ mod tests {
         made.debug = Some(info);
         let scratch = tempfile::tempdir().unwrap();
         let path = scratch.path().join("f.obj");
-        std::fs::write(&path, write(&made).unwrap()).unwrap();
+        std::fs::write(&path, crate::mc::X86Objects.write_object("coff", &made).unwrap()).unwrap();
         let said = Command::new(dump).arg("--codeview").arg(&path).output().unwrap();
         let text = String::from_utf8_lossy(&said.stdout);
         for wanted in [

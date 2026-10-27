@@ -55,6 +55,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 mod tests {
     use std::process::Command;
 
+    use llrm_object::ObjectTarget;
     use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
@@ -256,7 +257,7 @@ mod tests {
         ] {
             let mut made = hello();
             made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
-            let why = write(&made).unwrap_err().0;
+            let why = crate::mc::X86Objects.write_object("elf", &made).unwrap_err().0;
             assert!(why.contains("cannot carry") && why.contains(name), "{why}");
         }
     }

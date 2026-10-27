@@ -554,7 +554,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         // linker joins and relocates.
         Some(info) if dwarf => {
             let mut lines = crate::codeview::lines(object, info)?;
-            let expanded = llrm_debuginfo::expanded(object, info).map_err(|error| unencodable(error.0))?;
+            let expanded = llrm_dwarf::expanded(object, info).map_err(|error| unencodable(error.0))?;
 
             lines.resize(expanded.sections.len(), Vec::new());
             (Cow::Owned(expanded), lines)

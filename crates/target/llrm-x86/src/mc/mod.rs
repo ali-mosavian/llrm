@@ -18,6 +18,20 @@ impl ObjectTarget for X86Objects {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported> {
+        // The debug writer is the format's pick, not the container's: DWARF for
+        // ELF and Mach-O, C13 for COFF.
+        let expanded;
+        let object = match (format, &object.debug) {
+            ("elf" | "macho", Some(_)) => {
+                expanded = llrm_dwarf::expanded(object, object.debug.as_ref().expect("matched"))?;
+                &expanded
+            }
+            ("coff", Some(_)) => {
+                expanded = llrm_codeview::expanded(object)?;
+                &expanded
+            }
+            _ => object,
+        };
         match (format, object.arch) {
             ("elf", Arch::I386) => elf32::write(object),
             ("elf", Arch::X8664) => elf64::write(object),

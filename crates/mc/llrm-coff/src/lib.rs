@@ -3,12 +3,6 @@
 //! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
 //! machines.
 
-/// C13 gives each local the ranges its place holds over.
-pub const LOCATION_RANGES: bool = true;
-pub const CFA_LOCATIONS: bool = false;
-
-pub mod codeview;
-
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 
 const SCN_CNT_CODE: u32 = 0x20;
@@ -178,30 +172,9 @@ fn pad(
     }
 }
 
-/// `object` as a COFF object file of machine `M`, its debug information, if
-/// any, as C13.
+/// `object` as a COFF object file of machine `M`; its debug information, if
+/// any, is already C13 sections (`llrm_codeview::expanded`).
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    let expanded;
-    let object = match &object.debug {
-        Some(info) => {
-            let encoded = codeview::encode(object, info)?;
-            let section = |name: &str, one: codeview::Section| Section {
-                name: name.to_owned(),
-                role: Role::Debug,
-                near: true,
-                align: 1,
-                spans: vec![[0, one.image.len()]],
-                image: one.image,
-                relocs: one.relocs,
-            };
-            let mut sections = object.sections.clone();
-            sections.push(section(".debug$S", encoded.symbols));
-            sections.push(section(".debug$T", encoded.types));
-            expanded = Object { sections, debug: None, ..object.clone() };
-            &expanded
-        }
-        None => object,
-    };
     if object.arch != M::ARCH {
         return Err(unsupported(format!("{:?} is not the {:?} this COFF writer is for", object.arch, M::ARCH)));
     }

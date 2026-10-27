@@ -38,7 +38,8 @@ llrm-x86-m64-select = { path = "crates/target/llrm-x86-m64-select" }
 llrm-omf = { path = "crates/mc/llrm-omf" }
 llrm-object = { path = "crates/mc/llrm-object" }
 llrm-elf = { path = "crates/mc/llrm-elf" }
-llrm-debuginfo = { path = "crates/mc/llrm-debuginfo" }
+llrm-dwarf = { path = "crates/mc/llrm-dwarf" }
+llrm-codeview = { path = "crates/mc/llrm-codeview" }
 llrm-coff = { path = "crates/mc/llrm-coff" }
 llrm-macho = { path = "crates/mc/llrm-macho" }
 llrm-bcobj = { path = "crates/frontends/bcobj" }

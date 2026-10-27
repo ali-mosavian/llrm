@@ -12,6 +12,7 @@ llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
 llrm-support = { workspace = true }
 llrm-macho = { workspace = true }
+llrm-dwarf = { workspace = true }
 llrm-elf = { workspace = true }
 llrm-target = { workspace = true }
 

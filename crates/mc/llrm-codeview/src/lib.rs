@@ -1,6 +1,7 @@
 //! [`Info`] as CodeView C13: the `.debug$S` and `.debug$T` sections of a COFF
-//! object, the format current MSVC and clang-cl emit. A fact C13 as written
-//! here cannot say is refused with what it was, never dropped.
+//! object (`expanded` adds them), the format current MSVC and clang-cl emit. A
+//! fact C13 as written here cannot say is refused with what it was, never
+//! dropped.
 
 pub mod symbols;
 mod types;
@@ -95,8 +96,28 @@ pub(crate) fn record(
     Ok(())
 }
 
+/// `object` with its debug information as C13 sections, the information itself
+/// dropped.
+pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
+    let Some(info) = &object.debug else { return Ok(object.clone()) };
+    let encoded = encode(object, info)?;
+    let section = |name: &str, one: Section| llrm_object::Section {
+        name: name.to_owned(),
+        role: llrm_object::Role::Debug,
+        near: true,
+        align: 1,
+        spans: vec![[0, one.image.len()]],
+        image: one.image,
+        relocs: one.relocs,
+    };
+    let mut sections = object.sections.clone();
+    sections.push(section(".debug$S", encoded.symbols));
+    sections.push(section(".debug$T", encoded.types));
+    Ok(Object { sections, debug: None, ..object.clone() })
+}
+
 /// `object`'s debug sections.
-pub fn encode(
+fn encode(
     object: &Object,
     info: &Info,
 ) -> Result<Encoded, Unsupported> {

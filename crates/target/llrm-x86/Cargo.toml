@@ -12,7 +12,9 @@ iced-x86 = { workspace = true }
 toml = { workspace = true }
 iced-x86 = { workspace = true }
 llrm-lir = { workspace = true }
+llrm-codeview = { workspace = true }
 llrm-coff = { workspace = true }
+llrm-dwarf = { workspace = true }
 llrm-elf = { workspace = true }
 llrm-macho = { workspace = true }
 llrm-object = { workspace = true }

@@ -159,16 +159,6 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     if object.arch != M::ARCH {
         return Err(unsupported(format!("{:?} is not the {:?} this ELF writer is for", object.arch, M::ARCH)));
     }
-    // DWARF's sections are this writer's, made from the object's debug
-    // information.
-    let expanded;
-    let object = match &object.debug {
-        Some(info) => {
-            expanded = llrm_debuginfo::expanded(object, info)?;
-            &expanded
-        }
-        None => object,
-    };
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
     }
