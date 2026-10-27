@@ -281,7 +281,10 @@ fn fold_icmp_with_ext_of_ext(
             return None;
         }
     }
-    let signed_pred = matches!(pred, IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle);
+    let signed_pred = matches!(
+        pred,
+        IntPredicate::Sgt | IntPredicate::Sge | IntPredicate::Slt | IntPredicate::Sle
+    );
     let narrowed = if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) || (signed_pred && signed_ext) {
         pred
     } else {

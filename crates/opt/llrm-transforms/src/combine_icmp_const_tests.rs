@@ -164,9 +164,8 @@ fn on_i386(
     body: &str,
     wanted: &[&str],
 ) {
-    let text = format!(
-        "target datalayout = \"e-p:32:32-n8:16:32\"\n\ndefine i1 @f(i32 %x) {{\nb0:\n{body}  ret i1 %r\n}}\n"
-    );
+    let text =
+        format!("target datalayout = \"e-p:32:32-n8:16:32\"\n\ndefine i1 @f(i32 %x) {{\nb0:\n{body}  ret i1 %r\n}}\n");
     let mut module = parsed(&text);
     let globals = module.globals.clone();
     let metadata = module.metadata.clone();
@@ -185,18 +184,9 @@ fn on_i386(
 /// not translated.
 #[test]
 fn a_compare_of_a_nuw_or_nsw_trunc_with_a_constant_is_the_wide_compare() {
-    on_i386(
-        "  %t = trunc nuw i32 %x to i16\n  %r = icmp ult i16 %t, 32\n",
-        &["icmp ult i32 %x, 32"],
-    );
+    on_i386("  %t = trunc nuw i32 %x to i16\n  %r = icmp ult i16 %t, 32\n", &["icmp ult i32 %x, 32"]);
     // nsw: the constant is sign-extended, for any predicate.
-    on_i386(
-        "  %t = trunc nsw i32 %x to i16\n  %r = icmp slt i16 %t, -5\n",
-        &["icmp slt i32 %x, -5"],
-    );
+    on_i386("  %t = trunc nsw i32 %x to i16\n  %r = icmp slt i16 %t, -5\n", &["icmp slt i32 %x, -5"]);
     // nuw alone cannot widen a signed compare.
-    on_i386(
-        "  %t = trunc nuw i32 %x to i16\n  %r = icmp slt i16 %t, 32\n",
-        &["icmp slt i16 %t, 32"],
-    );
+    on_i386("  %t = trunc nuw i32 %x to i16\n  %r = icmp slt i16 %t, 32\n", &["icmp slt i16 %t, 32"]);
 }
