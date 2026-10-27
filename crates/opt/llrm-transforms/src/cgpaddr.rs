@@ -235,6 +235,19 @@ impl FunctionPass for CgpAddr {
             Some(tti) => sunk(unit, &*tti),
             None => false,
         };
+        // An address sunk into a loop reads the cast from where it was; made
+        // again there, the far pointer's zero offset folds into the address.
+        let resunk = addresses
+            && match analyses.outer().target().lowering() {
+                Some(lowering) => crate::sinkcast::casts_sunk(
+                    unit.context,
+                    unit.layout,
+                    &*lowering,
+                    analyses.outer().target().spaces(),
+                    unit.function,
+                ),
+                None => false,
+            };
         if merged {
             // A block went: the blocks and edges are not as they were.
             PreservedAnalyses::none()
@@ -245,6 +258,7 @@ impl FunctionPass for CgpAddr {
             || addresses
             || extended
             || sunk_casts
+            || resunk
             || split
             || remainders
             || compares
