@@ -25,8 +25,8 @@ def test_the_triple_and_cpu_come_from_the_targets_description_and_the_default_is
     import targetdesc
 
     monkeypatch.delenv("LLRM_DIFFTEST_TARGET", raising=False)
-    assert set(targetdesc.targets()) == {"m16", "m32"} and targetdesc.default() == "m32"
-    assert targetdesc.triple_cpu() == ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486"]
+    assert set(targetdesc.targets()) == {"m16", "m32", "m64"} and targetdesc.default() == "m64"
+    assert targetdesc.triple_cpu() == ["-mtriple=x86_64-unknown-linux-gnu", "-mcpu=x86-64"]
     assert targetdesc.opt_args("m16")[:2] == ["-mtriple=i386-unknown-unknown-code16", "-mcpu=i486"] and "--data-layout=e-p:16:16" in targetdesc.opt_args("m16")[2]
     monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "host")
     assert targetdesc.opt_args() == []

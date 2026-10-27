@@ -517,6 +517,11 @@ pub struct Semantics {
     /// A `rep` prefix on an instruction that is not a string operation
     /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
     pub repeat: bool,
+    /// The bytes of its arguments an indirect call's callee pops, as `masm`
+    /// reads them from the body's `call_pops`: the stack depth after the call.
+    /// `None` where unknown, which an indirect call keeps the frame register
+    /// for.
+    pub pops: Option<i64>,
 }
 
 impl Semantics {
@@ -540,6 +545,7 @@ impl Semantics {
             && self.indirect == other.indirect
             && self.table == other.table
             && self.repeat == other.repeat
+            && self.pops == other.pops
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
     }
@@ -569,6 +575,7 @@ impl Semantics {
             indirect: false,
             table: Vec::new(),
             repeat: false,
+            pops: None,
         }
     }
 }
@@ -586,6 +593,7 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     indirect: false,
     table: Vec::new(),
     repeat: false,
+    pops: None,
 });
 
 /// Python `TABLE_DATA`.
@@ -682,6 +690,7 @@ pub fn restoring(
         indirect: false,
         table: Vec::new(),
         repeat: false,
+        pops: None,
     }
 }
 

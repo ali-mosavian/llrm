@@ -8,7 +8,7 @@ use std::process::Command;
 fn test_no_generated_page_is_stale() {
     let root = env!("CARGO_MANIFEST_DIR");
     let out = Command::new("python3")
-        .args(["tools/docsbuild/build.py", "--check"])
+        .args(["tools/docs/docsbuild/build.py", "--check"])
         .current_dir(root)
         .output()
         .expect("python3 runs");
@@ -21,5 +21,5 @@ fn test_no_generated_page_is_stale() {
                 || line.starts_with("  docs/")
         })
         .collect();
-    assert!(stale.is_empty(), "run python3 tools/docsbuild/build.py --sync:\n{}", stale.join("\n"));
+    assert!(stale.is_empty(), "run python3 tools/docs/docsbuild/build.py --sync:\n{}", stale.join("\n"));
 }
