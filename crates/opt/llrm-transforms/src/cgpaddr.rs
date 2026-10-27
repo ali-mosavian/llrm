@@ -494,8 +494,8 @@ fn integer(
 /// `Shl` case through `matchScaledValue`): the `shl`, `x` and the new scale,
 /// when the scaled mode is legal and folding extends no live range
 /// (`isProfitableToFoldIntoAddressingMode`: `x` is already used in the
-/// access's block). DEVIATE SHL1: the pin also folds where every use of the
-/// `shl` is an access that folds it; that case is left unfolded. DEVIATE SHL2:
+/// access's block, or every use of the `shl` is an access that folds it).
+/// DEVIATE SHL2:
 /// not where a scaled index costs instructions of its own
 /// (`scaled_index_insns`, real mode's prefix): each access would pay them,
 /// where the shift is made once (quicksort at m16 grew 21 bytes, a spill for
@@ -532,7 +532,14 @@ fn shifted(
         Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
         _ => true,
     };
-    live.then_some((shl, x, scaled))
+    // `isProfitableToFoldIntoAddressingMode`, the last case: every use of the
+    // `shl` is a memory access that folds it, so it goes with them.
+    let folds = unit
+        .function
+        .instruction(shl)
+        .result
+        .is_some_and(|result| crate::spill::address_only(unit.function, result, DEPTH));
+    (live || folds).then_some((shl, x, scaled))
 }
 
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.

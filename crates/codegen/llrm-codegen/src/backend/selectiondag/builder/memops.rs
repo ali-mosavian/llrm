@@ -914,7 +914,8 @@ impl Builder<'_> {
         };
         let (from, to) = (last(self, src), last(self, dst));
         let tail = self.constant_size(count).is_none_or(|bytes| bytes % 4 != 0);
-        let mut code = vec![0xFD, 0xF3, 0x66, 0xA5];
+        // `push ds; pop es`: both pointers are near, in DS
+        let mut code = vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5];
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
         }
@@ -933,7 +934,7 @@ impl Builder<'_> {
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
-            clobbers: names.iter().map(|name| (*name).into()).collect(),
+            clobbers: names.iter().copied().chain(["es"]).map(Into::into).collect(),
             memory: true,
             fixups: Vec::new(),
         };
@@ -968,10 +969,12 @@ impl Builder<'_> {
         };
         let (from, to) = (last(self, src), last(self, dst));
         let block = llrm_mir::intrinsics::AsmBlock {
-            code: vec![0xFD, 0xF3, 0xA4, 0xFC],
+            // `push ds; pop es`: both pointers are near, in DS; ES holds
+            // whatever the last far access left
+            code: vec![0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC],
             inputs: vec!["cx".into(), "si".into(), "di".into()],
             outputs: Vec::new(),
-            clobbers: vec!["cx".into(), "si".into(), "di".into()],
+            clobbers: vec!["cx".into(), "si".into(), "di".into(), "es".into()],
             memory: true,
             fixups: Vec::new(),
         };
@@ -1074,6 +1077,29 @@ impl Builder<'_> {
         pointer: SDValue,
     ) -> bool {
         self.dag.value_type(pointer) == EVT::Simple(super::super::mvt::MVT::Far)
+    }
+
+    /// `getMemcpy` with `AlwaysInline` (a byval argument's copy): the loads
+    /// and stores while they fit the store limit, then X86's
+    /// `emitConstantSizeRepmov` (`rep movs`, whatever the size or alignment),
+    /// and the loads and stores whatever their number only where `rep movs`
+    /// does not apply (a far pointer).
+    pub(super) fn always_inline_memcpy(
+        &mut self,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: u64,
+        align: u64,
+    ) -> Result<Option<SDValue>, Refused> {
+        let limit = if self.has_opt_size() { 4 } else { 8 };
+        if let Some(copy) = self.inline_memcpy(chain, dst, src, size, limit, align, align)? {
+            return Ok(Some(copy));
+        }
+        if self.is_far(dst) || self.is_far(src) {
+            return self.inline_memcpy(chain, dst, src, size, usize::MAX, align, align);
+        }
+        self.rep_movs(chain, dst, src, size, align.min(4), align, align).map(Some)
     }
 
     /// `emitRepmovs` with the block width of `emitConstantSizeRepmov`.
