@@ -13,7 +13,7 @@ pub mod visit;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use llrm_object::{Object, ObjectTarget, Unsupported};
+use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported};
 
 /// arm64's object writers.
 pub struct Arm64Objects;
@@ -29,5 +29,17 @@ impl ObjectTarget for Arm64Objects {
             "elf" => elf::write(object),
             _ => Err(Unsupported(format!("no {format} writer for {:?} yet", object.arch))),
         }
+    }
+
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo> {
+        matches!(format, "macho" | "elf").then_some(AsmInfo {
+            pref_align: false,
+            hosted: true,
+            location_ranges: true,
+            cfa_locations: true,
+        })
     }
 }

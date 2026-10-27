@@ -7,7 +7,7 @@ pub mod elf32;
 pub mod elf64;
 pub mod macho;
 
-use llrm_object::{Arch, Object, ObjectTarget, Unsupported};
+use llrm_object::{Arch, AsmInfo, Object, ObjectTarget, Unsupported};
 
 /// x86's object writers: the ELF, COFF and Mach-O tables of i386 and x86-64.
 pub struct X86Objects;
@@ -26,5 +26,19 @@ impl ObjectTarget for X86Objects {
             ("coff", Arch::X8664) => coff64::write(object),
             _ => Err(Unsupported(format!("no {format} writer for {:?} yet", object.arch))),
         }
+    }
+
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo> {
+        Some(match format {
+            "omf" => AsmInfo { pref_align: false, hosted: false, location_ranges: false, cfa_locations: false },
+            "elf" | "macho" => {
+                AsmInfo { pref_align: format == "elf", hosted: true, location_ranges: true, cfa_locations: true }
+            }
+            "coff" => AsmInfo { pref_align: false, hosted: true, location_ranges: true, cfa_locations: false },
+            _ => return None,
+        })
     }
 }

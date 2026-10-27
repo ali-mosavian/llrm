@@ -533,6 +533,12 @@ pub fn written_in(
     })
 }
 
+/// What `format` says of the code it holds, from x86's table (the formats the
+/// layout tests use).
+pub fn asm_info(format: Format) -> llrm_object::AsmInfo {
+    llrm_x86::mc::X86Objects.asm_info(format.name()).unwrap_or_default()
+}
+
 /// `object` as a file of `format`.
 pub fn serialized(
     object: &Object,
@@ -685,7 +691,7 @@ pub fn _code(
     sizes: &mut IndexMap<String, usize>,
     format: Format,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, sizes, format, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, asm_info(format).pref_align, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -698,7 +704,7 @@ pub fn _code_by(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
     sizes: &mut IndexMap<String, usize>,
-    format: Format,
+    pref_align: bool,
     listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
 ) -> Result<(), Error> {
     let regs = module.registers;
@@ -711,12 +717,10 @@ pub fn _code_by(
         let function = module.padding.function;
         let end = format!("{}$end", procedure.name);
         let aligned = function > 0 && !procedure.size;
-        match format {
-            Format::Elf if aligned => {
-                items.push(Encoded::Prefer { preferred: function, computed: 0, end: end.clone() })
-            }
-            _ if aligned => items.push(Encoded::Align(masm::CodeAlign { log2: function, max_skip: 0 })),
-            _ => {}
+        if aligned && pref_align {
+            items.push(Encoded::Prefer { preferred: function, computed: 0, end: end.clone() });
+        } else if aligned {
+            items.push(Encoded::Align(masm::CodeAlign { log2: function, max_skip: 0 }));
         }
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
         for item in listed(procedure, number).map_err(Unencodable)? {
@@ -1756,17 +1760,21 @@ mod tests {
                 ..masm::Callee::new("", false)
             })])
         };
-        let offsets = |format: Format, size: bool| {
+        let offsets_with = |pref_align: bool, size: bool| {
             let module = small(size);
             let mut segment = Segment::new("M_TEXT", Role::Text, true);
             let mut symbols = IndexMap::default();
             let mut sizes = IndexMap::default();
-            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, format, body_of).unwrap();
+            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, pref_align, body_of).unwrap();
             // `.size` is the body alone: the padding before a function is no
             // symbol's.
-            assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "{format:?}");
+            assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "pref_align {pref_align}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };
+        let offsets = |format: Format, size: bool| offsets_with(asm_info(format).pref_align, size);
+        // `.prefalign` was `Format::Elf` by name: a format that only says
+        // `pref_align` got `.p2align`.
+        assert_eq!(offsets_with(true, false), ([0, 4, 8], 4), "a format that says pref_align");
         assert_eq!(offsets(Format::Coff, false), ([0, 16, 32], 16), "p2align 4 each");
         assert_eq!(offsets(Format::Elf, false), ([0, 4, 8], 4), "prefalign: a 3-byte body fills 4");
         assert_eq!(offsets(Format::Coff, true), ([0, 3, 6], 1), "no alignment tuned for size");

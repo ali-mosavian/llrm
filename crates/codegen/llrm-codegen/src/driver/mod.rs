@@ -130,12 +130,10 @@ impl Options {
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
         use llrm_object::debug::Format;
-        match (self.object_format, self.debug_format) {
-            (_, Format::TurboDebugger) => llrm_omf::LOCATION_RANGES,
-            (_, Format::Dwarf { .. }) => llrm_debuginfo::LOCATION_RANGES,
-            ("omf", _) => llrm_omf::LOCATION_RANGES,
-            ("coff", _) => llrm_coff::LOCATION_RANGES,
-            _ => llrm_debuginfo::LOCATION_RANGES,
+        match self.debug_format {
+            Format::TurboDebugger => llrm_omf::LOCATION_RANGES,
+            Format::Dwarf { .. } => llrm_debuginfo::LOCATION_RANGES,
+            _ => self.format_info().location_ranges,
         }
     }
 
@@ -143,13 +141,19 @@ impl Options {
     /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
         use llrm_object::debug::Format;
-        match (self.object_format, self.debug_format) {
-            (_, Format::TurboDebugger) => llrm_omf::CFA_LOCATIONS,
-            (_, Format::Dwarf { .. }) => llrm_debuginfo::CFA_LOCATIONS,
-            ("omf", _) => llrm_omf::CFA_LOCATIONS,
-            ("coff", _) => llrm_coff::CFA_LOCATIONS,
-            _ => llrm_debuginfo::CFA_LOCATIONS,
+        match self.debug_format {
+            Format::TurboDebugger => llrm_omf::CFA_LOCATIONS,
+            Format::Dwarf { .. } => llrm_debuginfo::CFA_LOCATIONS,
+            _ => self.format_info().cfa_locations,
         }
+    }
+
+    /// What the object format says of the debug writer it picks by default; a
+    /// format unknown to the target is ELF's.
+    fn format_info(&self) -> llrm_object::AsmInfo {
+        use llrm_target::object::Format;
+        let format = Format::parse(self.object_format).unwrap_or(Format::Elf);
+        crate::backend::objbuild::asm_info(format)
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {

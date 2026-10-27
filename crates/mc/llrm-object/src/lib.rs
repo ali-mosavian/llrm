@@ -217,6 +217,31 @@ pub trait ObjectTarget {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported>;
+
+    /// What the target says of `format`'s assembly and debug conventions
+    /// (LLVM's `MCAsmInfo`); `None` for a format it does not write.
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo>;
+}
+
+/// What an object format says of the code it holds, so the code that lays it
+/// out names no format.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AsmInfo {
+    /// A function's preferred alignment is `.prefalign` (no more than its body
+    /// fills), not `.p2align`.
+    pub pref_align: bool,
+    /// A host's linker and C name the runtime's `B$X` as `B_X`: the object is
+    /// not DOS's.
+    pub hosted: bool,
+    /// Whether the format's own debug writer says where a value is over a range
+    /// of code.
+    pub location_ranges: bool,
+    /// Whether that writer places a frame cell from the canonical frame
+    /// address.
+    pub cfa_locations: bool,
 }
 
 /// What a writer cannot say. A writer returns it; it never writes something

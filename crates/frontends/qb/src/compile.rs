@@ -450,7 +450,7 @@ fn rich_assembled(
     // A host has no B$ENRA: every procedure frames itself (the zero fill above
     // covers what the runtime's frame would have cleared).
     let hosted = llrm_target::object::Format::parse(codegen.object_format)
-        .is_ok_and(|one| one != llrm_target::object::Format::Omf);
+        .is_ok_and(|one| llrm_codegen::backend::objbuild::asm_info(one).hosted);
     let frames = module
         .functions
         .iter()
