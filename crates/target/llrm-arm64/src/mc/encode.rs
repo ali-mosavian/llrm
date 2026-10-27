@@ -403,6 +403,11 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorFill { rd, fill } => match fill {
+            Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
+            Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
+            Fill::Gpr(source) => 0x4E01_0C00 | reg(*source)? << 5 | vreg(*rd)?,
+        },
         Inst::FpMoveImm { size, rd, imm8 } => 0x1E20_1000 | size.field() << 22 | u32::from(*imm8) << 13 | vreg(*rd)?,
         Inst::FpToFp { to, from, rd, rn } => {
             // `fcvt`: the source size is `type`, the destination's code `opc`.

@@ -346,6 +346,11 @@ impl fmt::Display for Inst {
             Inst::FpSelect { size, rd, rn, rm, cond } => {
                 write!(out, "fcsel {}, {}, {}, {cond}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
             }
+            Inst::VectorFill { rd, fill } => match fill {
+                Fill::Zero => write!(out, "movi.2d v{}, #0", rd.0),
+                Fill::Byte(byte) => write!(out, "movi.16b v{}, #{byte}", rd.0),
+                Fill::Gpr(source) => write!(out, "dup.16b v{}, {}", rd.0, gpr(*source, Width::W, false)),
+            },
             Inst::FpMoveImm { size, rd, imm8 } => {
                 write!(out, "fmov {}, #{}", fpr(*rd, *size), fp_immediate_value(*imm8))
             }

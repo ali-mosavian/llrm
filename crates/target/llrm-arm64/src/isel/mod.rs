@@ -22,6 +22,7 @@ mod fp;
 mod index;
 mod int;
 mod mem;
+mod memops;
 mod shifted;
 mod val;
 

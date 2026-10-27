@@ -12,7 +12,7 @@ use crate::mfunc::Op;
 
 /// What an access at `address` reaches, so that two accesses can be told apart later (`pairs`): the global or
 /// frame object it starts from and, where no index moves it, the byte offset in it.
-fn memory_operand(address: &AddrExpr) -> MemOperand {
+pub(super) fn memory_operand(address: &AddrExpr) -> MemOperand {
     let offset = address.index.is_none().then_some(address.offset);
     match &address.base {
         Base::Global { name, .. } => MemOperand { object: MemObject::Global(name.clone()), offset },
@@ -313,7 +313,9 @@ impl Selector<'_> {
                 let base = self.pointer_register(&AddrExpr { index: None, ..address.clone() })?;
                 Ok(Addr::Register { base, index: index.reg, extend: index.extend, shifted: index.shift != 0 })
             }
-            (Base::Global { name, got: false }, None) => {
+            // A page-offset relocation scales its offset by the access size: an offset that is not a multiple
+            // of it (`load i16, ptr getelementptr (@g, 1), align 1`) would lose its low bits.
+            (Base::Global { name, got: false }, None) if address.offset % scale == 0 => {
                 let page = self.mf.gpr();
                 self.inst(Inst::Adr {
                     page: true,

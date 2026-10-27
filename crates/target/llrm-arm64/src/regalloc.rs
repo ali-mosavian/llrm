@@ -305,6 +305,9 @@ fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             | Op::I(Inst::Store { mem: Memory::Fp { bytes: 16, reg }, .. }) => {
                 wide.insert(Reg::Fpr(*reg));
             }
+            Op::I(Inst::VectorFill { rd, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+            }
             Op::I(Inst::LoadPair { first, second, .. }) | Op::I(Inst::StorePair { first, second, .. }) => {
                 for memory in [first, second] {
                     if let Memory::Fp { bytes: 16, reg } = memory {
@@ -669,11 +672,11 @@ mod tests {
     }
 
     fn load(register: Vreg) -> Op {
-        Op::I(Inst::Load { mem: quad(register), addr: Addr::Slot { slot: 0, offset: 0 } })
+        Op::I(Inst::Load { mem: quad(register), addr: Addr::Slot { slot: 0, offset: 0 }, mmo: MemOperand::default() })
     }
 
     fn store(register: Vreg) -> Op {
-        Op::I(Inst::Store { mem: quad(register), addr: Addr::Slot { slot: 0, offset: 0 } })
+        Op::I(Inst::Store { mem: quad(register), addr: Addr::Slot { slot: 0, offset: 0 }, mmo: MemOperand::default() })
     }
 
     fn call() -> Op {
@@ -698,8 +701,20 @@ mod tests {
         allocate(&mut function);
         let ops = &function.blocks[0].ops;
         assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
-        let spills = ops.iter().filter(|op| matches!(op, Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, mem: Memory::Fp { bytes: 16, .. } }) if *slot != 0)).count();
+        let spills = ops.iter().filter(|op| matches!(op, Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, mem: Memory::Fp { bytes: 16, .. }, .. }) if *slot != 0)).count();
         assert_eq!(spills, 1, "{ops:?}");
+    }
+
+    /// A `VectorFill` made a 128-bit value that no `q` access named before its store, so it was spilled
+    /// as 8 bytes across a call: the top 64 bits were lost.
+    #[test]
+    fn a_vector_fill_across_a_call_is_spilled_whole() {
+        let fill = Op::I(Inst::VectorFill { rd: Vreg(100), fill: Fill::Zero });
+        let mut function = function(vec![fill, call(), store(Vreg(100))]);
+        function.next_register = 101;
+        allocate(&mut function);
+        let ops = &function.blocks[0].ops;
+        assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
     }
 
     /// A copy of a 128-bit value that is not coalesced was `fmov d`, which

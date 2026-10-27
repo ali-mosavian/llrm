@@ -177,6 +177,12 @@ impl Inst {
                 }
             }
             Inst::FpMoveImm { rd, .. } => f(Fpr(rd), Role::Def),
+            Inst::VectorFill { rd, fill } => {
+                f(Fpr(rd), Role::Def);
+                if let Fill::Gpr(source) = fill {
+                    f(G(source), Role::Use);
+                }
+            }
             Inst::FpInt { op, gpr, fpr, .. } | Inst::FpFixed { op, gpr, fpr, .. } => {
                 let to_fp = matches!(op, FpConvert::ToFp { .. } | FpConvert::Bits { to_fp: true });
                 if to_fp {

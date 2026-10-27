@@ -189,7 +189,8 @@ pub(crate) fn pair_of(
         && second.bytes == first.bytes
         && std::mem::discriminant(&second.mem) == std::mem::discriminant(&first.mem)
         && (second.imm == first.imm + first.bytes || second.imm == first.imm - first.bytes)
-        && (second_float, second_number) != (first_float, first_number);
+        // Two loads into one register leave the pair undefined; two stores of one register are `stp q0, q0`.
+        && (!first.load || (second_float, second_number) != (first_float, first_number));
     // A load into the base register would change the address of the other.
     let base_loaded = first.load
         && ((!second_float && second_number == first.base.0) || (!first_float && first_number == first.base.0));
@@ -326,5 +327,14 @@ mod tests {
         assert!(matches!(other[0], Inst::StorePair { .. }), "{other:?}");
         let same = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 8, "_a", 8), store_to(3, 20, 8, "_a", 8)]);
         assert!(!same.iter().any(|inst| matches!(inst, Inst::StorePair { .. })), "{same:?}");
+    }
+
+    /// Stores of one register (a fill, `stp xzr, xzr`) were never paired; loads into one register still are not.
+    #[test]
+    fn stores_of_one_register_pair_but_loads_into_one_do_not() {
+        let stores = folded(vec![store(5, 20, 0), store(5, 20, 8)]);
+        assert!(matches!(stores[0], Inst::StorePair { .. }) && stores.len() == 1, "{stores:?}");
+        let loads = folded(vec![load(5, 20, 0), load(5, 20, 8)]);
+        assert!(!loads.iter().any(|inst| matches!(inst, Inst::LoadPair { .. })), "{loads:?}");
     }
 }

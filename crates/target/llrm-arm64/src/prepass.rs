@@ -31,6 +31,7 @@ fn pure(op: &Op) -> bool {
                     | Inst::AddPageOffset { .. }
                     | Inst::Adr { .. }
                     | Inst::FpMoveImm { .. }
+                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_), .. }
                     | Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }
             ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
                 // Reading the stack pointer (stacksave, a dynamic alloca's
@@ -511,6 +512,7 @@ mod tests {
             Op::I(Inst::Store {
                 mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
                 addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
             })
         };
         function.blocks[0].ops =
