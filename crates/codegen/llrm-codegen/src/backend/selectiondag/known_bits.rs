@@ -112,12 +112,6 @@ fn walk(
             }
         }
         ISD::Select => operand(1).intersect(operand(2)),
-        // `KnownBits::byteSwap`.
-        ISD::BSwap => {
-            let inner = operand(0);
-            let swap = |bits: u128| bits.swap_bytes() >> (128 - width);
-            KnownBits { zero: swap(inner.zero), one: swap(inner.one), width }
-        }
         ISD::ZeroExtend => {
             let inner = operand(0);
             // The new high bits are zero.
