@@ -96,3 +96,33 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
     assert!(listing.matches("fstp dword").count() >= 10, "{listing}");
     assert_eq!(listing.matches("fstp qword").count(), 0, "{listing}");
 }
+
+/// clang keeps a library builtin (`memcpy`) in C's convention whatever
+/// `-fdefault-calling-conv` says, and refused its address in a pointer of the
+/// default convention: memcpy_runtime.c and memfuncs_runtime.c (6 rows) did
+/// not compile at x86_32-wat.
+#[test]
+fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-wat-bi-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.c"),
+        "extern void *memcpy(void *, const void *, unsigned long);\nstatic void *(*volatile copy)(void *, const void *, unsigned long) = memcpy;\nint f(char *d, char *s) { copy(d, s, 4); return 0; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O1", "-w", "-S", "-o"])
+        .arg(dir.join("a.s"))
+        .arg(dir.join("a.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
