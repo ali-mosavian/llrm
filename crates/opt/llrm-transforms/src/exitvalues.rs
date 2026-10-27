@@ -323,14 +323,7 @@ fn loop_size(
     function: &Function,
     l: &Loop,
 ) -> u32 {
-    l.get_blocks()
-        .iter()
-        .flat_map(|&block| function.iter_block(block))
-        .filter(|&inst| {
-            let opcode = &function.instruction(inst).opcode;
-            *opcode != Opcode::Phi && !opcode.is_terminator()
-        })
-        .count() as u32
+    l.get_blocks().iter().flat_map(|&block| function.iter_block(block)).count() as u32
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1770

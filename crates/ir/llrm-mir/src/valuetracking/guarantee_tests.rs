@@ -185,3 +185,21 @@ fn test_a_cast_walk_of_up_to_four_values_allocates_no_table() {
     assert!(seen.spilled());
     assert!(!seen.insert(value(1)) && !seen.insert(value(4)) && seen.insert(value(5)));
 }
+
+/// Old: `program_undefined_if_undef_or_poison_of` and
+/// `must_execute_ub_if_poison_on_path_to` built a hash set per call (the pin's
+/// `SmallPtrSet<_, 16>` stays in place): 5.8x the pin's cost per call on
+/// d_faces. Up to sixteen values take no table.
+#[test]
+fn test_a_poison_walk_of_up_to_sixteen_values_allocates_no_table() {
+    use crate::valuetracking::guarantee::PoisonSet;
+    let value = |at: u32| Operand::Value(crate::module::ValueId(at));
+    let mut set = PoisonSet::default();
+    for at in 0..16 {
+        assert!(set.insert(value(at)));
+        assert!(!set.spilled(), "{at}");
+    }
+    assert!(!set.insert(value(9)));
+    assert!(set.insert(value(16)) && set.spilled());
+    assert!(set.contains(&value(0)) && set.contains(&value(16)) && !set.contains(&value(17)));
+}
