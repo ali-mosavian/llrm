@@ -17,6 +17,7 @@ const SHF_EXECINSTR: u64 = 4;
 const SHF_INFO_LINK: u64 = 0x40;
 const STB_LOCAL: u8 = 0;
 const STB_GLOBAL: u8 = 1;
+const STB_WEAK: u8 = 2;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
 const STT_SECTION: u8 = 3;
@@ -228,7 +229,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
-                symbol(&mut symtab, name, offset as u64, one.size as u64, STB_GLOBAL << 4 | kind, section as u16 + 1);
+                let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
+                symbol(&mut symtab, name, offset as u64, one.size as u64, binding << 4 | kind, section as u16 + 1);
             }
             Definition::Undefined => symbol(&mut symtab, name, 0, 0, STB_GLOBAL << 4, 0),
         }
