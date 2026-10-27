@@ -77,6 +77,14 @@ fn layout(
 }
 
 impl Layout {
+    /// The bytes the first saved pair's store takes off the stack pointer
+    /// (`stp [sp, #-N]!`) where the frame is only saved registers and fits the
+    /// pair's offset (`AArch64FrameLowering`, the first CSR push).
+    fn folded_bump(&self) -> Option<i64> {
+        let first = self.saves.first().map(|(_, at)| *at).or(self.frame_record)?;
+        (first == 0 && self.size <= 512).then_some(self.size as i64)
+    }
+
     /// The register and the offset from it that address byte `offset` of frame
     /// object `slot` (or of the caller's argument area): the stack pointer, or
     /// the frame pointer where the stack pointer moves.
@@ -242,8 +250,11 @@ fn prologue(
     frame: &Layout,
     emitter: &mut Emitter,
 ) {
-    emitter.adjust_sp(-(frame.size as i64));
-    save_registers(frame, emitter, true);
+    let bump = frame.folded_bump();
+    if bump.is_none() {
+        emitter.adjust_sp(-(frame.size as i64));
+    }
+    save_registers(frame, emitter, true, bump);
     if let Some(at) = frame.frame_record {
         emitter.add_to(Gpr::FP, Gpr::R31, false, at, Gpr(16));
     }
@@ -257,8 +268,11 @@ fn epilogue(
     if let (true, Some(record)) = (frame.dynamic, frame.frame_record) {
         emitter.add_to(Gpr::R31, Gpr::FP, true, record, Gpr(16));
     }
-    save_registers(frame, emitter, false);
-    emitter.adjust_sp(frame.size as i64);
+    let bump = frame.folded_bump();
+    save_registers(frame, emitter, false, bump);
+    if bump.is_none() {
+        emitter.adjust_sp(frame.size as i64);
+    }
 }
 
 /// The stores (`store`) or loads of the saved pairs and the frame record.
@@ -266,6 +280,7 @@ fn save_registers(
     frame: &Layout,
     emitter: &mut Emitter,
     store: bool,
+    bump: Option<i64>,
 ) {
     let mut accesses: Vec<(Memory, Option<Memory>, u64, i64)> = Vec::new();
     for (save, offset) in &frame.saves {
@@ -289,8 +304,28 @@ fn save_registers(
             8,
         ));
     }
+    // The access at the lowest address also moves the stack pointer: first in
+    // the prologue (`stp [sp, #-N]!`), last in the epilogue (`ldp [sp], #N`).
+    if bump.is_some() && !store {
+        accesses.rotate_left(1);
+    }
     for (first, second, offset, _) in accesses {
-        let addr = Addr::Offset { base: Gpr::R31, imm: offset as i64 };
+        let moves = bump.filter(|_| offset == 0);
+        let addr = match moves {
+            Some(by) if store => Addr::Pre { base: Gpr::R31, imm: -by },
+            Some(by) => Addr::Post { base: Gpr::R31, imm: by },
+            None => Addr::Offset { base: Gpr::R31, imm: offset as i64 },
+        };
+        if moves.is_some() {
+            let inst = match (second, store) {
+                (Some(second), true) => Inst::StorePair { first, second, addr },
+                (Some(second), false) => Inst::LoadPair { first, second, addr },
+                (None, true) => Inst::Store { mem: first, addr },
+                (None, false) => Inst::Load { mem: first, addr },
+            };
+            emitter.insts.push(inst);
+            continue;
+        }
         // A pair reaches 504 bytes from the base; further, the address is made.
         let (base, imm) = if offset <= 504 {
             (Gpr::R31, offset as i64)

@@ -241,3 +241,14 @@ fn a_printf_whose_result_is_read_stays_and_an_empty_format_goes() {
     let asm = driver::assembly(&text, Platform::Darwin, true).expect("lowers");
     assert_eq!(asm.matches("_printf").count(), 1, "{asm}");
 }
+
+/// A frame of only saved registers took `sub sp` and a separate `stp`, and `add sp` after the
+/// last `ldp`, where the pin pre-indexes the first store and post-indexes the last load: two
+/// instructions more in every such function (`fib`: 116 against 109).
+#[test]
+fn a_frame_of_saved_registers_moves_the_stack_pointer_in_the_pair_access() {
+    let asm = driver::assembly(include_str!("darwin/fib.ll"), Platform::Darwin, true).expect("lowers");
+    let fib = asm.split("_main:").next().expect("fib first");
+    assert!(fib.contains("[sp, #-32]!") && fib.contains("[sp], #32"), "{fib}");
+    assert!(!fib.contains("sub sp") && !fib.contains("add sp"), "{fib}");
+}
