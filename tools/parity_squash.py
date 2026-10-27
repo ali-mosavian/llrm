@@ -1023,6 +1023,29 @@ def scanners_for(files: list[str]) -> tuple[str, ...]:
     return ALWAYS_SCANNERS
 
 
+def tool_tests_for(files: list[str], root: Path = ROOT) -> list[str]:
+    """The pytest files of the Python tools a diff touches: tools/x.py -> tools/test_x.py, and a changed test file itself; none for a diff outside tools/."""
+    tests = set()
+    for name in files:
+        path = Path(name)
+        if path.suffix != ".py" or path.parts[:1] != ("tools",):
+            continue
+        test = path if path.name.startswith("test_") else path.with_name(f"test_{path.name}")
+        if (root / test).is_file():
+            tests.add(str(test))
+    return sorted(tests)
+
+
+def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run) -> list[str]:
+    """The last lines of a failing pytest over `tool_tests_for(files)`; none when they pass or no tool changed. test_assemble sat red on parity for hours behind a landing that ran Rust tests only."""
+    tests = tool_tests_for(files, root)
+    if not tests:
+        return []
+    stage("tool-tests")
+    done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+    return [] if done.returncode == 0 else (done.stdout + done.stderr).strip().splitlines()[-6:]
+
+
 def landing_scanner_failures(
     files: list[str],
     tests: bool,
@@ -1921,6 +1944,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
                 failed_units.update(new)
                 blame(new)
+                return False
+            if broken_tools := tool_test_failures(git("diff", "--name-only", BASE, "HEAD").split()):
+                print(f"REFUSED: the batch fails the tests of the tools it changes: {' / '.join(broken_tools)[:300]}")
+                failed_units.add("tools tests")
                 return False
             return True
 

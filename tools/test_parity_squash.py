@@ -1788,3 +1788,25 @@ def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
     placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
     assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
 
+
+def test_a_diff_that_touches_a_tool_runs_that_tools_python_tests_and_a_red_one_refuses_the_batch(tmp_path):
+    """test_assemble.py sat red on parity for hours: landing ran Rust tests only, so a tools/ change never ran the Python tests that guard it."""
+    (tmp_path / "tools").mkdir()
+    for name in ("parity_squash.py", "test_parity_squash.py", "test_other.py", "lonely.py"):
+        (tmp_path / "tools" / name).write_text("")
+    assert ps.tool_tests_for(["tools/parity_squash.py", "tools/test_other.py", "tools/lonely.py", "docs/a.md", "crates/x.rs"], tmp_path) == ["tools/test_other.py", "tools/test_parity_squash.py"]
+    assert ps.tool_tests_for(["docs/a.md"], tmp_path) == []
+    ran = []
+
+    class Done:
+        returncode = 1
+        stdout = "FAILED tools/test_other.py::test_x\n1 failed"
+        stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done()) == ["FAILED tools/test_other.py::test_x", "1 failed"]
+    assert "tools/test_other.py" in ran[0]
+    assert ps.tool_test_failures(["docs/a.md"], tmp_path, run=lambda *a, **k: ran.append("never")) == [] and "never" not in ran
+    import inspect
+
+    assert "tool_test_failures(" in inspect.getsource(ps.merge_batch)
+
