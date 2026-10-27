@@ -414,6 +414,22 @@ fn a_double_result_travels_in_xmm0() {
     assert!(listing.lines().any(|line| line.trim().ends_with("xmm0, xmm1")), "the result is copied to xmm0\n{listing}");
 }
 
+/// A `double` returned by a call and passed straight to the return went
+/// `rax` -> `xmm0` (`mov rax, xmm0; mov xmm0, rax`): the copies around a value
+/// pinned in `xmm0` are plain moves, which named no class, so the value between
+/// them took a general register and the object writer refused it.
+#[test]
+fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare double @g(double)\n\
+                define double @f(double %a) {\n  %r = call double @g(double %a)\n  ret double %r\n}\n";
+    let (built, _) =
+        crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fno-optimize-sibling-calls"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]
