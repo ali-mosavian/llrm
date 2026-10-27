@@ -580,12 +580,13 @@ fn pushed_arguments(
 }
 
 /// DEVIATE SD228: an outgoing argument area whose call is in a later block (a
-/// select split the block between the area and the call) is made again at the call, when what
-/// lies between neither calls nor moves the stack pointer: the pushes
-/// `pushed_arguments` makes stay pushes, where `based_areas` would store each
-/// argument through a copy of SP (`sub sp, 2; mov bx, sp; mov [bx], x`, four
-/// bytes over a push in `jumps` and `range_power_digits`). The pin's scheduler
-/// keeps such a select out of the call sequence; ours does not always.
+/// select split the block between the area and the call) is made again at the
+/// call, when what lies between neither calls nor moves the stack pointer: the
+/// pushes `pushed_arguments` makes stay pushes, where `based_areas` would store
+/// each argument through a copy of SP (`sub sp, 2; mov bx, sp; mov [bx], x`,
+/// four bytes over a push in `jumps` and `range_power_digits`). The pin's
+/// scheduler keeps such a select out of the call sequence; ours does not
+/// always.
 fn sunk_areas(
     blocks: &mut [EmitBlock],
     sp: llrm_lir::registers::RegId,
