@@ -744,6 +744,7 @@ mod tests {
                 align: 2,
                 optional: false,
                 enter: false,
+                wrap_split_size: false,
                 free: false,
             },
             landing: None,
