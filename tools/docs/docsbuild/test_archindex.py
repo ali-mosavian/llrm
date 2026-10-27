@@ -5,7 +5,7 @@ from pathlib import Path
 
 from docsbuild import archindex
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def tree(tmp_path: Path, pages: dict[str, str]) -> Path:
@@ -40,7 +40,7 @@ def test_a_new_page_appears_in_the_list_without_editing_the_readme_line(tmp_path
 
 def test_the_committed_readme_is_current():
     """A page added or retitled without `build.py --sync` leaves the list stale: the check fails."""
-    assert not archindex.drift(ROOT), "run python3 tools/docsbuild/build.py --sync"
+    assert not archindex.drift(ROOT), "run python3 tools/docs/docsbuild/build.py --sync"
 
 
 def test_front_matter_holds_only_a_block_that_opens_the_file():

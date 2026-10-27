@@ -41,6 +41,9 @@ pub enum Role {
     Stack,
     /// A format's debug section, which only that format's writer makes.
     Debug,
+    /// Pointers to the functions the loader calls before `main`, in order
+    /// (`llvm.global_ctors`): `__mod_init_func`, `.init_array`.
+    InitFunctions,
 }
 
 /// The field a relocation patches, and what the value is relative to.
