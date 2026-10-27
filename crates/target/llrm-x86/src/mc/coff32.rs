@@ -2,7 +2,7 @@
 //! container is `llrm-coff`'s.
 
 use llrm_coff::{Machine, Relocation};
-use llrm_object::{Arch, Kind, Object, Unsupported};
+use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
 const DIR32: u16 = 6;
 const SECTION: u16 = 0xA;
@@ -16,15 +16,20 @@ impl Machine for I386 {
     const NUMBER: u16 = 0x14C;
     const SAFE_SEH: bool = true;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported> {
-        let (kind, width, from, baked) = match kind {
-            Kind::Abs { width: 4 } => (DIR32, 4, 0, 0),
-            Kind::PcRel { width: 4, from } => (REL32, 4, from, 4),
-            Kind::Branch { width: 4 } => (REL32, 4, 4, 4),
-            Kind::SectionIndex => (SECTION, 2, 0, 0),
-            Kind::SectionOffset { width: 4 } => (SECREL, 4, 0, 0),
-            Kind::SegmentBase => return Err(Unsupported("a segment selector has no COFF relocation".into())),
-            Kind::FarPointer => return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into())),
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
+        let from = reloc.pc_bias;
+        let (kind, width, from, baked) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_4, false) => (DIR32, 4, 0, 0),
+            (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
+            (FixupKind::BRANCH_4, true) => (REL32, 4, 4, 4),
+            (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
+            (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
+            (FixupKind::SEGMENT_BASE, _) => {
+                return Err(Unsupported("a segment selector has no COFF relocation".into()));
+            }
+            (FixupKind::FAR_POINTER, _) => {
+                return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into()));
+            }
             other => return Err(Unsupported(format!("COFF i386 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from, baked })
@@ -41,7 +46,7 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
+    use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
 
@@ -148,7 +153,7 @@ mod tests {
     /// short.
     #[test]
     fn a_call_is_rel32_with_its_addend_in_the_field() {
-        let call = Reloc { at: 1, kind: Kind::Branch { width: 4 }, target: Target::Symbol(0), addend: 0 };
+        let call = Reloc::new(1, Fix::branch(4), Target::Symbol(0), 0);
         let bytes = write(&object(
             vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3], vec![call])],
             vec![symbol("_f", Binding::Public, Definition::Undefined)],
@@ -170,7 +175,7 @@ mod tests {
     /// holds addend + 4 - from.
     #[test]
     fn a_pc_relative_field_short_of_the_instruction_end_compensates() {
-        let reloc = Reloc { at: 2, kind: Kind::PcRel { width: 4, from: 5 }, target: Target::Symbol(0), addend: 0 };
+        let reloc = Reloc::new(2, Fix::pc_rel(4, 5), Target::Symbol(0), 0);
         let bytes = write(&object(
             vec![text(vec![0x83, 0x3D, 0, 0, 0, 0, 1], vec![reloc])],
             vec![symbol("_v", Binding::Public, Definition::Undefined)],
@@ -184,7 +189,7 @@ mod tests {
     /// addend in the field and the symbol says where.
     #[test]
     fn a_local_symbol_is_a_static_and_dir32_keeps_the_addend_in_the_field() {
-        let reloc = Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 };
+        let reloc = Reloc::new(4, Fix::abs(4), Target::Symbol(0), 2);
         let bytes = write(&object(
             vec![data(vec![0; 8], vec![reloc])],
             vec![symbol("loc", Binding::Local, Definition::Defined { section: 0, offset: 4 })],
@@ -230,9 +235,7 @@ mod tests {
     #[test]
     fn more_than_65535_relocations_overflow_into_the_first_entry() {
         let total = 70_000;
-        let relocs = (0..total)
-            .map(|at| Reloc { at: at * 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 0 })
-            .collect();
+        let relocs = (0..total).map(|at| Reloc::new(at * 4, Fix::abs(4), Target::Symbol(0), 0)).collect();
         let bytes = write(&object(
             vec![data(vec![0; total * 4], relocs)],
             vec![symbol("_x", Binding::Public, Definition::Undefined)],
@@ -248,8 +251,8 @@ mod tests {
     #[test]
     fn section_and_secrel_are_two_and_four_byte_fields() {
         let relocs = vec![
-            Reloc { at: 0, kind: Kind::SectionOffset { width: 4 }, target: Target::Symbol(0), addend: 0 },
-            Reloc { at: 4, kind: Kind::SectionIndex, target: Target::Symbol(0), addend: 0 },
+            Reloc::new(0, Fix::section_offset(4), Target::Symbol(0), 0),
+            Reloc::new(4, Fix::SECTION_INDEX, Target::Symbol(0), 0),
         ];
         let bytes =
             write(&object(vec![data(vec![0; 8], relocs)], vec![symbol("_x", Binding::Public, Definition::Undefined)]))
@@ -261,16 +264,16 @@ mod tests {
     /// What COFF cannot say is refused, never written near.
     #[test]
     fn what_coff_cannot_say_is_refused() {
-        let at = |kind| {
-            let reloc = Reloc { at: 0, kind, target: Target::Symbol(0), addend: 0 };
+        let at = |fix| {
+            let reloc = Reloc::new(0, fix, Target::Symbol(0), 0);
             write(&object(
                 vec![text(vec![0; 4], vec![reloc])],
                 vec![symbol("_f", Binding::Public, Definition::Undefined)],
             ))
         };
-        assert!(at(Kind::SegmentBase).is_err());
-        assert!(at(Kind::FarPointer).is_err());
-        assert!(at(Kind::Abs { width: 2 }).is_err());
+        assert!(at(Fix::SEGMENT_BASE).is_err());
+        assert!(at(Fix::FAR_POINTER).is_err());
+        assert!(at(Fix::abs(2)).is_err());
         assert!(
             write(&object(vec![Section { near: false, ..data(vec![0], vec![]) }], vec![]))
                 .unwrap_err()
@@ -311,8 +314,8 @@ mod tests {
             return;
         };
         let code = vec![0xE8, 0, 0, 0, 0, 0xC3, 0x90, 0x90, 0xC3];
-        let call = Reloc { at: 1, kind: Kind::Branch { width: 4 }, target: Target::Symbol(1), addend: 0 };
-        let slot = Reloc { at: 0, kind: Kind::Abs { width: 4 }, target: Target::Symbol(1), addend: 0 };
+        let call = Reloc::new(1, Fix::branch(4), Target::Symbol(1), 0);
+        let slot = Reloc::new(0, Fix::abs(4), Target::Symbol(1), 0);
         let made = object(
             vec![text(code, vec![call]), data(vec![0; 4], vec![slot])],
             vec![

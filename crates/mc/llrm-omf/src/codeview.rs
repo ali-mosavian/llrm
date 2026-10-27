@@ -3,7 +3,7 @@
 //! CodeView 4 as `cvwrite` writes it cannot say is refused with what it was.
 
 use llrm_object::debug::{self as model, Info, Location};
-use llrm_object::{Definition, Kind as Fixup, Object, Reloc, Role, Section, Target};
+use llrm_object::{Definition, Fix, Object, Reloc, Role, Section, Target};
 
 use crate::cvwrite::{self, Flavor, Reach, Scalar, Type};
 use crate::write::Error;
@@ -242,12 +242,12 @@ pub fn sections(
         // The image holds zeros where LINK fills in, the displacement is the
         // addend.
         image[one.at..one.at + 2].fill(0);
-        relocs.push(Reloc {
-            at: one.at,
-            kind: if one.far { Fixup::FarPointer } else { Fixup::Abs { width: 2 } },
-            target: Target::Symbol(symbol),
-            addend: i64::from(one.displacement as i16),
-        });
+        relocs.push(Reloc::new(
+            one.at,
+            if one.far { Fix::FAR_POINTER } else { Fix::abs(2) },
+            Target::Symbol(symbol),
+            i64::from(one.displacement as i16),
+        ));
     }
     let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| {
         let spans = if image.is_empty() { Vec::new() } else { vec![[0, image.len()]] };

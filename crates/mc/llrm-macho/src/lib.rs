@@ -12,7 +12,7 @@
 //! one atom, so a call between two functions of it may be resolved where it is
 //! written.
 
-use llrm_object::{Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const MH_OBJECT: u32 = 1;
@@ -124,7 +124,7 @@ pub trait MachTargetWriter {
 
     fn relocation(
         &self,
-        kind: Kind,
+        reloc: &Reloc,
     ) -> Result<Described, Unsupported>;
 }
 
@@ -226,8 +226,8 @@ pub fn write<W: MachTargetWriter>(
         let mut image = section.image.clone();
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
-            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one.kind)?;
-            let width = one.kind.width();
+            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
+            let width = one.width();
             // A section's start is a local symbol at offset 0 of it.
             let (target, home) = match one.target {
                 Target::Symbol(target) => (Some(target), None),

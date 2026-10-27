@@ -4,7 +4,7 @@
 //! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
 //! `mc::elf` are the machines.
 
-use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Arch, Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -43,7 +43,7 @@ pub trait Machine {
     /// Relocations carry their addend (RELA); else it is in the field (REL).
     const ADDEND: bool;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported>;
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -237,7 +237,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from } = M::relocation(one.kind)?;
+            let Relocation { kind, width, from } = M::relocation(one)?;
             let (symbol, own) = match one.target {
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
                 // The section's own symbol.
@@ -251,7 +251,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             };
             // S + A - P, where the model's value is S + addend - (at + from).
             let addend = one.addend + own - from as i64;
-            if !fits(addend, width, one.kind.relative()) {
+            if !fits(addend, width, one.pc_rel) {
                 return Err(unsupported(format!(
                     "{}: an addend of {addend} does not fit its {width}-byte field",
                     section.name

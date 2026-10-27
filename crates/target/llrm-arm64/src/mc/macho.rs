@@ -8,7 +8,7 @@
 //! `llrm_macho::write(&object, &Arm64MachO)`.
 
 use llrm_macho::{Described, MachTargetWriter};
-use llrm_object::{Kind, Unsupported};
+use llrm_object::{Fix, FixupKind, Reloc, Unsupported};
 
 const CPU_TYPE_ARM64: u32 = 0x0100_000C;
 const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
@@ -32,16 +32,17 @@ impl MachTargetWriter for Arm64MachO {
 
     fn relocation(
         &self,
-        kind: Kind,
+        reloc: &Reloc,
     ) -> Result<Described, Unsupported> {
-        let (kind, length, pcrel, addend_in_field) = match kind {
-            Kind::Abs { width: 8 } => (ARM64_RELOC_UNSIGNED, 3, false, true),
-            Kind::Abs { width: 4 } => (ARM64_RELOC_UNSIGNED, 2, false, true),
-            Kind::Branch26 => (ARM64_RELOC_BRANCH26, 2, true, false),
-            Kind::Page21 => (ARM64_RELOC_PAGE21, 2, true, false),
-            Kind::PageOffset12 { .. } => (ARM64_RELOC_PAGEOFF12, 2, false, false),
-            Kind::GotPage21 => (ARM64_RELOC_GOT_LOAD_PAGE21, 2, true, false),
-            Kind::GotPageOffset12 => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
+        let got = reloc.spec == Fix::S_GOT;
+        let (kind, length, pcrel, addend_in_field) = match (reloc.kind, reloc.pc_rel, got) {
+            (FixupKind::DATA_8, false, _) => (ARM64_RELOC_UNSIGNED, 3, false, true),
+            (FixupKind::DATA_4, false, _) => (ARM64_RELOC_UNSIGNED, 2, false, true),
+            (FixupKind::BRANCH26, _, _) => (ARM64_RELOC_BRANCH26, 2, true, false),
+            (FixupKind::PAGE21, _, false) => (ARM64_RELOC_PAGE21, 2, true, false),
+            (kind, _, false) if kind.is_page_offset12() => (ARM64_RELOC_PAGEOFF12, 2, false, false),
+            (FixupKind::PAGE21, _, true) => (ARM64_RELOC_GOT_LOAD_PAGE21, 2, true, false),
+            (FixupKind::LDST_IMM12_SCALE8, _, true) => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
             other => return Err(Unsupported(format!("Mach-O arm64 has no relocation for {other:?}"))),
         };
         Ok(Described { kind, length, pcrel, beyond: 0, addend_in_field })

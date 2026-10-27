@@ -3,7 +3,7 @@
 //! `llrm-elf`'s.
 
 use llrm_elf::{Machine, Relocation};
-use llrm_object::{Arch, Kind, Object, Unsupported};
+use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
 const R_X86_64_64: u32 = 1;
 const R_X86_64_PC32: u32 = 2;
@@ -24,22 +24,23 @@ impl Machine for X8664 {
     const NUMBER: u16 = 62;
     const ADDEND: bool = true;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported> {
-        let (kind, width, from) = match kind {
-            Kind::Abs { width: 8 } => (R_X86_64_64, 8, 0),
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
+        let from = reloc.pc_bias;
+        let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_8, false) => (R_X86_64_64, 8, 0),
             // Zero-extended: a signed 32-bit absolute address has its own type,
             // which no encoder asks for yet.
-            Kind::Abs { width: 4 } => (R_X86_64_32, 4, 0),
-            Kind::Abs { width: 2 } => (R_X86_64_16, 2, 0),
-            Kind::Abs { width: 1 } => (R_X86_64_8, 1, 0),
-            Kind::PcRel { width: 8, from } => (R_X86_64_PC64, 8, from),
-            Kind::PcRel { width: 4, from } => (R_X86_64_PC32, 4, from),
-            Kind::Branch { width: 4 } => (R_X86_64_PLT32, 4, 4),
-            Kind::GotPcRel { width: 4, from } => (R_X86_64_REX_GOTPCRELX, 4, from),
-            Kind::PcRel { width: 2, from } => (R_X86_64_PC16, 2, from),
-            Kind::PcRel { width: 1, from } => (R_X86_64_PC8, 1, from),
-            Kind::SegmentBase => return Err(Unsupported("a segment selector has no ELF relocation".into())),
-            Kind::FarPointer => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
+            (FixupKind::DATA_4, false) => (R_X86_64_32, 4, 0),
+            (FixupKind::DATA_2, false) => (R_X86_64_16, 2, 0),
+            (FixupKind::DATA_1, false) => (R_X86_64_8, 1, 0),
+            (FixupKind::DATA_8, true) => (R_X86_64_PC64, 8, from),
+            (FixupKind::DATA_4, true) => (R_X86_64_PC32, 4, from),
+            (FixupKind::BRANCH_4, true) => (R_X86_64_PLT32, 4, 4),
+            (FixupKind::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4, from),
+            (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2, from),
+            (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1, from),
+            (FixupKind::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
+            (FixupKind::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF x86-64 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from })
@@ -56,7 +57,7 @@ mod tests {
     use std::process::Command;
 
     use llrm_object::ObjectTarget;
-    use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
+    use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
 
@@ -90,7 +91,7 @@ mod tests {
     /// against a local symbol) and writes what it points at (R_X86_64_64
     /// with an addend), then exits: GNU ld links it, and it runs.
     fn hello() -> Object {
-        let load = Reloc { at: 3, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(2), addend: 0 };
+        let load = Reloc::new(3, Fix::pc_rel(4, 4), Target::Symbol(2), 0);
         let text = [
             vec![0x48, 0x8B, 0x35, 0, 0, 0, 0], // mov ptr(%rip), %rsi
             vec![0xBF, 1, 0, 0, 0],             // mov $1, %edi
@@ -102,7 +103,7 @@ mod tests {
             vec![0x0F, 0x05],                   // syscall
         ]
         .concat();
-        let pointer = Reloc { at: 0, kind: Kind::Abs { width: 8 }, target: Target::Symbol(1), addend: 1 };
+        let pointer = Reloc::new(0, Fix::abs(8), Target::Symbol(1), 1);
         Object {
             name: "hello.s".into(),
             arch: Arch::X8664,
@@ -204,8 +205,8 @@ mod tests {
         ]
         .concat();
         let relocs = vec![
-            Reloc { at: 7, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(1), addend: 0 },
-            Reloc { at: 12, kind: Kind::Branch { width: 4 }, target: Target::Symbol(2), addend: 0 },
+            Reloc::new(7, Fix::pc_rel(4, 4), Target::Symbol(1), 0),
+            Reloc::new(12, Fix::branch(4), Target::Symbol(2), 0),
         ];
         let object = Object {
             name: "puts.s".into(),
@@ -242,7 +243,7 @@ mod tests {
     #[test]
     fn a_segment_selector_is_refused() {
         let mut made = hello();
-        made.sections[0].relocs[0].kind = Kind::SegmentBase;
+        made.sections[0].relocs[0].kind = FixupKind::SEGMENT_BASE;
         assert!(write(&made).is_err());
     }
 

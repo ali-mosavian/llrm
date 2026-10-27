@@ -63,7 +63,7 @@ use std::fmt;
 
 use llrm_lir::registers::Regs;
 use llrm_object::{
-    Arch, Binding, Definition, Kind, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target,
+    Arch, Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target,
 };
 use llrm_target::object::{CodeModel, Format};
 
@@ -76,15 +76,15 @@ use crate::support::pyrepr::{self, Repr};
 
 /// How an address is relocated: a near offset, a segment's selector, a far
 /// pointer.
-pub const OFFSET: Kind = Kind::Abs { width: 2 };
-pub const BASE: Kind = Kind::SegmentBase;
-pub const POINTER: Kind = Kind::FarPointer;
-pub const OFFSET32: Kind = Kind::Abs { width: 4 };
-pub const OFFSET64: Kind = Kind::Abs { width: 8 };
+pub const OFFSET: Fix = Fix::abs(2);
+pub const BASE: Fix = Fix::SEGMENT_BASE;
+pub const POINTER: Fix = Fix::FAR_POINTER;
+pub const OFFSET32: Fix = Fix::abs(4);
+pub const OFFSET64: Fix = Fix::abs(8);
 
 /// A call's field: relative to its own end.
-fn relative(width: usize) -> Kind {
-    Kind::Branch { width }
+fn relative(width: usize) -> Fix {
+    Fix::branch(width)
 }
 
 /// The role of a data segment `name` that the object's classes name, and that
@@ -198,14 +198,14 @@ impl From<omf::ValueError> for Error {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fixup {
     pub at: usize,
-    pub kind: Kind,
+    pub kind: Fix,
     pub name: String,
 }
 
 impl Fixup {
     pub fn new(
         at: usize,
-        kind: Kind,
+        kind: Fix,
         name: impl Into<String>,
     ) -> Self {
         Self { at, kind, name: name.into() }
@@ -371,12 +371,12 @@ pub fn pack_into(
 fn pack_field(
     buffer: &mut [u8],
     at: usize,
-    kind: Kind,
+    kind: Fix,
     value: i64,
 ) {
-    if kind.width() == 8 {
+    if kind.kind.width() == 8 {
         buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
-    } else if kind.width() == 4 && kind != POINTER {
+    } else if kind.kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
         pack_into(buffer, at, i64::from(value as u16));
@@ -388,11 +388,11 @@ fn pack_field(
 fn field(
     buffer: &[u8],
     at: usize,
-    kind: Kind,
+    kind: Fix,
 ) -> i64 {
-    if kind.width() == 8 {
+    if kind.kind.width() == 8 {
         i64::from_le_bytes(buffer[at..at + 8].try_into().expect("eight bytes"))
-    } else if kind.width() == 4 && kind != POINTER {
+    } else if kind.kind.width() == 4 && kind != POINTER {
         i64::from(i32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
     } else {
         i64::from(i16::from_le_bytes([buffer[at], buffer[at + 1]]))
@@ -661,9 +661,14 @@ pub fn _data(
                         CodeModel::Segmented16 => OFFSET,
                     }
                 };
-                assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {}-bit object", model.bits());
-                segment.put(&vec![0; loc.width()], &[Fixup::new(0, loc, name.clone())]);
-                let at = segment.image.len() - loc.width();
+                assert_eq!(
+                    loc.kind.width(),
+                    *bytes as usize,
+                    "a {bytes}-byte pointer in a {}-bit object",
+                    model.bits()
+                );
+                segment.put(&vec![0; loc.kind.width()], &[Fixup::new(0, loc, name.clone())]);
+                let at = segment.image.len() - loc.kind.width();
                 if loc == OFFSET64 {
                     pack_field(&mut segment.image, at, loc, *offset);
                 } else {
@@ -912,9 +917,9 @@ pub fn _encoded(
         let loc = if model == CodeModel::Flat64 {
             let from = code.len() - at;
             if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
-                Kind::GotPcRel { width: 4, from }
+                Fix::got_pc_rel(from)
             } else {
-                Kind::PcRel { width: 4, from }
+                Fix::pc_rel(4, from)
             }
         } else {
             loc
@@ -1236,11 +1241,11 @@ pub fn object_of(
             let target = _target(&one.name);
             let target = if target == "DGROUP" { Target::OmfGroup(0) } else { Target::Symbol(index[target]) };
             let addend = if one.kind == BASE { 0 } else { field(&image, one.at, one.kind) };
-            relocs.push(Reloc { at: one.at, kind: one.kind, target, addend });
+            relocs.push(Reloc::new(one.at, one.kind, target, addend));
         }
         for one in &relocs {
-            if one.kind != BASE {
-                pack_field(&mut image, one.at, one.kind, 0);
+            if one.fix() != BASE {
+                pack_field(&mut image, one.at, one.fix(), 0);
             }
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });

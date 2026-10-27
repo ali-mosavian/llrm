@@ -3,7 +3,7 @@
 //! `llrm-elf`'s.
 
 use llrm_elf::{Machine, Relocation};
-use llrm_object::{Arch, Kind, Object, Unsupported};
+use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
 const R_386_32: u32 = 1;
 const R_386_PC32: u32 = 2;
@@ -21,18 +21,19 @@ impl Machine for I386 {
     const NUMBER: u16 = 3;
     const ADDEND: bool = false;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported> {
-        let (kind, width, from) = match kind {
-            Kind::Abs { width: 4 } => (R_386_32, 4, 0),
-            Kind::Abs { width: 2 } => (R_386_16, 2, 0),
-            Kind::Abs { width: 1 } => (R_386_8, 1, 0),
-            Kind::PcRel { width: 4, from } => (R_386_PC32, 4, from),
-            Kind::Branch { width: 4 } => (R_386_PLT32, 4, 4),
-            Kind::Branch { width: 2 } => (R_386_PC16, 2, 2),
-            Kind::PcRel { width: 2, from } => (R_386_PC16, 2, from),
-            Kind::PcRel { width: 1, from } => (R_386_PC8, 1, from),
-            Kind::SegmentBase => return Err(Unsupported("a segment selector has no ELF relocation".into())),
-            Kind::FarPointer => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
+        let from = reloc.pc_bias;
+        let (kind, width, from) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_4, false) => (R_386_32, 4, 0),
+            (FixupKind::DATA_2, false) => (R_386_16, 2, 0),
+            (FixupKind::DATA_1, false) => (R_386_8, 1, 0),
+            (FixupKind::DATA_4, true) => (R_386_PC32, 4, from),
+            (FixupKind::BRANCH_4, true) => (R_386_PLT32, 4, 4),
+            (FixupKind::BRANCH_2, true) => (R_386_PC16, 2, 2),
+            (FixupKind::DATA_2, true) => (R_386_PC16, 2, from),
+            (FixupKind::DATA_1, true) => (R_386_PC8, 1, from),
+            (FixupKind::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
+            (FixupKind::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF i386 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from })
@@ -47,7 +48,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 #[cfg(test)]
 mod tests {
     use llrm_object::ObjectTarget;
-    use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
+    use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
 
@@ -144,7 +145,7 @@ mod tests {
     /// first global.
     #[test]
     fn a_call_is_r_386_pc32_with_minus_four_in_the_field() {
-        let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: 0 };
+        let call = Reloc::new(1, Fix::pc_rel(4, 4), Target::Symbol(0), 0);
         let made = object(
             vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3], vec![call])],
             vec![symbol("f", Binding::Public, Definition::Undefined)],
@@ -169,7 +170,7 @@ mod tests {
             align: 4,
             image: vec![0; 8],
             spans: vec![[0, 8]],
-            relocs: vec![Reloc { at: 4, kind: Kind::Abs { width: 4 }, target: Target::Symbol(0), addend: 2 }],
+            relocs: vec![Reloc::new(4, Fix::abs(4), Target::Symbol(0), 2)],
         };
         let made =
             object(vec![data], vec![symbol("loc", Binding::Local, Definition::Defined { section: 0, offset: 4 })]);
@@ -203,15 +204,15 @@ mod tests {
     /// What ELF cannot say is refused, never written near.
     #[test]
     fn what_elf_cannot_say_is_refused() {
-        let at = |kind| {
-            let reloc = Reloc { at: 0, kind, target: Target::Symbol(0), addend: 0 };
+        let at = |fix| {
+            let reloc = Reloc::new(0, fix, Target::Symbol(0), 0);
             write(&object(
                 vec![text(vec![0; 4], vec![reloc])],
                 vec![symbol("f", Binding::Public, Definition::Undefined)],
             ))
         };
-        assert!(at(Kind::SegmentBase).is_err());
-        assert!(at(Kind::FarPointer).is_err());
+        assert!(at(Fix::SEGMENT_BASE).is_err());
+        assert!(at(Fix::FAR_POINTER).is_err());
         let far = Section { near: false, role: Role::Data, ..text(vec![0], vec![]) };
         assert!(write(&object(vec![far], vec![])).unwrap_err().0.contains("selector"));
         let stack = Section { role: Role::Stack, ..text(vec![0], vec![]) };

@@ -5,7 +5,7 @@ use std::process::Command;
 
 use llrm_macho::{MachTargetWriter, write as write_with};
 use llrm_object::{Arch, ObjectTarget};
-use llrm_object::{Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Fix, Object, Role, Section, Target, Unsupported};
 use llrm_object::{Reloc, Symbol};
 
 /// `llrm_macho::write` with the writer of the object's architecture; any other
@@ -32,13 +32,13 @@ impl MachTargetWriter for Made {
 
     fn relocation(
         &self,
-        kind: Kind,
+        reloc: &Reloc,
     ) -> Result<llrm_macho::Described, Unsupported> {
-        match kind {
-            Kind::Abs { width: 8 } => {
+        match (reloc.fix(), reloc.pc_rel) {
+            (fix, _) if fix == Fix::abs(8) => {
                 Ok(llrm_macho::Described { kind: 0, length: 3, pcrel: false, beyond: 0, addend_in_field: true })
             }
-            other => Err(Unsupported(format!("{other:?}"))),
+            (other, _) => Err(Unsupported(format!("{other:?}"))),
         }
     }
 }
@@ -90,11 +90,11 @@ fn external(name: &str) -> Symbol {
 
 fn reloc(
     at: usize,
-    kind: Kind,
+    fix: Fix,
     target: usize,
     addend: i64,
 ) -> Reloc {
-    Reloc { at, kind, target: Target::Symbol(target), addend }
+    Reloc::new(at, fix, Target::Symbol(target), addend)
 }
 
 /// The program `REFERENCE` assembles: a call, a `lea`, a `movb $1,
@@ -106,10 +106,10 @@ fn program() -> Object {
         0xC3,
     ];
     let relocs = vec![
-        reloc(1, Kind::Branch { width: 4 }, 3, 0),
-        reloc(8, Kind::PcRel { width: 4, from: 4 }, 1, 0),
-        reloc(14, Kind::PcRel { width: 4, from: 5 }, 4, 0),
-        reloc(22, Kind::PcRel { width: 4, from: 4 }, 2, 0),
+        reloc(1, Fix::branch(4), 3, 0),
+        reloc(8, Fix::pc_rel(4, 4), 1, 0),
+        reloc(14, Fix::pc_rel(4, 5), 4, 0),
+        reloc(22, Fix::pc_rel(4, 4), 2, 0),
     ];
     Object {
         name: "ref.s".into(),
@@ -118,7 +118,7 @@ fn program() -> Object {
             section("text", Role::Text, text, relocs),
             section("const", Role::ROData, b"hello\n".to_vec(), vec![]),
             {
-                let mut data = section("data", Role::Data, vec![0; 9], vec![reloc(0, Kind::Abs { width: 8 }, 1, 1)]);
+                let mut data = section("data", Role::Data, vec![0; 9], vec![reloc(0, Fix::abs(8), 1, 1)]);
                 data.image[8] = 0;
                 data
             },
@@ -264,15 +264,15 @@ fn arm64_program() -> Object {
     ];
     let text: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
     let relocs = vec![
-        reloc(0, Kind::Branch26, 2, 0),
-        reloc(4, Kind::Page21, 1, 0),
-        reloc(8, Kind::PageOffset12 { access: None }, 1, 0),
-        reloc(12, Kind::Page21, 3, 0),
-        reloc(16, Kind::PageOffset12 { access: Some(2) }, 3, 0),
-        reloc(20, Kind::GotPage21, 4, 0),
-        reloc(24, Kind::GotPageOffset12, 4, 0),
-        reloc(28, Kind::Branch26, 2, 8),
-        reloc(32, Kind::Page21, 3, 16),
+        reloc(0, Fix::BRANCH26, 2, 0),
+        reloc(4, Fix::PAGE21, 1, 0),
+        reloc(8, Fix::page_offset12(None), 1, 0),
+        reloc(12, Fix::PAGE21, 3, 0),
+        reloc(16, Fix::page_offset12(Some(2)), 3, 0),
+        reloc(20, Fix::GOT_PAGE21, 4, 0),
+        reloc(24, Fix::GOT_PAGE_OFFSET12, 4, 0),
+        reloc(28, Fix::BRANCH26, 2, 8),
+        reloc(32, Fix::PAGE21, 3, 16),
     ];
     let mut data = vec![7, 0, 0, 0];
     data.extend([0; 8]);
@@ -285,7 +285,7 @@ fn arm64_program() -> Object {
         sections: vec![
             text,
             section("const", Role::ROData, b"hi\0".to_vec(), vec![]),
-            section("data", Role::Data, data, vec![reloc(4, Kind::Abs { width: 8 }, 3, 0)]),
+            section("data", Role::Data, data, vec![reloc(4, Fix::abs(8), 3, 0)]),
         ],
         symbols: vec![
             defined("_main", 0, 0),
@@ -367,12 +367,7 @@ fn ld64_links_it_with_a_clang_object() {
         name: "m.s".into(),
         arch: Arch::X8664,
         sections: vec![
-            section(
-                "text",
-                Role::Text,
-                text,
-                vec![reloc(1, Kind::Branch { width: 4 }, 1, 0), reloc(8, Kind::PcRel { width: 4, from: 4 }, 2, 0)],
-            ),
+            section("text", Role::Text, text, vec![reloc(1, Fix::branch(4), 1, 0), reloc(8, Fix::pc_rel(4, 4), 2, 0)]),
             section("data", Role::Data, vec![7, 0, 0, 0], vec![]),
         ],
         symbols: vec![
@@ -441,7 +436,7 @@ fn a_pc_relative_field_must_fit_a_signed_word() {
 #[test]
 fn a_constant_with_relocations_is_in_data_const() {
     let mut made = program();
-    made.sections[1] = section("const", Role::ROData, vec![0; 8], vec![reloc(0, Kind::Abs { width: 8 }, 0, 0)]);
+    made.sections[1] = section("const", Role::ROData, vec![0; 8], vec![reloc(0, Fix::abs(8), 0, 0)]);
     let bytes = write(&made).unwrap();
     let text = String::from_utf8_lossy(&bytes);
     assert!(
@@ -455,14 +450,15 @@ fn a_constant_with_relocations_is_in_data_const() {
 /// What Mach-O cannot say is refused, never written near.
 #[test]
 fn what_mach_o_cannot_say_is_refused() {
-    let with = |kind| {
+    let with = |fix| {
         let mut made = program();
-        made.sections[0].relocs[0].kind = kind;
+        let at = made.sections[0].relocs[0].at;
+        made.sections[0].relocs[0] = Reloc::new(at, fix, Target::Symbol(3), 0);
         write(&made)
     };
-    assert!(with(Kind::SegmentBase).is_err());
-    assert!(with(Kind::FarPointer).is_err());
-    assert!(with(Kind::PcRel { width: 4, from: 7 }).is_err());
+    assert!(with(Fix::SEGMENT_BASE).is_err());
+    assert!(with(Fix::FAR_POINTER).is_err());
+    assert!(with(Fix::pc_rel(4, 7)).is_err());
     let mut far = program();
     far.sections[1].near = false;
     assert!(write(&far).unwrap_err().0.contains("selector"));

@@ -2,7 +2,7 @@
 //! container is `llrm-coff`'s.
 
 use llrm_coff::{Machine, Relocation};
-use llrm_object::{Arch, Kind, Object, Unsupported};
+use llrm_object::{Arch, FixupKind, Object, Reloc, Unsupported};
 
 const ADDR64: u16 = 1;
 const ADDR32: u16 = 2;
@@ -16,19 +16,24 @@ impl Machine for X8664 {
     const ARCH: Arch = Arch::X8664;
     const NUMBER: u16 = 0x8664;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported> {
-        let (kind, width, from, baked) = match kind {
-            Kind::Abs { width: 8 } => (ADDR64, 8, 0, 0),
-            Kind::Abs { width: 4 } => (ADDR32, 4, 0, 0),
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
+        let from = reloc.pc_bias;
+        let (kind, width, from, baked) = match (reloc.kind, reloc.pc_rel) {
+            (FixupKind::DATA_8, false) => (ADDR64, 8, 0, 0),
+            (FixupKind::DATA_4, false) => (ADDR32, 4, 0, 0),
             // REL32_n (types 5 to 9) is relative to the place n bytes past the
             // field's end.
-            Kind::PcRel { width: 4, from } if (4..=9).contains(&from) => (REL32 + (from - 4) as u16, 4, from, from),
-            Kind::PcRel { width: 4, from } => (REL32, 4, from, 4),
-            Kind::Branch { width: 4 } => (REL32, 4, 4, 4),
-            Kind::SectionIndex => (SECTION, 2, 0, 0),
-            Kind::SectionOffset { width: 4 } => (SECREL, 4, 0, 0),
-            Kind::SegmentBase => return Err(Unsupported("a segment selector has no COFF relocation".into())),
-            Kind::FarPointer => return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into())),
+            (FixupKind::DATA_4, true) if (4..=9).contains(&from) => (REL32 + (from - 4) as u16, 4, from, from),
+            (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
+            (FixupKind::BRANCH_4, true) => (REL32, 4, 4, 4),
+            (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
+            (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
+            (FixupKind::SEGMENT_BASE, _) => {
+                return Err(Unsupported("a segment selector has no COFF relocation".into()));
+            }
+            (FixupKind::FAR_POINTER, _) => {
+                return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into()));
+            }
             other => return Err(Unsupported(format!("COFF x86-64 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from, baked })
@@ -45,7 +50,7 @@ mod tests {
     use std::process::Command;
 
     use llrm_object::ObjectTarget;
-    use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
+    use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
 
@@ -88,7 +93,7 @@ mod tests {
     /// (type, field) of the one relocation of `.text`, for a pc-relative field
     /// `from` bytes short of the place.
     fn rel(from: usize) -> (u16, i32) {
-        let reloc = Reloc { at: 2, kind: Kind::PcRel { width: 4, from }, target: Target::Symbol(0), addend: 0 };
+        let reloc = Reloc::new(2, Fix::pc_rel(4, from), Target::Symbol(0), 0);
         let bytes =
             write(&object(vec![text(vec![0x83, 0x3D, 0, 0, 0, 0, 1], vec![reloc])], vec![defined("v", 0)])).unwrap();
         let (raw, relocs) = (
@@ -121,7 +126,7 @@ mod tests {
             eprintln!("skipped: needs lld-link and llvm-objdump");
             return;
         };
-        let call = Reloc { at: 1, kind: Kind::Branch { width: 4 }, target: Target::Symbol(1), addend: 0 };
+        let call = Reloc::new(1, Fix::branch(4), Target::Symbol(1), 0);
         let made = object(
             vec![text(vec![0xE8, 0, 0, 0, 0, 0xC3, 0x90, 0x90, 0xC3], vec![call])],
             vec![defined("start", 0), defined("f", 8)],

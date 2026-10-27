@@ -8,7 +8,7 @@
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 
 use llrm_object::debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
-use llrm_object::{Binding, Kind as Fixup, Object, Reloc, Role, Section, Target};
+use llrm_object::{Binding, Fix, Object, Reloc, Role, Section, Target};
 use llrm_support::leaf::{numeric, pad};
 
 use crate::codeview::{SYMBOLS, TYPES};
@@ -551,10 +551,10 @@ impl Symbols<'_> {
         addend: i64,
     ) {
         if self.wide {
-            self.relocs.push(Reloc { at, kind: Fixup::Abs { width: 4 }, target, addend });
-            self.relocs.push(Reloc { at: at + 4, kind: Fixup::SegmentBase, target, addend: 0 });
+            self.relocs.push(Reloc::new(at, Fix::abs(4), target, addend));
+            self.relocs.push(Reloc::new(at + 4, Fix::SEGMENT_BASE, target, 0));
         } else {
-            self.relocs.push(Reloc { at, kind: Fixup::FarPointer, target, addend: i64::from(addend as i16) });
+            self.relocs.push(Reloc::new(at, Fix::FAR_POINTER, target, i64::from(addend as i16)));
         }
     }
 

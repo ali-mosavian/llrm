@@ -4,7 +4,7 @@
 //! fill its offset and its section.
 
 use llrm_object::debug::{ChecksumKind, Function, Info, Kind, Location, Range, Type, Variable};
-use llrm_object::{Binding, Definition, Kind as Fixup, Object, Reloc, Target, Unsupported};
+use llrm_object::{Binding, Definition, Fix, Object, Reloc, Target, Unsupported};
 
 use super::types::Types;
 use super::{Registers, SIGNATURE, Section, machine, name, put16, put32, record, refused};
@@ -48,12 +48,7 @@ impl Data {
         symbol: usize,
         addend: i64,
     ) {
-        self.relocs.push(Reloc {
-            at: self.bytes.len(),
-            kind: Fixup::SectionOffset { width: 4 },
-            target: Target::Symbol(symbol),
-            addend,
-        });
+        self.relocs.push(Reloc::new(self.bytes.len(), Fix::section_offset(4), Target::Symbol(symbol), addend));
         put32(&mut self.bytes, 0);
     }
 
@@ -61,12 +56,7 @@ impl Data {
         &mut self,
         symbol: usize,
     ) {
-        self.relocs.push(Reloc {
-            at: self.bytes.len(),
-            kind: Fixup::SectionIndex,
-            target: Target::Symbol(symbol),
-            addend: 0,
-        });
+        self.relocs.push(Reloc::new(self.bytes.len(), Fix::SECTION_INDEX, Target::Symbol(symbol), 0));
         put16(&mut self.bytes, 0);
     }
 

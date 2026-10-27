@@ -3,7 +3,7 @@
 //! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
 //! machines.
 
-use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Arch, Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported};
 
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
@@ -41,7 +41,7 @@ pub trait Machine {
     /// so; x86-64 has no such table.
     const SAFE_SEH: bool = false;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported>;
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -226,15 +226,15 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from, baked } = M::relocation(one.kind)?;
+            let Relocation { kind, width, from, baked } = M::relocation(one)?;
             let Target::Symbol(target) = one.target else { return Err(unsupported("a reference to a group is OMF's")) };
             // The linker adds S + field (- P - baked, if relative); the model
             // wants S + addend - (at + from).
-            let field = if one.kind.relative() { one.addend - (from as i64 - baked as i64) } else { one.addend };
+            let field = if one.pc_rel { one.addend - (from as i64 - baked as i64) } else { one.addend };
             let fits = match width {
                 8 => true,
-                4 => i32::try_from(field).is_ok() || (!one.kind.relative() && u32::try_from(field).is_ok()),
-                _ => i16::try_from(field).is_ok() || (!one.kind.relative() && u16::try_from(field).is_ok()),
+                4 => i32::try_from(field).is_ok() || (!one.pc_rel && u32::try_from(field).is_ok()),
+                _ => i16::try_from(field).is_ok() || (!one.pc_rel && u16::try_from(field).is_ok()),
             };
             if !fits {
                 return Err(unsupported(format!(

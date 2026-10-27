@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_object::{Definition, Kind, Object, Role, Section, Target};
+use llrm_object::{Definition, Fix, FixupKind, Object, Role, Section, Target};
 
 use crate::omf;
 
@@ -208,25 +208,26 @@ fn class(section: &Section) -> &'static str {
 }
 
 /// The location code of a field, and whether it is self-relative.
-fn location(kind: Kind) -> Result<(u8, bool), Error> {
-    Ok(match kind {
-        Kind::Abs { width: 2 } => (OFFSET, false),
-        Kind::Abs { width: 4 } => (OFFSET32, false),
-        Kind::SegmentBase => (BASE, false),
-        Kind::FarPointer => (POINTER, false),
-        Kind::PcRel { width, from } if width == from && matches!(width, 2 | 4) => {
+fn location(fix: Fix) -> Result<(u8, bool), Error> {
+    let width = fix.kind.width();
+    Ok(match (fix.kind, fix.pc_rel) {
+        (FixupKind::DATA_2, false) => (OFFSET, false),
+        (FixupKind::DATA_4, false) => (OFFSET32, false),
+        (FixupKind::SEGMENT_BASE, false) => (BASE, false),
+        (FixupKind::FAR_POINTER, false) => (POINTER, false),
+        (FixupKind::DATA_2 | FixupKind::DATA_4, true) if fix.pc_bias == width => {
             (if width == 2 { OFFSET } else { OFFSET32 }, true)
         }
-        Kind::Branch { width: 2 } => (OFFSET, true),
-        Kind::Branch { width: 4 } => (OFFSET32, true),
-        other => return Err(unencodable(format!("OMF has no fixup for {other:?}"))),
+        (FixupKind::BRANCH_2, true) => (OFFSET, true),
+        (FixupKind::BRANCH_4, true) => (OFFSET32, true),
+        _ => return Err(unencodable(format!("OMF has no fixup for {fix:?}"))),
     })
 }
 
 /// Bytes of a field that hold a value: a far pointer's offset is its first two.
-fn packed(kind: Kind) -> usize {
-    match kind {
-        Kind::Abs { width: 4 } | Kind::PcRel { width: 4, .. } | Kind::Branch { width: 4 } => 4,
+fn packed(fix: Fix) -> usize {
+    match fix.kind {
+        FixupKind::DATA_4 | FixupKind::BRANCH_4 => 4,
         _ => 2,
     }
 }
@@ -261,7 +262,7 @@ fn resolved(
     at: usize,
 ) -> Result<Resolved, Error> {
     let reloc = section.relocs.iter().find(|one| one.at == at).expect("the caller names a fixup");
-    let (loc, relative) = location(reloc.kind)?;
+    let (loc, relative) = location(reloc.fix())?;
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
     let (method, datum, group) = match reloc.target {
         Target::OmfGroup(group) => (GROUP_TARGET, group as i64 + 1, Some(group)),
@@ -421,8 +422,8 @@ fn ledata(
     let mut subrecords = std::collections::BTreeMap::new();
     for &at in &at_sorted {
         let made = resolved(object, extern_index, comdats, section, at)?;
-        let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").kind;
-        if kind == Kind::SegmentBase && made.value != 0 {
+        let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").fix();
+        if kind.kind == FixupKind::SEGMENT_BASE && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
         }
         pack_field(&mut image, at, packed(kind), made.value);
@@ -435,7 +436,7 @@ fn ledata(
         while start < end {
             let mut stop = end.min(start + CHUNK);
             for &at in &at_sorted {
-                if at < stop && stop < at + subrecords[&at].1.width() {
+                if at < stop && stop < at + subrecords[&at].1.kind.width() {
                     stop = at;
                 }
             }
@@ -884,10 +885,7 @@ mod tests {
     fn a_fixup_is_never_split_between_ledata_records() {
         let size = CHUNK * 3;
         let starts = [CHUNK - 1, 2 * CHUNK - 2];
-        let relocs = starts
-            .iter()
-            .map(|&at| Reloc { at, kind: Kind::FarPointer, target: Target::Symbol(0), addend: 0 })
-            .collect();
+        let relocs = starts.iter().map(|&at| Reloc::new(at, Fix::FAR_POINTER, Target::Symbol(0), 0)).collect();
         let made =
             object(Arch::I8086, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
         let bytes = write(&made).unwrap();
@@ -908,7 +906,7 @@ mod tests {
     /// holds the addend.
     #[test]
     fn a_call_is_a_self_relative_fixup_against_an_extern() {
-        let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: -2 };
+        let call = Reloc::new(1, Fix::pc_rel(4, 4), Target::Symbol(0), -2);
         let made = object(
             Arch::I386,
             vec![section("T", vec![0xE8, 0, 0, 0, 0], vec![call])],
@@ -932,7 +930,7 @@ mod tests {
     fn a_debug_address_in_a_group_is_addressed_through_the_group() {
         let mut data = section("D", vec![0; 4], vec![]);
         data.role = Role::Data;
-        let far = Reloc { at: 2, kind: Kind::FarPointer, target: Target::Section(0), addend: 0 };
+        let far = Reloc::new(2, Fix::FAR_POINTER, Target::Section(0), 0);
         let mut debug = section("$$SYMBOLS", vec![0; 8], vec![far]);
         debug.role = Role::Debug;
         let mut made = object(Arch::I8086, vec![data, debug], vec![]);
@@ -963,7 +961,7 @@ mod tests {
     /// refused.
     #[test]
     fn a_pc_relative_field_omf_cannot_say_is_refused() {
-        let jump = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 8 }, target: Target::Symbol(0), addend: 0 };
+        let jump = Reloc::new(1, Fix::pc_rel(4, 8), Target::Symbol(0), 0);
         let made =
             object(Arch::I386, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
         assert!(matches!(write(&made), Err(Error::Unencodable(_))));

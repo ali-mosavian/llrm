@@ -21,7 +21,7 @@ mod types;
 
 pub use buffer::{sleb, uleb};
 use llrm_object::debug::{Format, Info};
-use llrm_object::{Definition, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{Definition, Fix, Object, Reloc, Role, Section, Target, Unsupported};
 
 /// The version DWARF is written in when the format does not say.
 pub const DEFAULT_VERSION: u16 = 5;
@@ -147,7 +147,7 @@ pub(crate) fn symbol_reloc(
     symbol: usize,
     addend: i64,
 ) -> Reloc {
-    Reloc { at, kind: llrm_object::Kind::Abs { width }, target: Target::Symbol(symbol), addend }
+    Reloc::new(at, Fix::abs(width), Target::Symbol(symbol), addend)
 }
 
 /// A segment base: the selector of the segment `section` is in, which the
@@ -156,7 +156,7 @@ pub(crate) fn segment_reloc(
     at: usize,
     section: usize,
 ) -> Reloc {
-    Reloc { at, kind: llrm_object::Kind::SegmentBase, target: Target::Section(section), addend: 0 }
+    Reloc::new(at, Fix::SEGMENT_BASE, Target::Section(section), 0)
 }
 
 pub(crate) fn section_reloc(
@@ -164,7 +164,7 @@ pub(crate) fn section_reloc(
     section: usize,
     addend: i64,
 ) -> Reloc {
-    Reloc { at, kind: llrm_object::Kind::Abs { width: 4 }, target: Target::Section(section), addend }
+    Reloc::new(at, Fix::abs(4), Target::Section(section), addend)
 }
 
 #[cfg(test)]

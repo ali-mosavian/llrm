@@ -5,7 +5,7 @@
 //! (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64ELFObjectWriter.cpp>).
 
 use llrm_elf::{Machine, Relocation};
-use llrm_object::{Arch, Kind, Object, Unsupported};
+use llrm_object::{Arch, Fix, FixupKind, Object, Reloc, Unsupported};
 
 const EM_AARCH64: u16 = 183;
 const R_AARCH64_ABS64: u32 = 257;
@@ -29,23 +29,24 @@ impl Machine for Arm64 {
     const NUMBER: u16 = EM_AARCH64;
     const ADDEND: bool = true;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported> {
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         // Every instruction relocation computes its value from the symbol and
         // the addend alone (`from` is 0): the page and branch kinds subtract
         // the place themselves.
-        let (kind, width) = match kind {
-            Kind::Abs { width: 8 } => (R_AARCH64_ABS64, 8),
-            Kind::Abs { width: 4 } => (R_AARCH64_ABS32, 4),
-            Kind::Branch26 => (R_AARCH64_CALL26, 4),
-            Kind::Page21 => (R_AARCH64_ADR_PREL_PG_HI21, 4),
-            Kind::PageOffset12 { access: None } => (R_AARCH64_ADD_ABS_LO12_NC, 4),
-            Kind::PageOffset12 { access: Some(0) } => (R_AARCH64_LDST8_ABS_LO12_NC, 4),
-            Kind::PageOffset12 { access: Some(1) } => (R_AARCH64_LDST16_ABS_LO12_NC, 4),
-            Kind::PageOffset12 { access: Some(2) } => (R_AARCH64_LDST32_ABS_LO12_NC, 4),
-            Kind::PageOffset12 { access: Some(3) } => (R_AARCH64_LDST64_ABS_LO12_NC, 4),
-            Kind::PageOffset12 { access: Some(4) } => (R_AARCH64_LDST128_ABS_LO12_NC, 4),
-            Kind::GotPage21 => (R_AARCH64_ADR_GOT_PAGE, 4),
-            Kind::GotPageOffset12 => (R_AARCH64_LD64_GOT_LO12_NC, 4),
+        let got = reloc.spec == Fix::S_GOT;
+        let (kind, width) = match (reloc.kind, reloc.pc_rel, got) {
+            (FixupKind::DATA_8, false, _) => (R_AARCH64_ABS64, 8),
+            (FixupKind::DATA_4, false, _) => (R_AARCH64_ABS32, 4),
+            (FixupKind::BRANCH26, _, _) => (R_AARCH64_CALL26, 4),
+            (FixupKind::PAGE21, _, false) => (R_AARCH64_ADR_PREL_PG_HI21, 4),
+            (FixupKind::ADD_IMM12, _, _) => (R_AARCH64_ADD_ABS_LO12_NC, 4),
+            (FixupKind::LDST_IMM12_SCALE1, _, _) => (R_AARCH64_LDST8_ABS_LO12_NC, 4),
+            (FixupKind::LDST_IMM12_SCALE2, _, _) => (R_AARCH64_LDST16_ABS_LO12_NC, 4),
+            (FixupKind::LDST_IMM12_SCALE4, _, _) => (R_AARCH64_LDST32_ABS_LO12_NC, 4),
+            (FixupKind::LDST_IMM12_SCALE8, _, false) => (R_AARCH64_LDST64_ABS_LO12_NC, 4),
+            (FixupKind::LDST_IMM12_SCALE16, _, _) => (R_AARCH64_LDST128_ABS_LO12_NC, 4),
+            (FixupKind::PAGE21, _, true) => (R_AARCH64_ADR_GOT_PAGE, 4),
+            (FixupKind::LDST_IMM12_SCALE8, _, true) => (R_AARCH64_LD64_GOT_LO12_NC, 4),
             other => return Err(Unsupported(format!("ELF arm64 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from: 0 })
@@ -62,7 +63,7 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    use llrm_object::{Binding, Definition, Reloc, Role, Section, Symbol, Target};
+    use llrm_object::{Binding, Definition, Fix, Reloc, Role, Section, Symbol, Target};
 
     use super::*;
 
@@ -106,11 +107,11 @@ mod tests {
 
     fn reloc(
         at: usize,
-        kind: Kind,
+        fix: Fix,
         target: usize,
         addend: i64,
     ) -> Reloc {
-        Reloc { at, kind, target: Target::Symbol(target), addend }
+        Reloc::new(at, fix, Target::Symbol(target), addend)
     }
 
     /// `_start` writes `ptr`'s string (`msg+1`, "ello\n") and exits 0.
@@ -127,14 +128,14 @@ mod tests {
             0xD400_0001,    // svc #0
         ];
         let text: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
-        let relocs = vec![reloc(0, Kind::Page21, 2, 0), reloc(4, Kind::PageOffset12 { access: Some(3) }, 2, 0)];
+        let relocs = vec![reloc(0, Fix::PAGE21, 2, 0), reloc(4, Fix::page_offset12(Some(3)), 2, 0)];
         Object {
             name: "hello.s".into(),
             arch: Arch::Arm64,
             sections: vec![
                 section(".text", Role::Text, text, relocs),
                 section(".rodata", Role::ROData, b"hello\n".to_vec(), vec![]),
-                section(".data", Role::Data, vec![0; 8], vec![reloc(0, Kind::Abs { width: 8 }, 1, 1)]),
+                section(".data", Role::Data, vec![0; 8], vec![reloc(0, Fix::abs(8), 1, 1)]),
             ],
             symbols: vec![
                 symbol("_start", Binding::Public, 0),
