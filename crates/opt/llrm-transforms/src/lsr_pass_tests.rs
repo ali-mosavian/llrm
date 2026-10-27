@@ -831,3 +831,51 @@ b6:
     let body = after.split("b5:").nth(1).unwrap().split("b6:").next().unwrap();
     assert!(body.matches(" = phi ptr").count() == 0, "the loop is kept: {after}");
 }
+
+/// x_insertion's shifting loop: the dead address that read the counter's
+/// increment kept it in the header (the pin deletes the dead first), where the
+/// exit compare could not fuse with it: `lea; cmp; mov; jg` where the pin has
+/// `dec; jg`, 48633 executed instructions against 37377.
+#[test]
+fn the_counter_increment_moves_to_the_latch_once_the_dead_address_is_gone() {
+    let text = format!(
+        "{FLAT}@a = global [256 x i32] zeroinitializer
+
+define i32 @f(i32 %n) {{
+b1:
+  br label %b2
+b2:
+  %o = phi i32 [ %o1, %b6 ], [ 1, %b1 ]
+  %pk = getelementptr inbounds nuw [4 x i8], ptr @a, i32 %o
+  %key = load i32, ptr %pk
+  br label %b3
+b3:
+  %i = phi i32 [ %o, %b2 ], [ %i1, %b4 ]
+  %i1 = add nsw i32 %i, -1
+  %p = getelementptr inbounds nuw [4 x i8], ptr @a, i32 %i1
+  %v = load i32, ptr %p
+  %c = icmp sgt i32 %v, %key
+  br i1 %c, label %b4, label %b5
+b4:
+  %q = getelementptr inbounds nuw [4 x i8], ptr @a, i32 %i
+  store i32 %v, ptr %q
+  %d = icmp sgt i32 %i, 1
+  br i1 %d, label %b3, label %b5
+b5:
+  %at = phi i32 [ 0, %b4 ], [ %i, %b3 ]
+  %s = getelementptr inbounds [4 x i8], ptr @a, i32 %at
+  store i32 %key, ptr %s
+  br label %b6
+b6:
+  %o1 = add nuw nsw i32 %o, 1
+  %e = icmp eq i32 %o1, %n
+  br i1 %e, label %b7, label %b2
+b7:
+  ret i32 0
+}}
+"
+    );
+    let (_, after) = reduced_on(FLAT, &text.replacen(FLAT, "", 1), "i486", &[]);
+    let latch = after.split("b4:").nth(1).unwrap().split("b5:").next().unwrap();
+    assert!(latch.contains("add nsw i32"), "the increment stays in the header: {after}");
+}

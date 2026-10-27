@@ -388,7 +388,12 @@ pub fn reduced_held(
                         changed: false,
                     };
                     run.implement_solution(&plan);
-                    let mut dead = std::mem::take(&mut run.dead);
+                    // The dead are deleted first, as the pin does: what only
+                    // they read must not keep an increment
+                    // where it is.
+                    let dead = std::mem::take(&mut run.dead);
+                    crate::dead::dead_from(&mut *run.context, outer.callees(), &mut *run.function, dead);
+                    let mut dead = Vec::new();
                     run.move_increments();
                     changed |= run.changed;
                     if run.changed {
