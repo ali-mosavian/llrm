@@ -595,14 +595,15 @@ fn constrain_local_copy(
     }
     // And the earlier readers of the global before the start of the local.
     let after = global_defs.iter().copied().filter(|&at| at < global_def).max().map_or(0, |at| at + 1);
-    let global_uses: Vec<usize> = (after..global_def)
-        .filter(|&at| at != first_local && insns[at].uses.contains(&global_value))
-        .collect();
+    let global_uses: Vec<usize> =
+        (after..global_def).filter(|&at| at != first_local && insns[at].uses.contains(&global_value)).collect();
     if global_uses.iter().any(|&user| graph.reaches(first_local, user)) {
         return;
     }
     if trace() {
-        eprintln!("machinesched constraining copy {copy}: {local_uses:?} -> {global_def}, {global_uses:?} -> {first_local}");
+        eprintln!(
+            "machinesched constraining copy {copy}: {local_uses:?} -> {global_def}, {global_uses:?} -> {first_local}"
+        );
     }
     for user in local_uses {
         graph.add_weak(user, global_def);
@@ -1018,6 +1019,30 @@ mod tests {
             insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(8)]), vec![3], vec![]),
             insn(3, semantics(Operation::Move, "mov", vec![cell(0)], vec![held(2)]), vec![], vec![2]),
         ]
+    }
+
+    /// `l = g; g = x; t = l * 3; out = t + g` (x_iir's `%2 = COPY %8`, `%8 =
+    /// COPY %6`, `imul %2`): the pin's `CopyConstrain` keeps the use of the
+    /// copy before the global's next def, so the copy dies at once and
+    /// coalesces. Without it the schedule was copy, def, `imul`: the copy's
+    /// register stayed live across the def and could not coalesce, and a
+    /// `mov` more was left in the loop.
+    #[test]
+    fn test_the_use_of_a_copy_stays_before_the_next_def_of_the_copied_value() {
+        use super::{bottom_up, copy_constrain};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns = vec![
+            insn(0, semantics(Operation::Move, "mov", vec![held(2)], vec![held(1)]), vec![2], vec![1]),
+            insn(1, semantics(Operation::Move, "mov", vec![held(1)], vec![held(4)]), vec![1], vec![4]),
+            insn(2, semantics(Operation::Binary, "imul", vec![held(3)], vec![held(2), imm(3)]), vec![3], vec![2]),
+            insn(3, semantics(Operation::Binary, "add", vec![held(5)], vec![held(3), held(1)]), vec![5], vec![3, 1]),
+        ];
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16);
+        assert_eq!(bottom_up(&insns, &found, None), [0, 1, 2, 3], "premise: program order without the edge");
+        copy_constrain(&insns, &mut found, &|value| value == 1);
+        assert_eq!(found.weak_preds[1], [2]);
+        assert_eq!(bottom_up(&insns, &found, None), [0, 2, 1, 3]);
     }
 
     /// `x = load [m]; y = x + 1; z = load [n]; store [m], y`: a load feeds the
