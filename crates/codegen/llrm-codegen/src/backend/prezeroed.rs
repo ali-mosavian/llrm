@@ -15,13 +15,10 @@
 //! The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`),
 //! for every function they select.
 
-use std::collections::BTreeSet;
-
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::{ConstantKind, Module, Opcode};
-
-use crate::support::hash::IndexMap;
 
 /// The zero writes in the entry block to a local no earlier instruction
 /// reaches. A local's address is its alloca's, so nothing reaches it before the
@@ -29,12 +26,14 @@ use crate::support::hash::IndexMap;
 pub fn prezeroed(
     module: &Module,
     function: &Function,
-) -> BTreeSet<InstId> {
-    let mut out = BTreeSet::new();
+) -> IdSet<InstId> {
+    let mut out = IdSet::new();
     let Some(&entry) = function.layout().first() else { return out };
-    let order: IndexMap<InstId, usize> =
-        function.iter_block(entry).enumerate().map(|(index, inst)| (inst, index)).collect();
-    for (&inst, &index) in &order {
+    let mut order: IdMap<InstId, usize> = IdMap::new();
+    for (index, inst) in function.iter_block(entry).enumerate() {
+        order.insert(inst, index);
+    }
+    for (index, inst) in function.iter_block(entry).enumerate() {
         let Some(local) = zero_write(module, function, inst) else { continue };
         if function
             .users(local)

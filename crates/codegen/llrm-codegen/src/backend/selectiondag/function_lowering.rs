@@ -23,7 +23,7 @@ pub struct FunctionLoweringInfo {
     pub variadic_save: Option<i32>,
     /// The entry block's writes of zero the runtime's zero-filled frame
     /// already holds (`prezeroed`): not lowered.
-    pub prezeroed: std::collections::BTreeSet<InstId>,
+    pub prezeroed: llrm_mir::dense::IdSet<InstId>,
     /// The register the `sret` parameter is copied to, read back to return it.
     pub sret_reg: Option<u32>,
     /// The branch probabilities of the function, made at its first `switch`.

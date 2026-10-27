@@ -1964,7 +1964,7 @@ impl Selector<'_, '_, '_> {
         }
         if self.zeroed {
             let prezeroed = crate::backend::prezeroed::prezeroed(self.module, self.function);
-            self.consumed.extend(prezeroed);
+            self.consumed.extend(prezeroed.iter());
         }
         for &block in layout {
             let from = block_at[&block];
