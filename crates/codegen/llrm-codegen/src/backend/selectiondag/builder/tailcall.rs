@@ -150,10 +150,28 @@ impl Builder<'_> {
                     .flatten()
                     .copied()
                     .collect();
-                // and not one the caller's epilogue restores before the jump
+                // and not one the caller's epilogue restores before the jump;
+                // `TCRETURNri` (emit.rs) takes the address in a register the
+                // target's own convention does not keep, so a convention that
+                // keeps ecx and edx (Watcom's) has only eax, which the
+                // arguments may take: then the call stays a call, as the pin's
+                // `IsEligibleForTailCallOptimization` leaves it with no
+                // register for the address
+                let regs = llrm_lir::registers::Regs(self.arch.registers());
+                let native_kept: Vec<RegId> = self
+                    .arch
+                    .callee_saved()
+                    .into_iter()
+                    .filter(|(full, pushed)| full == pushed)
+                    .map(|(full, _)| regs.root(full))
+                    .collect();
                 let free = eax_edx_ecx
                     .iter()
-                    .any(|reg| !used.contains(reg) && !caller_kept.iter().any(|(whole, _)| whole == reg));
+                    .any(
+                        |reg| !used.contains(reg)
+                            && !caller_kept.iter().any(|(whole, _)| whole == reg)
+                            && !native_kept.contains(&regs.root(*reg)),
+                    );
                 if !free {
                     return false;
                 }
