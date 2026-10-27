@@ -30,6 +30,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegSet;
 use llrm_lir::registers::{RegId, Regs};
+use llrm_support::hash::HashMap;
 
 use super::greedy::{GreedyEnv, RAGreedy, Stats};
 use super::inlinespiller::{InlineSpiller, Tables};
@@ -478,8 +479,7 @@ impl super::splitkit::SplitEnv for BodySplitEnv {
 
 /// The successors of each block, by position.
 fn successors(body: &LirBody) -> Vec<Vec<usize>> {
-    let position: std::collections::HashMap<i64, usize> =
-        body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
+    let position: HashMap<i64, usize> = body.blocks.iter().enumerate().map(|(n, block)| (block.at, n)).collect();
     body.blocks.iter().map(|block| block.succ.iter().filter_map(|to| position.get(to).copied()).collect()).collect()
 }
 
@@ -514,6 +514,8 @@ thread_local! {
     /// this thread.
     static RANGE_SEARCHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BLOCK_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The pins a query for a register walked, on this thread.
+    static PINS_EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// How many times this thread searched the regmask slots for a block's range,
@@ -653,6 +655,8 @@ struct FixedPins {
     /// The copies of the body by the slot they define at: (destination,
     /// source).
     copies: crate::support::hash::HashMap<SlotIndex, (u32, u32)>,
+    /// The pins that share a unit with each register asked about, found once.
+    overlapping: std::cell::RefCell<crate::support::hash::HashMap<RegId, Rc<[usize]>>>,
 }
 
 struct FixedPin {
@@ -667,7 +671,22 @@ impl FixedPins {
         li: &LiveInterval,
         phys: RegId,
     ) -> bool {
-        self.pins.iter().filter(|pin| self.tri.overlaps(pin.root, phys)).any(|pin| {
+        let near = {
+            let mut known = self.overlapping.borrow_mut();
+            Rc::clone(known.entry(phys).or_insert_with(|| {
+                (0..self.pins.len()).filter(|&at| self.tri.overlaps(self.pins[at].root, phys)).collect()
+            }))
+        };
+        let (Some(first), Some(last)) = (li.segments.first(), li.segments.last()) else { return false };
+        near.iter().map(|&at| &self.pins[at]).any(|pin| {
+            #[cfg(test)]
+            PINS_EXAMINED.with(|count| count.set(count.get() + 1));
+            // A pin that ends before the range starts, or starts after it
+            // ends, meets none of its segments.
+            let (Some(from), Some(to)) = (pin.segments.first(), pin.segments.last()) else { return false };
+            if to.1 <= first.start || last.end <= from.0 {
+                return false;
+            }
             let (mut i, mut j) = (0, 0);
             while i < li.segments.len() && j < pin.segments.len() {
                 let (a, b) = (&li.segments[i], &pin.segments[j]);
@@ -1271,7 +1290,7 @@ pub fn decide_with_split(
         if conflict {
             return None;
         }
-        let _ = pins_cell.set(FixedPins { tri, pins, units, copies });
+        let _ = pins_cell.set(FixedPins { tri, pins, units, copies, overlapping: Default::default() });
         regs
     } else {
         Vec::new()
@@ -2119,10 +2138,34 @@ mod tests {
             pins: vec![FixedPin { reg: 2, root: RegId::ECX, segments: vec![(at[10].clone(), at[20].clone())] }],
             units: Default::default(),
             copies: [(at[10].clone(), (2, 1))].into_iter().collect(),
+            overlapping: Default::default(),
         };
         assert!(!pins.interferes(&span(1, 5, 30, &at), RegId::ECX), "the copy's source shares ecx");
         assert!(pins.interferes(&span(3, 5, 30, &at), RegId::ECX), "another range over the pin");
         assert!(!pins.interferes(&span(3, 5, 30, &at), RegId::EDX), "a register the pin does not hold");
         assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX), "a range that starts inside, not at the copy");
+    }
+
+    /// A query for a register walked every pin of the function, 2.9 K
+    /// instructions each on d_faces -O2 (10.6 M of 15 M in `checkInterference`,
+    /// the pin's whole `LiveRegMatrix` costs 2.9 M): only the pins that share a
+    /// unit with the register are walked.
+    #[test]
+    fn a_query_walks_only_the_pins_that_share_a_unit_with_the_register() {
+        let at = fixed_pin_slots();
+        let tri = RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO));
+        let pin = |reg, root| FixedPin { reg, root, segments: vec![(at[10].clone(), at[20].clone())] };
+        let pins = FixedPins {
+            tri,
+            pins: vec![pin(2, RegId::ECX), pin(3, RegId::EDX), pin(4, RegId::ESI), pin(5, RegId::EDI)],
+            units: Default::default(),
+            copies: Default::default(),
+            overlapping: Default::default(),
+        };
+        PINS_EXAMINED.with(|count| count.set(0));
+        assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX));
+        assert!(pins.interferes(&span(1, 12, 30, &at), RegId::ECX));
+        assert!(!pins.interferes(&span(1, 12, 30, &at), RegId::EAX));
+        assert_eq!(PINS_EXAMINED.with(std::cell::Cell::get), 2, "the ecx pin, twice; none for eax");
     }
 }

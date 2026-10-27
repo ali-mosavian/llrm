@@ -2654,3 +2654,43 @@ b2:
     let [proof] = &proofs[..] else { panic!("one proof") };
     assert_eq!(proof.count, Some(BigInt::from(20000)));
 }
+
+/// `FOR i = 0 TO n - 1` after InstCombine's `foldICmpBinOp` (`i + 1 < n` is
+/// `i < n - 1`) tests the counter before its step against `n - 1`: the stepped
+/// test against `n`. Uncounted, loopidioms made no `rep stosw` of a word fill
+/// (tests/check/qb/pattern_fill.bas).
+#[test]
+fn test_a_latch_test_against_a_bound_one_step_below_a_value_is_the_stepped_test_against_it() {
+    let parsed = Parsed::new(
+        "define i32 @f(i32 %n) {
+b0:
+  %m = add nsw i32 %n, -1
+  %g = icmp slt i32 %m, 0
+  br i1 %g, label %b4, label %b1
+
+b1:
+  br label %b2
+
+b2:
+  %i = phi i32 [ 0, %b1 ], [ %next, %b2 ]
+  %trips = phi i32 [ 0, %b1 ], [ %up, %b2 ]
+  %up = add i32 %trips, 1
+  %next = add nuw nsw i32 %i, 1
+  %c = icmp slt i32 %i, %m
+  br i1 %c, label %b2, label %b3
+
+b3:
+  ret i32 %up
+
+b4:
+  ret i32 0
+}
+",
+    );
+    let proofs = parsed.counted(false);
+    let [proof] = &proofs[..] else { panic!("{proofs:?}") };
+    assert!(proof.posttested && proof.stepped && proof.shifted && proof.entry_guarded, "{proof:?}");
+    for n in [1, 2, 7] {
+        assert_eq!(parsed.run(&[(n, 32)], 10_000), Some(n as u128), "{n}");
+    }
+}

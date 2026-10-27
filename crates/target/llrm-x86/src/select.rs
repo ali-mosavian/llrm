@@ -819,6 +819,7 @@ pub fn lowered(what: &Semantics) -> Option<Vec<Semantics>> {
         indirect: false,
         table: Vec::new(),
         repeat: false,
+        pops: None,
     };
     let (push, pop) = (
         |source: &Loc| step(Operation::Push, "push", vec![], vec![source.clone()]),
@@ -2940,7 +2941,17 @@ mod sweep_support {
         target: Option<i64>,
         indirect: bool,
     ) -> Semantics {
-        Semantics { op, name: name.map(Into::into), dests, sources, target, indirect, table: Vec::new(), repeat: false }
+        Semantics {
+            op,
+            name: name.map(Into::into),
+            dests,
+            sources,
+            target,
+            indirect,
+            table: Vec::new(),
+            repeat: false,
+            pops: None,
+        }
     }
 
     type Want = Option<(&'static str, Option<usize>, Option<usize>, Vec<usize>, bool)>;
