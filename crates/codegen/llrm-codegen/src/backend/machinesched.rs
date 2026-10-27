@@ -404,6 +404,16 @@ fn bits_of(mut mask: u128) -> impl Iterator<Item = usize> {
     })
 }
 
+/// What `graph` knows of one register lane: the defs standing (a live def
+/// replaces them, a dead one joins them), the one live def among them, and
+/// the readers since.
+#[derive(Clone, Default)]
+struct Lane {
+    defs: Vec<usize>,
+    live_def: Option<usize>,
+    readers: Vec<usize>,
+}
+
 /// The graph of `insns`, one region (every instruction schedulable).
 pub fn graph(
     insns: &[Arc<Insn>],
@@ -431,7 +441,7 @@ pub fn graph(
     let mut by_value: HashMap<u32, (Option<usize>, Vec<usize>)> = HashMap::default();
     // Per lane: the defs still standing (a live def replaces them, a dead one
     // joins them, as the pin's `Defs`) and the readers since.
-    let mut by_lane: Vec<(Vec<usize>, Vec<usize>)> = vec![(Vec::new(), Vec::new()); 128];
+    let mut by_lane: Vec<Lane> = vec![Lane::default(); 128];
     // The lanes each instruction writes that nothing reads before the next
     // write (`MO.isDead()`); what is live below the region is not known, so the
     // last write of a lane is live.
@@ -472,21 +482,21 @@ pub fn graph(
         match masks {
             Some((reads, writes)) => {
                 for bit in bits_of(reads) {
-                    if let Some(&def) = by_lane[bit].0.last() {
+                    if let Some(&def) = by_lane[bit].defs.last() {
                         edges.push((def, def_latency(&insns[def])));
                     }
                 }
                 for bit in bits_of(writes) {
                     // No output edge between two dead defs (`addPhysRegDeps`).
                     let this_dead = dead[later] >> bit & 1 == 1;
-                    edges.extend(
-                        by_lane[bit]
-                            .0
-                            .iter()
-                            .filter(|&&earlier| !(this_dead && dead[earlier] >> bit & 1 == 1))
-                            .map(|&earlier| (earlier, 1)),
-                    );
-                    edges.extend(by_lane[bit].1.iter().map(|&earlier| (earlier, 0)));
+                    // A dead write is ordered after the live def only, the dead
+                    // defs standing before it being the ones it has no edge to.
+                    if this_dead {
+                        edges.extend(by_lane[bit].live_def.map(|earlier| (earlier, 1)));
+                    } else {
+                        edges.extend(by_lane[bit].defs.iter().map(|&earlier| (earlier, 1)));
+                    }
+                    edges.extend(by_lane[bit].readers.iter().map(|&earlier| (earlier, 0)));
                 }
             }
             // An unknown effect is ordered with everything before it.
@@ -521,7 +531,7 @@ pub fn graph(
         }
         if let Some((reads, writes)) = masks {
             for bit in bits_of(reads) {
-                by_lane[bit].1.push(later);
+                by_lane[bit].readers.push(later);
             }
             for bit in bits_of(writes) {
                 // A dead write leaves the defs and readers standing: a later
@@ -529,17 +539,18 @@ pub fn graph(
                 // live def before it.
                 let entry = &mut by_lane[bit];
                 if dead[later] >> bit & 1 == 0 {
-                    entry.0.clear();
-                    entry.1.clear();
+                    entry.defs.clear();
+                    entry.readers.clear();
+                    entry.live_def = Some(later);
                 }
-                entry.0.push(later);
+                entry.defs.push(later);
             }
         } else {
             unknown = Some(later);
             since.clear();
             // Everything before it is behind it now.
             by_value.clear();
-            by_lane.iter_mut().for_each(|entry| *entry = (Vec::new(), Vec::new()));
+            by_lane.iter_mut().for_each(|entry| *entry = Lane::default());
             store = None;
             loads.clear();
         }
@@ -1170,6 +1181,27 @@ mod tests {
             insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(8)]), vec![3], vec![]),
             insn(3, semantics(Operation::Move, "mov", vec![cell(0)], vec![held(2)]), vec![], vec![2]),
         ]
+    }
+
+    /// A write whose flags nothing reads joined the defs standing in its
+    /// lane, and every later write scanned them all for the live def to order
+    /// after: a region of 40,000 flag-writing instructions took seconds
+    /// (machinesched `graph` 12.9 M scans of 4,290 instructions).
+    #[test]
+    fn test_a_long_run_of_dead_flag_writes_builds_its_graph_in_linear_time() {
+        use super::graph;
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns: Vec<_> = (0..40_000u32)
+            .map(|k| {
+                let at = i64::from(k);
+                insn(at, semantics(Operation::Binary, "add", vec![held(k + 1)], vec![held(k), imm(1)]), vec![k + 1], vec![k])
+            })
+            .collect();
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let started = std::time::Instant::now();
+        let found = graph(&insns, regs, 16);
+        assert_eq!(found.preds.len(), insns.len());
+        assert!(started.elapsed().as_millis() < 1000, "{:?} for 40,000 adds", started.elapsed());
     }
 
     /// `copy_constrain` scanned the whole region for each value's ranges and
