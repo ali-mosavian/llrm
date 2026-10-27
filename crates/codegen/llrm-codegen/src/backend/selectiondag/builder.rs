@@ -1837,7 +1837,14 @@ impl Builder<'_> {
         let result = if self.is_pointer_cast(op, instruction)? {
             self.pointer_cast(op, instruction.operands[0], operand, instruction.ty)?
         } else if op == CastOp::FPRound {
-            self.round_through_memory(operand, dest)
+            // DEVIATE SD318: the pin folds `store (fp_round x)` into a
+            // truncating store (`visitSTORE`); a rounding only a store of its
+            // type reads is the store's own
+            if self.read_only_by_a_store_of_its_type(instruction) {
+                operand
+            } else {
+                self.round_through_memory(operand, dest)
+            }
         } else {
             let converted = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
             // an integer wider than the float's mantissa is rounded to its type
@@ -1855,6 +1862,21 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether the one reader of a cast's result is a plain store of it, in
+    /// this block, of the cast's type.
+    fn read_only_by_a_store_of_its_type(
+        &self,
+        cast: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = cast.result else { return false };
+        let Some(read) = self.function.users(result).only() else { return false };
+        let user = self.function.instruction(read.user);
+        matches!(user.opcode, Opcode::Store { volatile: false, .. })
+            && read.index == 0
+            && self.function.parent(read.user) == Some(self.block)
+            && self.function.operand_type(&self.module.context, user.operands[0]) == Some(cast.ty)
     }
 
     /// `fpround`: the value stored to a stack slot of its own type and loaded
