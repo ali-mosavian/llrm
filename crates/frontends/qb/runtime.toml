@@ -75,6 +75,7 @@ rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exception
 ["B$CENP"]
 cleanup = 0
 control = "never"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = false
@@ -198,6 +199,7 @@ rt/dynamic.asm: `B$ERAS - erase an array`, `Entry: pAd ds relative array descrip
 ["B$EVCK"]
 cleanup = 0
 control = "unknown"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = false
@@ -512,6 +514,7 @@ rt/helpi4.asm: `B$MUI4(I4 op1,I4 op2)`, `Uses: ax,cx,dx,bx`, `Exceptions: none`,
 ["B$OEGA"]
 cleanup = 4
 control = "unknown"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = true
@@ -722,6 +725,7 @@ rt/read.asm, the header above B$RDI2: `pDest = far pointer to the destination fo
 ["B$RESN"]
 cleanup = 0
 control = "never"
+calls_back = true
 enters_user_code = true
 raises_error = false
 error_handling = true
