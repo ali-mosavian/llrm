@@ -819,6 +819,7 @@ b6:
         scaled_index_insns: 0,
         huge_space: None,
         inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
