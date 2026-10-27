@@ -34,6 +34,8 @@ pub struct DataLayout {
     /// The preferred alignment of an aggregate, in bytes: `a:0:64`.
     aggregate_pref: u64,
     pub alloca_space: u32,
+    /// The natural stack alignment in bytes: `S32`.
+    pub stack_align: Option<u64>,
 }
 
 impl Default for DataLayout {
@@ -53,6 +55,7 @@ impl Default for DataLayout {
             aggregate_align: 1,
             aggregate_pref: 8,
             alloca_space: 0,
+            stack_align: None,
         }
     }
 }
@@ -86,7 +89,8 @@ impl DataLayout {
                         layout.pointers.insert(space as u32, one);
                     }
                 }
-                "m" | "S" | "F" | "G" | "P" | "Fi" | "Fn" => {}
+                "S" => layout.stack_align = numbers(rest)?.first().map(|&bits| bytes(bits)).filter(|&one| one > 0),
+                "m" | "F" | "G" | "P" | "Fi" | "Fn" => {}
                 "A" => layout.alloca_space = numbers(rest)?.first().copied().unwrap_or(0) as u32,
                 "p" => {
                     let (space, fields) = match rest.split_once(':') {
