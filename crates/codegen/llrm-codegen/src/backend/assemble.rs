@@ -234,20 +234,26 @@ pub fn assembled_by(
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
         match &global.kind {
+            GlobalKind::Variable(_) if globals::is_compiler_only(name) => {}
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
                 // A far or huge object lies outside DGROUP, in a segment of the
                 // module's own.
                 let mut datums = globals::datums(module, id, &names)?;
-                if let Some(to) = globals::alignment(
-                    module,
-                    layout.as_ref(),
-                    variable,
-                    module.sections.contains_key(name),
-                    arch.layout().segment_bytes().is_some(),
-                ) {
+                // The constructor table is aligned by `datums`.
+                if name != globals::CONSTRUCTORS
+                    && let Some(to) = globals::alignment(
+                        module,
+                        layout.as_ref(),
+                        variable,
+                        module.sections.contains_key(name),
+                        arch.layout().segment_bytes().is_some(),
+                    )
+                {
                     datums.insert(0, masm::Datum::Align(masm::Align { to }));
                 }
-                if let Some(section) = module.sections.get(name) {
+                if name == globals::CONSTRUCTORS {
+                    sectioned.entry(globals::INIT_SEGMENT.to_owned()).or_default().extend(datums);
+                } else if let Some(section) = module.sections.get(name) {
                     // `#pragma data_seg`: a segment of the program's own
                     // naming.
                     sectioned.entry(section.clone()).or_default().extend(datums);
