@@ -3,7 +3,7 @@
 ; CHECK: define {{.*}} @main(
 ; CHECK: define {{.*}} @"best[i16]"(
 
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32"
 
 @$str1 = internal constant [7 x i8] c"\08\00\00\00\00\00\00"
 @$str2 = internal constant [13 x i8] c"\08\00\06\00\06\00Rovers\00"
