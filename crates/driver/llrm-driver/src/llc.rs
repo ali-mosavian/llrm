@@ -222,9 +222,9 @@ fn with_default_convention(
         (true, 0) => variadic,
         _ => false,
     };
-    // Under the register-size convention `main` is C's: the start-up calls
-    // `_main`.
-    let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // `main` is C's under any convention clang left it in: the OS layer's
+    // start-up calls `_main`.
+    let keeps_main = !regcall_default;
     let types = &module.context.types;
     let is_variadic = |ty| matches!(
         types.get(ty),

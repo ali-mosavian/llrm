@@ -872,3 +872,18 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
+
+/// Under `-mabi=watcom` clang's `main` became `main_`, but the start-up calls
+/// `_main`: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed
+/// failed to link ("_main is an undefined reference").
+#[test]
+fn main_keeps_the_c_spelling_under_the_watcom_convention() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @main() {\n  ret i32 0\n}\n\
+                define i32 @other() {\n  ret i32 1\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-fobject-format=omf", "-mabi=watcom"]), text, "main").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("public _main") && !listing.contains("main_"), "{listing}");
+    assert!(listing.contains("public other_"), "other functions keep the convention's spelling\n{listing}");
+}
