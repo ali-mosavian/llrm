@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ours against the pin's llc on the same IR, per program: instructions and code bytes.
 
-    pindiff.py m32|m16 LEVEL --src DIR --llc LLRM_LLC --work DIR [--jobs N] [--old]
+    pindiff.py m32|m16 LEVEL [--src DIR] --llc LLRM_LLC --work DIR [--jobs N] [--old]
 
 LEVEL is O1, O2, O3 or Os. Each `DIR/*.c` goes through the pinned clang with the flags llrm-cc gives the machine (`crates/driver/llrm-cc/targets.toml`) and
 `-march` of the pin's target CPU, to IR with no pass run (as llrm-cc writes it). Ours takes that IR; the pin's side runs its `opt` on it
@@ -112,6 +112,17 @@ def pin_padding_free(obj: Path, bits: int) -> int:
     """The pin's `.text` without its nops."""
     listing = subprocess.run(["objdump", "-d", *objdump_mode(bits), str(obj)], capture_output=True, text=True).stdout
     return pin_text_size(obj) - nop_bytes(listing)
+
+
+def corpus_sources(into: Path) -> Path:
+    """The comparison's programs, `vsgcc/programs.py`'s (bench/ and the x_ kernels, written with u32/i32 for m16), copied flat into `into`."""
+    sys.path.insert(0, str(next((ROOT / "crates/target").glob("*/vsgcc"))))
+    import programs
+
+    into.mkdir(parents=True, exist_ok=True)
+    for name, path in programs.sources().items():
+        (into / f"{name}.c").write_text(path.read_text())
+    return into
 
 
 def layout_note(wanted: str, used: str) -> str:
@@ -250,7 +261,7 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("machine", choices=sorted(MACHINES))
     parser.add_argument("level", choices=["O1", "O2", "O3", "Os"])
-    parser.add_argument("--src", required=True)
+    parser.add_argument("--src", help="a directory of *.c; default: the repo's corpus (vsgcc/programs.py)")
     parser.add_argument("--llc", required=True)
     parser.add_argument("--work", required=True)
     parser.add_argument("--jobs", type=int, default=4)
@@ -271,7 +282,7 @@ def main(argv: list[str]) -> int:
     stale = staleness(version, args.ref, str(Path(__file__).resolve().parents[2]), args.max_behind)
     if stale:
         print(stale)
-    sources = sorted(Path(args.src).glob("*.c"))
+    sources = sorted((Path(args.src) if args.src else corpus_sources(work / "src")).glob("*.c"))
     with ThreadPoolExecutor(args.jobs) as pool:
         results = list(pool.map(lambda source: one(source, args.machine, args.level, args.llc, work, args.old, args.reopt), sources))
     rows = [r for r in results if isinstance(r, dict)]

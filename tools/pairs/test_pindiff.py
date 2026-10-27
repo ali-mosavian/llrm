@@ -144,3 +144,31 @@ def test_a_pin_llc_that_replaces_the_datalayout_is_stated():
     note = pindiff.layout_note(wanted, used)
     assert "p:32:32" in note and "p:16:16" in note and note.startswith("# NOTE")
     assert pindiff.layout_note(wanted, wanted) == ""
+
+
+def test_no_row_of_the_corpus_shifts_by_the_width_of_its_type_at_m16():
+    """17 m16 rows of the 2026-10-17 copy of the corpus had `unsigned s >> 16` on a 16-bit unsigned: UB the pin folded to poison, and the
+    m16 pin column was wrong for them until 2026-10-27. The repo's corpus (`vsgcc/programs.py`) is written with u32/i32; this keeps it so."""
+    import os
+
+    pindiff = load("pindiff")
+    if not (os.environ.get("LLRM_OW") and os.environ.get("LLRM_PIN_CLANG") and os.environ.get("LLRM_CLANG_M16")):
+        pytest.skip("needs LLRM_OW, LLRM_PIN_CLANG and LLRM_CLANG_M16")
+    import tempfile
+
+    guard = load("irguard")
+    sources = os.environ.get("ROWS_SRC")
+    with tempfile.TemporaryDirectory() as work:
+        folder = Path(sources) if sources else pindiff.corpus_sources(Path(work) / "src")
+        bad, compiled = {}, 0
+        for source in sorted(folder.glob("*.c")):
+            ir = Path(work) / f"{source.stem}.ll"
+            binary, flags = pindiff.clang_flags("m16")
+            import subprocess
+
+            done = subprocess.run([binary, *flags, "-march=i486", *pindiff.front_end_flags("O2", False), "-o", str(ir), str(source)], capture_output=True)
+            compiled += done.returncode == 0
+            if done.returncode == 0 and (shifts := guard.undefined_shifts(ir.read_text())):
+                bad[source.stem] = shifts[0]
+        assert compiled >= 60, f"only {compiled} sources compiled"
+        assert not bad
