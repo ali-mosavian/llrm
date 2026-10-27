@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # queue-runner.sh: batches up to 8 disjoint PRs of the queue build-queue.sh writes to /tmp/land-queue.txt before every batch (tools/parity_squash.py merge-batch: one smoke, halving on failure);
-# stacked PRs (same STACKS group) and a batch that does not merge land one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
+# a batch that does not merge lands one at a time with land.sh. Prints `N: MERGED ...` / `N: REFUSED: ...` lines
 # (the format refusals-report.sh reads). Waits for any running land.sh/runner first.
 export BUILDSLOT_BYPASS=1
 mkdir -p "${LAND_TMP:-/tmp/landing}"
 # own process group, recorded for stop.sh: the only way to end the runner (never by name or pattern)
 [ "$(ps -o pgid= $$ | tr -d ' ')" = "$$" ] || exec setsid "$0" "$@"
 echo $$ > "${LAND_PIDFILE:-${LAND_TMP:-/tmp/landing}/land-runner.pgid}"
-HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/stale-batch.sh"
+HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/open-only.sh"; source "$HERE/pick-disjoint.sh"; source "$HERE/precheck-filter.sh"; source "$HERE/landing-busy.sh"; source "$HERE/head-age.sh"; source "$HERE/alone-filter.sh"; source "$HERE/solo.sh"; source "$HERE/background.sh"; source "$HERE/stamp.sh"; source "$HERE/stale-batch.sh"; source "$HERE/tooling-current.sh"
 R=ali-mosavian/llrm; W=~/scratch/coord-ps; T=~/scratch/coord-ps-target; Q=/tmp/land-queue.txt; touch $Q
-STACKS="2752 2773 2776|2785 2789 2797|2713 2738 2764|2753 2757 2763|2672 2683"
-group() { for g in ${STACKS//|/ |}; do :; done; echo "$STACKS" | tr '|' '\n' | grep -w -- "$1" | head -1; }
 while true; do
   # never run beside another landing (old runner's land.sh)
   while landing_busy; do sleep 20; done
@@ -26,28 +24,27 @@ while true; do
     touch "${LAND_TMP:-/tmp/landing}/sweep.stamp"; background_timeout "${SWEEP_TIMEOUT:-1800}" "${LAND_TMP:-/tmp/landing}/sweep.log" "$HERE/sweep-targets.sh"
   fi
   n=$(head -1 $Q); [ -z "$n" ] && { sleep 20; continue; }
-  batch=("$n"); g=$(group "$n")
-  if [ -z "$g" ]; then
-    cand=(); for m in $(sed -n '1,40p' $Q); do [ -z "$(group "$m")" ] && cand+=("$m"); done
-    # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
-    if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
-      # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
-      # closed PRs are dropped and a head younger than 15 minutes waits (a fix may be on its way) before the assembly
-      # a PR listed in solo.txt at the head of the queue is a batch of its own (the others wait one cycle)
-      solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
-      cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
-      # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
-      cand=($(alone_filter "${cand[@]:0:16}"))
-      asm_start=$(date +%s)
-      if [ -n "$solo" ]; then batch=("${cand[@]}"); else
-      batch=($(python3 "$HERE/../parity_squash.py" assemble 16 "${cand[@]:0:40}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:16}"); fi
-      asm_s=$(( $(date +%s) - asm_start ))
-    else
-      cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
-      batch=($(pick_disjoint 8 "${cand[@]}"))
-    fi
-    [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
+  batch=("$n")
+  cand=($(sed -n '1,40p' $Q))
+  # the cheap static checks (ratchets, fmt, docs, deletions) on each PR merged with feat/parity: a failure never reaches a batch (and never halves it)
+  if [ "${LAND_FAST:-}" = 1 ]; then  # the user's call: no precheck, no smoke, up to 16 PRs in queue order; merge-batch leaves out the ones that cannot join
+    # only PRs that merge one after another: one that conflicts with an earlier member waits a round instead of costing the others a smoke
+    # closed PRs are dropped and a head younger than 15 minutes waits (a fix may be on its way) before the assembly
+    # a PR listed in solo.txt at the head of the queue is a batch of its own (the others wait one cycle)
+    solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
+    cand=($(open_only "${cand[@]:0:16}" 2>/dev/null)); cand=($(aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
+    # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
+    tooling_current "$HERE/.." 2>>"${LAND_TMP:-/tmp/landing}/assemble.log" || echo "tooling not refreshed" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
+    cand=($(alone_filter "${cand[@]:0:16}"))
+    asm_start=$(date +%s)
+    if [ -n "$solo" ]; then batch=("${cand[@]}"); else
+    batch=($(python3 "$HERE/../parity_squash.py" assemble 16 "${cand[@]:0:40}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log")); [ ${#batch[@]} -eq 0 ] && batch=("${cand[@]:0:16}"); fi
+    asm_s=$(( $(date +%s) - asm_start ))
+  else
+    cand=($(prechecked "${cand[@]:0:${PRECHECK_WINDOW:-16}}"))
+    batch=($(pick_disjoint 8 "${cand[@]}"))
   fi
+  [ ${#batch[@]} -eq 0 ] && { sleep 60; continue; }
   open=($(pop_open $Q "${batch[@]}"))
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
   echo "== $(date +%H:%M) landing ${batch[*]}"
