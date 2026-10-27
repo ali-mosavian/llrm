@@ -848,6 +848,26 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::CtLz | ISD::CtLzZeroPoison) => self.expand_ctlz(value, op, half),
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
+            op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
+                // `ExpandIntRes_MINMAX`: the high halves' own min/max, and the
+                // low half of the winning high half, or the unsigned min/max
+                // of the low halves when the high halves are equal.
+                let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+                let (cc, low) = match op {
+                    ISD::SMin => (CondCode::SetLt, ISD::UMin),
+                    ISD::SMax => (CondCode::SetGt, ISD::UMax),
+                    ISD::UMin => (CondCode::SetULt, ISD::UMin),
+                    _ => (CondCode::SetUGt, ISD::UMax),
+                };
+                let cc_vt = self.tli.types.set_cc_result_type(half);
+                let hi = self.dag.get_node(op, half, &[lh, rh]);
+                let equal = self.dag.get_setcc(cc_vt, lh, rh, CondCode::SetEq);
+                let wins = self.dag.get_setcc(cc_vt, lh, rh, cc);
+                let winner = self.dag.get_select(half, wins, ll, rl);
+                let min_max = self.dag.get_node(low, half, &[ll, rl]);
+                (self.dag.get_select(half, equal, min_max, winner), hi)
+            }
             ISD::Mul => self.expand_mul(value, half)?,
             op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => self.expand_division(value, op, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
