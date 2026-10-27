@@ -131,6 +131,9 @@ pub fn function_declaration(
     };
     let void = context.types.void();
     let mut function = Function::new(ty, void);
+    function.parameters.reserve(parameters.len());
+    function.values.reserve(parameters.len());
+    function.parameter_attrs.reserve(parameters.len());
     for (at, ty) in parameters.into_iter().enumerate() {
         function.parameters.push(ValueId(function.values.len() as u32));
         function.values.push(ValueData { ty, name: None, def: ValueDef::Argument(at as u32) });

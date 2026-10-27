@@ -174,6 +174,9 @@ impl From<omf::ValueError> for Error {
     }
 }
 
+/// The most bytes a USE16 SEGDEF's size field holds: 0 and the B bit say 64K.
+const MAX_SEGMENT_16: usize = 0x10000;
+
 fn unencodable(text: impl Into<String>) -> Error {
     Error::Unencodable(text.into())
 }
@@ -592,7 +595,13 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         let (acbp, record) = if bits == 32 {
             (alignment | 1, omf::SEGDEF + 1)
         } else {
-            (alignment | if size == 0x10000 { 2 } else { 0 }, omf::SEGDEF)
+            if size > MAX_SEGMENT_16 {
+                return Err(unencodable(format!(
+                    "segment `{}` is {size} bytes: a 16-bit segment holds {MAX_SEGMENT_16}",
+                    section.name
+                )));
+            }
+            (alignment | if size == MAX_SEGMENT_16 { 2 } else { 0 }, omf::SEGDEF)
         };
         let mut body = vec![acbp];
         if bits == 32 {
@@ -938,6 +947,15 @@ mod tests {
     fn a_64_bit_object_is_refused() {
         let made = object(Arch::X8664, vec![section("T", vec![0xC3], vec![])], vec![]);
         assert!(matches!(write(&made), Err(Error::Unencodable(text)) if text.contains("64-bit")));
+    }
+
+    /// A 16-bit segment of 64K+1 bytes was written with its size truncated to
+    /// one byte; the writer refuses it, and 64K exactly keeps the B bit.
+    #[test]
+    fn a_16_bit_segment_past_64k_is_refused() {
+        let big = |bytes: usize| object(Arch::I8086, vec![section("T", vec![0; bytes], vec![])], vec![]);
+        assert!(matches!(write(&big(0x10001)), Err(Error::Unencodable(text)) if text.contains("holds 65536")));
+        assert!(write(&big(0x10000)).is_ok());
     }
 
     /// A pc-relative field OMF has no fixup for was written near-ish; it is

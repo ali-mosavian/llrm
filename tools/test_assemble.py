@@ -532,3 +532,54 @@ def test_an_alone_check_runs_the_lib_tests_of_the_crates_that_depend_on_the_one_
     monkeypatch.setattr(smoke, "dependants_lib_failures", lambda packages, **_: ran.append(set(packages)) or set())
     ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set())
     assert ran and {"llrm-transforms", "llrm-qb"} <= ran[0] and not {"llrm-nib", "llrm-x86"} & ran[0], ran  # qb depends on the change; nib does not; x86 does, but only qb, c and nib are probed
+
+
+def test_the_last_alone_slot_is_for_urgent_prs_only(tmp_path, monkeypatch):
+    import pytest  # noqa: PLC0415
+
+    """Every alone slot was held by checks of ordinary PRs (and by orphaned warm-ups) while landing fixes waited; the last slot is reserved for the PRs of urgent.txt."""
+    root = tmp_path / "slots"
+    held = [ps._claim_slot(root, 3) for _ in range(2)]
+    assert sorted(slot for slot, _ in held) == [0, 1]
+
+    def sleep(_):
+        raise TimeoutError("an ordinary PR waits for a slot")
+
+    monkeypatch.setattr(ps.time, "sleep", sleep)
+    with pytest.raises(TimeoutError):
+        ps._claim_slot(root, 3)
+    slot, lock = ps._claim_slot(root, 3, urgent=True)
+    assert slot == 2, "the reserved slot goes to an urgent PR"
+    lock.close()
+    (tmp_path / "urgent.txt").write_text("# fixes\n5073 5125 # docs\n5123\n")
+    assert ps.urgent_numbers({"LAND_TMP": str(tmp_path)}) == {"5073", "5125", "5123"}
+    assert ps.urgent_numbers({"LAND_TMP": str(tmp_path / "none")}) == set()
+
+
+def test_a_pr_that_does_not_link_alone_is_refused_and_only_a_runtime_or_frontend_pr_pays_for_the_check(tmp_path):
+    """#4822 and #4839 (QB frontend) broke the link of the QB runtime programs and were refused by 19 batch rounds in three batches: the alone layer never linked anything."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "a.txt").write_text("a\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    head = branch(repo, "ok", "b.txt", "b\n")
+    sh(repo, "checkout", "-q", "main")
+    kw = dict(base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda _: set(), units=lambda _: set(), docs=lambda root: set())
+    why = ps.alone_refusals(head, links=lambda files, cwd, target: ["qb arena_type: llrm-c: _line@3", "qb bc_draw: x"], **kw)
+    assert why == ["programs do not link: link qb arena_type, link qb bc_draw"], why
+    assert ps.alone_refusals(head, links=lambda files, cwd, target: [], **kw) == []
+
+    def never(*args, **kwargs):
+        raise AssertionError("a PR outside the runtime and the frontends built and linked")
+
+    assert ps.alone_link_failures(["crates/opt/llrm-transforms/src/x.rs", "docs/a.md"], tmp_path, None, run=never) == []
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(command[-1] if "link_check" in command[-2:][0] or "link_check" in command[-1] else command[0])
+        (tmp_path / "link" / "release").mkdir(parents=True, exist_ok=True)
+        return type("Done", (), {"returncode": 0, "stdout": "link: 2 QB + 1 C programs, 1 do not link\nqb arena_type: boom\n", "stderr": ""})()
+
+    got = ps.alone_link_failures(["crates/frontends/llrm-qb/src/x.rs"], tmp_path, tmp_path, run=run)
+    assert got == ["qb arena_type: boom"] and len(ran) == 2, (got, ran)

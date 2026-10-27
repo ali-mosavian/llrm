@@ -1,7 +1,7 @@
 //! At -Os a loop is not replaced by its closed form when the formula is more
 //! code than the loop.
 
-use std::process::Command;
+mod common;
 
 /// A sum the loop optimizer writes in closed form, widened to i64 for the
 /// product: 35 B as a loop on main, 107 B as the formula.
@@ -17,7 +17,7 @@ const SUM: &str = r#"long b(unsigned short n)
 fn exit_value_listing(level: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SUM).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m16", "-march=i386", level, "-S", "-o", "a.s", "a.c"])
         .output()

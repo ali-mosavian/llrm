@@ -1,5 +1,7 @@
 //! Spill-side changes keep what a value was when it was loaded.
 
+mod common;
+
 use std::path::Path;
 use std::process::Command;
 
@@ -92,7 +94,7 @@ fn test_a_value_loaded_before_a_store_is_not_read_again_after_it() {
     let reference = run(directory, "gcc", &["-m32", "-O0", "-c", "refk.c", "-o", "ref.o"]);
     assert!(reference.status.success(), "{}", String::from_utf8_lossy(&reference.stderr));
     for level in ["-O1", "-O2", "-O3", "-Os"] {
-        let made = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        let made = common::cc::llrm_c()
             .current_dir(directory)
             .args(["-m32", "-mabi=sysv", "-march=i486", level, "-fobject-format=elf", "-o", "own.o", "own.c"])
             .output()
