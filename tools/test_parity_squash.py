@@ -1244,8 +1244,8 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
 
 
-def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs(tmp_path):
-    """Four refusals of the 03:03 batch said `docs_in_sync::test_no_generated_page_is_stale` and nothing else; owners guessed which page."""
+def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs_and_the_prs_that_changed_the_source(tmp_path):
+    """Four refusals of the 03:03 batch said `docs_in_sync::test_no_generated_page_is_stale` and nothing else; owners guessed which page and which PR."""
     def git(*args):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
@@ -1254,8 +1254,8 @@ def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs(tmp_
     (tmp_path / "docs/a.md").write_text("head\n")
     git("add", ".")
     git("commit", "-qm", "base")
-    (tmp_path / "docs/a.md").write_text("stale in the batch\n")
+    (tmp_path / "docs/a.md").write_text("<!-- src: crates/x/precse.rs sha256:0 -->\nstale in the batch\n")
     head_blob, batch_blob = git("rev-parse", "main:docs/a.md")[:9], git("hash-object", "docs/a.md")[:9]
-    got = ps.docs_detail({"integration docs_in_sync::test_no_generated_page_is_stale"}, tmp_path, "main", stale=lambda root: {"docs/a.md", "docs/gone.md"})
-    assert got == f" [stale pages: docs/a.md (batch tree {batch_blob}, head {head_blob}); docs/gone.md (batch tree absent, head absent)]", got
+    got = ps.docs_detail({"integration docs_in_sync::test_no_generated_page_is_stale"}, tmp_path, "main", stale=lambda root: {"docs/a.md", "docs/gone.md"}, members=lambda: {"5094": ["crates/x/precse.rs"], "5071": ["other.rs"]})
+    assert got == f" [stale pages: docs/a.md (batch tree {batch_blob}, head {head_blob}; source crates/x/precse.rs, changed by #5094); docs/gone.md (batch tree absent, head absent)]", got
     assert ps.docs_detail({"integration docs_links::t"}, tmp_path, "main", stale=lambda root: pytest.fail("not a docs refusal")) == ""
