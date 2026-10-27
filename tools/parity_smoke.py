@@ -614,6 +614,18 @@ SCANNERS = {
 TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
 
 
+def with_common(
+    text: str,
+    root: Path = ROOT,
+) -> str:
+    """`text` of a target and, if it says `mod common;`, the text of tests/common/mod.rs and of each `common::NAME` submodule it names: what a target reaches through the helper."""
+    if not re.search(r"^\s*(?:pub\s+)?mod common;", text, re.M):
+        return text
+    common = root / "tests" / "common"
+    files = [common / "mod.rs", *(common / f"{name}.rs" for name in set(re.findall(r"\bcommon::(\w+)", text)))]
+    return "\n".join([text, *(one.read_text(errors="replace") for one in files if one.is_file())])
+
+
 def integration_map(
     root: Path = ROOT,
     metadata: dict | None = None,
@@ -629,7 +641,7 @@ def integration_map(
     bins = {target["name"]: named(Path(target["src_path"]).read_text()) for one in metadata["packages"] if one["name"] == "llrm" for target in one["targets"] if target["kind"] == ["bin"]}
     out = {}
     for source in sorted((root / "tests").glob("*.rs")):
-        text = source.read_text(errors="replace")
+        text = with_common(source.read_text(errors="replace"), root)
         used = named(text)
         for name in set(re.findall(r"CARGO_BIN_EXE_([\w-]+)", text)):
             used |= {name} & bins.keys() and bins[name]
