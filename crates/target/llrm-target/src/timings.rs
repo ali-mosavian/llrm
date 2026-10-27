@@ -30,6 +30,33 @@ pub struct CpuTable {
     pub latency: Vec<(String, i64)>,
 }
 
+/// The price a tune file gives a row of `section`: a scalar at the top, a form
+/// under `clocks` or `latency`. `docs` holds each CPU's file once parsed.
+fn tune_value(
+    tunes: &[(&str, &str)],
+    docs: &mut [Option<toml::Table>],
+    marches: &[String],
+    at_cpu: usize,
+    section: &str,
+    name: &str,
+) -> Result<String, String> {
+    let march = marches.get(at_cpu).ok_or("`=` before the `march` line")?;
+    if docs[at_cpu].is_none() {
+        let text = tunes.iter().find(|(one, _)| one == march).map(|(_, text)| *text);
+        let text = text.ok_or(format!("no tune file for {march}"))?;
+        docs[at_cpu] = Some(text.parse().map_err(|e| format!("tune {march}: {e}"))?);
+    }
+    let doc = docs[at_cpu].as_ref().expect("parsed above");
+    let found = match section {
+        "scalars" => doc.get(name),
+        other => doc.get(other).and_then(|table| table.get(name)),
+    };
+    match found.and_then(|one| one.as_integer()) {
+        Some(number) => Ok(number.to_string()),
+        None => Err(format!("tune {march} has no `{name}` in {section}")),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Timings {
     cpus: Vec<String>,
@@ -41,11 +68,21 @@ pub struct Timings {
 
 impl Timings {
     pub fn parse(text: &str) -> Result<Self, String> {
+        Self::parse_tuned(text, &[])
+    }
+
+    /// `parse`, where a `=` in a CPU's cell reads the row from that CPU's tune
+    /// file: `tunes` pairs a `march` name with the file's text.
+    pub fn parse_tuned(
+        text: &str,
+        tunes: &[(&str, &str)],
+    ) -> Result<Self, String> {
         let mut cpus: Vec<String> = Vec::new();
         let mut tables: Vec<CpuTable> = Vec::new();
         let mut default = None;
         let mut marches: Vec<String> = Vec::new();
         let mut section = "scalars";
+        let mut docs: Vec<Option<toml::Table>> = Vec::new();
         for (index, raw) in text.lines().enumerate() {
             let line = raw.split('#').next().unwrap_or("").trim();
             if line.is_empty() {
@@ -69,6 +106,7 @@ impl Timings {
             if name == "cpus" {
                 cpus = values.iter().map(|one| (*one).to_owned()).collect();
                 tables = vec![CpuTable::default(); cpus.len()];
+                docs = vec![None; cpus.len()];
                 continue;
             }
             if values.len() != cpus.len() {
@@ -78,7 +116,15 @@ impl Timings {
                 marches = values.iter().map(|one| (*one).to_owned()).collect();
                 continue;
             }
-            for (table, value) in tables.iter_mut().zip(values) {
+            for (at_cpu, (table, value)) in tables.iter_mut().zip(values).enumerate() {
+                let tuned;
+                let value = if *value == "=" {
+                    tuned = tune_value(tunes, &mut docs, &marches, at_cpu, section, name)
+                        .map_err(|e| format!("{at}: {e}"))?;
+                    &tuned.as_str()
+                } else {
+                    value
+                };
                 let number = || value.parse::<i64>().map_err(|_| format!("{at}: `{value}` is no number"));
                 if *value == "-" {
                     continue;
@@ -191,5 +237,26 @@ mod tests {
             (Some(3), Some(3), Some(3), Some(2))
         );
         assert_eq!((b.set_ratio, b.clear_ratio), (None, Some(6)));
+    }
+
+    #[test]
+    fn an_equals_cell_reads_the_cpus_tune_file() {
+        let text = "cpus a b\nmarch ma mb\nissue = 2\n[clocks]\nalu = 4\nmul 9 =\n";
+        let tunes = [("ma", "issue = 1\n[clocks]\nalu = 3\n"), ("mb", "issue = 5\n[clocks]\nmul = 7\n")];
+        let timings = Timings::parse_tuned(text, &tunes).unwrap();
+        let (a, b) = (timings.cpu("a").unwrap(), timings.cpu("b").unwrap());
+        assert_eq!((a.issue, b.issue), (1, 2));
+        assert_eq!(
+            (a.clocks.clone(), b.clocks.clone()),
+            (vec![("alu".into(), 3), ("mul".into(), 9)], vec![("alu".into(), 4), ("mul".into(), 7)])
+        );
+    }
+
+    #[test]
+    fn an_equals_cell_with_no_tune_row_is_an_error_not_a_zero() {
+        let text = "cpus a\nmarch ma\n[clocks]\nalu =\n";
+        assert!(Timings::parse(text).unwrap_err().contains("no tune file for ma"));
+        assert!(Timings::parse_tuned(text, &[("ma", "")]).unwrap_err().contains("no `alu` in clocks"));
+        assert!(Timings::parse_tuned("cpus a\n[clocks]\nalu =\n", &[]).unwrap_err().contains("before the `march`"));
     }
 }

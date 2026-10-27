@@ -264,6 +264,17 @@ impl AllocationOrder {
             };
             // Don't add the same reg twice; check Phys is in the allocation
             // order.
+            // A pin names a root; a byte value takes the byte register of it
+            // that comes first in its order (`copyHint` reads the copy's
+            // sub-register index).
+            let phys = phys.map(|phys| {
+                if order.contains(&phys) {
+                    phys
+                } else {
+                    let root = crate::model::ir::root(phys);
+                    order.iter().copied().find(|one| crate::model::ir::root(*one) == root).unwrap_or(phys)
+                }
+            });
             if let Some(phys) = phys {
                 if !found.contains(&phys) && order.contains(&phys) {
                     found.push(phys);
@@ -477,7 +488,8 @@ pub struct RAGreedy<'a> {
     /// require one (pre-assigned): nothing recolors them (DEVIATE: LLVM
     /// models a fixed register as the reg units of a physical register).
     pub pinned: HashSet<u32>,
-    /// Pinned values that are fixed ranges, not allocated (`LLRM_FIXED_PINS`).
+    /// Pinned values that are fixed ranges, not allocated (unless
+    /// `LLRM_PINS_AS_VREGS`).
     pub fixed: HashSet<u32>,
     queue: BinaryHeap<(u32, u32)>,
     spiller: Box<dyn Spiller + 'a>,

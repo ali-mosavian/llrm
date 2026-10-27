@@ -54,6 +54,8 @@ pub enum Unmapped {
 /// `x86.instr`'s forms, by mnemonic.
 pub struct OpcodeMap {
     forms: Vec<Form>,
+    /// [`Self::scalar_sse`], asked per operand width: found once.
+    scalar_sse: bool,
     /// The answer for each name asked: every machine node of a function asks,
     /// and a name has one answer.
     asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
@@ -61,13 +63,14 @@ pub struct OpcodeMap {
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
-        OpcodeMap { forms, asked: Default::default() }
+        let scalar_sse = forms.iter().any(|form| form.name == "addsd");
+        OpcodeMap { forms, scalar_sse, asked: Default::default() }
     }
 
     /// Whether this target does scalar floating point in xmm registers (it has
     /// `addsd`): a floating value is then 4 or 8 bytes, not the x87's 10.
     pub fn scalar_sse(&self) -> bool {
-        self.forms.iter().any(|form| form.name == "addsd")
+        self.scalar_sse
     }
 
     pub fn forms(&self) -> &[Form] {
@@ -290,7 +293,7 @@ fn split(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
     while let Some(c) = tail.chars().next() {
         match c {
             'r' | 'm' | 'i' => letters.push(c),
-            'C' if tail.starts_with("CL") => {
+            'C' if tail[1..].starts_with('L') => {
                 letters.push('r');
                 tail = &tail[1..];
             }

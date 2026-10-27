@@ -702,7 +702,7 @@ pub fn value_id(
             K::Zero => 2,
             K::Bytes(_) => 3,
             K::Int(_) => 5,
-            K::Float(_) => 7,
+            K::Float(_) | K::Float80(_) => 7,
             K::Null => 9,
             K::Aggregate(_) => match cx.context.types.get(cx.context.get(id).ty) {
                 MirType::Array { .. } => 11,
