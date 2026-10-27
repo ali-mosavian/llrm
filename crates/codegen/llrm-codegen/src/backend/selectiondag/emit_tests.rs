@@ -94,6 +94,8 @@ fn context_in(
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
+        strings: None,
+        registers: llrm_target::Target::registers(&target),
         globals: &NoGlobals,
         block_at: &no_blocks,
         frame: &NoFrame,
