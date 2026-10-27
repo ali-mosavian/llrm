@@ -830,49 +830,74 @@ fn at_os_a_54_byte_clear_is_a_rep_string_operation() {
     assert_eq!((fills, stores), (1, 0), "a fill and no store");
 }
 
-const M16_CLEAR_FRAME_18: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
-@g = global [18 x i8] zeroinitializer
+const M16_CLEAR_24: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@g = global [24 x i8] zeroinitializer
+
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
-declare void @use(ptr)
+
 define void @f() {
 entry:
-  %a = alloca [18 x i8], align 2
-  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 18, i1 false)
-  call void @use(ptr %a)
-  ret void
-}
-define void @h() {
-entry:
-  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 18, i1 false)
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 24, i1 false)
   ret void
 }
 ";
 
-/// Counts of the fills and of the stores a function selects to at -Os, m16.
-fn fills_and_stores(name: &str) -> (usize, usize) {
-    let module = llrm_mir::parse::module(M16_CLEAR_FRAME_18).expect("parses");
-    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+/// A 24-byte local array cleared by six dword stores at -Os (24 B of code)
+/// where the old selector's `rep stos` is 12: the inline limit was the pin's
+/// 8 stores, not the target's size-tuned ratio (nbody_single.nib: 96 B of
+/// `mov [bp-N],esi` for four arrays, and 610 more `mov` stores over the
+/// corpus under dag). Real mode takes four stores inline at -Os.
+#[test]
+fn at_os_a_24_byte_clear_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_CLEAR_24).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
     cpu.size = true;
-    let done = selected(&module, name, &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
-    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
-    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
-    let stores = whats()
-        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+    let fills =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
         .count();
-    (fills, stores)
+    assert_eq!((fills, stores), (1, 0), "a fill and no store");
 }
 
-/// An 18-byte clear of a local at m16 -Os was five stores through BP
-/// (`sieve.bas` +44 B over the old selector, bench `sieve` 893 -> 937): the
-/// pin counts stores, but in 16-bit code they are longer than the fill. A
-/// clear at an absolute address stays stores: its register cost is not the
-/// model's.
+const M16_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@a = global [12 x i8] zeroinitializer
+@b = global [12 x i8] zeroinitializer
+
+declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p0.i16(ptr @a, ptr @b, i16 12, i1 false)
+  ret void
+}
+";
+
+/// A 12-byte struct copy (a `vec3` of floats) was three dword load and store
+/// pairs at -Os, 24 bytes of code where `rep movs` is about 16 (QCport
+/// `_ent_mover_push`: 21 stores and 15 loads). Real mode takes two pairs
+/// inline at size.
 #[test]
-fn at_os_an_18_byte_clear_of_a_local_is_a_fill_and_of_a_global_is_stores() {
-    assert_eq!(fills_and_stores("f").0, 1, "a fill for the local");
-    let (fills, stores) = fills_and_stores("h");
-    assert_eq!((fills, stores > 1), (0, true), "stores for the global");
+fn at_os_a_12_byte_copy_is_a_rep_string_operation() {
+    let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Copy).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((copies, stores), (1, 0), "a copy and no store");
 }
 
 /// A 16-byte clear at m16 was eight word stores: the widest store was the
@@ -1010,4 +1035,49 @@ fn a_volatile_load_folded_into_an_add_is_a_volatile_instruction() {
         .collect();
     assert_eq!(folded.len(), 1, "premise: the load is folded into the add");
     assert!(folded[0].volatile, "the folded add is volatile");
+}
+
+const M16_CLEAR_FRAME_18: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+@g = global [18 x i8] zeroinitializer
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {
+entry:
+  %a = alloca [18 x i8], align 2
+  call void @llvm.memset.p0.i16(ptr %a, i8 0, i16 18, i1 false)
+  call void @use(ptr %a)
+  ret void
+}
+define void @h() {
+entry:
+  call void @llvm.memset.p0.i16(ptr @g, i8 0, i16 18, i1 false)
+  ret void
+}
+";
+
+/// Counts of the fills and of the stores a function selects to at -Os, m16.
+fn fills_and_stores(name: &str) -> (usize, usize) {
+    let module = llrm_mir::parse::module(M16_CLEAR_FRAME_18).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, name, &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = whats()
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    (fills, stores)
+}
+
+/// An 18-byte clear of a local at m16 -Os was five stores through BP
+/// (`sieve.bas` +44 B over the old selector, bench `sieve` 893 -> 937): the
+/// pin counts stores, but in 16-bit code they are longer than the fill. A
+/// clear at an absolute address stays stores: its register cost is not the
+/// model's.
+#[test]
+fn at_os_an_18_byte_clear_of_a_local_is_a_fill_and_of_a_global_is_stores() {
+    assert_eq!(fills_and_stores("f").0, 1, "a fill for the local");
+    let (fills, stores) = fills_and_stores("h");
+    assert_eq!((fills, stores > 1), (0, true), "stores for the global");
 }
