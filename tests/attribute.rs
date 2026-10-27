@@ -3,7 +3,9 @@
 //! `always_inline`) reach the optimizer; those that change no meaning are read
 //! and dropped; the rest are an error, not ignored.
 
-use std::process::{Command, Output};
+mod common;
+
+use std::process::Output;
 
 fn compile(source: &str) -> (Output, String) {
     compiled("-m16", source)
@@ -15,7 +17,7 @@ fn compiled(
 ) -> (Output, String) {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("t.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args([target, "-O2", "-S", "-o", "t.s", "t.c"])
         .output()
@@ -80,8 +82,13 @@ fn test_noinline_after_a_prototype_holds_for_the_definition() {
 /// the budget stayed eight calls, where gcc and clang inline them all.
 #[test]
 fn test_always_inline_replaces_every_call_of_a_big_routine() {
-    let body = "{ long s = 0; int i; for (i = 0; i < x; i++) s += i * x + (s >> 3); if (s > 100) s ^= x; \
-                for (i = 0; i < x; i++) s += i * s - (s >> 2); return s * 3 + x; }\n";
+    // Big enough that the inliner's threshold refuses it at eight calls, as the
+    // pin's does (the smaller routine of two loops is inlined without the
+    // attribute by both).
+    let body = format!(
+        "{{ long s = 0; int i; for (i = 0; i < x; i++) s += i * x + (s >> 3); if (s > 100) s ^= x; {}return s * 3 + x; }}\n",
+        "for (i = 0; i < x; i++) s += i * s - (s >> 2); if (s > 100) s ^= x; ".repeat(4)
+    );
     let main = "long main(long a) { return f(a) + f(a + 1) + f(a + 2) + f(a + 3) + f(a + 4) + f(a + 5) + f(a + 6) + f(a + 7); }\n";
     let (_, plain) = compiled("-m32", &format!("static long f(long x) {body}{main}"));
     let (_, forced) = compiled("-m32", &format!("static __attribute__((always_inline)) long f(long x) {body}{main}"));

@@ -185,6 +185,36 @@ out:
     assert!(after.contains("unreachable"), "the latch no longer jumps back: {after}");
 }
 
+/// `breakLoopBackedge` splits a switch latch's backedge with `SplitEdge`,
+/// which stands the block right after the latch (LoopUtils.cpp:800), not at
+/// the end of the function.
+#[test]
+fn the_block_that_replaces_the_backedge_stands_after_the_latch() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  store i16 %x, ptr @g
+  %c = icmp eq i16 %i, 0
+  br i1 %c, label %out, label %latch
+
+latch:
+  %next = add i16 %i, 1
+  switch i16 %x, label %loop []
+
+out:
+  ret i16 %x
+}
+";
+    let after = deleted(text, INPUTS);
+    let (bridge, out) = (after.find("unreachable").expect("the bridge"), after.find("out:").expect("out"));
+    assert!(bridge < out, "the bridge stands before out: {after}");
+}
+
 /// `n` dead loops in a row cost entries in proportion to `n`.
 fn sequence(n: usize) -> String {
     let mut text = String::from("define i16 @f(i16 %x) mustprogress {\nb0:\n  br label %l0\n\n");
@@ -239,7 +269,7 @@ b3:
     let nodes = |loopdeletion: bool| {
         let mut module = crate::testing::parsed(text);
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.add(crate::indvars::IndVars { lftr: true });
+        manager.add(crate::indvars::IndVars { lftr: true, size: false });
         if loopdeletion {
             manager.add(super::LoopDeletion);
         }
@@ -250,4 +280,16 @@ b3:
     let (alone, both) = (nodes(false), nodes(true));
     assert!(alone > 0);
     assert_eq!(both, alone, "loopdeletion made {} expressions again", both - alone);
+}
+
+/// observed.c's `mix` at -O2 -g lost the debug record of its parameter `n`,
+/// which stands before the preheader's branch, when its loop was deleted: the
+/// branch was replaced and its records dropped, and gdb read `n` as optimised
+/// out where it is in a register throughout.
+#[test]
+fn the_debug_records_before_the_preheaders_branch_survive_a_deletion() {
+    let text = COUNTER.replace("b0:\n  br label %head", "b0:\n  #dbg_value(i16 %n, !1)\n  br label %head")
+        + "\n!1 = !{!\"f\", !\"n\", !2, i64 0, i64 1, i64 0}\n!2 = !{!\"int\"}\n";
+    let after = deleted(&text, INPUTS);
+    assert!(!after.contains("phi") && after.contains("#dbg_value(i16 %n"), "{after}");
 }

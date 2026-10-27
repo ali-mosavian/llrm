@@ -45,7 +45,7 @@ A private procedure that frames itself is called near: no CS, so the arguments s
 
 ## The runtime frame
 
-A procedure whose errors can land in it, or that has a local string, calls `B$ENRA` and leaves with `B$EXSA`; any other frames itself with `push bp`, `mov bp,sp`, `sub sp`. `B$ENRA` takes CX = bytes of locals (even) and builds the frame below. Its header is 10 bytes in QB 4.5 and in the llrm runtime, 18 in PDS 7.1 and 20 in VBDOS (`_RUNTIME_FRAME_HEADER` in `crates/backend/llrm-core/src/driver/basic.rs`); the llrm runtime's flat header is 32. `B$EXSA` takes BP and the result in DX:AX, restores SI, DI and BP and leaves BP and SP as the procedure used them.
+A procedure whose errors can land in it, or that has a local string, calls `B$ENRA` and leaves with `B$EXSA`; any other frames itself with `push bp`, `mov bp,sp`, `sub sp`. `B$ENRA` takes CX = bytes of locals (even) and builds the frame below. Its header is 10 bytes in QB 4.5 and in the llrm runtime, 18 in PDS 7.1 and 20 in VBDOS (`_RUNTIME_FRAME_HEADER` in `crates/codegen/llrm-codegen/src/driver/basic.rs`); the llrm runtime's flat header is 32. `B$EXSA` takes BP and the result in DX:AX, restores SI, DI and BP and leaves BP and SP as the procedure used them.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','textColor':'#64748b'}}}%%
@@ -114,4 +114,4 @@ Some entries keep a register interface beside the stack block: `B$HARY` takes th
 
 ## Tests
 
-`crates/frontends/llrm-qb/src/callconv_tests.rs` compares llrm's lowering of each call boundary with BC's `/A` listings of the same program; [conformance](conformance.md) lists the rest.
+`crates/frontends/qb/src/callconv_tests.rs` compares llrm's lowering of each call boundary with BC's `/A` listings of the same program; [conformance](conformance.md) lists the rest.

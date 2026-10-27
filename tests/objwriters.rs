@@ -1,19 +1,17 @@
 //! The object writers: what `-fobject-format=` picks, and what readelf and
 //! objdump make of the objects it writes for every bench C program.
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-
-fn llrm_c() -> PathBuf {
-    Path::new(env!("CARGO_BIN_EXE_llrm-qb")).parent().unwrap().join("llrm-c")
-}
 
 fn compile(
     source: &Path,
     arguments: &[&str],
     out: &Path,
 ) -> Output {
-    Command::new(llrm_c()).args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
+    common::cc::llrm_c().args(arguments).arg(source).arg("-o").arg(out).output().unwrap()
 }
 
 fn have(tool: &str) -> bool {

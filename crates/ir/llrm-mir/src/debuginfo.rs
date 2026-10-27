@@ -117,6 +117,7 @@ pub const LANGUAGE: &str = "llrm.dbg.language";
 pub const TYPES: &str = "llrm.dbg.types";
 pub const FUNCTIONS: &str = "llrm.dbg.functions";
 pub const GLOBALS: &str = "llrm.dbg.globals";
+pub const FILE: &str = "llrm.dbg.file";
 /// The attachment naming an `llvm.dbg.declare`'s variable.
 pub const VARIABLE: &str = "var";
 
@@ -380,6 +381,23 @@ pub fn set_language(
 ) {
     let id = node(module, vec![text(language.value()), text(dialect.value())]);
     named(module, LANGUAGE, id);
+}
+
+/// The source file of the unit: its name, and the MD5 of its text as hex where
+/// the frontend gave one.
+pub fn set_file(
+    module: &mut Module,
+    name: &str,
+    md5: Option<&str>,
+) {
+    let id = node(module, vec![text(name), text(md5.unwrap_or(""))]);
+    named(module, FILE, id);
+}
+
+pub fn file(module: &Module) -> Option<(String, Option<String>)> {
+    let id = listed(module, FILE).next()?;
+    let one = Reader::of(module, id)?;
+    Some((one.text(0)?, one.text(1).filter(|sum| !sum.is_empty())))
 }
 
 /// The form of CodeView 4 the frontend says: the BASIC compilers' where it says

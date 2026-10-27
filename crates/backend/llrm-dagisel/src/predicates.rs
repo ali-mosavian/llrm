@@ -1,9 +1,10 @@
-//! The bodies of the pin's node predicates (`CheckNodePredicate`), the ones the x86-32 table
-//! without vectors still names.
+//! The bodies of the pin's node predicates (`CheckNodePredicate`), the ones the
+//! x86-32 table without vectors still names.
 //!
-//! The pin writes each as C++ over the node; the generated `node_predicate` calls the function
-//! `features.toml` names for it. Each is a translation of its PatFrag body in
-//! `X86InstrFragments.td`, `X86InstrCompiler.td` and `TargetSelectionDAG.td`.
+//! The pin writes each as C++ over the node; the generated `node_predicate`
+//! calls the function `features.toml` names for it. Each is a translation of
+//! its PatFrag body in `X86InstrFragments.td`, `X86InstrCompiler.td` and
+//! `TargetSelectionDAG.td`.
 
 use crate::dag::{Dag, FpClass, Hooks, LoadExt, SDValue};
 use crate::generated::ids::{isd, mvt};
@@ -44,10 +45,16 @@ pub fn two_uses_of_first_value<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> 
 
 /// `loadi8`: a load that leaves the upper bits undefined or zero.
 pub fn loadi8<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
-    matches!(dag.load_ext_type(v.node), Some(LoadExt::NonExt | LoadExt::Ext | LoadExt::ZExt))
+    matches!(
+        dag.load_ext_type(v.node),
+        Some(LoadExt::NonExt | LoadExt::Ext | LoadExt::ZExt)
+    )
 }
 
-fn loadi<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>, align: u64) -> bool {
+fn loadi<D: Dag, H: Hooks<D>>(
+    (dag, _, v): Args<D, H>,
+    align: u64,
+) -> bool {
     match dag.load_ext_type(v.node) {
         Some(LoadExt::NonExt) => true,
         Some(LoadExt::Ext) if ENABLE_PROMOTE_ANYEXT_LOAD => dag.alignment(v.node) >= align && dag.is_simple(v.node),
@@ -104,7 +111,10 @@ pub fn atomic_non_extending<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     non_extending_load(args)
 }
 
-fn memory_vt_is<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>, vt: Vt) -> bool {
+fn memory_vt_is<D: Dag, H: Hooks<D>>(
+    (dag, _, v): Args<D, H>,
+    vt: Vt,
+) -> bool {
     dag.memory_vt(v.node) == vt
 }
 
@@ -140,12 +150,26 @@ pub fn memory_vt_f80<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     memory_vt_is(args, mvt::f80)
 }
 
+/// `nontemporalstore`: the builder sets no `!nontemporal`, so none is.
+pub fn non_temporal_store<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
+/// `CommutableCMPCC`: a `cmpss`/`cmpsd` predicate whose operands may swap
+/// (EQ, UNORD, NEQ, ORD).
+pub fn commutable_cmp_cc<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    imm(args, |i| matches!(i & 0x7, 0 | 3 | 4 | 7))
+}
+
 /// `fp32imm0`: `N->isPosZero()`.
 pub fn is_pos_zero<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     fp_imm_pos_zero(args)
 }
 
-fn fp_is<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>, class: FpClass) -> bool {
+fn fp_is<D: Dag, H: Hooks<D>>(
+    (dag, _, v): Args<D, H>,
+    class: FpClass,
+) -> bool {
     dag.fp_class(v) == Some(class)
 }
 
@@ -165,7 +189,10 @@ pub fn fp_imm_minus_one<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     fp_is(args, FpClass::MinusOne)
 }
 
-fn imm<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>, test: impl Fn(i64) -> bool) -> bool {
+fn imm<D: Dag, H: Hooks<D>>(
+    (dag, _, v): Args<D, H>,
+    test: impl Fn(i64) -> bool,
+) -> bool {
     dag.constant(v).is_some_and(test)
 }
 
@@ -221,12 +248,19 @@ pub fn reloc_imm_sext_8<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> boo
     hooks.is_sext_absolute_symbol_ref(dag, 8, v.node)
 }
 
+/// `xor_flag_dead_result`: the value result of the `X86xor_flag` has no use,
+/// only its flags (64-bit mode).
+pub fn xor_flag_dead_result<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
+    dag.has_n_uses_of_value(SDValue::new(v.node, 0), 0)
+}
+
 /// `X86add_flag_nocf` and its kin: no use of the flags result reads the carry.
 pub fn no_carry_flag_uses_of_flags<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
     hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
 }
 
-/// `X86sub_flag_nocf`: only when the result is used too, so `dec` is not a pure compare.
+/// `X86sub_flag_nocf`: only when the result is used too, so `dec` is not a pure
+/// compare.
 pub fn sub_no_carry_flag_uses<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
     !dag.has_n_uses_of_value(SDValue::new(v.node, 0), 0) && hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
 }

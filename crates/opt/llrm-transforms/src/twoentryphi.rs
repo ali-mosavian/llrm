@@ -269,7 +269,7 @@ pub fn folded(
     block: BlockId,
 ) -> bool {
     let Some(first) = function.block(block).first() else { return false };
-    if function.instruction(first).opcode != Opcode::Phi || arms(function, first).len() != 2 {
+    if function.instruction(first).opcode != Opcode::Phi || function.instruction(first).operands.len() != 4 {
         return false;
     }
     let Some(found) = if_condition(function, block, first) else { return false };

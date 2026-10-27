@@ -1,8 +1,10 @@
-//! Reads the text of `X86GenDAGISel.inc`: the byte tables and the predicate lists.
+//! Reads the text of `X86GenDAGISel.inc`: the byte tables and the predicate
+//! lists.
 //!
-//! tblgen writes the tables as C++ initialisers whose entries name enum values, so the bytes
-//! come from the symbol values in [`Ids`] (`tools/dagisel/regen.sh` takes them from the pin's
-//! headers). The number of bytes is checked against the total tblgen states.
+//! tblgen writes the tables as C++ initialisers whose entries name enum values,
+//! so the bytes come from the symbol values in [`Ids`]
+//! (`tools/dagisel/regen.sh` takes them from the pin's headers). The number of
+//! bytes is checked against the total tblgen states.
 
 use std::collections::BTreeMap;
 
@@ -21,7 +23,10 @@ impl Ids {
         Ok(Ids(map))
     }
 
-    pub fn get(&self, name: &str) -> Result<i64, String> {
+    pub fn get(
+        &self,
+        name: &str,
+    ) -> Result<i64, String> {
         self.0.get(name).copied().ok_or_else(|| format!("symbol `{name}` has no value in the ids file"))
     }
 }
@@ -33,7 +38,8 @@ pub struct Inc {
     pub pattern_predicates: Vec<String>,
     /// The `// Predicate_X` names of each `CheckNodePredicate` case, by number.
     pub node_predicates: Vec<Vec<String>>,
-    /// Each `CheckComplexPattern` case: the selector function it calls and how many results.
+    /// Each `CheckComplexPattern` case: the selector function it calls and how
+    /// many results.
     pub complex_patterns: Vec<ComplexPattern>,
     /// The `return` line of each `RunSDNodeXForm` case.
     pub xforms: Vec<String>,
@@ -61,8 +67,12 @@ fn strip_comments(text: &str) -> String {
     out
 }
 
-/// The text between `marker` and the closing `};`, and what follows the closing line.
-fn initializer<'a>(text: &'a str, marker: &str) -> Result<(&'a str, &'a str), String> {
+/// The text between `marker` and the closing `};`, and what follows the closing
+/// line.
+fn initializer<'a>(
+    text: &'a str,
+    marker: &str,
+) -> Result<(&'a str, &'a str), String> {
     let at = text.find(marker).ok_or_else(|| format!("no `{marker}` in the .inc"))?;
     let body = &text[at + marker.len()..];
     let end = body.find("};").ok_or_else(|| format!("`{marker}` is not closed"))?;
@@ -70,8 +80,12 @@ fn initializer<'a>(text: &'a str, marker: &str) -> Result<(&'a str, &'a str), St
     Ok((&body[..end], after))
 }
 
-/// One initialiser entry as bytes: a number, an OR of numbers and symbols, or `TARGET_VAL(sym)`.
-fn entry_bytes(entry: &str, ids: &Ids) -> Result<Vec<u8>, String> {
+/// One initialiser entry as bytes: a number, an OR of numbers and symbols, or
+/// `TARGET_VAL(sym)`.
+fn entry_bytes(
+    entry: &str,
+    ids: &Ids,
+) -> Result<Vec<u8>, String> {
     let entry = entry.trim();
     if let Some(inner) = entry.strip_prefix("TARGET_VAL(") {
         let symbol = inner.strip_suffix(')').ok_or_else(|| format!("bad entry `{entry}`"))?;
@@ -91,14 +105,20 @@ fn entry_bytes(entry: &str, ids: &Ids) -> Result<Vec<u8>, String> {
     Ok(vec![value as u8])
 }
 
-fn term(term: &str, ids: &Ids) -> Result<i64, String> {
+fn term(
+    term: &str,
+    ids: &Ids,
+) -> Result<i64, String> {
     if term.bytes().all(|b| b.is_ascii_digit()) && !term.is_empty() {
         return term.parse().map_err(|_| format!("bad number `{term}`"));
     }
     ids.get(term)
 }
 
-fn bytes_of(body: &str, ids: &Ids) -> Result<Vec<u8>, String> {
+fn bytes_of(
+    body: &str,
+    ids: &Ids,
+) -> Result<Vec<u8>, String> {
     let body = strip_comments(body);
     let mut out = Vec::new();
     for entry in body.split(',').map(str::trim).filter(|e| !e.is_empty()) {
@@ -107,7 +127,10 @@ fn bytes_of(body: &str, ids: &Ids) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-pub fn parse(text: &str, ids: &Ids) -> Result<Inc, String> {
+pub fn parse(
+    text: &str,
+    ids: &Ids,
+) -> Result<Inc, String> {
     let (table_body, after) = initializer(text, "MatcherTable[] = {")?;
     let matcher_table = bytes_of(table_body, ids)?;
     let stated = after
@@ -130,7 +153,8 @@ pub fn parse(text: &str, ids: &Ids) -> Result<Inc, String> {
     Ok(Inc { matcher_table, operand_lists, pattern_predicates, node_predicates, complex_patterns, xforms })
 }
 
-/// The expression of each `case N: return <expr>;` in `CheckPatternPredicate`, by `N`.
+/// The expression of each `case N: return <expr>;` in `CheckPatternPredicate`,
+/// by `N`.
 fn pattern_predicates(after: &str) -> Result<Vec<String>, String> {
     let at = after.find("CheckPatternPredicate(unsigned PredNo) const\n").ok_or("no CheckPatternPredicate")?;
     let body = &after[at..];
@@ -149,15 +173,20 @@ fn pattern_predicates(after: &str) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// The body of the generated function that starts at `signature`, up to its closing brace.
-fn function_body<'a>(after: &'a str, signature: &str) -> Result<&'a str, String> {
+/// The body of the generated function that starts at `signature`, up to its
+/// closing brace.
+fn function_body<'a>(
+    after: &'a str,
+    signature: &str,
+) -> Result<&'a str, String> {
     let at = after.find(signature).ok_or_else(|| format!("no `{signature}` in the .inc"))?;
     let body = &after[at..];
     let end = body.find("\n}\n").ok_or_else(|| format!("`{signature}` is not closed"))?;
     Ok(&body[..end])
 }
 
-/// The numbers of the `  case N:` lines of a generated switch, with the lines of each case.
+/// The numbers of the `  case N:` lines of a generated switch, with the lines
+/// of each case.
 fn cases(body: &str) -> Vec<(usize, Vec<&str>)> {
     let mut out: Vec<(usize, Vec<&str>)> = Vec::new();
     for line in body.lines() {
@@ -181,18 +210,16 @@ fn node_predicates(after: &str) -> Result<Vec<Vec<String>>, String> {
         if number != out.len() {
             return Err(format!("node predicate {number} out of order"));
         }
-        out.push(
-            lines
-                .iter()
-                .filter_map(|l| l.trim().strip_prefix("// Predicate_").map(str::to_string))
-                .collect(),
-        );
+        out.push(lines.iter().filter_map(|l| l.trim().strip_prefix("// Predicate_").map(str::to_string)).collect());
     }
     Ok(out)
 }
 
 fn complex_patterns(after: &str) -> Result<Vec<ComplexPattern>, String> {
-    let body = function_body(after, "CheckComplexPattern(SDNode *Root, SDNode *Parent,\n      SDValue N, unsigned PatternNo,\n      SmallVectorImpl<std::pair<SDValue, SDNode *>> &Result)\n")?;
+    let body = function_body(
+        after,
+        "CheckComplexPattern(SDNode *Root, SDNode *Parent,\n      SDValue N, unsigned PatternNo,\n      SmallVectorImpl<std::pair<SDValue, SDNode *>> &Result)\n",
+    )?;
     let mut out = Vec::new();
     for (number, lines) in cases(body) {
         if number != out.len() {

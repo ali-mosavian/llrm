@@ -144,6 +144,20 @@ fn test_a_call_that_may_throw_stays() {
     assert_eq!(decided(&call(" nounwind readnone")), ["v"]);
 }
 
+/// A libm call `InferFunctionAttrs` marked `memory(errnomem: write)` is hoisted
+/// from the header of a loop that touches no other memory, as the pin does
+/// (`onlyWritesMemory`, then `noConflictingReadWrites`).
+#[test]
+fn test_a_call_that_only_writes_errno_is_hoisted() {
+    let text = looped(
+        "declare i16 @lib(i16) nofree nosync nounwind willreturn memory(errnomem: write)\n\n",
+        ", i16 %a",
+        "  %v = call i16 @lib(i16 %a)\n",
+        "",
+    );
+    assert_eq!(decided(&text), ["v"]);
+}
+
 /// A speculatable call that is handed a `noundef` argument stayed in the loop:
 /// `isSafeToSpeculativelyExecute` ignores UB-implying attributes by default,
 /// and LICM strips them from a call it moves that was not certain to run.
@@ -261,6 +275,56 @@ b3:
 #[test]
 fn test_a_slot_only_the_loop_touches_is_promoted_with_its_stores() {
     assert_eq!(promoted(&slot_loop("", "", "load i16, ptr %s")), [(vec!["s".to_owned()], true)]);
+}
+
+/// The loop of a global it only stores to, on one path.
+fn conditional_store_loop(test: &str) -> String {
+    format!(
+        "@g = internal global i32 0
+
+define i32 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+{test}  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr @g
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}}
+"
+    )
+}
+
+/// Promoting a global the loop only stores to, on some paths, loads it in the
+/// preheader and stores it after the loop for no load saved, and keeps the
+/// global from being removed as write-only: nbody.bas promoted DELTAY&, DIST2&
+/// and DELTAX& once its division guard was gone, +43 B at -Os m16.
+#[test]
+fn test_a_global_stored_on_some_paths_and_never_loaded_is_not_promoted() {
+    assert_eq!(promoted(&conditional_store_loop("  %t = icmp eq i32 %i, 3\n")), Vec::<(Vec<String>, bool)>::new());
+}
+
+/// With a load in the loop the promotion saves it: promoted, stores and all.
+#[test]
+fn test_a_global_stored_on_some_paths_and_loaded_is_promoted() {
+    assert_eq!(
+        promoted(&conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n")),
+        [(vec!["constant".to_owned()], true)]
+    );
 }
 
 /// A call that is handed the slot's address may read or write it: no promotion.
@@ -496,7 +560,7 @@ b3:
 /// so a loop that never stores leaves it as it was.
 #[test]
 fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
-    let text = global_loop("  store i16 %i, ptr @g\n");
+    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
@@ -581,7 +645,7 @@ b5:
 /// was 7).
 #[test]
 fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
-    let text = global_loop("  store i16 %i, ptr @g\n");
+    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
@@ -1196,4 +1260,88 @@ fn test_the_exposed_allocas_are_not_scanned_for_a_loop_that_cannot_throw() {
     // The manager's own `ExposedFrames` is the one scan; LICM made a second.
     let scans = llrm_mir::counts::get(llrm_mir::counts::Event::ExposedFrames) - before;
     assert!(scans <= 1, "the function was scanned for exposed allocas {scans} times");
+}
+
+/// A machine that states the i486's register count and nothing else.
+struct I486(llrm_mir::target::Neutral);
+
+impl llrm_mir::target::Machine for I486 {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap()))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
+/// Ten globals the loop adds the index to, each a promotion candidate.
+fn ten_counters() -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = global i16 0\n")).collect();
+    let body: String = (1..=10)
+        .map(|k| format!("  %x{k} = load i16, ptr @g{k}\n  %y{k} = add i16 %x{k}, %i\n  store i16 %y{k}, ptr @g{k}\n"))
+        .collect();
+    format!(
+        "{globals}
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp eq i16 %i1, %n
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 0
+}}
+"
+    )
+}
+
+/// How many of the counters `Licm` promotes on `machine`.
+fn counters_promoted(machine: impl llrm_mir::target::Machine + 'static) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(&ten_counters());
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: false, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).expect("runs");
+    DECIDED.with(|all| all.borrow().promoted.len())
+}
+
+/// Promoting every global the nbody loop nest touches (17 at m16 -Os) held
+/// them all across the inner loops, and they were spilled to the frame: the
+/// m16 target has six registers, so only as many promotions as the loop's own
+/// values leave room for are made.
+#[test]
+fn test_a_promotion_past_the_target_register_count_is_refused() {
+    assert_eq!(counters_promoted(llrm_mir::target::Neutral), 10);
+    assert_eq!(counters_promoted(llrm_x86_m16::Dos::default()), 3);
+    assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
 }

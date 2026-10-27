@@ -12,9 +12,9 @@
 //!   `llvm.annotation`, `llvm.ptr.annotation`, `llvm.vscale` and
 //!   `llvm.loop.decrement.reg` are not MIR intrinsics (`Intrinsic::named` is
 //!   none for them, tested), so a call to one is an unknown, as any call is.
-//! * No `ptrtoaddr` instruction: `ptrtoint` is an unknown, as at the pin.
-//! * Constant expressions are in global initializers only, so a function
-//!   operand is never one; one that is is an unknown.
+//! * No separate `ptrtoaddr`: MIR's `ptrtoint` is modelled as one.
+//! * Only a constant `getelementptr` expression has a SCEV; any other constant
+//!   expression is an unknown.
 //! * `PoisonValue::get(Ty)` as the SCEV of an unreachable instruction needs a
 //!   constant interned in the context, and the `Cx` holds it by `&`: the
 //!   unknown is of the instruction itself.
@@ -416,7 +416,7 @@ impl ScalarEvolution {
         } else if let Some(ap) = self.const_int(cx, Opnd::V(v)) {
             return Some(self.get_constant(ap));
         } else if let Operand::Constant(_) = v {
-            return Some(self.get_unknown(cx, v));
+            return Some(self.create_node_for_constant_gep(cx, v).unwrap_or_else(|| self.get_unknown(cx, v)));
         } else {
             // An argument.
             return Some(self.get_unknown(cx, v));
@@ -814,8 +814,17 @@ impl ScalarEvolution {
                 self.get_unknown(cx, v)
             }
 
-            // SCEV only models ptrtoaddr, and MIR has no such cast.
-            Opcode::Cast(CastOp::PtrToInt) => self.get_unknown(cx, v),
+            // MIR has one pointer-to-integer cast, which is the pin's
+            // `ptrtoaddr` (what its clang writes for a pointer difference).
+            Opcode::Cast(CastOp::PtrToInt) => {
+                let ty = self.operand_ty(cx, v);
+                let op = self.get_scev(cx, instruction.operands[0]);
+                let addr = self.get_ptr_to_addr_expr(cx, op);
+                if matches!(self.node(addr).kind, Kind::CouldNotCompute) || self.type_of(addr) != ty {
+                    return self.get_unknown(cx, v);
+                }
+                addr
+            }
 
             // Just don't deal with inttoptr casts.
             Opcode::Cast(CastOp::IntToPtr) => self.get_unknown(cx, v),

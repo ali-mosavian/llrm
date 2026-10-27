@@ -263,11 +263,48 @@ fn the_builder_folds_float_casts_of_numbers() {
     let negative = constant(&mut b, double, (-1.0f64).to_bits());
     let unsigned = b.cast(CastOp::FPToUI, negative, i8, "g");
     assert_eq!(bits_of(&b, unsigned), Some(u64::MAX));
-    // An x87 constant and a NaN stay instructions.
+    // An x87 constant folds in its own format; a NaN stays an instruction.
     let extended = constant(&mut b, x87, 2.0f64.to_bits());
-    assert!(matches!(b.cast(CastOp::FPTrunc, extended, double, "h"), Operand::Value(_)));
+    let narrowed = b.cast(CastOp::FPTrunc, extended, double, "h");
+    assert_eq!(bits_of(&b, narrowed), Some(2.0f64.to_bits()));
     let nan = constant(&mut b, double, f64::NAN.to_bits());
     assert!(matches!(b.cast(CastOp::FPTrunc, nan, float, "i"), Operand::Value(_)));
     let zero = b.int(32, 0);
     b.ret(Some(zero));
+}
+
+/// The attributes stamp was SipHash13 over the whole declaration at every
+/// invalidation: 1.0 M of a `d_faces` compile in `Attribute::hash_slice` alone.
+/// It is the crate's Fx now, and moves with an attribute.
+#[test]
+fn test_attributes_stamp_is_fx_and_moves_with_an_attribute() {
+    use std::hash::{Hash, Hasher};
+
+    let mut module = parse::module(TEXT).unwrap();
+    let by_hand = |f: &crate::module::Function| {
+        let mut hasher = crate::hash::Fx::default();
+        f.ty.hash(&mut hasher);
+        f.parameter_attrs.hash(&mut hasher);
+        f.return_attrs.hash(&mut hasher);
+        f.attrs.hash(&mut hasher);
+        f.personality.hash(&mut hasher);
+        f.calling_convention.hash(&mut hasher);
+        hasher.finish()
+    };
+    let before = module.function_mut("f").unwrap().1.attributes_stamp();
+    assert_eq!(before, by_hand(module.function_mut("f").unwrap().1));
+    module.function_mut("f").unwrap().1.attrs.push(crate::opcode::Attribute::Flag("nounwind".into()));
+    assert_ne!(module.function_mut("f").unwrap().1.attributes_stamp(), before);
+}
+
+/// A declaration grew its parameter vectors by doubling (235 growths on
+/// d_faces): five parameters left room for eight.
+#[test]
+fn test_a_declaration_holds_room_for_its_parameters_only() {
+    let module = Module::default();
+    let i16 = module.context.types.int(16);
+    let void = module.context.types.void();
+    let ty = module.context.types.intern(Type::Function { returns: void, parameters: vec![i16; 5], variadic: false });
+    let declaration = crate::build::function_declaration(&module.context, "f", ty).expect("a function type");
+    assert_eq!(declaration.parameter_attrs.capacity(), 5);
 }

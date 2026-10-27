@@ -279,7 +279,9 @@ def linked_objects(source: Path, work: Path, runtime: str = "qb45", flags: tuple
             library = source.parent / name
             obj = work / f"{library.stem}.{runtime}{tag}.obj"
             done = subprocess.run(
-                [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags],
+                dosbatch.with_isel(
+                    [str(dosbatch.BIN / "llrm-nib"), str(library), "-o", str(obj), "-O2", f"--basic-runtime={runtime}", *flags]
+                ),
                 capture_output=True,
                 text=True,
             )
@@ -364,6 +366,18 @@ def os_group_bits(source: Path) -> dict[str, int]:
     return {name.lower(): int(bit) for name, bit in found}
 
 
+def device_directory(platform: Path | None = None) -> Path:
+    """The QB device interface's code for that target: runtime/qb/dev/<os>/<mode> (the DOS BIOS, VGA, speaker and clock)."""
+    platform = platform or platform_directory()
+    return RUNTIME / "dev" / platform.parent.name / platform.name
+
+
+def device_includes(platform: Path | None = None) -> list[str]:
+    """The compiler's -I arguments for the device interface: dev.h, the target's devsym.h and device.h, and the code both targets share."""
+    where = device_directory(platform)
+    return ["-I", str(RUNTIME / "dev"), "-I", str(where), "-I", str(where.parent)]
+
+
 def shared_sources() -> list[Path]:
     return [os_directory() / dosbatch.os_layer(dosbatch.REAL_MODE, "implementation", "c")]
 
@@ -373,9 +387,15 @@ def portable_sources() -> list[Path]:
     return sorted(RUNTIME.glob("*.c"))
 
 
+def platform_sources_of(platform: Path) -> list[Path]:
+    """A target's own code: its C and its assembly, and its device interface's."""
+    device = device_directory(platform)
+    return sorted([*platform.glob("*.c"), *platform.glob("*.asm"), *device.glob("*.c"), *device.glob("*.asm"), *device.parent.glob("*.c")])
+
+
 def platform_sources() -> list[Path]:
     """The target's own code: its C and its assembly."""
-    return sorted([*platform_directory().glob("*.c"), *platform_directory().glob("*.asm"), *(RUNTIME / "dos").glob("*.c")])
+    return platform_sources_of(platform_directory())
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
@@ -393,8 +413,7 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(RUNTIME),
             "-I",
             str(platform_directory()),
-            "-I",
-            str(RUNTIME / "dos"),
+            *device_includes(),
             "-o",
             str(obj),
         ]

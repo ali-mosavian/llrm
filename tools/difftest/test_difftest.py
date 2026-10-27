@@ -135,8 +135,9 @@ def test_two_layouts_of_one_control_flow_graph_are_identical():
 
 
 @needs_opt
-def test_llrms_answer_is_the_pass_run_alone_not_what_the_next_step_made_of_it(tmp_path):
+def test_llrms_answer_is_the_pass_run_alone_not_what_the_next_step_made_of_it(tmp_path, monkeypatch):
     """The proxy (the next step's input) holds every pass that ran in between: with the replay the answer is the runner's output, whatever the next input is."""
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")  # these tests are about the i486 machine; the default target is m64 now
     source = tmp_path / "in.ll"
     source.write_text(INPUT)
     runner = tmp_path / "llrm-pass"
@@ -262,6 +263,7 @@ def test_llrm_only_attributes_reach_opt_as_strings():
 
 def test_every_opt_command_line_carries_llrms_triple_and_cpu(monkeypatch):
     """inlinediff priced 30 i32 GEPs at 5 each with opt's host default, 370 vs 215 at i486: a dump has no `target triple`, so opt costs for x86-64 unless told."""
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")  # these tests are about the i486 machine; the default target is m64 now
     import inlinediff
 
     seen = []
@@ -306,6 +308,7 @@ def test_export_writes_input_both_answers_and_the_diff_of_a_differing_function(t
 
 def test_the_replay_gets_the_targets_layout_so_pointer_width_answers_are_the_targets(monkeypatch, tmp_path):
     """LoopIdiom formed `memset.p0.i64` where opt at i486 forms `.i32`: llrm-pass ran on the Neutral 64-bit layout and the dumps carry no `target datalayout`."""
+    monkeypatch.setenv("LLRM_DIFFTEST_TARGET", "m32")  # these tests are about the i486 machine; the default target is m64 now
     seen = []
 
     class Done:

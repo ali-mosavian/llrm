@@ -152,10 +152,11 @@
 //!   would send two or more edges to a loop header, or leave one. Here a jump
 //!   alone in a block that holds a loop's simple form up (its preheader, its
 //!   one latch, a dedicated exit: `decide::loop_form_blocks`) is also kept
-//!   while the option is on, because rounds repeat until nothing changes and
-//!   `loopsimplify` runs in them: LLVM's passes run once, and without this the
-//!   two undid each other each round ("cycle after 3 rounds" on the `deedlines`
-//!   demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
+//!   while `Options::loop_form_kept` is on, because rounds repeat until nothing
+//!   changes and `loopsimplify` runs in them: LLVM's passes run once, and
+//!   without this the two undid each other each round ("cycle after 3 rounds"
+//!   on the `deedlines` demo). The LLVM-order pipeline (the default) turns it
+//!   off at every slot; exit: the rounds pipeline (`LLRM_NO_LLVM_ORDER`) goes.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
@@ -224,7 +225,11 @@ impl FunctionPass for SimplifyCfg {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
         let spec = Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
-        if simplified_with(&self.options, unit.context, &spec, unit.declared, unit.function) {
+        let known = KnownLoops {
+            info: analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function),
+            cfg_epoch: unit.function.epochs().cfg,
+        };
+        if simplified_with_known(&self.options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -238,6 +243,12 @@ pub struct Options {
     /// `needCanonicalLoops`: true by default and at the early slot, false at
     /// the one after vectorization.
     pub need_canonical_loop: bool,
+    /// D7: keep the jump alone in a block that holds a loop's simple form up,
+    /// which the pin removes (`TryToSimplifyUncondBranchFromEmptyBlock` at
+    /// L8820 asks only the loop headers). On for the rounds that repeat
+    /// with `loopsimplify`; off in the LLVM-order pipeline, whose passes run
+    /// once.
+    pub loop_form_kept: bool,
     /// `SpeculateBlocks`: true by default and at every slot.
     pub speculate_blocks: bool,
     /// `HoistCommonInsts`: hoist the code the arms of a branch share even
@@ -253,6 +264,9 @@ pub struct Options {
     pub convert_switch_to_arithmetic: bool,
     /// `ConvertSwitchToLookupTable`.
     pub convert_switch_to_lookup_table: bool,
+    /// `-fno-jump-tables`: what clang writes on every function as the
+    /// "no-jump-tables" attribute, which stops a lookup table.
+    pub no_jump_tables: bool,
 }
 
 impl Options {
@@ -262,6 +276,7 @@ impl Options {
     /// canonical.
     pub const L1438: Options = Options {
         need_canonical_loop: false,
+        loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
@@ -269,6 +284,7 @@ impl Options {
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
         convert_switch_to_lookup_table: true,
+        no_jump_tables: false,
     };
 
     /// The slot at
@@ -278,6 +294,7 @@ impl Options {
     /// last two are not translated.
     pub const L1682: Options = Options {
         need_canonical_loop: true,
+        loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: false,
         sink_common_insts: false,
@@ -285,19 +302,7 @@ impl Options {
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
         convert_switch_to_lookup_table: false,
-    };
-
-    /// The slot at
-    /// [L2376](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L2376).
-    pub const L2376: Options = Options {
-        need_canonical_loop: true,
-        speculate_blocks: true,
-        hoist_common_insts: true,
-        sink_common_insts: false,
-        forward_switch_cond_to_phi: false,
-        convert_switch_range_to_icmp: true,
-        convert_switch_to_arithmetic: true,
-        convert_switch_to_lookup_table: false,
+        no_jump_tables: false,
     };
 }
 
@@ -305,6 +310,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             need_canonical_loop: true,
+            loop_form_kept: true,
             speculate_blocks: true,
             hoist_common_insts: false,
             sink_common_insts: false,
@@ -312,6 +318,7 @@ impl Default for Options {
             convert_switch_range_to_icmp: true,
             convert_switch_to_arithmetic: false,
             convert_switch_to_lookup_table: false,
+            no_jump_tables: false,
         }
     }
 }
@@ -327,6 +334,14 @@ pub fn simplified(
     simplified_with(&Options::default(), context, spec, declared, function)
 }
 
+/// The loops the manager held when the pass began, and the CFG epoch they were
+/// held at: read for the blocks that keep a loop's form while the CFG is as it
+/// was (`NeedCanonicalLoop`).
+pub struct KnownLoops {
+    pub info: std::rc::Rc<llrm_mir::loopinfo::LoopInfo>,
+    pub cfg_epoch: u64,
+}
+
 /// `simplified` under `options`.
 pub fn simplified_with(
     options: &Options,
@@ -335,18 +350,30 @@ pub fn simplified_with(
     declared: &mut Declared,
     function: &mut Function,
 ) -> bool {
+    simplified_with_known(options, context, spec, declared, function, None)
+}
+
+/// `simplified_with`, given the loops the manager held.
+pub fn simplified_with_known(
+    options: &Options,
+    context: &mut Context,
+    spec: &Speculation,
+    declared: &mut Declared,
+    function: &mut Function,
+    known: Option<&KnownLoops>,
+) -> bool {
     let callees = spec.outer.callees();
     let mut folded = false;
     let mut ever = unreachable_removed(context, callees, function, &mut folded);
     ever |= tailmerge::merged(context, function);
-    ever |= iteratively_simplified(options, context, spec, declared, function, &mut folded);
+    ever |= iteratively_simplified(options, context, spec, declared, function, &mut folded, known);
     // `iterativelySimplifyCFG` can make a loop dead; the removal and the
     // visits then alternate until neither does anything.
     if !ever {
         return false;
     }
     if unreachable_removed(context, callees, function, &mut folded) {
-        while iteratively_simplified(options, context, spec, declared, function, &mut folded)
+        while iteratively_simplified(options, context, spec, declared, function, &mut folded, known)
             | unreachable_removed(context, callees, function, &mut folded)
         {}
     }
@@ -366,14 +393,16 @@ fn iteratively_simplified(
     declared: &mut Declared,
     function: &mut Function,
     folded: &mut bool,
+    known: Option<&KnownLoops>,
 ) -> bool {
     let (mut changed, mut local) = (false, true);
     let headers = loop_headers(function);
-    // D7: with the option, a function with a loop only.
-    let form = if headers.is_empty() || !options.need_canonical_loop {
-        Default::default()
-    } else {
-        crate::decide::loop_form_blocks(function)
+    // D7: with the option, a function with a loop only; found at the first
+    // jump alone in a block, which most functions never have.
+    let form = LoopForm {
+        wanted: !headers.is_empty() && options.need_canonical_loop && options.loop_form_kept,
+        known,
+        cell: std::cell::OnceCell::new(),
     };
     let headers = if options.need_canonical_loop { headers } else { Default::default() };
     while local {
@@ -390,6 +419,43 @@ fn iteratively_simplified(
     changed
 }
 
+/// The blocks that hold a loop's simple form up (D7), found when first asked.
+struct LoopForm<'a> {
+    wanted: bool,
+    known: Option<&'a KnownLoops>,
+    cell: std::cell::OnceCell<std::collections::BTreeSet<i64>>,
+}
+
+impl LoopForm<'_> {
+    fn contains(
+        &self,
+        function: &Function,
+        block: i64,
+    ) -> bool {
+        self.wanted
+            && self
+                .cell
+                .get_or_init(|| {
+                    // The manager's loops, where the CFG is as they were found.
+                    let held = self.known.filter(|one| one.cfg_epoch == function.epochs().cfg);
+                    crate::decide::loop_form_blocks(
+                        function,
+                        held.map(|one| llrm_analysis::cfg::natural(function, &one.info)),
+                    )
+                })
+                .contains(&block)
+    }
+}
+
+/// `block` holds phis and a jump only, and is not the entry: the blocks
+/// `jump_simplified` can remove.
+fn only_phis_and_jump(
+    function: &Function,
+    block: BlockId,
+) -> bool {
+    function.entry() != Some(block) && function.block(block).len() == edges::phis(function, block).len() + 1
+}
+
 /// One visit of `block`: LLVM's `SimplifyCFGOpt::simplifyOnce`, as far as it
 /// is ported (D2).
 fn block_simplified(
@@ -401,12 +467,12 @@ fn block_simplified(
     block: BlockId,
     folded: &mut bool,
     headers: &IdSet<BlockId>,
-    form: &std::collections::BTreeSet<i64>,
+    form: &LoopForm,
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
-    let predecessors = function.predecessors(block);
-    if (predecessors.is_empty() && function.entry() != Some(block)) || predecessors[..] == [block] {
+    let reach = reached_from(function, block);
+    if (reach == Reach::Nothing && function.entry() != Some(block)) || reach == Reach::Itself {
         dead_blocks_deleted(context, function, &[block]);
         return true;
     }
@@ -430,17 +496,81 @@ fn block_simplified(
     if options.speculate_blocks && function.is_placed(block) && twoentryphi::folded(context, spec, function, block) {
         return true;
     }
-    // `simplifyCondBranch`'s value comparisons (SimplifyCFG.cpp:8963), before
-    // the compare chain; a `switch` has them in `switchopt`.
-    if function.is_placed(block)
-        && function.terminator(block).is_some_and(|last| {
-            function.instruction(last).opcode == Opcode::Br && function.instruction(last).operands.len() == 3
-        })
-        && crate::switchvalue::folded(options, context, spec, function, block)
-    {
+    // `simplifyOnce`'s switch on the terminator (SimplifyCFG.cpp#L9368): each
+    // arm runs only its own kind's steps, in the pin's order.
+    let acted = match terminator_kind(function, block) {
+        Terminator::Conditional => cond_branch_simplified(options, context, spec, function, block, folded, headers),
+        // `simplifySwitch`: the shared hoist, then the switch steps.
+        Terminator::Switch => {
+            function.is_placed(block)
+                && (branch_hoisted(options, context, spec, function, block)
+                    || crate::switchopt::simplified(options, context, spec, declared, function, block))
+        }
+        // `simplifyUncondBranch`, then the rest of it where the empty block
+        // did not go.
+        Terminator::Jump => {
+            function.is_placed(block)
+                && ((only_phis_and_jump(function, block)
+                    && !form.contains(function, llrm_analysis::cfg::id(block))
+                    && jump_simplified(context, function, block, headers))
+                    || (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block)))
+        }
+        Terminator::Other => false,
+    };
+    changed | acted
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The predecessor lists `predecessor_list` built.
+    pub(crate) static PREDECESSOR_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The blocks `cond_branch_simplified` visited.
+    pub(crate) static CONDITIONAL_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The kind of terminator ending a block, as `simplifyOnce` dispatches on it.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Terminator {
+    Conditional,
+    Switch,
+    Jump,
+    Other,
+}
+
+fn terminator_kind(
+    function: &Function,
+    block: BlockId,
+) -> Terminator {
+    let Some(last) = function.terminator(block) else { return Terminator::Other };
+    let one = function.instruction(last);
+    match (&one.opcode, one.operands.len()) {
+        (Opcode::Br, 3) => Terminator::Conditional,
+        (Opcode::Br, 1) => Terminator::Jump,
+        (Opcode::Switch, _) => Terminator::Switch,
+        _ => Terminator::Other,
+    }
+}
+
+/// `simplifyCondBranch`: the value comparisons (SimplifyCFG.cpp:8963), the
+/// compare chain, and the folds that follow, in the pin's order.
+fn cond_branch_simplified(
+    options: &Options,
+    context: &mut Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+    folded: &mut bool,
+    headers: &IdSet<BlockId>,
+) -> bool {
+    #[cfg(test)]
+    CONDITIONAL_VISITS.with(|one| one.set(one.get() + 1));
+    if function.is_placed(block) && crate::switchvalue::folded(options, context, spec, function, block) {
         return true;
     }
     if function.is_placed(block) && icmpchain::folded(context, spec, function, block) {
+        return true;
+    }
+    if function.is_placed(block) && dominating_condition_folded(context, spec, function, block) {
         return true;
     }
     if options.speculate_blocks && function.is_placed(block) && branchtocommon::folded(context, spec, function, block) {
@@ -460,20 +590,38 @@ fn block_simplified(
         *folded = true;
         return true;
     }
-    if function.is_placed(block) && stores_merged(context, spec, function, block) {
-        return true;
+    function.is_placed(block) && stores_merged(context, spec, function, block)
+}
+
+/// The branch ending `block` made one on a constant when the condition of its
+/// dominating predecessor implies it: `simplifyCondBranch`'s
+/// `isImpliedByDomCondition` step, before `foldBranchToCommonDest`. The
+/// constant branch is folded by the next visit.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L8989>
+fn dominating_condition_folded(
+    context: &mut Context,
+    spec: &Speculation,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    let &[condition, Operand::Block(..), Operand::Block(..)] = &function.instruction(last).operands[..] else {
+        return false;
+    };
+    if function.instruction(last).opcode != Opcode::Br || integer(context, condition).is_some() {
+        return false;
     }
-    if function.is_placed(block) && crate::switchopt::simplified(options, context, spec, declared, function, block) {
-        return true;
-    }
-    if function.is_placed(block)
-        && !form.contains(&llrm_analysis::cfg::id(block))
-        && jump_simplified(context, function, block, headers)
-    {
-        return true;
-    }
-    // The rest of `simplifyUncondBranch`, where the empty block did not go.
-    changed | (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block))
+    let query = llrm_mir::valuetracking::Query::bare(context, function, spec.layout);
+    let Some(implied) = llrm_mir::valuetracking::context::is_implied_by_dom_condition_cond(&query, condition, last)
+    else {
+        return false;
+    };
+    let i1 = context.types.int(1);
+    let known = Operand::Constant(context.constant(Constant { ty: i1, kind: ConstantKind::Int(u128::from(implied)) }));
+    function.set_operand(last, 0, known);
+    condition_deleted(context, spec.outer.callees(), function, condition, true);
+    true
 }
 
 /// The code the two arms of the branch ending `block` share, run before it:
@@ -498,19 +646,68 @@ fn branch_hoisted(
         && hoistcommon::hoisted(context, spec, function, last, !options.hoist_common_insts)
 }
 
+/// What `predecessors(block)` is, to the one question asked of it at the head
+/// of a visit: no block names it, only itself does, or another does.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum Reach {
+    Nothing,
+    Itself,
+    Other,
+}
+
+/// `predecessors(block)` as a `Reach`, without the list: the visit of every
+/// block began by building it (9,955 builds, 1.7 M Ir in d_faces -O2).
+fn reached_from(
+    function: &Function,
+    block: BlockId,
+) -> Reach {
+    let mut found = None;
+    for one in function.block_users(block) {
+        let user = one.user;
+        if !function.instruction(user).opcode.is_terminator() {
+            continue;
+        }
+        let Some(parent) = function.parent(user) else { continue };
+        match found {
+            None => found = Some(parent),
+            Some(earlier) if earlier == parent => {}
+            Some(_) => return Reach::Other,
+        }
+    }
+    match found {
+        None => Reach::Nothing,
+        Some(parent) if parent == block => Reach::Itself,
+        Some(_) => Reach::Other,
+    }
+}
+
+/// `predecessors(block)`, counted in tests.
+fn predecessor_list(
+    function: &Function,
+    block: BlockId,
+) -> llrm_mir::blocklist::BlockList {
+    #[cfg(test)]
+    PREDECESSOR_LISTS.with(|count| count.set(count.get() + 1));
+    function.predecessors(block)
+}
+
 /// The block `block`'s predecessors all have as their only predecessor:
 /// `allPredecessorsComeFromSameSource`.
 fn all_predecessors_come_from_same_source(
     function: &Function,
     block: BlockId,
 ) -> Option<BlockId> {
+    // One predecessor, the common case: no list.
+    if let Some(only) = function.sole_predecessor(block) {
+        return function.sole_predecessor(only);
+    }
     let mut source = None;
-    for &pred in function.predecessors(block).iter() {
-        let preds = function.predecessors(pred);
-        if preds.len() != 1 || source.is_some_and(|one| one != preds[0]) {
+    for &pred in predecessor_list(function, block).iter() {
+        let only = function.sole_predecessor(pred)?;
+        if source.is_some_and(|one| one != only) {
             return None;
         }
-        source = Some(preds[0]);
+        source = Some(only);
     }
     source
 }
@@ -561,7 +758,7 @@ fn cond_to_cond_simplified(
     }) else {
         return false;
     };
-    for pred in function.predecessors(block).iter().copied().collect::<Vec<_>>() {
+    for pred in predecessor_list(function, block) {
         if let Some(pbi) = function.terminator(pred).filter(|&last| {
             last != bi
                 && function.instruction(last).opcode == Opcode::Br
@@ -608,7 +805,7 @@ pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     // 0 unseen, 1 on the walk's path, 2 done.
     let mut state: IdMap<BlockId, u8> = IdMap::new();
     state.insert(entry, 1);
-    let mut path = vec![(entry, function.successors(entry).into_iter().collect::<Vec<_>>(), 0usize)];
+    let mut path = vec![(entry, function.successors(entry), 0usize)];
     while let Some((block, successors, next)) = path.last_mut() {
         let Some(&successor) = successors.get(*next) else {
             state.insert(*block, 2);
@@ -623,7 +820,7 @@ pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
             Some(_) => {}
             None => {
                 state.insert(successor, 1);
-                path.push((successor, function.successors(successor).into_iter().collect(), 0));
+                path.push((successor, function.successors(successor), 0));
             }
         }
     }

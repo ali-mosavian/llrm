@@ -1,6 +1,11 @@
 # C's runtime on real-mode DOS: what the language asks of the target's OS layer
 # (runtime/shared/dos/m16). Each field naming a file names one in this directory.
 
+# Library routines this runtime has (ext.asm, as `_name@3` in regparm3, the default), which the compiler may call for what it does not move inline. Only
+# `memmove`: no instruction moves overlapping bytes, and the pin calls it where it does not inline (getMemmoveLoadsAndStores). `memcpy` and
+# `memset` stay `rep movs`/`rep stos`. Near pointers only: a far one is refused.
+libcalls = ["memmove"]
+
 # What `-fsanitize=stack` compares and calls.
 stack = "stack.toml"
 # The stack the OS layer's start-up reserves.

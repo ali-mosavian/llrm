@@ -18,7 +18,10 @@ enum AtomRule {
 }
 
 impl Cpu {
-    pub fn load(text: &str, name: &str) -> Result<Cpu, String> {
+    pub fn load(
+        text: &str,
+        name: &str,
+    ) -> Result<Cpu, String> {
         let doc: toml::Table = text.parse().map_err(|e| format!("features.toml: {e}"))?;
         let features = doc
             .get("cpu")
@@ -33,12 +36,24 @@ impl Cpu {
         for (atom, rule) in doc.get("atom").and_then(|a| a.as_table()).into_iter().flatten() {
             let rule = match rule {
                 toml::Value::Boolean(b) => AtomRule::Constant(*b),
-                toml::Value::Array(list) => AtomRule::AnyOf(
-                    list.iter().map(|f| f.as_str().unwrap_or_default().to_string()).collect(),
-                ),
+                toml::Value::Array(list) => {
+                    AtomRule::AnyOf(list.iter().map(|f| f.as_str().unwrap_or_default().to_string()).collect())
+                }
                 _ => return Err(format!("atom `{atom}`: expected a boolean or a feature list")),
             };
             atoms.insert(atom.clone(), rule);
+        }
+        // A CPU's own `[cpu.NAME.atom]` rows win over the shared `[atom]` rows.
+        for (atom, rule) in doc
+            .get("cpu")
+            .and_then(|c| c.get(name))
+            .and_then(|c| c.get("atom"))
+            .and_then(|a| a.as_table())
+            .into_iter()
+            .flatten()
+        {
+            let toml::Value::Boolean(b) = rule else { return Err(format!("atom `{atom}`: expected a boolean")) };
+            atoms.insert(atom.clone(), AtomRule::Constant(*b));
         }
         let dynamic = doc
             .get("dynamic")
@@ -65,14 +80,22 @@ impl Cpu {
         Ok(Cpu { features, atoms, dynamic, dead_type_prefixes, node_predicates })
     }
 
-    /// The verdict of one atom; an atom nothing states is an error, not a guess.
-    pub fn verdict(&self, atom: &str) -> Result<Verdict, String> {
+    /// The verdict of one atom; an atom nothing states is an error, not a
+    /// guess.
+    pub fn verdict(
+        &self,
+        atom: &str,
+    ) -> Result<Verdict, String> {
         if let Some(rule) = self.atoms.get(atom) {
             return Ok(match rule {
                 AtomRule::Constant(true) => Verdict::Yes,
                 AtomRule::Constant(false) => Verdict::No,
                 AtomRule::AnyOf(list) => {
-                    if list.iter().any(|f| self.features.contains(f)) { Verdict::Yes } else { Verdict::No }
+                    if list.iter().any(|f| self.features.contains(f)) {
+                        Verdict::Yes
+                    } else {
+                        Verdict::No
+                    }
                 }
             });
         }
@@ -86,17 +109,26 @@ impl Cpu {
     }
 
     /// The `llrm_dagisel::predicates` function for a PatFrag name.
-    pub fn node_predicate_fn(&self, name: &str) -> Option<&str> {
+    pub fn node_predicate_fn(
+        &self,
+        name: &str,
+    ) -> Option<&str> {
         self.node_predicates.get(name).map(String::as_str)
     }
 
     /// The `PatternContext` method that decides a dynamic atom.
-    pub fn dynamic_method(&self, atom: &str) -> Option<&str> {
+    pub fn dynamic_method(
+        &self,
+        atom: &str,
+    ) -> Option<&str> {
         self.dynamic.get(atom).map(String::as_str)
     }
 
     /// Whether `MVT::<name>` is a type no selection here produces.
-    pub fn dead_type(&self, mvt_name: &str) -> bool {
+    pub fn dead_type(
+        &self,
+        mvt_name: &str,
+    ) -> bool {
         self.dead_type_prefixes.iter().any(|p| {
             mvt_name.strip_prefix(p.as_str()).and_then(|rest| rest.bytes().next()).is_some_and(|b| b.is_ascii_digit())
         })

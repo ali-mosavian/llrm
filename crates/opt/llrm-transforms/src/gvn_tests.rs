@@ -271,12 +271,10 @@ fn test_gvn_numbers_then_joins() {
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS));
 }
 
-/// The premise of `simplifycfg`'s trivial-phi cleanup (D5): gvn forwards the
-/// cell a loop stores its phi to, and leaves `phi [%p, entry], [%self, latch]`.
-/// LLVM's GVN builds its phis with SSAUpdater, which never leaves one; the
-/// cleanup stays until gvn does the same (#2186).
+/// Forwarding the cell a loop stores its phi to leaves `phi [%p, entry],
+/// [%self, latch]`, which `simplifyInstruction` then makes `%p`.
 #[test]
-fn test_forwarding_a_loops_cell_to_its_phi_leaves_a_phi_of_itself() {
+fn test_forwarding_a_loops_cell_to_its_phi_leaves_no_phi_of_itself() {
     let text = "@g = global ptr null
 
 define i16 @f(ptr %p, i16 %n) {
@@ -302,7 +300,7 @@ b2:
     manager.add(Gvn::default());
     manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
     let after = printed(&module);
-    assert!(after.contains("%q = phi ptr [ %p, %b0 ], [ %q, %b1 ]"), "{after}");
+    assert!(!after.contains("phi ptr"), "{after}");
 }
 
 /// Under the pass manager a load through a global is served across a
@@ -621,7 +619,7 @@ b0:
 fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 
@@ -652,7 +650,7 @@ b0:
 fn test_a_store_to_a_global_keeps_a_fixed_address_read_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 
@@ -688,7 +686,7 @@ b0:
 fn test_a_noalias_result_is_apart_from_every_other_object() {
     for (attribute, reloaded) in [("noalias ", false), ("", true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 declare {attribute}ptr @make()
 
@@ -733,7 +731,7 @@ fn numbered(text: &str) -> String {
 fn test_a_volatile_store_elsewhere_keeps_a_global_loaded_before() {
     for (store, reloaded) in [("ptr addrspace(4) %dev", false), ("ptr @h", false), ("ptr addrspace(1) %far", true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 @h = global i8 0
@@ -758,7 +756,7 @@ b0:
 /// both stay, and a second volatile read is not the first's value.
 #[test]
 fn test_volatile_accesses_keep_their_order_and_count() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 define i16 @f(ptr addrspace(4) %dev) {
 b0:
@@ -1224,4 +1222,17 @@ b5:
         let after = printed(&module);
         assert_eq!(after.matches("load i16, ptr %p").count(), 1, "{registers} registers\n{after}");
     }
+}
+
+/// A min/max of two constants a load forwarded folds in the same pass (`opt`
+/// agrees): `process_instruction` asked `simplifyInstruction` of binary
+/// operators, compares, selects and casts only, so a `umax` the select
+/// canonicalization made kept its call and the pointer selects behind it
+/// stayed (borrow_puzzles.nib -Os +25 B).
+#[test]
+fn test_an_intrinsic_of_forwarded_constants_folds() {
+    let after = managed(
+        "declare i16 @llvm.umax.i16(i16, i16)\n\ndefine i16 @f() {\nb0:\n  %a = alloca i16\n  store i16 5, ptr %a\n  %x = load i16, ptr %a\n  %m = call i16 @llvm.umax.i16(i16 %x, i16 4)\n  ret i16 %m\n}\n",
+    );
+    assert!(after.contains("ret i16 5") && !after.contains("call i16 @llvm.umax"), "{after}");
 }

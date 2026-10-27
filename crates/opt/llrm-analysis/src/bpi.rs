@@ -198,6 +198,87 @@ impl BranchProbabilityInfo {
         }
     }
 
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1025
+    /// `allocEdges`: room for `src`'s edges, none if it has no successors.
+    fn alloc_edges(
+        &mut self,
+        function: &Function,
+        src: BlockId,
+    ) -> Option<&mut Vec<BranchProbability>> {
+        let successors = children(function, src).count();
+        if successors == 0 {
+            self.erase_block(src);
+            return None;
+        }
+        if self.probs.len() <= src.0 as usize {
+            self.probs.resize(function.block_capacity().max(src.0 as usize + 1), None);
+        }
+        let slot = &mut self.probs[src.0 as usize];
+        *slot = Some(vec![BranchProbability::get_zero(); successors]);
+        slot.as_mut()
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1115
+    /// `setEdgeProbability`: all of `src`'s edges at once, one per successor.
+    pub fn set_edge_probability(
+        &mut self,
+        function: &Function,
+        src: BlockId,
+        probs: &[BranchProbability],
+    ) {
+        assert_eq!(children(function, src).count(), probs.len(), "one probability per successor");
+        let Some(edges) = self.alloc_edges(function, src) else { return };
+        edges.copy_from_slice(probs);
+        // Rounding keeps the total within one part in 2^31 per edge of 1.
+        let total: u64 = probs.iter().map(|one| u64::from(one.get_numerator())).sum();
+        let one = u64::from(BranchProbability::get_denominator());
+        debug_assert!(total <= one + probs.len() as u64 && total + probs.len() as u64 >= one);
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1140
+    /// `copyEdgeProbabilities`: `dst` takes `src`'s edges (the same number of
+    /// successors); with none stored for `src`, none for `dst`.
+    pub fn copy_edge_probabilities(
+        &mut self,
+        function: &Function,
+        src: BlockId,
+        dst: BlockId,
+    ) {
+        assert_eq!(children(function, src).count(), children(function, dst).count());
+        let from = self.probs.get(src.0 as usize).cloned().flatten();
+        let Some(from) = from else {
+            self.erase_block(dst);
+            return;
+        };
+        if let Some(edges) = self.alloc_edges(function, dst) {
+            edges.copy_from_slice(&from);
+        }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1158
+    /// `swapSuccEdgesProbabilities`: a two-way block's edges exchanged.
+    pub fn swap_succ_edges_probabilities(
+        &mut self,
+        function: &Function,
+        src: BlockId,
+    ) {
+        assert_eq!(children(function, src).count(), 2);
+        if let Some(Some(edges)) = self.probs.get_mut(src.0 as usize) {
+            edges.swap(0, 1);
+        }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/BranchProbabilityInfo.cpp#L1183
+    /// `eraseBlock`: nothing stored for `block`; it reads 1/N again.
+    pub fn erase_block(
+        &mut self,
+        block: BlockId,
+    ) {
+        if let Some(slot) = self.probs.get_mut(block.0 as usize) {
+            *slot = None;
+        }
+    }
+
     /// `isEdgeHot`: more than 4/5.
     pub fn is_edge_hot(
         &self,
@@ -954,6 +1035,29 @@ impl Analysis for BranchProbabilityInfo {
     }
 
     const READS_OUTER: bool = true;
+}
+
+/// `opt -passes='print<branch-prob>'` of every defined function of `module`
+/// (`llrm-mir --branch-prob`, for `tools/bpi/oracle.py`).
+pub fn print_module_branch_prob(module: &llrm_mir::module::Module) -> String {
+    let layout = DataLayout::default();
+    let mut out = String::new();
+    for (_, global, function) in module.functions().filter(|(_, _, one)| !one.is_declaration()) {
+        let bpi = BranchProbabilityInfo::of(
+            Module {
+                context: &module.context,
+                declarations: &module.globals,
+                metadata: &module.metadata,
+                layout: &layout,
+            },
+            function,
+        );
+        let name = global.name.as_deref().unwrap_or_default();
+        out += &format!("Printing analysis 'Branch Probability Analysis' for function '{name}':\n");
+        let labels = llrm_mir::print::block_labels(function);
+        out += &bpi.print(function, &|block| labels.get(&block).cloned().unwrap_or_default());
+    }
+    out
 }
 
 #[cfg(test)]

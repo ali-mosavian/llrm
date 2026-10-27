@@ -22,6 +22,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import harness  # noqa: E402
+import pin_clang  # noqa: E402
 from harness import MEMORY, MISALIGNED, OUT, cost, elf_segments, misaligned_operands, multiplier_of, nm, omf_link  # noqa: E402
 from iced_x86 import Decoder, Mnemonic  # noqa: E402
 from unicorn import UC_ARCH_X86, UC_HOOK_CODE, UC_MODE_32, Uc  # noqa: E402
@@ -104,11 +105,16 @@ def build_variant(variant):
         return obj
     compiler = "gcc" if variant.startswith("gcc") else "clang"
     level = variant[len(compiler):]
+    command = compiler if compiler == "gcc" else pin_clang.path()  # not PATH's clang: the distro's 20.1.8 is not the pin
     obj = OUT / "b" / f"dfaces.{variant}.o"
-    sh([compiler, *GCC_FLAGS, f"-{level}", *INCLUDES, "-c", SOURCE, "-o", obj])
+    sh([command, *GCC_FLAGS, f"-{level}", *INCLUDES, "-c", SOURCE, "-o", obj])
     runtime = []
     if level != "O0":
-        runtime = [sh(["gcc", "-m32", "--print-libgcc-file-name"]).stdout.strip()] if compiler == "gcc" else [sh(["clang", "-m32", "--rtlib=compiler-rt", "-print-libgcc-file-name"]).stdout.strip()]
+        libgcc = sh(["gcc", "-m32", "--print-libgcc-file-name"]).stdout.strip()
+        runtime = [libgcc]
+        if compiler != "gcc":
+            builtins = sh([command, "-m32", "--rtlib=compiler-rt", "-print-libgcc-file-name"]).stdout.strip()
+            runtime = [builtins if Path(builtins).exists() else libgcc]  # the pin has no 32-bit compiler-rt here: the host's libgcc serves the 64-bit divides
     elf = OUT / "b" / f"dfaces.{variant}.elf"
     sh(["ld", "-m", emulation(), "-static", "-e", "0", f"-Ttext={harness.BASE:#x}", f"--just-symbols={stub()}", f"--just-symbols={build_env()}",
         f"-Map={OUT / 'b' / f'dfaces.{variant}.map'}", "-o", elf, obj, *runtime])

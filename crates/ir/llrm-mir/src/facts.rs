@@ -121,6 +121,12 @@ macro_rules! facts {
                 }
             }
 
+            /// The attribute a flag fact is stated by, none for any other fact.
+            #[inline]
+            fn flag_key(self) -> Option<&'static str> {
+                match self { $(Fact::$flag => Some($fkey),)* _ => None }
+            }
+
             /// The kinds of subject it can be stated of.
             pub fn kinds(self) -> &'static [Kind] {
                 match self {
@@ -305,6 +311,12 @@ facts! {
         // Of a routine: it raises nothing, comes back, calls nothing of the
         // module, is rare.
         NoUnwind no_unwind "nounwind" on [Callable];
+        // Of a routine: it frees no memory, directly or through what it calls;
+        // of a pointer argument: it is not freed through it.
+        NoFree no_free "nofree" on [Callable, Param];
+        // Of a routine: it does no synchronizing, directly or through what it
+        // calls.
+        NoSync no_sync "nosync" on [Callable];
         WillReturn will_return "willreturn" on [Callable];
         // It is never entered again while it runs: in no cycle of calls, and
         // nothing it reaches calls what may call back.
@@ -442,6 +454,20 @@ impl Fact {
         self.attribute().unwrap_or_else(|| panic!("{} has no attribute", self.key()))
     }
 
+    /// Whether `attributes` state this fact:
+    /// `Facts::of(attributes).contains(self)` for any fact but inlining
+    /// (which the strongest of wins), without building the facts.
+    #[inline]
+    pub fn stated_by(
+        self,
+        attributes: &[Attribute],
+    ) -> bool {
+        match self.flag_key() {
+            Some(key) => attributes.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == key)),
+            None => attributes.iter().filter_map(Fact::of_attribute).any(|fact| fact == self),
+        }
+    }
+
     /// The fact a carrier states, if it states one.
     pub fn of_attribute(attribute: &Attribute) -> Option<Fact> {
         match attribute {
@@ -532,7 +558,7 @@ impl Facts {
 
     /// The facts `attributes` state; any other attribute is not a fact.
     pub fn of(attributes: &[Attribute]) -> Facts {
-        let mut facts = Vec::new();
+        let mut facts = Vec::with_capacity(attributes.len());
         for fact in attributes.iter().filter_map(Fact::of_attribute) {
             if !facts.contains(&fact) {
                 facts.push(fact);

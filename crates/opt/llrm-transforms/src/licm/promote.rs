@@ -49,6 +49,46 @@ fn access_pointer(
     }
 }
 
+/// How many loads and stores of the loop go through `pointers`: what keeping
+/// them in a register saves, for ranking the promotions a register count
+/// allows.
+pub fn accesses_of(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    pointers: &[Operand],
+) -> usize {
+    ctx.loop_
+        .body
+        .iter()
+        .flat_map(|&at| unit.function.iter_block(cfg::block(at)))
+        .filter(|&inst| access_pointer(ctx, inst).is_some_and(|pointer| pointers.contains(&pointer)))
+        .count()
+}
+
+/// Whether keeping `pointers`' accesses in a register frees the registers
+/// that hold their addresses: each is a value only those accesses read in the
+/// loop. A promotion that frees one takes none net.
+pub fn frees_addresses(
+    unit: &passes::Unit,
+    ctx: &LoopCtx,
+    pointers: &[Operand],
+) -> bool {
+    let values: Vec<_> = pointers
+        .iter()
+        .filter_map(|pointer| if let Operand::Value(value) = pointer { Some(*value) } else { None })
+        .collect();
+    !values.is_empty()
+        && ctx.loop_.body.iter().flat_map(|&at| unit.function.iter_block(cfg::block(at))).all(|inst| {
+            let reads = unit
+                .function
+                .instruction(inst)
+                .operands
+                .iter()
+                .any(|operand| matches!(operand, Operand::Value(value) if values.contains(value)));
+            !reads || access_pointer(ctx, inst).is_some_and(|pointer| pointers.contains(&pointer))
+        })
+}
+
 /// [`foreachMemoryAccess`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L2011):
 /// the instructions of the loop's memory accesses (those still in it).
 fn memory_accesses(
@@ -542,6 +582,22 @@ pub fn promote_loop_accesses_to_scalars(
     // only, if possible.
     if store_safety != StoreSafety::Safe && !found_load_to_promote {
         // If we cannot hoist the load either, give up.
+        return None;
+    }
+    // A location the loop only stores to, on some paths, is promoted only
+    // where the pin's `StoreSafety` allows the store after the loop
+    // ([L1921](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1921)):
+    // the pin (`ThreadModel::POSIX` for this triple,
+    // [L1672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672))
+    // calls only a function-local object thread-local, so a global is left:
+    // promoting it would load it in the preheader and store it after the
+    // loop for no load saved, and the load keeps `writeonly` from removing
+    // the global (nbody.bas, +43 B at -Os m16, once its division guard
+    // stopped taking a slot of `Pressure`).
+    if !found_load_to_promote
+        && !store_is_guaranteed_to_execute
+        && !is_alloca(unit, underlying_object(unit, first_pointer))
+    {
         return None;
     }
     Some(Promotion {

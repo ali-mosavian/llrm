@@ -9,13 +9,13 @@ import re
 import subprocess
 from pathlib import Path
 
-GOLDEN = Path("crates/backend/llrm-core/src/backend/selectiondag/golden")
+GOLDEN = Path("crates/codegen/llrm-codegen/src/backend/selectiondag/golden")
 LLC = os.environ.get("LLC") or str(Path.home() / "scratch/llvm-build-assert/bin/llc")
 
 
 def initial_dags(ll: Path) -> str:
     run = subprocess.run(
-        [LLC, "-O2", "-mattr=-sse", "-disable-cgp", "-disable-lsr", "-debug-only=isel", "-o", "/dev/null", str(ll)],
+        [LLC, "-O2", "-mattr=-sse", "-disable-cgp", "-disable-lsr", "-relocation-model=static", "-debug-only=isel", "-o", "/dev/null", str(ll)],
         capture_output=True, text=True, check=True,
     )
     keep, out = False, []
@@ -29,6 +29,24 @@ def initial_dags(ll: Path) -> str:
     return "\n".join(out) + "\n"
 
 
+def case_clusters(ll: Path) -> str:
+    """`name: clusters` for each switch the pin lowers."""
+    run = subprocess.run(
+        [LLC, "-O2", "-mattr=-sse", "-disable-cgp", "-disable-lsr", "-debug-only=isel", "-o", "/dev/null", str(ll)],
+        capture_output=True, text=True, check=True,
+    )
+    out, name = [], None
+    for line in run.stderr.splitlines():
+        if line.startswith("=== "):
+            name = line[4:].strip()
+        elif line.startswith("Case clusters: "):
+            out.append(f"{name}: {line[len('Case clusters: '):]}")
+    return "\n".join(out) + "\n"
+
+
 for ll in sorted(GOLDEN.glob("*.ll")):
-    ll.with_suffix(".pin.txt").write_text(initial_dags(ll))
+    if ll.stem == "switches":
+        ll.with_suffix(".pin.txt").write_text(case_clusters(ll))
+    else:
+        ll.with_suffix(".pin.txt").write_text(initial_dags(ll))
     print("wrote", ll.with_suffix(".pin.txt"))

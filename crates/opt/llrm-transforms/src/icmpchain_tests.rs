@@ -206,3 +206,49 @@ b0:
         &[&[0], &[1], &[5], &[2]],
     );
 }
+
+/// Every conditional branch built a `Query` and ran the gatherer, 1,741 times
+/// in d_faces -O2, 773 Ir a call against the pin's 124: a branch on a lone
+/// compare or on an argument gathers nothing. Only a logical or/and root does.
+#[test]
+fn test_only_a_logical_or_and_root_is_gathered() {
+    let gathered = |text: &str| {
+        let mut module = parsed(text);
+        let outer = Outer::of(&module, None);
+        let layout = DataLayout::default();
+        let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+        let mut declared = Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        super::GATHERED.with(|one| one.set(0));
+        simplified(context, &spec, &mut declared, function);
+        super::GATHERED.with(std::cell::Cell::get)
+    };
+    let lone = "define i16 @f(i16 %x) {
+b0:
+  %a = icmp slt i16 %x, 4
+  br i1 %a, label %t, label %e
+
+t:
+  ret i16 1
+
+e:
+  ret i16 2
+}
+";
+    let chain = "define i16 @f(i16 %x) {
+b0:
+  %a = icmp eq i16 %x, 1
+  %b = icmp eq i16 %x, 5
+  %c = or i1 %a, %b
+  br i1 %c, label %t, label %e
+
+t:
+  ret i16 1
+
+e:
+  ret i16 2
+}
+";
+    assert_eq!(gathered(lone), 0, "a lone compare is no chain");
+    assert!(gathered(chain) >= 1, "an or of compares is gathered");
+}
