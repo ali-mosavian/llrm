@@ -394,7 +394,7 @@ impl MemorySsaView for Translated<'_> {
 
 /// One walk of a function.
 struct Walk<'a> {
-    context: &'a mut Context,
+    context: &'a Context,
     function: &'a mut Function,
     /// The function as it was, which `mssa` describes.
     view: &'a View<'a>,
@@ -1282,10 +1282,9 @@ impl FunctionPass for EarlyCse {
         // `unit.function`, which this copy and the context's copy do not
         // follow.
         let before = unit.function.fork();
-        let frozen = unit.context.clone();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
-        let view = View::within(&frozen, unit.layout, &before, &outer).with_shape(&shape);
-        let simplifier = FunctionAnalyses::of(&frozen, view.globals, view.metadata, view.layout, &before);
+        let view = View::within(&*unit.context, unit.layout, &before, &outer).with_shape(&shape);
+        let simplifier = FunctionAnalyses::of(&*unit.context, view.globals, view.metadata, view.layout, &before);
         let shape = view.shape();
         // The manager's graph of this body, cloned: the removals below update
         // the clone, which is put back (`MemorySSAUpdater`, as EarlyCSE.cpp
@@ -1304,7 +1303,7 @@ impl FunctionPass for EarlyCse {
             None => (Box::new(Detached), None),
         };
         let mut walk = Walk {
-            context: unit.context,
+            context: &*unit.context,
             function: unit.function,
             view: &view,
             mssa: view_of_memory,

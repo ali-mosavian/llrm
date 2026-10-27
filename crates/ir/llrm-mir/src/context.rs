@@ -64,12 +64,33 @@ pub struct Constant {
     pub kind: ConstantKind,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Context {
     pub types: Types,
     constants: Arena<Constant>,
     interned: Box<RefCell<HashMap<Constant, ConstantId>>>,
     extensions: Extensions,
+}
+
+thread_local! {
+    static CLONES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// How many contexts have been copied on this thread.
+pub fn clones() -> u64 {
+    CLONES.with(std::cell::Cell::get)
+}
+
+impl Clone for Context {
+    fn clone(&self) -> Self {
+        CLONES.with(|clones| clones.set(clones.get() + 1));
+        Self {
+            types: self.types.clone(),
+            constants: self.constants.clone(),
+            interned: self.interned.clone(),
+            extensions: self.extensions.clone(),
+        }
+    }
 }
 
 /// What a layer above MIR keeps in the context, one value per type, dropped

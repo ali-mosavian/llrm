@@ -360,3 +360,20 @@ b0:
 ");
     assert_eq!(after.matches("load i16").count(), 1, "{after}");
 }
+
+/// The walk copied the whole context (types, constants) on every run to give
+/// MemorySSA a frozen one: 1 M instructions on d_faces for nothing, as the
+/// context only grows. A run copies none.
+#[test]
+fn test_a_run_copies_no_context() {
+    let before = llrm_mir::context::clones();
+    run("define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = add i32 %x, %y
+  %b = add i32 %y, %x
+  %c = mul i32 %a, %b
+  ret i32 %c
+}
+");
+    assert_eq!(llrm_mir::context::clones(), before);
+}
