@@ -652,7 +652,8 @@ fn test_local_error_and_resume_label_use_their_measured_procedure_abi() {
     let registered = procedure.find("call far ptr B$OEGP").expect("B$OEGP");
     let raised = procedure.find("call far ptr B$SERR").expect("B$SERR");
     assert!(entered < registered && registered < raised, "{procedure}");
-    // The handler address is pushed as an immediate (`push offset`, #5135), not made in `ax` first.
+    // The handler address is pushed as an immediate (`push offset`, #5135), not
+    // made in `ax` first.
     assert!(procedure[..registered].contains("push offset"), "{procedure}");
     assert!(!procedure.contains("call far ptr B$OEGA"), "{procedure}");
 }
