@@ -62,6 +62,8 @@ fn physical(
     let whole = format!("{register:?}").to_lowercase();
     match (width, whole.strip_prefix('e')) {
         (4, _) => Ok(whole),
+        // `es` is a segment register, not the low half of an `e` one.
+        (2, _) if matches!(whole.as_str(), "es" | "cs" | "ss" | "ds" | "fs" | "gs") => Ok(whole),
         // The m32 table also names the 16- and 8-bit registers.
         (2, None) if matches!(
             whole.as_str(),
@@ -330,41 +332,23 @@ fn instruction(
             }
             writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
         }
-        // A read-modify-write of a cell.
-        (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
-            let (form, right) = match rhs {
-                Loc::Held(b) => ("mr", vreg(b)?),
-                Loc::Imm(i) => ("mi", immediate(i)?.to_string()),
-                _ => return Err(format!("{op} to a cell from that source")),
-            };
-            writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
-                .unwrap()
-        }
-        // A call through a register.
-        ("call", None, [Loc::Held(target)]) if what.indirect => {
-            let used: String =
-                one.requires.iter().map(|(_, r)| format!(", implicit ${}", format!("{r:?}").to_lowercase())).collect();
-            let made: String = one
-                .delivers
-                .iter()
-                .map(|(_, r)| format!(", implicit-def ${}", format!("{r:?}").to_lowercase()))
-                .collect();
+        // `rep stosb`: the count, the destination and the byte arrive in cx, di
+        // and al, and cx and di leave.
+        ("stosb", Some(Loc::Mem(_)), _) => {
             writeln!(
                 out,
-                "    CALL32r {}, csr_32, implicit $esp, implicit $ssp, implicit-def $esp, implicit-def $ssp{used}{made}",
-                vreg(target)?
+                "    REP_STOSB_32 implicit-def $ecx, implicit-def $edi, implicit $ecx, implicit $al, implicit $edi"
             )
             .unwrap();
-            for (held, register) in &one.delivers {
-                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+            for (held, register) in [(what.dests.get(1), "cx"), (what.dests.get(2), "di")] {
+                if let Some(Loc::Held(held)) = held {
+                    writeln!(out, "    {} = COPY ${register}", vreg(held)?).unwrap();
+                }
             }
         }
-        // Sign-extends ax into dx.
-        ("cwd", Some(Loc::Held(d)), [Loc::Held(s)]) => {
-            if one.requires.is_empty() && !in_register.contains(&s.value) {
-                writeln!(out, "    $ax = COPY {}", vreg(s)?).unwrap();
-            }
-            writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
+        // A segment register read (`mov ax, ss`).
+        ("mov", Some(Loc::Held(d)), [Loc::Reg(r)]) if r.width == 2 => {
+            writeln!(out, "    {} = COPY ${}", vreg(d)?, format!("{:?}", r.register).to_lowercase()).unwrap()
         }
         // Sign-extends eax into edx.
         ("cdq", Some(Loc::Held(d)), [Loc::Held(s)]) => {
@@ -1111,6 +1095,29 @@ mod tests {
         assert!(text.contains("ADD16mr %fixed-stack.0, 1, $noreg, 0, $noreg, %2, implicit-def dead $eflags"), "{text}");
         assert!(text.contains("CALL32r %3, csr_32"), "{text}");
         assert!(text.contains("CWD implicit-def $ax, implicit-def $dx, implicit $ax"), "{text}");
+    }
+
+    #[test]
+    fn test_a_segment_read_a_string_store_and_the_es_name_print() {
+        use llrm_lir::{Mem, Reg};
+
+        use super::physical;
+        let ss = Loc::Reg(Reg { register: RegId::SS, width: 2 });
+        let read = insn("mov", Operation::Move, vec![held(1)], vec![ss]);
+        let fill = insn(
+            "stosb",
+            Operation::Move,
+            vec![Loc::Mem(Mem::new(None, 0)), held(3), held(4)],
+            vec![held(5), held(6), held(7), held(8)],
+        );
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![read, fill, ret]))];
+        let body = LirBody::new("str", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("%1 = COPY $ss"), "{text}");
+        assert!(text.contains("REP_STOSB_32 implicit-def $ecx, implicit-def $edi"), "{text}");
+        assert!(text.contains("%3 = COPY $cx\n    %4 = COPY $di"), "{text}");
+        assert_eq!(physical(RegId::ES, 2).as_deref(), Ok("es"));
     }
 
     #[test]
