@@ -210,6 +210,7 @@ pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
 pub mod indvars;
+pub mod inferalignment;
 pub mod inferfunctionattrs;
 pub mod inferspace;
 #[cfg(test)]

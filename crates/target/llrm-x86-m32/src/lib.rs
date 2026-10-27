@@ -302,6 +302,15 @@ impl llrm_target::Target for M32 {
         llrm_x86::helpers::divide(signed, wide_divisor, 32).map_err(|refused| refused.message)
     }
 
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
+    }
+
     fn float_width(
         &self,
         _: u32,

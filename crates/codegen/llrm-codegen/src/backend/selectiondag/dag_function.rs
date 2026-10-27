@@ -43,6 +43,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Module, ValueDef, ValueId};
 use llrm_support::hash::{HashMap, HashSet};
 use llrm_target::Target;
+use llrm_target::routines::Used;
 
 use super::actions::{Features, TargetLowering};
 use super::builder::{BuilderTarget, RuntimeAnswer, build_block};
@@ -1132,9 +1133,11 @@ fn selected_in(
     for (at, name) in calls.iter().filter(|(_, name)| name.starts_with(llrm_target::routines::DIVIDE_PREFIX)) {
         for signed in [true, false] {
             for wide in [true, false] {
-                if let Ok(routine) = arch.divide_routine(signed, wide) {
-                    if routine.name == name.as_str() {
-                        inline.insert(*at, routine.code);
+                for used in [Used::Both, Used::Quotient, Used::Remainder] {
+                    if let Ok(routine) = arch.divide_routine_used(signed, wide, used) {
+                        if routine.name == name.as_str() {
+                            inline.insert(*at, routine.code);
+                        }
                     }
                 }
             }
