@@ -727,6 +727,7 @@ pub mod x86 {
     pub const ADD8mi: u16 = 696;
     pub const ADD8mr: u16 = 702;
     pub const AH: u16 = 1;
+    pub const AL: u16 = 2;
     pub const AND16mi: u16 = 804;
     pub const AND16mr: u16 = 814;
     pub const AND32mi: u16 = 845;
@@ -768,14 +769,20 @@ pub mod x86 {
     pub const IMUL32r: u16 = 1824;
     pub const IMUL64m: u16 = 1849;
     pub const IMUL64r: u16 = 1852;
+    pub const IMUL8m: u16 = 1877;
+    pub const IMUL8r: u16 = 1880;
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
     pub const MOV32r0: u16 = 386;
+    pub const MUL16m: u16 = 2778;
+    pub const MUL16r: u16 = 2781;
     pub const MUL32m: u16 = 2784;
     pub const MUL32r: u16 = 2787;
     pub const MUL64m: u16 = 2790;
     pub const MUL64r: u16 = 2793;
+    pub const MUL8m: u16 = 2796;
+    pub const MUL8r: u16 = 2799;
     pub const NEG16m: u16 = 2849;
     pub const NEG16r: u16 = 2854;
     pub const NEG32m: u16 = 2859;
@@ -869,13 +876,19 @@ pub mod x86 {
         (1824, "IMUL32r"),
         (1849, "IMUL64m"),
         (1852, "IMUL64r"),
+        (1877, "IMUL8m"),
+        (1880, "IMUL8r"),
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
+        (2778, "MUL16m"),
+        (2781, "MUL16r"),
         (2784, "MUL32m"),
         (2787, "MUL32r"),
         (2790, "MUL64m"),
         (2793, "MUL64r"),
+        (2796, "MUL8m"),
+        (2799, "MUL8r"),
         (2849, "NEG16m"),
         (2854, "NEG16r"),
         (2859, "NEG32m"),

@@ -581,7 +581,16 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
             }
-            ISD::UAddO | ISD::USubO | ISD::UAddOCarry | ISD::USubOCarry | ISD::SAddO | ISD::SSubO if value.res == 1 => {
+            ISD::UAddO
+            | ISD::USubO
+            | ISD::UAddOCarry
+            | ISD::USubOCarry
+            | ISD::SAddO
+            | ISD::SSubO
+            | ISD::UMulO
+            | ISD::SMulO
+                if value.res == 1 =>
+            {
                 // `PromoteIntRes_Overflow`: the node again with the target's
                 // boolean type for the flag; the sum is switched to the new
                 // node and the flag is the promoted value.
@@ -875,6 +884,8 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::CtTz | ISD::CtTzZeroPoison) => self.expand_cttz(value, op, half),
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
+            op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
+            ISD::UMulO => self.expand_umulo(value, half),
             ISD::Mul => self.expand_mul(value, half)?,
             op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => self.expand_division(value, op, half)?,
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
@@ -1124,6 +1135,64 @@ impl<'a> TypeLegalizer<'a> {
         };
         self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
         Ok((lo, hi))
+    }
+
+    /// `ExpandIntRes_SADDSUBO` without a signed carry operation: the plain sum
+    /// or difference, and the overflow as the sign of `(~(l ^ r) & (l ^ sum))`
+    /// for an add, `((l ^ r) & (l ^ sum))` for a subtract.
+    fn expand_signed_addsub_overflow(
+        &mut self,
+        value: SDValue,
+        op: ISD,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let wide = self.dag.value_type(value);
+        let is_add = op == ISD::SAddO;
+        let sum = self.dag.get_node(if is_add { ISD::Add } else { ISD::Sub }, wide, &[lhs, rhs]);
+        let (lo, hi) = self.split_integer(sum, half);
+        let mut signs_match = self.dag.get_node(ISD::Xor, wide, &[lhs, rhs]);
+        if is_add {
+            signs_match = self.dag.get_not(signs_match, wide);
+        }
+        let sum_sign_ne = self.dag.get_node(ISD::Xor, wide, &[lhs, sum]);
+        let both = self.dag.get_node(ISD::And, wide, &[signs_match, sum_sign_ne]);
+        let zero = self.dag.get_constant(0, wide);
+        let overflow_vt = self.dag.node(value).values[1];
+        let overflow = self.dag.get_setcc(overflow_vt, both, zero, CondCode::SetLt);
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
+        (lo, hi)
+    }
+
+    /// `ExpandIntRes_XMULO` for the unsigned multiply: the product of the low
+    /// halves, the two cross products (each with its own overflow) added into
+    /// the high half, and overflow when both high halves are set.
+    fn expand_umulo(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let ((ll, lh), (rl, rh)) = (self.expanded_integer(lhs), self.expanded_integer(rhs));
+        let wide = self.dag.value_type(value);
+        let bit = self.dag.node(value).values[1];
+        let zero = self.dag.get_constant(0, half);
+        let lh_set = self.dag.get_setcc(bit, lh, zero, CondCode::SetNe);
+        let rh_set = self.dag.get_setcc(bit, rh, zero, CondCode::SetNe);
+        let mut overflow = self.dag.get_node(ISD::And, bit, &[lh_set, rh_set]);
+        let one = self.dag.get_node_multi(ISD::UMulO, &[half, bit], &[lh, rl]);
+        overflow = self.dag.get_node(ISD::Or, bit, &[overflow, SDValue { node: one.node, res: 1 }]);
+        let two = self.dag.get_node_multi(ISD::UMulO, &[half, bit], &[rh, ll]);
+        overflow = self.dag.get_node(ISD::Or, bit, &[overflow, SDValue { node: two.node, res: 1 }]);
+        let high_sum = self.dag.get_node(ISD::Add, half, &[one, two]);
+        let (wl, wr) =
+            (self.dag.get_node(ISD::ZeroExtend, wide, &[ll]), self.dag.get_node(ISD::ZeroExtend, wide, &[rl]));
+        let three = self.dag.get_node(ISD::Mul, wide, &[wl, wr]);
+        let (lo, hi) = self.split_integer(three, half);
+        let hi = self.dag.get_node_multi(ISD::UAddO, &[half, bit], &[hi, high_sum]);
+        overflow = self.dag.get_node(ISD::Or, bit, &[overflow, SDValue { node: hi.node, res: 1 }]);
+        self.replace_value_with(SDValue { node: value.node, res: 1 }, overflow);
+        (lo, SDValue { node: hi.node, res: 0 })
     }
 
     /// `ExpandIntRes_ZERO_EXTEND`, `_SIGN_EXTEND`, `_ANY_EXTEND`: the source
