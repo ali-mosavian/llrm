@@ -296,3 +296,41 @@ exit:
     let out = printed(&module);
     assert_eq!(out.matches("icmp slt").count(), 3, "{out}");
 }
+
+/// observed.c's `mix` at -O2 -g lost the debug record of its parameter `n`,
+/// which stands before the preheader's branch into the loop: the rotation
+/// erased that branch and its records with it, and gdb read `n` as optimised
+/// out where it is in a register throughout.
+#[test]
+fn test_the_debug_records_before_the_preheaders_branch_survive_rotation() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i16 %n) {
+b0:
+  #dbg_value(i16 %n, !1)
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %s, %b2 ]
+  %go = icmp slt i16 %i, 4
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %m = mul i16 %i, %n
+  %s = add i16 %m, %acc
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = add i16 %acc, %n
+  ret i16 %r
+}
+
+!1 = !{!\"f\", !\"n\", !2, i64 0, i64 1, i64 0}
+!2 = !{!\"int\"}
+",
+    );
+    assert!(rotated(&mut module));
+    let text = printed(&module);
+    assert!(text.contains("#dbg_value(i16 %n"), "{text}");
+}

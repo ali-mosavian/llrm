@@ -488,7 +488,8 @@ pub struct RAGreedy<'a> {
     /// require one (pre-assigned): nothing recolors them (DEVIATE: LLVM
     /// models a fixed register as the reg units of a physical register).
     pub pinned: HashSet<u32>,
-    /// Pinned values that are fixed ranges, not allocated (`LLRM_FIXED_PINS`).
+    /// Pinned values that are fixed ranges, not allocated (unless
+    /// `LLRM_PINS_AS_VREGS`).
     pub fixed: HashSet<u32>,
     queue: BinaryHeap<(u32, u32)>,
     spiller: Box<dyn Spiller + 'a>,

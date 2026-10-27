@@ -39,6 +39,8 @@
 //! Nothing yet: the passes that read it (aggressive-instcombine's folds,
 //! InstCombine's `LibCallSimplifier`, the alias analyses) take it from here.
 
+pub mod attrs;
+pub mod infer;
 pub mod table;
 
 pub use table::{ALL, LibFunc, NAMES, NUM_LIB_FUNCS, SIGNATURES};
@@ -154,6 +156,16 @@ pub trait Library {
         &self,
         func: LibFunc,
     ) -> Availability;
+
+    /// The standard name of the function a link `symbol` is: the pin sees the
+    /// IR's name, here a front end has decorated it (`_sin@3`) before the
+    /// optimizer runs. The symbol itself where the target does not.
+    fn standard<'a>(
+        &self,
+        symbol: &'a str,
+    ) -> &'a str {
+        symbol
+    }
 }
 
 /// The pin's defaults for a target that is none of the OSes it knows
@@ -180,6 +192,43 @@ impl Library for Generic {
         func: LibFunc,
     ) -> Availability {
         if BASE_UNAVAILABLE.contains(&func) { Availability::Unavailable } else { Availability::Standard }
+    }
+}
+
+/// The C library of a target whose linker symbols are C's decorated: a leading
+/// underscore, and `@N` after the name for a callee-pops convention. What
+/// `Generic` states of the functions, under those names.
+#[derive(Clone, Copy, Debug)]
+pub struct Cdecl {
+    pub int_bits: u32,
+    pub size_t_bits: u32,
+}
+
+impl Library for Cdecl {
+    fn int_bits(&self) -> u32 {
+        self.int_bits
+    }
+
+    fn size_t_bits(&self) -> u32 {
+        self.size_t_bits
+    }
+
+    fn availability(
+        &self,
+        func: LibFunc,
+    ) -> Availability {
+        Generic { int_bits: self.int_bits, size_t_bits: self.size_t_bits }.availability(func)
+    }
+
+    fn standard<'a>(
+        &self,
+        symbol: &'a str,
+    ) -> &'a str {
+        let name = symbol.strip_prefix('_').unwrap_or(symbol);
+        match name.rsplit_once('@') {
+            Some((base, bytes)) if !bytes.is_empty() && bytes.bytes().all(|one| one.is_ascii_digit()) => base,
+            _ => name,
+        }
     }
 }
 
