@@ -208,6 +208,10 @@ pub struct RuntimeContracts<'a> {
     /// (QB's); a call of any other routine reads the ABI's for what it
     /// destroys.
     pub runtime: bool,
+    /// Whether the function's frame is zero-filled by the runtime that builds
+    /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
+    /// then dropped.
+    pub frame_zeroed: bool,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -662,6 +666,9 @@ fn selected_in(
     let layout = DataLayout::parse(text).map_err(Unselected)?;
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
+    if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
+        info.prezeroed = crate::backend::prezeroed::prezeroed(module, function);
+    }
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
@@ -688,15 +695,21 @@ fn selected_in(
         }
     }
     let (builder_target, address_mode) = match bitness {
-        16 => (BuilderTarget::m16(), AddrMode::Real16),
+        16 => (BuilderTarget::m16().with_memset_stores_size(4).with_memcpy_moves_size(2), AddrMode::Real16),
         64 => (BuilderTarget::m64(), AddrMode::Flat64),
         _ => (BuilderTarget::m32(), AddrMode::Flat32),
     };
+    let mut builder_target = builder_target;
+    // The frontends compile static code: every symbol is `dso_local`.
+    builder_target.dag.dso_local_symbols = true;
     let builder_target = builder_target
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
-        // llrm's -Os keeps the divide too, as the old selector does (the pin:
-        // minsize only)
+        // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
+        // only). Flipping it grows m32 -Os +250 B and m16 -Os +301 B; only
+        // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
+        // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
+        // +59 B in 4 spill slots).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
@@ -817,6 +830,7 @@ fn selected_in(
             work.push((id, block, extra));
         }
     }
+    let (fixed_objects, fixed_depth) = (frame.locals.borrow().len(), frame.depth.get());
     // The stack objects the builder made (a rounded float's slot) follow the
     // static allocas in the frame.
     for (at, (size, align)) in info.objects.iter().enumerate() {
@@ -854,6 +868,8 @@ fn selected_in(
         conventions: &CallConventions { module, arch, contracts, general: &cpu.general },
         constants: &PoolCells(std::cell::RefCell::new(pool)),
         stack_pointer,
+        strings: arch.string_registers(),
+        registers: arch.registers(),
         globals: &globals,
         block_at: &block_at,
         frame: &frame,
@@ -1152,8 +1168,9 @@ fn selected_in(
         inline_symbols: IndexMap::default(),
         far,
         pops: IndexMap::default(),
-        depth: frame.depth.get(),
+        depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
+        temporaries: frame.locals.borrow().len() - fixed_objects,
         landing,
     })
 }

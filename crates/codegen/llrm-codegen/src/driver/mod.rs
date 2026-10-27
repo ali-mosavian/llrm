@@ -331,6 +331,8 @@ pub fn compiled_module(
             &options.libcalls,
         )
     })?;
+    let mut assembled = assembled;
+    data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
     stage_files(options, "", &assembled)?;
     Ok(assembled)
 }

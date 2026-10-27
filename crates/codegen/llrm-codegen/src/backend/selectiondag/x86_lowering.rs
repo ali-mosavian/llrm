@@ -149,6 +149,7 @@ impl CombineHooks for X86Lowering {
             || op == x86isd::BRCOND
             || op == x86isd::ADC
             || op == x86isd::SBB
+            || op == ISD::UIntToFp
     }
 
     fn perform_dag_combine(
@@ -166,6 +167,7 @@ impl CombineHooks for X86Lowering {
             x86isd::SETCC => combine_setcc(dag, node),
             x86isd::BRCOND => combine_brcond(dag, node),
             x86isd::ADC | x86isd::SBB => combine_adc_sbb(dag, node),
+            ISD::UIntToFp => combine_uint_to_fp(dag, node),
             _ => None,
         }
     }
@@ -307,6 +309,7 @@ impl Hooks for X86Lowering {
             ISD::BrCond => lower_brcond(dag, node),
             ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
+            ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
             ISD::VAStart => lower_vastart(dag, node),
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
@@ -1137,6 +1140,22 @@ fn combine_x86_add_sub(
 /// (`SETCC_CARRY`), where `and; neg` took two instructions and a mask. (The
 /// `adc`/`sbb` forms with a variable first operand, the `cmp`/`neg` carry
 /// forms and `-1 + setae` are not translated.)
+/// `combineUIntToFP`: `UINT_TO_FP` is custom, so the generic combine never
+/// makes it a `SINT_TO_FP` when the sign bit is clear; here a `nneg` flag or a
+/// known clear sign bit does, which is one `fild` of the value itself and not
+/// of a 64-bit buffer holding it. (Vector forms are not translated.)
+fn combine_uint_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let value = dag.operand(node, 0);
+    let vt = dag.value_type(node);
+    let bits = dag.value_type(value).size_in_bits();
+    let non_neg = dag.node(node).flags.has(SDNodeFlags::NON_NEG)
+        || super::known_bits::known_bits(dag, value).zero >> (bits - 1) & 1 == 1;
+    non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
+}
+
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1314,6 +1333,30 @@ fn lower_addsub_carry(
     let code = cond_code(dag, cond::B);
     let carry_out = dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]);
     dag.get_node_multi(ISD::MergeValues, &[vt, EVT::I8], &[sum, carry_out])
+}
+
+/// `LowerSETCCCARRY`: the carry in is put into the flags (`carry + -1`), the
+/// high halves are subtracted with it (`SBB`), and the condition is read from
+/// the flags.
+fn lower_setcc_carry(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let NodeData::CondCode(cc) = dag.node(dag.operand(node, 3)).data else { unreachable!("a SETCCCARRY condition") };
+    // `TranslateIntegerX86CC` has no constant rewrites: a stand-in that is
+    // no constant keeps `translate_cc` from making any.
+    let mut plain = carry;
+    let x86_cc = translate_cc(dag, cc, &mut plain);
+    let code = cond_code(dag, x86_cc);
+    let carry_vt = dag.value_type(carry);
+    let ones = dag.get_all_ones_constant(carry_vt);
+    let set_carry = dag.get_node_multi(x86isd::ADD, &[carry_vt, EVT::I32], &[carry, ones]);
+    let flags_in = SDValue { node: set_carry.node, res: 1 };
+    let vt = dag.value_type(lhs);
+    let sub = dag.get_node_multi(x86isd::SBB, &[vt, EVT::I32], &[lhs, rhs, flags_in]);
+    let flags = SDValue { node: sub.node, res: 1 };
+    dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags])
 }
 
 /// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the

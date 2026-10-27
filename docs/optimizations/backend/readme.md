@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 133 documented, 1 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -42,7 +42,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | ehprepare | Make a QB personality's landing pad one the runtime can enter, before instruction selection. | In `driver::optimized` (`mir ehprepare`), once per module after the MIR | [ehprepare](ehprepare.md) |
 | exactaddress | Fold the chain computing an exact address into its 32-bit form. | Inside the peephole phase, after the pattern rewrites, before | [exactaddress](exactaddress.md) |
 | executed | A finished body's executed work per call, estimated without a profile. | Not a pass: `assemble.rs` calls it on each finished body to choose | [executed](executed.md) |
-| expansion | What the MIR expansions of an intrinsic share: finding its calls, and the instructions made before one. | Under [`crate::backend::bitcounts`](bitcounts.md), [`crate::backend::bytes`](bytes.md) and | [expansion](expansion.md) |
 | farcall | Give a far indirect call the memory operand the 16-bit ISA requires. | First machine phase (`far-indirect-calls`), before `ssaspill`, once per | [farcall](farcall.md) |
 | farload | Select a far pointer's two word loads as one `les`-form load. | Per block in isel's cross-instruction selection (`isel/combined.rs`), | [farload](farload.md) |
 | fixupbw | A byte or word load, copy or extension is the dword form when the rest of its register is dead: `X86FixupBWInsts`. | After `Peephole`, optimizing levels only. | [fixupbw](fixupbw.md) |
@@ -89,7 +88,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | machinesink | Moves a computation into the one successor block that uses it, breaking a critical edge where that is what lets it go. | A machine phase before `phielim` (`flow::machine_with`), in every machine | [machinesink](machinesink.md) |
 | masm | The assembly-level module: allocated LIR with its frame sequences written out, as the items `objbuild` encodes and the jwasm source `-S` prints. | Once per procedure after the machine phases. `cleaned_returns` runs in | [masm](masm.md) |
 | memcpycall | Turns an `llvm.memcpy` the target should not copy inline into a call of `memcpy`, as the pin's `EmitTargetCodeForMemcpy` leaves it: a call for a length the target cannot move in a few loads and stores. | Once per module in `driver::optimized`, when the target names `memcpy` | [memcpycall](memcpycall.md) |
-| memsetpattern | Expands `llvm.experimental.memset.pattern` into a store loop in MIR before instruction selection, as the pin's `PreISelIntrinsicLowering` does (the DAG never sees the intrinsic). | Once per module in `driver::optimized`, for `--isel=dag`: the old selector | [memsetpattern](memsetpattern.md) |
+| memsetpattern | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/memsetpattern.rs) |
 | mirprint | Pre-allocation LIR as LLVM MIR, so the pin's `llc -run-pass=greedy` allocates the same function (a like-for-like check of quality and cost). | `LLRM_MIR_PRINT=<function>` in the greedy shadow run; | [mirprint](mirprint.md) |
 | nativeframe | The frame plan of a procedure whose prologue already exists (native-code input): where it reserves the frame, where it releases it, and which registers hold values on entry. | `frame` (`Frame::native`), `prologue`, `relayout`, `assemble` and | [nativeframe](nativeframe.md) |
 | nearcode | Puts a function a frontend allows near, which only its own module calls and only directly, in the near code space, so callers enter it by a near call. | Once per module at the start of `assemble::assembled_by` (`mir near code`), | [nearcode](nearcode.md) |
@@ -106,6 +105,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
+| prezeroed | The entry block's zero writes to a local nothing has touched yet, for a frame the runtime zero-fills (QB's `B$ENRA`): the frame already holds them. | The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`), | [prezeroed](prezeroed.md) |
 | prologue | Reserves the stack the spiller asked for (`sub sp, N`) and gives it back (`add sp, N`) at every exit. | A machine phase after `parcopy` and before `peephole`, in every machine | [prologue](prologue.md) |
 | pushfold | A value that a load made and nothing else reads is read from memory where it is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a commutative operation the load is. | Twice. As `LoadFold` first of the machine phases, after selection: the pin's | [pushfold](pushfold.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |

@@ -380,10 +380,12 @@ impl Options {
 
     /// -O3: gcc's: -O2 with peeling, unswitching, complete copies that grow the
     /// code, and the larger inline threshold; the copy budget is LLVM's -O3
-    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's.
+    /// (`UnrollThresholdAggressive`, twice the target's), not gcc's. No ipa-cp
+    /// clones: the pin makes none, and they grew recchop 1541 lines against
+    /// 171.
     pub fn speed() -> Self {
         Self {
-            inline: inline::Threshold { cp_clone: true, ..inline::Threshold::new(250) },
+            inline: inline::Threshold::new(250),
             unswitch: true,
             unroll_and_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
@@ -1240,7 +1242,7 @@ pub fn strength_slot(applied: &Applied) -> Vec<Box<dyn FunctionPass>> {
         passes.push(Box::new(lcssa::LoopClosedSSA));
         // The pin runs canon-freeze with loop-reduce, before it.
         passes.push(Box::new(crate::canonfreeze::CanonicalizeFreezeInLoops));
-        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce));
+        passes.push(Box::new(crate::lsr_pass::LoopStrengthReduce { size: applied.options.prefers_size() }));
         // What the counters it chose leave behind (a bound subtracted from a
         // counter rebased by it), as LLVM's LSR cleans with
         // SimplifyInstructions.
