@@ -804,3 +804,36 @@ fn a_bswap_of_which_one_byte_is_demanded_is_a_shift() {
     assert!(!made.iter().any(|name| name == "bswap"), "{made:?}");
     assert!(made.len() <= 17, "{made:?}");
 }
+
+const U16_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(i16 zeroext %a) {
+entry:
+  %r = uitofp i16 %a to float
+  ret float %r
+}
+";
+
+/// `(float)a` of an `unsigned short` was promoted to an unsigned dword and
+/// converted through a 64-bit buffer with a zero high dword and `fild qword`;
+/// the pin's `LowerUINT_TO_FP` makes a nonnegative source signed: one `fild`
+/// of the dword (uitofp_nneg, -Os).
+#[test]
+fn an_unsigned_short_converts_with_a_dword_fild_not_a_qword_buffer() {
+    let module = llrm_mir::parse::module(U16_TO_FLOAT).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let widths: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("fild"))
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|source| match source {
+            crate::model::ir::Loc::Mem(m) => Some(m.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths, [4], "the fild reads a dword, not a 64-bit buffer: {names:?}");
+}
