@@ -742,6 +742,13 @@ fn sp_reg() -> Loc {
     reg(STACK)
 }
 
+/// Whether a return of `body` is a sibling call (`jmp`).
+fn sibling_calls(body: &lir::LirBody) -> bool {
+    body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| {
+        one.what.as_ref().is_some_and(|what| what.op == Operation::Return && what.name.as_deref() == Some("jmp"))
+    })
+}
+
 /// Whether a call in `body` leaves SP somewhere else (`alloca`). The registers
 /// it saves are then all pushed at the entry, and the return sets SP from the
 /// frame register.
@@ -1048,6 +1055,13 @@ fn parts(
     // Inline code that moves SP (`alloca`) leaves the saved registers below an
     // unknown distance: SP is set from the frame register first.
     let moved = !omit && framed && moves_stack(&procedure.body);
+    // A one-slot adjustment of a 64-bit frame is `push rax` / `pop rcx` where
+    // no return is a sibling call (rcx may carry its argument):
+    // X86FrameLowering's emitSPUpdate, with the register
+    // findDeadCallerSavedReg gives a `ret`.
+    let one_slot = omit && procedure.body.bits == 64 && reserve == slot && !sibling_calls(&procedure.body);
+    let regs = procedure.body.regs();
+    let (accumulator, dead_at_return) = (regs.named(RegId::EAX, 8), Some(regs.named(RegId::ECX, 8)));
     let mut leave: Vec<Semantics> = Vec::new();
     if moved {
         let below = reserve + slot * saved.len() as i64;
@@ -1055,7 +1069,9 @@ fn parts(
         leave.push(semantics(Operation::Address, "lea", vec![sp_reg()], vec![Loc::Mem(from)]));
     }
     leave.extend(saved.iter().rev().map(|one| semantics(Operation::Pop, "pop", vec![reg(*one)], vec![])));
-    if omit && reserve != 0 {
+    if one_slot && let Some(dead) = dead_at_return {
+        leave.push(semantics(Operation::Pop, "pop", vec![reg(dead)], vec![]));
+    } else if omit && reserve != 0 {
         leave.push(semantics(
             Operation::Binary,
             "add",
@@ -1081,7 +1097,9 @@ fn parts(
             semantics(Operation::Move, "mov", vec![bp], vec![sp.clone()]),
         ]);
     }
-    if reserve != 0 && !opened {
+    if one_slot {
+        enter.push(semantics(Operation::Push, "push", vec![], vec![reg(accumulator)]));
+    } else if reserve != 0 && !opened {
         enter.push(semantics(
             Operation::Binary,
             "sub",
