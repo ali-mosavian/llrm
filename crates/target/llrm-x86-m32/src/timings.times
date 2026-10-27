@@ -1,3 +1,6 @@
+# `=` in a cell: the price is in the CPU's file, machine/tune/x86/<march>.toml, which holds the rows every
+# target with that CPU agrees on. Correct such a price there; a row only this target states is here.
+#
 # x86-m32 prices, clocks, per CPU. Keys are the cost keys of the forms; a
 # key absent here is the target having no such form (no far call, no segment
 # load). Values are x86-m16's `timings.times` 486 and P5 columns for the forms
@@ -17,174 +20,174 @@
 default_cpu           486
 cpus                  486   P5
 march                i486 pentium
-issue                   1    2
-in_order                1    1
-prefix                  1    1
-partial_stall           0    0
-lcp_stall               0    0
+issue                   =    =
+in_order                =    =
+prefix                  =    =
+partial_stall           =    =
+lcp_stall               =    =
 # gcc's by-pieces limits for a constant memset (x86-tune-costs.h, gcc 13.4.0): stores while their count is under
 # the ratio, else the CPU's stringop algorithm, `rep stos` of dwords here (i486_memset :256, pentium_memset :368).
 # `set_ratio` (a nonzero byte) is MOVE_RATIO through defaults.h:1330's SET_RATIO: i486_cost :312, pentium_cost :424;
 # `clear_ratio` (zero) is CLEAR_RATIO: :313, :425. The `_size` rows are the optimise-for-size path every CPU takes:
 # i386.h:1866 MOVE_RATIO(speed false) 3, :1871 CLEAR_RATIO 2, its algorithm `rep stos` of bytes (ix86_size_memset :33).
-set_ratio               3    6
-clear_ratio             3    6
-set_ratio_size          3    3
-clear_ratio_size        2    2
+set_ratio               =    =
+clear_ratio             =    =
+set_ratio_size          =    =
+clear_ratio_size        =    =
 # A switch of at least `jump_table` case values is a jump table: gcc's case_values_threshold, targhooks.cc:1846
 # (4 with a `casesi` pattern, else 5); i386.md has `tablejump` (:15824) and no `casesi`, and i386.cc sets no
 # TARGET_CASE_VALUES_THRESHOLD.
-jump_table              5    5
+jump_table              =    =
 # Bytes of a line of the first-level data cache, which loop interchange prices
 # a walk by: the 486's 8 KB cache has 16 byte lines (Intel's i486 data sheet),
 # the Pentium's, Pentium Pro's, K5's and K6's 32 (Intel and AMD's manuals), the
 # Athlon's and Core 2's 64. The 386 has no cache on the chip.
-cache_line             16   32
-pairing                 0    1
+cache_line             =    = 
+pairing                 =    =
 
 [clocks]
-alu_rr       1   1
-xchg_rr      3   3
-alu_ri       1   1
-alu_rm       2   2
-alu_mr       3   3
-mov_rr       1   1
-mov_rm       1   1
-mov_mr       1   1
-mov_ri       1   1
-shift_ri     2   1
-shift_r1     3   1
-movzx        3   3
-setcc        4   1
-cdq          3   2
-lea          1   1
-imul_r32     26  10
-imul_m32     27  11
-mul_r32      26  10
-idiv_r32     43  46
-idiv_m32     44  47
-push_r       1   1
-push_m       4   2
-push_i       1   1
-pop_r        4   1
-pop_m        6   1
-leave        5   3
-jmp_short    3   1
-jmp_indirect  5   2
-jcc          3   1
+alu_rr       =   =
+xchg_rr      =   =
+alu_ri       =   =
+alu_rm       =   =
+alu_mr       =   =
+mov_rr       =   =
+mov_rm       =   =
+mov_mr       =   =
+mov_ri       =   =
+shift_ri     =   =
+shift_r1     =   =
+movzx        =   =
+setcc        =   =
+cdq          =   =
+lea          =   =
+imul_r32     =   = 
+imul_m32     =   = 
+mul_r32      =   = 
+idiv_r32     =   = 
+idiv_m32     =   = 
+push_r       =   =
+push_m       =   =
+push_i       =   =
+pop_r        =   =
+pop_m        =   =
+leave        =   3
+jmp_short    =   =
+jmp_indirect  =   =
+jcc          =   =
 call_near    3   1
 ret_near     5   2
 ret_pop      5   3
-rep_stos     7   9
-rep_stos_cell 4  1
-rep_movs     12  13
-rep_movs_cell 3  1
-x87_load     3   1
-x87_exchange 4   1
-x87_store    8   2
+rep_stos     =   =
+rep_stos_cell =  =
+rep_movs     =   = 
+rep_movs_cell =  =
+x87_load     =   =
+x87_exchange =   =
+x87_store    =   =
 x87_release 3   1
-x87_add      8   3
-x87_mul      16  3
-x87_div      73  39
-x87_convert_store 35 7
-x87_add_m    8   3
-x87_mul_m    14  3
-x87_div_m    73  39
+x87_add      =   =
+x87_mul      =   =
+x87_div      =   = 
+x87_convert_store =  =
+x87_add_m    =   =
+x87_mul_m    =   =
+x87_div_m    =   = 
 # Integer memory operands (fild, fiadd, fimul, fidiv, m16/m32int): 486 is Intel's i486 data sheet 240440-002, Table 10.3, the least of
 # each range; P5 is the pair the form replaces (`fild` as a load plus the operation), as no source here states a cheaper one.
-x87_load_i   13   1
-x87_add_i    20   4
-x87_mul_i    23   4
-x87_div_i    85  40
-x87_cmp_i    15   4
-x87_control_load 4 8
-x87_control_store 3 2
-mul_r16      13  11
-div_r16      24  25
-jcc_not_taken 1  1
-nop          1   1
-lahf         3   2
-sahf         2   1
-unknown      2   2
+x87_load_i   =    =
+x87_add_i    =    =
+x87_mul_i    =    =
+x87_div_i    =   = 
+x87_cmp_i    =    =
+x87_control_load = =
+x87_control_store = =
+mul_r16      =   = 
+div_r16      =   = 
+jcc_not_taken =  =
+nop          =   =
+lahf         =   =
+sahf         =   1
+unknown      =   =
 
 # The latencies are the clocks, as the 386's are, until measured.
 
 # Audited bounds of the signed multiply and divide (docs/measurement/timing-audit.md), where a CPU has them:
 # the least and most clocks by operand width in bytes (`w2`, `w4`), and where the P5 prices the full product
 # of a word differently (`smul_full_w2`). Read by backend/timing.rs; the divide has one figure.
-smul_min_w2     13   10
-smul_max_w2     26   10
-smul_min_w4     13   10
-smul_max_w4     42   10
-smul_full_w2     -   11
+smul_min_w2     =    = 
+smul_max_w2     =    = 
+smul_min_w4     =    = 
+smul_max_w4     =    = 
+smul_full_w2     -   = 
 # Intel 240440-002 Table 10.1 note 3: n = 3 for a positive multiplier, 5 for a negative one (the bits floor of 10 + max(bits, n)).
-smul_negative_bits  5    -
-sdiv_w2         27   30
-sdiv_w4         43   46
-udiv_w2         24   25
-udiv_w4         40   41
+smul_negative_bits  =    -
+sdiv_w2         =    = 
+sdiv_w4         =    = 
+udiv_w2         =    = 
+udiv_w4         =    = 
 
 [latency]
-alu_rr       1   1
-xchg_rr      3   3
-alu_ri       1   1
-alu_rm       2   2
-alu_mr       3   3
-mov_rr       1   1
-mov_rm       1   1
-mov_mr       1   1
-mov_ri       1   1
-shift_ri     2   1
-shift_r1     3   1
-movzx        3   3
-setcc        4   1
-cdq          3   2
-lea          1   1
-imul_r32     26  10
-imul_m32     27  11
-mul_r32      26  10
-idiv_r32     43  46
-idiv_m32     44  47
-push_r       1   1
-push_m       4   2
-push_i       1   1
-pop_r        4   1
-pop_m        6   1
-leave        5   3
-jmp_short    3   1
-jmp_indirect  5   2
-jcc          3   1
+alu_rr       =   =
+xchg_rr      =   =
+alu_ri       =   =
+alu_rm       =   =
+alu_mr       =   =
+mov_rr       =   =
+mov_rm       =   =
+mov_mr       =   =
+mov_ri       =   =
+shift_ri     =   =
+shift_r1     =   =
+movzx        =   =
+setcc        =   =
+cdq          =   =
+lea          =   =
+imul_r32     =   = 
+imul_m32     =   = 
+mul_r32      =   = 
+idiv_r32     =   = 
+idiv_m32     =   = 
+push_r       =   =
+push_m       =   =
+push_i       =   =
+pop_r        =   =
+pop_m        =   =
+leave        =   3
+jmp_short    =   =
+jmp_indirect  =   =
+jcc          =   =
 call_near    3   1
 ret_near     5   2
 ret_pop      5   3
-rep_stos     7   9
-rep_stos_cell 4  1
-rep_movs     12  13
-rep_movs_cell 3  1
-x87_load     3   1
-x87_exchange 4   1
-x87_store    8   2
+rep_stos     =   =
+rep_stos_cell =  =
+rep_movs     =   = 
+rep_movs_cell =  =
+x87_load     =   =
+x87_exchange =   =
+x87_store    =   =
 x87_release 3   1
-x87_add      8   3
-x87_mul      16  3
-x87_div      73  39
-x87_convert_store 35 7
-x87_add_m    8   3
-x87_mul_m    14  3
-x87_div_m    73  39
+x87_add      =   =
+x87_mul      =   =
+x87_div      =   = 
+x87_convert_store =  =
+x87_add_m    =   =
+x87_mul_m    =   =
+x87_div_m    =   = 
 # Integer memory operands (fild, fiadd, fimul, fidiv, m16/m32int): 486 is Intel's i486 data sheet 240440-002, Table 10.3, the least of
 # each range; P5 is the pair the form replaces (`fild` as a load plus the operation), as no source here states a cheaper one.
-x87_load_i   13   1
-x87_add_i    20   4
-x87_mul_i    23   4
-x87_div_i    85  40
-x87_cmp_i    15   4
-x87_control_load 4 8
-x87_control_store 3 2
-mul_r16      13  11
-div_r16      24  25
-jcc_not_taken 1  1
-nop          1   1
-lahf         3   2
-sahf         2   1
-unknown      2   2
+x87_load_i   =    =
+x87_add_i    =    =
+x87_mul_i    =    =
+x87_div_i    =   = 
+x87_cmp_i    =    =
+x87_control_load = =
+x87_control_store = =
+mul_r16      =   = 
+div_r16      =   = 
+jcc_not_taken =  =
+nop          =   =
+lahf         =   =
+sahf         =   1
+unknown      =   =
