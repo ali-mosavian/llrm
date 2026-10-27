@@ -232,6 +232,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD219 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
 | SD216 | sdag-b | `visitLOAD` bypasses a dead non-volatile load and forwards a store to the load straight after it (little-endian, integer, offset 0); no alignment inference, indexed or sliced loads, no big-endian, float or same-size bitcast forwarding, and it runs at every opt level (the pin skips it at `-O0`, CC1); the root load is left alone (the pin's `HandleSDNode` holds it) | `selectiondag/combine_load.rs` |
+| SD313 | sdag-b | `visitSIGN_EXTEND_INREG` has no vector in-reg forms and no `reduceLoadWidth` narrowing of the load | `selectiondag/dag_combiner.rs` |
 | SD312 | sdag-b | `visitBSWAP` has no half-width `shl` fold (no truncate-free query) and no `foldBitOrderCrossLogicOp` | `selectiondag/dag_combiner.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |

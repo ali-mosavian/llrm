@@ -416,6 +416,37 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 }
                 KnownBits { zero: k.zero & all, one: k.one & all, width }
             }
+            // `SimplifyDemandedBits` of `SIGN_EXTEND_INREG`: the bits above the
+            // narrow type are copies of its sign bit.
+            ISD::SignExtendInReg => {
+                let src = self.dag.operand(op, 0);
+                let super::dag::NodeData::ValueType(inner) = self.dag.node(self.dag.operand(op, 1)).data else {
+                    return Ok(known_bits(self.dag, op));
+                };
+                let inner_bits = inner.size_in_bits();
+                let in_mask = mask(inner_bits);
+                let sign = 1u128 << (inner_bits - 1);
+                // None of the extended bits is demanded: the operand will do.
+                if demanded & !in_mask == 0 && self.dag.value_type(src) == vt {
+                    self.sdb(src, demanded, depth + 1, false, tlo)?;
+                    return Self::combine_to(tlo, op, src);
+                }
+                let in_demanded = (demanded & in_mask) | if demanded & !in_mask != 0 { sign } else { 0 };
+                let k = self.sdb(src, in_demanded, depth + 1, false, tlo)?;
+                if let Some(new_src) = self.simplify_multiple_use_demanded_bits(src, in_demanded, depth + 1) {
+                    let new = self.dag.get_node(ISD::SignExtendInReg, vt, &[new_src, self.dag.operand(op, 1)]);
+                    return Self::combine_to(tlo, op, new);
+                }
+                let high = all & !in_mask;
+                let (zero, one) = if k.zero & sign != 0 {
+                    ((k.zero & in_mask) | high, k.one & in_mask)
+                } else if k.one & sign != 0 {
+                    (k.zero & in_mask, (k.one & in_mask) | high)
+                } else {
+                    (k.zero & in_mask & !sign, k.one & in_mask & !sign)
+                };
+                KnownBits { zero, one, width }
+            }
             _ => known_bits(self.dag, op),
         };
         known.width = width;
