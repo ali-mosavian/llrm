@@ -101,8 +101,10 @@ oracle = "none"
 
 [[program]]
 match = "*/matmul*"
-cause = "untriaged"
+cause = "RA: five frame temporaries [bp-2..-12] and two address registers per row (_bench_matmul 123 -> 137 insns in the nib, same shape in .c/.bas); loop forms equal"
 owner = "w-13"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/jpeg*"
