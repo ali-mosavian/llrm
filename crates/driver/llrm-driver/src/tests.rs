@@ -378,6 +378,20 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
 }
 
+/// A `double` argument came in `xmm0` and went to `rax` and back
+/// (`mov rax, xmm0; mov xmm0, rax; addsd xmm0, xmm1`): the value delivered in
+/// an xmm register named no xmm operand, so the allocator took a
+/// general-purpose register for it, which the object writer cannot encode.
+#[test]
+fn a_double_argument_stays_in_its_xmm_register() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define double @f(double %a, double %b) {\n  %r = fadd double %a, %b\n  ret double %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]
