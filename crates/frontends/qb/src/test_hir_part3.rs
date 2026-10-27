@@ -3205,6 +3205,20 @@ fn listing_of(
     std::fs::read_to_string(&out).expect("the listing")
 }
 
+/// READ keeps nothing of its destination's address, so a later PRINT cannot
+/// write the cell: `n` was loaded again after `PRINT x#;` though nothing
+/// stored to it (B$RDI2 was a pointer that might be kept).
+#[test]
+fn test_a_cell_read_into_is_not_reloaded_after_a_print() {
+    let text = listing_of(
+        "read_then_print",
+        "DEFINT A-Z\r\nCOMMON SHARED n\r\nDIM x AS DOUBLE\r\nREAD n\r\nDATA 7\r\nx = 2.5\r\na = n\r\nPRINT x;\r\nb = n\r\nPRINT a; b\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let loads = main.lines().map(str::trim).filter(|one| one.starts_with("mov") && one.ends_with("ptr N%")).count();
+    assert_eq!(loads, 1, "{main}");
+}
+
 /// `DEF SEG = VARSEG(x)` then `POKE VARPTR(x) + k, ...` writes into x: the
 /// pointer `ADDRESS(x) + k`, not a segment loaded from `b$seg` and an offset,
 /// which a loop's cells and `b$seg` itself could not be kept in registers
