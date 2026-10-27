@@ -7,6 +7,50 @@
 
 use crate::matcher::{Opcode, Vt};
 
+/// The nodes a walk has seen (the pin's `SmallPtrSet`): a bit per node, so a
+/// membership test is O(1). A `Vec` scanned per test made each walk
+/// quadratic.
+#[derive(Default)]
+pub struct Visited {
+    bits: Vec<u64>,
+    len: usize,
+}
+
+impl Visited {
+    pub fn contains(
+        &self,
+        node: &u32,
+    ) -> bool {
+        self.bits.get(*node as usize / 64).is_some_and(|word| word >> (*node % 64) & 1 != 0)
+    }
+
+    pub fn push(
+        &mut self,
+        node: u32,
+    ) {
+        let at = node as usize / 64;
+        if at >= self.bits.len() {
+            self.bits.resize(at + 1, 0);
+        }
+        let bit = 1u64 << (node % 64);
+        self.len += usize::from(self.bits[at] & bit == 0);
+        self.bits[at] |= bit;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.bits.clear();
+        self.len = 0;
+    }
+}
+
 /// `SDValue`: result `res` of node `node`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SDValue {
@@ -314,7 +358,7 @@ pub trait Dag {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool;

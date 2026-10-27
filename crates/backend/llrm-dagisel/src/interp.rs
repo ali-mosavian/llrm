@@ -31,7 +31,7 @@
 //! [known]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3103
 
-use crate::dag::{Dag, Hooks, MemRef, SDValue};
+use crate::dag::{Dag, Hooks, MemRef, SDValue, Visited};
 use crate::generated::ids::{isd, mvt, target_opcode};
 use crate::matcher::{Emit, Matcher, Opcode, Slice, Table, Vt, opfl};
 
@@ -825,14 +825,14 @@ fn handle_merge_input_chains<D: Dag>(
         return Some(dag.operand(matched[0], 0));
     }
 
-    let mut visited: Vec<u32> = Vec::new();
+    let mut visited = Visited::default();
     let mut worklist: Vec<u32> = Vec::new();
     let mut input_chains: Vec<SDValue> = Vec::new();
 
     fn add_chains<D: Dag>(
         dag: &D,
         v: SDValue,
-        visited: &mut Vec<u32>,
+        visited: &mut Visited,
         chains: &mut Vec<SDValue>,
     ) {
         if dag.value_type(v) != mvt::Other || dag.opcode(v.node) == isd::EntryToken || visited.contains(&v.node) {

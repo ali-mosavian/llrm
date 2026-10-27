@@ -844,7 +844,7 @@ impl Dag for DagisAdapter<'_> {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut llrm_dagisel::dag::Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {

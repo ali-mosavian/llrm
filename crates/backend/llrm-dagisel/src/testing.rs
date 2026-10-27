@@ -527,7 +527,7 @@ impl Dag for TestDag {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut crate::dag::Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {

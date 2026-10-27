@@ -19,7 +19,7 @@
 //! [fusable]:
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L3787
 
-use crate::dag::{LoadExt, SDValue};
+use crate::dag::{LoadExt, SDValue, Visited};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::matcher::Vt;
 use crate::x86_addr::{AddrDag, Matcher};
@@ -127,7 +127,7 @@ fn fusable<D: AddrDag>(
             worklist.push(op.node);
         }
     }
-    if dag.has_predecessor_helper(load.node, &mut Vec::new(), &mut worklist, 1024) {
+    if dag.has_predecessor_helper(load.node, &mut Visited::default(), &mut worklist, 1024) {
         return None;
     }
     let input_chain = if chain_ops.len() == 1 { chain_ops[0] } else { dag.token_factor(&chain_ops) };

@@ -25,7 +25,7 @@
 //! # Used by
 //! The shadow harness: `Selector::select(dag, &mut X86Hooks::new(..), node)`.
 
-use crate::dag::{Hooks, PatternContext, SDValue};
+use crate::dag::{Hooks, PatternContext, SDValue, Visited};
 use crate::generated::ids::{isd, mvt, x86, x86isd};
 use crate::generated::{x86_i486, x86_m16, x86_p5, x86_x64};
 use crate::instr;
@@ -364,9 +364,10 @@ fn find_non_imm_use<D: AddrDag>(
     if dag.is_only_user_of(immediate_use, def) {
         return false;
     }
-    let mut visited = vec![immediate_use];
+    let mut visited = Visited::default();
+    visited.push(immediate_use);
     let mut worklist = Vec::new();
-    let seed = |node: u32, visited: &mut Vec<u32>, worklist: &mut Vec<u32>| {
+    let seed = |node: u32, visited: &mut Visited, worklist: &mut Vec<u32>| {
         for i in 0..dag.num_operands(node) {
             let op = dag.operand(node, i);
             if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || visited.contains(&op.node) {
