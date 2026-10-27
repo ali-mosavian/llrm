@@ -103,6 +103,7 @@
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
 pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
+pub mod abs_combine;
 pub mod address_analysis;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
