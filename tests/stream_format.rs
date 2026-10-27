@@ -5,8 +5,6 @@
 
 mod common;
 
-use std::process::Command;
-
 fn listing(source: &str) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
@@ -35,6 +33,9 @@ int pick(int x, int *p)
 
 /// A 64-bit value, a negative one and a case label passed through the stream
 /// as text: each digit string must read back as written.
+/// llrm-cc: the compare and the load name the register clang's IR and the pin's
+/// allocator pick (`ecx`, not `edx`), so the operand's digits are matched, not
+/// the register.
 #[test]
 fn test_the_stream_carries_signed_wide_and_escaped_values_exactly() {
     let text = listing(SOURCE);
@@ -43,10 +44,15 @@ fn test_the_stream_carries_signed_wide_and_escaped_values_exactly() {
         "db 000h,00eh,0fah,0d5h,0feh,0ffh,0ffh,0ffh",
         "db 000h,000h,000h,080h",
         "db 061h,022h,062h,05ch,001h,0ffh,07ah,000h",
-        "cmp edx, -7",
-        "cmp edx, 3000000",
-        "mov eax, dword ptr [ecx-12]",
     ] {
         assert!(text.lines().any(|line| line.trim() == expected), "missing {expected:?} in\n{text}");
+    }
+    // The register is the allocator's to choose; the operand's digits are the
+    // test.
+    for (head, tail) in [("cmp ", ", -7"), ("cmp ", ", 3000000"), ("mov ", "-12]")] {
+        assert!(
+            text.lines().any(|line| line.trim().starts_with(head) && line.trim().ends_with(tail)),
+            "missing {head:?}..{tail:?} in\n{text}"
+        );
     }
 }

@@ -5,6 +5,8 @@
 //! The binaries are enumerated from `src/bin`: one nobody classified fails, so
 //! a new frontend cannot ship with a parser of its own.
 
+mod common;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -31,7 +33,7 @@ struct Tool {
 fn tools() -> Vec<Tool> {
     vec![
         Tool {
-            name: "llrm-c",
+            name: "llrm-cc",
             path: env!("CARGO_BIN_EXE_llrm-cc"),
             input: ("a.c", C),
             more: &["-S", "-o", "a.s"],
@@ -76,7 +78,8 @@ fn tools() -> Vec<Tool> {
 }
 
 /// Binaries that name no target, and why.
-const EXEMPT: [(&str, &str); 5] = [
+const EXEMPT: [(&str, &str); 6] = [
+    ("llrm-c", "the dropped Watcom front end, still built; llrm-cc replaces it and is tested above"),
     ("llrm-llc", "reads LLVM IR; takes -m through the shared flag parser"),
     ("qbfront", "prints HIR text; takes -m through the shared flag parser"),
     ("llrm-mir", "reads MIR, which states its own datalayout"),
@@ -90,6 +93,16 @@ fn run(
     flags: &[&str],
 ) -> Output {
     std::fs::write(directory.join(tool.input.0), tool.input.1).unwrap();
+    if tool.name == "llrm-cc" {
+        // llrm-cc names its target by `LLRM_CC_TARGET`; the helper maps `-m32`.
+        return common::cc::llrm_c()
+            .current_dir(directory)
+            .args(flags)
+            .arg(tool.input.0)
+            .args(tool.more)
+            .output()
+            .unwrap();
+    }
     Command::new(tool.path).current_dir(directory).args(flags).arg(tool.input.0).args(tool.more).output().unwrap()
 }
 
@@ -98,6 +111,8 @@ fn text(done: &Output) -> String {
 }
 
 /// A frontend with a parser of its own would not be in this list.
+/// llrm-cc: `llrm-c` is the `llrm-cc` binary now, so it is listed under that
+/// name.
 #[test]
 fn every_binary_is_classified() {
     let known: Vec<&str> = tools().iter().map(|one| one.name).chain(EXEMPT.iter().map(|(name, _)| *name)).collect();
@@ -145,16 +160,20 @@ fn the_old_spellings_are_refused_everywhere() {
 
 /// A mode no target declares is a clear refusal, not a fall back to the
 /// default. (`-m64` stopped being one when x86-m64 landed.)
+/// llrm-cc: it takes the target by name (`LLRM_CC_TARGET`), not by mode, so the
+/// target no table declares is `x86_128-wat` and the refusal says `no target`.
 #[test]
 fn a_mode_no_target_declares_is_refused() {
     for tool in tools().iter().filter(|one| !matches!(one.name, "llrm-omf" | "llrm-qb")) {
         let directory = tempfile::tempdir().unwrap();
-        let done = run(tool, directory.path(), &["-m128"]);
-        assert!(
-            !done.status.success() && text(&done).contains("no target for -m128"),
-            "{} -m128: {}",
-            tool.name,
-            text(&done)
-        );
+        let (flag, said) =
+            if tool.name == "llrm-cc" { ("-m16", "no target `x86_128-wat`") } else { ("-m128", "no target for -m128") };
+        let mut command = Command::new(tool.path);
+        if tool.name == "llrm-cc" {
+            command.env("LLRM_CC_TARGET", "x86_128-wat");
+        }
+        std::fs::write(directory.path().join(tool.input.0), tool.input.1).unwrap();
+        let done = command.current_dir(directory.path()).arg(flag).arg(tool.input.0).args(tool.more).output().unwrap();
+        assert!(!done.status.success() && text(&done).contains(said), "{} -m128: {}", tool.name, text(&done));
     }
 }

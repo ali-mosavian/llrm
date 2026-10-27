@@ -117,11 +117,13 @@ impl LlrmC {
         command
             .env("LLRM_CC_TARGET", if wide { "x86_32-wat" } else { "x86_16-wat" })
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
-            .args(stop)
-            .envs(self.environment.iter().map(|(key, value)| (key, value)));
+            .args(stop);
+        // In the order they were asked, as `Command` does: a removal beside a
+        // later `env` of the same key must not win over it.
         for key in &self.removed {
             command.env_remove(key);
         }
+        command.envs(self.environment.iter().map(|(key, value)| (key, value)));
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
         }
