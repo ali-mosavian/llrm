@@ -229,10 +229,10 @@ fn the_audited_bounds_come_from_the_targets_timings() {
 /// written (no pipeline), leaving `40 + 2` and a dead stack slot in the code.
 #[test]
 fn llvm_ir_is_found_by_its_triple_and_optimized() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define dso_local i32 @main() {\n  %1 = alloca i32, align 4\n  store i32 0, ptr %1, align 4\n  \
-                %2 = add i32 40, 2\n  ret i32 %2\n}\n";
+                %2 = add i32 40, 2\n  ret i32 %2\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "main").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let body: Vec<&str> =
@@ -245,10 +245,10 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
 /// never set, so `printf` read whatever the register held.
 #[test]
 fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @printf(ptr, ...)\n\
-                define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
+                define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
@@ -264,13 +264,13 @@ fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
 /// { i64, i64 } value").
 #[test]
 fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare { i64, i64 } @mk(i64, i64)\n\
                 define { i64, i64 } @pair(i64 %a, i64 %b) {\n\
                   %x = insertvalue { i64, i64 } poison, i64 %a, 0\n  %y = insertvalue { i64, i64 } %x, i64 %b, 1\n  ret { i64, i64 } %y\n}\n\
                 define i64 @sum(i64 %a, i64 %b) {\n  %r = call { i64, i64 } @mk(i64 %a, i64 %b)\n\
-                  %p = extractvalue { i64, i64 } %r, 0\n  %q = extractvalue { i64, i64 } %r, 1\n  %s = add i64 %p, %q\n  ret i64 %s\n}\n";
+                  %p = extractvalue { i64, i64 } %r, 0\n  %q = extractvalue { i64, i64 } %r, 1\n  %s = add i64 %p, %q\n  ret i64 %s\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "pair").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let mut lines = listing.lines().map(str::trim);
@@ -290,12 +290,12 @@ fn a_struct_of_two_quadwords_returns_in_rax_and_rdx() {
 /// a root), so its caller's frame was garbage.
 #[test]
 fn a_freed_frame_register_holding_a_value_is_saved() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @g(i32)\n\
                 define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %h) {\n\
                   %x = call i32 @g(i32 %a)\n\
-                  %1 = add i32 %x, %a\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  %5 = add i32 %4, %e\n  %6 = add i32 %5, %h\n  ret i32 %6\n}\n";
+                  %1 = add i32 %x, %a\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  %5 = add i32 %4, %e\n  %6 = add i32 %5, %h\n  ret i32 %6\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let body: Vec<&str> = listing.lines().map(str::trim).collect();
@@ -311,11 +311,11 @@ fn a_freed_frame_register_holding_a_value_is_saved() {
 /// stores for a constant).
 #[test]
 fn an_alloca_with_the_pins_lifetime_markers_is_promoted() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @llvm.lifetime.start.p0(ptr captures(none))\n\
                 declare void @llvm.lifetime.end.p0(ptr captures(none))\n\
-                define i32 @f() {\n  %p = alloca i32, align 4\n  call void @llvm.lifetime.start.p0(ptr %p)\n  store i32 5, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  call void @llvm.lifetime.end.p0(ptr %p)\n  ret i32 %v\n}\n";
+                define i32 @f() {\n  %p = alloca i32, align 4\n  call void @llvm.lifetime.start.p0(ptr %p)\n  store i32 5, ptr %p, align 4\n  %v = load i32, ptr %p, align 4\n  call void @llvm.lifetime.end.p0(ptr %p)\n  ret i32 %v\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let body: Vec<&str> =
@@ -328,11 +328,11 @@ fn an_alloca_with_the_pins_lifetime_markers_is_promoted() {
 /// variadic arguments" refused every `va_list` of x86-64.
 #[test]
 fn va_start_saves_the_unnamed_argument_registers_and_fills_the_list() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @llvm.va_start.p0(ptr)\n\
                 declare void @llvm.va_end.p0(ptr)\n\
-                define i32 @f(i32 %n, ...) {\n  %ap = alloca [24 x i8], align 8\n  call void @llvm.va_start.p0(ptr %ap)\n  %g = load i32, ptr %ap, align 8\n  call void @llvm.va_end.p0(ptr %ap)\n  ret i32 %g\n}\n";
+                define i32 @f(i32 %n, ...) {\n  %ap = alloca [24 x i8], align 8\n  call void @llvm.va_start.p0(ptr %ap)\n  %g = load i32, ptr %ap, align 8\n  call void @llvm.va_end.p0(ptr %ap)\n  ret i32 %g\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     // One argument is named: rsi, rdx, rcx, r8 and r9 are saved; the list
@@ -353,10 +353,10 @@ fn va_start_saves_the_unnamed_argument_registers_and_fills_the_list() {
 /// them. It lowers the stack pointer when it runs and keeps the frame register.
 #[test]
 fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @use(ptr)\n\
-                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
+                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
@@ -367,10 +367,10 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
 /// A constant count above one reserved one element's bytes.
 #[test]
 fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @use(ptr)\n\
-                define void @f() {\n  %p = alloca i64, i32 8, align 8\n  call void @use(ptr %p)\n  ret void\n}\n";
+                define void @f() {\n  %p = alloca i64, i32 8, align 8\n  call void @use(ptr %p)\n  ret void\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let reserved: i64 =
@@ -382,10 +382,10 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]
 fn a_select_is_one_conditional_move() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 define i32 @min(i32 %a, i32 %b) {\n  %c = icmp slt i32 %a, %b\n  %r = select i1 %c, i32 %a, i32 %b\n  ret i32 %r\n}\n\
-                define i64 @pick(i1 %c, i64 %a, i64 %b) {\n  %r = select i1 %c, i64 %a, i64 %b\n  ret i64 %r\n}\n";
+                define i64 @pick(i1 %c, i64 %a, i64 %b) {\n  %r = select i1 %c, i64 %a, i64 %b\n  ret i64 %r\n}\n");
     for (name, cmov) in [("min", "cmovl"), ("pick", "cmovne")] {
         let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, name).unwrap();
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
@@ -398,10 +398,10 @@ fn a_select_is_one_conditional_move() {
 /// holding a pointer, so a program with one could not be dumped at x86-64.
 #[test]
 fn a_global_holding_a_pointer_lists_as_a_quadword() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @x = global i32 0\n@p = global ptr @x\n\
-                define ptr @f() {\n  %v = load ptr, ptr @p\n  ret ptr %v\n}\n";
+                define ptr @f() {\n  %v = load ptr, ptr @p\n  ret ptr %v\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("dq x"), "{listing}");
@@ -412,10 +412,10 @@ fn a_global_holding_a_pointer_lists_as_a_quadword() {
 /// and `[base+index*4]` stores.
 #[test]
 fn accesses_to_one_global_share_its_address_and_take_the_index_in_the_address() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 @a = global [64 x i32] zeroinitializer\n\
-                define void @f(i64 %i) {\n  %p = getelementptr [64 x i32], ptr @a, i64 0, i64 %i\n  store i32 1, ptr %p\n  %q = getelementptr [64 x i32], ptr @a, i64 1, i64 %i\n  store i32 2, ptr %q\n  ret void\n}\n";
+                define void @f(i64 %i) {\n  %p = getelementptr [64 x i32], ptr @a, i64 0, i64 %i\n  store i32 1, ptr %p\n  %q = getelementptr [64 x i32], ptr @a, i64 1, i64 %i\n  store i32 2, ptr %q\n  ret void\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
@@ -428,9 +428,9 @@ fn accesses_to_one_global_share_its_address_and_take_the_index_in_the_address() 
 /// was five shifts and adds where `llc` has one `imul r,r,100`.
 #[test]
 fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
-                define i32 @f(i32 %x) {\n  %r = mul i32 %x, 100\n  ret i32 %r\n}\n";
+                define i32 @f(i32 %x) {\n  %r = mul i32 %x, 100\n  ret i32 %r\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("imul")), "{listing}");
@@ -443,10 +443,10 @@ fn a_multiply_by_a_constant_is_one_imul_at_x86_64() {
 /// stack.
 #[test]
 fn values_live_across_a_call_take_the_callee_saved_registers() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @g(i32)\n\
-                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %1 = call i32 @g(i32 %a)\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  ret i32 %4\n}\n";
+                define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %1 = call i32 @g(i32 %a)\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  ret i32 %4\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
@@ -456,10 +456,10 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
 /// words and dwords. It is `xor eax, eax`.
 #[test]
 fn a_quadword_zero_is_a_dword_xor() {
-    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+    let text = ir("target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i64 @g(i64)\n\
-                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
+                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
@@ -513,10 +513,10 @@ fn an_operand_of_an_sse_form_is_confined_to_xmm_registers() {
 /// both undefined. Names take the convention's spelling for the format.
 #[test]
 fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 declare void @report(i32)\n\
-                define i32 @main() {\n  call void @report(i32 7)\n  ret i32 0\n}\n";
+                define i32 @main() {\n  call void @report(i32 7)\n  ret i32 0\n}\n");
     let flags = flags(&["-fobject-format=omf", "-mabi=sysv"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
@@ -528,12 +528,10 @@ fn llvm_ir_symbols_are_decorated_as_the_object_format_spells_them() {
 /// module that calls qgl compiled.
 #[test]
 fn clangs_pascal_number_is_llrms_basic_convention() {
-    let text = m16_ir(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc232 i16 @QGL(i16) addrspace(1)\n\
-                define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n",
-    );
+                define i16 @f() addrspace(1) {\n  %1 = call cc232 addrspace(1) i16 @QGL(i16 7)\n  ret i16 %1\n}\n");
     crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
 }
 
@@ -542,12 +540,10 @@ fn clangs_pascal_number_is_llrms_basic_convention() {
 /// asm block compiled.
 #[test]
 fn inline_code_intrinsics_keep_their_names() {
-    let text = m16_ir(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr)\n\
-                define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n",
-    );
+                define i16 @f() addrspace(1) {\n  %a = alloca i16\n  %r = call i32 @\"llrm.ia16.code.89a60170c3.2p0\"(ptr %a)\n  ret i16 0\n}\n");
     crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
 }
 
@@ -556,14 +552,12 @@ fn inline_code_intrinsics_keep_their_names() {
 /// reference" (QCport).
 #[test]
 fn defined_globals_are_public_and_internal_ones_are_not() {
-    let text = m16_ir(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @a = dso_local global i16 5\n\
                 @b = dso_local addrspace(1) constant i16 7\n\
                 @c = internal global i16 9\n\
-                define i16 @f() addrspace(1) {\n  ret i16 0\n}\n",
-    );
+                define i16 @f() addrspace(1) {\n  ret i16 0\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(
@@ -578,13 +572,11 @@ fn defined_globals_are_public_and_internal_ones_are_not() {
 /// the `llrm.ia16.in`/`out` intrinsics.
 #[test]
 fn borlands_port_functions_are_the_port_intrinsics() {
-    let text = m16_ir(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 declare cc1000 i8 @__outportb__(i16, i8) addrspace(1)\n\
                 declare i8 @__inportb__(i16) addrspace(1)\n\
-                define i8 @f(i8 %v) addrspace(1) {\n  %1 = call addrspace(1) i8 @__outportb__(i16 noundef 968, i8 noundef zeroext %v)\n  %2 = call addrspace(1) i8 @__inportb__(i16 noundef 969)\n  ret i8 %2\n}\n",
-    );
+                define i8 @f(i8 %v) addrspace(1) {\n  %1 = call addrspace(1) i8 @__outportb__(i16 noundef 968, i8 noundef zeroext %v)\n  %2 = call addrspace(1) i8 @__inportb__(i16 noundef 969)\n  ret i8 %2\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=cdecl"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(
@@ -598,9 +590,9 @@ fn borlands_port_functions_are_the_port_intrinsics() {
 /// find it.
 #[test]
 fn the_chosen_abi_spells_clang_functions_without_a_convention() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
-                define i32 @main() {\n  ret i32 0\n}\n";
+                define i32 @main() {\n  ret i32 0\n}\n");
     let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
@@ -612,10 +604,10 @@ fn the_chosen_abi_spells_clang_functions_without_a_convention() {
 /// registers) was never sorted by.
 #[test]
 fn the_chosen_abi_passes_arguments_of_functions_without_a_convention() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 declare i32 @ext(i32, i32)\n\
-                define i32 @main() {\n  %1 = call i32 @ext(i32 11, i32 22)\n  ret i32 %1\n}\n";
+                define i32 @main() {\n  %1 = call i32 @ext(i32 11, i32 22)\n  ret i32 %1\n}\n");
     let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
@@ -630,11 +622,11 @@ fn the_chosen_abi_passes_arguments_of_functions_without_a_convention() {
 /// `stdout` was an undefined reference.
 #[test]
 fn variables_keep_the_leading_underscore_under_the_watcom_abi() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 @counter = global i32 5\n\
                 @__iob = external global i32\n\
-                define i32 @main() {\n  %1 = load i32, ptr @__iob\n  ret i32 %1\n}\n";
+                define i32 @main() {\n  %1 = load i32, ptr @__iob\n  ret i32 %1\n}\n");
     let flags = flags(&["-fobject-format=omf", "-mabi=watcom"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
@@ -649,10 +641,10 @@ fn variables_keep_the_leading_underscore_under_the_watcom_abi() {
 /// `B$SINCOS` was an undefined reference.
 #[test]
 fn an_asm_label_is_the_symbol_as_written() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 declare void @\"\\01B$SINCOS\"()\n\
-                define void @main() {\n  call void @\"\\01B$SINCOS\"()\n  ret void\n}\n";
+                define void @main() {\n  call void @\"\\01B$SINCOS\"()\n  ret void\n}\n");
     let flags = flags(&["-fobject-format=omf"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
@@ -664,11 +656,11 @@ fn an_asm_label_is_the_symbol_as_written() {
 /// `_DATA` and the module's own code segment.
 #[test]
 fn a_section_names_the_segment_of_a_variable_and_a_function() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 @in_xib = global i32 3, section \"XIB\", align 4\n\
                 define i32 @hot() section \"HOT_TEXT\" {\n  %1 = load i32, ptr @in_xib\n  ret i32 %1\n}\n\
-                define i32 @main() {\n  %1 = call i32 @hot()\n  ret i32 %1\n}\n";
+                define i32 @main() {\n  %1 = call i32 @hot()\n  ret i32 %1\n}\n");
     let flags = flags(&["-fobject-format=omf"]);
     let (built, _) = crate::llc::compiled(&flags, text, "main").unwrap();
     assert!(built.data.iter().any(|(name, items)| name == "XIB" && !items.is_empty()), "{:?}", built.data);
@@ -680,16 +672,15 @@ fn a_section_names_the_segment_of_a_variable_and_a_function() {
 /// pointers, lowest priority first, in an init-function segment.
 #[test]
 fn global_ctors_become_init_function_pointers_at_x86_64_and_m32() {
-    for (layout, triple) in [
-        ("e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128", "x86_64-unknown-linux-gnu"),
-        ("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32", "i486-unknown-linux-gnu"),
-    ] {
-        let text = format!(
+    for (layout, triple) in
+        [("@m64-datalayout@", "x86_64-unknown-linux-gnu"), ("@m32-datalayout@", "i486-unknown-linux-gnu")]
+    {
+        let text = ir(&format!(
             "target datalayout = \"{layout}\"\ntarget triple = \"{triple}\"\n\
              @llvm.global_ctors = appending global [3 x {{ i32, ptr, ptr }}] [{{ i32, ptr, ptr }} {{ i32 200, ptr @late, ptr null }}, \
              {{ i32, ptr, ptr }} {{ i32 100, ptr @early, ptr null }}, {{ i32, ptr, ptr }} {{ i32 150, ptr null, ptr null }}]\n\
              define void @early() {{\n  ret void\n}}\ndefine internal void @late() {{\n  ret void\n}}\n"
-        );
+        ));
         let (built, _) =
             crate::llc::compiled(&flags(&[]), &text, "ctors").unwrap_or_else(|error| panic!("{triple}: {error}"));
         let (_, items) = built
@@ -717,9 +708,9 @@ fn global_ctors_become_init_function_pointers_at_x86_64_and_m32() {
 /// emitted for nothing.
 #[test]
 fn global_ctors_are_refused_at_m16() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 @llvm.global_ctors = appending global [1 x { i32, ptr, ptr }] [{ i32, ptr, ptr } { i32 1, ptr @f, ptr null }]\n\
-                define void @f() {\n  ret void\n}\n";
+                define void @f() {\n  ret void\n}\n");
     let error = crate::llc::compiled(&flags(&["-m16"]), text, "ctors").expect_err("refused");
     assert!(error.contains("llvm.global_ctors") && error.contains("start-up"), "{error}");
 }
@@ -729,9 +720,9 @@ fn global_ctors_are_refused_at_m16() {
 /// false, and the branch on it is gone.
 #[test]
 fn is_constant_of_a_parameter_is_lowered_before_selection() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 declare i1 @llvm.is.constant.i32(i32)\n\
-                define i32 @f(i32 %x) {\n  %c = call i1 @llvm.is.constant.i32(i32 %x)\n  %r = select i1 %c, i32 1, i32 2\n  ret i32 %r\n}\n";
+                define i32 @f(i32 %x) {\n  %c = call i1 @llvm.is.constant.i32(i32 %x)\n  %r = select i1 %c, i32 1, i32 2\n  ret i32 %r\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O0"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("is.constant"), "{listing}");
@@ -742,9 +733,9 @@ fn is_constant_of_a_parameter_is_lowered_before_selection() {
 /// calls `floor`.
 #[test]
 fn a_floor_intrinsic_is_a_call_of_floor() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 declare double @llvm.floor.f64(double)\n\
-                define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n";
+                define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("call ") && line.contains("floor")), "{listing}");
@@ -756,10 +747,10 @@ fn a_floor_intrinsic_is_a_call_of_floor() {
 /// nothing.
 #[test]
 fn a_prefetch_hint_compiles_to_no_code() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 declare void @llvm.prefetch.p0(ptr, i32, i32, i32)\n\
-                define void @f(ptr %p) {\n  call void @llvm.prefetch.p0(ptr %p, i32 0, i32 3, i32 1)\n  ret void\n}\n";
+                define void @f(ptr %p) {\n  call void @llvm.prefetch.p0(ptr %p, i32 0, i32 3, i32 1)\n  ret void\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("prefetch"), "{listing}");
@@ -770,10 +761,10 @@ fn a_prefetch_hint_compiles_to_no_code() {
 /// nothing through `llrm-cc`.
 #[test]
 fn a_fake_use_compiles_to_no_code() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 declare void @llvm.fake.use(...)\n\
-                define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  call void (...) @llvm.fake.use(i32 %b)\n  ret i32 %a\n}\n";
+                define i32 @f(i32 %a) {\n  %b = add i32 %a, 1\n  call void (...) @llvm.fake.use(i32 %b)\n  ret i32 %a\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("fake"), "{listing}");
@@ -786,12 +777,12 @@ fn a_fake_use_compiles_to_no_code() {
 /// initial value stay in `_DATA`.
 #[test]
 fn a_zero_static_in_llvm_ir_is_uninitialised_data() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 @zero = internal global i32 0, align 4\n\
                 @three = internal global i32 3, align 4\n\
                 @ro = internal constant i32 0, align 4\n\
-                define i32 @f() {\n  store volatile i32 1, ptr @zero\n  %a = load volatile i32, ptr @zero\n  store volatile i32 1, ptr @three\n  %b = load volatile i32, ptr @three\n  %c = load volatile i32, ptr @ro\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  ret i32 %t\n}\n";
+                define i32 @f() {\n  store volatile i32 1, ptr @zero\n  %a = load volatile i32, ptr @zero\n  store volatile i32 1, ptr @three\n  %b = load volatile i32, ptr @three\n  %c = load volatile i32, ptr @ro\n  %s = add i32 %a, %b\n  %t = add i32 %s, %c\n  ret i32 %t\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let bss = listing.split(".data?").nth(1).unwrap_or_default().split(".code").next().unwrap();
@@ -805,10 +796,10 @@ fn a_zero_static_in_llvm_ir_is_uninitialised_data() {
 /// written to yield to. It is refused, naming the symbol.
 #[test]
 fn a_weak_symbol_is_refused_where_the_object_format_cannot_say_so() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 define weak i32 @hook() {\n  ret i32 1\n}\n\
-                declare extern_weak i32 @maybe()\n";
+                declare extern_weak i32 @maybe()\n");
     let refused = crate::llc::compiled(&flags(&["-m32"]), text, "w").map(|_| ()).unwrap_err();
     assert!(refused.contains("@hook") && refused.contains("weak"), "{refused}");
     let strong = text.replace("define weak", "define").replace("declare extern_weak", "declare");
@@ -821,10 +812,10 @@ fn a_weak_symbol_is_refused_where_the_object_format_cannot_say_so() {
 /// frontends, not LLVM IR.
 #[test]
 fn a_store_to_video_memory_leaves_a_global_forwarded_in_llvm_ir() {
-    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let text = ir("target datalayout = \"@m32-datalayout@\"\n\
                 target triple = \"i486-unknown-linux-gnu\"\n\
                 @g = global i32 0, align 4\n\
-                define i32 @f() {\n  store i32 5, ptr @g, align 4\n  store i8 1, ptr inttoptr (i32 753664 to ptr), align 1\n  %a = load i32, ptr @g, align 4\n  ret i32 %a\n}\n";
+                define i32 @f() {\n  store i32 5, ptr @g, align 4\n  store i8 1, ptr inttoptr (i32 753664 to ptr), align 1\n  %a = load i32, ptr @g, align 4\n  ret i32 %a\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("mov eax, dword ptr _g"), "{listing}");
@@ -833,8 +824,9 @@ fn a_store_to_video_memory_leaves_a_global_forwarded_in_llvm_ir() {
     assert!(llrm_codegen::backend::masm::text(&built).unwrap().contains("mov eax, dword ptr _g"));
 }
 
-const REGCALL_DATALAYOUT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
-                                  target triple = \"i486-unknown-linux-gnu\"\n";
+fn regcall_datalayout() -> &'static str {
+    ir("target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n")
+}
 
 /// `__cdecl` on a Watcom target was the register convention: clang's `ccc`
 /// took the ABI's default, so `int __cdecl a(int, int)` read EAX/EDX and was
@@ -843,8 +835,9 @@ const REGCALL_DATALAYOUT: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i3
 /// stack.
 #[test]
 fn an_explicit_cdecl_stays_cdecl_when_regcall_is_the_default() {
+    let regcall = regcall_datalayout();
     let text = format!(
-        "{REGCALL_DATALAYOUT}\
+        "{regcall}\
          define i32 @a(i32 %x, i32 %y) {{\n  %s = add i32 %x, %y\n  ret i32 %s\n}}\n\
          define x86_regcallcc i32 @__regcall3__b(i32 %x, i32 %y) {{\n  %s = sub i32 %x, %y\n  ret i32 %s\n}}\n\
          define i32 @main() {{\n  ret i32 0\n}}\n\
@@ -868,7 +861,8 @@ fn an_explicit_cdecl_stays_cdecl_when_regcall_is_the_default() {
 /// what to write instead.
 #[test]
 fn stdcall_is_refused_by_name() {
-    let text = format!("{REGCALL_DATALAYOUT}define x86_stdcallcc i32 @c(i32 %x) {{\n  ret i32 %x\n}}\n");
+    let regcall = regcall_datalayout();
+    let text = format!("{regcall}define x86_stdcallcc i32 @c(i32 %x) {{\n  ret i32 %x\n}}\n");
     let refused = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom"]), &text, "c").map(|_| ()).unwrap_err();
     assert!(refused.contains("@c") && refused.contains("stdcall") && refused.contains("__cdecl"), "{refused}");
 }
@@ -879,12 +873,10 @@ fn stdcall_is_refused_by_name() {
 /// DX and call `main_`: the m16 -Os programs came out 16% larger.
 #[test]
 fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
-    let text = m16_ir(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 define i16 @f(i16 %x) {\n  %d = sdiv i16 %x, 7\n  ret i16 %d\n}\n\
-                define i16 @main() {\n  ret i16 0\n}\n",
-    );
+                define i16 @main() {\n  ret i16 0\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m16", "-Os"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("_f@3 proc") && listing.contains("_main proc"), "{listing}");
@@ -898,14 +890,12 @@ fn m16_defaults_to_the_register_size_convention_with_a_c_main() {
 /// whose address is taken stays far.
 #[test]
 fn a_static_function_is_entered_by_a_near_call() {
-    let text = m16_ir(
-        "target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
+    let text = ir("target datalayout = \"@m16-datalayout@-ni:2:3\"\n\
                 target triple = \"i386-unknown-unknown-code16\"\n\
                 @keep = global ptr addrspace(1) @taken\n\
                 define internal i16 @h(i16 %x) addrspace(1) {\n  %y = mul i16 %x, 3\n  ret i16 %y\n}\n\
                 define internal i16 @taken(i16 %x) addrspace(1) {\n  %y = mul i16 %x, 5\n  ret i16 %y\n}\n\
-                define i16 @f(i16 %x) addrspace(1) {\n  %a = call addrspace(1) i16 @h(i16 %x)\n  %b = call addrspace(1) i16 @taken(i16 %a)\n  ret i16 %b\n}\n",
-    );
+                define i16 @f(i16 %x) addrspace(1) {\n  %a = call addrspace(1) i16 @h(i16 %x)\n  %b = call addrspace(1) i16 @taken(i16 %a)\n  ret i16 %b\n}\n");
     let (built, _) = crate::llc::compiled(&flags(&["-m16", "-O0"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("call _h@3\n"), "{listing}");
@@ -920,8 +910,7 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
         .lines()
         .map(|line| {
             if line.starts_with("target datalayout") {
-                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
-                    .to_owned()
+                format!("target datalayout = \"{}\"", ir("@m32-datalayout@"))
             } else {
                 line.to_owned()
             }
@@ -934,18 +923,19 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
 
-/// `text` with `@m16-datalayout@` replaced by the m16 target's datalayout
-/// string (its `datalayout.toml`, stated once), kept for the life of the test
-/// run.
-fn m16_ir(text: &str) -> &'static str {
+/// `text` with `@m16-datalayout@`, `@m32-datalayout@` and `@m64-datalayout@`
+/// replaced by that target's datalayout string (its `datalayout.toml`, stated
+/// once), kept for the life of the test run.
+fn ir(text: &str) -> &'static str {
+    let layout = |toml: &'static str| {
+        toml.lines()
+            .find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"'))
+            .expect("datalayout.toml states a datalayout")
+    };
     Box::leak(
-        text.replace(
-            "@m16-datalayout@",
-            &llrm_x86_m16::DATALAYOUT_TOML
-                .lines()
-                .find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"'))
-                .expect("datalayout.toml states a datalayout"),
-        )
-        .into_boxed_str(),
+        text.replace("@m16-datalayout@", layout(llrm_x86_m16::DATALAYOUT_TOML))
+            .replace("@m32-datalayout@", layout(llrm_x86_m32::DATALAYOUT_TOML))
+            .replace("@m64-datalayout@", layout(llrm_x86_m64::DATALAYOUT_TOML))
+            .into_boxed_str(),
     )
 }
