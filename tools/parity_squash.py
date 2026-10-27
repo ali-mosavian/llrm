@@ -794,7 +794,12 @@ def beside(background, foreground):
         return front, future.result()
 
 
-MAX_BATCH = 16 if FAST else 8  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
+def max_batch(fast: bool) -> int:
+    """PRs per smoke (BATCH_CAP in the runner). A fast round costs ~100-130 s of workspace-check plus ~7 s per PR squashed, so 32 PRs cost ~25 s each against ~39 s at 16 (a red in the batch costs one more round either way); a failing slow batch is halved."""
+    return 32 if fast else 8
+
+
+MAX_BATCH = max_batch(FAST)
 
 
 def batch(prs: list, passes, land, refuse, offenders=None) -> None:

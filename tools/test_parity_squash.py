@@ -1284,3 +1284,8 @@ def test_docs_gated_with_the_default_docs_check_does_not_crash_and_a_crash_names
     assert gated("1") == "", "no build.py in the tree: nothing is stale, and nothing raises"
     line = ps.crash_line("5082", TypeError("docs_stale() missing 1 required positional argument: 'root'"))
     assert line == "#5082: REFUSED: the batch crashed (a tool fault, not this PR): TypeError: docs_stale() missing 1 required positional argument: 'root'"
+
+
+def test_a_fast_batch_may_hold_32_prs_a_slow_one_8():
+    """The cap of 16 made every round pay ~100-130 s of workspace-check for 16 PRs; at 32 the fixed stages are shared by twice as many (about 25 s a PR against 39 s)."""
+    assert ps.max_batch(True) == 32 and ps.max_batch(False) == 8
