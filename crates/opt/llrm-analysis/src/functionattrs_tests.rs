@@ -24,8 +24,10 @@ fn all_of(
     no_unwind: bool,
     will_return: bool,
     no_return: bool,
+    no_free: bool,
+    no_sync: bool,
 ) -> Inferred {
-    Inferred { no_recurse, no_unwind, will_return, no_return }
+    Inferred { no_recurse, no_unwind, will_return, no_return, no_free, no_sync }
 }
 
 #[test]
@@ -39,7 +41,7 @@ b0:
   ret i32 %b
 }
 ";
-    assert_eq!(inferred(text, &["f"]), [all_of(true, true, true, false)]);
+    assert_eq!(inferred(text, &["f"]), [all_of(true, true, true, false, false, false)]);
 }
 
 /// A call to a body nothing states leaves the function recursive, throwing and
@@ -61,8 +63,8 @@ b0:
   ret void
 }
 ";
-    assert_eq!(inferred(text, &["calls_unknown"]), [all_of(false, false, false, false)]);
-    assert_eq!(inferred(text, &["itself"]), [all_of(false, true, false, false)]);
+    assert_eq!(inferred(text, &["calls_unknown"]), [all_of(false, false, false, false, false, false)]);
+    assert_eq!(inferred(text, &["itself"]), [all_of(false, true, false, false, true, true)]);
 }
 
 /// Mutual recursion: norecurse needs a one-member SCC; nounwind is the whole
@@ -81,7 +83,10 @@ b0:
   ret void
 }
 ";
-    assert_eq!(inferred(quiet, &["a", "b"]), [all_of(false, true, false, false), all_of(false, true, false, false)]);
+    assert_eq!(
+        inferred(quiet, &["a", "b"]),
+        [all_of(false, true, false, false, true, true), all_of(false, true, false, false, true, true)]
+    );
     let throwing = "declare void @unknown()
 
 define void @a() {
@@ -99,7 +104,7 @@ b0:
 ";
     assert_eq!(
         inferred(throwing, &["a", "b"]),
-        [all_of(false, false, false, false), all_of(false, false, false, false)]
+        [all_of(false, false, false, false, false, false), all_of(false, false, false, false, false, false)]
     );
 }
 
@@ -329,4 +334,97 @@ b2:
         .filter(|one| matches!(one, Fact::WillReturn | Fact::NoUnwind | Fact::NoRecurse))
         .collect();
     assert_eq!(order, [Fact::WillReturn, Fact::NoUnwind, Fact::NoRecurse]);
+}
+
+/// `will_return_by_loops` derived what is known of the whole body (0.94 M
+/// instructions a body at d_faces -O2, 11 M over the stamps) before it asked
+/// whether the calls state `willreturn`; with one that does not, the answer
+/// is no whatever the loops are.
+#[test]
+fn a_call_that_does_not_state_willreturn_costs_no_derivation_of_the_loops() {
+    let mut module = parsed(
+        "declare void @external(i32)
+
+define i32 @count() {
+b0:
+  br label %b1
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %n, %b1 ]
+  call void @external(i32 %i)
+  %n = add i32 %i, 1
+  %more = icmp ult i32 %n, 10
+  br i1 %more, label %b1, label %b2
+b2:
+  ret i32 %n
+}
+",
+    );
+    let id = module.named("count").unwrap();
+    let before = crate::consts::scratch_derivations();
+    post_order(&mut module, &DataLayout::default(), Spaces::FLAT, &[id]);
+    assert_eq!(
+        crate::consts::scratch_derivations(),
+        before,
+        "the body's values were derived for a loop proof nothing reads"
+    );
+    assert!(!Facts::of(&module.global(id).function().unwrap().attrs).will_return());
+}
+
+/// What F1 may not do: a loop nothing proves finite is no `willreturn`
+/// function (callers delete an unused call of one). An empty loop, a loop that
+/// ends on a loaded value and a `!=` loop stepping by two past its bound all
+/// can run for ever.
+#[test]
+fn a_loop_that_may_not_end_is_not_willreturn() {
+    let shapes = [
+        ("empty", "define i32 @f() {\nb0:\n  br label %b1\nb1:\n  br label %b1\n}\n"),
+        (
+            "loaded exit",
+            "define i32 @f(ptr %p) {\nb0:\n  br label %b1\nb1:\n  %q = phi ptr [ %p, %b0 ], [ %r, %b1 ]\n  %v = load i32, ptr %q\n  %r = getelementptr i32, ptr %q, i32 1\n  %z = icmp ne i32 %v, 0\n  br i1 %z, label %b1, label %b2\nb2:\n  ret i32 %v\n}\n",
+        ),
+        (
+            "step two",
+            "define i32 @f(i32 %n) {\nb0:\n  br label %b1\nb1:\n  %i = phi i32 [ 0, %b0 ], [ %j, %b1 ]\n  %j = add i32 %i, 2\n  %c = icmp ne i32 %j, %n\n  br i1 %c, label %b1, label %b2\nb2:\n  ret i32 %j\n}\n",
+        ),
+    ];
+    for (name, text) in shapes {
+        let mut module = parsed(text);
+        let id = module.named("f").unwrap();
+        post_order(&mut module, &DataLayout::default(), Spaces::FLAT, &[id]);
+        let attrs = &module.global(id).function().unwrap().attrs;
+        assert!(!Facts::of(attrs).will_return(), "{name}: {attrs:?}");
+    }
+}
+
+/// `nofree` and `nosync` were never inferred: 111 functions of 180 in the
+/// dyn-work programs had neither where the pin gives both (a body that calls
+/// only what states them), and a call that states neither keeps them off.
+#[test]
+fn test_nofree_and_nosync_follow_what_the_calls_state() {
+    let text = "declare void @quiet() nofree nosync nounwind
+declare void @loud()
+
+define void @a() {
+b0:
+  call void @quiet()
+  ret void
+}
+
+define void @b() {
+b0:
+  call void @loud()
+  ret void
+}
+
+define i32 @leaf(i32 %x) {
+b0:
+  %y = add i32 %x, 1
+  ret i32 %y
+}
+";
+    let flags = |name: &str| {
+        let one = inferred(text, &[name])[0];
+        (one.no_free, one.no_sync)
+    };
+    assert_eq!((flags("a"), flags("b"), flags("leaf")), ((true, true), (false, false), (true, true)));
 }

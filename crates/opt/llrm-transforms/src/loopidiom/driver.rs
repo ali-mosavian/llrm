@@ -72,7 +72,12 @@ impl LoopIdiomRecognize {
 
         // Disable loop idiom recognition if the function's name is a common
         // idiom.
-        if matches!(run.name, "memset" | "memcpy" | "strlen" | "wcslen") {
+        // The name is the symbol's: a C compile decorates it (`_strlen`, Open
+        // Watcom's `strlen_`), which the pin's `getName` never sees.
+        let undecorated = run.name.strip_prefix('_').or_else(|| run.name.strip_suffix('_')).unwrap_or(run.name);
+        if matches!(run.name, "memset" | "memcpy" | "strlen" | "wcslen")
+            || matches!(undecorated, "memset" | "memcpy" | "strlen" | "wcslen")
+        {
             return Some(false);
         }
 
@@ -81,14 +86,17 @@ impl LoopIdiomRecognize {
             run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize"))
                 && self.options.use_lir_code_size_heurs;
 
-        self.has_memset = self.library.memset;
+        // `"no-builtins"` disables every library function in the pin's TLI.
+        let no_builtins =
+            run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins"));
+        self.has_memset = self.library.memset && !no_builtins;
         // TODO (LLVM): Unconditionally enable use of the memset pattern
         // intrinsic (or at least, opt-in via target hook) once we are
         // confident it will never result in worse codegen than without. For
         // now, use it only when the target supports memset_pattern16 libcall
         // (or unless this is overridden by command line option).
-        self.has_memset_pattern = self.library.memset_pattern16;
-        self.has_memcpy = self.library.memcpy;
+        self.has_memset_pattern = self.library.memset_pattern16 && !no_builtins;
+        self.has_memcpy = self.library.memcpy && !no_builtins;
 
         if self.has_memset
             || self.has_memset_pattern
@@ -103,7 +111,7 @@ impl LoopIdiomRecognize {
             }
         }
 
-        None
+        Some(self.run_on_noncountable_loop(run))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L383
@@ -148,9 +156,20 @@ impl LoopIdiomRecognize {
             made_change |= self.run_on_loop_block(run, block, be_count, &exit_blocks);
         }
 
-        // Attempt to optimize a CRC loop if one is detected by HashRecognize
-        // (D9, temporary, https://github.com/ali-mosavian/llrm/issues/2313:
-        // not translated).
+        // Attempt to optimize a CRC loop if one is detected by HashRecognize.
+        if !self.options.disable_hash_recognize
+            && self.options.crc_strategy != super::CrcStrategy::Disable
+            && let Some(tti) = run.tti
+        {
+            let found = {
+                let cx = cx!(run);
+                super::hashrecognize::recognize_crc(&cx, run.se, run.cur_loop)
+            };
+            if let Ok(info) = found {
+                made_change |= self.optimize_crc_loop(run, &info, tti);
+            }
+        }
+
         made_change
     }
 

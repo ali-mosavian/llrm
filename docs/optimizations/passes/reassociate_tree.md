@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/reassociate_tree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/reassociate_tree.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/reassociate_tree.rs sha256:ff7960816286ab1f9266f3997d14366b59d0cda2959f2d4a65dd516bb7ea1293 -->
+<!-- src: crates/opt/llrm-transforms/src/reassociate_tree.rs sha256:4477250c3609a6813922a0fe144e698036c3e4b25df39e5b9119f7c17af1a630 -->
 
 # reassociate_tree
 

@@ -150,7 +150,13 @@ impl FunctionInfo {
 pub struct GlobalsModRef {
     non_address_taken: BTreeSet<GlobalId>,
     unknown_functions_with_local_linkage: bool,
+    /// The variables no outside code reaches, taken as local (DEVIATE G8).
+    unexported: BTreeSet<GlobalId>,
     functions: BTreeMap<GlobalId, FunctionInfo>,
+    /// The local variables the use scan calls escaped (it has no `phi` or
+    /// `select` case) that escape by no use but being joined: `covers` takes
+    /// one for what it was.
+    joined: BTreeSet<GlobalId>,
 }
 
 /// `isDefinitionExact`.
@@ -170,6 +176,17 @@ fn local(linkage: Linkage) -> bool {
 enum Root {
     Global(GlobalId),
     Value(GlobalId, ValueId),
+}
+
+thread_local! {
+    static BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has scanned a module for the sites of its
+/// globals.
+#[cfg(test)]
+fn built() -> usize {
+    BUILT.with(std::cell::Cell::get)
 }
 
 /// Every instruction operand that names a global, and the globals some
@@ -222,12 +239,20 @@ fn named_inside(
 
 impl Sites {
     fn of(module: &Module) -> Self {
+        BUILT.with(|count| count.set(count.get() + 1));
         let mut named: BTreeMap<GlobalId, Vec<(GlobalId, InstId, u32)>> = BTreeMap::new();
         let (mut in_initializer, mut in_operand) = (BTreeSet::new(), BTreeSet::new());
         for (id, _, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
             for (_, inst) in function.walk() {
                 for (at, operand) in function.instruction(inst).operands.iter().enumerate() {
                     let Operand::Constant(c) = operand else { continue };
+                    // A number or a string names no global; most operands are.
+                    if !matches!(
+                        module.context.get(*c).kind,
+                        ConstantKind::Global(_) | ConstantKind::Aggregate(_) | ConstantKind::Expr(_)
+                    ) {
+                        continue;
+                    }
                     match derived_from(&module.context, *c) {
                         Some(global) => named.entry(global).or_default().push((id, inst, at as u32)),
                         None => named_inside(&module.context, *c, &mut in_operand),
@@ -248,10 +273,16 @@ impl Sites {
 
 struct Analysis<'a> {
     module: &'a Module,
-    sites: Sites,
+    sites: std::rc::Rc<Sites>,
     /// A global in an initializer escapes (the pin's `isConstantUsed` rule).
     /// GlobalsAA turns it off and reads initializers through their holders.
     initializers_escape: bool,
+    /// A `phi` or `select` of the pointer is followed as a `getelementptr` is,
+    /// each once. The pin's `AnalyzeUsesOfPointer` has no such case: any other
+    /// user is an escape. Asked only to tell a global that escapes by a join
+    /// from one that escapes by what the join leads to.
+    through_joins: bool,
+    seen: std::cell::RefCell<BTreeSet<(GlobalId, ValueId)>>,
 }
 
 impl Analysis<'_> {
@@ -312,6 +343,19 @@ impl Analysis<'_> {
                 Opcode::GetElementPtr { .. } | Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) => {
                     let Some(result) = op.result else { return true };
                     if self.escapes(Root::Value(f, result), readers, writers) {
+                        return true;
+                    }
+                }
+                Opcode::Phi | Opcode::Select if self.through_joins => {
+                    let Some(result) = op.result else { return true };
+                    // A select's condition is no pointer, and a compare of it
+                    // is no use of one; a join already followed is not again.
+                    if at == 0 && matches!(op.opcode, Opcode::Select) {
+                        return true;
+                    }
+                    if self.seen.borrow_mut().insert((f, result))
+                        && self.escapes(Root::Value(f, result), readers, writers)
+                    {
                         return true;
                     }
                 }
@@ -382,8 +426,40 @@ pub fn escaping_among(
     module: &Module,
     candidates: &BTreeSet<GlobalId>,
 ) -> BTreeSet<GlobalId> {
-    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: false };
+    let analysis = Analysis {
+        module,
+        sites: std::rc::Rc::new(Sites::of(module)),
+        initializers_escape: false,
+        through_joins: false,
+        seen: Default::default(),
+    };
     candidates.iter().copied().filter(|&id| analysis.escapes(Root::Global(id), &mut None, &mut None)).collect()
+}
+
+/// [`escaping_among`], a `phi` or `select` of a global's address followed like
+/// a `getelementptr` (each join once): the globals that escape by what they are
+/// used for, not by being joined.
+pub fn escaping_among_joins(
+    module: &Module,
+    candidates: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let analysis = Analysis {
+        module,
+        sites: std::rc::Rc::new(Sites::of(module)),
+        initializers_escape: false,
+        through_joins: true,
+        seen: Default::default(),
+    };
+    // The joins seen are one candidate's: another reaching the same join must
+    // follow it too.
+    candidates
+        .iter()
+        .copied()
+        .filter(|&id| {
+            analysis.seen.borrow_mut().clear();
+            analysis.escapes(Root::Global(id), &mut None, &mut None)
+        })
+        .collect()
 }
 
 /// `GlobalsAAResult::analyzeModule`.
@@ -416,8 +492,29 @@ fn declaration_info(function: &Function) -> Option<FunctionInfo> {
 }
 
 pub fn compute(module: &Module) -> GlobalsModRef {
-    let analysis = Analysis { module, sites: Sites::of(module), initializers_escape: true };
-    let mut result = GlobalsModRef::default();
+    compute_with(module, BTreeSet::new())
+}
+
+/// `compute`, the variables `unexported` taken as local too. DEVIATE G8: the
+/// pin's `hasLocalLinkage`
+/// ([GlobalsModRef.cpp#L276](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/GlobalsModRef.cpp#L276))
+/// sees what LTO's internalization has made internal; here the program says
+/// which globals no outside code reaches (`Exports`, the runtime's
+/// `!llrm.named`).
+pub fn compute_with(
+    module: &Module,
+    unexported: BTreeSet<GlobalId>,
+) -> GlobalsModRef {
+    COMPUTES.with(|made| made.set(made.get() + 1));
+    let sites = std::rc::Rc::new(Sites::of(module));
+    let analysis = Analysis {
+        module,
+        sites: std::rc::Rc::clone(&sites),
+        initializers_escape: true,
+        through_joins: false,
+        seen: Default::default(),
+    };
+    let mut result = GlobalsModRef { unexported, ..GlobalsModRef::default() };
     let mut tracked_functions: BTreeSet<GlobalId> = BTreeSet::new();
     let mut infos: BTreeMap<GlobalId, FunctionInfo> = BTreeMap::new();
     // AnalyzeGlobals
@@ -431,9 +528,10 @@ pub fn compute(module: &Module) -> GlobalsModRef {
             }
         }
     }
+    let mut joins: Option<Analysis> = None;
     for (at, global) in module.globals.iter().enumerate() {
         let (id, GlobalKind::Variable(variable)) = (GlobalId(at as u32), &global.kind) else { continue };
-        if !local(global.linkage) {
+        if !local(global.linkage) && !result.unexported.contains(&id) {
             continue;
         }
         let (mut readers, mut writers) = (BTreeSet::new(), BTreeSet::new());
@@ -444,6 +542,17 @@ pub fn compute(module: &Module) -> GlobalsModRef {
             analysis.escapes(Root::Global(id), &mut Some(&mut readers), &mut None)
         };
         if escaped {
+            let joins = joins.get_or_insert_with(|| Analysis {
+                module,
+                sites: std::rc::Rc::clone(&sites),
+                initializers_escape: true,
+                through_joins: true,
+                seen: Default::default(),
+            });
+            joins.seen.borrow_mut().clear();
+            if !joins.escapes(Root::Global(id), &mut None, &mut None) {
+                result.joined.insert(id);
+            }
             continue;
         }
         result.non_address_taken.insert(id);
@@ -555,11 +664,42 @@ pub fn compute(module: &Module) -> GlobalsModRef {
             infos.insert(id, info.clone());
         }
     }
+    // A declaration is a node of the call graph with the info its attributes
+    // give (the `isDeclaration()` arm of `AnalyzeCallGraph`), where it may not
+    // call back into the module.
+    for (id, _, function) in module.functions().filter(|(_, _, function)| function.is_declaration()) {
+        if let Some(info) = declaration_info(function) {
+            infos.insert(id, info);
+        }
+    }
     result.functions = infos;
     result
 }
 
 impl GlobalsModRef {
+    /// Whether `self`, held past edits that add no memory operation, still
+    /// bounds what `fresh` finds: it tracks no global `fresh` does not, and
+    /// each function it states something of is stated by `fresh` as no more,
+    /// of the globals it tracks (it answers `ModRef` for the rest).
+    pub fn covers(
+        &self,
+        fresh: &Self,
+    ) -> bool {
+        let within = |stale: ModRefInfo, fresh: ModRefInfo| stale.union(fresh) == stale;
+        self.non_address_taken.iter().all(|one| fresh.non_address_taken.contains(one) || fresh.joined.contains(one))
+            && (self.unknown_functions_with_local_linkage || !fresh.unknown_functions_with_local_linkage)
+            && self.functions.iter().all(|(id, stale)| {
+                fresh.functions.get(id).is_some_and(|now| {
+                    within(stale.mod_ref(), now.mod_ref())
+                        && (stale.may_read_any_global || !now.may_read_any_global)
+                        && self
+                            .non_address_taken
+                            .iter()
+                            .all(|&global| within(stale.mod_ref_for_global(global), now.mod_ref_for_global(global)))
+                })
+            })
+    }
+
     /// `getFunctionInfo`: none where nothing useful is known.
     pub fn function_info(
         &self,
@@ -591,13 +731,15 @@ impl GlobalsModRef {
     /// where nothing is known of `callee`, the direct callee.
     pub fn get_mod_ref_info_for_global(
         &self,
-        module: &Module,
+        globals: &[GlobalValue],
         callee: Option<GlobalId>,
         global: GlobalId,
         argument_may_reach: impl FnOnce() -> ModRefInfo,
     ) -> ModRefInfo {
-        let global_value: &GlobalValue = module.global(global);
-        if !local(global_value.linkage) || self.unknown_functions_with_local_linkage {
+        let global_value: &GlobalValue = &globals[global.0 as usize];
+        if !(local(global_value.linkage) || self.unexported.contains(&global))
+            || self.unknown_functions_with_local_linkage
+        {
             return ModRefInfo::ModRef;
         }
         let Some(callee) = callee else { return ModRefInfo::ModRef };
@@ -611,6 +753,299 @@ impl GlobalsModRef {
     }
 }
 
+/// `GlobalsAAResult` as one of a query's providers: what a call may do to a
+/// tracked global (`getModRefInfo(Call, Loc)`), the top of the lattice for
+/// everything else.
+pub struct GlobalsAAResult<'a> {
+    unit: &'a crate::memory::Unit<'a>,
+    info: &'a GlobalsModRef,
+}
+
+impl<'a> GlobalsAAResult<'a> {
+    pub fn new(
+        unit: &'a crate::memory::Unit<'a>,
+        info: &'a GlobalsModRef,
+    ) -> Self {
+        Self { unit, info }
+    }
+
+    /// `getModRefInfoForArgument`: what the call may do to `global` through
+    /// its arguments. DEVIATE G7: `getUnderlyingObjects` is one object, through
+    /// geps and casts (no phi or select), and the "all identified or not
+    /// aliasing" test asks identified-ness only.
+    fn for_argument(
+        &self,
+        call: InstId,
+        global: GlobalId,
+    ) -> ModRefInfo {
+        let function = self.unit.function;
+        let effects = crate::basicaa::call_memory_effects(self.unit, call);
+        if effects.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        let conservative = if effects.only_reads_memory() { ModRefInfo::Ref } else { ModRefInfo::ModRef };
+        let op = function.instruction(call);
+        let arguments = op.operands.len().saturating_sub(1);
+        for &argument in &op.operands[..arguments] {
+            if self.unit.space(argument).is_none() {
+                continue;
+            }
+            let object = crate::basicaa::underlying_object(self.unit, argument);
+            if !crate::basicaa::is_identified_object(self.unit, object) {
+                return conservative;
+            }
+            if let Operand::Constant(id) = object
+                && matches!(
+                    self.unit.context.get(id).kind,
+                    ConstantKind::Global(one) if one == global
+                )
+            {
+                return conservative;
+            }
+        }
+        ModRefInfo::NoModRef
+    }
+}
+
+impl GlobalsAAResult<'_> {
+    /// The global an underlying object is.
+    fn global_of(
+        &self,
+        object: Operand,
+    ) -> Option<GlobalId> {
+        match object {
+            Operand::Constant(id) => match self.unit.context.get(id).kind {
+                ConstantKind::Global(global) => Some(global),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `isNonEscapingGlobalNoAlias` (L715): an object that is an argument, a
+    /// call's result, or loaded from somewhere an escape would have been, is
+    /// not the non-address-taken `global`. DEVIATE G9: another global ends the
+    /// walk with "may" (the pin goes on for two sized variables), and so does a
+    /// null pointer (it asks `NullPointerIsDefined`).
+    fn non_escaping_no_alias(
+        &self,
+        global: GlobalId,
+        object: Operand,
+    ) -> bool {
+        let mut visited = vec![object];
+        let mut inputs = vec![object];
+        let mut depth = 0;
+        while let Some(input) = inputs.pop() {
+            if let Some(other) = self.global_of(input) {
+                let _ = other;
+                return false;
+            }
+            let Some(defined) = self.unit.defining(input).map(|(_, one)| one) else {
+                // An argument escapes already.
+                if matches!(input, Operand::Value(_)) {
+                    continue;
+                }
+                return false;
+            };
+            if matches!(defined.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+                continue;
+            }
+            depth += 1;
+            if depth > 4 {
+                return false;
+            }
+            let mut push = |one: Operand, inputs: &mut Vec<Operand>| {
+                let one = crate::basicaa::underlying_object(self.unit, one);
+                if !visited.contains(&one) {
+                    visited.push(one);
+                    inputs.push(one);
+                }
+            };
+            match defined.opcode {
+                Opcode::Load { .. } => {
+                    let pointer = crate::basicaa::underlying_object(self.unit, defined.operands[0]);
+                    if self.loaded_no_alias(pointer, &mut depth) {
+                        continue;
+                    }
+                    return false;
+                }
+                Opcode::Select => {
+                    push(defined.operands[1], &mut inputs);
+                    push(defined.operands[2], &mut inputs);
+                }
+                Opcode::Phi => {
+                    for &incoming in defined.operands.iter().step_by(2) {
+                        push(incoming, &mut inputs);
+                    }
+                }
+                _ => return false,
+            }
+        }
+        let _ = global;
+        true
+    }
+
+    /// `isNonEscapingGlobalNoAliasWithLoad` (L633): a pointer loaded from
+    /// `object` is no tracked global's, if what `object` is loaded from is
+    /// itself an argument, a call's result or a global.
+    fn loaded_no_alias(
+        &self,
+        object: Operand,
+        depth: &mut u32,
+    ) -> bool {
+        let mut visited = vec![object];
+        let mut inputs = vec![object];
+        while let Some(input) = inputs.pop() {
+            if self.global_of(input).is_some() {
+                continue;
+            }
+            let Some(defined) = self.unit.defining(input).map(|(_, one)| one) else {
+                if matches!(input, Operand::Value(_)) {
+                    continue;
+                }
+                return false;
+            };
+            if matches!(defined.opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
+                continue;
+            }
+            *depth += 1;
+            if *depth > 4 {
+                return false;
+            }
+            let mut add = |one: Operand, inputs: &mut Vec<Operand>| {
+                let one = crate::basicaa::underlying_object(self.unit, one);
+                if !visited.contains(&one) {
+                    visited.push(one);
+                    inputs.push(one);
+                }
+            };
+            match defined.opcode {
+                Opcode::Load { .. } => add(defined.operands[0], &mut inputs),
+                Opcode::Select => {
+                    add(defined.operands[1], &mut inputs);
+                    add(defined.operands[2], &mut inputs);
+                }
+                Opcode::Phi => {
+                    for &incoming in defined.operands.iter().step_by(2) {
+                        add(incoming, &mut inputs);
+                    }
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+}
+
+impl crate::aa::AAResults for GlobalsAAResult<'_> {
+    /// `GlobalsAAResult::alias` (L836), the non-address-taken globals' part
+    /// (L845 to L876); the indirect globals' (L882 on) are not translated.
+    fn alias(
+        &mut self,
+        a: &crate::aa::MemoryLocation,
+        b: &crate::aa::MemoryLocation,
+        _: &mut crate::aa::AAQueryInfo,
+        _: Option<InstId>,
+    ) -> crate::aa::AliasResult {
+        let (first, second) =
+            (crate::basicaa::underlying_object(self.unit, a.ptr), crate::basicaa::underlying_object(self.unit, b.ptr));
+        // The global's address taken: pretend it is not known to be a pointer
+        // to it.
+        // DEVIATE G10: a global the unit states unaddressed (`-oa`, INIT `sw`)
+        // is reached by its name alone, as one the use scan finds
+        // non-address-taken is.
+        let tracked = |object| {
+            self.global_of(object).filter(|&global| {
+                self.info.is_non_address_taken(global) || self.unit.globals_aa.is_some_and(|aa| aa.tracked(global))
+            })
+        };
+        let (one, two) = (tracked(first), tracked(second));
+        if one.is_some() && two.is_some() && one != two {
+            return crate::aa::AliasResult::NoAlias;
+        }
+        if (one.is_some() || two.is_some()) && one != two {
+            let (global, other) = match one {
+                Some(global) => (global, second),
+                None => (two.expect("one of the two"), first),
+            };
+            if self.non_escaping_no_alias(global, other) {
+                return crate::aa::AliasResult::NoAlias;
+            }
+        }
+        crate::aa::AliasResult::MayAlias
+    }
+
+    fn get_mod_ref_info_mask(
+        &mut self,
+        _: &crate::aa::MemoryLocation,
+        _: &mut crate::aa::AAQueryInfo,
+        _: bool,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+
+    fn get_arg_mod_ref_info(
+        &mut self,
+        _: InstId,
+        _: u32,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+
+    fn get_memory_effects(
+        &mut self,
+        _: InstId,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> MemoryEffects {
+        MemoryEffects::unknown()
+    }
+
+    fn get_mod_ref_info(
+        &mut self,
+        inst: InstId,
+        loc: Option<&crate::aa::MemoryLocation>,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> ModRefInfo {
+        let (Some(loc), Opcode::Call(_) | Opcode::Invoke(_)) = (loc, &self.unit.function.instruction(inst).opcode)
+        else {
+            return ModRefInfo::ModRef;
+        };
+        let object = crate::basicaa::underlying_object(self.unit, loc.ptr);
+        let Operand::Constant(id) = object else { return ModRefInfo::ModRef };
+        let ConstantKind::Global(global) = self.unit.context.get(id).kind else { return ModRefInfo::ModRef };
+        let callee = llrm_mir::memory::callee(self.unit.context, self.unit.function, inst);
+        self.info.get_mod_ref_info_for_global(self.unit.globals, callee, global, || self.for_argument(inst, global))
+    }
+
+    fn get_mod_ref_info_call(
+        &mut self,
+        _: InstId,
+        _: InstId,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+
+    fn call_captures_before(
+        &mut self,
+        _: InstId,
+        _: &crate::aa::MemoryLocation,
+        _: &mut crate::aa::AAQueryInfo,
+    ) -> ModRefInfo {
+        ModRefInfo::ModRef
+    }
+}
+
 #[cfg(test)]
 #[path = "globalsmodref_tests.rs"]
 mod tests;
+
+thread_local! {
+    static COMPUTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has worked out `GlobalsModRef` of a module
+/// (`compute_with`), for a test that one analysis result serves its readers.
+pub fn computes_made() -> usize {
+    COMPUTES.with(std::cell::Cell::get)
+}

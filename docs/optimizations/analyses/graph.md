@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/graph.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/graph.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/graph.rs sha256:b2a6f060cadb7719a687642a200755db2f9192b8ba74843de5477091e3295b52 -->
+<!-- src: crates/opt/llrm-analysis/src/graph.rs sha256:1f23245f3efba010861c1aee58bd36cdd7c8292be85a158a4a3756eda186bb96 -->
 
 # graph
 
@@ -26,7 +26,7 @@ flowchart LR
 *From a Function to loops*
 
 The backend's `LirBlock` has its own copy of these walks in
-`crates/backend/llrm-core/src/analysis/loops.rs`; both build on
+`crates/codegen/llrm-codegen/src/analysis/loops.rs`; both build on
 `llrm_support::graph`.
 
 ## Example

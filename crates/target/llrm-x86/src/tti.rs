@@ -61,12 +61,26 @@ pub struct X86 {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RealMode {
     /// What an address `base + scale * index` costs above the native form,
-    /// for each scale a primary address form holds: the legal scales. A
-    /// secondary form (the address-size prefix) is the backend's fallback, not
-    /// an address LSR may form.
+    /// for each scale some address form holds: the legal scales.
     pub scale_costs: Vec<(i64, i64)>,
     /// General registers a value may sit in.
     pub registers: u32,
+    /// What a scaled index costs in instructions, once for each scaled
+    /// register: the address-size prefix and the stall it takes.
+    pub scaled_index_insns: u32,
+    /// The space of huge pointers: an offset there carries into the selector,
+    /// so an address is one register and no more.
+    pub huge_space: Option<u32>,
+    /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
+    /// stays is inlined into an `optsize` caller only if its code does not
+    /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
+    /// instructions, not bytes); 16-bit code names it so a size row never
+    /// grows.
+    pub inline_size_guard: bool,
+    /// What an instruction that touches a float takes in code, in percent of
+    /// its `CodeSize` units: x87 moves each operand through the register
+    /// stack (`qmove`: the model tied where the code grew 2 bytes).
+    pub float_code_size_percent: i64,
 }
 
 impl RealMode {
@@ -430,23 +444,32 @@ fn int_imm_chunk(value: i64) -> i64 {
     }
 }
 
-/// Intrinsic prices by (profile, kind, callee name), as the pinned `opt` gives
-/// them (T7).
-fn intrinsic_prices() -> &'static llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>> {
-    static PRICES: std::sync::OnceLock<
-        llrm_support::hash::HashMap<(&'static str, &'static str, &'static str), Option<i64>>,
-    > = std::sync::OnceLock::new();
-    PRICES.get_or_init(|| {
-        include_str!("tti_intrinsics.txt")
-            .lines()
-            .filter(|line| !line.starts_with('#'))
-            .filter_map(|line| {
-                let mut words = line.split(' ');
-                let (profile, kind, name, cost) = (words.next()?, words.next()?, words.next()?, words.next()?);
-                Some(((profile, kind, name), cost.parse().ok()))
-            })
-            .collect()
-    })
+const INTRINSIC_PRICES: &str = include_str!("tti_intrinsics.txt");
+
+/// The price of `name` under (profile, kind) in the pinned `opt`'s table (T7):
+/// `None` when the table has no row, `Some(None)` for an invalid price. The
+/// text is sorted by byte, so a lookup bisects it where it lies; building a
+/// map on first use cost 1.06 M Ir on d_faces -O2.
+fn intrinsic_price(
+    profile: &str,
+    kind: &str,
+    name: &str,
+) -> Option<Option<i64>> {
+    let key = || profile.bytes().chain([b' ']).chain(kind.bytes()).chain([b' ']).chain(name.bytes()).chain([b' ']);
+    let key_len = profile.len() + kind.len() + name.len() + 3;
+    let (mut low, mut high) = (0, INTRINSIC_PRICES.len());
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let start = INTRINSIC_PRICES[low..middle].rfind('\n').map_or(low, |at| low + at + 1);
+        let end = INTRINSIC_PRICES[start..].find('\n').map_or(INTRINSIC_PRICES.len(), |at| start + at);
+        let line = &INTRINSIC_PRICES[start..end];
+        match line.bytes().take(key_len).cmp(key()) {
+            std::cmp::Ordering::Less => low = end + 1,
+            std::cmp::Ordering::Greater => high = start,
+            std::cmp::Ordering::Equal => return Some(line[key_len..].trim_end().parse().ok()),
+        }
+    }
+    None
 }
 
 impl Tti for X86 {
@@ -454,12 +477,23 @@ impl Tti for X86 {
         "X86"
     }
 
-    /// SZ1: at most one call penalty (25) of growth over the call removed,
-    /// where the pin's 50 let crc, tile and recchop copy an external callee
-    /// into `main` at -Os (+52, +42, +15 bytes). Over the -Os corpus: 0
-    /// grows 16 programs, 25 grows 3, 50 is the pin.
-    fn opt_size_inline_threshold(&self) -> Option<i64> {
-        Some(25)
+    /// SZ1: an inline that stays must not grow the code, where the target
+    /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
+    /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
+    fn opt_size_inline_by_code_size(&self) -> bool {
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+    }
+
+    /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
+    /// an ALU instruction. With 100 the 28 calls of `_savegame_read_block`
+    /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
+    /// 14-instruction loop of `idioms.bas` out of ten sites.
+    fn call_code_size_percent(&self) -> i64 {
+        150
+    }
+
+    fn float_code_size_percent(&self) -> i64 {
+        self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
     fn is_type_legal(
@@ -524,8 +558,8 @@ impl Tti for X86 {
             CostKind::CodeSize => "code-size",
             CostKind::SizeAndLatency => "size-latency",
         };
-        match intrinsic_prices().get(&(profile, kind, name)) {
-            Some(Some(cost)) => Cost::of(*cost),
+        match intrinsic_price(profile, kind, name) {
+            Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
             None => Cost::INVALID,
@@ -677,6 +711,20 @@ impl Tti for X86 {
         }
     }
 
+    fn is_legal_addressing_mode_in(
+        &self,
+        addr_space: u32,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        if self.real_mode.as_ref().is_some_and(|real| real.huge_space == Some(addr_space)) {
+            return !base_gv && has_base_reg && base_offset == 0 && scale == 0;
+        }
+        self.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `X86TargetLowering::isLegalAddressingMode`:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L36621,
     /// Small code model; position independent in long mode, not in 32-bit.
@@ -783,6 +831,15 @@ impl Tti for X86 {
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+    }
+
+    /// Real mode forms a scaled index with an address-size prefix.
+    fn lsr_drops_spilling_solution(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn scaled_index_insns(&self) -> u32 {
+        self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

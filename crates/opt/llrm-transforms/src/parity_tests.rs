@@ -46,9 +46,12 @@ fn test_a_translated_slot_that_is_not_run_under_the_parity_switch_fails() {
 /// A slot the parity pipeline runs must be in the registry, or it has no kind.
 #[test]
 fn test_a_slot_that_runs_and_is_not_registered_fails() {
-    let why =
-        parity::check(parity::REGISTRY, Phase::Early, &["decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"])
-            .unwrap_err();
+    let why = parity::check(
+        parity::REGISTRY,
+        Phase::Early,
+        &["lowerexpect@1177", "decide@1178", "sroa@1179", "earlycse@1180", "unknown@1"],
+    )
+    .unwrap_err();
     assert!(why.contains("unknown@1"), "{why}");
 }
 
@@ -66,6 +69,21 @@ fn test_the_built_lists_satisfy_the_registry_at_every_level() {
     }
 }
 
+/// `dead@677`, `@768`, `@801` and `@837` followed InstCombine in the Simplify
+/// slots and changed nothing in 1561 runs each over the 568 vsgcc cells (the
+/// `idle` of `LLRM_DEBUG=runs`), 5.7 M Ir of d_faces -O2 with the one at the
+/// cleanup slot; only `dead@1242` finds work (48 of 1480 runs).
+#[test]
+fn test_no_dead_pass_follows_instcombine_in_the_simplify_slots() {
+    let on = Applied {
+        options: pipeline::Options { llvm_order: true, ..pipeline::Options::standard() },
+        ..Applied::default()
+    };
+    let built = names(&on, Phase::Simplify);
+    let dead: Vec<_> = built.iter().filter(|name| name.starts_with("dead@")).collect();
+    assert!(dead.is_empty(), "{dead:?}");
+}
+
 /// The MemorySSA entry carries its dependency on alias analysis, is asked by
 /// default (EarlyCSE, LICM), and what is open of keeping it updated is named.
 #[test]
@@ -77,7 +95,7 @@ fn test_the_registry_records_mssa_with_its_dependency_and_the_open_vocabulary() 
     );
     let report = parity::report();
     assert!(
-        report.contains("fold@677 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
+        report.contains("dead@1242 (instcombine) -> instcombine-port") && report.contains("shadow_mssa"),
         "{report}"
     );
     assert!(parity::TODO.iter().any(|one| one.contains("LICM")), "LICM still drops what it updates");
@@ -109,7 +127,33 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
     let why = parity::check(&registry, Phase::Backend, &built).expect_err("a Translated slot nobody runs");
     assert!(why.contains("ghost@99"), "{why}");
     let why = parity::check_backend(
-        &["machinecse@4", "machinesink@4", "floatalloc@8", "coalesce@10", "jumps@17", "allocate@11", "unknown@1"],
+        &[
+            "earlytaildup@1",
+            "cmpsub@1",
+            "processimpdefs@2",
+            "optimizephis@1",
+            "fixupsetcc@5",
+            "machinelicm@4",
+            "flagscopy@5",
+            "callframe@5",
+            "fixupbw@14",
+            "fixupleas@14",
+            "machinecse@4",
+            "machinesink@4",
+            "peepholeopt@4",
+            "machinesched@5",
+            "combiner@4",
+            "liverangeshrink@4",
+            "floatalloc@8",
+            "pushfold@6",
+            "coalesce@10",
+            "latecleanup@13",
+            "leaopt@5",
+            "jumps@17",
+            "copyprop@18",
+            "allocate@11",
+            "unknown@1",
+        ],
         &[],
     )
     .unwrap_err();
@@ -276,7 +320,7 @@ fn test_bdce_stands_between_gvn_and_the_next_fold() {
     };
     let built = names(&on, Phase::Simplify);
     let at = |name: &str| built.iter().position(|one| *one == name).unwrap_or_else(|| panic!("{name} missing"));
-    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("fold@801"), "{built:?}");
+    assert!(at("gvn@787") < at("bdce@797") && at("bdce@797") < at("combine@801"), "{built:?}");
 }
 
 /// ADCE stands where LLVM runs it, after jump threading and before MemCpyOpt
@@ -543,4 +587,69 @@ fn test_marking_a_wired_row_old_is_caught_on_the_real_lists() {
         }
     }
     assert!(checked > 0, "no slot of the built lists holds a translated pass: the scan checks nothing");
+}
+
+/// The three late InstCombines of the pin's default pipeline (l.1403, l.1464,
+/// l.1499) had no slot: a `not` of a condition that SimplifyCFG (l.1438) made
+/// before a branch stayed, 30 QCport objects larger once `fold`, which had
+/// cleaned it, went. They run in a compile of a body, once each.
+#[test]
+fn test_the_late_instcombine_slots_run_in_a_compile() {
+    let lines = runs_of(&Applied::default());
+    for slot in ["combine@1403", "combine@1464", "combine@1499"] {
+        let ran = lines.iter().filter(|line| line.contains(&format!("r01-{slot}"))).count();
+        assert!(ran >= 1, "{slot} did not run: {lines:?}");
+    }
+}
+
+/// The `.rs` file stems under `crates`.
+fn source_stems() -> Vec<String> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../crates");
+    let mut stems = Vec::new();
+    let mut dirs = vec![root];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(dir).expect("a readable directory").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name != "target") {
+                    dirs.push(path);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && let Some(stem) = path.file_stem()
+            {
+                stems.push(stem.to_string_lossy().into_owned());
+            }
+        }
+    }
+    stems
+}
+
+/// constraint-elimination and shrink-wrap were labelled Missing while
+/// `constraintelim.rs` and `shrinkwrap.rs` existed: the table undercounted the
+/// port and sent work to translate a pass twice (a duplicate PR, #4457).
+#[test]
+fn test_a_missing_entry_whose_pass_has_a_source_file_fails() {
+    let stems = source_stems();
+    parity::check_missing_has_no_file(parity::REGISTRY, &stems).unwrap();
+    let mut registry = parity::REGISTRY.to_vec();
+    registry.push(Entry {
+        slot: "constraint-elimination",
+        phase: Phase::Simplify,
+        llvm: "constraint-elimination",
+        kind: SlotKind::Missing,
+        replaced_by: "",
+        note: "",
+    });
+    let why = parity::check_missing_has_no_file(&registry, &stems).unwrap_err();
+    assert!(why.contains("constraint-elimination"), "{why}");
+}
+
+/// `decide@809` ran after JumpThreading and CVP: 19.1 M Ir on d_faces -O2 for
+/// 3 or 4 of 65 objects, +5 to +24 B. The slot is gone.
+#[test]
+fn test_the_simplify_list_has_no_decide_after_jump_threading() {
+    let on = Applied { options: pipeline::Options { llvm_order: true, ..Default::default() }, ..Applied::default() };
+    let built = names(&on, Phase::Simplify);
+    assert!(!built.contains(&"decide@809"), "decide@809 runs again: {built:?}");
+    assert!(built.contains(&"jumpthreading@809") && built.contains(&"cvp@810"));
 }

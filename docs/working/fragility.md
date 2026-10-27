@@ -8,7 +8,7 @@ For contributors changing the backend, the loop passes or the measuring tools: p
 
 **Decoding data as code hides loops.** `tools/innerloops.py` decodes only what control reaches from the entries (`_decoded`), not the segment from byte 0. Guard: `tests/test_innerloops.py`.
 
-**A loop's estimated trips depend on where it is tested.** `executed` (`crates/backend/llrm-core/src/backend/executed.rs`) gives a loop tested at its header N/(N+1) to stay, so an unrotated loop's body is not counted one trip short of a rotated one; a loop with no proven count goes round nine times in ten whatever its number of exits. Guards: `test_a_loop_tested_at_its_header_runs_its_body_every_trip`, `test_an_uncounted_loop_runs_as_often_as_its_exits_odds_say`.
+**A loop's estimated trips depend on where it is tested.** `executed` (`crates/codegen/llrm-codegen/src/backend/executed.rs`) gives a loop tested at its header N/(N+1) to stay, so an unrotated loop's body is not counted one trip short of a rotated one; a loop with no proven count goes round nine times in ten whatever its number of exits. Guards: `test_a_loop_tested_at_its_header_runs_its_body_every_trip`, `test_an_uncounted_loop_runs_as_often_as_its_exits_odds_say`.
 
 **A test that passes before the fix proves nothing.** Check the listing holds the instruction under test, and watch the test fail with the fix reverted.
 

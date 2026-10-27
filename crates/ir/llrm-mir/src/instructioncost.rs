@@ -157,7 +157,14 @@ fn gep_cost(
         return Cost::BASIC;
     }
     let scale = variable.first().map_or(0, |&(_, scale)| scale as i64);
-    if tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale) { Cost::FREE } else { Cost::BASIC }
+    // A scaled index that costs instructions of its own (real mode's prefixed
+    // form) is not free in the address.
+    let folds = scale <= 1 || tti.scaled_index_insns() == 0;
+    if folds && tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale) {
+        Cost::FREE
+    } else {
+        Cost::BASIC
+    }
 }
 
 /// Whether `pointer` is a GEP with an index that is not a constant.

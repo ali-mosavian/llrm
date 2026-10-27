@@ -73,6 +73,10 @@ fn main() -> ExitCode {
     if counts {
         arguments.remove(0);
     }
+    let branch_prob = arguments.first().is_some_and(|one| one == "--branch-prob");
+    if branch_prob {
+        arguments.remove(0);
+    }
     let loops = arguments.first().is_some_and(|one| one == "--loops");
     if loops {
         arguments.remove(0);
@@ -405,6 +409,10 @@ fn main() -> ExitCode {
                 print!("{}", llrm_analysis::scev::values::print_module_counts(&module));
                 return ExitCode::SUCCESS;
             }
+            if branch_prob {
+                print!("{}", llrm_analysis::bpi::print_module_branch_prob(&module));
+                return ExitCode::SUCCESS;
+            }
             if loops {
                 print!("{}", llrm_mir::loopinfo::print_loops(&module));
                 return ExitCode::SUCCESS;
@@ -691,13 +699,11 @@ fn memops(module: &llrm_mir::module::Module) -> String {
 /// `function<TAB>answer` per mod/ref pair `aa-eval` lists, in its order: each
 /// call against each pointer (the pointer operands of the loads and stores, one
 /// per pointer and size), then each call against every other call. The answer
-/// is what the call's `CallEffects` say of the other access: `Mod` where the
+/// is what `calls_by_attributes` says of the other access: `Mod` where the
 /// call may write what it touches, `Ref` where it may read it.
 fn calls(module: &llrm_mir::module::Module) -> String {
-    use llrm_analysis::manager::CallEffects;
     use llrm_analysis::memory::{MemRef, Unit};
     use llrm_mir::opcode::Opcode;
-    use llrm_mir::passes::{Analyses, Outer};
     let layout = module
         .datalayout
         .as_deref()
@@ -705,19 +711,10 @@ fn calls(module: &llrm_mir::module::Module) -> String {
             llrm_mir::datalayout::DataLayout::default,
             |text| llrm_mir::datalayout::DataLayout::parse(text).expect("a datalayout"),
         );
-    let mut module = module.clone();
-    let mut analyses = Analyses::new(std::rc::Rc::new(Outer::of(&module, None)));
+    let module = module.clone();
     let names: Vec<String> = module.functions().map(|(_, global, _)| global.name.owned().unwrap_or_default()).collect();
     let mut out = String::new();
     for name in names {
-        let effects = {
-            let Some((context, function)) = module.function_mut(&name) else { continue };
-            if function.layout().is_empty() {
-                continue;
-            }
-            analyses.get::<CallEffects>(context, &layout, function)
-        };
-        let Ok(effects) = &*effects else { continue };
         let Some((_, _, function)) =
             module.functions().find(|(_, global, _)| global.name.as_deref() == Some(name.as_str()))
         else {
@@ -728,6 +725,8 @@ fn calls(module: &llrm_mir::module::Module) -> String {
         let shape = llrm_analysis::cfg::Shape::of(function);
         let unit = plain.with_registers(&known).with_shape(&shape);
         let Ok(facts) = llrm_analysis::alias::points_to(&unit, None, None) else { continue };
+        let Ok(values) = llrm_analysis::alias::point_values(&unit) else { continue };
+        let effects = llrm_analysis::alias::calls_by_attributes(&unit.with_point_values(&values));
         let reference = |inst| {
             let mut reference = MemRef::of(&unit, inst)?;
             reference.provenance = facts.reference(&unit, &reference).or(reference.provenance.take());

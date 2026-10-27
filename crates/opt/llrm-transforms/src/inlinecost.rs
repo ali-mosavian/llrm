@@ -63,27 +63,31 @@
 //! - D8: -Os and -Oz share one pipeline here, so every caller at -Os is
 //!   `optsize` (clang's `OptimizeForSize`, InlineCost.cpp:2125) and none
 //!   `minsize` (:2117).
-//! - D11: at -Os a callee that stays is inlined only if the target's bound
-//!   (`Tti::opt_size_inline_threshold`, X86: 25, a cost value of the target)
-//!   holds the finished cost, where LLVM's `OptSizeThreshold` 50 allows growth.
-//!   The pin's threshold cannot say it: its verdict is `cost < max(1,
-//!   threshold)` and the walk stops at cost 0, so a threshold of 0 inlines a
-//!   callee whose walk ends there. No shape of callee is tested.
+//! - D11: at -Os a callee that stays is inlined only if it does not grow the
+//!   code (`Tti::opt_size_inline_by_code_size`, X86: yes): the target's
+//!   `CodeSize` of the callee's instructions that the walk did not fold must
+//!   not exceed the `CodeSize` of the call and the pushes of its arguments.
+//!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
+//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
+//!   of a local callee, which goes with it, is the pin's. No shape of callee
+//!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-//!   address of a stack slot the caller stored a constant to and whose callee
-//!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//!   address of a stack slot or a global the caller stored a constant to and
+//!   whose callee loads through that parameter, is inlined if the caller,
+//!   simplified again with the call inlined, is smaller by the target's size
+//!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+//!   private callee that dies with its last call are tried together, its body
+//!   credited; so are the sites of a private callee called only from this
+//!   caller, whatever they pass). The pin's cost does not follow a load through
+//!   a pointer argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10: a callee that calls itself is priced as any (LLVM: "recursive",
-//!   `IsRecursiveCall`), and `decide` leaves a call of the caller itself to the
-//!   copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
+//!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
+//!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
+//!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
 //!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
 //!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
 //!   10%; none at -Os; calls of a function that reads and writes nothing with
@@ -173,6 +177,12 @@ pub struct InlineParams {
     /// `ComputeFullInlineCost`: the whole cost, past the threshold too (an
     /// optimisation remark asks for it).
     pub compute_full_inline_cost: bool,
+    /// `AllowRecursiveCall`: a callee that calls itself is priced, not
+    /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
+    pub allow_recursive_call: bool,
+    /// The `LastCallToStatic` bonus applies. The pin's always does;
+    /// `-fno-inline-functions-called-once` turns it off.
+    pub last_call_to_static: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -201,6 +211,8 @@ impl InlineParams {
             opt_min_size_threshold: OPT_MIN_SIZE_THRESHOLD,
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
+            allow_recursive_call: false,
+            last_call_to_static: true,
             tti: Tti::Generic,
         }
     }
@@ -437,6 +449,7 @@ struct Analyzer<'a> {
     known_successors: HashMap<u32, BlockId>,
     load_addrs: BTreeSet<Operand>,
     enable_load_elimination: bool,
+    is_recursive_call: bool,
     exposes_returns_twice: bool,
     has_dynamic_alloca: bool,
     contains_noduplicate_call: bool,
@@ -447,6 +460,9 @@ struct Analyzer<'a> {
     allocated_size: u64,
     instructions: u64,
     vector_instructions: u64,
+    /// D11: the target's code size of the callee's instructions that cost
+    /// (the ones the walk did not fold), in `CostKind::CodeSize` units.
+    size_units: i64,
     // InlineCostCallAnalyzer state.
     load_elimination_cost: i64,
     vector_bonus: i64,
@@ -478,6 +494,7 @@ impl<'a> Analyzer<'a> {
             known_successors: HashMap::default(),
             load_addrs: BTreeSet::new(),
             enable_load_elimination: true,
+            is_recursive_call: false,
             exposes_returns_twice: false,
             has_dynamic_alloca: false,
             contains_noduplicate_call: false,
@@ -488,6 +505,7 @@ impl<'a> Analyzer<'a> {
             allocated_size: 0,
             instructions: 0,
             vector_instructions: 0,
+            size_units: 0,
             load_elimination_cost: 0,
             vector_bonus: 0,
             single_bb_bonus: 0,
@@ -641,7 +659,11 @@ impl<'a> Analyzer<'a> {
         // it is a global), else the generic one: no global, no offset,
         // scale 0 or 1.
         let legal = |scale: i64| match self.site.tti {
-            Some(tti) => tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale),
+            // A scaled index with instructions of its own is not free.
+            Some(tti) => {
+                (scale <= 1 || tti.scaled_index_insns() == 0)
+                    && tti.is_legal_addressing_mode(global_base, offset as i64, !global_base, scale)
+            }
             None => !global_base && offset == 0 && scale <= 1,
         };
         match variable[..] {
@@ -1413,6 +1435,12 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         };
+        // `F == Call.getCalledFunction()`: "This flag will fully abort the
+        // analysis" unless the params allow a recursive call (:2481).
+        if target == self.site.callee_id && !self.params.allow_recursive_call {
+            self.is_recursive_call = true;
+            return false;
+        }
         // simplifyCallSite: D3, no library folding.
         let name = self.site.module.global(target).name.clone();
         // A declaration flagged `frame_bound` (the QB error-handler
@@ -1461,10 +1489,6 @@ impl<'a> Analyzer<'a> {
             }
             return self.visit_default(inst);
         }
-        // D-recursion: `F == Call.getFunction()` (the callee calls itself) is
-        // an ordinary call here, not the refusal "recursive": a recursive
-        // callee is inlined into another caller as gcc does, and into itself
-        // by `walk`'s bounded self-inlining.
         if lowered_to_call(self.site.module, target) {
             // onLoweredCall (:732), a direct call.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1553,14 +1577,12 @@ impl<'a> Analyzer<'a> {
                 _ => None,
             })
             .collect();
-        let (clusters, table) = if self.params.tti == Tti::Generic {
-            (cases.len() as u64, 0)
-        } else {
-            llrm_mir::tti::basic_case_clusters(
-                &cases,
-                self.site.layout.pointer(0).bits,
-                self.site.caller_size != CallerSize::Speed,
-            )
+        let for_size = self.site.caller_size != CallerSize::Speed;
+        let index_bits = self.site.layout.pointer(0).bits;
+        let (clusters, table) = match self.site.tti {
+            Some(tti) => tti.estimated_number_of_case_clusters(&cases, index_bits, for_size),
+            None if self.params.tti == Tti::Generic => (cases.len() as u64, 0),
+            None => llrm_mir::tti::basic_case_clusters(&cases, index_bits, for_size),
         };
         let default_unreachable = match operation.operands[1] {
             Operand::Block(default) => self
@@ -1650,6 +1672,7 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
+                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -1665,7 +1688,9 @@ impl<'a> Analyzer<'a> {
                     self.cost - before
                 );
             }
-            if self.exposes_returns_twice {
+            if self.is_recursive_call {
+                return Err("recursive".into());
+            } else if self.exposes_returns_twice {
                 return Err("exposes returns twice".into());
             } else if self.has_dynamic_alloca {
                 return Err("dynamic alloca".into());
@@ -1695,7 +1720,7 @@ impl<'a> Analyzer<'a> {
         } else {
             let mut single_bb_percent = 50;
             let mut vector_percent = VECTOR_BONUS_PERCENT;
-            let mut last_call_bonus = LAST_CALL_TO_STATIC_BONUS;
+            let mut last_call_bonus = if self.params.last_call_to_static { LAST_CALL_TO_STATIC_BONUS } else { 0 };
             let caller_size = self.site.caller_size;
             match caller_size {
                 CallerSize::MinSize => {
@@ -1902,6 +1927,42 @@ impl<'a> Analyzer<'a> {
         self.finalize()
     }
 
+    /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    fn code_size_of(
+        &self,
+        inst: InstId,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.callee,
+            inst,
+            llrm_mir::tti::CostKind::CodeSize,
+        )
+        .value
+    }
+
+    /// The target's code size of the call and the pushes of its arguments,
+    /// where the target says a call is bigger than the instruction it is
+    /// counted as.
+    fn call_size(&self) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let size = llrm_mir::instructioncost::instruction_cost(
+            tti,
+            self.context,
+            self.site.layout,
+            &self.site.module.globals,
+            self.site.caller,
+            self.site.call,
+            llrm_mir::tti::CostKind::CodeSize,
+        )
+        .value;
+        (size * tti.call_code_size_percent() + 50) / 100
+    }
+
     fn finalize(&mut self) -> Result<(), String> {
         if self.site.caller_size == CallerSize::MinSize {
             let loops = loop_headers(self.callee).iter().filter(|header| !self.dead_blocks.contains(&header.0)).count();
@@ -1912,18 +1973,20 @@ impl<'a> Analyzer<'a> {
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
         }
-        // D11: the analysis above stops at LLVM's threshold; the verdict is
-        // held to the target's.
+        // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
+        // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        if self.site.caller_size == CallerSize::OptSize
+        let grows = self.site.caller_size == CallerSize::OptSize
             && !self.site.sole_call_to_local
-            && let Some(bound) = self.site.tti.and_then(|tti| tti.opt_size_inline_threshold())
-        {
-            self.threshold = self.threshold.min(bound);
+            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
+            && self.size_units > self.call_size();
+        self.blocked_by_bound = grows && self.cost < pin;
+        if grows {
+            // The verdict is `cost < threshold`: the call stays.
+            self.threshold = self.threshold.min(self.cost);
         }
-        self.blocked_by_bound = self.cost < pin && self.cost >= self.threshold.max(1);
         self.decided_by_threshold = true;
-        if self.cost < self.threshold.max(1) { Ok(()) } else { Err("Cost over threshold.".into()) }
+        if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
 }
 
@@ -2485,7 +2548,8 @@ pub fn sites(
 }
 
 /// `sites`, and the sites the target's -Os bound alone refused whose call
-/// passes a constant or a stack slot (SZ2): `trials`
+/// passes a constant or a stack slot, or whose private callee has no call but
+/// these (SZ2): `trials`
 /// takes their copies, for the walk to try inlined against not.
 #[allow(clippy::too_many_arguments)]
 pub fn sites_with_trials(
@@ -2506,13 +2570,31 @@ pub fn sites_with_trials(
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
     let frequencies = caller_frequencies(module, layout, caller);
+    // The calls to each callee here: a private callee all of whose calls are
+    // here goes with the last one inlined.
+    let mut here: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if trials.is_some() {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *here.entry(callee).or_default() += 1;
+            }
+        }
+    }
+    let goes = |callee: GlobalId| {
+        local_linkage(module.global(callee).linkage)
+            && !addressed.contains(&callee)
+            && counts.get(&callee).is_some_and(|all| here.get(&callee) == Some(all))
+    };
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        if !decision.inline && !(blocked && trials.is_some() && worth_a_trial(module, caller, inst, decision.callee)) {
+        let worth = blocked
+            && trials.is_some()
+            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+        if !decision.inline && !worth {
             continue;
         }
         let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
@@ -2527,6 +2609,9 @@ pub fn sites_with_trials(
             body: std::rc::Rc::new((**callee).clone()),
             frame: crate::inline::grown(&module.context, layout, callee),
             moved: false,
+            last_call: local_linkage(module.global(decision.callee).linkage)
+                && !addressed.contains(&decision.callee)
+                && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
             self_calls: (!own.is_empty()).then(|| {
@@ -2573,10 +2658,27 @@ fn root_of(
     }
 }
 
+/// The global a constant pointer is the address of, or a step or a cast of.
+fn global_of(
+    context: &llrm_mir::context::Context,
+    operand: llrm_mir::module::Operand,
+) -> Option<GlobalId> {
+    use llrm_mir::context::{ConstantExpr, ConstantKind};
+    let llrm_mir::module::Operand::Constant(mut at) = operand else { return None };
+    loop {
+        match &context.get(at).kind {
+            ConstantKind::Global(global) => return Some(*global),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
+            _ => return None,
+        }
+    }
+}
+
 /// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot the caller wrote a constant to, and
-/// the callee reads through that parameter, which the cost model does not
-/// follow (a constant argument it folds itself).
+/// call passes the address of a stack slot (or of a global) the caller wrote a
+/// constant to, and the callee reads through that parameter, which the cost
+/// model does not follow (a constant argument it folds itself).
 fn worth_a_trial(
     module: &Module,
     caller: &llrm_mir::module::Function,
@@ -2601,6 +2703,20 @@ fn worth_a_trial(
                 },
             )
     };
+    // A gate, not dataflow: the store may be to another field, or after the
+    // call; the trial decides on bytes.
+    let written_global = |global: GlobalId| {
+        caller
+            .walk()
+            .any(
+                |(_, inst)| {
+                    let store = caller.instruction(inst);
+                    matches!(store.opcode, Opcode::Store { .. })
+                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
+                        && global_of(&module.context, store.operands[1]) == Some(global)
+                },
+            )
+    };
     let read_through: Vec<llrm_mir::module::ValueId> = callee
         .walk()
         .filter_map(|(_, inst)| {
@@ -2611,16 +2727,21 @@ fn worth_a_trial(
             }
         })
         .collect();
-    arguments
-        .iter()
-        .zip(callee.parameters())
-        .any(
-            |(argument, parameter)| read_through.contains(parameter)
-                && matches!(
+    // A callee that reads a global directly (its pointer arguments were
+    // propagated into it), one the caller has stored a constant to.
+    let reads_written_global = callee.walk().any(|(_, inst)| {
+        let load = callee.instruction(inst);
+        matches!(load.opcode, Opcode::Load { .. })
+            && load.operands.first().and_then(|ptr| global_of(&module.context, *ptr)).is_some_and(written_global)
+    });
+    reads_written_global
+        || arguments.iter().zip(callee.parameters()).any(|(argument, parameter)| {
+            read_through.contains(parameter)
+                && (matches!(
                     root_of(caller, *argument),
                     Some(Root::Slot(slot)) if written(slot)
-                ),
-        )
+                ) || global_of(&module.context, *argument).is_some_and(written_global))
+        })
 }
 
 /// What `decide` reads of the module besides the site.

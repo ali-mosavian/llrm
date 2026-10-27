@@ -19,6 +19,11 @@
 //! the constant may take the first outside the object. A negative constant
 //! drops `inbounds` too.
 //!
+//! DEVIATE LP-2 (no pin pass: LLVM gets `a[i + 8]` as a displacement from
+//! InstCombine's gep canonicalization, LSR and CodeGenPrepare's address-mode
+//! matching (row CG DEVIATE C1); exit: that matching translated, then deleted;
+//! owner w-6; review 2026-11-13).
+//!
 //! # Example
 //! Before:
 //!

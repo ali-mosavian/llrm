@@ -1,5 +1,0 @@
-opStGet1|x
-opStGet2|x
-opStGetRec2|x
-opStGetRec3|x
-opFnAbs|x

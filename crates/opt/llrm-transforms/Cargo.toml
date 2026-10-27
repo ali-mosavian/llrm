@@ -3,7 +3,7 @@ name = "llrm-transforms"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "MIR to MIR passes, adapted from llrm-core's optimizations"
+description = "MIR to MIR passes, adapted from llrm-codegen's optimizations"
 
 [dependencies]
 llrm-mir = { workspace = true }

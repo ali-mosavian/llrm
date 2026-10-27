@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:61dff1a38f8987376fa8d3529f8107a30333988a43d9303da69b9522e3ad86dd -->
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:afe26aa27b752798bd311493ccb0c7b36a5d6465db7dfd21329b7cc794efc7c1 -->
 
 # calleepop
 
@@ -30,13 +30,46 @@ bytes: the cleanup each call no longer makes, summed over the call sites
 (`return_pops`).
 
 Where the description gives a private function a convention of its own
-(`private`, as the x86 m32 description does with `watcall32`), every
+(`private`, as the x86 m32 description does with `fastcc32`), every
 internal, non-variadic function whose convention may be replaced takes that
 one, with the calls of it, under any ABI the program has. No price is asked:
 registers cost no more than the stack at either end.
 
 A function some call of which is not a plain call in its convention keeps
 its convention.
+
+## Translation
+| LLVM | Rust | Kind |
+|---|---|---|
+| [`OptimizeFunctions`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L2019): `fastcc` for a function with a changeable convention | `CalleePop::run` | MATCH |
+| [`hasChangeableCCImpl`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1700) | `direct_only` and the plain-call test | MATCH |
+| [`ChangeCalleesToFastCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1673) | the call-site loop in `run` | MATCH |
+| [`useFastCCForInternalCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8196): always true here | none | MATCH |
+| what `fastcc` is: two integer arguments in ECX, EDX, the rest on the stack, the caller pops | `fastcc32` at m32 (the pin's); the callee-pop twin at m16 | MATCH |
+
+CC1 is closed: the private m32 convention is the pin's `fastcc`
+(`fastcc32`). `LLRM_PRIVATE_WATCALL=1` gives `watcall32` back, to compare;
+it is no switch for production. Priced on the 71 m32 rows (486 model) and
+QCport (62 modules, `qcport.py`), dda83cd1c5, the same binary on both arms;
+new against the old `watcall32` default:
+
+| level | clocks | code bytes | QCport bytes |
+|---|---|---|---|
+| -O1 | -0.9% | +0.05% | +0.18% |
+| -O2 | -0.2% | +0.6% | +0.03% |
+| -O3 | -0.2% | +0.4% | +0.08% |
+| -Os | +0.2% | -0.1% | +0.06% |
+
+The exit ("adopt the pin's `fastcc` if no worse") is met on clocks at
+-O1..-O3, by `rectwo` (-9.6%) and `fib` (-5.0%); d_faces compile Ir -0.28%.
+Rows above the old default are numbered, owner funcattrs-port, exit "tune
+after the allocator work" (the cost is frame traffic around calls), review
+2026-11-13:
+- CC2, -Os clocks +0.2%: `x_hanoi2` +32.2%, `queens` +4.9%, `bintree` +2.0%.
+- CC3, -O1..-O3 rows: `x_hanoi2` +9.4% at -O1 and +3.8% at -O2 and -O3,
+  `queens` +8.2% at -O2.
+- CC4, code bytes +0.05%, +0.6%, +0.4% at -O1..-O3 (`quicksort` and
+  `bintree` +64 and +48 B at -O2), QCport +0.03% to +0.18%.
 
 ## Example
 Before:

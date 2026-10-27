@@ -1329,7 +1329,9 @@ impl Combiner<'_> {
         index: usize,
         demanded: u128,
     ) -> bool {
-        let Some(sel_c) = self.apint_of(self.operand_of(inst, index)) else { return false };
+        let Some((sel_c, sel_bits)) = query(self, None).int_constant(self.operand_of(inst, index)) else {
+            return false;
+        };
 
         // Get the constant out of the ICmp, if there is one. Only try this
         // when exactly 1 operand is a constant.
@@ -1339,7 +1341,11 @@ impl Combiner<'_> {
             q.instruction_of(cond).and_then(|(_, instruction)| match instruction.opcode {
                 Opcode::ICmp(_) => {
                     let (x, c) = (instruction.operands[0], instruction.operands[1]);
-                    q.int_constant(c).filter(|_| !matches!(x, Operand::Constant(_))).map(|(bits, _)| bits)
+                    // A constant of another width is not the arm's: setting it
+                    // would not make them equal, and the arm is set again.
+                    q.int_constant(c)
+                        .filter(|&(_, bits)| !matches!(x, Operand::Constant(_)) && bits == sel_bits)
+                        .map(|(bits, _)| bits)
                 }
                 _ => None,
             })
@@ -1420,7 +1426,13 @@ impl Combiner<'_> {
             (instruction.opcode.clone(), instruction.flags, instruction.ty)
         };
         let self_value = self.result_of(inst);
-        let (op0, op1) = (self.operand_of(inst, 0), self.operand_of(inst, 1));
+        // Only the binary arms read the operands; a load or a call has fewer
+        // than two.
+        let (op0, op1) = if matches!(opcode, Opcode::Binary(_)) {
+            (self.operand_of(inst, 0), self.operand_of(inst, 1))
+        } else {
+            (self_value, self_value)
+        };
         let d1 = depth + 1;
         let mut lhs = KnownBits::unknown(w);
         let mut rhs = KnownBits::unknown(w);

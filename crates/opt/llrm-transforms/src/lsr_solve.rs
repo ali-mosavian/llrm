@@ -20,6 +20,7 @@
 //!
 //! # Limits
 //! DEVIATE: `AMK_PostIndexed` (x86 prefers none) is not ported.
+//! DEVIATE LU3: see `solve`, the drop of a rewrite that spills (real mode).
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::expr::Scev;
@@ -64,7 +65,7 @@ impl Collection<'_, '_> {
             }
             // The cost with this formula: a branch no better than the best is
             // pruned.
-            let mut new_cost = *cur_cost;
+            let mut new_cost = cur_cost.clone();
             let mut new_regs = cur_regs.clone();
             self.rate(se, &mut new_cost, f, &mut new_regs, visited, lu_idx, None);
             if new_cost.is_less(self.tti, solution_cost) {
@@ -75,7 +76,7 @@ impl Collection<'_, '_> {
                         visited.insert(f.scaled_reg.unwrap_or_else(|| f.base_regs[0]));
                     }
                 } else {
-                    *solution_cost = new_cost;
+                    *solution_cost = new_cost.clone();
                     *solution = workspace.clone();
                 }
                 workspace.pop();
@@ -108,8 +109,15 @@ impl Collection<'_, '_> {
             return solution;
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
+        // DEVIATE LU3: a rewrite that needs more registers than the loop and
+        // than the target has, and costs two instructions more, is dropped.
+        let budget = self.tti.number_of_gpr_registers().saturating_sub(1);
+        let spills = solution_cost.c.num_regs > budget
+            && solution_cost.c.num_regs > self.baseline_cost.c.num_regs
+            && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         if self.baseline_cost.is_less(self.tti, &solution_cost)
-            && self.tti.should_drop_lsr_solution_if_less_profitable()
+            && (self.tti.should_drop_lsr_solution_if_less_profitable()
+                || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }

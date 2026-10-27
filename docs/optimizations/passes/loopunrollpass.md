@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollpass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollpass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:08390fe184ddc69037f2e019848f1e2d2f18bc818b1567797d0b2bdd20ac3577 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:9bab8de5f59ecd24e378d1c655cdfc535dbd466c14e64eae92d01544c1dbf8c4 -->
 
 # loopunrollpass
 
@@ -56,3 +56,6 @@ with no `phi`, no `icmp` and no backedge.
 [`computeUnrollCount`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1016),
 [`analyzeLoopUnrollCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L336),
 [`LoopFullUnrollPass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1640).
+
+## Used by
+Named by `loopunrollandjam`, `pipeline`.

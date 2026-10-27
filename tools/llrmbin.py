@@ -3,9 +3,11 @@
 The one resolver every Python tool and test uses; a tree built elsewhere (the gate's) has no ./target.
 """
 import atexit
+import contextlib
 import hashlib
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
@@ -23,7 +25,22 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
     stale = stale_binaries(found, repo)
     if stale:
         raise SystemExit(f"stale binaries in {found}: {', '.join(stale)} older than the source they are built from; run `cargo build --release --bins` (`cargo build -p X` builds only the library)")
+    stamped(found)
     return found
+
+
+def stamped(found: Path) -> None:
+    """Prints the commit llrm-c was built from; refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import stamp
+
+    expect = os.environ.get("LLRM_EXPECT_SHA") or None
+    if (found / "llrm-c").is_file():
+        try:
+            stamp.check(found / "llrm-c", expect, allow_dirty=True, label=str(found))
+        except SystemExit:
+            if expect:
+                raise  # a binary without a stamp is only refused where a sha is named
 
 
 def declared(repo: Path) -> set[str]:
@@ -45,8 +62,21 @@ def built_from(directory: Path, default: Path) -> Path:
     return default
 
 
+def recorded_md5(directory: Path) -> dict[str, str]:
+    """name -> md5 from the `ok` file beside a `dist/` that tools/pairs/pair_build.sh built (`<md5>  <name>` lines, written at build time), else empty."""
+    ok = directory.parent / "ok"
+    if directory.name != "dist" or not ok.is_file():
+        return {}
+    pairs = (line.split() for line in ok.read_text().splitlines())
+    return {fields[1]: fields[0] for fields in pairs if len(fields) == 2 and len(fields[0]) == 32}
+
+
+def md5_of(binary: Path) -> str:
+    return hashlib.md5(binary.read_bytes()).hexdigest()
+
+
 def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, str, float]]:
-    """(binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
+    """A binary of a pair_build dist is judged by its md5 against the `ok` record (`recorded_md5`), not by time. (binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
     built from, or than the toolchain patches (build.rs reruns on them; dep-info does not list them) of the tree they were built from, which is `repo` unless
     their dep-info names another. A directory without dep-info is not checked."""
     repo = built_from(directory, repo)
@@ -57,6 +87,11 @@ def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, st
         if binary.name not in built_here or not binary.is_file():
             continue
         built = binary.stat().st_mtime
+        # a pair_build dist records each binary's md5 when it is built: that decides, not the mtime (a copy or a checkout moves mtimes, and touching one would pass the guard)
+        if recorded := recorded_md5(directory).get(binary.name):
+            if md5_of(binary) != recorded:
+                stale.append((binary.name, built, f"{directory.parent / 'ok'} (md5 differs)", built))
+            continue
         sources = [Path(path) for path in info.read_text().partition(":")[2].replace("\\\n", " ").split()]
         # Sources only: a build script rewrites its outputs under the target directory whenever it reruns.
         written = directory.resolve().parent
@@ -135,3 +170,20 @@ def assert_distinct(base, new, same_source: bool = False) -> str:
     if a == b and not same_source:
         raise SystemExit(f"same binary: base {base} and new {new} both have md5 {a}; the new commit was not built into it (`cargo build --bin X`, not `-p`). Refusing to print a diff.")
     return f"binaries: base {a[:12]} {base} | new {b[:12]} {new}" + (" (same binary, same source)" if a == b else "")
+
+
+OBJECT = "<object>"
+OBJECT_BYTES = 100
+
+
+@contextlib.contextmanager
+def with_object(command: list[str]):
+    """`command` with the `OBJECT` placeholder made a path to write the object to. llrm-c encodes only for an `.o` or `.obj` output; `-o /dev/null` gets
+    the assembly text, so a cost measured there leaves out the encoder and the object write (emit: 4 M of 22 M Ir on d_faces, 2026-10-23). The path is
+    OBJECT_BYTES long whatever the directory: a longer argv moved an instruction count (see `pinned`)."""
+    if OBJECT not in command:
+        yield command
+        return
+    with tempfile.TemporaryDirectory(prefix="llrm-obj-", dir="/tmp") as directory:
+        path = Path(directory) / ("o" * (OBJECT_BYTES - len(directory) - len("/.obj")) + ".obj")
+        yield [str(path) if one == OBJECT else one for one in command]

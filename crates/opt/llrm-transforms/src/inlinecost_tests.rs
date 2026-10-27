@@ -14,6 +14,23 @@ const GLOBAL: &str = "@g = global i32 0\n\n";
 /// The cost and threshold of the `at`th call of @callee in @f, `sole`: the
 /// callee's only call (the `LastCallToStatic` bonus is in the cost, as in
 /// `opt`'s remark).
+/// i486 in 16-bit code with the target's -Os growth guard (the m16
+/// description's `inline_size_guard`).
+fn x86_real() -> llrm_x86::tti::X86 {
+    llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .in_real_mode(
+            llrm_x86::tti::RealMode {
+                scale_costs: vec![(1, 0)],
+                registers: 6,
+                scaled_index_insns: 0,
+                huge_space: None,
+                inline_size_guard: true,
+                float_code_size_percent: 100,
+            },
+        )
+}
+
 fn priced_with(
     text: &str,
     at: usize,
@@ -173,10 +190,12 @@ b0:
 }
 
 /// An external callee that stays after the inline is not copied into an
-/// `optsize` caller on x86 (D11): crc, tile and recchop grew 52, 42 and 15
-/// bytes at -Os (cost 45, 30 and 40 against the pin's threshold of 50).
+/// `optsize` caller in 16-bit code (D11, the target's `inline_size_guard`):
+/// crc, tile and recchop grew 52, 42 and 15 bytes at -Os (cost 45, 30 and 40
+/// against the pin's threshold of 50). In 32-bit code the pin's decision
+/// stands: the `called_once` kernel's `twice` (cost 45) is inlined.
 #[test]
-fn an_optsize_caller_does_not_copy_a_callee_that_stays_on_x86() {
+fn an_optsize_caller_does_not_copy_a_callee_that_stays_in_16_bit_code() {
     let text = format!(
         "{GLOBAL}define i32 @callee(i32 %x) {{
 b0:
@@ -204,11 +223,75 @@ b0:
 }}
 "
     );
-    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (x86, flat) = (x86_real(), llrm_x86::tti::X86::of_cpu("i486").unwrap());
     let (generic, bound) = priced_with(&text, 0, false, CallerSize::OptSize, None);
     let (target, held) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&x86));
+    let (wide, kept) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&flat));
     assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
-    assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
+    assert!(target >= held, "16-bit code inlined it, cost {target} threshold {held}");
+    assert!(wide < kept, "32-bit code kept it, cost {wide} threshold {kept}");
+}
+
+/// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
+/// `idioms.bas` copied a 14-instruction loop (cost 15 against the target's old
+/// bound of 25) into ten call sites, +690 bytes. The callee that stays is
+/// refused when its instructions that do not fold cost more code than the call
+/// and its argument pushes; the last call of a local callee, which goes with
+/// it, and a callee smaller than its call are inlined.
+#[test]
+fn an_optsize_caller_inlines_only_what_does_not_grow_the_code_on_x86() {
+    let text = |linkage: &str, body: &str| {
+        format!(
+            "@arr = global [64 x i32] zeroinitializer
+
+define {linkage}i32 @callee(i32 %x) {{
+{body}
+}}
+
+define i32 @f(i32 %y) {{
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}}
+"
+        )
+    };
+    let looped = "b0:
+  br label %h
+h:
+  %i = phi i32 [ 0, %b0 ], [ %n, %h ]
+  %s = phi i32 [ %x, %b0 ], [ %t, %h ]
+  %p = getelementptr i32, ptr @arr, i32 %i
+  %v = load i32, ptr %p
+  %t = add i32 %s, %v
+  %n = add i32 %i, 1
+  %c = icmp ne i32 %n, 64
+  br i1 %c, label %h, label %e
+e:
+  ret i32 %t";
+    let small = "b0:
+  %a = add i32 %x, 1
+  ret i32 %a";
+    let x86 = x86_real();
+    let held = |text: &str, sole: bool| {
+        let (cost, threshold) = priced_with(text, 0, sole, CallerSize::OptSize, Some(&x86));
+        cost < threshold
+    };
+    let (generic, bound) = priced_with(&text("", looped), 0, false, CallerSize::OptSize, None);
+    assert!(generic < bound, "premise: the pin inlines the loop, cost {generic} threshold {bound}");
+    assert!(!held(&text("", looped), false), "an external loop callee was copied into the caller");
+    assert!(!held(&text("internal ", looped), false), "a local callee with other calls was copied");
+    assert!(held(&text("internal ", looped), true), "the last call of a local callee, which goes, stays");
+    assert!(held(&text("", small), false), "a callee smaller than its call stays");
+    // A call and the push of its argument are bigger than the instructions
+    // they count as: `_savegame_read_block` (28 calls) grew its module by 408
+    // bytes while the call counted as three plain instructions.
+    let three = "b0:
+  %a = add i32 %x, 1
+  %b = xor i32 %a, 85
+  %c = mul i32 %b, 3
+  ret i32 %c";
+    assert!(held(&text("", three), false), "a callee of the size of a far call and its push was kept out");
 }
 
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
@@ -480,4 +563,58 @@ fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
     assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
     assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
     assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
+}
+
+/// `-fno-inline-functions-called-once` set `Threshold::last` and nothing read
+/// it after `decide` replaced the clocks inliner (5bff5e074): the sole call of
+/// a local callee still took the 15000 bonus and nib's `bench_scroll` was
+/// inlined into `main`.
+#[test]
+fn the_last_call_bonus_is_off_where_called_once_inlining_is() {
+    let text = "define internal i32 @callee(i32 %x) {
+b0:
+  %a = add i32 %x, 1
+  ret i32 %a
+}
+
+define i32 @f(i32 %y) {
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}
+";
+    let price = |last_call_to_static: bool| {
+        let module: Module = parsed(text);
+        let layout = DataLayout::default();
+        let (caller_id, _, caller) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+        let (callee_id, _, callee) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("callee")).unwrap();
+        let call = caller
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+            .unwrap();
+        let site = Site {
+            module: &module,
+            layout: &layout,
+            caller,
+            caller_id,
+            call,
+            callee,
+            callee_id,
+            sole_call_to_local: true,
+            caller_recursive: false,
+            caller_size: CallerSize::Speed,
+            relative_frequency: None,
+            tti: None,
+        };
+        let params =
+            InlineParams { compute_full_inline_cost: true, last_call_to_static, ..InlineParams::from_level(2) };
+        match inline_cost(&site, params) {
+            InlineCost::Cost { cost, .. } => cost,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(price(false) - price(true), 15000);
 }

@@ -163,6 +163,17 @@ impl Layout {
             }
         };
         let required = |name: &str| number(name)?.ok_or(format!("spaces.{name} is missing"));
+        // A selector alone is no address, and a huge pointer's packed bits are
+        // not one either (a displacement past 64K carries into its selector):
+        // casts through their spaces do not compose (`ni:` marks them
+        // non-integral for every pass that asks the layout).
+        let non_integral: Vec<String> =
+            [number("segment")?, number("huge")?].into_iter().flatten().map(|space| space.to_string()).collect();
+        let datalayout = if non_integral.is_empty() || datalayout.split('-').any(|spec| spec.starts_with("ni:")) {
+            datalayout
+        } else {
+            format!("{datalayout}-ni:{}", non_integral.join(":"))
+        };
         let mut unmarked = BTreeMap::new();
         for (width, kind) in value.get("pointers").and_then(|one| one.as_table()).ok_or("[pointers] is missing")? {
             let width: i64 = width.parse().map_err(|_| format!("pointers.{width} is not a width"))?;
@@ -315,5 +326,26 @@ mod tests {
             Layout::parse(&FLAT.replace("near = 0", "near = \"x\"")).unwrap_err(),
             "spaces.near is not an address space number"
         );
+    }
+}
+
+#[cfg(test)]
+mod segment_tests {
+    use super::*;
+
+    /// The selector-alone space is no address (casts through it do not
+    /// compose): a target that has one marks it non-integral in the layout
+    /// every pass reads; one that has none marks nothing.
+    #[test]
+    fn the_selector_space_is_non_integral_in_the_layout() {
+        let text = |segment: &str| {
+            format!(
+                "mode = 16\ndatalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16\"\n[spaces]\nnear = 0\nfar = 1\ndata = 0\nstack = 0\n{segment}\n[pointers]\n4 = \"near\"\n"
+            )
+        };
+        let with = Layout::parse(&text("segment = 2")).unwrap().data();
+        let without = Layout::parse(&text("")).unwrap().data();
+        assert!(with.is_non_integral_address_space(2));
+        assert!(!without.is_non_integral_address_space(2));
     }
 }

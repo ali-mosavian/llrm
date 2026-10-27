@@ -17,7 +17,7 @@
 //! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
 //! `foldICmpMulConstant`, `foldICmpShlConstant`, `foldICmpShrConstant`,
 //! `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
-//! `foldICmpSubConstant`, `foldICmpAddConstant`),
+//! `foldICmpSubConstant`),
 //! `foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
 //! truncate, intrinsic and `extractvalue` arms of `foldICmpInstWithConstant`.
 //!
@@ -122,15 +122,247 @@ pub fn fold_icmp_inst_with_constant(
     op1: Operand,
 ) -> Option<Visit> {
     let (value, width) = query(c, None).int_constant(op1)?;
-    let (and_x, and_y) = {
-        let q = query(c, None);
-        let (_, _, x, y) = pattern::binary(&q, op0, BinaryOp::And)?;
-        (x, y)
-    };
-    // foldICmpBinOpWithConstant, the `and` case.
+    // foldICmpBinOpWithConstant, the `and` and `add` cases.
     // OWED: the other opcodes, foldICmpBinOpEqualityWithConstant and the
-    // truth-table fold; the select, trunc, intrinsic and extractvalue arms.
-    fold_icmp_and_constant(c, inst, pred, op0, (and_x, and_y), value, width)
+    // truth-table fold; the select, intrinsic and extractvalue arms, and the
+    // rest of the trunc arm.
+    let trunc = {
+        let q = query(c, None);
+        pattern::cast(&q, op0, CastOp::Trunc).map(|(_, trunc, x)| (trunc.flags, x))
+    };
+    if let Some((flags, x)) = trunc {
+        return fold_icmp_trunc_constant(c, inst, pred, (flags, x), value, width);
+    }
+    let and = {
+        let q = query(c, None);
+        pattern::binary(&q, op0, BinaryOp::And).map(|(_, _, x, y)| (x, y))
+    };
+    if let Some(operands) = and {
+        return fold_icmp_and_constant(c, inst, pred, op0, operands, value, width);
+    }
+    let (flags, x, y) = {
+        let q = query(c, None);
+        pattern::binary(&q, op0, BinaryOp::Add).map(|(_, add, x, y)| (add.flags, x, y))?
+    };
+    fold_icmp_add_constant(c, inst, pred, op0, flags, (x, y), value, width)
+}
+
+/// `foldICmpTruncConstant`'s first arm: `icmp pred (trunc nsw X), C` is the
+/// compare on `X` with `C` sign-extended; `trunc nuw` with an unsigned or
+/// equality predicate, with `C` zero-extended, when `shouldChangeType` allows
+/// computing in the wider type.
+///
+/// OWED: the `signum`, `shl` power-of-two and equality-mask arms.
+fn fold_icmp_trunc_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    (flags, x): (Flags, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let src = c.type_of(x);
+    let src_bits = c.context.types.int_bits(src)?;
+    if !crate::combine_shared::should_change_type(c.env.layout, width, src_bits) {
+        return None;
+    }
+    let wide = if flags.contains(Flags::NSW) {
+        llrm_mir::context::signed(value, width) as u128 & mask(src_bits)
+    } else if !is_signed(pred) && flags.contains(Flags::NUW) {
+        value
+    } else {
+        return None;
+    };
+    let bound = c.int(src, wide);
+    Some(new_icmp(c, inst, pred, x, bound))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3231
+/// `foldICmpAddConstant`: `icmp (add X, C2), C`.
+fn fold_icmp_add_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    add: Operand,
+    add_flags: Flags,
+    (x, y): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let ty = c.type_of(add);
+    let same_sign = c.function.instruction(inst).flags.contains(Flags::SAMESIGN);
+    let m = mask(width);
+    let (nuw, nsw) = (add_flags.contains(Flags::NUW), add_flags.contains(Flags::NSW));
+    let smin = 1u128 << (width - 1);
+    let smax = smin - 1;
+    let wrap = |v: u128| v & m;
+
+    // icmp ult (add nuw A, (lshr A, ShAmtC)), C --> icmp ult A, C
+    // when C <= (1 << ShAmtC).
+    if pred == IntPredicate::Ult && nuw {
+        let found = {
+            let q = query(c, Some(inst));
+            [(x, y), (y, x)]
+                .into_iter()
+                .find_map(
+                    |(a, shifted)| {
+                        let (_, _, deferred, amount) = pattern::binary(&q, shifted, BinaryOp::LShr)?;
+                        let (amount, _) = q.int_constant(amount)?;
+                        (deferred == a && amount < u128::from(width) && value <= 1u128 << amount).then_some(a)
+                    },
+                )
+        };
+        if let Some(a) = found {
+            let bound = c.int(c.type_of(a), value);
+            return Some(new_icmp(c, inst, pred, a, bound));
+        }
+    }
+
+    if is_equality(pred) {
+        return None;
+    }
+    let (c2, _) = query(c, None).int_constant(y)?;
+
+    // If the add does not wrap, we can always adjust the compare by
+    // subtracting the constants. Equality comparisons are handled elsewhere.
+    // SGE/SLE/UGE/ULE have been canonicalized to SGT/SLT/UGT/ULT.
+    if nuw && matches!(pred, IntPredicate::Ugt | IntPredicate::Ult) && value >= c2 {
+        // icmp Pred (add nuw X, C2), C --> icmp Pred X, (C - C2)
+        let bound = c.int(ty, value - c2);
+        return Some(new_icmp(c, inst, pred, x, bound));
+    }
+
+    let chosen = llrm_mir::valuetracking::pattern::CmpPredicate { pred, same_sign }.preferred_signed_predicate();
+    if nsw && matches!(chosen, IntPredicate::Sgt | IntPredicate::Slt) {
+        let (sc, sc2) = (llrm_mir::context::signed(value, width), llrm_mir::context::signed(c2, width));
+        let (low, high) = (llrm_mir::context::signed(smin, width), llrm_mir::context::signed(smax, width));
+        if let Some(new) = sc.checked_sub(sc2).filter(|new| (low..=high).contains(new)) {
+            // icmp samesign ugt/ult (add nsw X, C2), C
+            //   -> icmp sgt/slt X, (C - C2)
+            let bound = c.int(ty, wrap(new as u128));
+            return Some(new_icmp(c, inst, chosen, x, bound));
+        }
+    }
+
+    let non_negative = |v: u128| !is_negative(v, width);
+    if !is_signed(pred) && nsw && non_negative(value) && non_negative(wrap(value.wrapping_sub(c2))) {
+        let range = {
+            let q = query(c, Some(inst));
+            llrm_mir::valuetracking::range::compute_constant_range(&q, x, true, 0)
+        };
+        let shifted = llrm_mir::constantrange::ConstantRange::single(width, c2);
+        if range.add(&shifted).is_all_non_negative() {
+            let signed_pred = match pred {
+                IntPredicate::Ugt => IntPredicate::Sgt,
+                IntPredicate::Uge => IntPredicate::Sge,
+                IntPredicate::Ult => IntPredicate::Slt,
+                _ => IntPredicate::Sle,
+            };
+            let bound = c.int(ty, wrap(value.wrapping_sub(c2)));
+            return Some(new_icmp(c, inst, signed_pred, x, bound));
+        }
+    }
+
+    let region = llrm_mir::constantrange::ConstantRange::make_exact_icmp_region(pred, width, value).subtract(c2);
+    let (lower, upper) = (region.lower, region.upper);
+    if is_signed(pred) {
+        if lower == smin {
+            let bound = c.int(ty, upper);
+            return Some(new_icmp(c, inst, IntPredicate::Slt, x, bound));
+        }
+        if upper == smin {
+            let bound = c.int(ty, lower);
+            return Some(new_icmp(c, inst, IntPredicate::Sge, x, bound));
+        }
+    } else {
+        if lower == 0 {
+            let bound = c.int(ty, upper);
+            return Some(new_icmp(c, inst, IntPredicate::Ult, x, bound));
+        }
+        if upper == 0 {
+            let bound = c.int(ty, lower);
+            return Some(new_icmp(c, inst, IntPredicate::Uge, x, bound));
+        }
+    }
+
+    // This set of folds is intentionally placed after folds that use
+    // no-wrapping flags because those folds are likely better for later
+    // analysis/codegen.
+
+    // Fold compare with offset to opposite sign compare if it eliminates
+    // offset: (X + C2) >u C --> X <s -C2 (if C == C2 + SMAX)
+    if pred == IntPredicate::Ugt && value == wrap(c2.wrapping_add(smax)) {
+        let bound = c.int(ty, wrap(c2.wrapping_neg()));
+        return Some(new_icmp(c, inst, IntPredicate::Slt, x, bound));
+    }
+    // (X + C2) <u C --> X >s ~C2 (if C == C2 + SMIN)
+    if pred == IntPredicate::Ult && value == wrap(c2.wrapping_add(smin)) {
+        let bound = c.int(ty, wrap(!c2));
+        return Some(new_icmp(c, inst, IntPredicate::Sgt, x, bound));
+    }
+    // (X + C2) >s C --> X <u (SMAX - C) (if C == C2 - 1)
+    if pred == IntPredicate::Sgt && value == wrap(c2.wrapping_sub(1)) {
+        let bound = c.int(ty, wrap(smax.wrapping_sub(value)));
+        return Some(new_icmp(c, inst, IntPredicate::Ult, x, bound));
+    }
+    // (X + C2) <s C --> X >u (C ^ SMAX) (if C == C2)
+    if pred == IntPredicate::Slt && value == c2 {
+        let bound = c.int(ty, value ^ smax);
+        return Some(new_icmp(c, inst, IntPredicate::Ugt, x, bound));
+    }
+    // (X + -1) <u C --> X <=u C (if X is never null)
+    if pred == IntPredicate::Ult && c2 == m {
+        let q = query(c, Some(inst));
+        if llrm_mir::valuetracking::nonzero::is_known_non_zero(&q, x, 0) {
+            let bound = c.int(ty, value);
+            return Some(new_icmp(c, inst, IntPredicate::Ule, x, bound));
+        }
+    }
+
+    if !has_one_use(c, add) {
+        return None;
+    }
+
+    // X+C <u C2 -> (X & -C2) == C
+    //   iff C & (C2-1) == 0
+    //       C2 is a power of 2
+    if pred == IntPredicate::Ult && value.is_power_of_two() && c2 & (value - 1) == 0 {
+        let neg_value = c.int(ty, wrap(value.wrapping_neg()));
+        let masked = c.create_binop(inst, BinaryOp::And, x, neg_value, Flags::default());
+        let bound = c.int(ty, wrap(c2.wrapping_neg()));
+        return Some(new_icmp(c, inst, IntPredicate::Eq, masked, bound));
+    }
+    // X+C2 <u C -> (X & C) == 2C
+    //   iff C == -(C2)
+    //       C2 is a power of 2
+    if pred == IntPredicate::Ult && c2.is_power_of_two() && value == wrap(c2.wrapping_neg()) {
+        let cv = c.int(ty, value);
+        let masked = c.create_binop(inst, BinaryOp::And, x, cv, Flags::default());
+        let bound = c.int(ty, wrap(value.wrapping_mul(2)));
+        return Some(new_icmp(c, inst, IntPredicate::Ne, masked, bound));
+    }
+    // X+C >u C2 -> (X & ~C2) != C
+    //   iff C & C2 == 0
+    //       C2+1 is a power of 2
+    if pred == IntPredicate::Ugt && wrap(value.wrapping_add(1)).is_power_of_two() && c2 & value == 0 {
+        let not_value = c.int(ty, wrap(!value));
+        let masked = c.create_binop(inst, BinaryOp::And, x, not_value, Flags::default());
+        let bound = c.int(ty, wrap(c2.wrapping_neg()));
+        return Some(new_icmp(c, inst, IntPredicate::Ne, masked, bound));
+    }
+    // The range test idiom can use either ult or ugt. Arbitrarily
+    // canonicalize to the ult form.
+    // X+C2 >u C -> X+(C2-C-1) <u ~C
+    if pred == IntPredicate::Ugt {
+        let offset = c.int(ty, wrap(c2.wrapping_sub(value).wrapping_sub(1)));
+        let shifted = c.create_binop(inst, BinaryOp::Add, x, offset, Flags::default());
+        let bound = c.int(ty, wrap(!value));
+        return Some(new_icmp(c, inst, IntPredicate::Ult, shifted, bound));
+    }
+    // OWED: zext(V) + C2 pred C -> V + C3 pred' C4 (needs
+    // `ConstantRange::truncate` with the no-unsigned-wrap kind, and
+    // `shouldChangeType`).
+    None
 }
 
 /// `foldICmpAndConstant`: `icmp (and X, Y), C`.

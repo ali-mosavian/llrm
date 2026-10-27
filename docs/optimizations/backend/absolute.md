@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/absolute.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/absolute.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/absolute.rs sha256:c126d40adf332c65eacbe959c10358b6c11351b432f9bbbe8d86bc4319489d53 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/absolute.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/absolute.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/absolute.rs sha256:7f6e6ba0fffac13711e703bcd8dab7fc5c2d1f9bf358ceb15802f4d5be5d330e -->
 
 # absolute
 

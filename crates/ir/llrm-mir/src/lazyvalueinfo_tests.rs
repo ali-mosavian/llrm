@@ -201,3 +201,57 @@ fn predecessors_run_newest_first_as_llvm_walks_a_use_list() {
     let end = *layout.last().expect("end");
     assert_eq!(crate::lazyvalueinfo::predecessors(function, end), [layout[2], layout[1]]);
 }
+
+/// Every condition `%x ult 10` asked about `%y` tried an add, an add again, an
+/// or and an and of its operands, twice (6,781 conditions in d_faces -O2, 2.8
+/// operand matches and 6.5 patterns each against the pin's two matches): a
+/// operand that is no add, or or and matches none of them.
+#[test]
+fn an_icmp_of_arguments_and_constants_tries_no_pattern() {
+    use crate::counts::{Event, get};
+    let mut module = parse::module(
+        "define i1 @f(i32 %x, i32 %y) {
+entry:
+  %c = icmp ult i32 %x, 10
+  br i1 %c, label %t, label %e
+
+t:
+  %d = icmp eq i32 %y, 3
+  ret i1 %d
+
+e:
+  ret i1 false
+}
+",
+    )
+    .expect("parses");
+    let layout = DataLayout::default();
+    let at = module.globals.iter().position(|g| matches!(&g.kind, GlobalKind::Function(f) if !f.is_declaration()));
+    let GlobalKind::Function(function) = &module.globals[at.expect("a function")].kind else { unreachable!() };
+    let assumptions = AssumptionCache::new(&module, function);
+    let mut lvi = LazyValueInfo::new();
+    let globals = &module.globals;
+    let GlobalKind::Function(function) = &globals[at.expect("a function")].kind else { unreachable!() };
+    let mut env = Env::new(&mut module.context, globals, &module.metadata, function, &layout, &assumptions);
+    let y = Operand::Value(function.parameters()[1]);
+    let (entry, taken) = (function.layout()[0], function.layout()[1]);
+    let before = get(Event::LviIcmpPatterns);
+    lvi.get_constant_on_edge(&mut env, y, entry, taken, None);
+    // Neither `%y`, `%x` nor the constant is an add, an or or an and: no
+    // pattern is tried (the load of an operand matches none either).
+    let tried = get(Event::LviIcmpPatterns) - before;
+    assert_eq!(tried, 0, "{tried} patterns for %y's edge value through %x < 10");
+}
+
+/// Old: `solveBlockValueNonLocal` built a list of the block's predecessors,
+/// each once, to walk it; the pin walks the use list in place. The list cost
+/// 0.6 M Ir more than the walk, of the 11.9 M of the largest CVP input of
+/// d_faces (4651 lists).
+#[test]
+fn solving_a_value_across_blocks_builds_no_predecessor_list() {
+    use crate::counts::{Event, get};
+    let before = get(Event::LviPredecessorLists);
+    let solved = steps(&diamonds(30)).solved;
+    assert!(solved > 30, "{solved}");
+    assert_eq!(get(Event::LviPredecessorLists), before);
+}

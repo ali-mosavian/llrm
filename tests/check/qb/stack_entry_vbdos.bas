@@ -7,6 +7,7 @@
 ' CHECK: call far ptr B$ENRD
 ' CHECK-NOT: B$ENRA
 ' CHECK: S endp
+DECLARE SUB S ()
 S
 SUB S
   DIM t AS STRING

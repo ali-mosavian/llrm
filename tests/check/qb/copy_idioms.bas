@@ -21,14 +21,18 @@
 ' CHECK-LABEL: CHANGED proc
 ' CHECK-NOT: rep
 ' CHECK: CHANGED endp
+' The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b), as LoopIdiomRecognize does a loop of independent stores: two string moves.
 ' CHECK-LABEL: TWOSTORES proc
-' CHECK-NOT: rep
+' CHECK: rep stos
+' CHECK: rep movs
 ' CHECK: TWOSTORES endp
 ' CHECK-LABEL: STRIDES proc
 ' CHECK-NOT: rep
 ' CHECK: STRIDES endp
+' The pin makes b = 0 and a = b two llvm.memset calls (the second store reads what the first wrote, a constant).
 ' CHECK-LABEL: WRITTEN proc
-' CHECK-NOT: rep
+' CHECK: rep stos
+' CHECK: rep stos
 ' CHECK: WRITTEN endp
 ' CHECK-LABEL: BLK proc
 ' CHECK: rep movsd

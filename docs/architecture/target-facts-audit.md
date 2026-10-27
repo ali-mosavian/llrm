@@ -21,7 +21,7 @@ still here.
 
 ## Method and limits
 
-Production code of `crates/backend/llrm-core/src` (the code before each `mod tests`), found by
+Production code of `crates/codegen/llrm-codegen/src` (the code before each `mod tests`), found by
 pattern, then read. Counts are hits, not decisions: a hit is a candidate. Tests and
 `crates/target` are out of scope. Hit totals: mnemonic 546, size 119, register 93, mode 28,
 iced 10, cost 6.
@@ -73,7 +73,6 @@ The `m16()`/`M16` defaults (`assemble.rs`, `cpu.rs`, `driver/mod.rs`, `flow.rs`,
 | `isel/matcher.rs:896`, `schedule.rs:220`, `rmw.rs:328`, `farload.rs:128`, `storecombine.rs:79`, `regclass.rs:339`, `framefree.rs:233`, `addressforms.rs:94`, `constrain.rs:402`, `floatassign.rs:174`, `peep/guards.rs:250`, `isel/combined.rs:197`, `arithmetic.rs:224`, `cpu.rs:258` | `width == 2` / `== 4` meaning "native word" or "address register" | `Layout::pointer`/`word`, `AddressForm` |
 | `constpool.rs:158`, `timing.rs:71` | 8-byte constant test; `smul_full_w2` | `Layout`; `timings` |
 | `division.rs:108` | magic-number word size | `Layout::word_bits` |
-| `machinecse.rs:308` | `len * 4` iteration cap | not a machine fact: name the constant |
 
 ## E. Costs and latencies (6 hits, but the cost model is the clean one)
 
@@ -92,7 +91,7 @@ passes. Generic crates hold none.
 | `llrm-lir/src/registers.rs`, `flag.rs`, `build.rs` | `Register` (the `RegId` payload), `RflagsBits` (the `Flag` payload) | per-target `RegId`/`Flag` (arm64-spike's generification) |
 | `llrm-target/src/registers.rs` | `Register` as the id type | same |
 | `llrm-support/src/{pyset,pyrepr,lib}.rs` | `Register` (hash, repr), `Code`, `Decoder` | the target crates; support keeps no x86 |
-| `llrm-core`: `peephole.rs` (5), `postrasink.rs` (2), `verify.rs`, `valuetrack.rs`, `target.rs`, `regthrash.rs`, `registerinfo.rs`, `peep/guards.rs`, `cfi.rs`, `arrival.rs` | `Register`, `RflagsBits`, `Decoder`, `Instruction`, `InstructionInfoFactory`, `Code`, `FlowControl`, `Mnemonic`, `OpKind`, `OpAccess` | a target `Encoding` interface: flag effects, flow kind, operand access, decode |
+| `llrm-codegen`: `peephole.rs` (5), `postrasink.rs` (2), `verify.rs`, `valuetrack.rs`, `target.rs`, `regthrash.rs`, `registerinfo.rs`, `peep/guards.rs`, `cfi.rs`, `arrival.rs` | `Register`, `RflagsBits`, `Decoder`, `Instruction`, `InstructionInfoFactory`, `Code`, `FlowControl`, `Mnemonic`, `OpKind`, `OpAccess` | a target `Encoding` interface: flag effects, flow kind, operand access, decode |
 | `llrm-peepgen/src/table.rs`, `llrm-iselgen/src/build.rs` | `Code`/`Register` tables | generator input read from the target description |
 
 One inventory with arm64-spike: this section is the list its `RegId`/`Flag` change closes.

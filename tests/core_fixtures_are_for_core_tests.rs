@@ -1,4 +1,4 @@
-//! llrm-core generates a selector and peephole rules for its own
+//! llrm-codegen generates a selector and peephole rules for its own
 //! tests behind its `fixtures` feature. A product binds a target's from the
 //! target's select crate: no other crate may switch the feature on, or the
 //! product would carry a second copy.
@@ -21,13 +21,13 @@ fn manifests(
 }
 
 #[test]
-fn only_llrm_core_turns_on_its_fixtures() {
+fn only_llrm_codegen_turns_on_its_fixtures() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut found = Vec::new();
     manifests(&root.join("crates"), &mut found);
     manifests(&root.join("src"), &mut found);
     found.push(root.join("Cargo.toml"));
-    let core = root.join("crates/backend/llrm-core/Cargo.toml");
+    let core = root.join("crates/codegen/llrm-codegen/Cargo.toml");
     let users: Vec<_> = found
         .iter()
         .filter(|one| **one != core)

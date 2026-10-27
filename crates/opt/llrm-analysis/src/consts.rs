@@ -33,7 +33,7 @@
 //! ```
 //!
 //! The caller states what each call writes (`Calls`, from
-//! `alias::calls_annotated`); a call not listed writes what
+//! `alias::calls_by_attributes`); a call not listed writes what
 //! `memory::unmodeled_write` says. A far store through a segment selector
 //! nothing yet resolves is taken to write no program object, and the solve is
 //! made again without any such selector that did not resolve to a number.
@@ -130,7 +130,7 @@ pub static ARITH: [(BinaryOp, Binary); 8] = [
 /// its width in bytes.
 pub type Cells = IndexMap<(Addr, u32), Known>;
 
-/// What each call writes, where `alias::calls_annotated` found it. A call
+/// What each call writes, where `alias::calls_by_attributes` found it. A call
 /// not here writes what `memory::unmodeled_write` says: everything, or
 /// nothing.
 pub type Calls = IndexMap<InstId, std::rc::Rc<[MemRef]>>;

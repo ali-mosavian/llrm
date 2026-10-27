@@ -848,6 +848,7 @@ declare { i16, i1 } @llvm.umul.with.overflow.i16(i16, i16)
 declare i16 @llvm.fshl.i16(i16, i16, i16)
 declare i16 @llvm.fshr.i16(i16, i16, i16)
 declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
+declare i16 @llvm.sdiv.fix.i16(i16, i16, i32 immarg)
 ";
     for (body, expected) in [
         // bswap(bswap(x)) -> x, bitreverse(bitreverse(x)) -> x
@@ -921,6 +922,11 @@ declare i16 @llvm.smul.fix.i16(i16, i16, i32 immarg)
         ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 2)\n", Some("%x")),
         ("  %r = call i16 @llvm.smul.fix.i16(i16 4, i16 %x, i32 2)\n", Some("%x")),
         ("  %r = call i16 @llvm.smul.fix.i16(i16 %x, i16 4, i32 3)\n", None),
+        // fixed-point divide of constants (Nib's `Real(3.2) / Real(64)` was an
+        // `idiv` at run time, 50 bytes): rounded toward negative infinity
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 7, i16 2, i32 1)\n", Some("7")),
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 -7, i16 4, i32 1)\n", Some("65532")),
+        ("  %r = call i16 @llvm.sdiv.fix.i16(i16 7, i16 0, i32 1)\n", None),
     ] {
         assert_eq!(simplified(&format!("{decls}{}", of(body)), "r").as_deref(), expected, "{body}");
     }
@@ -1193,4 +1199,48 @@ declare i16 @llvm.usub.sat.i16(i16, i16)
 fn a_gep_with_a_relocatable_index_stays_an_instruction() {
     let text = "@g = global [4 x i16] zeroinitializer\ndefine void @f() {\nb0:\n  %r = getelementptr i8, ptr @g, i16 ptrtoint (ptr @g to i16)\n  ret void\n}\n";
     assert_eq!(simplified(text, "r"), None);
+}
+
+/// `death_counts[2]` of QCport's client: a load of a constant table at a
+/// constant offset. `simplifyLoadInst` folds it
+/// (`ConstantFoldLoadFromConstPtr`); MIR left it for `Fold`'s table, and the
+/// loop whose bound it was kept "trips 0, max 32766" without it. A volatile
+/// load, and a load of a global that is not constant, stay.
+#[test]
+fn a_load_of_a_constant_table_at_a_constant_offset_is_the_element() {
+    let table = |keyword: &str, load: &str| {
+        format!(
+            "@counts = internal {keyword} [12 x i8] c\"\\0B\\00\\09\\00\\0F\\00\\09\\00\\09\\00\\09\\00\"\n\ndefine i16 @f() {{\nb0:\n  %v = {load}\n  ret i16 %v\n}}\n"
+        )
+    };
+    let at = "load i16, ptr getelementptr inbounds nuw (i8, ptr @counts, i16 4)";
+    assert_eq!(simplified(&table("constant", at), "v").as_deref(), Some("15"));
+    assert_eq!(simplified(&table("constant", &at.replace("load i16", "load volatile i16")), "v"), None);
+    assert_eq!(simplified(&table("global", at), "v"), None);
+}
+
+/// `simplifyICmpWithMinMax` matches intrinsic calls: an icmp of two values that
+/// are not calls asks no name. It made eight lookups an icmp, 1.4 K Ir each
+/// (2,264 asks of 3.1 M Ir in d_faces -O2; the pin's matchers cost 75).
+#[test]
+fn an_icmp_of_two_non_calls_asks_no_min_max_name() {
+    simplify::MIN_MAX_ASKS.with(|asks| asks.set(0));
+    let text = "define i1 @f(i16 %a, i16 %b) {
+b0:
+  %c = icmp slt i16 %a, %b
+  ret i1 %c
+}
+";
+    assert_eq!(simplified(text, "c"), None);
+    assert_eq!(simplify::MIN_MAX_ASKS.with(|asks| asks.get()), 0);
+}
+
+/// `strlen("hello, arm64")` inlined left `sub (ptrtoint (gep @s, 12)),
+/// (ptrtoint @s)` in the function, which llrm-arm64-llc refused as "a constant
+/// cast". It is 12.
+#[test]
+fn the_difference_of_two_offsets_from_one_global_is_their_distance() {
+    let text = "@s = internal constant [13 x i8] zeroinitializer\n\
+        define i64 @f() {\nb0:\n  %r = sub i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @s, i64 12) to i64), ptrtoint (ptr @s to i64)\n  ret i64 %r\n}\n";
+    assert_eq!(simplified(text, "r").as_deref(), Some("12"));
 }
