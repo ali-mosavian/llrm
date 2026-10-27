@@ -241,7 +241,10 @@ fn _unfolded(
 ) -> Option<(Arc<Insn>, Arc<Insn>)> {
     let what = one.what.as_ref()?;
     if what.op != Operation::Binary
-        || !matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor"))
+        || !matches!(
+            what.name.as_deref(),
+            Some("add" | "adc" | "and" | "or" | "xor")
+        )
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.volatile
@@ -439,7 +442,10 @@ fn _swappable(one: &Insn) -> Option<(u32, u32, u32)> {
 
 /// Whether the two sources of `what` can swap places (`isCommutable`).
 pub fn commutative(what: &Semantics) -> bool {
-    (what.op == Operation::Binary && matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")))
+    (what.op == Operation::Binary && matches!(
+        what.name.as_deref(),
+        Some("add" | "adc" | "and" | "or" | "xor")
+    ))
         || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))
 }
 
@@ -1031,9 +1037,18 @@ mod tests {
 
     #[test]
     fn test_noncommutative_or_implicit_arithmetic_is_not_swapped() {
-        for name in ["sub", "adc", "sbb", "shl"] {
+        for name in ["sub", "sbb", "shl"] {
             assert!(commuted(dying_second(name, Operation::Binary), 2).is_none(), "{name}");
         }
+    }
+
+    /// `adc` is commutable like `add` (X86 `ADC32rr`, `isCommutable`): a dying
+    /// second source was left untied, costing a copy in front of every wide
+    /// add.
+    #[test]
+    fn test_the_dying_second_source_of_an_adc_is_tied() {
+        let chosen = commuted(dying_second("adc", Operation::Binary), 2).expect("swapped");
+        assert_eq!(sources(&chosen), reversed(&addition("adc")));
     }
 
     #[test]
