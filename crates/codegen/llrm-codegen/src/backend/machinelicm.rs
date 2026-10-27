@@ -12,8 +12,10 @@
 //! moves to the end of the preheader, before its jump, when:
 //!
 //! - it is a pure operation on registers and constants with one result, no
-//!   pinned operand, no call, no x87 value (`candidate`), or a load in a block
-//!   that runs on every trip of a loop with no store, call or volatile access
+//!   pinned operand, no call, no x87 value (`candidate`), an `fld1`/`fldz` in a
+//!   loop with no call and a free stack slot, in a function that never writes
+//!   the control word (`constant_load`), or a load in a block that runs on
+//!   every trip of a loop with no store, call or volatile access
 //!   (`InitializeLoadsHoistableLoops` L1472, `IsGuaranteedToExecute`);
 //! - every value it reads is defined outside the loop or was hoisted
 //!   (`IsLoopInvariantInst`);
@@ -103,6 +105,26 @@ fn keeps_loads(one: &Insn) -> bool {
         })
 }
 
+/// `fld1` / `fldz`: an x87 constant, made again where it is read. The pin
+/// hoists it (`LD_Fp164` is not as cheap as a move); the value then stays on
+/// the stack across the loop. It reads `$fpcw`, which `IsLoopInvariantInst`
+/// accepts only where nothing in the function writes it: a `fistp` that
+/// truncates (`fisttp` here) writes it with `FLDCW`.
+fn constant_load(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.op == Operation::FloatLoad
+            && matches!(what.name.as_deref(), Some("fld1" | "fldz"))
+            && what.sources.is_empty()
+            && matches!(what.dests.as_slice(), [Loc::Held(_)])
+    }) && one.defines.len() == 1
+        && one.uses.is_empty()
+        && one.call.is_none()
+        && one.group.is_none()
+        && !one.volatile()
+        && !one.spill_reload
+        && !one.spill_store
+}
+
 /// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
 /// that keeps a load in it, and the load's block runs on every trip.
 fn candidate(
@@ -162,6 +184,16 @@ pub fn hoisted(
         return body.clone();
     }
     let floating = crate::backend::regclass::floating(body);
+    let control_word_written = body
+        .insns()
+        .iter()
+        .any(
+            |one| one.what
+                .as_ref()
+                .is_some_and(
+                    |what| what.op == Operation::FloatStore && matches!(what.name.as_deref(), Some("fisttp" | "fistt")),
+                ),
+        );
     let dominance = loopy::dominance(&body.blocks, Some(body.entry));
     let mut blocks: Vec<crate::model::lir::Block> = body.blocks.clone();
     let place: HashMap<i64, usize> = blocks.iter().enumerate().map(|(number, block)| (block.at, number)).collect();
@@ -209,6 +241,31 @@ pub fn hoisted(
             .filter(|value| !floating.contains(value))
             .collect();
         let limit = classes.available.len();
+        // An x87 value cannot be live across a call (`floatassign` does not
+        // spill across one), and the stack holds `float_stack` values.
+        let calls = inside
+            .iter()
+            .any(
+                |at| blocks[place[at]].insns.iter().any(|one| {
+                    one.call.is_some()
+                        || one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Barrier))
+                }),
+            );
+        let floats_named = inside
+            .iter()
+            .flat_map(|at| {
+                let block = &blocks[place[at]];
+                block
+                    .insns
+                    .iter()
+                    .flat_map(|one| one.uses.iter().copied())
+                    .filter(|value| defined.get(value).is_none_or(|home| !inside.contains(home)))
+                    .chain(block.phis.iter().map(|phi| phi.result))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|value| floating.contains(value))
+            .collect::<HashSet<u32>>()
+            .len();
         // `InitializeLoadsHoistableLoops`: no store, call or ordered load in
         // the loop, its inner loops among it.
         let loads = !inside.iter().any(|at| blocks[place[at]].insns.iter().any(|one| keeps_loads(one)));
@@ -234,11 +291,16 @@ pub fn hoisted(
                     let flags = |lanes: &crate::backend::lanes::Lanes| {
                         lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
                     };
-                    let mut movable = candidate(one, classes, loads_here)
-                        && invariant
-                        && value.is_some_and(|value| !floating.contains(&value))
-                        && named.len() < limit;
-                    if movable {
+                    let constant = constant_load(one);
+                    let mut movable = if constant {
+                        !control_word_written && !calls && floats_named < body.float_stack
+                    } else {
+                        candidate(one, classes, loads_here)
+                            && invariant
+                            && value.is_some_and(|value| !floating.contains(&value))
+                            && named.len() < limit
+                    };
+                    if movable && !constant {
                         let effect = liveness::effect(regs, body.bits, one);
                         let name = one.what.as_ref().and_then(|what| what.name.as_deref()).unwrap_or("");
                         let reads = matches!(name, "adc" | "sbb" | "rcl" | "rcr")
@@ -434,5 +496,56 @@ mod tests {
             run(true),
             (vec!["lea".to_owned(), "jmp".into()], vec!["mov".to_owned(), "mov".into(), "jcxz".into()])
         );
+    }
+
+    /// recfloat's `decay` at -O1: `fld1` was made on every trip of the loop
+    /// (4 clk and an `fxch` a trip); the pin's EarlyMachineLICM hoists it, the
+    /// value then stays on the x87 stack. A call in the loop keeps it there.
+    #[test]
+    fn test_an_x87_constant_load_is_made_before_a_loop_without_a_call() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let wide = |value: u32| Loc::Held(Held { value, width: 10 });
+        let run = |call: bool, truncating: bool| {
+            let one = insn(10, Operation::FloatLoad, "fld1", vec![wide(10)], vec![], vec![10], vec![]);
+            let add =
+                insn(11, Operation::Binary, "fadd", vec![wide(11)], vec![wide(1), wide(10)], vec![11], vec![1, 10]);
+            let mut inside = vec![one, add];
+            if call {
+                inside.push(insn(12, Operation::Call, "call", vec![], vec![], vec![], vec![]));
+            }
+            inside.push(branch(13));
+            let mut exit = vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])];
+            if truncating {
+                exit.insert(0, insn(15, Operation::FloatStore, "fisttp", vec![], vec![wide(11)], vec![], vec![11]));
+            }
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    block(1, vec![1, 2], inside).into(),
+                    block(2, vec![], exit).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1].into_iter().collect();
+            body.float_stack = 8;
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted(&body, &RegisterClasses::m16());
+            done.blocks[0]
+                .insns
+                .iter()
+                .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(false, false), ["fld1", "jmp"]);
+        assert_eq!(run(true, false), ["jmp"]);
+        // recfloat -O2: the pin's `FLDCW` for the `fptosi` after the loop
+        // makes `$fpcw` non-constant, so `fld1` stays in the loop.
+        assert_eq!(run(false, true), ["jmp"]);
     }
 }
