@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 210 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 211 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -47,6 +47,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_icmp_binop | InstCombine's `foldICmpBinOp`, the add and subtract arms ([`InstCombineCompares.cpp:5301`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L5301) at d1106deb71cc). |  | [combine_icmp_binop](combine_icmp_binop.md) |
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
 | combine_icmp_logic | `foldBooleanAndOr`: an `and` or `or` of two `i1` compares, folded to one compare. | `visit_and` and `visit_or` (the bitwise forms). | [combine_icmp_logic](combine_icmp_logic.md) |
+| combine_invert | InstCombine's `getFreelyInverted` (`getFreelyInvertedImpl` of InstructionCombining.cpp at d1106deb71cc): the `~V` of a value whose inversion costs nothing, when every use of it is being rewritten to read `~V`. |  | [combine_invert](combine_invert.md) |
 | combine_loadstore | InstCombine's stores and allocas: the store that cannot matter is erased, the one that cannot execute stores poison; an alloca's count is an array type and a zero-size alloca is one at the top of the entry block. | `combine` (its `visit`). | [combine_loadstore](combine_loadstore.md) |
 | combine_memintrinsics | InstCombine's memory intrinsics: a `memcpy` or `memmove` of 1, 2, 4 or 8 bytes is one integer load and one store. | `combine` (its `visit`, the `Call` opcode). | [combine_memintrinsics](combine_memintrinsics.md) |
 | combine_minmax | InstCombine's min/max intrinsics: the narrowing folds of `InstCombinerImpl::visitCallInst` for `umin`, `umax`, `smin` and `smax` ([InstCombineCalls.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L2261)). | `visit_call` (`combine_memintrinsics`). | [combine_minmax](combine_minmax.md) |

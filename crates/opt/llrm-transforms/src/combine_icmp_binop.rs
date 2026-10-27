@@ -538,8 +538,7 @@ fn fold_multiplication_overflow_check(
     Some(Visit::Replace(result))
 }
 
-/// `foldICmpAndXX`: a compare of `X & A` with `X`. OWED: its two equality
-/// forms, which need `getFreelyInverted`.
+/// `foldICmpAndXX`: a compare of `X & A` with `X`.
 fn fold_icmp_and_xx(
     c: &mut Combiner,
     inst: InstId,
@@ -561,6 +560,28 @@ fn fold_icmp_and_xx(
     // (icmp (X & Y) u>= X --> (X & Y) == X
     if pred == IntPredicate::Uge {
         return Some(new_icmp(c, inst, IntPredicate::Eq, op0, op1));
+    }
+    if is_equality(pred) && has_one_use(c, op0) {
+        let ty = c.type_of(op1);
+        let mut consumes = false;
+        // icmp (X & Y) eq/ne Y --> (X | ~Y) eq/ne -1 if Y is freely invertible
+        // and Y is non-constant. If Y is constant the `X & C == C` form is
+        // preferable so don't do this fold.
+        if !is_constant(c, op1) {
+            let invertible = !has_n_uses_or_more(c, op1, 3);
+            if let Some(not_op1) = c.get_freely_inverted(inst, op1, invertible, true, &mut consumes) {
+                let or = c.create_binop(inst, BinaryOp::Or, a, not_op1, Flags::default());
+                let ones = c.all_ones(ty);
+                return Some(new_icmp(c, inst, pred, or, ones));
+            }
+        }
+        // icmp (X & Y) eq/ne Y --> (~X & Y) eq/ne 0 if X  is freely invertible.
+        let a_inverts = has_one_use(c, a);
+        if let Some(not_a) = c.get_freely_inverted(inst, a, a_inverts, true, &mut consumes) {
+            let and = c.create_binop(inst, BinaryOp::And, op1, not_a, Flags::default());
+            let zero = c.int(ty, 0);
+            return Some(new_icmp(c, inst, pred, and, zero));
+        }
     }
     if !is_signed(pred) {
         return None;
@@ -956,8 +977,7 @@ fn fold_icmp_xor_xx(
     None
 }
 
-/// `foldICmpOrXX`: a compare of `X | A` with `X`. OWED: its two equality
-/// forms, which need `getFreelyInverted`.
+/// `foldICmpOrXX`: a compare of `X | A` with `X`.
 fn fold_icmp_or_xx(
     c: &mut Combiner,
     inst: InstId,
@@ -979,6 +999,26 @@ fn fold_icmp_or_xx(
     // icmp (X | Y) u> X --> (X | Y) != X
     if pred == IntPredicate::Ugt {
         return Some(new_icmp(c, inst, IntPredicate::Ne, op0, op1));
+    }
+    if is_equality(pred) && has_one_use(c, op0) {
+        let a = commutative_with_specific(c, inst, op0, BinaryOp::Or, op1)?;
+        let ty = c.type_of(op1);
+        let mut consumes = false;
+        // icmp (X | Y) eq/ne Y --> (X & ~Y) eq/ne 0 if Y is freely invertible
+        let op1_inverts = !is_constant(c, op1) && !has_n_uses_or_more(c, op1, 3);
+        if let Some(not_op1) = c.get_freely_inverted(inst, op1, op1_inverts, true, &mut consumes) {
+            let and = c.create_binop(inst, BinaryOp::And, a, not_op1, Flags::default());
+            let zero = c.int(ty, 0);
+            return Some(new_icmp(c, inst, pred, and, zero));
+        }
+        // icmp (X | Y) eq/ne Y --> (~X | Y) eq/ne -1 if X  is freely
+        // invertible.
+        let a_inverts = has_one_use(c, a);
+        if let Some(not_a) = c.get_freely_inverted(inst, a, a_inverts, true, &mut consumes) {
+            let or = c.create_binop(inst, BinaryOp::Or, op1, not_a, Flags::default());
+            let ones = c.all_ones(ty);
+            return Some(new_icmp(c, inst, pred, or, ones));
+        }
     }
     None
 }
@@ -1077,4 +1117,24 @@ fn new_icmp(
 ) -> Visit {
     let i1 = c.context.types.int(1);
     c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![a, b], Flags::default())
+}
+
+/// `isa<Constant>`: an integer constant here.
+fn is_constant(
+    c: &Combiner,
+    v: Operand,
+) -> bool {
+    matches!(v, Operand::Constant(_)) || query(c, None).int_constant(v).is_some()
+}
+
+/// `Value::hasNUsesOrMore`.
+fn has_n_uses_or_more(
+    c: &Combiner,
+    v: Operand,
+    n: usize,
+) -> bool {
+    match v {
+        Operand::Value(value) => c.function.users(value).iter().take(n).count() >= n,
+        _ => false,
+    }
 }
