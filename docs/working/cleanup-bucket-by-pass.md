@@ -78,3 +78,9 @@ well); the FP stackifier (`floatalloc`, `floatassign`, `floatfold`) is 28.6 M ag
 | (none of ours) ExecutionDomainFix | - | 0.8 | - | (unassigned) |
 | (none of ours) DeadMachineInstructionElim | - | 1.3 | - | (unassigned) |
 | total | 123.2 | 42.5 | 2.90 | |
+
+## Peephole, measured again (w-1, 2026-10-27)
+
+Peephole is 44.5 M on d_faces -O2 (callgrind of Peephole alone), not comparable to the pin's PeepholeOptimizer 2.1 M: it also does the pin's DAG combines
+and X86 fixups. Flat: the walks cost about 4 M together, lane liveness 6.8 M, `upperzero::disturbed` 2.0 M, each of ~40 groups 0.3 to 1 M. No cut above
+3 M (0.3% of the total); folding the walks cannot keep the output identical, since each group reads the one before. Not worth re-measuring.
