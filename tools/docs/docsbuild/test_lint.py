@@ -101,7 +101,7 @@ def test_tree_check_reads_markdown_and_headers_and_rejects_fig_fences(tmp_path):
 
 
 def test_the_repository_figures_are_well_formed():
-    assert lint.check_tree(lint.HERE.parent.parent) == []
+    assert lint.check_tree(lint.HERE.parents[2]) == []
 
 
 def test_render_is_skipped_with_a_message_when_mmdc_is_absent(tmp_path, monkeypatch, capsys):
