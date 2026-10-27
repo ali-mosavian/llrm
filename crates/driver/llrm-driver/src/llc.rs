@@ -259,6 +259,7 @@ pub fn compiled_dumping(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
+    refuse_weak(&module, format.name())?;
     with_default_convention(&mut module, default);
     decorate(&mut module, bound.target.calling(), default, format.name());
     let mut options = options_for(&bound, flags, machine, format.name(), default);
@@ -267,6 +268,35 @@ pub fn compiled_dumping(
         options.dump = Some(dump.to_path_buf());
     }
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
+}
+
+/// The object formats that cannot say a symbol is weak or merged: a definition
+/// would link as a strong one and change what the program means.
+const NO_WEAK_SYMBOLS: [&str; 1] = ["omf"];
+
+/// Refuses a weak, `linkonce` or `extern_weak` symbol where the object format
+/// has no way to say so (`__attribute__((weak))`, `#pragma weak`), naming it.
+fn refuse_weak(
+    module: &llrm_mir::module::Module,
+    format: &str,
+) -> Result<(), String> {
+    use llrm_mir::module::Linkage;
+    if !NO_WEAK_SYMBOLS.contains(&format) {
+        return Ok(());
+    }
+    for global in &module.globals {
+        let kind = match global.linkage {
+            Linkage::Weak | Linkage::WeakOdr => "weak",
+            Linkage::LinkOnce | Linkage::LinkOnceOdr => "linkonce",
+            Linkage::ExternWeak => "extern_weak",
+            _ => continue,
+        };
+        let name = global.name.as_deref().unwrap_or("?");
+        return Err(format!(
+            "@{name}: {kind} linkage cannot be written in the {format} object format; the symbol would link as a strong one"
+        ));
+    }
+    Ok(())
 }
 
 /// The driver's options for IR from the pinned clang: what the Watcom front

@@ -715,3 +715,18 @@ fn a_zero_static_in_llvm_ir_is_uninitialised_data() {
     assert!(!bss.contains("_three") && !bss.contains("_ro"), "{listing}");
     assert!(listing.split(".data?").next().unwrap().contains("_three"), "{listing}");
 }
+
+/// `__attribute__((weak))` left no trace in the listing, so a weak definition
+/// linked as a strong one and could clash with, or hide, the strong one it was
+/// written to yield to. It is refused, naming the symbol.
+#[test]
+fn a_weak_symbol_is_refused_where_the_object_format_cannot_say_so() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define weak i32 @hook() {\n  ret i32 1\n}\n\
+                declare extern_weak i32 @maybe()\n";
+    let refused = crate::llc::compiled(&flags(&["-m32"]), text, "w").map(|_| ()).unwrap_err();
+    assert!(refused.contains("@hook") && refused.contains("weak"), "{refused}");
+    let strong = text.replace("define weak", "define").replace("declare extern_weak", "declare");
+    assert!(crate::llc::compiled(&flags(&["-m32"]), &strong, "w").is_ok());
+}
