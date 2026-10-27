@@ -141,3 +141,12 @@ fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
     assert_eq!(one.clang, words("-O3"));
     assert_eq!(one.level, "max");
 }
+
+/// `-fverify-ir` went to clang ("unknown argument") and the backend never
+/// checked the IR it was given.
+#[test]
+fn fverify_ir_reaches_the_backend() {
+    let one = built("-fverify-ir -c x.c");
+    assert_eq!(one.llc, words("-fverify-ir"));
+    assert!(one.clang.is_empty(), "{:?}", one.clang);
+}
