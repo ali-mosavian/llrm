@@ -1162,3 +1162,31 @@ fn a_forty_byte_byval_argument_is_a_string_move() {
     let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
     assert!(ops.iter().any(|name| name.starts_with("movs")), "{ops:?}");
 }
+
+const M16_UDIV_TEN: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define cc 1005 i64 @f(i64 %x) addrspace(1) {
+entry:
+  %q = udiv i64 %x, 10
+  ret i64 %q
+}
+";
+
+/// `x / 10` on an `i64` was always the `$div64` routine; the pin
+/// (`expandDIVREMByConstant`) multiplies by the magic number at speed and
+/// keeps the call at `-Os`.
+#[test]
+fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
+    let module = llrm_mir::parse::module(M16_UDIV_TEN).expect("parses");
+    let calls = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .insns()
+            .iter()
+            .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
+            .count()
+    };
+    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+    assert_eq!(calls(true), 1, "-Os: the divide routine");
+}

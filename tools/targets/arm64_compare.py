@@ -14,7 +14,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 CRATE = ROOT / "crates/target/llrm-arm64"
 BUILD = Path(os.environ.get("LLVM_BUILD", Path.home() / "scratch/llvm-build-aarch64"))
 CLANG, LLD, OBJDUMP = BUILD / "bin/clang", BUILD / "bin/ld.lld", BUILD / "bin/llvm-objdump"
