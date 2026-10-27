@@ -111,6 +111,132 @@ owner = "w-13"
 
 # A pass whose removal shrinks a grower is its cause under --ablate (the flag name without -fno-); the owner of that pass.
 
+[[program]]
+match = "grep/grep.c"
+cause = "pre-ISel IR differs (phi -12, gep +8, select +5, mul -> shl) and the asm grows with it; first the IR, then RA"
+owner = "w-5"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "*/particle.nib"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 112 vs 111, asm +20 insns)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "examples/planets.nib"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 126 vs 121, asm +4)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "shellsort/shellsort.bas"
+cause = "CGP address sinking: +4 inttoptr and +4 addrspacecast at cgpaddr (IR 66 -> 75), re-made in the using blocks as the pin's optimizeMemoryInst does; the asm reloads the segment"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "shellsort/shellsort.c"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 52 vs 50, asm +7)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "shellsort/shellsort.nib"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 54 vs 56, asm +11)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/pow_unrolled.bas"
+cause = "correctness-driven: the same ^ domain check as data_after_checked (+1 fcmp, +1 unreachable, IR 9 -> 12)"
+owner = "w-2"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "nbody_single/nbody_single.*"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 142 -> 120 and 139 -> 116, asm +11 and +5); BASIC SINGLE rounding is equal in fast mode"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "queens/queens.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 80 vs 79, asm +9)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "switch/switch.c"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 34 vs 34, frame 4 -> 6, an extra spill of the loop counter)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/fpdeep.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 41 vs 44, asm +3)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "recchop/recchop.c"
+cause = "pre-ISel IR differs (+3 phi, +2 zext, -2 ashr; IR 38 -> 41), asm +4"
+owner = "w-5"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/localp.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 14 vs 16, asm +2)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qlight/qlight.*"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (qlight.bas IR 40 -> 33, asm +3; qlight.c IR 32 -> 30, asm +1)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/far_poke_scanned_variable.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 53 -> 43, asm +9: far-pointer selector reloads)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "tile/tile.*"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 38 -> 40 and 33 -> 36, asm +7 and +10)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qmove/qmove.c"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 54 vs 54, asm +4)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "recpow/recpow.c"
+cause = "pre-ISel IR differs (+5 phi, +3 add, +2 urem; IR 27 -> 35), asm +6"
+owner = "w-5"
+status = "cause known"
+oracle = "none"
+
 [[flag]]
 flag = "tree-ch"
 owner = "w-5"
