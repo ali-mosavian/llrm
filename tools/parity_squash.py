@@ -890,6 +890,16 @@ def check_beside_scanners(load=os.getloadavg, now=time.time, flag: Path | None =
     return not overlap_verdict(load, now, flag, free)
 
 
+def check_and_scan(check, scan) -> tuple[str, bool]:
+    """(the build error or "", whether the scan passed), the two run together. `beside` returns (foreground, background): the first draft of this unpacked them the other way round, so
+    every overlapped batch called a passing build broken (`True[:300]`, a TypeError) and a failing one lost its text."""
+    took: dict[str, float] = {}
+    begun = time.monotonic()
+    scanned, broken = beside(timed(took, "check", check), timed(took, "scanners", scan))
+    note_overlap(time.monotonic() - begun, took["check"] + took["scanners"])
+    return broken, scanned
+
+
 def note_overlap(wall: float, serial: float, flag: Path | None = None) -> None:
     """Prints the overlapped wall time against its halves' sum; an overlap slower than that turns itself off for an hour."""
     print(f"check beside scanners: {wall:.0f} s against {serial:.0f} s in a row")
@@ -1963,10 +1973,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             why_serial = overlap_verdict()
             print(f"check beside scanners: {'serial (' + why_serial + ')' if why_serial else 'on'}")
             if not why_serial:
-                took: dict[str, float] = {}
-                begun = time.monotonic()
-                broken, tests_ok = beside(timed(took, "check", lambda: _workspace_check(ROOT)), timed(took, "scanners", tests_pass))
-                note_overlap(time.monotonic() - begun, took["check"] + took["scanners"])
+                broken, tests_ok = check_and_scan(lambda: _workspace_check(ROOT), tests_pass)
             else:
                 broken = _workspace_check(ROOT)
                 tests_ok = not broken and tests_pass()
