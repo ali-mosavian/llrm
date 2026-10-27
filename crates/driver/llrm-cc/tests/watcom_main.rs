@@ -99,7 +99,9 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
 
 /// `wat_link.py` built the float support with `target/release/llrm-cc`: from
 /// any other target directory a link failed with "No such file" (18 of the
-/// debug-info tests, built in a private target dir).
+/// debug-info tests, built in a private target dir). The program calls
+/// `sqrtf`, which the float support (floatm.c) defines: it was `_sqrtf`
+/// against a call of `sqrtf_`.
 #[test]
 fn a_program_links_whichever_target_directory_the_driver_is_in() {
     if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
@@ -109,7 +111,7 @@ fn a_program_links_whichever_target_directory_the_driver_is_in() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let dir = std::env::temp_dir().join(format!("llrm-cc-wat-link-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("m.c"), "int main(void) { return 0; }\n").unwrap();
+    std::fs::write(dir.join("m.c"), "volatile float v = 4.0f;\nint main(void) { return (int)__builtin_sqrtf(v) - 2; }\n").unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_32-wat")
         .env_remove("LLRM_CC_BIN")

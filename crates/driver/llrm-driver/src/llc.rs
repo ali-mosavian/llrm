@@ -227,14 +227,15 @@ fn with_default_convention(
     let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
-    // library has `strlen_`: a declaration of one takes the default too.
+    // library has `strlen_`: a declaration or a definition of one (the float
+    // routines of floatm.c) takes the default too.
     let library: std::collections::HashSet<llrm_mir::context::GlobalId> = {
         module
             .globals
             .iter()
             .enumerate()
             .filter(|(_, global)| matches!(&global.kind, llrm_mir::module::GlobalKind::Function(function)
-                if function.is_declaration() && function.calling_convention == 0))
+                if function.calling_convention == 0))
             .filter(|(_, global)| {
                 global.name.as_deref().is_some_and(|name| {
                     llrm_mir::libfunc::TargetLibraryInfo::get_lib_func_by_name(name).is_some()

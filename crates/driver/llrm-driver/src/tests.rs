@@ -827,6 +827,22 @@ fn a_known_library_function_is_called_in_the_default_convention() {
     assert!(listing.contains("call _mine"), "{listing}");
 }
 
+/// A definition of a library function the pin knows (floatm.c's `sqrtf`) kept
+/// C's convention while its calls took the default: `sqrtf_` was called and
+/// `_sqrtf` defined, and the link failed with `sqrtf_` undefined.
+#[test]
+fn a_defined_library_function_takes_the_default_convention_too() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}\
+         define float @sqrtf(float %x) {{\n  ret float %x\n}}\n\
+         define x86_regcallcc float @__regcall3__use(float %x) {{\n  %r = call float @sqrtf(float %x)\n  ret float %r\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-mabi=watcom", "-mregcall-default"]), &text, "c").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("sqrtf_ proc"), "{listing}");
+    assert!(!listing.contains("_sqrtf proc"), "{listing}");
+}
+
 /// `__stdcall` and `__fastcall` reached the backend as "calling convention
 /// 64": no target here has them, and the message did not say which function or
 /// what to write instead.
