@@ -356,6 +356,17 @@ impl super::emit::Conventions for CallConventions<'_> {
             .collect()
     }
 
+    fn disturbs(
+        &self,
+        callee: Option<&Callee>,
+        clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
+        match self.contract(callee) {
+            Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            _ => clobbers.clone(),
+        }
+    }
+
     fn clobbers(
         &self,
         callee: Option<&Callee>,
@@ -1296,13 +1307,33 @@ fn set_odds(
     block_at: &HashMap<u32, i64>,
 ) {
     let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
-    for &(from, to, probability) in edges {
-        let (Some(&at), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
-        let Some(lir) = body.blocks.iter().find(|one| one.at == at) else { continue };
-        if lir.succ.len() < 2 || !lir.succ.contains(&to_at) {
-            continue;
+    // The pieces a block became: it, then the blocks after it in the body that
+    // no IR block starts.
+    let first_of_ir: std::collections::HashSet<i64> = block_at.values().copied().collect();
+    let mut piece_of: HashMap<i64, i64> = HashMap::default();
+    let mut current = None;
+    for one in &body.blocks {
+        if first_of_ir.contains(&one.at) {
+            current = Some(one.at);
         }
-        *stated.entry((at, to_at)).or_insert(0) += u64::from(probability);
+        if let Some(current) = current {
+            piece_of.insert(one.at, current);
+        }
+    }
+    for &(from, to, probability) in edges {
+        let (Some(&first), Some(&to_at)) = (block_at.get(&from.0), block_at.get(&to.0)) else { continue };
+        // A select made into branches splits the block, and the branch ends
+        // the last piece (`transferSuccessorsAndUpdatePHIs`): the edges are
+        // that piece's.
+        let Some(lir) = body
+            .blocks
+            .iter()
+            .filter(|one| piece_of.get(&one.at) == Some(&first) && one.succ.len() >= 2 && one.succ.contains(&to_at))
+            .last()
+        else {
+            continue;
+        };
+        *stated.entry((lir.at, to_at)).or_insert(0) += u64::from(probability);
     }
     // `normalizeSuccProbs`: the edges of a block share one.
     let mut total: IndexMap<i64, u64> = IndexMap::default();

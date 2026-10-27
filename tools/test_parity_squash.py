@@ -1100,10 +1100,10 @@ def test_a_pr_is_rescanned_when_the_batch_dropped_one_after_its_scan():
 def test_a_squash_github_refuses_prints_the_reason(capsys):
     """`4108: REFUSED: #4108 ` named no reason: the log held GitHub's message on a line the summary does not carry, and the only REFUSED text left was the batch's summary."""
     info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
-    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)\n")  # noqa: E731
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request is not mergeable (mergePullRequest)\n")  # noqa: E731
     assert ps.squash("4108", info, "body", run=refuse) is False
     out = capsys.readouterr().out
-    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Head branch was modified" in out and "(mergePullRequest)" in out
+    assert "#4108: REFUSED: the squash was refused by GitHub: GraphQL: Pull Request is not mergeable" in out and "(mergePullRequest)" in out
 
 
 def test_a_doc_naming_a_path_of_one_machine_is_refused_at_landing_without_the_lib_tests_switch():
@@ -1280,6 +1280,35 @@ def test_a_squash_github_failed_on_its_side_is_retried_once_after_a_wait_not_ref
     assert ps.squash("5040", info, "body", run=run, settle=0, retry_wait=0) is False
     assert len([c for c in calls if c[:3] == ["gh", "pr", "merge"]]) == 2, "once, not forever"
     assert not ps.own_refusal("the squash was refused by GitHub: GraphQL: Something went wrong")
+
+
+def test_a_squash_github_declines_for_a_moved_head_is_left_out_not_refused(capsys):
+    """#5087's squash was declined with `Head branch was modified` (its owner pushed during the batch) and counted as a REFUSAL in the summary and the exit code; the PR is left out and re-queued."""
+    run, calls = _gh(["GraphQL: Head branch was modified. Review and try the merge again. (mergePullRequest)"])
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b"}
+    ps.HEAD_MOVED.clear()
+    assert ps.squash("5087", info, "body", run=run, settle=0, retry_wait=0) is False
+    out = capsys.readouterr().out
+    assert "#5087: LEFT OUT (head moved)" in out and "REFUSED" not in out and "5087" in ps.HEAD_MOVED
+    assert ps.batch_summary(["1"], ["2"], [], ["5087"]) == "LANDED: #1  REFUSED: #2  LEFT OUT (head moved): #5087"
+    assert ps.batch_summary([], [], [], ["5087"]) == "LANDED: -  REFUSED: -  LEFT OUT (head moved): #5087"
+
+
+def test_a_docs_refusal_names_the_stale_pages_with_the_batch_and_head_blobs_and_the_prs_that_changed_the_source(tmp_path):
+    """Four refusals of the 03:03 batch said `docs_in_sync::test_no_generated_page_is_stale` and nothing else; owners guessed which page and which PR."""
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs/a.md").write_text("head\n")
+    git("add", ".")
+    git("commit", "-qm", "base")
+    (tmp_path / "docs/a.md").write_text("<!-- src: crates/x/precse.rs sha256:0 -->\nstale in the batch\n")
+    head_blob, batch_blob = git("rev-parse", "main:docs/a.md")[:9], git("hash-object", "docs/a.md")[:9]
+    got = ps.docs_detail({"integration docs_in_sync::test_no_generated_page_is_stale"}, tmp_path, "main", stale=lambda root: {"docs/a.md", "docs/gone.md"}, members=lambda: {"5094": ["crates/x/precse.rs"], "5071": ["other.rs"]})
+    assert got == f" [stale pages: docs/a.md (batch tree {batch_blob}, head {head_blob}; source crates/x/precse.rs, changed by #5094); docs/gone.md (batch tree absent, head absent)]", got
+    assert ps.docs_detail({"integration docs_links::t"}, tmp_path, "main", stale=lambda root: pytest.fail("not a docs refusal")) == ""
 
 
 def test_an_alone_refusal_is_not_replayed_once_the_base_moved(tmp_path):
@@ -1512,3 +1541,17 @@ def test_the_group_rescan_regenerates_the_pages_before_it_scans(monkeypatch):
     monkeypatch.setattr(ps, "new_scanner_failures", lambda *a, **k: order.append("scan") or set())
     assert ps.rescan_group_alone(["1", "2"], {"1": {"headRefOid": "a"}, "2": {"headRefOid": "b"}}) == set()
     assert order[-2:] == ["sync", "scan"]
+
+
+def test_land_skip_rescan_is_read_where_the_rescan_check_is_made():
+    """12:03-12:12: every PR the squash refused (merge conflicts) cost a ~80 s group rescan, ~1 PR a minute for 40 PRs; the bulk order skips it with LAND_SKIP_RESCAN=1."""
+    import inspect  # noqa: PLC0415
+
+    source = inspect.getsource(ps.merge_batch)
+    assert 'os.environ.get("LAND_SKIP_RESCAN") == "1"' in source and "make_rescan_check()" in source
+
+
+def test_the_head_red_limit_is_read_from_the_environment():
+    """A target_facts red on parity (12:03) turns every batch into a refusal after HEAD_RED_HOURS (2 h, ~14:03) whatever the members do: the limit is the runner's to set."""
+    read = lambda env: subprocess.run([sys.executable, "-c", "import parity_squash as p; print(p.HEAD_RED_HOURS)"], cwd=Path(__file__).parent, env={**{k: v for k, v in os.environ.items() if k != "HEAD_RED_HOURS"}, **env}, capture_output=True, text=True).stdout.strip()
+    assert read({"HEAD_RED_HOURS": "6"}) == "6.0" and read({}) == "2.0"

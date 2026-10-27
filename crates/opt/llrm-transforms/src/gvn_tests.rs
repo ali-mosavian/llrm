@@ -621,7 +621,7 @@ b0:
 fn test_a_store_at_a_fixed_address_keeps_a_global_loaded_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 
@@ -652,7 +652,7 @@ b0:
 fn test_a_store_to_a_global_keeps_a_fixed_address_read_before() {
     for (space, reloaded) in [(4, false), (1, true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 
@@ -688,7 +688,7 @@ b0:
 fn test_a_noalias_result_is_apart_from_every_other_object() {
     for (attribute, reloaded) in [("noalias ", false), ("", true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 declare {attribute}ptr @make()
 
@@ -733,7 +733,7 @@ fn numbered(text: &str) -> String {
 fn test_a_volatile_store_elsewhere_keeps_a_global_loaded_before() {
     for (store, reloaded) in [("ptr addrspace(4) %dev", false), ("ptr @h", false), ("ptr addrspace(1) %far", true)] {
         let text = format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 @g = global i16 0
 @h = global i8 0
@@ -758,7 +758,7 @@ b0:
 /// both stay, and a second volatile read is not the first's value.
 #[test]
 fn test_volatile_accesses_keep_their_order_and_count() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 
 define i16 @f(ptr addrspace(4) %dev) {
 b0:

@@ -128,7 +128,7 @@ fn a_call_names_the_registers_it_takes_arguments_in() {
     assert!(call.requires.iter().all(|(held, _)| call.uses.contains(&held.value)));
 }
 
-const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1005 i16 @f(i16 %a, i16 %b) addrspace(1) {
 entry:
   %s = add i16 %a, %b
@@ -257,7 +257,7 @@ fn va_start_finds_the_first_variadic_argument() {
     assert!(why.is_none(), "{why:?}");
 }
 
-const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16)
 define cc 1005 i16 @f(i16 %a) addrspace(1) {
 entry:
@@ -491,7 +491,7 @@ fn a_runtime_call_answering_in_registers_says_so() {
     assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
-const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
   invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
@@ -526,7 +526,7 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
 }
 
-const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {
 entry:
@@ -552,7 +552,7 @@ fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
     assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
 }
 
-const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
 entry:
@@ -572,7 +572,7 @@ fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @g = internal global i16 0
 define cc 1000 void @f(i16 %x) addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
@@ -600,7 +600,7 @@ fn a_landing_pad_reading_an_entry_value_is_refused() {
 }
 
 const RUNTIME_CALL_MORE_ARGS_THAN_DECLARED: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f(i16 %a) addrspace(1) {
 entry:
   call cc 1000 addrspace(1) void (i16, i16, i16) @llrm.qb.B$RDIM(i16 %a, i16 1, i16 2)
@@ -688,7 +688,7 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
 
-const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i8 @llrm.ia16.in.i8(i16)
 declare void @llrm.ia16.out.i8(i16, i8)
 define i8 @f(i16 %p) {
@@ -717,7 +717,7 @@ fn port_writes_and_reads_stay_in_order() {
     assert_eq!(names, ["out", "in"]);
 }
 
-const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
   %0 = invoke cc 1000 addrspace(1) ptr @llrm.qb.B$FCHR(i16 65) to label %next unwind label %landing
@@ -765,7 +765,7 @@ fn a_fixed_point_divide_is_selected() {
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
 
-const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 
 @_inbuf = global [512 x i8] zeroinitializer
 @_inpos = global [2 x i8] zeroinitializer
@@ -824,7 +824,7 @@ fn a_long_result_truncated_to_an_int_does_not_read_dx() {
     }
 }
 
-const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 void @g(i16, i16, i16)
 define cc 1005 void @f(i16 %p) {
   %q = add i16 %p, 100
@@ -878,7 +878,7 @@ fn a_call_of_a_constant_expression_calls_its_value() {
 #[test]
 fn a_call_of_a_basic_routine_keeps_si_and_di() {
     use llrm_lir::registers::RegId;
-    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) {
 entry:
   call cc 1000 addrspace(1) void @user(i16 1)
@@ -934,7 +934,8 @@ declare cc 1000 void @user(i16) addrspace(1)
     assert!(high.contains(&RegId::ESI) && high.contains(&RegId::EDI), "{high:?}");
 }
 
-const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16, i16, i16, i32, i32) addrspace(1)
 define cc 1005 i16 @f(i16 %file, ptr addrspace(1) %p) addrspace(1) {
 entry:
@@ -959,7 +960,7 @@ fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     assert!(!names.contains(&"shl"), "no merge of the halves: {names:?}");
 }
 
-const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1002 i16 @w(i16)
 define i16 @f(i16 %a) {
 entry:
@@ -1019,6 +1020,17 @@ entry:
 }
 ";
 
+const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+@g = global i16 0
+declare void @h(ptr addrspace(2), ptr)
+define void @f(ptr %p) {
+entry:
+  %s = addrspacecast ptr %p to ptr addrspace(2)
+  call void @h(ptr addrspace(2) %s, ptr %p)
+  ret void
+}
+";
+
 const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
 declare void @g(ptr byval([40 x i8]) %p)
 define void @f(ptr %q) minsize {
@@ -1045,6 +1057,71 @@ fn a_select_before_a_call_stays_above_the_call_frame() {
         .collect();
     let call = names.iter().position(|n| n == "call").expect("a call");
     assert_eq!(names[call - 1], "push", "the argument is pushed: {names:?}");
+}
+
+/// The segment of a global is pushed as an immediate (`push DGROUP`, 3 bytes);
+/// the DAG path moved it to a register and pushed that (4 bytes, 205 times in
+/// the QB corpus). Pin: `X86CallFrameOptimization` folds a `MOV32ri` of one
+/// use.
+#[test]
+fn a_pushed_segment_of_a_global_is_an_immediate() {
+    let module = llrm_mir::parse::module(PUSH_SEGMENT).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let pushes: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("push")).collect();
+    assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
+}
+
+const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+@\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
+@\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
+@$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c\"\\04\\00\", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c\"DONE\" }>
+define cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
+b1:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI4(ptr addrspace(1) addrspacecast (ptr @\"INPUTVALUE&\" to ptr addrspace(1)))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI2(ptr addrspace(1) addrspacecast (ptr @\"BRANCHCHOICE%\" to ptr addrspace(1)))
+  %0 = load i32, ptr @\"INPUTVALUE&\"
+  %1 = add i32 %0, 1
+  store i32 %1, ptr @\"INPUTVALUE&\"
+  %2 = load i16, ptr @\"BRANCHCHOICE%\"
+  %3 = icmp eq i16 %2, 0
+  %4 = mul i32 %1, %1
+  %5 = select i1 %3, i32 -1, i32 1
+  %6 = add i32 %5, %4
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %6)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %4)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI4(ptr addrspace(1) addrspacecast (ptr @\"INPUTVALUE&\" to ptr addrspace(1)))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI2(ptr addrspace(1) addrspacecast (ptr @\"BRANCHCHOICE%\" to ptr addrspace(1)))
+  %7 = load i32, ptr @\"INPUTVALUE&\"
+  %8 = add i32 %7, 1
+  store i32 %8, ptr @\"INPUTVALUE&\"
+  %9 = load i16, ptr @\"BRANCHCHOICE%\"
+  %10 = icmp eq i16 %9, 0
+  %11 = mul i32 %8, %8
+  %12 = select i1 %10, i32 -1, i32 1
+  %13 = add i32 %12, %11
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %13)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %11)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string4)
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$RDI4(ptr addrspace(1)) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$RDI2(ptr addrspace(1)) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PSI4(i32) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
+";
+
+/// One segment pushed by two calls with a select between them: the second
+/// push is in a block after the select's arms, so the first block saw one read
+/// and pushed the immediate, removing the `mov` the second push read
+/// (`value 1 is read and not defined on every path`): `qb/gvnjn.bas` and
+/// `gvnphi.bas` stopped compiling at -O2 m16.
+#[test]
+fn a_segment_pushed_by_two_calls_around_a_select_is_still_defined() {
+    select_with_contracts(CONSTANT_PUSHED_AROUND_A_SELECT).unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// A 40-byte byval copy is past the store limit (4 at -Os, 8 otherwise), so the
