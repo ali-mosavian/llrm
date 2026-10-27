@@ -2,7 +2,7 @@
 //! drops the zero case; a population count looks through a shift that moves
 //! no set bit.
 //!
-//! DEVIATE SD323: no `foldCTLZToCTLS` (no `CTLS` node), no half-width
+//! DEVIATE SD245: no `foldCTLZToCTLS` (no `CTLS` node), no half-width
 //! `ctpop` of a value with a zero upper half (needs `isTruncateFree` and
 //! `isZExtFree`), and "non-zero" is what known bits prove, not the full
 //! `isKnownNeverZero`. Owner sdag-b.
