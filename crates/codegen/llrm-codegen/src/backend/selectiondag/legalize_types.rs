@@ -19,11 +19,6 @@
 //! by name ([`LegalizeError::Unsupported`]), and the cases are added in the
 //! pin's order by later pieces.
 //!
-//! DEVIATE SD204: `IntegerExpandSetCCOperands` takes the pin's generic
-//! select-of-two-compares form for an ordering, not the `SETCCCARRY`
-//! (`sbb`) form the X86 target prefers. Exit: x86 `SETCCCARRY` lowering.
-//! Owner sdag-b. Review 2026-11-27.
-//!
 //! DEVIATE SD209: a load or store through a far pointer sets `ES` with a
 //! `CopyToReg` before it, ordered by the chain only: the access has no glue
 //! operand, so two far accesses unordered by the chain could interleave their
@@ -1445,6 +1440,24 @@ impl<'a> TypeLegalizer<'a> {
         let (far, delta) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
         let (offset, selector) = self.expanded_integer(far);
         let dword = self.dag.value_type(delta);
+        // A delta that fits the offset adds as a word and the carry steps the
+        // selector: `add bx, 4; sbb di, di; and di, 4096`, not a dword add and
+        // a shift of its high word. (The expansion of the dword add: the
+        // low halves' `UADDO`, the carry as the high half's step.)
+        let half_bits = half.size_in_bits();
+        let high_zero = !super::known_bits::known_bits(self.dag, delta).zero
+            & super::fold::mask(dword.size_in_bits()) >> half_bits << half_bits
+            == 0;
+        if high_zero && self.tli.is_operation_legal_or_custom(ISD::UAddO, half) {
+            let low = self.dag.get_node(ISD::Truncate, half, &[delta]);
+            let overflow_vt = self.tli.types.set_cc_result_type(half);
+            let sum = self.dag.get_node_multi(ISD::UAddO, &[half, overflow_vt], &[offset, low]);
+            let carry = SDValue { node: sum.node, res: 1 };
+            let stride = self.dag.get_constant(1u128 << shift, half);
+            let zero = self.dag.get_constant(0, half);
+            let step = self.dag.get_select(half, carry, stride, zero);
+            return Ok((sum, self.dag.get_node(ISD::Add, half, &[selector, step])));
+        }
         let wide = self.dag.get_node(ISD::ZeroExtend, dword, &[offset]);
         let sum = self.dag.get_node(ISD::Add, dword, &[wide, delta]);
         let (width, stride_shift) = (
@@ -1671,6 +1684,28 @@ impl<'a> TypeLegalizer<'a> {
             unsigned => unsigned,
         };
         let low = self.dag.get_setcc(vt, ll, rl, low_code);
+        // Comparing the low bits is enough.
+        if lh == rh {
+            return low;
+        }
+        // Lower with SETCCCARRY if the target supports it: the high halves
+        // subtracted with the low halves' borrow; `>` and `<=` flip the
+        // operands.
+        if self.tli.is_operation_legal_or_custom(ISD::SetCCCarry, self.dag.value_type(lh)) {
+            let (code, flip) = match code {
+                CondCode::SetGt => (CondCode::SetLt, true),
+                CondCode::SetUGt => (CondCode::SetULt, true),
+                CondCode::SetLe => (CondCode::SetGe, true),
+                CondCode::SetULe => (CondCode::SetUGe, true),
+                other => (other, false),
+            };
+            let ((ll, rl), (lh, rh)) = if flip { ((rl, ll), (rh, lh)) } else { ((ll, rl), (lh, rh)) };
+            let overflow_vt = self.tli.types.set_cc_result_type(half);
+            let borrow = self.dag.get_node_multi(ISD::USubO, &[half, overflow_vt], &[ll, rl]);
+            let borrow = SDValue { node: borrow.node, res: 1 };
+            let cc = self.dag.get_cond_code(code);
+            return self.dag.get_node(ISD::SetCCCarry, vt, &[lh, rh, borrow, cc]);
+        }
         let high = self.dag.get_setcc(vt, lh, rh, code);
         let same = self.dag.get_setcc(vt, lh, rh, CondCode::SetEq);
         self.dag.get_select(vt, same, low, high)
