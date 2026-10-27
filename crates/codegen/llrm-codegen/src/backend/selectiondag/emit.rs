@@ -419,6 +419,7 @@ pub fn emit_in(
     }
     let mut blocks = emitter.blocks;
     if ctx.address_mode == AddrMode::Real16 {
+        sunk_areas(&mut blocks, ctx.stack_pointer);
         based_areas(&mut blocks, ctx.stack_pointer, emitter.state, &mut emitter.classes);
         for block in &mut blocks {
             pushed_arguments(&mut block.insns, ctx.stack_pointer, emitter.state, &mut emitter.classes)?;
@@ -576,6 +577,85 @@ fn pushed_arguments(
         return Err(EmitError::Unsupported("a store through the stack pointer at m16".to_owned()));
     }
     Ok(())
+}
+
+/// DEVIATE SD224: an outgoing argument area whose call is in a later block (a
+/// select split the block between the area and the call) is made again at the call, when what
+/// lies between neither calls nor moves the stack pointer: the pushes
+/// `pushed_arguments` makes stay pushes, where `based_areas` would store each
+/// argument through a copy of SP (`sub sp, 2; mov bx, sp; mov [bx], x`, four
+/// bytes over a push in `jumps` and `range_power_digits`). The pin's scheduler
+/// keeps such a select out of the call sequence; ours does not always.
+fn sunk_areas(
+    blocks: &mut [EmitBlock],
+    sp: llrm_lir::registers::RegId,
+) {
+    let through_sp =
+        |cell: &Mem| cell.through == sp && cell.base.is_none() && cell.index.is_none() && cell.addr.is_none();
+    let is_store = |insn: &Insn| match insn.what.as_ref() {
+        Some(what) => matches!(&what.dests[..], [Loc::Mem(cell)] if through_sp(cell)),
+        None => false,
+    };
+    let is_area = |insn: &Insn| {
+        insn.what
+            .as_ref()
+            .is_some_and(
+                |what| what.name.as_deref() == Some("sub")
+                    && matches!(&what.dests[..], [Loc::Reg(reg)] if reg.register == sp)
+                    && matches!(&what.sources[..], [_, Loc::Imm(_)]),
+            )
+    };
+    let is_call = |insn: &Insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+    let touches_sp = |insn: &Insn| {
+        insn.what
+            .as_ref()
+            .is_some_and(
+                |what| matches!(what.op, Operation::Push | Operation::Pop | Operation::Call)
+                    || what.dests.iter().any(|dest| matches!(dest, Loc::Reg(reg) if reg.register == sp))
+                    || what.sources.iter().any(|source| matches!(source, Loc::Reg(reg) if reg.register == sp)),
+            )
+    };
+    for first in 0..blocks.len() {
+        let mut at = 0;
+        while at < blocks[first].insns.len() {
+            if !is_area(&blocks[first].insns[at]) || blocks[first].insns[at..].iter().any(|one| is_call(one)) {
+                at += 1;
+                continue;
+            }
+            let Some(last) = (first + 1..blocks.len()).find(|&one| blocks[one].insns.iter().any(|insn| is_call(insn)))
+            else {
+                at += 1;
+                continue;
+            };
+            let call = blocks[last].insns.iter().position(|insn| is_call(insn)).expect("a call");
+            // Only stores and what leaves SP alone lie between.
+            let clear = blocks[first].insns[at + 1..].iter().all(|insn| is_store(insn) || !touches_sp(insn))
+                && (first + 1..last).all(|one| blocks[one].insns.iter().all(|insn| !touches_sp(insn)))
+                && blocks[last].insns[..call].iter().all(|insn| is_store(insn) || !touches_sp(insn));
+            if !clear {
+                at += 1;
+                continue;
+            }
+            let mut moved = vec![blocks[first].insns.remove(at)];
+            let mut kept = Vec::new();
+            for insn in blocks[first].insns.drain(at..) {
+                if is_store(&insn) { moved.push(insn) } else { kept.push(insn) }
+            }
+            blocks[first].insns.extend(kept);
+            for one in first + 1..last {
+                let (stores, rest): (Vec<_>, Vec<_>) = blocks[one].insns.drain(..).partition(|insn| is_store(insn));
+                moved.extend(stores);
+                blocks[one].insns = rest;
+            }
+            let call = blocks[last].insns.iter().position(|insn| is_call(insn)).expect("a call");
+            let tail = blocks[last].insns.split_off(call);
+            let (stores, rest): (Vec<_>, Vec<_>) = blocks[last].insns.drain(..).partition(|insn| is_store(insn));
+            moved.extend(stores);
+            blocks[last].insns = rest;
+            blocks[last].insns.extend(moved);
+            blocks[last].insns.extend(tail);
+        }
+    }
 }
 
 /// An outgoing argument area whose call is in a later block (a select split the

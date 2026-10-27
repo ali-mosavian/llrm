@@ -897,3 +897,27 @@ fn a_far_fill_takes_the_offset_word_not_the_joined_pointer() {
     let crate::model::ir::Loc::Held(destination) = &sources[2] else { panic!("{fill:?}") };
     assert_eq!(destination.width, 2, "the joined dword, not the offset word: {fill:?}");
 }
+
+const SELECT_IN_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+@s = internal global [2 x i8] zeroinitializer
+declare cc 1000 void @g(i32) addrspace(1)
+declare cc 1000 void @h(ptr) addrspace(1)
+define cc 1000 void @f(i16 %k, i32 %a) addrspace(1) {
+  %c = icmp eq i16 %k, 1
+  %r = select i1 %c, i32 %a, i32 524246911
+  call cc 1000 addrspace(1) void @h(ptr @s)
+  call cc 1000 addrspace(1) void @g(i32 %r)
+  ret void
+}
+";
+
+/// A select that splits the block between an argument area and its call left
+/// the area open: `sub sp, 2; mov bx, sp; mov [bx], offset _s` where the
+/// old selector pushed (+42 B in `range_power_digits`, +45 in `jumps`). The
+/// area moves to the call and stays a push.
+#[test]
+fn a_select_between_an_argument_area_and_its_call_leaves_pushes() {
+    let done = select_f(SELECT_IN_CALL).unwrap_or_else(|why| panic!("{why}"));
+    let names = mnemonics(&done);
+    assert_eq!(names.iter().filter(|m| m.starts_with("push")).count(), 2, "{names:?}");
+}
