@@ -180,6 +180,9 @@ pub struct Flags {
     /// `-m16`, `-m32`, `-m64`: the target to build for, by the number its
     /// description gives.
     mode: Option<u32>,
+    /// `-mcmodel=small|medium|large`: the code model of real mode's segmented
+    /// memory; the target's own (medium) when absent.
+    code_model: Option<String>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
@@ -235,6 +238,7 @@ impl Default for Flags {
             mtune: None,
             machine: None,
             mode: None,
+            code_model: None,
             stack_is_data: None,
             far_bss: None,
             bss_begin: None,
@@ -327,7 +331,24 @@ impl Flags {
             "--isel" => self.isel = Selector::parse(&value("--isel")?)?,
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
-            _ if Self::mode_flag(flag).is_some() => self.mode = Self::mode_flag(flag),
+            _ if Self::mode_flag(flag).is_some() => self.set_mode(Self::mode_flag(flag), flag)?,
+            "--memory-model" => {
+                let model = value("--memory-model")?;
+                let mode = match model.as_str() {
+                    "real16" => 16,
+                    "flat32" => 32,
+                    "flat64" => 64,
+                    _ => return Err(format!("--memory-model={model}: expected real16, flat32 or flat64")),
+                };
+                self.set_mode(Some(mode), &format!("--memory-model={model}"))?
+            }
+            _ if flag.starts_with("-mcmodel=") => {
+                let model = &flag["-mcmodel=".len()..];
+                if !matches!(model, "small" | "medium" | "large") {
+                    return Err(format!("{flag}: expected small, medium or large"));
+                }
+                self.code_model = Some(model.to_owned());
+            }
             _ if flag.starts_with("-march=") => self.march = Some(flag["-march=".len()..].to_owned()),
             _ if flag.starts_with("-mtune=") => self.mtune = Some(flag["-mtune=".len()..].to_owned()),
             "-fstack-usage" => self.stack_usage = true,
@@ -414,6 +435,25 @@ impl Flags {
     /// The `-m` number given, if any: the target whose description names it.
     pub fn mode(&self) -> Option<u32> {
         self.mode
+    }
+
+    /// `-mcmodel=`, if given.
+    pub fn code_model(&self) -> Option<&str> {
+        self.code_model.as_deref()
+    }
+
+    /// Sets the memory model by its number; a second spelling of another model
+    /// is an error.
+    fn set_mode(
+        &mut self,
+        mode: Option<u32>,
+        spelled: &str,
+    ) -> Result<(), String> {
+        if self.mode.is_some() && mode.is_some() && self.mode != mode {
+            return Err(format!("{spelled} conflicts with -m{}", self.mode.unwrap_or_default()));
+        }
+        self.mode = mode;
+        Ok(())
     }
 
     /// The pipeline's options: the level's, then each `-f`.

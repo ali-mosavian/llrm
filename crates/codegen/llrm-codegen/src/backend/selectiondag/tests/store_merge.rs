@@ -117,3 +117,88 @@ fn argument_stores_of_a_call_sequence_are_not_merged() {
     }
     assert_eq!(widths, vec![EVT::I16, EVT::I16]);
 }
+
+/// Copies of `vt` words `from+offset` to `to+offset`, each store chained off
+/// its own load, or all off the entry once the chains are improved; what the
+/// combiner leaves, as `(load type, load offset, store type, store offset)` per
+/// store.
+fn copied(
+    offsets: &[i64],
+    vt: EVT,
+    volatile: bool,
+    extra_use: bool,
+    from_entry: bool,
+) -> Vec<(EVT, i64, EVT, i64)> {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let mut stores = Vec::new();
+    let mut loads = Vec::new();
+    for &offset in offsets {
+        let from = dag.get_global_address(EVT::I16, 1, offset);
+        loads.push(dag.get_load(vt, entry, from, info(vt, volatile)));
+    }
+    for (&offset, &load) in offsets.iter().zip(&loads) {
+        let to = dag.get_global_address(EVT::I16, 0, offset);
+        let chain = if from_entry { entry } else { SDValue { node: load.node, res: 1 } };
+        stores.push(dag.get_store(chain, load, to, info(vt, false)));
+        if extra_use {
+            let sum = dag.get_node(ISD::Add, vt, &[load, load]);
+            let other = dag.get_global_address(EVT::I16, 2, offset);
+            stores.push(dag.get_store(chain, sum, other, info(vt, false)));
+        }
+    }
+    let root = dag.get_token_factor(&stores);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let mut out = Vec::new();
+    let mut seen = vec![dag.get_root()];
+    while let Some(node) = seen.pop() {
+        match dag.opcode(node) {
+            ISD::TokenFactor => seen.extend((0..dag.node(node).ops.len()).map(|i| dag.operand(node, i))),
+            ISD::Store => {
+                let NodeData::Global { symbol, offset } = dag.node(dag.operand(node, 2)).data else {
+                    panic!("address")
+                };
+                let NodeData::Mem(store) = dag.node(node).data else { panic!("mem") };
+                let value = dag.operand(node, 1);
+                if symbol != 0 || dag.opcode(value) != ISD::Load {
+                    continue;
+                }
+                let NodeData::Global { offset: from, .. } = dag.node(dag.operand(value, 1)).data else {
+                    panic!("address")
+                };
+                let NodeData::Mem(load) = dag.node(value).data else { panic!("mem") };
+                out.push((load.mem_vt, from, store.mem_vt, offset));
+            }
+            _ => {}
+        }
+    }
+    out.sort_by_key(|copy| copy.3);
+    out.dedup();
+    out
+}
+
+/// Two word copies stayed two loads and two stores (`mov cx, [si]; mov [di],
+/// cx` twice) where the pin makes one dword copy.
+#[test]
+fn two_consecutive_word_copies_are_one_dword_copy() {
+    assert_eq!(copied(&[0, 2], EVT::I16, false, false, false), vec![(EVT::I32, 0, EVT::I32, 0)]);
+}
+
+/// Three words: a dword copy and the word after it.
+#[test]
+fn three_word_copies_are_a_dword_and_a_word_copy() {
+    assert_eq!(
+        copied(&[0, 2, 4], EVT::I16, false, false, true),
+        vec![(EVT::I32, 0, EVT::I32, 0), (EVT::I16, 4, EVT::I16, 4)]
+    );
+}
+
+/// A volatile load, a load that something else reads and a gap stay copies.
+#[test]
+fn copies_of_a_volatile_or_shared_load_or_with_a_gap_stay() {
+    assert_eq!(copied(&[0, 2], EVT::I16, true, false, false).len(), 2);
+    assert_eq!(copied(&[0, 2], EVT::I16, false, true, false).len(), 2);
+    assert_eq!(copied(&[0, 4], EVT::I16, false, false, false).len(), 2);
+}

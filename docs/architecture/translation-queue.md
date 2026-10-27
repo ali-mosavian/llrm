@@ -47,8 +47,6 @@ The 52 `Old` slots of the parity registry, ranked by what replacing each saves o
 | 34 | `phiopt@675` | simplifycfg-port | [SimplifyCFG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 | 35 | `phiopt@1244` | simplifycfg-port | [SimplifyCFG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 | 36 | `phiopt@1178` | simplifycfg-port | [SimplifyCFG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp) | 0.0 | 0.0 | 0 | 0.0 |
-| 37 | `loopsimplify@728` | loopsimplify-port | [LoopSimplify.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp) | 0.0 | 0.0 | 0 | 0.0 |
-| 38 | `lcssa@728` | lcssa-port | [LCSSA.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LCSSA.cpp) | 0.0 | 0.0 | 0 | 0.0 |
 
 ## Backend, ranked by bucket
 

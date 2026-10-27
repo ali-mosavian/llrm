@@ -290,6 +290,54 @@ b4:
     assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
 }
 
+/// lcexit.bas (`FOR`/`EXIT` over an `INTEGER` counter read as `LONG`): the
+/// counter is widened, and the loop's exit count, worked out before that, is
+/// still the one in `i16`. LLVM tells ScalarEvolution nothing of the compares
+/// the widening rewrote in place, so LFTR tests the wide counter against
+/// `zext` of a limit built in `i16`. The port forgot the count and built the
+/// limit in `i32`: two copies of `umin(zext n - 1, 9) + 1`.
+#[test]
+fn test_a_widened_counters_limit_is_built_in_the_narrow_type_and_extended() {
+    let text = with_exit_values(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %n) {
+b0:
+  %none = icmp eq i16 %n, 0
+  br i1 %none, label %b4, label %b2
+
+b2:
+  br label %b7
+
+b7:
+  %i = phi i16 [ 0, %b2 ], [ %next, %b7 ]
+  %acc = phi i32 [ 0, %b2 ], [ %sum, %b7 ]
+  %w = zext nneg i16 %i to i32
+  %sum = add i32 %acc, %w
+  %next = add nuw nsw i16 %i, 1
+  %big = icmp ugt i16 %i, 8
+  %hit = icmp eq i16 %next, %n
+  %stop = select i1 %big, i1 true, i1 %hit
+  br i1 %stop, label %x, label %b7
+
+x:
+  %sum.out = phi i32 [ %sum, %b7 ]
+  %i.out = phi i16 [ %next, %b7 ]
+  br label %b4
+
+b4:
+  %total = phi i32 [ 0, %b0 ], [ %sum.out, %x ]
+  %last = phi i16 [ 0, %b0 ], [ %i.out, %x ]
+  %wide = zext i16 %last to i32
+  %r = add i32 %total, %wide
+  ret i32 %r
+}
+",
+    );
+    assert!(text.contains("%wide.trip.count = zext i16"), "{text}");
+    assert!(text.contains("llvm.umin.i16") && !text.contains("llvm.umin.i32"), "{text}");
+}
+
 /// An exit whose count is not a number is written from the count, as
 /// `rewriteLoopExitValues` writes it: the loop runs `smax(n, 1)` times, two
 /// instructions, under the budget.

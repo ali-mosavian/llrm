@@ -88,3 +88,37 @@ b0:
     );
     assert!(after.contains("@llvm.smax.i8(i8 %x, i8 %y)") && after.contains("sext i8 %"), "{after}");
 }
+
+/// demo-deedlines COPPER at m16 -Os: the trip-count selects left `umin.i1`
+/// and `smax.i1` calls (`and` in the pin), +74 lines of the listing. The four
+/// min/max of two `i1` are `and` for `umin` and `smax`, `or` for `umax` and
+/// `smin`.
+#[test]
+fn a_min_or_max_of_two_bits_is_an_and_or_an_or() {
+    let after = combined(
+        "declare i1 @llvm.umin.i1(i1, i1)
+declare i1 @llvm.umax.i1(i1, i1)
+declare i1 @llvm.smin.i1(i1, i1)
+declare i1 @llvm.smax.i1(i1, i1)
+
+define i16 @f(i1 %a, i1 %b) {
+b0:
+  %m = call i1 @llvm.umin.i1(i1 %a, i1 %b)
+  %n = call i1 @llvm.umax.i1(i1 %a, i1 %b)
+  %o = call i1 @llvm.smin.i1(i1 %a, i1 %b)
+  %p = call i1 @llvm.smax.i1(i1 %a, i1 %b)
+  %x = zext i1 %m to i16
+  %y = zext i1 %n to i16
+  %z = zext i1 %o to i16
+  %w = zext i1 %p to i16
+  %s = add i16 %x, %y
+  %t = add i16 %z, %w
+  %r = add i16 %s, %t
+  ret i16 %r
+}
+",
+    );
+    assert!(!after.contains("call i1"), "{after}");
+    assert_eq!(after.matches("and i1 %a, %b").count(), 2, "{after}");
+    assert_eq!(after.matches("or i1 %a, %b").count(), 2, "{after}");
+}
