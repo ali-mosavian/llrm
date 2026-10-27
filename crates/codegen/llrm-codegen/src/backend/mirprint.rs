@@ -294,6 +294,42 @@ fn instruction(
             .unwrap();
             writeln!(out, "    {} = COPY ${ax}\n    {} = COPY ${dx}", vreg(quotient)?, vreg(remainder)?).unwrap();
         }
+        // A read-modify-write of a cell.
+        (op @ ("add" | "sub" | "and" | "or" | "xor"), Some(Loc::Mem(m)), [Loc::Mem(read), rhs]) if read == m => {
+            let (form, right) = match rhs {
+                Loc::Held(b) => ("mr", vreg(b)?),
+                Loc::Imm(i) => ("mi", immediate(i)?.to_string()),
+                _ => return Err(format!("{op} to a cell from that source")),
+            };
+            writeln!(out, "    {}{}{form} {}, {right}, {eflags}", op.to_uppercase(), bits(m.width)?, cell(m, symbols)?)
+                .unwrap()
+        }
+        // A call through a register.
+        ("call", None, [Loc::Held(target)]) if what.indirect => {
+            let used: String =
+                one.requires.iter().map(|(_, r)| format!(", implicit ${}", format!("{r:?}").to_lowercase())).collect();
+            let made: String = one
+                .delivers
+                .iter()
+                .map(|(_, r)| format!(", implicit-def ${}", format!("{r:?}").to_lowercase()))
+                .collect();
+            writeln!(
+                out,
+                "    CALL32r {}, csr_32, implicit $esp, implicit $ssp, implicit-def $esp, implicit-def $ssp{used}{made}",
+                vreg(target)?
+            )
+            .unwrap();
+            for (held, register) in &one.delivers {
+                writeln!(out, "    {} = COPY ${}", vreg(held)?, format!("{register:?}").to_lowercase()).unwrap();
+            }
+        }
+        // Sign-extends ax into dx.
+        ("cwd", Some(Loc::Held(d)), [Loc::Held(s)]) => {
+            if one.requires.is_empty() && !in_register.contains(&s.value) {
+                writeln!(out, "    $ax = COPY {}", vreg(s)?).unwrap();
+            }
+            writeln!(out, "    CWD implicit-def $ax, implicit-def $dx, implicit $ax\n    {} = COPY $dx", vreg(d)?).unwrap();
+        }
         // Sign-extends eax into edx.
         ("cdq", Some(Loc::Held(d)), [Loc::Held(s)]) => {
             if one.requires.is_empty() && !in_register.contains(&s.value) {
@@ -459,6 +495,60 @@ fn undef_first_partial_defs(text: &str) -> String {
         out.push_str(line);
         out.push('\n');
     }
+    out
+}
+
+/// A value whose first mention in the text is a read has no definition on the
+/// path in (a loop-carried value the first trip reads unset): the pin's
+/// verifier wants one, and `IMPLICIT_DEF` is the nothing it stands for.
+fn implicit_defs_for_unset_reads(text: &str) -> String {
+    let mut defined = BTreeSet::new();
+    let mut unset = BTreeSet::new();
+    let values = |part: &str| -> Vec<String> {
+        let mut found = Vec::new();
+        let bytes = part.as_bytes();
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes[at] == b'%' && bytes.get(at + 1).is_some_and(u8::is_ascii_digit) {
+                let end = (at + 1..bytes.len()).find(|&k| !bytes[k].is_ascii_digit()).unwrap_or(bytes.len());
+                if !part[..at].ends_with("bb.")
+                    && !part[..at].ends_with("fixed-stack.")
+                    && !part[..at].ends_with("stack.")
+                {
+                    found.push(part[at + 1..end].to_owned());
+                }
+                at = end;
+            } else {
+                at += 1;
+            }
+        }
+        found
+    };
+    for line in text.lines().filter(|line| line.starts_with("    ")) {
+        let (left, right) = match line.split_once(" = ") {
+            Some((left, right)) => (left, right),
+            None => ("", line),
+        };
+        for value in values(right) {
+            if !defined.contains(&value) {
+                unset.insert(value);
+            }
+        }
+        defined.extend(values(left));
+    }
+    if unset.is_empty() {
+        return text.to_owned();
+    }
+    let mut entry = text.find("  bb.0:\n").map_or(0, |at| at + "  bb.0:\n".len());
+    while text[entry..].starts_with("    successors:") || text[entry..].starts_with("    liveins:") {
+        entry += text[entry..].find('\n').map_or(0, |end| end + 1);
+    }
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..entry]);
+    for value in &unset {
+        out.push_str(&format!("    %{value} = IMPLICIT_DEF\n"));
+    }
+    out.push_str(&text[entry..]);
     out
 }
 
@@ -663,6 +753,7 @@ pub fn mir(
         writeln!(out, "  - {{ id: {v}, class: {class} }}").unwrap();
     }
     let text = undef_first_partial_defs(&text);
+    let text = implicit_defs_for_unset_reads(&text);
     let objects = text
         .match_indices("%fixed-stack.")
         .filter_map(
@@ -947,6 +1038,21 @@ mod tests {
         let body = LirBody::new("set", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("AND32ri %1, 15, implicit-def $eflags"), "{text}");
+    }
+
+    /// A loop-carried value read on the first trip before any definition left
+    /// the pin's verifier saying "defs don't dominate all uses" and
+    /// aborting on a recursive fib at m32.
+    #[test]
+    fn test_a_value_read_before_any_definition_gets_an_implicit_def() {
+        let imm = |value| Loc::Imm(Imm { value, width: 4, address: None });
+        let start = insn("mov", Operation::Move, vec![held(1)], vec![imm(0)]);
+        let add = insn("add", Operation::Binary, vec![held(1)], vec![held(1), held(2)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![start, add, ret]))];
+        let body = LirBody::new("unset", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("  bb.0:\n    %2 = IMPLICIT_DEF\n    %1 = MOV32ri 0"), "{text}");
     }
 
     #[test]
