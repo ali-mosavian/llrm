@@ -1056,7 +1056,7 @@ fn a_saturating_add_or_subtract_is_the_wrapped_operation_and_a_select() {
     for op in ["uadd", "usub", "sadd", "ssub"] {
         for width in [8, 16, 32, 64] {
             let ir = format!(
-                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare i{width} @llvm.{op}.sat.i{width}(i{width}, i{width})
 define i{width} @f(i{width} %a, i{width} %b) {{
 entry:

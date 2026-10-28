@@ -52,7 +52,9 @@ def test_the_scan_counts_the_copies_in_a_tree(tmp_path: Path):
     (tmp_path / "crates/target/llrm-x86-m16/src/machines").mkdir(parents=True)
     (tmp_path / "crates/target/llrm-x86-m16/src/machines/datalayout.toml").write_text(f'datalayout = "{layout}"\n')
     (tmp_path / "t.ll").write_text(f'target datalayout = "{layout}"\n"{layout}-ni:2:3"\n')
+    (tmp_path / "crates/opt/llrm-analysis/corpus/emitted").mkdir(parents=True)
+    (tmp_path / "crates/opt/llrm-analysis/corpus/emitted/g.ll").write_text(f'target datalayout = "{layout}"\n')
     import subprocess
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-    assert sync.copies(tmp_path) == {"t.ll": 2}
+    assert sync.copies(tmp_path) == {"t.ll": 2}, "the generated corpus is not scanned: 455 of its files were baseline rows no one could shrink"
