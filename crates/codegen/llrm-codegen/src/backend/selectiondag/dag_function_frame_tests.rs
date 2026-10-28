@@ -1311,4 +1311,22 @@ define i16 @f(i16 %x) {
         .filter(|w| matches!(w.name.as_deref(), Some("sar" | "shr")))
         .count();
     assert_eq!(shifts, 2, "{:?}", done.body.insns());
+
+/// The pin's `(i16 0)` is the low part of a `MOV32r0`: `xor edi, edi` at m32,
+/// 2 bytes. Narrowed to a word (`xor di, di`, 66-prefixed) it grew 1 B per
+/// zero (QB `frames` -Os bq32).
+#[test]
+fn a_zero_word_at_m32_is_a_dword_xor() {
+    use crate::model::ir::Loc;
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i16 @f() {
+  ret i16 0
+}
+";
+    let done = select_m32(ir).unwrap_or_else(|why| panic!("{why}"));
+    let zero = done.body.insns().iter().filter_map(|one| one.what.clone()).find(|what| {
+        what.name.as_deref() == Some("mov") && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.value == 0)
+    });
+    let zero = zero.expect("a zero");
+    assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
 }

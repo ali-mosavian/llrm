@@ -257,6 +257,9 @@ impl<'m> Machine<'m> {
                 let from = self.module.context.get(*value).ty;
                 cast(self.types(), &self.layout, *op, self.constant(*value)?, from, constant.ty, Flags::default())?
             }
+            ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs }) => {
+                binary(*op, Flags::default(), self.constant(*lhs)?, self.constant(*rhs)?)?
+            }
             ConstantKind::Expr(ConstantExpr::GetElementPtr { source, operands, .. }) => {
                 let values: Vec<Val> = operands.iter().map(|&one| self.constant(one)).collect::<Run<_>>()?;
                 self.gep(*source, constant.ty, &values)?
