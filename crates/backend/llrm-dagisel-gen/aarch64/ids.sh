@@ -2,11 +2,13 @@
 # Writes ids.txt for the pin's AArch64GenDAGISel.inc: `name value` for every OPC_*, ISD::, AArch64ISD::,
 # MVT::, AArch64:: and TargetOpcode:: symbol its matcher table names, taken from the pin's own headers.
 #
-#   ids.sh OUT_DIR      (PIN names a checkout of the pin with a build in PIN/build)
+#   ids.sh OUT_DIR [EXTRA_SYMBOLS]      (PIN names a checkout of the pin with a build in PIN/build;
+#   EXTRA_SYMBOLS lists more `Namespace::name` symbols, one per line: the registers and register
+#   classes the instruction operand lists name)
 set -euo pipefail
 PIN=${PIN:-$HOME/work/other/llvm-pin}; OUT=$1; mkdir -p "$OUT"
 B=$PIN/build; S=$PIN/llvm; A=$S/lib/Target/AArch64; INC=$B/lib/Target/AArch64/AArch64GenDAGISel.inc
-sed -n '/MatcherTable\[\] = {/,/^  };/p' "$INC" | grep -oE '\b(ISD|AArch64ISD|MVT|AArch64|TargetOpcode|MCRegister)::[A-Za-z0-9_]+' | sort -u | sed 's/.*/P(&);/' > "$OUT/symbols.cpp"
+{ sed -n '/MatcherTable\[\] = {/,/^  };/p' "$INC" | grep -oE '\b(ISD|AArch64ISD|MVT|AArch64|TargetOpcode|MCRegister)::[A-Za-z0-9_]+'; [ -n "${2:-}" ] && cat "$2"; true; } | sort -u | sed 's/.*/P(&);/' > "$OUT/symbols.cpp"
 grep -oE '\bOPC_[A-Za-z0-9_]+|\bOPFL_[A-Za-z0-9_]+' "$S/include/llvm/CodeGen/SelectionDAGISel.h" | grep -v OPFL_VariadicN | sort -u | sed 's/.*/P(&);/' > "$OUT/members.cpp"
 # The OPC_* enums are protected members of SelectionDAGISel and its header will not compile alone: copy the text.
 sed -n '/enum BuiltinOpcodes {/,/^  };/p;/^  enum {/,/^  };/p' "$S/include/llvm/CodeGen/SelectionDAGISel.h" > "$OUT/enums.cpp"
