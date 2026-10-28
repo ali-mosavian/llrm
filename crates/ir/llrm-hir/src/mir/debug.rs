@@ -142,6 +142,7 @@ pub(super) fn emitted<'h>(
                         offset: place.offset - group.start,
                         parameter: variable.parameter,
                         argument: variable.argument,
+                        block: None,
                     };
                     variables.insert((function.id, place.id), di::add_variable(module, &node));
                 }

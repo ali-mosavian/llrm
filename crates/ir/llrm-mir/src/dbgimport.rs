@@ -93,6 +93,8 @@ impl Import {
                         offset: 0,
                         parameter: argument.is_some(),
                         argument,
+                        // A variable of the function's own scope names none.
+                        block: node(module, old, "scope").filter(|&scope| kind(module, scope) == "DILexicalBlock"),
                     },
                 );
                 if let Some(argument) = argument {
