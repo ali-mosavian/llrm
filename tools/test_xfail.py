@@ -23,7 +23,7 @@ def unit(monkeypatch):
     monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: LISTED)
 
     def run(code, output):
-        monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd: (code, output))
+        monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: (code, output))
         return ps.unit_step("crate", 10.0)(Path("."))
 
     return run

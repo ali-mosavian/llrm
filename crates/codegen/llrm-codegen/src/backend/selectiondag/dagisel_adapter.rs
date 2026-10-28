@@ -846,11 +846,11 @@ impl Dag for DagisAdapter<'_> {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut llrm_dagisel::dag::Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {
-        if visited.contains(&node) {
+        if visited.contains(node) {
             return true;
         }
         while let Some(m) = worklist.pop() {
@@ -861,8 +861,7 @@ impl Dag for DagisAdapter<'_> {
                 return true;
             }
             for op in &self.dag.nodes()[m as usize].ops {
-                if !visited.contains(&op.node) {
-                    visited.push(op.node);
+                if visited.insert(op.node) {
                     worklist.push(op.node);
                 }
             }

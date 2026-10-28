@@ -1,82 +1,86 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$data = internal global [24 x i8] zeroinitializer
+@$data = internal global [0 x i8] zeroinitializer
 @$qb$statementTable = internal constant [0 x i8] zeroinitializer
 @"S!" = internal global [4 x i8] zeroinitializer
 @"D#" = internal global [8 x i8] zeroinitializer
 @$float3 = internal constant [4 x i8] c"\00\00\80@"
 @$float4 = internal constant [4 x i8] c"\00\00\00A"
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string5$payload to ptr addrspace(2))
-@$string5$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string5$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string5$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string5$payload, i16 2) to i16), ptr @$fslSegment }>
+@$arguments$5 = internal global [24 x i8] zeroinitializer
+@$string6 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string6, i16 4), [4 x i8] c"DONE" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %0 = load float, ptr @$float3, !tbaa !2
   store float %0, ptr @"S!", !tbaa !2
   %1 = load float, ptr @$float4, !tbaa !2
   %2 = fpext float %1 to double
-  store double %2, ptr @"D#", !tbaa !2
-  %3 = call cc1000 addrspace(1) float @"HALF!"(ptr @"S!", ptr @$data)
-  %4 = getelementptr i8, ptr @$data, i16 4
-  store float %3, ptr %4, !tbaa !2
-  %5 = getelementptr i8, ptr @$data, i16 4
-  %6 = load float, ptr %5, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PER4(float %6)
-  %7 = getelementptr i8, ptr @$data, i16 8
-  %8 = call cc1000 addrspace(1) double @"DOUBLED#"(ptr @"D#", ptr %7)
-  %9 = getelementptr i8, ptr @$data, i16 16
-  store double %8, ptr %9, !tbaa !2
-  %10 = getelementptr i8, ptr @$data, i16 16
-  %11 = load double, ptr %10, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PER8(double %11)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string5$descriptor)
+  %3 = fpround double %2 to double
+  store double %3, ptr @"D#", !tbaa !2
+  %4 = call cc 1000 addrspace(1) ptr @"HALF!"(ptr @"S!", ptr @$arguments$5)
+  %5 = load float, ptr %4
+  %6 = fpround float %5 to float
+  %7 = getelementptr i8, ptr @$arguments$5, i16 4
+  store float %6, ptr %7, !tbaa !2
+  %8 = getelementptr i8, ptr @$arguments$5, i16 4
+  %9 = load float, ptr %8, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PER4(float %9)
+  %10 = getelementptr i8, ptr @$arguments$5, i16 8
+  %11 = call cc 1000 addrspace(1) ptr @"DOUBLED#"(ptr @"D#", ptr %10)
+  %12 = load double, ptr %11
+  %13 = fpround double %12 to double
+  %14 = getelementptr i8, ptr @$arguments$5, i16 16
+  store double %13, ptr %14, !tbaa !2
+  %15 = getelementptr i8, ptr @$arguments$5, i16 16
+  %16 = load double, ptr %15, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PER8(double %16)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string6)
   ret void
 }
 
-define cc1000 float @"HALF!"(ptr %0, ptr %1) addrspace(1) {
+define cc 1000 ptr @"HALF!"(ptr dereferenceable(4) %0, ptr %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = alloca i16
   %3 = alloca float
-  store i16 0, ptr %2
-  store float 0.000000e+00, ptr %3
   %4 = load float, ptr %0
   store i16 2, ptr %2, !tbaa !2
   %5 = load i16, ptr %2, !tbaa !2
   %6 = sitofp i16 %5 to float
   %7 = fdiv float %4, %6
-  store float %7, ptr %3, !tbaa !2
+  %8 = fpround float %7 to float
+  store float %8, ptr %3, !tbaa !2
   br label %b2
 
 b2:
-  %8 = load float, ptr %3, !tbaa !2
-  ret float %8
+  %9 = load float, ptr %3, !tbaa !2
+  store float %9, ptr %1
+  ret ptr %1
 }
 
-define cc1000 double @"DOUBLED#"(ptr %0, ptr %1) addrspace(1) {
+define cc 1000 ptr @"DOUBLED#"(ptr dereferenceable(8) %0, ptr %1) addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %2 = alloca i16
   %3 = alloca double
-  store i16 0, ptr %2
-  store double 0.000000e+00, ptr %3
   %4 = load double, ptr %0
   store i16 2, ptr %2, !tbaa !2
   %5 = load i16, ptr %2, !tbaa !2
   %6 = sitofp i16 %5 to double
   %7 = fmul double %4, %6
-  store double %7, ptr %3, !tbaa !2
+  %8 = fpround double %7 to double
+  store double %8, ptr %3, !tbaa !2
   br label %b2
 
 b2:
-  %8 = load double, ptr %3, !tbaa !2
-  ret double %8
+  %9 = load double, ptr %3, !tbaa !2
+  store double %9, ptr %1
+  ret ptr %1
 }
 
-declare cc1000 void @llrm.qb.B$PER4(float) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PER4(float) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PER8(double) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PER8(double) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
