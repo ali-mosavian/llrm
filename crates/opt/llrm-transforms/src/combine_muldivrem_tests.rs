@@ -978,3 +978,78 @@ m:
 ";
     assert_eq!(combined(text), want);
 }
+
+/// `@f` after the visits alone, the intrinsics the fold calls declared.
+fn combined_declaring(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        &mut declared,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `Op0 udiv Op1` with `Op1` a power of two or zero by its bits is `lshr Op0,
+/// cttz(Op1)`. Stayed a divide before.
+#[test]
+fn a_division_by_a_lowest_set_bit_is_a_shift_by_its_count() {
+    let after = combined_declaring(
+        "define i32 @f(i32 %x, i32 %y) {
+b0:
+  %n = sub i32 0, %y
+  %p = and i32 %y, %n
+  %r = udiv i32 %x, %p
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i32 @llvm.cttz.i32(i32 %p, i1 true)"), "{after}");
+    assert!(after.contains("lshr i32 %x,"), "{after}");
+    assert!(!after.contains("udiv"), "{after}");
+}
+
+/// `abs(X) * abs(Y)` with `nsw` is `abs(X * Y)`.
+#[test]
+fn a_product_of_two_abs_is_the_abs_of_the_product() {
+    let after = combined_declaring(
+        "declare i32 @llvm.abs.i32(i32, i1)
+
+define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = call i32 @llvm.abs.i32(i32 %x, i1 true)
+  %b = call i32 @llvm.abs.i32(i32 %y, i1 true)
+  %r = mul nsw i32 %a, %b
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("mul nsw i32 %x, %y"), "{after}");
+    assert!(after.contains("call i32 @llvm.abs.i32(i32 %0, i1 true)"), "{after}");
+}
+
+/// `((ashr X, 31) | 1) * X` is `abs(X)`.
+#[test]
+fn a_sign_or_one_times_the_value_is_its_abs() {
+    let after = combined_declaring(
+        "define i32 @f(i32 %x) {
+b0:
+  %s = ashr i32 %x, 31
+  %o = or i32 %s, 1
+  %r = mul i32 %o, %x
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i32 @llvm.abs.i32(i32 %x, i1 false)"), "{after}");
+    assert!(!after.contains("mul"), "{after}");
+}

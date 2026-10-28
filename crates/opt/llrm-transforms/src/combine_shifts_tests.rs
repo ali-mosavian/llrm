@@ -958,3 +958,43 @@ b0:
     );
     assert!(out.contains("ret i16 0"), "{out}");
 }
+
+/// `@f` after the visits alone, the intrinsics the fold calls declared.
+fn combined_declaring(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        &mut declared,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `(bswap (zext X)) >> C` with a shift smaller than the extension is `(zext
+/// (bswap X)) << C'`. Stayed a 32-bit `bswap` before.
+#[test]
+fn a_shifted_bswap_of_a_zext_is_a_narrow_bswap() {
+    let after = combined_declaring(
+        "declare i32 @llvm.bswap.i32(i32)
+
+define i32 @f(i16 %x) {
+b0:
+  %z = zext i16 %x to i32
+  %s = call i32 @llvm.bswap.i32(i32 %z)
+  %r = lshr i32 %s, 8
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i16 @llvm.bswap.i16(i16 %x)"), "{after}");
+    assert!(after.contains("shl nuw nsw i32 %1, 8"), "{after}");
+}

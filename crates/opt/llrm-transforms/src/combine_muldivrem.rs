@@ -1137,13 +1137,17 @@ pub fn visit_mul(
         let q = query(c, None);
         let bits = width(c, v);
         let (l, r, _) = binop(&q, v, BinaryOp::Or)?;
-        [(l, r), (r, l)].into_iter().find_map(|(shifted, one)| {
-            if !pattern::one(&q, one) {
-                return None;
-            }
-            let (x, amount, _) = binop(&q, shifted, BinaryOp::AShr)?;
-            pattern::apint(&q, amount).is_some_and(|(value, _)| value == (bits - 1) as u128).then_some(x)
-        })
+        [(l, r), (r, l)]
+            .into_iter()
+            .find_map(
+                |(shifted, one)| {
+                    if !pattern::one(&q, one) {
+                        return None;
+                    }
+                    let (x, amount, _) = binop(&q, shifted, BinaryOp::AShr)?;
+                    pattern::apint(&q, amount).is_some_and(|(value, _)| value == (bits - 1) as u128).then_some(x)
+                },
+            )
     };
     let abs_of = [(op0, op1), (op1, op0)].into_iter().find_map(|(or, x)| (sign_or_one(c, or) == Some(x)).then_some(x));
     if let Some(x) = abs_of {
