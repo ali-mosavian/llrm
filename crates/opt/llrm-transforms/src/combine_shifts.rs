@@ -18,10 +18,6 @@
 //! (`loop-products-slope`) is left out, named where it stood in a `// DEVIATE
 //! 2:` comment.
 //!
-//! DEVIATE 3 (temporary): the folds that build an intrinsic call (`bswap`) are
-//! left out until the Builder can declare an intrinsic (`combine_build`
-//! DEVIATE 2); each is a `// DEVIATE 3:` comment at its place.
-//!
 //! DEVIATE 4: constants are `u128` bits with a width, so a mask built in twice
 //! the width (`dropRedundantMaskingOfLeftShiftInput`) is not built for a type
 //! wider than 64 bits, and a sum of shift amounts at or past twice the width
@@ -1965,7 +1961,37 @@ fn lshr_by_constant(
         return Some(c.replace_with_binop(inst, BinaryOp::Add, x, shifted, Flags::NSW));
     }
 
-    // DEVIATE 3: narrowing bswap (CreateUnaryIntrinsic).
+    // Try to narrow bswap. In the case where the shift amount equals the
+    // bitwidth difference, the shift is eliminated.
+    let narrow_swap = {
+        let q = query(c, Some(inst));
+        pattern::intrinsic_call(&q, op0, "llvm.bswap").and_then(|(_, args)| {
+            let [extended] = *args else { return None };
+            let (_, _, source) = pattern::cast(&q, extended, CastOp::ZExt)?;
+            Some((extended, source))
+        })
+    };
+    if let Some((extended, source)) = narrow_swap
+        && has_one_use(c, op0)
+        && has_one_use(c, extended)
+    {
+        let src_width = c.context.types.int_bits(c.type_of(source)).unwrap_or(0);
+        if src_width != 0 && src_width % 16 == 0 {
+            let width_diff = w - src_width;
+            let narrow_ty = c.type_of(source);
+            let narrow_swap = c.create_intrinsic(inst, "bswap", narrow_ty, &[source]);
+            if amount >= width_diff {
+                // (bswap (zext X)) >> C --> zext (bswap X >> C')
+                let by = c.int(narrow_ty, u128::from(amount - width_diff));
+                let shifted = c.create_binop(inst, BinaryOp::LShr, narrow_swap, by, Flags::default());
+                return Some(c.replace_with_new(inst, Opcode::Cast(CastOp::ZExt), ty, vec![shifted], Flags::default()));
+            }
+            // (bswap (zext X)) >> C --> (zext (bswap X)) << C'
+            let wide = c.create_cast(inst, CastOp::ZExt, narrow_swap, ty, Flags::default());
+            let by = c.int(ty, u128::from(width_diff - amount));
+            return Some(c.replace_with_binop(inst, BinaryOp::Shl, wide, by, Flags::default()));
+        }
+    }
 
     // Reduce add-carry of bools to logic:
     // ((zext BoolX) + (zext BoolY)) >> 1 --> zext (BoolX && BoolY)
