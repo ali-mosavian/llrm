@@ -1273,3 +1273,30 @@ define void @f(ptr %fp) {
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.body.call_pops.values().copied().collect::<Vec<_>>(), vec![0], "{:?}", done.body.call_pops);
 }
+
+const BASIC_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define cc 1000 i32 @g(i32 %a) {
+entry:
+  ret i32 %a
+}
+define cc 1000 i32 @f(i32 %a) {
+entry:
+  %r = call cc 1000 i32 @g(i32 %a)
+  ret i32 %r
+}
+";
+
+/// A call of a BASIC function disturbed every register the call clobbers, so
+/// a caller that used none of them saved all of them for its own caller
+/// (QB `parity/branch` -Os bq32: `BenchBranch` pushed ebx, ecx, edx, esi and
+/// edi where the old selector pushed nothing, +57% executed instructions).
+#[test]
+fn a_call_of_a_basic_function_disturbs_what_its_convention_says() {
+    let module = llrm_mir::parse::module(BASIC_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
+    let disturbs = &call.call.as_ref().expect("a call").disturbs;
+    assert!(disturbs.is_empty(), "{disturbs:?}");
+}

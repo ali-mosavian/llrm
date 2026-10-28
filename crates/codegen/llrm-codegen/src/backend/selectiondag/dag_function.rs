@@ -398,6 +398,20 @@ impl super::emit::Conventions for CallConventions<'_> {
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            // A call of a function the module defines disturbs what its
+            // convention says, not the contract's whole clobber list: a caller
+            // saves for its own caller only that (`isel.rs`, `disturbs`).
+            _ if matches!(callee, Some(Callee::Global(_))) && self.written(callee).is_none() => {
+                let regs = llrm_lir::registers::Regs(self.arch.registers());
+                self.convention_of(callee).map_or_else(Default::default, |found| {
+                    found
+                        .clobbered
+                        .iter()
+                        .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+                        .map(|name| regs.root(self.arch.register_named(name)))
+                        .collect()
+                })
+            }
             _ => clobbers.clone(),
         }
     }
