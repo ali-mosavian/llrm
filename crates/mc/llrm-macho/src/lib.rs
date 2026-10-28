@@ -8,13 +8,14 @@
 //! writer does; an addend goes in an `ARM64_RELOC_ADDEND` entry before its
 //! relocation.
 //!
-//! An arm64 object carries `LC_BUILD_VERSION` (macOS 11, no tools, no SDK), as LLVM's does
-//! for `arm64-apple-macos`; `ld` takes the platform from it.
+//! An arm64 object carries `LC_BUILD_VERSION` (macOS 11, no tools, no SDK), as
+//! LLVM's does for `arm64-apple-macos`; `ld` takes the platform from it.
 //!
-//! An x86-64 file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays one atom, so a call
-//! between two functions of it may be resolved where it is written. An arm64 file is, as clang's is: a
-//! weak definition (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols is a
-//! relocation.
+//! An x86-64 file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section
+//! stays one atom, so a call between two functions of it may be resolved where
+//! it is written. An arm64 file is, as clang's is: a weak definition
+//! (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols
+//! is a relocation.
 
 use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
 
@@ -136,17 +137,18 @@ struct Described {
 trait Flavor {
     fn cpu(&self) -> (u32, u32);
 
-    /// The platform and minimum OS (`xxxx.yy.zz` packed) of `LC_BUILD_VERSION`, if the
-    /// machine's objects carry one.
+    /// The platform and minimum OS (`xxxx.yy.zz` packed) of `LC_BUILD_VERSION`,
+    /// if the machine's objects carry one.
     fn build_version(&self) -> Option<(u32, u32)>;
 
     /// Whether the symbol table lists the symbols the object keeps local. A
     /// relocation then names the symbol and not its section.
     fn lists_locals(&self) -> bool;
 
-    /// Whether the linker may treat each symbol of a section as an atom of its own
-    /// (`MH_SUBSECTIONS_VIA_SYMBOLS`): then a weak definition replaces only itself, and every
-    /// reference between two symbols of a section carries a relocation.
+    /// Whether the linker may treat each symbol of a section as an atom of its
+    /// own (`MH_SUBSECTIONS_VIA_SYMBOLS`): then a weak definition replaces
+    /// only itself, and every reference between two symbols of a section
+    /// carries a relocation.
     fn subsections_via_symbols(&self) -> bool;
 
     fn relocation(
@@ -203,8 +205,8 @@ impl Flavor for Arm64 {
         (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL)
     }
 
-    /// macOS 11, the first with arm64; `ld` takes the platform from this command and warns
-    /// "no platform load command" without it.
+    /// macOS 11, the first with arm64; `ld` takes the platform from this
+    /// command and warns "no platform load command" without it.
     fn build_version(&self) -> Option<(u32, u32)> {
         Some((PLATFORM_MACOS, 11 << 16))
     }
@@ -469,7 +471,16 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
 
     let mut out = Vec::new();
     let (cpu_type, cpu_subtype) = flavor.cpu();
-    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, if version.is_some() { 4 } else { 3 }, commands as u32, if flavor.subsections_via_symbols() { MH_SUBSECTIONS_VIA_SYMBOLS } else { 0 }, 0] {
+    for field in [
+        MH_MAGIC_64,
+        cpu_type,
+        cpu_subtype,
+        MH_OBJECT,
+        if version.is_some() { 4 } else { 3 },
+        commands as u32,
+        if flavor.subsections_via_symbols() { MH_SUBSECTIONS_VIA_SYMBOLS } else { 0 },
+        0,
+    ] {
         put32(&mut out, field);
     }
     put32(&mut out, LC_SEGMENT_64);
@@ -496,7 +507,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         }
     }
     if let Some((platform, minos)) = version {
-        // No tools, and no SDK: the version of the SDK is the build's, not the object's.
+        // No tools, and no SDK: the version of the SDK is the build's, not the
+        // object's.
         for field in [LC_BUILD_VERSION, 24, platform, minos, 0, 0] {
             put32(&mut out, field);
         }
@@ -642,8 +654,8 @@ mod tests {
             .collect()
     }
 
-    /// An arm64 object had no `LC_BUILD_VERSION`: `ld` warned "no platform load command
-    /// found" for every object and assumed macOS.
+    /// An arm64 object had no `LC_BUILD_VERSION`: `ld` warned "no platform load
+    /// command found" for every object and assumed macOS.
     #[test]
     fn an_arm64_object_names_its_platform() {
         let mut object = program();
@@ -655,7 +667,8 @@ mod tests {
         assert_eq!(build.len(), 1);
         let words: Vec<u32> = build[0].1.chunks(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
         assert_eq!(words, [LC_BUILD_VERSION, 24, PLATFORM_MACOS, 11 << 16, 0, 0]);
-        // The header's byte count covers it: the symbol table is where the commands end.
+        // The header's byte count covers it: the symbol table is where the
+        // commands end.
         let total: usize = commands_of(&written).iter().map(|(_, bytes)| bytes.len()).sum();
         assert_eq!(total, u32::from_le_bytes(written[20..24].try_into().unwrap()) as usize);
     }
@@ -667,8 +680,9 @@ mod tests {
         assert!(commands_of(&written).iter().all(|(cmd, _)| *cmd != LC_BUILD_VERSION));
     }
 
-    /// A weak definition (`__attribute__((weak))`) was written as a strong one: two objects
-    /// that defined it were "duplicate symbol" to `ld`. It carries `N_WEAK_DEF`.
+    /// A weak definition (`__attribute__((weak))`) was written as a strong one:
+    /// two objects that defined it were "duplicate symbol" to `ld`. It
+    /// carries `N_WEAK_DEF`.
     #[test]
     fn a_weak_symbol_is_a_weak_definition() {
         let mut object = program();
@@ -684,7 +698,8 @@ mod tests {
         for index in 0..count {
             let entry = symbols_at + index * 16;
             let name_at = strings_at + word(entry);
-            let name = written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
+            let name =
+                written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
             let desc = u16::from_le_bytes([written[entry + 6], written[entry + 7]]);
             found.push((name, written[entry + 4] & N_EXT != 0, desc & N_WEAK_DEF != 0));
         }
