@@ -96,12 +96,12 @@ pub struct Fix {
     /// The value is relative to the place (`MCFixup::PCRel`).
     pub pc_rel: bool,
     /// The bytes from the field's start to the place a pc-relative value is
-    /// relative to: an x86 call's is the field's width, the field's end.
-    /// DEVIATE: LLVM folds it into the addend. llrm keeps it apart because two
-    /// writers choose by it alone: coff64's `REL32_1..5` against LLVM's
-    /// `REL32`, and Mach-O's `SIGNED_n`, which llvm-mc picks from the total
-    /// addend. `cmpb $1, x(%rip)` and `lea x-1(%rip)` share the total -5 and -1
-    /// and one object in LLVM, and two here.
+    /// relative to: an x86 call's is the field's width, the field's end. LLVM
+    /// folds it into the addend; llrm keeps it apart and the writers add it
+    /// back, choosing by the total: coff64 writes `REL32` for every value (the
+    /// distance past the end goes into the field) and Mach-O picks `SIGNED_n`
+    /// from `-(total + 4)`, so `cmpb $1, x(%rip)` and `lea x-1(%rip)` are one
+    /// object as in LLVM.
     pub pc_bias: usize,
     /// The value's specifier (`S_ABS`, `S_GOT`).
     pub spec: u8,
