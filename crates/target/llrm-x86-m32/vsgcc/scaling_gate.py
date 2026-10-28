@@ -101,6 +101,7 @@ def measure(jobs: int, axes=tuple(SIZES), levels=LEVELS) -> dict[str, tuple[int,
             return dict(zip((f"{a} {l}" for a, l in todo), pool.map(lambda t: costs(*t, Path(tmp)), todo)))
 
 
+RUN_AT = re.compile(r"@\d+$")
 INSTR = re.compile(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ total\s+\d+x (.+)$", re.M)
 
 
@@ -110,7 +111,11 @@ def own_work(command: list[str]) -> dict[str, float]:
     rows = INSTR.findall(text)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
         raise NoCounter("llrm-llc printed no instruction counts per step")
-    return {name: float(own) for own, _, name in rows}
+    # A pass that runs more than once, or is named by the line that makes it (`mir gvn@787`), is one step.
+    steps: dict[str, float] = {}
+    for own, _, name in rows:
+        steps[RUN_AT.sub("", name)] = steps.get(RUN_AT.sub("", name), 0.0) + float(own)
+    return steps
 
 
 def pass_costs(axis: str, level: str, work: Path, command=levels_time.command, compiler: str = "llrm") -> dict[str, tuple[float, float, float, float]]:
