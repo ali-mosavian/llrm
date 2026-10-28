@@ -36,7 +36,9 @@ fn a_frame_pointer_is_pushed_once() {
          return sum; }\n",
         "-Os",
     );
-    assert_eq!(text.matches("push ebp").count(), 2, "one for sort, one for f: {text}");
+    // The pin (`clang -target i386-unknown-linux-gnu -march=i486 -Os`) pushes
+    // `ebp` once, as a saved register of `sort`; `f` keeps no frame register.
+    assert_eq!(text.matches("push ebp").count(), 1, "sort's saved ebp only: {text}");
 }
 
 /// The pops of the epilogue were no instructions when the tails were merged,
