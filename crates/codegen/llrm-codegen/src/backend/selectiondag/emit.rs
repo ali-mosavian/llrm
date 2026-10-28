@@ -452,7 +452,7 @@ pub fn emit_in(
             emitter.node(node)?;
             // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
             // instruction's line.
-            if let Some(&line) = dag.lines.get(order as usize).filter(|line| **line != 0) {
+            if let Some(&Some(line)) = dag.lines.get(order as usize) {
                 for (at, block) in emitter.blocks.iter_mut().enumerate().skip(first_block) {
                     let from = if at == first_block { before } else { 0 };
                     for one in &mut block.insns[from..] {
