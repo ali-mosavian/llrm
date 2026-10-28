@@ -169,6 +169,11 @@ def c_include_arguments(work: Path) -> list[str]:
     return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
 
 
+def c_environment(variant: Variant) -> dict[str, str]:
+    """What llrm-cc is told of a C program's target: the Watcom row of the 16-bit target, whose programs enter `main_` as dosbatch links them."""
+    return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
+
+
 @functools.cache
 def reads_noinline_attribute(compiler: str) -> bool:
     """False where `compiler` rejects `__attribute__((noinline))` (a build before the native C front end hands the source to wccq, which reads it as
@@ -242,14 +247,14 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     if variant.language == FLAT:
         source = qbbuild.flat_source(variant.source)
         return [("llrm-qb", qbbuild.compile_arguments(source, (*compile_flags(variant, opt), "-g"), qbbuild.FLAT, obj), obj)]
-    tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
+    tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-cc"
     arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
     if variant.language in OURS_BASIC:
         arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
     extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
     kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
     if variant.language == "c":
-        extra += [*c_include_arguments(work), "-I", str(variant.source.parent)]
+        extra += [*c_include_arguments(work), "-I", str(variant.source.parent), "-c"]
     flags = compile_flags(variant, opt, kept is not None)
     out = [(tool, [str(kept[1] if kept else variant.source), *arguments, *extra, *flags, "-o", str(obj)], obj)]
     if kept:
@@ -279,21 +284,21 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             built = qbbuild.one_target(variant.source, work, objects, (*flags, "-g"), qbbuild.FLAT, stem, listing, before=("debug", "codeview"), image=work / f"{stem}.elf")
             LOADERS[built.exe] = built.files
             return built.exe, listing
-        tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-c"
+        tool = "llrm-qb" if variant.language in (*BASIC_LANGUAGES, *OURS_BASIC) else "llrm-cc"
         arguments = ["--dialect", variant.dialect, "--runtime", variant.dialect] if variant.language in BASIC_LANGUAGES else []
         if variant.language in OURS_BASIC:
             arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         if variant.language == "c":
-            extra += [*c_include_arguments(work), "-I", str(variant.source.parent)]
-        done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(source), *arguments, *extra, *flags, "-o", str(obj)]), 300, capture_output=True, text=True)
+            extra += [*c_include_arguments(work), "-I", str(variant.source.parent), "-c"]
+        done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(source), *arguments, *extra, *flags, "-o", str(obj)]), 300, env=c_environment(variant), capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
         if variant.language == "c":
             exe, linked = work / f"{stem}.exe", obj
             if counted is not None:
                 linked = work / f"{stem}.counted.obj"
-                done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(counted), *arguments, *extra, *flags, "-o", str(linked)]), 300, capture_output=True, text=True)
+                done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(counted), *arguments, *extra, *flags, "-o", str(linked)]), 300, env=c_environment(variant), capture_output=True, text=True)
                 if done.returncode != 0 or not linked.exists():
                     return "compile: " + (done.stderr or done.stdout).strip()[-300:]
             dosbatch.link_c(linked, exe, work, listing)

@@ -3,6 +3,7 @@
 import re
 import sys
 import json
+import pytest
 import unittest
 from pathlib import Path
 
@@ -833,3 +834,12 @@ def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_t
     for name in ("branch", "loop", "qlight", "qmove"):
         assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
         assert re.search(r"^read ", (bench.BENCH / "parity" / name / f"{name}.bas").read_text(), re.M)
+
+
+def test_a_c_bench_row_builds_and_links(tmp_path):
+    """llrm-c built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
+    if not (bench.BIN / "llrm-cc").is_file():
+        pytest.skip("no llrm-cc in the dist")
+    variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")
+    built = bench.build(variant, "Os", tmp_path, "bintree")
+    assert not isinstance(built, str), built
