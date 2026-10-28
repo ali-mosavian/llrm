@@ -189,15 +189,19 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         let name = global.name.owned().ok_or("an unnamed function")?;
         let mut machine =
             crate::isel::select(module, id, &program.layout, platform).map_err(|why| format!("@{name}: {why}"))?;
+        dump("Select", &machine);
         crate::prepass::run(&mut machine);
+        dump("Prepass", &machine);
         crate::flagcse::run(&mut machine);
+        dump("FlagCse", &machine);
         crate::storecluster::run(&mut machine);
+        dump("StoreCluster", &machine);
         crate::sibcall::run(&mut machine);
+        dump("SibCall", &machine);
         crate::prepass::order_copies(&mut machine);
-        if llrm_support::debug::enabled("arm64") {
-            eprintln!("@{name} before allocation:\n{machine:#?}");
-        }
+        dump("OrderCopies", &machine);
         let allocation = crate::regalloc::allocate(&mut machine);
+        dump("RegAlloc", &machine);
         let blocks = crate::frame::lower(&machine, &allocation).map_err(|why| format!("@{name}: {why}"))?;
         let blocks = crate::layout::fold(blocks);
         let blocks = crate::pairs::fold(blocks);
@@ -208,6 +212,24 @@ pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String
         });
     }
     Ok(out)
+}
+
+/// With `ISEL_DUMP=1`, the function's operations after machine phase `phase`,
+/// one per line (`=== Phase @name`), as the x86 backend prints its LIR.
+fn dump(
+    phase: &str,
+    machine: &crate::mfunc::MFunc,
+) {
+    if !llrm_support::env_flag!("ISEL_DUMP") {
+        return;
+    }
+    eprintln!("=== {phase} @{}", machine.name);
+    for block in &machine.blocks {
+        eprintln!("{}:", block.label);
+        for op in &block.ops {
+            eprintln!("    {op:?}");
+        }
+    }
 }
 
 fn platform_of_machine(program: &Program) -> Platform {

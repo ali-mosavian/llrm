@@ -557,3 +557,30 @@ fn debug_only_inline_cost_prints_the_decision_and_the_instruction_costs() {
     assert!(traced.contains("shl i64 %x, 1"), "the callee's body the costs were taken on: {traced}");
     assert!(run(&[]).is_empty());
 }
+
+/// The arm64 backend printed nothing between the IR and the asm, so where a
+/// value was spilled could only be read off the final code (`B_PNTC`, 83 extra
+/// stack accesses). `ISEL_DUMP=1` prints the operations after each machine
+/// phase, as the x86 backend does.
+#[test]
+fn isel_dump_prints_the_operations_after_each_machine_phase() {
+    let llc = std::path::Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
+    let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/inline_small_callee.ll");
+    let run = |dump: bool| {
+        let out = std::env::temp_dir().join(format!("isel_dump_{dump}.s"));
+        let mut command = std::process::Command::new(llc);
+        command.args(["-S", "-o"]).arg(&out).arg(ir).env_remove("ISEL_DUMP");
+        if dump {
+            command.env("ISEL_DUMP", "1");
+        }
+        let said = command.output().expect("llc runs");
+        assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+        String::from_utf8_lossy(&said.stderr).into_owned()
+    };
+    let dumped = run(true);
+    let phases: Vec<&str> = dumped.lines().filter_map(|line| line.strip_prefix("=== ")).collect();
+    for phase in ["Select @f", "Prepass @f", "RegAlloc @f"] {
+        assert!(phases.contains(&phase), "{phase} missing from {phases:?}");
+    }
+    assert!(run(false).is_empty());
+}

@@ -92,6 +92,8 @@ If the MIR is right to the last dump, the fault is in the machine phases:
 
 prints the LIR after each machine phase (`=== PhiElimination`, `RegAlloc`, `ParallelCopy`, `Peephole`, `LoopSlots`, `Scheduler`, ...). The first phase whose output is wrong is the one.
 
+`llrm-arm64-llc` (and `llrm-cc` with `LLRM_CC_TARGET=arm64-macos`) takes the same variable and prints the operations, one per line, after `Select`, `Prepass`, `FlagCse`, `StoreCluster`, `SibCall`, `OrderCopies` and `RegAlloc` (spills and reloads are visible there).
+
 `llrm-mir FILE` reads, verifies and prints a `.ll` back; `llrm-mir --run [--entry NAME] [--fuel N] FILE` interprets its `@main`, so a reduced MIR program can be run before and after a pass.
 
 ## 5. The regression test
