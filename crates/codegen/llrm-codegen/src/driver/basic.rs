@@ -1286,15 +1286,36 @@ pub fn ends_program(
 ) -> (lir::LirBody, IndexMap<i64, masm::Callee>) {
     let mut sites: IndexMap<i64, masm::Callee> = IndexMap::default();
     let mut blocks = Vec::new();
+    let mut fresh = body.blocks.iter().flat_map(|block| block.insns.iter()).map(|one| one.at).max().unwrap_or(0) + 1;
     for block in &body.blocks {
         let mut instructions = Vec::new();
         let mut exits = false;
         for instruction in &block.insns {
             let mut instruction = Arc::clone(instruction);
-            if instruction.what.as_ref().is_some_and(|what| what.op == Operation::Return) {
+            if let Some(what) = instruction.what.as_ref().filter(|what| what.op == Operation::Return) {
                 exits = true;
-                sites.insert(instruction.at, masm::Callee::new("B$CENP", far));
                 let mut replaced = (*instruction).clone();
+                if what.name.as_deref() == Some("jmp") {
+                    // A sibling call (the DAG selector's, for a last statement
+                    // that calls the runtime) is a call
+                    // here: the exit follows it.
+                    let mut call = what.clone();
+                    call.op = Operation::Call;
+                    call.name = Some("call".into());
+                    if !call.indirect {
+                        call.sources.clear();
+                    }
+                    replaced.what = Some(call);
+                    instructions.push(Arc::new(replaced));
+                    let mut exit = (*instruction).clone();
+                    exit.at = fresh;
+                    fresh += 1;
+                    exit.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
+                    sites.insert(exit.at, masm::Callee::new("B$CENP", far));
+                    instructions.push(Arc::new(exit));
+                    continue;
+                }
+                sites.insert(instruction.at, masm::Callee::new("B$CENP", far));
                 replaced.what = Some(_semantics(Operation::Call, "call", vec![], vec![]));
                 instruction = Arc::new(replaced);
             }

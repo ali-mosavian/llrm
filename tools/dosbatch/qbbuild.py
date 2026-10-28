@@ -40,7 +40,7 @@ def runtime16(work: Path) -> dict[str, Path]:
     """The real-mode runtime's objects by source name, from the cache where nothing it is made of has changed."""
     work.mkdir(parents=True, exist_ok=True)
     include = dosbatch.c_include(dosbatch.REAL_MODE, work)
-    tree, tools = qb32._tree(), qb32._stamp("llrm-c", "jwasm")
+    tree, tools = qb32._tree(), qb32._stamp(dosbatch.c_frontend(), "jwasm")
     made: dict[str, Path] = {}
 
     def make(name: str, source: Path, produce) -> None:

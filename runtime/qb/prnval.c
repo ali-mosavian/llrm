@@ -97,6 +97,19 @@ static void string(SD *sd, enum Terminator end)
     terminate(end);
 }
 
+#pragma aux B_FTAB "B$FTAB"
+#pragma aux B_WRIT "B$WRIT"
+#pragma aux B_PEOS "B$PEOS"
+#pragma aux B_PCI2 "B$PCI2"
+#pragma aux B_PSI2 "B$PSI2"
+#pragma aux B_PEI2 "B$PEI2"
+#pragma aux B_PCI4 "B$PCI4"
+#pragma aux B_PSI4 "B$PSI4"
+#pragma aux B_PEI4 "B$PEI4"
+#pragma aux B_PCSD "B$PCSD"
+#pragma aux B_PSSD "B$PSSD"
+#pragma aux B_PESD "B$PESD"
+
 /* B$FTAB: TAB(column) in a PRINT: spaces up to the 1-based column, on the next
    line if the cursor is past it. */
 void B_FTAB(short column)
@@ -114,7 +127,6 @@ void B_FTAB(short column)
         cn_putc(' ');
 }
 
-#pragma aux B_FTAB "B$FTAB"
 
 /* B$WRIT: the start of a WRITE statement. */
 void B_WRIT(void)
@@ -122,7 +134,6 @@ void B_WRIT(void)
     writing = 1;
 }
 
-#pragma aux B_WRIT "B$WRIT"
 
 /* B$PEOS: the end of a PRINT that ended with a separator, and of an INPUT.  The
    console is written as each item is, so there is nothing to flush. */
@@ -180,14 +191,3 @@ void B_PESD(SD *sd)
 {
     string(sd, EOL);
 }
-
-#pragma aux B_PEOS "B$PEOS"
-#pragma aux B_PCI2 "B$PCI2"
-#pragma aux B_PSI2 "B$PSI2"
-#pragma aux B_PEI2 "B$PEI2"
-#pragma aux B_PCI4 "B$PCI4"
-#pragma aux B_PSI4 "B$PSI4"
-#pragma aux B_PEI4 "B$PEI4"
-#pragma aux B_PCSD "B$PCSD"
-#pragma aux B_PSSD "B$PSSD"
-#pragma aux B_PESD "B$PESD"

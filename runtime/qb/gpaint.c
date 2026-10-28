@@ -29,6 +29,9 @@ static void push(int left, int right, int y, int step)
     span_count++;
 }
 
+#pragma aux B_PAIN "B$PAIN"
+#pragma aux B_PNTC "B$PNTC"
+
 /* B$PAIN: the fill colour and the border colour (-1 for the foreground, and for
    the border the fill colour). */
 void B_PAIN(short fill, short border)
@@ -78,7 +81,6 @@ void B_PAIN(short fill, short border)
     qb_paint_queue_close();
 }
 
-#pragma aux B_PAIN "B$PAIN"
 
 /* The tile of PAINT's string (QB rt/paint.asm FGSTRINI, llagrp.asm B$TileMod):
    one byte a row where the mode has one plane, a row of 8 pixels (4 in the 2
@@ -192,5 +194,3 @@ void B_PNTC(SD *pattern, short border, short background)
     qb_paint_queue_close();
     str_tmp_free(pattern);
 }
-
-#pragma aux B_PNTC "B$PNTC"

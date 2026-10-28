@@ -4,14 +4,15 @@
 #include "qb.h"
 #include "rtinit.h"
 
-/* start.asm: where XIB and XIE are. */
-extern qb_init_fn *qb_xi_begin, *qb_xi_end;
 #pragma aux qb_xi_begin "qb_xi_begin"
 #pragma aux qb_xi_end "qb_xi_end"
+#pragma aux qb_traps "B$TRAPS"
+
+/* start.asm: where XIB and XIE are. */
+extern qb_init_fn *qb_xi_begin, *qb_xi_end;
 
 /* trap.asm: takes the divide fault. */
 extern void qb_traps(void);
-#pragma aux qb_traps "B$TRAPS"
 
 /* Runs each initializer the linked modules registered (B$Init's XI walk). */
 void qb_run_initializers(void)

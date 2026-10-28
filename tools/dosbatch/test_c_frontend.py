@@ -1,7 +1,10 @@
 """`c_compile` names the C compiler a run builds its programs with: llrm-c, or llrm-cc where LLRM_C_FRONTEND says so."""
 
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dosbatch  # noqa: E402
@@ -128,9 +131,55 @@ def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
     assert "/" not in name and name == dosbatch.object_name("runtime/nib/x86-m16/init.asm")
 
 
+def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypatch, tmp_path):
+    """qb32.build and qbruntime._compile_c named llrm-c: with it unbuilt every QB program failed the landing's link check ("llrm was built without the toolchain feature")."""
+    import qb32
+    import qbruntime
+
+    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
+    asked = []
+    monkeypatch.setattr(dosbatch, "_host", lambda command, env=None: asked.append((command, env)))
+    qbruntime._compile_c(Path("a.c"), tmp_path / "a.obj", tmp_path)
+    (command, env), = asked
+    assert Path(command[0]).name == "llrm-cc" and "-mbss-begin" in command and env == {"LLRM_CC_TARGET": "x86_16-wat"}, (command, env)
+    assert not any(Path(one).name == "llrm-c" for one in command)
+    assert qb32._stamp(dosbatch.c_frontend()).startswith("llrm-cc")
+
+
 def test_a_qb_program_links_the_start_up_that_calls_underscore_main(monkeypatch):
     """The QB link took C's defines, so under llrm-cc its start-up asked for `main_`, which no QB program defines (jwlink E2028: main_ is an undefined reference)."""
     monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
     monkeypatch.setattr(dosbatch, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: type("R", (), {"stdout": "A=1"})())}))
     assert dosbatch.os_defines("x86-m32", "c") == ("A=1", "LL_MAIN=main_")
     assert dosbatch.os_defines("x86-m32", "qb") == ("A=1",)
+
+
+def test_the_real_mode_start_up_finds_qb_start_by_the_name_start_asm_calls(tmp_path):
+    """The m16 fork clang ignores `__cdecl`: rtinit.c defined `_qb_start@3`, start.asm asks for `_qb_start`, and every real-mode QB program failed
+    to link (jwlink E2028: _qb_start is an undefined reference)."""
+    import qbruntime
+
+    if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
+        pytest.skip("needs LLRM_CLANG_M16 and LLRM_OW")
+    obj = tmp_path / "rtinit.obj"
+    qbruntime._compile_c(dosbatch.ROOT / "runtime/qb/rtinit.c", obj, dosbatch.c_include(dosbatch.REAL_MODE, tmp_path))
+    names = obj.read_bytes()
+    assert b"\x09_qb_start" in names and b"_qb_start@3" not in names
+
+
+@pytest.mark.parametrize("model", ["m16", "m32"])
+def test_an_initializer_lands_in_the_xi_segments_start_up_walks(tmp_path, model):
+    """`#pragma data_seg("XI", ...)` is ignored by the fork clang: nh_xinit's table entry sat in plain data, nothing registered the heap component,
+    and every m32 QB program died at start-up ("Out of memory", "String formula too complex")."""
+    import qb32
+    import qbruntime
+
+    if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
+        pytest.skip("needs LLRM_CLANG_M16 and LLRM_OW")
+    target, platform = (dosbatch.REAL_MODE, qbruntime.platform_directory()) if model == "m16" else (qb32.TARGET, qb32.PLATFORM)
+    include = dosbatch.c_include(target, tmp_path)
+    obj = tmp_path / "nheap.obj"
+    flags = ["-I", str(qbruntime.RUNTIME), "-I", str(platform), *qbruntime.device_includes(platform)]
+    dosbatch._host(*dosbatch.c_compile(dosbatch.ROOT / "runtime/qb/nheap.c", obj, target, "-Os", include, [], flags))
+    names = obj.read_bytes()
+    assert all(bytes([len(name)]) + name in names for name in (b"XIB", b"XI", b"XIE"))

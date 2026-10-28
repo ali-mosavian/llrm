@@ -21,6 +21,11 @@ static long aspect_scale; /* the aspect B$CASP was given, in 256ths of the scale
 static int aspect_x;      /* and whether the x axis is the one scaled */
 static int has_start, has_end, has_aspect;
 
+#pragma aux B_CSTT "B$CSTT"
+#pragma aux B_CSTO "B$CSTO"
+#pragma aux B_CASP "B$CASP"
+#pragma aux B_CIRC "B$CIRC"
+
 void B_CSTT(float angle)
 {
     start_angle = angle;
@@ -287,8 +292,3 @@ void B_CIRC(float radius, short color)
         rim_plain(&c);
     gd_dots_end(&c.fill);
 }
-
-#pragma aux B_CSTT "B$CSTT"
-#pragma aux B_CSTO "B$CSTO"
-#pragma aux B_CASP "B$CASP"
-#pragma aux B_CIRC "B$CIRC"

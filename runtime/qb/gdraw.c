@@ -8,8 +8,10 @@
 #include "qb.h"
 #include "varptr.h"
 
-void B_PAIN(short fill, short border);
 #pragma aux B_PAIN "B$PAIN"
+#pragma aux B_DRAW "B$DRAW"
+
+void B_PAIN(short fill, short border);
 
 enum { FRACTION = 256, HALF = 128 };
 
@@ -280,5 +282,3 @@ void B_DRAW(SD *commands)
     execute(&d);
     str_tmp_free(commands);
 }
-
-#pragma aux B_DRAW "B$DRAW"
