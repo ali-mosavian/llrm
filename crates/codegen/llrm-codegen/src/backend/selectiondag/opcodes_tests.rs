@@ -7,7 +7,7 @@ use super::opcodes::{OpcodeMap, Unmapped};
 
 fn map() -> OpcodeMap {
     let target = llrm_x86_m32::M32;
-    let forms = llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses");
+    let forms = llrm_target::instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses");
     OpcodeMap::new(forms)
 }
 
@@ -122,7 +122,7 @@ fn a_memory_operand_has_the_width_the_name_gives() {
 
 fn map64() -> OpcodeMap {
     let target = llrm_x86_m64::M64;
-    OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses"))
+    OpcodeMap::new(llrm_target::instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses"))
 }
 
 /// The pin names the scalar SSE instructions `ADDSDrr`, `MOVSDrm_alt`,
