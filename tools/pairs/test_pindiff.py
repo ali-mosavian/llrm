@@ -215,6 +215,14 @@ def test_a_new_compile_failure_outside_the_known_list_is_unexpected():
     assert [entry.name for entry in sweep.fixed(seen[:1])] == ["x_ll_div", "x_ll_div", "lru"]
 
 
+def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
+    """After llrm-cc's m32 default became regcall every m32 row read `no figures`: ours was run with -mabi=sysv ('calling convention 92')."""
+    pindiff = load("pindiff")
+    cfg = pindiff.MACHINES["m32"]
+    assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
+    assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
+
+
 def test_a_known_failure_that_is_gone_is_reported_not_failed():
     """The sweep exited 1 when #5202 fixed x_ll_div's Freeze crash: the fixing PR could not land until it edited KNOWN in step, and w9/w13
     could not drop the entry at all while crashsweep.py was not on feat/parity (2026-10-27). A fix is reported (`FIXED?`); only a new crash fails."""

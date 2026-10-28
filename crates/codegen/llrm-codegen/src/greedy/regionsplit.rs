@@ -193,6 +193,18 @@ impl Splitter<'_> {
         order: &AllocationOrder,
         new_vregs: &mut Vec<u32>,
     ) -> Option<RegId> {
+        self.matrix.fixed().set_lane(Some(virt.reg()));
+        let phys = self.try_split_for(virt, order, new_vregs);
+        self.matrix.fixed().set_lane(None);
+        phys
+    }
+
+    fn try_split_for(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        new_vregs: &mut Vec<u32>,
+    ) -> Option<RegId> {
         // Ranges must be Split2 or less.
         if self.extra.get_stage(virt.reg()) >= LiveRangeStage::Spill {
             return None;

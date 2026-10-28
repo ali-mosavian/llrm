@@ -581,7 +581,17 @@ impl Cost {
             let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
             self.c.num_base_adds += (parts - (1 + usize::from(folded))) as u32;
         }
-        self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
+        // DEVIATE LU2: the offset beside two registers is the displacement of
+        // the `lea` that adds the registers, when the form is a legal address
+        // for the target; only a Basic or ICmpZero use pays an add for it.
+        let absorbed = f.unfolded_offset.is_non_zero()
+            && lu.kind != Kind::Address
+            && parts >= 2
+            && r.tti.address_form_adds_offsets()
+            && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
+        if !absorbed {
+            self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
+        }
 
         // Scaling amounts that are not free.
         self.c.scale_cost += scaling_factor_cost(r.tti, r.se, lu, f, r.l).value as u32;

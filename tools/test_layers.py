@@ -84,6 +84,12 @@ def test_no_new_upward_dependency_and_the_allow_list_only_shrinks():
     assert not ALLOWED - found, f"no longer violations, remove from ALLOWED: {sorted(ALLOWED - found)}"
 
 
+def test_the_root_mir_directory_is_not_tracked():
+    """`--dump` writes ./mir/ in the cwd; 97 of its files were committed by accident and nothing reads them."""
+    tracked = subprocess.check_output(["git", "ls-files", "mir"], cwd=ROOT, text=True)
+    assert tracked == "", tracked.splitlines()[:3]
+
+
 def test_the_default_build_does_not_make_llrm_c():
     """llrm-llc and llrm-cc are the C compiler; llrm-c builds only with feature c-legacy (and wccq, which brings it)."""
     import tomllib
