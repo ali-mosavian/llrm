@@ -1450,7 +1450,7 @@ fn lined(
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-fn noted(
+pub(crate) fn noted(
     module: &Module,
     function: &Function,
     name: &str,

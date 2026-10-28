@@ -101,7 +101,7 @@ datalayout = "{datalayout:x86-m16}-ni:2:3"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-fhosted", "-fpack-struct=1", "-fno-pic",
-  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
+  "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
   "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h",
 ]
 llc = ["-mregcall-default"]
@@ -115,7 +115,7 @@ triple = "i486-unknown-linux-gnu"
 datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 clang_env = "LLRM_CLANG_M16"
 clang = ["-ffp-contract=off", "-target", "i486-unknown-linux-gnu", "-fhosted", "-fno-pic", "-fno-stack-protector",
-  "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall", "-fdeclspec", "-Wno-error=incompatible-function-pointer-types", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/flat.h", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m32", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h"]
+  "-fno-asynchronous-unwind-tables", "-D__386__=1", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall", "-fdeclspec", "-Wno-error=incompatible-function-pointer-types", "-Wno-unknown-attributes", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/flat.h", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m32", "-isystem", "{env:LLRM_OW}/bld/hdr/dos/h"]
 llc = ["-fobject-format=omf", "-mabi=watcom", "-mregcall-default"]
 object = "omf"
 link = ["python3", "-I", "{root}/tools/wat_link.py", "m32", "{env:LLRM_OW}", "{output}", "{objects}"]

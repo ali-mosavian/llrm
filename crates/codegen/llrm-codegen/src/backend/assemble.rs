@@ -963,7 +963,8 @@ impl Staged {
     }
 }
 
-/// Whether `name` calls a function `llrm_mir::atomic::hidden` made.
+/// Whether `name` calls a function `llrm_mir::atomic::hidden` made that the
+/// DAG has no node for: all but an exchange and a store.
 fn calls_atomic(
     module: &Module,
     name: &str,
@@ -984,7 +985,7 @@ fn calls_atomic(
                         matches!(instruction.opcode, Opcode::Call(_))
                             && matches!(
                                 instruction.operands.last(),
-                                Some(&Operand::Constant(callee)) if matches!(module.context.get(callee).kind, llrm_mir::context::ConstantKind::Global(one) if module.global(one).name.owned().is_some_and(|name| llrm_mir::atomic::decode(&name).is_some()))
+                                Some(&Operand::Constant(callee)) if matches!(module.context.get(callee).kind, llrm_mir::context::ConstantKind::Global(one) if module.global(one).name.owned().and_then(|name| llrm_mir::atomic::decode(&name)).is_some_and(|info| !matches!(info.kind, llrm_mir::opcode::AtomicKind::Rmw(llrm_mir::opcode::RmwOp::Xchg) | llrm_mir::opcode::AtomicKind::Store)))
                             )
                     },
                 ),
@@ -1015,9 +1016,9 @@ fn staged(
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
         // selector for the rest -- to bisect a wrong result to a function
-        // DEVIATE SD253: the DAG has no atomic nodes yet; a function calling a
-        // hidden atomic (`llrm_mir::atomic::hidden`) is selected by the old
-        // selector.
+        // DEVIATE SD253: the DAG has `ATOMIC_SWAP` only; a function calling any
+        // other hidden atomic (`llrm_mir::atomic::hidden`) is selected by the
+        // old selector.
         Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
             crate::backend::selectiondag::dag_function::selected_in_pool(
