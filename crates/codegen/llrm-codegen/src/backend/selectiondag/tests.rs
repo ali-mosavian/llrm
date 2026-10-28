@@ -12,6 +12,7 @@ fn arg(
     dag.get_register(vt, reg)
 }
 
+mod abs;
 mod action_table;
 mod add_simplify;
 mod and_fold;
