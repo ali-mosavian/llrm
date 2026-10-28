@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -11,6 +11,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | addressvalues | Spells the `address` operations of an allocated body as `lea` operands. | `assemble.rs`, on each machined body before `masm::cleaned_returns`, and | [addressvalues](addressvalues.md) |
 | affine | Recognises allocated instructions that keep a register an affine sum of registers, and names the 32-bit or 16-bit address of such a sum. | `exactaddress.rs`, which folds the chain into a memory operand, and the | [affine](affine.md) |
 | allocate | Assigns a register to every value of a lowered body, splitting and spilling the values that do not fit. | Once per function and route in the machine phases (`regalloc`), after | [allocate](allocate.md) |
+| allocresult | What an allocation returns: the error kinds and the assignment. | `backend::allocate`, the passes that run after it and the tests that | [allocresult](allocresult.md) |
 | arithmetic | Ranks the ways to multiply by a constant on a target: shift and add chains, `lea`, or `imul`. | `isel/matcher.rs` (which multiply to select), `division.rs` (a divisor's | [arithmetic](arithmetic.md) |
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |
@@ -25,7 +26,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | cfi | Reads call frame information back from emitted code. | `debuginfo.rs`, under `-g`. | [cfi](cfi.md) |
 | classes | What the selected target says about its registers, for the allocator and the passes around it. | `allocate.rs`, `coalesce.rs`, `constrain.rs`, `regclass.rs`, the spiller | [classes](classes.md) |
 | cmpsub | A compare of a value with a constant, where the same value minus (nearly) that constant is made just before it: the subtract's flags are the compare's. | A machine phase ahead of the first SSA phase (`flow::machine_with`), at | [cmpsub](cmpsub.md) |
-| coalesce | Removes a copy whose two values can share a register: the phase that runs LLVM's `RegisterCoalescer` ([`crate::coalescer`]). | Once per function, in the machine phases after `twoaddr` and before | [coalesce](coalesce.md) |
 | combiner | A chain of one integer operation rebuilt so the operand that arrives last joins last: LLVM's `MachineCombiner` ([MachineCombiner.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCombiner.cpp)) with the generic reassociation patterns of `TargetInstrInfo`, the only ones i486 has. | On SSA, after `leaopt` and before `phielim` (the pin's `addILPOpts`, after | [combiner](combiner.md) |
 | comparefold | Fold a one-use load into the comparison that reads it, as a memory operand. | Per block, inside isel's cross-instruction selection | [comparefold](comparefold.md) |
 | compares | Expands `llvm.scmp` and `llvm.ucmp` into two compares and a subtract in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, with the bit counts, for a target | [compares](compares.md) |
@@ -79,6 +79,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | live | The live intervals the allocator holds of the body it is rewriting, and the spill weight each value gets from them. | `allocate` builds and edits it; `spiller`, `splitkit` and `regclass` | [live](live.md) |
 | liveness | Which physical register and flag lanes are live into and dead out of each block, and what one instruction reads and writes. | `peephole` and the sub-passes it runs (`regthrash`, `copysink`, | [liveness](liveness.md) |
 | liverangeshrink | Moves an instruction up to just after the last definition of its operands, so the operands' live ranges end sooner. | A machine phase after `machinesink` and before `phielim` | [liverangeshrink](liverangeshrink.md) |
+| liverows | Which values are live where, per block and per instruction row, for the passes that place values (the allocator's consumers). | `backend::allocate` and the passes that read liveness of a lowered body | [liverows](liverows.md) |
 | loopslots | Moves a loop's invariant loads, of a spill slot or of a constant, out of the loop to its entry edges. | After `peephole` (spill traffic is final), before `schedule`. Always on; | [loopslots](loopslots.md) |
 | lower_int64 | The contract of an inline routine the compiler places where an operation has no instruction (`llrm_x86::helpers`): what it reads and what it changes. | `isel/wide` (64-bit arithmetic helpers) and `isel/unwind`. | [lower_int64](lower_int64.md) |
 | machinecp | Forward and backward copy propagation inside a block, and dead-copy removal: LLVM's `MachineCopyPropagation`. | In the peephole phase, where `copyprop` ran (it and `regthrash`'s rename | [machinecp](machinecp.md) |
@@ -102,7 +103,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | peepholeopt | A subtract whose difference nothing reads is a compare. | A machine phase on SSA after MachineSink and ahead of MachineCombiner (the | [peepholeopt](peepholeopt.md) |
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
-| postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [postings](postings.md) |
+| postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [postings](postings.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
 | prezeroed | The entry block's zero writes to a local nothing has touched yet, for a frame the runtime zero-fills (QB's `B$ENRA`): the frame already holds them. | The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`), | [prezeroed](prezeroed.md) |
@@ -110,7 +111,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | pushfold | A value that a load made and nothing else reads is read from memory where it is pushed or added: `mov r, [m]; push r` is `push [m]`, and `v2 := add v0, v1` with `v1` such a load is `v2 := add v0, [m]`, whichever operand of a commutative operation the load is. | Twice. As `LoadFold` first of the machine phases, after selection: the pin's | [pushfold](pushfold.md) |
 | regalloc_input | Test support: the machine-phase list and the LIR a fixture has reached just before a chosen phase. | Tests of [`crate::backend::allocate`](allocate.md), `crate::backend::ssaspill`, | [regalloc_input](regalloc_input.md) |
 | regclass | The register class of each value: the set of registers an instruction's operands allow it to be in. | Not a pass: queried on demand, by `coalesce`, `constrain`, `allocate`, at | [regclass](regclass.md) |
-| registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [registerinfo](registerinfo.md) |
+| registerinfo | The backend's view of a target's register file: re-exports of the types a target's `registers.regs` description generates. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [registerinfo](registerinfo.md) |
 | regpressure | Register pressure per pressure set, for the pre-RA scheduler: `RegPressureTracker` of the pin (RegisterPressure.cpp) as `GenericScheduler` asks it of a bottom-up region. | Named by `machinesched`. | [regpressure](regpressure.md) |
 | regthrash | Which register lanes are dead after each instruction of a block, from the lanes dead at its exit. | `peephole`, `exactaddress`, `sharedstores`, `fixupleas`, `fixupbw` | [regthrash](regthrash.md) |
 | relayout | Lays a function's frame out a second time, with a hole for the spill slots, by moving each frame cell of the first layout. | In `machined_once` (`assemble.rs`), after the first layout is chosen, unless | [relayout](relayout.md) |
@@ -133,10 +134,11 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documen
 | stepflags | Removes a compare of a value with a constant when a step of the same value already sets those flags. | Once per block in instruction selection, after `comparefold` and before | [stepflags](stepflags.md) |
 | storecombine | Packs two neighbouring literal word stores into one dword store. | A sub-pass of [`crate::backend::peephole`](peephole.md), once per body, after | [storecombine](storecombine.md) |
 | storedhomes | Finds the memory cells that provably still hold a phi's value, so a spilled value read from one needs no store and no slot of its own. | `crate::backend::spiller` and [`crate::backend::floatassign`](floatassign.md) (`held`); | [storedhomes](storedhomes.md) |
-| target | What the machine has for the register allocator: operand needs, the segment registers, and the facts the allocator asks of each instruction, so it can place operands without knowing x86. | [`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md), | [target](target.md) |
+| target | What the machine has for the register allocator: operand needs, the segment registers, and the facts the allocator asks of each instruction, so it can place operands without knowing x86. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [target](target.md) |
 | timing | Core-clock bounds of multiplies and divides, read from the CPU profile, so the compiler can pick a multiply or divide form by cost. | [`crate::backend::division`](division.md) (multiply by reciprocal against a divide) and | [timing](timing.md) |
 | twoaddr | Rewrites three-address arithmetic into x86's two-address form before register allocation. | A machine phase after `floatalloc` and before `coalesce` | [twoaddr](twoaddr.md) |
 | upperzero | Which 32-bit register roots hold zero in their upper half, and the `movzx` that makes it so where a 32-bit address needs it. | `established` is the last sub-pass of [`crate::backend::peephole`](peephole.md), run when | [upperzero](upperzero.md) |
 | valuefacts | What the middle end proves of an integer value, for the instruction selector to read: the bounds of an index or a dividend. | Once per function selected, in `isel::selected_with`. | [valuefacts](valuefacts.md) |
 | valuetrack | Where each `-g` variable's value is over the emitted code. | On the emitted code of a procedure, from `debuginfo`, when `-g` places | [valuetrack](valuetrack.md) |
 | verify | Checks that a lowered body is well formed, between machine phases. | After instruction selection and after every machine phase when `LLRM_VERIFY` | [verify](verify.md) |
+| widths | How wide each value is where an instruction names it. | The greedy allocator's inputs (`greedy::shadow`), which size each value's | [widths](widths.md) |

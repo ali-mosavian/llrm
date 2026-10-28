@@ -48,7 +48,7 @@
 //! None: the index is plumbing that changes no instruction, so there is no LIR
 //! to show before and after. Read `Postings::of` for what it holds.
 //! # Used by
-//! [`crate::backend::allocate`], [`crate::backend::coalesce`],
+//! [`crate::backend::allocate`], [`crate::coalescer::pass`],
 //! [`crate::backend::splitkit`], [`crate::backend::spiller`] and
 //! [`crate::backend::storedhomes`].
 
