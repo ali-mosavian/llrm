@@ -596,3 +596,32 @@ fn the_rp3_row_calls_the_library_by_its_c_names() {
     assert!(listing.contains("extern _cos:") && listing.contains("extern _fabs:"), "{listing}");
     assert!(listing.contains("_f@3 proc"), "{listing}");
 }
+
+/// An unprototyped (K&R) function under the rows' default regcall: clang
+/// refused it ("function with no prototype cannot use the regcall calling
+/// convention"), 18 torture builds (20000412-3).
+#[test]
+fn a_knr_function_compiles_at_the_wat_rows() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-knr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("m.c"),
+        "int f(a) int a; { return a + 1; }\nint g();\nint h(void) { return g(2) + f(3); }\n",
+    )
+    .unwrap();
+    for row in ["x86_32-wat", "x86_16-wat"] {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", row)
+            .args(["-O2", "-w", "-std=gnu89", "-S", "-o"])
+            .arg(dir.join("m.s"))
+            .arg(dir.join("m.c"))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{row}: {}", String::from_utf8_lossy(&run.stderr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
