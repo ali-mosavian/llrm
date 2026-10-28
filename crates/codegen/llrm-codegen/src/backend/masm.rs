@@ -218,6 +218,10 @@ pub struct Procedure {
     pub entry: i64,
     /// Compare SP with the runtime's limit once the frame is allocated.
     pub stack_check: Option<StackCheck>,
+    /// The routine that touches the pages of a frame of 4 KiB or more before
+    /// its `sub` (`__chkstk` on Windows: `mov eax, N; call __chkstk; sub rsp,
+    /// rax`), where the target's object format calls for one.
+    pub probe_stack: Option<String>,
     /// The target's frame register, stack pointer and callee-saved registers.
     pub registers: llrm_target::FrameRegisters,
 }
@@ -258,6 +262,7 @@ pub fn routine_procedure(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers,
     }
 }
@@ -781,6 +786,82 @@ fn seh_after(
         _ => return None,
     };
     Some(Item::Seh(seh))
+}
+
+/// `X86FrameLowering::emitStackProbe`: a frame past a page is allocated through
+/// the probe routine, which leaves `rsp` for the `sub` to move (`mov eax, N;
+/// call __chkstk; sub rsp, rax`).
+fn probed_entry(
+    procedure: &Procedure,
+    enter: Vec<Semantics>,
+) -> Vec<Semantics> {
+    let Some(((symbol, (wide, _)), regs)) =
+        procedure.probe_stack.as_deref().zip(procedure.registers.slot_scratch).zip(procedure.body.registers.as_ref())
+    else {
+        return enter;
+    };
+    let size = reg(regs.0.named(wide, 4));
+    let mut out = Vec::new();
+    for one in enter {
+        let bytes = match (one.op, one.name.as_deref(), one.dests.first(), one.sources.get(1)) {
+            (Operation::Binary, Some("sub"), Some(dest), Some(Loc::Imm(imm)))
+                if *dest == sp_reg() && imm.value >= STACK_PROBE_PAGE as i64 =>
+            {
+                imm.value
+            }
+            _ => {
+                out.push(one);
+                continue;
+            }
+        };
+        out.extend([
+            semantics(
+                Operation::Move,
+                "mov",
+                vec![size.clone()],
+                vec![Loc::Imm(ir::Imm { value: bytes, width: 2, address: None })],
+            ),
+            Semantics { name: Some(symbol.into()), ..Semantics::new(Operation::Call) },
+            semantics(Operation::Binary, "sub", vec![sp_reg()], vec![sp_reg(), reg(wide)]),
+        ]);
+    }
+    out
+}
+
+/// An entry instruction as an item: the stack probe's call is a callee.
+fn entry_item(
+    one: &Semantics,
+    probe: Option<&str>,
+) -> Item {
+    match (one.op, &one.name) {
+        (Operation::Call, Some(name)) if !one.indirect && probe == Some(&**name) => {
+            Item::Callee(Callee::new(&**name, false))
+        }
+        _ => Item::Semantics(one.clone()),
+    }
+}
+
+/// The immediate a `mov reg, imm` of the entry moves.
+fn size_moved(one: &Semantics) -> Option<i64> {
+    match (one.op, one.sources.first()) {
+        (Operation::Move, Some(Loc::Imm(imm))) if matches!(one.dests.first(), Some(Loc::Reg(_))) => Some(imm.value),
+        _ => None,
+    }
+}
+
+/// `sub rsp, reg` after `mov reg, size` as the `sub rsp, size` it makes.
+fn probed(
+    one: &Semantics,
+    size: Option<i64>,
+) -> Option<Semantics> {
+    let reg_source = matches!(one.sources.get(1), Some(Loc::Reg(_)));
+    if one.op != Operation::Binary || one.name.as_deref() != Some("sub") || one.dests.first() != Some(&sp_reg()) {
+        return None;
+    }
+    let (true, Some(value)) = (reg_source, size) else { return None };
+    let mut stated = one.clone();
+    stated.sources[1] = Loc::Imm(ir::Imm { value, width: 2, address: None });
+    Some(stated)
 }
 
 fn reg(register: RegId) -> Loc {
@@ -1326,6 +1407,9 @@ pub fn interrupt_parameters() -> i64 {
 /// segments, so the last one pushed is the lowest slot.
 const INTERRUPT_SAVED: usize = 5;
 
+/// `StackProbeSize`: a frame of this many bytes or more is probed.
+const STACK_PROBE_PAGE: u64 = 4096;
+
 /// What an interrupt handler wraps its frame in. It may interrupt anything,
 /// so it saves every register it or a callee may change once, as the frame
 /// the target's `interrupt_frame` (calling.toml) lays out, and gives compiled
@@ -1435,7 +1519,8 @@ impl Sequences {
         procedure: &Procedure,
         omit: bool,
     ) -> Self {
-        let (mut enter, mut leave) = parts(procedure, omit);
+        let (enter, mut leave) = parts(procedure, omit);
+        let mut enter = probed_entry(procedure, enter);
         // The registers a `saved_first` frame pushes are part of `enter`.
         let first = procedure.body.saved_first;
         let lows = if first { Vec::new() } else { saved_of(procedure) };
@@ -1559,8 +1644,14 @@ fn built(
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
         let mut pending = Vec::new();
+        let mut size = None;
         for one in &enter {
-            entry_items.push(Item::Semantics(one.clone()));
+            entry_items.push(entry_item(one, procedure.probe_stack.as_deref()));
+            // The directives state the allocation the probe's `sub rsp, rax`
+            // makes by the size that was moved into `eax`.
+            let stated = probed(one, size);
+            size = size_moved(one).or(size);
+            let one = stated.as_ref().unwrap_or(one);
             let marks = cfi.after(one, &bp);
             entry_items.extend(seh_after(one, &bp, &hardware));
             // The System V callee-saved registers: rbx, rbp and r12 to r15
@@ -1582,7 +1673,7 @@ fn built(
         entry_items.extend(pending.into_iter().rev());
         after_entry = Some(cfi.clone());
     } else {
-        entry_items.extend(enter.into_iter().map(Item::Semantics));
+        entry_items.extend(enter.iter().map(|one| entry_item(one, procedure.probe_stack.as_deref())));
     }
     let mut split_edges: Vec<(i64, Option<i64>, Vec<crate::backend::shrinkwrap::Piece>)> = Vec::new();
     let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(entry_items).collect();
@@ -1983,6 +2074,8 @@ fn addressed_pass(
     let slot = registers.slot;
     let mut depth: Option<i64> = Some(0);
     let mut in_dead = false;
+    // The size the entry moved into a register for the stack probe.
+    let mut moved: Option<i64> = None;
     let mut assumed: Vec<String> = Vec::new();
     let name_of = |target: i64| label(number, target);
     for item in items.iter_mut() {
@@ -2030,6 +2123,7 @@ fn addressed_pass(
             Item::Mark(_) => {}
             Item::Semantics(what) => {
                 let here = depth.ok_or(Stop::Refused)?;
+                moved = size_moved(what).or(moved);
                 // `pop` to memory addresses the cell with the stack already
                 // taken back.
                 let at = match (what.op, &what.dests[..]) {
@@ -2141,6 +2235,13 @@ fn addressed_pass(
                                 if ir::root(dest.register) == ir::root(STACK) && ir::root(source.register) == ir::root(STACK) =>
                             {
                                 *value
+                            }
+                            // The probe's `sub rsp, rax` takes what was moved
+                            // into `eax`.
+                            ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
+                                if ir::root(dest.register) == ir::root(STACK) && ir::root(source.register) == ir::root(STACK) =>
+                            {
+                                moved.ok_or_else(|| stop(procedure, &format!("the stack pointer written by {what:?}")))?
                             }
                             _ => return Err(stop(procedure, &format!("the stack pointer written by {what:?}"))),
                         };

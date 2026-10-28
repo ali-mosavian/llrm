@@ -582,13 +582,39 @@ pub fn built(
     built_inner(module, source, layout, Format::Omf)
 }
 
+/// [`built`] for `format`, which decides the code too (a Windows 64-bit frame
+/// past a page is probed).
+pub fn built_in(
+    module: &masm::Module,
+    source: &str,
+    layout: CodeLayout,
+    format: Format,
+) -> Result<Object, Error> {
+    built_inner(module, source, layout, format)
+}
+
+/// A Windows 64-bit function probes the frames past a page through `__chkstk`
+/// (`X86FrameLowering::emitStackProbe`): the format decides it, as the triple
+/// does for LLVM.
+fn stack_probed(
+    mut module: masm::Module,
+    format: Format,
+) -> masm::Module {
+    if format == Format::Coff {
+        for procedure in module.procedures.iter_mut().filter(|one| one.body.bits == 64) {
+            procedure.probe_stack = Some("__chkstk".to_owned());
+        }
+    }
+    module
+}
+
 fn built_inner(
     module: &masm::Module,
     source: &str,
     layout: CodeLayout,
     format: Format,
 ) -> Result<Object, Error> {
-    let module = &live(module)?;
+    let module = &stack_probed(live(module)?, format);
     // A procedure the program put in a segment of its own naming (`code_seg`)
     // is in that one, the rest in `code`.
     let segment_of = |procedure: usize| -> &str {
@@ -645,7 +671,13 @@ fn built_inner(
     {
         return Err(Unencodable("-g of the BASIC dialect with a code segment per procedure".into()).into());
     }
-    let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
+    let mut externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
+    // The probe routine is named by the frames that need it, nowhere else.
+    for probe in module.procedures.iter().filter_map(|one| one.probe_stack.as_ref()) {
+        if segments.iter().any(|segment| segment.fixups.iter().any(|one| _target(&one.name) == probe)) {
+            externs.entry(probe.clone()).or_insert_with(|| "near".to_owned());
+        }
+    }
     let mut object = object_of(module, source, segments, &symbols, &sizes, &externs)?;
     // A segment per procedure of one name is one segment to Microsoft's LINK,
     // which keeps the last one's length and loses the rest; a COMDAT per

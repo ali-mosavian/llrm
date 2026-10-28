@@ -1198,6 +1198,7 @@ fn procedure(
         size: target.cpu.size,
         entry,
         stack_check,
+        probe_stack: None,
         // What allocation used: a freed frame register and the registers saved.
         registers: machined.registers.clone(),
     };

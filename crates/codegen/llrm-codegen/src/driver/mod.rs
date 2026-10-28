@@ -734,6 +734,7 @@ pub fn statement_table(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers,
     }
 }

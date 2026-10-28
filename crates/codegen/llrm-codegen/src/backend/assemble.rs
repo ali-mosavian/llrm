@@ -387,6 +387,7 @@ pub fn assembled_by(
                         .any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck))
                         .then(|| abi.stack_check().cloned())
                         .flatten(),
+                    probe_stack: None,
                     registers,
                 };
                 // Copies of returns and split tails only make code better: -O0

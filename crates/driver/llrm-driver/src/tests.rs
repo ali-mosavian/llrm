@@ -1511,6 +1511,40 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
 }
 
+/// A 20 KB frame written as COFF allocated with a plain `sub rsp, N`: Windows
+/// grows the stack a page at a time, so `__chkstk` must touch it first (the
+/// pin: `mov eax, N; call __chkstk; sub rsp, rax; .seh_stackalloc N`). The
+/// program faulted past the guard page.
+#[test]
+fn a_big_coff_frame_is_probed_before_it_is_allocated() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr)\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %a = alloca [20040 x i8]\n  %r = call i32 @g(ptr %a)\n  ret i32 %r\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let frame_of = |format| {
+        let object = llrm_codegen::backend::objbuild::built_in(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+        )
+        .unwrap();
+        let frame = object.frames.first().expect("a declared frame").clone();
+        let image = object.sections[frame.section].image.clone();
+        (image[frame.offset..frame.offset + frame.length].to_vec(), frame.seh)
+    };
+    let (body, seh) = frame_of(llrm_target::object::Format::Coff);
+    let Some((_, llrm_object::Seh::StackAlloc(size))) = seh.first().copied() else { panic!("{seh:?}") };
+    assert!(size >= 20040, "{seh:?}");
+    // `mov eax, N; call __chkstk; sub rsp, rax` (the form of the `sub` is the
+    // encoder's `2B`, the pin's `29`: every register-register ALU op differs).
+    assert_eq!(body[..5], [&[0xB8][..], &(size as u32).to_le_bytes()].concat()[..], "{body:02x?}");
+    assert_eq!(body[5], 0xE8, "call __chkstk: {body:02x?}");
+    assert!(body[10..13] == [0x48, 0x29, 0xC4] || body[10..13] == [0x48, 0x2B, 0xE0], "{body:02x?}");
+    let (elf, _) = frame_of(llrm_target::object::Format::Elf);
+    assert!(!elf.windows(3).any(|bytes| bytes == [0x48, 0x29, 0xC4]), "ELF is not probed: {elf:02x?}");
+}
+
 /// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
 /// layout: the frames the compiler declared (`.seh_*`) against the bytes read
 /// back from the same code agree.
