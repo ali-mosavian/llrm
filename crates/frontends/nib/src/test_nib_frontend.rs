@@ -2105,6 +2105,17 @@ fn test_a_far_pointer_result_comes_back_in_dx_ax() {
     assert!(Regex::new(r"mov word ptr \S+\+2, dx\n").unwrap().is_match(&text), "{text}");
 }
 
+/// The block of `mix`: `a` reaches cx and dx from one register the block does
+/// not use, and `ch` is read after it with cx left alone in between (the
+/// scheduler may put the other work there).
+fn assert_block_between_its_constraints(mix: &str) {
+    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n((?:    [^\n]*\n)*?)    shr cx, 8\n";
+    let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
+    assert_eq!(found[1], found[2], "{mix}");
+    assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
+    assert!(!Regex::new(r"\b(e?cx|cl|ch)\b").unwrap().is_match(&found[3]), "cx is clobbered before `shr cx, 8`: {mix}");
+}
+
 /// An inline block is its bytes in place of a call, fed and read in the
 /// registers it names: `a` goes to both cx and dx, `b` and 7 are packed into
 /// ax, and `sum` and `high` come out of bx and ch.
@@ -2122,10 +2133,7 @@ fn test_inline_assembly_is_its_bytes_between_its_register_constraints() {
     );
     let assembly = listing_on(&parsed(&source), "main", &O2_calls_kept(), "486");
     let mix = between(&assembly, "_mix proc near", "_mix endp");
-    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
-    let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
-    assert_eq!(found[1], found[2], "{mix}");
-    assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
+    assert_block_between_its_constraints(mix);
 }
 
 /// A block that declares `memory` reaches what its pointer inputs point to:
@@ -2235,10 +2243,7 @@ fn test_the_rich_mir_lays_an_inline_block_between_its_register_constraints() {
     assert!(source.contains("asm("), "the shape that was refused");
     let assembly = rich_with(&directory, "blocks.nib", source, true);
     let mix = between(&assembly, "_mix proc near", "_mix endp");
-    let pattern = r"(?s)or ax, 1792\n    mov dx, (\w+)\n    mov cx, (\w+)\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n(?:    mov ax, bx\n)?    shr cx, 8\n";
-    let found = Regex::new(pattern).unwrap().captures(mix).unwrap_or_else(|| panic!("{mix}"));
-    assert_eq!(found[1], found[2], "{mix}");
-    assert!(!["ax", "bx", "cx", "dx"].contains(&&found[1]), "a is kept where the block leaves it: {mix}");
+    assert_block_between_its_constraints(mix);
 }
 
 /// A block that declares `memory` reaches what its pointer inputs point to:
