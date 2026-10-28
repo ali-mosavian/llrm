@@ -148,7 +148,7 @@ pub struct Insn {
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
-    pub line: Option<u32>,
+    pub line: Option<SrcLoc>,
     pub debug: DebugTags,
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
@@ -412,15 +412,31 @@ impl LirBody {
     }
 }
 
-/// The line of one instruction standing for two
-/// (`DILocation::getMergedLocation`): the line both have, none where either has
-/// none, else line 0, which a debugger does not stop at.
+/// A source position (`DILocation`'s line and column; column 0 is unknown).
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct SrcLoc {
+    pub line: u32,
+    pub column: u32,
+}
+
+impl SrcLoc {
+    pub const fn line(line: u32) -> Self {
+        Self { line, column: 0 }
+    }
+}
+
+/// The location of one instruction standing for two
+/// (`DILocation::getMergedLocation`): what both have, none where either has
+/// none, else line 0, which a debugger does not stop at. DEVIATE: two places
+/// of one line keep the line with no column, not line 0.
 pub fn merged_line(
-    one: Option<u32>,
-    other: Option<u32>,
-) -> Option<u32> {
+    one: Option<SrcLoc>,
+    other: Option<SrcLoc>,
+) -> Option<SrcLoc> {
     match (one, other) {
-        (Some(a), Some(b)) => Some(if a == b { a } else { 0 }),
+        (Some(a), Some(b)) if a == b => Some(a),
+        (Some(a), Some(b)) if a.line == b.line => Some(SrcLoc::line(a.line)),
+        (Some(_), Some(_)) => Some(SrcLoc::default()),
         _ => None,
     }
 }
@@ -1176,6 +1192,10 @@ pub struct LirBody {
     /// allocated (the pin's order), so every local lies that much lower
     /// (`masm::saved_first`).
     pub saved_first: bool,
+    /// A `saved_first` frame whose frame register is omitted: the cell it
+    /// would have held is not reserved, the locals lie directly below the
+    /// pushed registers.
+    pub slot_dropped: bool,
     /// What each return takes back is instructions of the body, made while the
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
@@ -1366,6 +1386,7 @@ impl LirBody {
             slotted: false,
             cfa_variables: false,
             saved_first: false,
+            slot_dropped: false,
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
@@ -1435,6 +1456,7 @@ impl LirBody {
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
+            slot_dropped: self.slot_dropped,
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),

@@ -14,7 +14,7 @@ ROOT = gate.ROOT
 
 
 def test_a_change_in_the_c_frontend_runs_the_c_programs_and_qcport_not_the_debugger_sessions():
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     assert p.tier == "fast"
     assert p.languages == ["c"]
     assert "qcport" in p.steps and "run" in p.steps
@@ -48,11 +48,11 @@ def test_only_docs_run_nothing():
 
 
 def test_lib_tests_run_in_the_changed_crate_and_its_dependents_only():
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     pkgs = gate.packages()
-    assert "llrm-c" in p.packages
+    assert "llrm-cc" in p.packages
     assert "llrm-transforms" not in p.packages
-    assert set(p.packages) == gate.dependents(pkgs, {"llrm-c"}) | {"llrm", "llrm-mir"}
+    assert set(p.packages) == gate.dependents(pkgs, {"llrm-cc"}) | {"llrm", "llrm-mir"}
 
 
 def test_a_change_in_any_crate_runs_the_lib_tests_that_read_the_sources_of_the_others():
@@ -95,7 +95,7 @@ def test_the_test_that_writes_into_the_tree_runs_alone_after_the_run_test_could_
     """It left crates/target/llrm-x86-m32/.rerun-probe in the tree while `run` compared the tree: `run` failed, 'the run left files'."""
     cfg = gate.load()
     assert "build_script_reruns" in cfg["exclusive"].values()
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     assert "build-script-reruns" in p.steps
     assert "build_script_reruns" not in gate.commands(p, cfg, gate.packages())["integration"]
 
@@ -103,7 +103,7 @@ def test_the_test_that_writes_into_the_tree_runs_alone_after_the_run_test_could_
 def test_a_scoped_lib_run_includes_the_root_crate_that_turns_on_the_features_the_crate_needs():
     """`cargo test -p llrm-c --lib` alone built llrm-c without its toolchain feature: 16 tests failed 'llrm was built without the toolchain feature'."""
     cfg, pkgs = gate.load(), gate.packages()
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     assert "-p llrm " in gate.commands(p, cfg, pkgs)["lib"] + " "
 
 
@@ -151,16 +151,16 @@ def test_a_filter_that_matches_no_test_is_incomplete_not_a_pass():
 
 
 def test_a_step_that_runs_the_binaries_builds_them_first_even_when_no_rust_changed():
-    """A change to tools/qcport-run.py planned `pytest qcport` with no build: qcport ran against missing or stale binaries."""
-    for path in ("tools/qcport-run.py", "tools/torture/torture.py"):
+    """A change to tools/qcport-run-cc.py planned `pytest qcport` with no build: qcport ran against missing or stale binaries."""
+    for path in ("tools/qcport-run-cc.py", "tools/torture/torture.py"):
         p = gate.plan([path])
         assert p.steps[0] == "build", (path, p.steps)
     assert "build" not in gate.plan(["tools/targets/msp430.py"]).steps
 
 
 def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
-    """`timeout 400` around qcport-run killed a run that was still drawing at load: qcport-run stops a stall and caps a hang itself."""
-    p = gate.plan(["tools/qcport-run.py"])
+    """`timeout 400` around qcport-run-cc killed a run that was still drawing at load: qcport-run-cc stops a stall and caps a hang itself."""
+    p = gate.plan(["tools/qcport-run-cc.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
 
 
@@ -365,7 +365,7 @@ def test_a_one_line_change_to_any_source_runs_every_source_scan_in_the_fast_tier
     """#1057 and #1071 gated fast and skipped llrm-mir's dense-key ratchet (a lib test of a crate they did not touch); main's full run went
     red. A ratchet reads every crate's source, so any .rs change selects it, whichever crate holds the test."""
     cfg = gate.load()
-    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "crates/codegen/llrm-codegen/src/backend/spiller.rs", "crates/frontends/llrm-c/src/lib.rs"):
+    for touched in ("crates/opt/llrm-analysis/src/ranges.rs", "crates/codegen/llrm-codegen/src/backend/spiller.rs", "crates/driver/llrm-cc/src/lib.rs"):
         p = gate.plan([touched])
         assert p.tier == "fast" and "scans" in p.steps, (touched, p.steps)
     command = gate.commands(gate.plan(["crates/opt/llrm-analysis/src/ranges.rs"]), cfg, gate.packages())["scans"]
@@ -502,7 +502,7 @@ def test_the_lib_step_runs_tests_in_a_random_order_that_a_seed_repeats(monkeypat
     """llrm-c's m16 tests failed at random (29 of 136) when an m32 test bound the register file first: the plain order never
     showed it. The lib step shuffles, each binary prints its seed, and LLRM_SHUFFLE_SEED repeats one."""
     cfg, pkgs = gate.load(), gate.packages()
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
     command = gate.commands(p, cfg, pkgs)["lib"]
     assert command.endswith("-Zunstable-options --shuffle"), command
@@ -524,7 +524,7 @@ def test_the_slow_dos_tier_is_a_heavy_step_selected_by_the_runtime_and_the_dos32
     """The demos and graphics sweeps (minutes) ran in the `pytest` step on every change; now they are a step of their own."""
     assert "dos-slow" in gate.plan(["runtime/qb/gpaint.c"]).steps
     assert "dos-slow" in gate.plan(["tools/dosbatch/qb32demos.py"]).steps
-    assert "dos-slow" not in gate.plan(["crates/frontends/llrm-c/src/lib.rs"]).steps
+    assert "dos-slow" not in gate.plan(["crates/driver/llrm-cc/src/lib.rs"]).steps
     command = gate.commands(gate.plan(["runtime/qb/gpaint.c"]), gate.load(), gate.packages())["dos-slow"]
     assert "-m slow_dos" in command and "exit 77" in command, command
 
@@ -589,7 +589,7 @@ def test_no_cargo_step_sets_an_environment_the_others_do_not(monkeypatch):
     STEP_ENV, for all of them."""
     cfg, pkgs = gate.load(), gate.packages()
     monkeypatch.delenv("LLRM_SHUFFLE_SEED", raising=False)
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full")
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"], "full")
     for step, command in gate.commands(p, cfg, pkgs).items():
         assert not re.match(r"\s*[A-Z_]+=\S+\s+cargo", command), f"{step} sets its own environment for cargo: {command[:80]}"
     assert gate.STEP_ENV["RUSTC_BOOTSTRAP"] == "1"
@@ -610,7 +610,7 @@ def test_the_doc_step_runs_rustdoc_only_where_a_doc_comment_has_a_fence_to_run(t
     assert has("/// ```rust\n/// let a = 1;\n/// ```\n") and has("/// ```no_run\n/// f();\n/// ```\n")
     assert has("/// ```should_panic\n/// f();\n/// ```\n") and has("/// ```edition2021\n/// f();\n/// ```\n")
     assert not has("/// ```text\n/// x\n/// ```\n/// ```text\n/// y\n/// ```\n"), "a closing fence is not an opening one"
-    command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"], "full"), gate.load(), gate.packages())["doc"]
+    command = gate.commands(gate.plan(["crates/driver/llrm-cc/src/lib.rs"], "full"), gate.load(), gate.packages())["doc"]
     assert command.startswith("if python3 tools/gate/doctests.py") and "--doc" in command, command
     skipped = subprocess.run(["bash", "-c", command.replace("python3 tools/gate/doctests.py crates src tests", "false")], capture_output=True, text=True)
     assert skipped.returncode == 0 and gate.incomplete(skipped.stdout, None, False) is None, "a skipped doc step reads as a cut-short run: " + skipped.stdout
@@ -1186,7 +1186,7 @@ def test_the_hosted_workflow_allows_only_perf_to_be_missing():
 
 def test_the_groups_that_need_private_tools_are_named_in_the_plan():
     """A job reads the private checkout only for these; a fork's pull request fails them by name."""
-    p = gate.plan(["crates/frontends/llrm-c/src/lib.rs"])
+    p = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     private = gate.private_groups(p)
     assert {"reference", "run", "bench-1", "python"} <= set(private) and "tools" not in private, private
     assert "unit" not in private
@@ -1285,8 +1285,8 @@ def test_the_measure_step_needs_a_counter_and_valgrind_is_one_where_perf_reads_n
 def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fails_where_they_are_not(tmp_path):
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
-    command = gate.commands(gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.load(), gate.packages())["qcport"]
-    command = command.replace("uv run -q --project tools python tools/qcport-run.py", 'echo ran "$JWLINK"')
+    command = gate.commands(gate.plan(["crates/driver/llrm-cc/src/lib.rs"]), gate.load(), gate.packages())["qcport"]
+    command = command.replace("uv run -q --project tools python tools/qcport-run-cc.py", 'echo ran "$JWLINK"')
     base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "LLRM_BIN": "/t/release"}
     both = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={**base, "QCPORT": "a", "QCPORT_INC": "b", "QCPORT_BORLAND": "c"})
     assert (both.returncode, both.stdout.strip()) == (0, "ran /t/release/jwlink"), both  # the linker the build made: a runner has none on PATH
@@ -1443,12 +1443,12 @@ def test_a_tracked_symlink_out_of_the_tree_or_a_build_dir_is_named(tmp_path, cap
     assert "tracked build dir target/x" in capsys.readouterr().out
 
 
-def test_a_change_to_llrm_cc_runs_the_steps_and_the_language_llrm_c_changes_did():
+def test_a_change_to_llrm_cc_runs_qcport_measure_and_the_c_programs():
     """Only crates/frontends/llrm-c/** owned the C steps: a llrm-cc change gated without qcport, measure and the C programs."""
-    old, new = gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
+    plan = gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
     for step in ("qcport", "oracle-qcport", "measure"):
-        assert (step in old.steps) == (step in new.steps), (step, new.steps)
-    assert "c" in new.languages, new.languages
+        assert step in plan.steps, (step, plan.steps)
+    assert "c" in plan.languages, plan.languages
 
 
 def test_the_integration_step_waits_for_the_clang_trees_the_pins_name(tmp_path):

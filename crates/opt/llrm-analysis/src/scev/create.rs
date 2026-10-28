@@ -158,6 +158,7 @@ impl ScalarEvolution {
         if let Some(s) = self.get_existing_scev(v) {
             return s;
         }
+        CREATED.with(|count| count.set(count.get() + 1));
         self.create_scev_iter(cx, v)
     }
 
@@ -331,13 +332,15 @@ impl ScalarEvolution {
         cx: &Cx,
         v: Operand,
     ) -> Scev {
-        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevNodes);
         // A value that is not an instruction or argument has no entry in the
-        // map: it is made at once.
+        // map: it is made at once. It is not a node made: the climb of
+        // `isBasicBlockEntryGuardedByCond` asked for the same constant once
+        // per guard (92% of the count at `functions` N=128).
         if !matches!(v, Operand::Value(_)) {
             let mut ops = Vec::new();
             return self.get_operands_to_create(cx, v, &mut ops).expect("a constant has its SCEV at once");
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevNodes);
 
         // Worklist item with a Value and a bool indicating whether all
         // operands have been visited already.
@@ -1286,4 +1289,14 @@ fn is_mask(
     bits: u32,
 ) -> bool {
     bits != 0 && bits <= a.width && a == low_bits_set(a.width, bits)
+}
+
+thread_local! {
+    static CREATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many values `get_scev` has analysed afresh on this thread (a miss of
+/// the value map): a test counts what a pass asks again after an edit.
+pub fn scevs_created() -> usize {
+    CREATED.with(std::cell::Cell::get)
 }

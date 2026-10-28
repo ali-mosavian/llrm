@@ -300,6 +300,44 @@ impl ModuleAnalysis for Summaries {
         module: &Module,
         analyses: &mut ModuleAnalyses,
     ) -> Self::Result {
+        let inputs = SummaryInputs::of(module, analyses);
+        let none = BTreeSet::new();
+        let tracked = match &inputs.globals_held {
+            Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
+            None => &none,
+        };
+        let summaries = Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &inputs.found));
+        *analyses.memo::<Option<SummaryInputs>>() = Some(inputs);
+        summaries
+    }
+
+    /// A summary is made of its function's declaration (attributes and
+    /// parameters) and of what `GlobalsAA` and `GlobalsModRef` hold, and of
+    /// nothing else in the body: where those are the very results the last run
+    /// read, so is the result. LLVM's `PostOrderFunctionAttrs` does not visit a
+    /// function whose body and callees it kept.
+    fn unchanged(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+        _: &Self::Result,
+    ) -> bool {
+        let now = SummaryInputs::of(module, analyses);
+        analyses.memo::<Option<SummaryInputs>>().as_ref().is_some_and(|last| now.is_the_last(last))
+    }
+}
+
+/// The results `Summaries::run` read.
+struct SummaryInputs {
+    declared: Rc<Vec<llrm_mir::module::GlobalValue>>,
+    globals_held: Option<Rc<<GlobalsAA as ModuleAnalysis>::Result>>,
+    found: Rc<<GlobalsModRefAnalysis as ModuleAnalysis>::Result>,
+}
+
+impl SummaryInputs {
+    fn of(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self {
         // Where GlobalsAA is read cached (`PassManager::require_cached`) and
         // not yet made, no global is tracked.
         let globals_held = match analyses.cached::<GlobalsAA>() {
@@ -307,15 +345,24 @@ impl ModuleAnalysis for Summaries {
             None if analyses.is_stateless::<GlobalsAA>() => None,
             None => Some(analyses.get::<GlobalsAA>(module)),
         };
-        let none = BTreeSet::new();
-        let tracked = match &globals_held {
-            Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
-            None => &none,
-        };
         // The one `GlobalsAAResult` of the module, as the pin has: the held
         // `GlobalsModRef`, not another made for each run.
         let found = analyses.get::<GlobalsModRefAnalysis>(module);
-        Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &found))
+        let declared = analyses.get::<llrm_mir::passes::Declarations>(module);
+        Self { declared, globals_held, found }
+    }
+
+    fn is_the_last(
+        &self,
+        last: &Self,
+    ) -> bool {
+        Rc::ptr_eq(&self.declared, &last.declared)
+            && Rc::ptr_eq(&self.found, &last.found)
+            && match (&self.globals_held, &last.globals_held) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 }
 
@@ -726,6 +773,12 @@ impl Analysis for ExposedFrames {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
+        // No alloca before or after: no edit can change the empty answer, and
+        // reading the edits costs their operands (a phi of N arms edited N
+        // times is N^2).
+        if previous.is_empty() && !crate::frameescape::has_alloca(function) {
+            return Some(previous.clone());
+        }
         let mut touched = Vec::<ValueId>::new();
         let mut read = |operand: &Operand| {
             if let Operand::Value(value) = operand {
@@ -758,6 +811,7 @@ impl Analysis for ExposedFrames {
                 Change::Substituted { .. } => {}
             }
         }
+        crate::frameescape::count_reads(touched.len());
         let unit = Unit::within(context, layout, function, analyses.outer());
         Some(
             crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst, at| {

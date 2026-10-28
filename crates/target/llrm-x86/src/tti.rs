@@ -876,6 +876,14 @@ impl Tti for X86 {
         true
     }
 
+    /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model
+    /// rates its rewrite worse (`shouldDropLSRSolutionIfLessProfitable`, which
+    /// the pin's X86 leaves off). Six registers and a prefix on every scaled
+    /// index make the model's best answer a loss in bytes and clocks too.
+    fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()

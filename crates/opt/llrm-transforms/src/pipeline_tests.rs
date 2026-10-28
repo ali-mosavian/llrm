@@ -1338,6 +1338,18 @@ fn watching(
     fixed
 }
 
+/// A body run once recorded its idle passes by classifying every edit since
+/// each one ran (chain512: 0.48 G in 1,544 `settled remember` spans, no pass
+/// ever skipped). Nothing is classified until a later run asks.
+#[test]
+fn a_body_run_once_classifies_no_edit_for_its_settled_records() {
+    let mut module = llrm_analysis::testing::parsed(CALLS_G);
+    let (reader, blind) = (std::rc::Rc::default(), std::rc::Rc::default());
+    let before = llrm_mir::footprint::computed();
+    crate::testing::managed(&mut module, watching(&reader, &blind));
+    assert_eq!(llrm_mir::footprint::computed(), before, "edits were classified for records no run has asked of");
+}
+
 const CALLS_G: &str = "declare i16 @g(i16)
 declare i16 @g2(i16)
 
@@ -2940,8 +2952,11 @@ fn lsr_runs_on_simplified_loops_after_the_closing_instsimplify() {
 /// x_strlen at -O2: the end of a scan was read through an exit phi, which
 /// stops IVUsers where the pin's walk goes on, so LSR kept the pointer IV
 /// (`lea eax,_buf-1`, a copy of it in the loop) where the pin has an index.
+/// IVUsers now walks on and LSR finds the index, but in real mode its own
+/// model rates that rewrite worse (one more register) and DEVIATE LU4 drops
+/// it: the scan stays one pointer phi.
 #[test]
-fn a_scan_whose_end_is_read_after_the_loop_is_an_index_not_a_pointer() {
+fn a_scan_whose_end_is_read_after_the_loop_stays_a_pointer_in_real_mode() {
     let mut module = llrm_analysis::testing::parsed(&format!(
         "{}@buf = global [64 x i8] zeroinitializer
 define i16 @f(i16 %k) {{
@@ -2972,7 +2987,8 @@ b2:
     .and_then(|done| done)
     .unwrap();
     let text = llrm_mir::print::module(&module);
-    assert!(!text.contains("phi ptr"), "{text}");
+    assert_eq!(text.matches("phi ").count(), 1, "{text}");
+    assert!(text.contains("phi ptr"), "{text}");
 }
 
 /// `Spares` and `Homes` are llrm-only (the pin has no counterpart for either)

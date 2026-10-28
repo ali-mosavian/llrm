@@ -139,6 +139,7 @@ pub mod combine_minmax;
 pub mod combine_muldivrem;
 #[cfg(test)]
 mod combine_muldivrem_tests;
+pub mod combine_narrow;
 pub mod combine_negator;
 pub mod combine_not;
 pub mod combine_or;

@@ -2024,7 +2024,7 @@ impl<'a> Analyzer<'a> {
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size == CallerSize::OptSize
+        let grows = self.site.caller_size != CallerSize::Speed
             && !self.site.sole_call_to_local
             && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
             && self.size_units > self.call_size();

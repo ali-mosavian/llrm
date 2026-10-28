@@ -743,6 +743,7 @@ mod tests {
             symbols: vec![symbol("_f", 0, 0, Binding::Public), symbol("_g", 1, 2, Binding::Public)],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            frames: Vec::new(),
             debug: Some(made),
         }
     }

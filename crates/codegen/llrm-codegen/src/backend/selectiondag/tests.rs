@@ -17,6 +17,7 @@ mod action_table;
 mod add_simplify;
 mod and_fold;
 mod and_simplify;
+mod assert_ext;
 mod bit_counts;
 mod bit_reverse;
 mod bit_test;

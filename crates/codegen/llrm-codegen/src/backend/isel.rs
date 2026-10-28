@@ -174,6 +174,7 @@ use crate::backend::target::Segments;
 use crate::backend::valuefacts::{self, Span, ValueFacts};
 use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::lir::SrcLoc;
 use crate::model::lir::{
     Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
 };
@@ -595,7 +596,8 @@ pub fn convention_for(
     }
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
-    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
+    let answer = lone_float(types, result);
+    let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
         Vec::new()
     } else {
         results(arch, described, size_of(module, layout, result)?)
@@ -621,7 +623,7 @@ pub fn convention_for(
         .and_then(|one| one.float_result_register())
         .filter(|_| {
             matches!(
-                types.get(result),
+                types.get(answer),
                 Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
             )
         })
@@ -630,6 +632,18 @@ pub fn convention_for(
             llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
         });
     Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
+}
+
+/// What a result is answered as: a struct of one float is that float
+/// (`ComputeValueVTs` gives it one leaf, which leaves where a lone float does).
+fn lone_float(
+    types: &llrm_mir::types::Types,
+    ty: TypeId,
+) -> TypeId {
+    match (types.get(ty), types.fields(ty)) {
+        (Type::Struct { .. } | Type::Named(_), Some([only])) if matches!(types.get(*only), Type::Float(_)) => *only,
+        _ => ty,
+    }
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -669,7 +683,12 @@ fn argument_of(
         bytes: i64::from(size),
         integer: types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
-        floating: matches!(types.get(ty), Type::Float(_)),
+        // An extended real is not a vector-register float: it travels in
+        // memory.
+        floating: matches!(
+            types.get(ty),
+            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+        ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
@@ -948,7 +967,7 @@ pub(super) fn size_of(
         (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
         // An aggregate of scalars answered in registers is as big as it is in
         // memory.
-        (_, Type::Struct { .. }) => {
+        (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
         _ => width_of(module, layout, ty),
@@ -1384,21 +1403,19 @@ pub(crate) fn dbg_line(
     module: &Module,
     function: &Function,
     inst: InstId,
-) -> Option<u32> {
-    function
-        .instruction(inst)
-        .metadata
-        .iter()
-        .find(|(kind, _)| kind == "dbg")
-        .and_then(
-            |&(_, node)| match module.metadata[node.0 as usize].operands.first() {
-                Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
-                    llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
-                    _ => None,
-                },
-                _ => None,
-            },
-        )
+) -> Option<SrcLoc> {
+    let (_, node) = function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "dbg")?;
+    let operands = &module.metadata[node.0 as usize].operands;
+    let number = |at: usize| match operands.get(at) {
+        Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
+            llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
+            _ => None,
+        },
+        _ => None,
+    };
+    let named =
+        |field: &str| module.special.get(node).and_then(|special| special.fields.iter().position(|one| one == field));
+    Some(SrcLoc { line: number(named("line").unwrap_or(0))?, column: named("column").and_then(number).unwrap_or(0) })
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
@@ -1409,7 +1426,7 @@ fn lined(
     ats: &IndexMap<InstId, i64>,
     body: LirBody,
 ) -> LirBody {
-    let mut lines: IndexMap<i64, u32> = IndexMap::default();
+    let mut lines: IndexMap<i64, SrcLoc> = IndexMap::default();
     for (&inst, &at) in ats {
         let line = dbg_line(module, function, inst);
         if let Some(line) = line {
@@ -1443,7 +1460,7 @@ fn lined(
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-fn noted(
+pub(crate) fn noted(
     module: &Module,
     function: &Function,
     name: &str,

@@ -19,7 +19,8 @@
 #              alone), `@8` (only where the narrowest source is a byte),
 #              `ax*` (ax at the row's width); and the words `rep` (a repeated
 #              string operation: only its count is written for certain),
-#              `count` (a constant count of none changes no flag), `idiom` (no
+#              `count` (a constant count of none changes no flag), `cond` (what it
+#              writes it may leave as it was: `bsf` of zero), `idiom` (no
 #              read when both operands are one register), `self` (no
 #              instruction when they are), `same` (the registers must be one
 #              size), `narrow` (address registers as wide as the destination).
@@ -55,8 +56,8 @@ shrd      funnel     rm/^0,r,ri         16,32      shift_ri     s2=cx           
 neg       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Neg_rm{w}
 not       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/-             Not_rm{w}
 # bsf, bsr, bswap: flat alu_rr; the pin has no per-CPU model at i486/P5 (cost row BSF-1).
-bsf       binary     r/^0,rm            16,32      alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Bsf_r{w}_rm{w}
-bsr       binary     r/^0,rm            16,32      alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Bsr_r{w}_rm{w}
+bsf       binary     r/^0,rm            16,32      alu_rr       -                       -       cond       -/OF,SF,ZF,AF,CF,PF  Bsf_r{w}_rm{w}
+bsr       binary     r/^0,rm            16,32      alu_rr       -                       -       cond       -/OF,SF,ZF,AF,CF,PF  Bsr_r{w}_rm{w}
 bswap     unary      r/^0               32         alu_rr       -                       -       -       -/-             Bswap_r32
 inc       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,PF  Inc_rm{w}
 dec       unary      rm/^0              8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,PF  Dec_rm{w}
@@ -73,7 +74,7 @@ cdq       extend     r/r                32         cdq          s0=ax,d0=dx     
 cmp       cmp        -/rm,rmi           8,16,32    alu_rr       -                       same    -       -/OF,SF,ZF,AF,CF,PF  Cmp_rm{w}_r{w}
 test      cmp        -/rm,ri            8,16,32    alu_rr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Test_rm{w}_r{w}
 bt        cmp        -/r,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bt_rm{w}_r{w}
-bt        cmp        -/r,i              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bt_rm{w}_imm8
+bt        cmp        -/rm,i             16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bt_rm{w}_imm8
 btc       binary     r/^0,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Btc_rm{w}_r{w}
 bts       binary     r/^0,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Bts_rm{w}_r{w}
 btr       binary     r/^0,r              16,32      alu_rr       -                       -       -       -/OF,SF,AF,CF,PF  Btr_rm{w}_r{w}

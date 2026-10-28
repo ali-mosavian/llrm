@@ -174,7 +174,10 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 A change to a pass, analysis, flag, level, tool, target or runtime updates its doc in the same PR. A pass's `//!` header is its doc; after editing one, run `tools/fmt.sh` (it rewraps header comments), then `python3 tools/docs/docsbuild/build.py --sync` and commit what it writes. A page of `docs/architecture/` joins its readme's Contents list by front matter (`architecture-index:` and `architecture-order:`, tools/docs/docsbuild/archindex.py); `build.py --sync` rewrites the list, and `--check` fails on a stale one. The tests (`pytest tools/docs/docsbuild`, `tests/header_mir.rs`) fail on a stale page, a missing section or a malformed MIR example.
 | [selectiondag-plan](selectiondag-plan.md) | Translating SelectionDAG selection (slot row 28): the pin's structure, what replaces each part, the generated matcher, shadow mode then switch then delete, with owners and dates |
+| [dag-assert-ext](dag-assert-ext.md) | `AssertZext`/`AssertSext` for extended arguments and results: why the DAG needs them, what drops them, SD43 |
 | [regalloc-matrix-profile](regalloc-matrix-profile.md) | LiveRegMatrix cost on d_faces m32 -O2 against the pin: ~10.8 M of the 77.6 M allocator, ~4.5 M over the pin |
 | [regpressure-plan](regpressure-plan.md) | Per-set register pressure for the pre-RA scheduler: tracker, limits, deltas; the half w2 calls |
 | [alloc-by-caller](alloc-by-caller.md) | Allocation and copy cost of d_faces -O2 by caller: flat, 9.4% of Ir, no single cut; successors/predecessors do not allocate |
 | [cgp-switch-type](cgp-switch-type.md) | `optimizeSwitchType`: a switch on i8/i16 is widened to i32 as the pin does; m16 keeps it narrow; byte evidence |
+| [scaling-gate-rebaseline-2026-10-28](scaling-gate-rebaseline-2026-10-28.md) | The 43 `test_scaling_gate` tests re-baselined per test against the current step names: old to new mapping, bounds |
+| [scev-persistent-se](scev-persistent-se.md) | One persistent SE across the loop passes: trip-count computes 7 -> 3, plan, files, risks |

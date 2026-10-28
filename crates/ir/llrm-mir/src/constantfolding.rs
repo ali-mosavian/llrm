@@ -1754,6 +1754,7 @@ fn constant_fold_constant_impl(
     let Some(ce) = expr(context, c) else { return c };
     let operands: Vec<ConstantId> = match &ce {
         ConstantExpr::Cast { value, .. } => vec![*value],
+        ConstantExpr::Binary { lhs, rhs, .. } => vec![*lhs, *rhs],
         ConstantExpr::GetElementPtr { operands, .. } => operands.clone(),
     };
     let mut ops = Vec::new();
@@ -1774,6 +1775,7 @@ fn constant_fold_constant_impl(
     let dest = ty_of(context, c);
     let (opcode, flags) = match ce {
         ConstantExpr::Cast { op, .. } => (Opcode::Cast(op), Flags::default()),
+        ConstantExpr::Binary { op, .. } => (Opcode::Binary(op), Flags::default()),
         ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, .. } => {
             let mut flags = Flags::default();
             if inbounds {

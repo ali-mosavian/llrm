@@ -1578,3 +1578,63 @@ b0:
     let body = text.split("define").nth(1).unwrap_or_default();
     assert!(body.contains("ptr @n") && !body.contains("alloca i16"), "{text}");
 }
+
+/// Every QB program with a dynamic array read its descriptor's segment word
+/// through `inttoptr`, which 3c4b31af6 took for a forged selector: no static
+/// was split, and sum_three's loop kept `icmp slt` where the pin ends on
+/// `icmp eq`. An `inttoptr` the frontend marks `!llrm.descriptor` makes the
+/// array's own segment.
+#[test]
+fn test_module_ipo_splits_a_static_while_a_body_reads_a_descriptor_selector() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "@n = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %a) norecurse {
+b0:
+  store i16 %a, ptr @n
+  %x = load i16, ptr @n
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define i8 @g(ptr %d) {
+b0:
+  %w = getelementptr i8, ptr %d, i16 2
+  %o = load i16, ptr %w
+  %s = inttoptr i16 %o to ptr addrspace(2), !llrm.descriptor !0
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  ret i8 %v
+}
+
+!0 = !{}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let body = text.split("define").nth(1).unwrap_or_default();
+    assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
+}
+
+/// -Oz walked its calls as -Os: the threshold said `optsize` and never
+/// `minsize`, so a call was held to `OptSizeThreshold` (50), not
+/// `OptMinSizeThreshold` (5). `next` of `div_constants_long` was inlined 40
+/// times and the object was 12% larger than the pin's.
+#[test]
+fn test_minsize_is_walked_as_a_minsize_caller() {
+    use crate::inlinecost::CallerSize;
+    use crate::pipeline::Options;
+    assert_eq!(Options::min_size().inline.caller_size(), CallerSize::MinSize);
+    assert_eq!(Options::size().inline.caller_size(), CallerSize::OptSize);
+    assert_eq!(Options::default().inline.caller_size(), CallerSize::Speed);
+}

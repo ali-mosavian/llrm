@@ -191,6 +191,11 @@ impl Builder<'_> {
         on_true: BlockId,
         on_false: BlockId,
     ) -> bool {
+        // DEVIATE SD103: at optsize two compares stay two branches; merged they
+        // cost a `setcc` pair and a logic op, and byte registers are scarce.
+        if self.has_opt_size() {
+            return false;
+        }
         let Some(tti) = self.target.tti.clone() else { return true };
         let tti = tti.0;
         let shared = |logic: Logic| match logic {

@@ -525,6 +525,48 @@ fn test_arms_that_end_differently_are_not_seen_whole() {
     assert!(built <= 12, "{built} items built for two arms that cannot share a tail");
 }
 
+/// Each merge that split a block made the predecessor map again from every
+/// block: a body of N merging diamonds built N+1 maps (the pin's blocks keep
+/// their predecessor lists), and `lir jumps` grew x2.21 from 256 to 512
+/// branches.
+#[test]
+fn test_merges_that_split_blocks_do_not_make_the_predecessor_map_again() {
+    let diamonds: i64 = 12;
+    let mut blocks: Vec<Block> = Vec::new();
+    for k in 0..diamonds {
+        let at = 100 * (k + 1);
+        let arm = |arm: i64| {
+            let own = at + arm * 10;
+            block(
+                own,
+                vec![_compare(own + 1), _inserted(_move(own + 2, imm(0))), _inserted(_jump(own + 3, at + 50))],
+                vec![at + 50],
+            )
+            .into()
+        };
+        blocks.push(block(at, vec![_compare(at), _branch(at + 1, "je", at + 20)], vec![at + 20, at + 10]).into());
+        blocks.extend([arm(1), arm(2)]);
+        let next = if k + 1 < diamonds { 100 * (k + 2) } else { 0 };
+        blocks.push(
+            if next == 0 {
+                block(at + 50, vec![_compare(at + 51), _return(at + 52)], vec![])
+            } else {
+                block(at + 50, vec![_compare(at + 51), _jump(at + 52, next)], vec![next])
+            }
+            .into(),
+        );
+    }
+    let source = placed(&body("f", 100, blocks)).unwrap();
+    tailmerge::PREDECESSOR_MAPS.with(|one| one.set(0));
+
+    let merged = tailmerge::merged(&source, false, None).unwrap().expect("the diamonds merge");
+
+    let made = tailmerge::PREDECESSOR_MAPS.with(|one| one.get());
+    let moves = merged.insns().iter().filter(|one| one.what.as_ref().is_some_and(|w| w.op == Operation::Move)).count();
+    assert!(moves < 24, "premise: tails were merged ({moves} moves left of 24)");
+    assert!(made <= 6, "{made} predecessor maps made for {diamonds} diamonds");
+}
+
 /// qglsurf emitted the same zero-result tail from two failure arms.
 #[test]
 fn test_identical_result_tails_are_merged() {
@@ -2211,7 +2253,7 @@ fn lined(
     one: Arc<Insn>,
     line: u32,
 ) -> Arc<Insn> {
-    Arc::new(Insn { line: Some(line), ..(*one).clone() })
+    Arc::new(Insn { line: Some(crate::model::lir::SrcLoc::line(line)), ..(*one).clone() })
 }
 
 fn zero_lines(
@@ -2236,6 +2278,7 @@ fn zero_lines(
         .flat_map(|block| block.insns.iter())
         .filter(|insn| insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("xor")))
         .map(|insn| insn.line)
+        .map(|one| one.map(|at| at.line))
         .collect()
 }
 
@@ -2273,6 +2316,7 @@ fn test_merged_tails_of_different_lines_have_line_zero() {
         .flat_map(|block| block.insns.iter())
         .filter(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Move))
         .map(|insn| insn.line)
+        .map(|one| one.map(|at| at.line))
         .collect();
     assert_eq!(lines, [Some(0)]);
 }

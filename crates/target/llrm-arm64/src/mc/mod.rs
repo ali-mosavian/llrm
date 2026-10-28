@@ -15,7 +15,7 @@ pub mod visit;
 #[cfg(test)]
 pub(crate) mod tests;
 
-use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported};
+use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// arm64's object writers.
 pub struct Arm64Objects;
@@ -50,6 +50,7 @@ impl ObjectTarget for Arm64Objects {
             hosted: true,
             location_ranges: true,
             cfa_locations: true,
+            unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
         })
     }
 }

@@ -47,6 +47,8 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
+use crate::analysis::frequency::Frequency;
+use crate::analysis::intervals as ranges;
 use crate::analysis::loops::{self, Loop};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
@@ -97,7 +99,7 @@ impl LIRTransform for LoopSlots {
         let m = self.word;
         let spills =
             frame.borrow().capacities.iter().filter(|(_, width)| **width == i64::from(m)).map(|(at, _)| *at).collect();
-        llrm_support::debug!("traffic", "{} {:?}", body.name, crate::backend::allocate::traffic_by_cause(&body));
+        llrm_support::debug!("traffic", "{} {:?}", body.name, traffic_by_cause(&body));
         Ok(hoisted(m, &self.classes.available, &body, &spills))
     }
 }
@@ -717,4 +719,43 @@ mod tests {
         let parked = out.iter_insns().filter(|insn| is_bp(insn, Operation::Push)).count();
         assert_eq!((parked, mentions(&out)), (0, 8), "the slot stays in memory");
     }
+}
+
+/// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
+/// reloads, stores and rematerializations, and the frame operands of x87 and
+/// other instructions. The allocator can reach only the first three.
+pub fn traffic_by_cause(body: &LirBody) -> std::collections::BTreeMap<&'static str, f64> {
+    let deep = ranges::depths(body);
+    let busy = Frequency::of(body);
+    let mut out = std::collections::BTreeMap::new();
+    for block in &body.blocks {
+        let depth = deep.get(&block.at).copied().unwrap_or(0);
+        if depth == 0 {
+            continue;
+        }
+        for one in &block.insns {
+            let Some(what) = &one.what else { continue };
+            let frame = what
+                .dests
+                .iter()
+                .chain(&what.sources)
+                .any(
+                    |place| matches!(
+                        place,
+                        Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)
+                    ),
+                );
+            let float = what.op.is_x87();
+            let cause = match () {
+                _ if one.spill_reload => "reload",
+                _ if one.spill_store => "store",
+                _ if one.rematerialized => "remat",
+                _ if frame && float => "x87-frame",
+                _ if frame => "int-frame",
+                _ => continue,
+            };
+            *out.entry(cause).or_insert(0.0) += busy.block(block.at);
+        }
+    }
+    out
 }

@@ -67,6 +67,11 @@ pub struct ValueData {
     pub def: ValueDef,
 }
 
+/// The metadata kind of a load of an array descriptor's word: a frontend's
+/// statement that a selector made from it names the array's segment, not a
+/// forged one (`llrm_analysis::forging`).
+pub const DESCRIPTOR_WORD: &str = "llrm.descriptor";
+
 #[derive(Clone, Debug)]
 pub struct Instruction {
     pub opcode: Opcode,
@@ -871,6 +876,28 @@ impl Function {
             }
         }
         out
+    }
+
+    /// The one block `block`'s terminator names, if it names no other: LLVM's
+    /// `getSingleSuccessor`, which stops at the first block that differs
+    /// where `successors` lists a switch of N cases whole.
+    pub fn sole_successor(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let last = self.terminator(block)?;
+        let mut blocks = self
+            .instruction(last)
+            .operands
+            .iter()
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(target) => Some(*target),
+                    _ => None,
+                },
+            );
+        let first = blocks.next()?;
+        blocks.all(|other| other == first).then_some(first)
     }
 
     /// The blocks `operands` name, once each, by a set: a switch of N cases
