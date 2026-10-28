@@ -231,6 +231,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD219 | sdag-b | `combineAddOrSubToADCOrSBB` without the `ADOX` form (no ADX), the or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)`/`SUB(…, SBB)` folds | `selectiondag/x86_carry.rs` |
 | SD227 | sdag-b | `visitBSWAP`: no half-width `bswap (shl x, c)` form, no `bswap (bitreverse x)` canonicalisation | `selectiondag/bswap_combine.rs` |
 | SD245 | sdag-b | `visitCTLZ/CTTZ/CTPOP`: no `foldCTLZToCTLS`, no half-width `ctpop`; non-zero is what known bits prove | `selectiondag/ctcount_combine.rs` |
+| SD254 | sdag-b | `visitRotate`: no demanded-bits simplification of the operand, no `distributeTruncateThroughAnd` | `selectiondag/rotate_combine.rs` |
 | SD237 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
 | SD224 | sdag-b | w12, m16: tuned for size, the bytes past a copy's last dword are `movsw`/`movsb` glued after the `rep movs`, not a load and store from addresses made again (the pin's tail) | `selectiondag/builder/memops.rs`, `selectiondag/emit.rs` |
@@ -255,6 +256,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD247 | sdag-b | `LowerFunnelShift`: the `isSHLDSlow` expansion of an `i16` funnel shift is not translated (no target of ours sets it) | `selectiondag/x86_lowering.rs` |
 | SD249 | sdag-b | `reduceLoadWidth` of a constant `srl`/`sra`/`and` of a load only; no `freeze` look-through, no `shl` opening; every x86 narrow access is taken as legal (`isLegalNarrowLdSt`). Exit: none while x86 loads stay unaligned-legal | `selectiondag/reduce_load_width.rs` |
 | SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
+| SD244 | sdag-b | w12, m16, parked (not applied): a segment-to-far cast stays out of a loop it is made outside of. Measured: `tools/sizes.py -Os` over 315 programs 182540 -> 183693 B (+1153; deedlines +477, qbdemo +236), grep.bas 416 -> 461 lines, no program smaller; SD220's sink wins | `sinkcast.rs` |
 | SD253 | sdag-b | w12: a function calling a hidden atomic (`llrm.atomic.*`) is selected by the old selector; the DAG has no atomic nodes, and its call path left the callee unnamed (assemble.rs panic, tests/check/mir/atomic_xchg.ll after the flip) | `assemble.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
@@ -278,6 +280,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD234 | sdag-b | an x87 `fld1`/`fldz` is loaded once for its readers in a block until the next call or barrier (the pin: one `LD_F1`, `fadd st(1),st`); the old rule loaded it per reader | `selectiondag/emit.rs` |
 | SD235 | sdag-b | a same-type `fpround` read only by a store of its type in the block is not rounded through a stack temp: the pin folds `store (fp_round x)` into a truncating store (`visitSTORE`) | `selectiondag/builder.rs` |
 | SD236 | sdag-b | `visitBITREVERSE` has no `clmul` fold (no carry-less multiply node here) | `selectiondag/bitreverse_combine.rs` |
+| SD250 | sdag-b | m16: a dword `lea` takes a scaled index (the pin's `matchAddressRecursively` has no 16-bit exclusion) only when not optimizing for size: with the 0x66 and 0x67 prefixes it is longer than the `imul` or `shl; add` (-Os +214 bytes, 26 programs). Exit: none (machine fact) | `llrm-dagisel/src/x86_addr.rs` |
 | SD251 | sdag-b | `visitBITCAST`: only the scalar `(conv (load x))` fold; no vector, `freeze`, `AssertNoFPClass` or range-metadata cases | `selectiondag/bitcast_combine.rs` |
 | SD312 | sdag-c | DIV-OPTSIZE-1: `isIntDivCheap` is `size \|\| minsize`, the pin's is `minsize`: a constant divide stays `div`/`idiv` at -Os (~40 clocks on a 486 against ~13 for the multiply; div_constants_long m32 -Os 5095 B against the pin's 5463) | `selectiondag/dag_function.rs` |
 | SD311 | sdag-c | a fill or copy through a huge pointer calls the target's stepped routine inline with its operands in the registers it reads (the pin has no huge pointers); a `memmove` of no proven direction, or a huge pointer beside a near one, is refused | `selectiondag/builder/memops.rs` |
