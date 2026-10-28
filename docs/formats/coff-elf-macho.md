@@ -79,7 +79,7 @@ power of two up to 8192. ELF alignment is at least 4. COFF numbers sections in 1
 | `Abs{2}` | `R_386_16` | `R_X86_64_16` | | | |
 | `Abs{1}` | `R_386_8` | `R_X86_64_8` | | | |
 | `PcRel{8}` | | `R_X86_64_PC64` | | | |
-| `PcRel{4}` | `R_386_PC32` | `R_X86_64_PC32` | `REL32` | `REL32`..`REL32_5` (from 4 to 9) | `SIGNED`, `SIGNED_1/2/4` (from 4, 5, 6, 8) |
+| `PcRel{4}` | `R_386_PC32` | `R_X86_64_PC32` | `REL32` | `REL32` (the distance past the field's end is in the field) | `SIGNED`, `SIGNED_1/2/4` (by the total addend, as `X86MachObjectWriter`) |
 | `PcRel{2}` | `R_386_PC16` | `R_X86_64_PC16` | | | |
 | `PcRel{1}` | `R_386_PC8` | `R_X86_64_PC8` | | | |
 | `Branch{4}` | `R_386_PLT32` | `R_X86_64_PLT32` | `REL32` | `REL32` | `BRANCH` |

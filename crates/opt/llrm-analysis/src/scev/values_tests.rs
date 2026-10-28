@@ -56,7 +56,7 @@ fn test_a_counted_loop_phi_is_an_add_recurrence() {
 /// gains one, `create_scev` must translate it.
 #[test]
 fn test_the_intrinsics_createscev_models_and_mir_lacks_are_not_mir_intrinsics() {
-    for name in ["llvm.usub.sat", "llvm.uadd.sat", "llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"] {
+    for name in ["llvm.start.loop.iterations", "llvm.annotation", "llvm.vscale"] {
         assert!(llrm_mir::intrinsics::Intrinsic::named(name).is_none(), "{name} is a MIR intrinsic now: translate it");
     }
 }
@@ -311,4 +311,27 @@ fn test_the_address_of_a_pointer_recurrence_is_a_recurrence() {
     let printed = print_module_values(&module);
     let line = printed.lines().find(|l| l.contains("%a")).expect("%a is printed");
     assert!(line.contains(",+,"), "{printed}");
+}
+
+/// `usub.sat` and `uadd.sat` are MIR intrinsics now; `createSCEV` models them
+/// as the pinned opt prints: `X - umin(X, Y)` and `umin(X, ~Y) + Y`, the add
+/// `<nuw>`. They were unknowns (DEVIATE 9) while MIR lacked them.
+#[test]
+fn test_the_unsigned_saturating_intrinsics_are_modelled() {
+    let text = "declare i32 @llvm.usub.sat.i32(i32, i32)\n\
+        declare i32 @llvm.uadd.sat.i32(i32, i32)\n\
+        define i32 @f(i32 %x, i32 %y) {\n\
+          %r = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n\
+          %s = call i32 @llvm.uadd.sat.i32(i32 %x, i32 %y)\n\
+          %t = add i32 %r, %s\n\
+          ret i32 %t\n}\n";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let printed = print_module_values(&module);
+    let expressions: Vec<&str> =
+        printed.lines().skip(1).map(|line| line.split(" U:").next().expect("a line")).collect();
+    assert_eq!(
+        expressions[..2],
+        ["%r\t((-1 * (%x umin %y)) + %x)", "%s\t(((-1 + (-1 * %y)) umin %x) + %y)<nuw>"],
+        "{printed}"
+    );
 }

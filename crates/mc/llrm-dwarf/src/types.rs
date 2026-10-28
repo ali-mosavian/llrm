@@ -57,6 +57,9 @@ struct Tree<'a> {
     /// The location lists, in `.debug_loclists` (a header first) or
     /// `.debug_loc`.
     locations: crate::buffer::Buf,
+    /// The code ranges of each DIE that has several, in `.debug_ranges` or
+    /// `.debug_rnglists`.
+    ranges: Vec<Vec<model::Range>>,
 }
 
 impl Tree<'_> {
@@ -115,6 +118,32 @@ impl Tree<'_> {
         } else {
             self.address(range.section, range.offset + range.length)
         }
+    }
+
+    /// `DW_AT_low_pc` and `DW_AT_high_pc` of one range, `DW_AT_ranges` of
+    /// several.
+    fn code(
+        &mut self,
+        die: &mut Die,
+        ranges: &[model::Range],
+    ) -> Result<(), Unsupported> {
+        match ranges {
+            [] => return refused("a DIE with no code range"),
+            [range] => {
+                die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
+                die.attrs.push((AT_HIGH_PC, self.high_pc(*range)?));
+            }
+            _ => {
+                crate::ranges::check(self.address)?;
+                // LLVM gives the DIE a base address of 0 beside its ranges.
+                if die.tag == TAG_COMPILE_UNIT {
+                    die.attrs.push((AT_LOW_PC, Value::NoAddr));
+                }
+                self.ranges.push(ranges.to_vec());
+                die.attrs.push((AT_RANGES, Value::Ranges(self.ranges.len() - 1)));
+            }
+        }
+        Ok(())
     }
 
     /// Type `index`'s DIE, which sits at `1 + index`.
@@ -436,10 +465,8 @@ impl Tree<'_> {
             }
         }
         for block in blocks {
-            let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
             let mut inner = Die::new(TAG_LEXICAL_BLOCK);
-            inner.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
-            inner.attrs.push((AT_HIGH_PC, self.high_pc(range)?));
+            self.code(&mut inner, &block.ranges)?;
             self.scope(&mut inner, &block.variables, &block.blocks)?;
             let at = self.push(inner);
             die.children.push(at);
@@ -451,8 +478,8 @@ impl Tree<'_> {
         &mut self,
         one: &Function,
     ) -> Result<usize, Unsupported> {
-        let [range] = one.ranges[..] else {
-            return refused(format!("function {} has {} ranges: one is written", one.name, one.ranges.len()));
+        let Some(first) = one.ranges.first() else {
+            return refused(format!("function {} has no code range", one.name));
         };
         self.far = one.far;
         let mut die = Die::new(TAG_SUBPROGRAM);
@@ -468,10 +495,9 @@ impl Tree<'_> {
             let _ = self.typed(&mut die, *result);
         }
         if self.address == 2 {
-            die.attrs.push((AT_SEGMENT, Value::ExprSegment { section: range.section }));
+            die.attrs.push((AT_SEGMENT, Value::ExprSegment { section: first.section }));
         }
-        die.attrs.push((AT_LOW_PC, self.address(range.section, range.offset)?));
-        die.attrs.push((AT_HIGH_PC, self.high_pc(range)?));
+        self.code(&mut die, &one.ranges)?;
         let framed = one
             .variables
             .iter()
@@ -561,7 +587,7 @@ pub fn tree(
     info: &Info,
     version: u16,
     address: usize,
-) -> Result<(Vec<Die>, crate::buffer::Done), Unsupported> {
+) -> Result<(Vec<Die>, crate::buffer::Done, Vec<Vec<model::Range>>), Unsupported> {
     let mut tree = Tree {
         object,
         info,
@@ -571,18 +597,14 @@ pub fn tree(
         address,
         far: false,
         locations: crate::buffer::Buf::default(),
+        ranges: Vec::new(),
     };
     let mut unit = Die::new(TAG_COMPILE_UNIT);
     unit.attrs.push((AT_PRODUCER, Value::Str("llrm".into())));
     unit.attrs.push((AT_LANGUAGE, Value::U16(language(info.language))));
     unit.attrs.push((AT_NAME, Value::Str(info.files.first().map_or(String::new(), |one| one.name.clone()))));
-    match info.code[..] {
-        [] => {}
-        [range] => {
-            unit.attrs.push((AT_LOW_PC, tree.address(range.section, range.offset)?));
-            unit.attrs.push((AT_HIGH_PC, tree.high_pc(range)?));
-        }
-        _ => return refused("a module of several code ranges is not written yet"),
+    if !info.code.is_empty() {
+        tree.code(&mut unit, &info.code)?;
     }
     unit.attrs.push((AT_STMT_LIST, Value::Line));
     tree.dies.push(unit);
@@ -632,5 +654,8 @@ pub fn tree(
         let length = tree.locations.at() as u32 - 4;
         tree.locations.patch32(0, length);
     }
-    Ok((tree.dies, tree.locations.done()))
+    if version >= 5 && !tree.ranges.is_empty() {
+        tree.dies[0].attrs.push((AT_RNGLISTS_BASE, Value::RangesBase));
+    }
+    Ok((tree.dies, tree.locations.done(), tree.ranges))
 }
