@@ -350,7 +350,7 @@ mod tests {
         fn forms_text(&self) -> String {
             self.0.forms_text()
         }
-        fn dialect(&self) -> &'static llrm_instr::Dialect {
+        fn dialect(&self) -> &'static llrm_target::instr::Dialect {
             self.0.dialect()
         }
         fn registers_text(&self) -> String {
