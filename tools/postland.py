@@ -19,6 +19,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import llrmbin  # noqa: E402
 import pairruns  # noqa: E402
 import parity_smoke  # noqa: E402
 import xfail  # noqa: E402
@@ -26,7 +27,7 @@ import xfail  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("POSTLAND", Path.home() / "scratch" / "postland"))
 TOOLS = Path(os.environ.get("POSTLAND_TOOLS", Path.home() / "scratch" / "sb-head3" / "dist"))  # jwasm, jwlink, dosbox-x
-BINS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")
+BINS = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront")
 BUILD = ["--profile", "dist", "-q", *(arg for one in BINS for arg in ("--bin", one))]
 LOW = ["nice", "-n", "19"]
 
@@ -272,20 +273,21 @@ def digest(path: Path) -> str:
 
 
 def combine_premise(at: Path, bins: Path, built: Path) -> str:
-    """The premise line: the tested llrm-c is the dist build's (same md5), and a program's object differs between default and LLRM_NO_COMBINE=1 on it, so combine ran."""
-    same = digest(bins / "llrm-c") == digest(built / "llrm-c")
+    """The premise line: the tested backend is the dist build's (same md5), and a program's object differs between default and LLRM_NO_COMBINE=1 on it, so combine ran."""
+    compiler, backend = llrmbin.compiler(bins), "llrm-llc" if (bins / "llrm-cc").is_file() else llrmbin.compiler(bins).name
+    same = digest(bins / backend) == digest(built / backend)
     seen = "no program differed"
     for source in sorted((at / "tests/run/c").glob("*.c"))[:200]:
         objects = []
         for off in (False, True):
             out = HOME / ("premise-off.obj" if off else "premise-on.obj")
-            env = {**os.environ, **({"LLRM_NO_COMBINE": "1"} if off else {})}
-            done = subprocess.run([str(bins / "llrm-c"), "-O2", "-o", str(out), str(source)], env=env, capture_output=True)
+            env = {**os.environ, "LLRM_CC_TARGET": "x86_64-linux", **({"LLRM_NO_COMBINE": "1"} if off else {})}
+            done = subprocess.run([str(compiler), "-O2", "-c", "-o", str(out), str(source)], env=env, capture_output=True)
             objects.append(digest(out) if done.returncode == 0 and out.exists() else None)
         if objects[0] and objects[1] and objects[0] != objects[1]:
             seen = f"{source.name} differs"
             break
-    return f"premise: tested llrm-c {digest(bins / 'llrm-c')} {'equals' if same else 'DIFFERS FROM'} the dist build {digest(built / 'llrm-c')}; default vs LLRM_NO_COMBINE=1: {seen}"
+    return f"premise: tested {backend} {digest(bins / backend)} {'equals' if same else 'DIFFERS FROM'} the dist build {digest(built / backend)}; default vs LLRM_NO_COMBINE=1: {seen}"
 
 
 def check(sha: str, previous: str, emit=lambda covered, raw: None) -> tuple[set[str], list[str]]:
