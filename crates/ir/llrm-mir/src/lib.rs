@@ -8,6 +8,7 @@ pub mod apint;
 pub mod arena;
 #[cfg(test)]
 mod arena_tests;
+pub mod atomic;
 pub mod blockfrequency;
 pub mod blocklist;
 pub mod blockorder;
