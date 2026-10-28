@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 137 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -11,6 +11,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documen
 | addressvalues | Spells the `address` operations of an allocated body as `lea` operands. | `assemble.rs`, on each machined body before `masm::cleaned_returns`, and | [addressvalues](addressvalues.md) |
 | affine | Recognises allocated instructions that keep a register an affine sum of registers, and names the 32-bit or 16-bit address of such a sum. | `exactaddress.rs`, which folds the chain into a memory operand, and the | [affine](affine.md) |
 | allocate | Assigns a register to every value of a lowered body, splitting and spilling the values that do not fit. | Once per function and route in the machine phases (`regalloc`), after | [allocate](allocate.md) |
+| allocresult | What an allocation returns: the error kinds and the assignment. | `backend::allocate`, the passes that run after it and the tests that | [allocresult](allocresult.md) |
 | arithmetic | Ranks the ways to multiply by a constant on a target: shift and add chains, `lea`, or `imul`. | `isel/matcher.rs` (which multiply to select), `division.rs` (a divisor's | [arithmetic](arithmetic.md) |
 | arrival | Finds how long a parameter stays in the register its convention passed it in, from the machine code. | `debuginfo.rs`, for 32-bit `-g` output: the parameter's location list is | [arrival](arrival.md) |
 | asm | The result of code layout: a body's bytes, where each instruction landed and the relocations that must follow, as the object writer needs them. | `layout.rs`, `objbuild.rs`. | [asm](asm.md) |

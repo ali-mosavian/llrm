@@ -128,6 +128,7 @@ pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
+pub mod allocresult;
 
 pub mod arithmetic;
 pub mod arrival;
