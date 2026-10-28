@@ -517,6 +517,9 @@ impl _Plain for model::Program {
         if self.float_semantics != model::FloatSemantics::Declared {
             out.insert("float_semantics".to_owned(), self.float_semantics._plain());
         }
+        if self.run_time_module {
+            out.insert("run_time_module".to_owned(), self.run_time_module._plain());
+        }
         if !self.zeroed_locals {
             out.insert("zeroed_locals".to_owned(), self.zeroed_locals._plain());
         }
@@ -1433,6 +1436,7 @@ static DATA_OBJECT: _Record = _Record {
             linkage: _default(args, "linkage", model::DataLinkage::Internal)?,
             address: _default(args, "address", model::AddressKind::Near)?,
             addressed: _default(args, "addressed", true)?,
+            exposed: false,
             segment: _default(args, "segment", None)?,
         })
     },
@@ -1703,6 +1707,7 @@ static PROGRAM: _Record = _Record {
         ("float_mode", enum_hint!(FloatMode), false),
         ("float_semantics", enum_hint!(FloatSemantics), false),
         ("zeroed_locals", _Hint::Bool, false),
+        ("run_time_module", _Hint::Bool, false),
         ("descriptor_word", _Hint::Int, false),
         ("frames", enum_hint!(Frames), false),
         ("promises", _Hint::Record(&RUNTIME_PROMISES), false),
@@ -1722,6 +1727,7 @@ static PROGRAM: _Record = _Record {
             float_mode: _default(args, "float_mode", model::FloatMode::Inline)?,
             float_semantics: _default(args, "float_semantics", model::FloatSemantics::Declared)?,
             zeroed_locals: _default(args, "zeroed_locals", true)?,
+            run_time_module: _default(args, "run_time_module", false)?,
             descriptor_word: _default(args, "descriptor_word", 2)?,
             frames: _default(args, "frames", model::Frames::Runtime)?,
             promises: _default(args, "promises", model::RuntimePromises::default())?,

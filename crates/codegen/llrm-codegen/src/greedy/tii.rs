@@ -19,7 +19,7 @@ use llrm_lir::registers::RegId;
 use crate::backend::allocate::Error;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::frame::Frame;
-use crate::model::ir::{self, Held, Loc, Mem, Operation, Reg, Semantics};
+use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
 use crate::model::lir::Insn;
 use crate::support::hash::IndexMap;
 
@@ -71,13 +71,36 @@ pub fn fold_memory_operand(
     if dests + sources != 1 && !tied {
         return None;
     }
+    // The cell is the width of the value's slot. An operand named wider than
+    // it (a dword zero defining a word value) would write the next slot too
+    // (grep.c: `mov dword ptr [bp-20], 0` zeroed a neighbour): a move of a
+    // constant stores the cell's width of it, anything else is not folded.
+    let narrow = what
+        .dests
+        .iter()
+        .chain(&what.sources)
+        .any(
+            |loc| matches!(
+                loc,
+                Loc::Held(held) if held.value == reg && held.width as u32 > cell.width
+            ),
+        );
+    if narrow && !(what.op == Operation::Move && matches!(what.sources.as_slice(), [Loc::Imm(_)])) {
+        return None;
+    }
     let swap = |loc: &Loc| match loc {
-        Loc::Held(held) if held.value == reg => Loc::Mem(Mem { width: held.width, ..cell.clone() }),
+        Loc::Held(held) if held.value == reg => {
+            Loc::Mem(Mem { width: (held.width as u32).min(cell.width), ..cell.clone() })
+        }
+        _ => loc.clone(),
+    };
+    let narrow_imm = |loc: &Loc| match loc {
+        Loc::Imm(imm) if narrow => Loc::Imm(Imm { width: imm.width.min(cell.width), ..imm.clone() }),
         _ => loc.clone(),
     };
     let made = Semantics {
         dests: what.dests.iter().map(swap).collect(),
-        sources: what.sources.iter().map(swap).collect(),
+        sources: what.sources.iter().map(swap).map(|loc| narrow_imm(&loc)).collect(),
         ..what.clone()
     };
     if !is_encodable(bits, &made, classes).ok()? {
