@@ -787,10 +787,23 @@ impl Builder<'_> {
             let vt = self.type_of(self.function.value(arg).ty)?;
             // the registers a convention names split a value as
             // `getNumRegisters` does
-            let (part_vt, parts) = match self.convention.parameters.get(at) {
+            let (mut part_vt, parts) = match self.convention.parameters.get(at) {
                 Some(Parameter::Registers(regs)) => self.parts_in(vt, regs.len())?,
                 _ => self.parts(vt)?,
             };
+            // `CCPromoteToType<i32>`: a byte or word in a register is the
+            // dword, whose high bits `zeroext`/`signext` assert
+            if matches!(
+                self.convention.parameters.get(at),
+                Some(Parameter::Registers(_))
+            )
+                && parts == 1
+                && vt.is_integer()
+                && vt.size_in_bits() < 32
+                && self.target.dag.pointer.size_in_bits() >= 32
+            {
+                part_vt = EVT::I32;
+            }
             let entry_node = self.dag.entry_node();
             let mut pieces = Vec::new();
             match self.convention.parameters.get(at) {
@@ -844,8 +857,25 @@ impl Builder<'_> {
             let value = if parts == 2 {
                 self.dag.get_node(ISD::BuildPair, vt, &pieces)
             } else if vt.is_integer() && vt.size_in_bits() < part_vt.size_in_bits() {
-                // a narrow argument arrives in a register-sized slot
-                self.dag.get_node(ISD::Truncate, vt, &[pieces[0]])
+                // a narrow argument arrives in a register-sized slot, and
+                // `zeroext`/`signext` says what is in the bits above it
+                // (`getCopyFromParts` with the `AssertOp` of `LowerArguments`)
+                let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
+                let assert = if llrm_mir::memory::has(attrs, "signext") {
+                    Some(ISD::AssertSext)
+                } else if llrm_mir::memory::has(attrs, "zeroext") {
+                    Some(ISD::AssertZext)
+                } else {
+                    None
+                };
+                let piece = match assert {
+                    Some(code) => {
+                        let narrow = self.dag.get_value_type_node(vt);
+                        self.dag.get_node(code, part_vt, &[pieces[0], narrow])
+                    }
+                    None => pieces[0],
+                };
+                self.dag.get_node(ISD::Truncate, vt, &[piece])
             } else {
                 pieces[0]
             };

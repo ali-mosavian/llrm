@@ -254,6 +254,23 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A `zeroext` argument arrives with its high bits clear, so `x / 10` of an
+/// `unsigned short` multiplies the register as it is; ours `movzx`ed it first
+/// (3 instructions where the pin has 2 at -m64). A `signext` one is its own
+/// `movsx`.
+#[test]
+fn a_zeroext_or_signext_argument_is_not_extended_again_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i16 @d(i16 zeroext %x) {\n  %r = udiv i16 %x, 10\n  ret i16 %r\n}\n\
+                define i32 @s(i8 signext %c) {\n  %r = sext i8 %c to i32\n  ret i32 %r\n}\n";
+    for function in ["d", "s"] {
+        let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, function).unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains("movzx") && !listing.contains("movsx"), "{function}: {listing}");
+    }
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
