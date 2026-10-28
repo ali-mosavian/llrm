@@ -1076,6 +1076,27 @@ impl SelectionDAG {
         store
     }
 
+    /// `getAtomic` of `ATOMIC_SWAP`: the old value at `ptr` and a chain,
+    /// `value` stored.
+    pub fn get_atomic_swap(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(value);
+        let swap = self.intern(
+            ISD::AtomicSwap,
+            &[vt, EVT::OTHER],
+            &[chain, ptr, value],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        self.volatile_accesses.insert(swap.node);
+        swap
+    }
+
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
     /// target asks to preserve pointer arithmetic, and ours does not).
     pub fn get_mem_base_plus_offset(

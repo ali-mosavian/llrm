@@ -987,6 +987,36 @@ impl Builder<'_> {
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
+    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
+    /// store that must be ordered, is `ATOMIC_SWAP`. The machine locks `xchg`
+    /// without asking, so every ordering is met.
+    fn visit_atomic(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: llrm_mir::opcode::AtomicInfo,
+    ) -> Result<(), Refused> {
+        use llrm_mir::opcode::{AtomicKind, RmwOp};
+        let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        let (pointer, value) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Store => (arguments[1], arguments[0]),
+            _ => return Err(Refused("an atomic other than an exchange")),
+        };
+        if self.operand_type(pointer)? == MVT::Far.into() {
+            return Err(Refused("an atomic access through a far pointer"));
+        }
+        let ty = self.function.operand_type(&self.module.context, value).ok_or(Refused("block operand"))?;
+        let (src, ptr) = (self.get_value(value)?, self.get_value(pointer)?);
+        let mem = self.mem_info(ty, info.align, true, pointer)?;
+        let root = self.root();
+        let swap = self.dag.get_atomic_swap(root, ptr, src, mem);
+        self.dag.set_root(SDValue { node: swap.node, res: 1 });
+        if let Some(result) = instruction.result {
+            self.set_value(result, swap);
+        }
+        Ok(())
+    }
+
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(
         &mut self,
@@ -1004,6 +1034,12 @@ impl Builder<'_> {
             },
             _ => None,
         };
+        if let Some(atomic) = direct
+            .and_then(|global| self.module.global(global).name.owned())
+            .and_then(|name| llrm_mir::atomic::decode(&name))
+        {
+            return self.visit_atomic(instruction, atomic);
+        }
         if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
             let name = direct.and_then(|global| self.module.global(global).name.owned()).unwrap_or_default();
             if intrinsic == llrm_mir::intrinsics::Intrinsic::Asm {
