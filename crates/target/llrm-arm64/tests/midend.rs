@@ -554,5 +554,6 @@ fn debug_only_inline_cost_prints_the_decision_and_the_instruction_costs() {
     let traced = run(&["-debug-only=inline-cost"]);
     assert!(traced.contains("'twice' inlined into 'f'") && traced.contains("cost="), "{traced}");
     assert!(traced.contains("[inlinetrace]"), "{traced}");
+    assert!(traced.contains("add i64 %"), "the callee's body the costs were taken on: {traced}");
     assert!(run(&[]).is_empty());
 }

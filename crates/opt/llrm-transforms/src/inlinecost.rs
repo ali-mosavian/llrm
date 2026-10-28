@@ -1862,6 +1862,7 @@ impl<'a> Analyzer<'a> {
                 self.site.module.global(self.site.callee_id).name.as_deref().unwrap_or("?"),
                 self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or("?")
             );
+            eprint!("{}", llrm_mir::print::body(self.context, self.callee));
         }
         self.start()?;
         if self.callee.layout().is_empty() {
