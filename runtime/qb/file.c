@@ -25,6 +25,9 @@ static unsigned os_error(long code)
     }
 }
 
+/* What an emptied string points at. */
+static const byte no_string;
+
 static Fdb *fdb_of(int channel)
 {
     return lh_file(channel);
@@ -84,7 +87,7 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     if (record_length <= 0)
         qb_error(BE_ILLFUN);
     handle = open_file(path, mode);
-    fdb = lh_alloc(sizeof(Fdb), LH_FILE, NULL, channel);
+    fdb = lh_alloc(sizeof(Fdb) + (mode == MD_RANDOM ? record_length : 0), LH_FILE, NULL, channel);
     if (!fdb) {
         llrm_os_close(handle);
         qb_error(BE_MEMORY);
@@ -258,8 +261,25 @@ static int get_byte(Fdb *fdb)
     return (byte)buffer[used++];
 }
 
+/* The strings FIELD mapped onto the buffer, which is about to go: each becomes empty. */
+static void unfield(Fdb *fdb)
+{
+    SD **at = (SD **)fdb->fielded.ptr;
+    unsigned count = fdb->fielded.len / sizeof(SD *);
+
+    for (; count--; at++)
+        if (in_buffer(fdb, *at)) {
+            (*at)->len = 0;
+            (*at)->ptr = (char *)&no_string;
+        }
+    str_release(&fdb->fielded);
+    fdb->fielded.len = 0;
+}
+
 static void close_fdb(Fdb *fdb)
 {
+    if (fdb->flags & FL_FIELD)
+        unfield(fdb);
     buffer_release();
     llrm_os_close(fdb->handle);
     lh_free(fdb);
@@ -326,6 +346,80 @@ long B_FSEK(short channel)
     long at = position_of(fdb);
 
     return fdb->mode == MD_RANDOM ? at / fdb->record_length + 1 : at + 1;
+}
+
+/* FIELD (QB rt/field.asm): B$FLDP picks the file and B$FIEL carves its record buffer, a string at a time. */
+static Fdb *field_fdb;
+static char *field_pos;
+static unsigned field_left;
+
+void B_FLDP(short channel)
+{
+    Fdb *fdb = fdb_of(channel);
+
+    if (!fdb || fdb->mode != MD_RANDOM)
+        qb_error(BE_FILEMODE);
+    fdb->flags |= FL_FIELD;
+    field_fdb = fdb;
+    field_left = fdb->record_length;
+    field_pos = FDB_BUFFER(fdb);
+}
+
+/* Whether `variable` still names the record buffer: a later assignment gives it a string of its own. */
+static int in_buffer(const Fdb *fdb, const SD *variable)
+{
+    return variable->ptr >= FDB_BUFFER(fdb) && variable->ptr < FDB_BUFFER(fdb) + fdb->record_length;
+}
+
+/* `variable` on the file's list of fielded descriptors, which the entry's mover and CLOSE walk; once is enough. */
+static void field_register(Fdb *fdb, SD *variable)
+{
+    static SD grown;
+    SD **at = (SD **)fdb->fielded.ptr;
+    unsigned count = fdb->fielded.len / sizeof(SD *), i;
+    SD **to;
+
+    for (i = 0; i < count; i++)
+        if (at[i] == variable)
+            return;
+    to = (SD **)str_alloc(&grown, (count + 1) * sizeof(SD *));
+    at = (SD **)fdb->fielded.ptr;
+    for (i = 0; i < count; i++)
+        to[i] = at[i];
+    to[count] = variable;
+    str_adopt(&fdb->fielded, &grown);
+}
+
+void B_FIEL(short width, SD *variable)
+{
+    if (width < 0)
+        qb_error(BE_ILLFUN);
+    if ((unsigned)width > field_left)
+        qb_error(BE_FIELD);
+    field_left -= width;
+    str_release(variable);
+    variable->len = width;
+    variable->ptr = field_pos;
+    if (width) {
+        field_pos += width;
+        field_register(field_fdb, variable);
+    }
+}
+
+/* The file entry moved `delta` bytes up: its fielded strings follow the buffer. */
+static void file_moved(void *data, int delta)
+{
+    Fdb *fdb = data;
+    SD **at = (SD **)fdb->fielded.ptr;
+    unsigned count = fdb->fielded.len / sizeof(SD *);
+
+    if (!count)
+        return;
+    /* called before the data moves, so the buffer is still where the strings are */
+    for (; count--; at++)
+        if (in_buffer(fdb, *at))
+            (*at)->ptr += delta;
+    str_owner_moved(&fdb->fielded, delta);
 }
 
 /* B$FATR: FILEATTR(#channel, field): 1 is the open mode, 2 the DOS handle. */
@@ -675,6 +769,7 @@ void file_xinit(void)
 {
     qb_comp_add(&comp);
     lh_on_move(LH_LINE, line_moved);
+    lh_on_move(LH_FILE, file_moved);
 }
 
 #pragma aux B_OPEN "B$OPEN"
@@ -690,6 +785,8 @@ void file_xinit(void)
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"
 #pragma aux B_FATR "B$FATR"
+#pragma aux B_FLDP "B$FLDP"
+#pragma aux B_FIEL "B$FIEL"
 #pragma aux file_close "@file_close@4"
 #pragma aux B_GET4 "B$GET4"
 #pragma aux B_PUT4 "B$PUT4"

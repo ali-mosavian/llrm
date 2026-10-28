@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferfunctionattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferfunctionattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferfunctionattrs.rs sha256:36e83241d3a40d8d283690c703f52f4ee385897337c54c8c815f138239b6573a -->
+<!-- src: crates/opt/llrm-transforms/src/inferfunctionattrs.rs sha256:85a2c582425eca28650e8095386281e1a7b1670e6c6734b745a2289456de5e6c -->
 
 # inferfunctionattrs
 
@@ -13,7 +13,7 @@ A translation of LLVM `d1106deb71cc`
 and `inferNonMandatoryLibFuncAttrs` of `BuildLibCalls.cpp`. A declaration
 whose name and prototype are a `LibFunc` the target's runtime has
 (`TargetLibraryInfo`) takes the attributes of its case in
-`libfunc/attrs.rs` (generated from the pin by `tools/gen_libattrs.py`):
+`libfunc/attrs.rs` (generated from the pin by `tools/gen/gen_libattrs.py`):
 `nounwind`, `willreturn`, `nofree`, `nosync`, `nocallback`, what it does to
 memory (`memory(errnomem: write)` for `sin`: it sets `errno` and touches
 nothing else) and what each pointer parameter is. A call of `sin(x)` twice

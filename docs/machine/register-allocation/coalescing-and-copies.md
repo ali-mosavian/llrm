@@ -22,7 +22,7 @@ x86 instructions write one of their sources. [`TwoAddress`](https://github.com/a
 
 ## Coalescing
 
-[`coalesce::joined`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L81) is LLVM's `RegisterCoalescer`, conservative: there is no undo, so a join must be safe. It is the one place an interference graph is built (`_interference`, a sorted set per value that is a bit vector once dense, [`neighbours.rs`](../../optimizations/backend/neighbours.md)).
+[`coalesce::joined`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/coalesce.rs#L81) is LLVM's `RegisterCoalescer`, conservative: there is no undo, so a join must be safe.
 
 Copies are visited in the blocks of deepest loop first, and in a loop the blocks that run most. A copy of two values `x := y` is joined when:
 
