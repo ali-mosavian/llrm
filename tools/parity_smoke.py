@@ -108,18 +108,27 @@ class Meter:
         self.value = total if seen else None
 
 
-def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, str]:
-    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was killed. A cargo killed alone leaves its test binary
-    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background."""
-    child = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+CUT_GRACE = 3.0  # seconds a cut group has to exit on SIGINT before SIGKILL
+
+
+def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] | None = None) -> tuple[int | None, str]:
+    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was stopped. A cargo killed alone leaves its test binary
+    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background. The group gets SIGINT first, so the `perf stat` wrapped around the command
+    (see Meter) still writes the instructions it counted; SIGKILL took them to the grave and a cut step counted 0 G beside a finished one's 120 G."""
+    child = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = child.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:  # it ended between the timeout and the kill
-            pass
-        child.communicate()
+        for sig in (signal.SIGINT, signal.SIGKILL):
+            try:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:  # it ended between the timeout and the signal
+                break
+            try:
+                child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
+                break
+            except subprocess.TimeoutExpired:
+                continue
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
@@ -379,9 +388,9 @@ def compile_ok(command: list[str], env: dict[str, str]) -> str | None:
 
 def programs(bins: Path) -> tuple[str, str]:
     jobs = []
-    for tool, ext in (("llrm-qb", "bas"), ("llrm-nib", "nib"), (llrmbin.c_compiler(), "c")):
+    for tool, ext in (("llrm-qb", "bas"), ("llrm-nib", "nib"), (llrmbin.compiler(bins).name, "c")):
         for machine in ("-m16", "-m32"):
-            extra = ["-mabi=sysv", "-march=i486"] if tool == llrmbin.c_compiler() and machine == "-m32" else []
+            extra = ["-mabi=sysv", "-march=i486"] if tool == llrmbin.compiler(bins).name and machine == "-m32" else []
             jobs.append([str(bins / tool), str(PROGRAM / f"bintree.{ext}"), "-O2", machine, *extra, "-o", os.devnull])
     for command in jobs:
         if why := compile_ok(command, oracle_env()):
@@ -396,7 +405,7 @@ def sc(bins: Path) -> tuple[str, str]:
     if not source.is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("", "render", "game", "host", "qgl", "model", "sound", "ui") for f in ("-I", str(qcport / part if part else qcport))] + ["-I", str(include)]
-    why = compile_ok([str(bins / llrmbin.c_compiler()), "-O1", *flags, str(source), "-o", os.devnull], oracle_env())
+    why = compile_ok([str(llrmbin.compiler(bins)), "-O1", *flags, str(source), "-o", os.devnull], oracle_env())
     return ("fail", why) if why else ("ok", "sc.c -m16 -O1")
 
 
@@ -428,7 +437,7 @@ def qc_d_faces(bins: Path) -> tuple[str, str]:
     if not source.is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    broken = {level: why for level in ("-O1", "-O2", "-O3", "-Os") if (why := compile_ok([str(bins / llrmbin.c_compiler()), level, *flags, str(source), "-o", os.devnull], os.environ))}
+    broken = {level: why for level in ("-O1", "-O2", "-O3", "-Os") if (why := compile_ok([str(llrmbin.compiler(bins)), level, *flags, str(source), "-o", os.devnull], os.environ))}
     if broken:
         first = next(iter(broken))
         return "fail", f"QCport d_faces.c {first}: {broken[first]}", [f"qc_d_faces {level}" for level in broken]
@@ -446,7 +455,7 @@ def qc_modules(bins: Path) -> tuple[str, str]:
     if not (qcport / QC_MODULES[0]).is_file() or not include.is_dir():
         return "skipped", f"no QCport sources ({qcport})"
     flags = [f for part in ("host", "render", "model", "game", "sound", "ui", "qgl") for f in ("-I", str(qcport / part))] + ["-I", str(include)]
-    broken = {module: why for module in QC_MODULES if (why := compile_ok([str(bins / llrmbin.c_compiler()), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ))}
+    broken = {module: why for module in QC_MODULES if (why := compile_ok([str(llrmbin.compiler(bins)), "-O2", *flags, str(qcport / module), "-o", os.devnull], os.environ))}
     if broken:
         first = next(iter(broken))
         return "fail", f"QCport {first} -O2: {broken[first]}", [f"qc_modules {module}" for module in broken]
@@ -766,7 +775,7 @@ def qcport_failures(
     include = Path(os.environ.get("QCPORT_INC", Path.home() / "scratch/qctc/inc")).expanduser()
     if not qcport.is_dir() or not include.is_dir():
         return set()
-    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(Path(bins) / llrmbin.c_compiler(), qcport, include)}
+    return {f"qc {module} {level}" for module, level, _ in (sweep or qcport_sweep.sweep)(llrmbin.compiler(Path(bins)), qcport, include)}
 
 
 def run_cases(bins: Path) -> tuple[str, str]:
@@ -786,7 +795,9 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
+        # an unranked crate runs its whole lib, cut by wall time: one test thread keeps that wall time the CPU it is charged (32 threads ran 32x the budget in it)
+        env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         listed = xfail.load_for(ROOT)

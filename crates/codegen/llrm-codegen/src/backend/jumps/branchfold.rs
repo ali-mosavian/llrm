@@ -131,6 +131,9 @@ struct Folder<'a> {
     /// The register file and width the effects of an instruction are worked
     /// out in; none in a body that has no allocation (a test's).
     regs: Option<(llrm_lir::registers::Regs, u32)>,
+    /// The value an instruction of the other way, hoisted away, defined or
+    /// read, to the hoisted instruction's (as in `tailmerge`).
+    rename: IndexMap<u32, u32>,
 }
 
 /// `body` with its branches folded; `protected` blocks are never bypassed.
@@ -140,10 +143,72 @@ pub fn folded(
 ) -> LirBody {
     let mut folder = Folder::of(body, protected);
     while folder.pass() {}
+    if !folder.rename.is_empty() {
+        let rename: IndexMap<u32, u32> =
+            folder.rename.keys().map(|one| (*one, super::_root(&folder.rename, *one))).collect();
+        for block in &mut folder.blocks {
+            let insns = block.insns.iter().map(|one| crate::backend::bodyfacts::_renamed(one, &rename)).collect();
+            *block = block.with_insns(insns);
+        }
+    }
     let mut done = body.with_blocks(folder.blocks);
     done.odds = folder.odds;
     super::_prune(&mut done);
+    super::_forget_moved_inflow(body, &mut done);
     done
+}
+
+/// Whether the flags `block.insns[at]` sets are written again before any
+/// instruction reads them. A call or return reads none (the pin's `RET` and
+/// `CALL` have no EFLAGS use), and none are live into a successor.
+fn flags_dead_after(
+    regs: llrm_lir::registers::Regs,
+    bits: u32,
+    block: &LirBlock,
+    at: usize,
+) -> bool {
+    let mut live = crate::backend::peephole::_ARITHMETIC_LANES.clone();
+    for insn in &block.insns[at + 1..] {
+        if insn.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Call | Operation::Return)) {
+            return true;
+        }
+        let (read, written) = crate::backend::peephole::_flag_effect(regs, bits, insn);
+        if !read.is_disjoint(&live) {
+            return false;
+        }
+        live = live.minus(&written);
+        if live.is_empty() {
+            return true;
+        }
+    }
+    true
+}
+
+/// An instruction `isSafeToMove` allows above a branch: a move or arithmetic
+/// on registers and constants, with nothing else it does.
+fn pure(insn: &Insn) -> bool {
+    insn.what.as_ref().is_some_and(|what| {
+        matches!(
+            what.op,
+            Operation::Move | Operation::Binary | Operation::Unary
+        )
+            && what.dests.iter().all(|loc| matches!(loc, crate::model::ir::Loc::Reg(_)))
+            && what
+                .sources
+                .iter()
+                .all(|loc| matches!(
+                    loc,
+                    crate::model::ir::Loc::Reg(_) | crate::model::ir::Loc::Imm(_)
+                ))
+    }) && insn.call.is_none()
+        && insn.group.is_none()
+        && insn.symbol.is_none()
+        && insn.spread.is_empty()
+        && insn.clobbers.is_empty()
+        && !insn.volatile
+        && !insn.frame_adjust
+        && !insn.spill_reload
+        && !insn.spill_store
 }
 
 impl<'a> Folder<'a> {
@@ -169,6 +234,7 @@ impl<'a> Folder<'a> {
             entry: body.entry,
             protected,
             regs: body.registers.map(|regs| (regs, body.bits)),
+            rename: IndexMap::default(),
         }
     }
 
@@ -439,11 +505,14 @@ impl<'a> Folder<'a> {
         true
     }
 
-    /// `HoistCommonCodeInSuccs` (L2043): the first instruction both ways of a
+    /// `HoistCommonCodeInSuccs` (L2043): the instructions both ways of a
     /// conditional branch begin with, where this block is the only way into
-    /// either, runs ahead of the branch (and of the compare that sets it up)
-    /// instead. Only a move of a register or a constant to a register the
-    /// compare and the branch do not touch, the kind allocation inserts.
+    /// either, run ahead of the branch (and of the compare that sets it up)
+    /// instead: the longest run that neither the compare nor the branch reads
+    /// or writes (L2088-2186). Only moves and arithmetic on registers and
+    /// constants, the kind allocation inserts (`isSafeToMove` is false for
+    /// the rest); an instruction that sets flags needs them dead after it, and
+    /// the compare in front of it to set them again.
     fn hoist_common(
         &mut self,
         index: usize,
@@ -466,41 +535,20 @@ impl<'a> Folder<'a> {
         if !first.phis.is_empty() || !second.phis.is_empty() {
             return false;
         }
-        let lead = |block: &LirBlock| block.insns.iter().position(|insn| !insn.is_meta());
-        let (Some(at), Some(by)) = (lead(&first), lead(&second)) else { return false };
-        let (head, tail) = (&first.insns[at], &second.insns[by]);
-        if head.what != tail.what || !head.inserted() || !tail.inserted() {
+        let real = |block: &LirBlock| -> Vec<usize> {
+            block.insns.iter().enumerate().filter(|(_, insn)| !insn.is_meta()).map(|(at, _)| at).collect()
+        };
+        let (firsts, seconds) = (real(&first), real(&second));
+        let pairs = |at: usize| match (firsts.get(at), seconds.get(at)) {
+            (Some(&one), Some(&two)) => {
+                let (head, tail) = (&first.insns[one], &second.insns[two]);
+                (head.what == tail.what && head.inserted() && tail.inserted() && pure(head)).then_some((one, two))
+            }
+            _ => None,
+        };
+        if pairs(0).is_none() {
             return false;
         }
-        let plain = |insn: &Insn| {
-            insn.what.as_ref().is_some_and(|what| {
-                what.op == Operation::Move
-                    && what.dests.iter().all(|loc| matches!(loc, crate::model::ir::Loc::Reg(_)))
-                    && what
-                        .sources
-                        .iter()
-                        .all(|loc| matches!(
-                            loc,
-                            crate::model::ir::Loc::Reg(_) | crate::model::ir::Loc::Imm(_)
-                        ))
-            }) && insn.defines.is_empty()
-                && insn.uses.is_empty()
-                && insn.call.is_none()
-                && insn.group.is_none()
-                && insn.symbol.is_none()
-                && insn.spread.is_empty()
-                && insn.clobbers.is_empty()
-                && !insn.volatile
-                && !insn.frame_adjust
-                && !insn.spill_reload
-                && !insn.spill_store
-        };
-        if !plain(head) {
-            return false;
-        }
-        let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, head, true, true) else {
-            return false;
-        };
         // From the compare that sets up the branch, or the branch, to the end.
         let last = block.insns.iter().position(|insn| Arc::ptr_eq(insn, cond)).expect("the branch is in its block");
         let mut from = last;
@@ -509,6 +557,7 @@ impl<'a> Folder<'a> {
                 from = before;
             }
         }
+        let flags = crate::backend::peephole::_flag_lanes(0xFFFF_FFFF);
         let (mut used, mut defined) = (crate::backend::lanes::Lanes::new(), crate::backend::lanes::Lanes::new());
         // The branches read the flags and no register; a move writes neither.
         let branches =
@@ -520,20 +569,58 @@ impl<'a> Folder<'a> {
             used = used.or(&read);
             defined = defined.or(&write);
         }
-        if !writes.is_disjoint(&used) || !writes.is_disjoint(&defined) || !reads.is_disjoint(&defined) {
+        // With no compare ahead of it the branch reads flags nothing may set.
+        if from == last {
+            used = used.or(&flags);
+        }
+        let mut run = Vec::new();
+        while let Some((at, by)) = pairs(run.len()) {
+            let head = &first.insns[at];
+            let Some((reads, writes)) = crate::backend::peephole::_register_effects(regs, bits, head, true, true)
+            else {
+                break;
+            };
+            // A flag the instruction sets is the compare's to set again: only
+            // the registers are `defined` against.
+            let registers = writes.minus(&flags);
+            let sets_flags = !writes.is_disjoint(&flags);
+            if !writes.is_disjoint(&used)
+                || !registers.is_disjoint(&defined)
+                || !reads.is_disjoint(&defined)
+                || (sets_flags
+                    && !(flags_dead_after(regs, bits, &first, at) && flags_dead_after(regs, bits, &second, by)))
+            {
+                break;
+            }
+            run.push((at, by));
+        }
+        if run.is_empty() {
             return false;
         }
-        let hoisted = Arc::clone(head);
+        for (at, by) in &run {
+            let (kept, dropped) = (&first.insns[*at], &second.insns[*by]);
+            let pairs = dropped.defines.iter().zip(&kept.defines).chain(dropped.uses.iter().zip(&kept.uses));
+            for (from, to) in pairs.filter(|(from, to)| from != to) {
+                let (from, to) = (super::_root(&self.rename, *from), super::_root(&self.rename, *to));
+                if from != to {
+                    self.rename.insert(from, to);
+                }
+            }
+        }
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
-        insns.insert(from, hoisted);
+        for (place, (at, _)) in run.iter().enumerate() {
+            insns.insert(from + place, Arc::clone(&first.insns[*at]));
+        }
         self.set(index, block.with_insns(insns).into_inner());
-        for (place, lead) in [(one, at), (two, by)] {
+        for (place, leads) in
+            [(one, run.iter().map(|(at, _)| *at).collect::<Vec<_>>()), (two, run.iter().map(|(_, by)| *by).collect())]
+        {
             let gone = self.blocks[place].clone();
             let insns: Vec<Arc<Insn>> = gone
                 .insns
                 .iter()
                 .enumerate()
-                .filter(|(position, _)| *position != lead)
+                .filter(|(position, _)| !leads.contains(position))
                 .map(|(_, insn)| Arc::clone(insn))
                 .collect();
             self.set(place, gone.with_insns(insns).into_inner());

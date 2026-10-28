@@ -14,6 +14,11 @@
 //! in `visitFAdd` and `visitFMul` after `SimplifyAssociativeOrCommutative`, are
 //! not translated.
 //!
+//! DEVIATE 3: `visitFSub` stops after `X - (-Y) --> X + Y`: the
+//! `foldFNegIntoConstant`, `foldFBinOpOfIntCasts`, cast-of-fneg, `fmul`/`fdiv`
+//! of a negated factor and the `reassoc nsz` arms are not translated; a half or
+//! `x86_fp80` constant is not negated.
+//!
 //! DEVIATE 2: an `x86_fp80` constant is held as a double: its reciprocal is
 //! formed only where exact.
 //!
@@ -28,7 +33,7 @@
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, Flags};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::types::{FloatKind, Type};
 
 use crate::combine::{Combiner, Visit};
@@ -46,6 +51,71 @@ pub fn visit_fadd_or_fmul(
         return Visit::Replace(found);
     }
     if simplify_associative_or_commutative(c, inst) { Visit::Changed } else { Visit::None }
+}
+
+/// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
+/// `fneg` spelled `fsub -0.0, X`, `X - C --> X + (-C)` for a float or double
+/// constant, and a subtrahend that is an `fneg`. DEVIATE 3 covers the rest.
+pub fn visit_fsub(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Visit {
+    if let Some(found) = simplify_first(c, inst) {
+        return Visit::Replace(found);
+    }
+    let instruction = c.function.instruction(inst).clone();
+    let (op0, op1) = (instruction.operands[0], instruction.operands[1]);
+    // fsub -0.0, X ==> fneg X; fsub nsz 0.0, X ==> fneg nsz X
+    if let Some((kind, value)) = float_constant(c, op0) {
+        let negative_zero = value == 0.0 && value.is_sign_negative();
+        let nsz_zero = value == 0.0 && instruction.flags.contains(Flags::NSZ);
+        if (negative_zero || nsz_zero) && kind != FloatKind::X86Fp80 {
+            return c.replace_with_new(inst, Opcode::FNeg, instruction.ty, vec![op1], instruction.flags);
+        }
+    }
+    // X - C --> X + (-C)
+    if let Some(negated) = negated_constant(c, op1) {
+        return c.replace_with_binop(inst, BinaryOp::FAdd, op0, negated, instruction.flags);
+    }
+    // X - (-Y) --> X + Y
+    if let Some(y) = fneg_operand(c, op1) {
+        return c.replace_with_binop(inst, BinaryOp::FAdd, op0, y, instruction.flags);
+    }
+    Visit::None
+}
+
+/// `m_FNeg(Y)`: `fneg Y`, or `fsub -0.0, Y`.
+fn fneg_operand(
+    c: &Combiner,
+    v: Operand,
+) -> Option<Operand> {
+    let (_, instruction) = crate::combine_shared::query(c, None).instruction_of(v)?;
+    match instruction.opcode {
+        Opcode::FNeg => Some(instruction.operands[0]),
+        Opcode::Binary(BinaryOp::FSub)
+            if float_constant(c, instruction.operands[0]).is_some_and(|(_, x)| x == 0.0 && x.is_sign_negative()) =>
+        {
+            Some(instruction.operands[1])
+        }
+        _ => None,
+    }
+}
+
+/// `ConstantFoldUnaryOpOperand(FNeg, C)` of a float or double constant.
+fn negated_constant(
+    c: &mut Combiner,
+    v: Operand,
+) -> Option<Operand> {
+    let Operand::Constant(id) = v else { return None };
+    let constant = c.context.get(id).clone();
+    let Type::Float(kind) = *c.context.types.get(constant.ty) else { return None };
+    let ConstantKind::Float(bits) = constant.kind else { return None };
+    let flipped = match kind {
+        FloatKind::Float => bits ^ (1 << 31),
+        FloatKind::Double => bits ^ (1 << 63),
+        _ => return None,
+    };
+    Some(Operand::Constant(c.context.constant(Constant { ty: constant.ty, kind: ConstantKind::Float(flipped) })))
 }
 
 /// `visitFDiv` (InstCombineMulDivRem.cpp).

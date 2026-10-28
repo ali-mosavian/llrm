@@ -358,6 +358,8 @@ mod tests {
             align: 2,
             optional: false,
             enter: false,
+            wrap_split_size: false,
+            slot_scratch: None,
             free: false,
         };
         let facts = CalleeFacts::of(&parsed(LEAF)).0;

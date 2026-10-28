@@ -13,12 +13,13 @@
 //! the register has no operand left, so its interval goes
 //! (`LRE_CanEraseVirtReg` asks the delegate first).
 //!
-//! DEVIATE D-E1: `eliminateDeadDefs` and `anyRematerializable` are not here.
-//! The fact: a spill's products here are a reload, the instruction itself and a
-//! store, none dead; what is made again (constants, frame addresses, loads of a
-//! frame cell) is decided by `backend::spiller`'s plan, which carries the m16
-//! forms. Exit: the spiller's plan is translated as `TargetInstrInfo::
-//! isTriviallyReMaterializable` rules (issue to be opened with step 2).
+//! DEVIATE D-E1: `eliminateDeadDefs` is in the spiller and the splitter
+//! (`InlineSpiller::eliminate_dead_defs`, `SplitEditor::delete_remat_victims`),
+//! not here, and erases what LLVM's `isInstructionTriviallyDead` would for the
+//! products of a spill or split: plain copies and the definitions
+//! `greedy/remat.rs` makes again. A spill's other products (the reload, the
+//! instruction itself, the store) are never dead, so no case differs. Exit: the
+//! general `isInstructionTriviallyDead` test, when a pass leaves such a def.
 //!
 //! # Example
 //! `create_from(7)` gives `%12`, whose original is `%7`; `new_regs()` is

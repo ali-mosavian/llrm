@@ -70,7 +70,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_analysis::globalsaa::embedded;
 use llrm_mir::context::{ConstantExpr, ConstantId, ConstantKind, Context, GlobalId};
-use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand};
+use llrm_mir::module::{Function, GlobalKind, InstId, Linkage, Module, Operand, UnnamedAddr};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
 
@@ -92,7 +92,11 @@ impl ModulePass for GlobalOpt {
                 variable.constant = true;
             }
         }
-        if found.is_empty() {
+        let unnamed = address_not_significant(module);
+        for &id in &unnamed {
+            module.globals[id.0 as usize].unnamed_addr = UnnamedAddr::Global;
+        }
+        if found.is_empty() && unnamed.is_empty() {
             Vec::new()
         } else {
             module.functions().filter(|(_, _, one)| !one.is_declaration()).map(|(id, _, _)| id).collect()
@@ -111,6 +115,67 @@ pub fn never_stored(module: &Module) -> Vec<GlobalId> {
             .then_some(GlobalId(at as u32))
     });
     only_used(module, candidates.collect(), &only_loaded)
+}
+
+/// The internal and private variables not yet `unnamed_addr` whose address is
+/// never compared: `processGlobal`'s first step
+/// ([GlobalOpt.cpp:1646](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/GlobalOpt.cpp#L1646)),
+/// with `GlobalStatus::analyzeGlobal` as `only_used` reads it: every use, in
+/// every function and through address arithmetic and casts, is a load's or
+/// non-volatile store's address or a transfer's or fill's operand, and no
+/// other global's initializer names the variable (an address that escapes
+/// there is `analyzeGlobal`'s give-up). A use that is a compare, a call
+/// argument, a stored address or a select or phi of the address is not one.
+///
+/// DEVIATE 1: only globals with local linkage (the pin marks the others
+/// `local_unnamed_addr`, which nothing here reads), and no functions.
+pub fn address_not_significant(module: &Module) -> Vec<GlobalId> {
+    let held = held_by_live(module);
+    let candidates = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(
+            |(at, global)| {
+                let GlobalKind::Variable(_) = &global.kind else { return None };
+                let internal = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+                (internal && global.unnamed_addr != UnnamedAddr::Global && !held.contains(&GlobalId(at as u32)))
+                    .then_some(GlobalId(at as u32))
+            },
+        );
+    only_used(module, candidates.collect(), &not_compared)
+}
+
+/// A use `analyzeGlobal` accepts and does not count as a compare.
+fn not_compared(
+    module: &Module,
+    function: &Function,
+    op: &llrm_mir::module::Instruction,
+    index: usize,
+) -> bool {
+    use llrm_mir::intrinsics::Intrinsic;
+    match op.opcode {
+        Opcode::Load { volatile, .. } => index == 0 && !volatile,
+        Opcode::Store { volatile, .. } => index == 1 && !volatile,
+        Opcode::Call(_) => {
+            let volatile = match op.operands.get(3) {
+                Some(Operand::Constant(id)) => {
+                    !matches!(
+                        module.context.get(*id).kind,
+                        ConstantKind::Int(0) | ConstantKind::Zero
+                    )
+                }
+                _ => true,
+            };
+            !volatile
+                && callee_intrinsic(module, function, op).is_some_and(|one| match one {
+                    Intrinsic::MemCpy | Intrinsic::MemMove => index <= 1,
+                    Intrinsic::MemSet => index == 0,
+                    _ => false,
+                })
+        }
+        _ => false,
+    }
 }
 
 /// The globals the initializers of the variables something reaches name. A

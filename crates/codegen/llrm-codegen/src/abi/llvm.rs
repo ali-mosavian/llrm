@@ -9,7 +9,10 @@ use crate::backend::assemble::{Abi, Registers};
 use crate::hir::model::StackCleanup;
 
 /// Calls and symbols of a module no HIR program made.
-pub struct LlvmAbi;
+pub struct LlvmAbi {
+    /// Where the runtime keeps its stack's lower limit, for `-fsanitize=stack`.
+    pub stack_check: Option<crate::hir::model::StackCheck>,
+}
 
 impl Abi for LlvmAbi {
     fn contract(
@@ -25,6 +28,10 @@ impl Abi for LlvmAbi {
         }
         let cleanup = if pops { StackCleanup::Callee } else { StackCleanup::Caller };
         Ok(super::qb::ordinary(callee, cleanup, pushed, &BTreeSet::new()))
+    }
+
+    fn stack_check(&self) -> Option<&crate::hir::model::StackCheck> {
+        self.stack_check.as_ref()
     }
 
     fn registers(

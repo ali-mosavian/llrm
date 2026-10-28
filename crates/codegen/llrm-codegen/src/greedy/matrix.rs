@@ -104,6 +104,23 @@ pub trait PhysInterference {
         self.reg_mask_range(start, stop)
     }
 
+    /// The value a split is being tried for, when what a regmask clobbers of
+    /// `phys` depends on it (`reg_mask_clobbers`): None for a register it does
+    /// not depend for.
+    fn lane_of(
+        &self,
+        _phys: RegId,
+    ) -> Option<u32> {
+        None
+    }
+
+    /// The value `lane_of` answers for, while a split is tried for it.
+    fn set_lane(
+        &self,
+        _virt: Option<u32>,
+    ) {
+    }
+
     /// Whether regmask number `i` destroys any register: an entry that only
     /// reads one (the data segment an access takes without naming it) is
     /// not a regmask operand of the instruction.

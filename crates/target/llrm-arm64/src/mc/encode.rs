@@ -33,14 +33,14 @@ pub enum FixupKind {
 
 impl FixupKind {
     /// The relocation the object format holds, for the kinds it has one for.
-    pub fn relocation(self) -> Option<llrm_object::Kind> {
-        use llrm_object::Kind;
+    pub fn relocation(self) -> Option<llrm_object::Fix> {
+        use super::fixup;
         Some(match self {
-            FixupKind::Branch26 => Kind::Branch26,
-            FixupKind::Page21 => Kind::Page21,
-            FixupKind::PageOffset12 { access } => Kind::PageOffset12 { access },
-            FixupKind::GotPage21 => Kind::GotPage21,
-            FixupKind::GotPageOffset12 => Kind::GotPageOffset12,
+            FixupKind::Branch26 => fixup::BRANCH26_FIX,
+            FixupKind::Page21 => fixup::PAGE21_FIX,
+            FixupKind::PageOffset12 { access } => fixup::page_offset12(access),
+            FixupKind::GotPage21 => fixup::GOT_PAGE21,
+            FixupKind::GotPageOffset12 => fixup::GOT_PAGE_OFFSET12,
             FixupKind::Branch19 | FixupKind::Branch14 | FixupKind::Adr21 => return None,
         })
     }

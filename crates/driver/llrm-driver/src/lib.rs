@@ -2,6 +2,7 @@
 //! name, among those it supports; nothing else in the tree matches on a
 //! target's name.
 
+mod coerce;
 pub mod llc;
 
 use std::rc::Rc;
@@ -90,6 +91,12 @@ pub fn m16_options(machine: Machine) -> Options {
     let target: Rc<dyn Target> = Rc::new(llrm_x86_m16::M16);
     let selection = selector(target.name()).expect("the 16-bit selector is built");
     Options::new(machine, target, selection)
+}
+
+/// `m16_options` with the old selector: for the tests that pin its output
+/// (the DAG selector is the default).
+pub fn m16_options_old(machine: Machine) -> Options {
+    Options { isel: llrm_codegen::backend::shadow::Selector::Old, ..m16_options(machine) }
 }
 
 /// BASIC's machine: real mode's, with its stack in the data group, which its
