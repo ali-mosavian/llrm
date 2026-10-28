@@ -492,7 +492,9 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
-    assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
+    // the pin subtracts in a scratch register and moves the result to `rsp`
+    assert!(lines.iter().any(|line| line.starts_with("sub r")), "the run-time size is subtracted\n{listing}");
+    assert!(lines.iter().any(|line| line.starts_with("mov rsp, r")), "the stack pointer is lowered\n{listing}");
     // The pin takes the stack back through the frame register and a pop, not
     // `leave`.
     let at = lines.iter().position(|line| *line == "mov rsp, rbp");
