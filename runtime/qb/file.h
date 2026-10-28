@@ -49,6 +49,10 @@ void B_GET4(short channel, long record, qb_data_ptr data, short length);
 void B_PUT4(short channel, long record, qb_data_ptr data, short length);
 void B_SSEK(short channel, long position);
 void B_FLDP(short channel);
+void B_GET1(short channel);
+void B_PUT1(short channel);
+void B_GET2(short channel, long record);
+void B_PUT2(short channel, long record);
 void B_FIEL(short width, SD *variable);
 
 #endif

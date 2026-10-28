@@ -237,6 +237,9 @@ pub struct SelectionDAG {
     dead_work: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// The source line of the IR instruction at each `IROrder` (0: none), from
+    /// the `!dbg` the builder read: `SDLoc`'s line.
+    pub lines: Vec<u32>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,
@@ -325,6 +328,7 @@ impl SelectionDAG {
             deleted: Vec::new(),
             dead_work: Vec::new(),
             cur_order: 0,
+            lines: Vec::new(),
             replacements: Vec::new(),
             config,
             entry: zero,

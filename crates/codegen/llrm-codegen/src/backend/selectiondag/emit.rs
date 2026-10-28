@@ -262,6 +262,7 @@ struct Emitter<'a, 'd> {
     returns: Vec<(Held, llrm_lir::registers::RegId)>,
     /// (call address, callee symbol) of each direct call.
     calls: Vec<(i64, Callee)>,
+    pops: Vec<(i64, i64)>,
     inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
@@ -371,6 +372,8 @@ pub struct Emitted {
     pub classes: Vec<(u32, &'static str)>,
     /// (address, global) of each direct call.
     pub calls: Vec<(i64, Callee)>,
+    /// (address, bytes) of each call whose callee pops arguments it was pushed.
+    pub pops: Vec<(i64, i64)>,
     /// The frame places each inline code site patches in, by site: (byte of
     /// the code, displacement, addend).
     pub inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
@@ -409,6 +412,7 @@ pub fn emit_in(
         arguments: Vec::new(),
         returns: Vec::new(),
         calls: Vec::new(),
+        pops: Vec::new(),
         inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
@@ -439,7 +443,21 @@ pub fn emit_in(
     for unit in units {
         for &node in unit.nodes.iter().rev() {
             let before = emitter.blocks.last().map_or(0, |block| block.insns.len());
+            let (first_block, order) =
+                (emitter.blocks.len().saturating_sub(1), dag.node(SDValue { node, res: 0 }).order);
             emitter.node(node)?;
+            // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+            // instruction's line.
+            if let Some(&line) = dag.lines.get(order as usize).filter(|line| **line != 0) {
+                for (at, block) in emitter.blocks.iter_mut().enumerate().skip(first_block) {
+                    let from = if at == first_block { before } else { 0 };
+                    for one in &mut block.insns[from..] {
+                        if one.line.is_none() {
+                            *one = Arc::new(Insn { line: Some(line), ..(**one).clone() });
+                        }
+                    }
+                }
+            }
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }
@@ -486,7 +504,13 @@ pub fn emit_in(
             )?;
         }
     }
-    Ok(Emitted { blocks, classes: emitter.classes, calls: emitter.calls, inline_places: emitter.inline_places })
+    Ok(Emitted {
+        blocks,
+        classes: emitter.classes,
+        calls: emitter.calls,
+        pops: emitter.pops,
+        inline_places: emitter.inline_places,
+    })
 }
 
 /// The high and low words (`word` bytes each) of a constant of two words when
@@ -2200,6 +2224,13 @@ impl Emitter<'_, '_> {
             "ADJCALLSTACKDOWN32" | "ADJCALLSTACKUP32" | "ADJCALLSTACKDOWN64" | "ADJCALLSTACKUP64" => {
                 let bytes = self.constant(node.ops[0])?;
                 let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
+                // What the call just before this took back is what the code
+                // that reads the frame back (`cfi.rs`) must not count.
+                if popped != 0
+                    && let Some(&(at, _)) = self.calls.last()
+                {
+                    self.pops.push((at, popped));
+                }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
                 let bytes = (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment;

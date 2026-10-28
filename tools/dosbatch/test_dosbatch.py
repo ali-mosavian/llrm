@@ -251,3 +251,17 @@ def test_a_program_whose_screen_is_compared_keeps_the_mount_so_its_rows_line_up_
     with mock.patch.object(dosbatch, "_launch", return_value=None), mock.patch.object(dosbatch, "collect", return_value={}):
         dosbatch.run([dosbatch.Job("J", "exe", exe, screen=True)], tmp_path / "w")
     assert "mount v" in (tmp_path / "w" / "jobs.txt").read_text()
+
+
+def test_a_failed_assembly_leaves_no_err_file_in_the_working_directory(tmp_path, monkeypatch):
+    """jwasm writes `<source>.err` into the current directory when it fails: tools/dosbatch/init.err landed untracked in the source tree."""
+    import pytest
+
+    if not (dosbatch.BIN / "jwasm").is_file():
+        pytest.skip("jwasm is not built")
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    with pytest.raises(Exception):  # noqa: B017
+        dosbatch.assemble(tmp_path / "missing" / "init.asm", tmp_path / "x.obj")
+    assert list(cwd.iterdir()) == []

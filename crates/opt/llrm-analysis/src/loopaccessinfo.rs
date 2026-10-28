@@ -737,6 +737,7 @@ fn is_vector_intrinsic_call(
                 | Intrinsic::Abs
                 | Intrinsic::Compare { .. }
                 | Intrinsic::FMulAdd
+                | Intrinsic::CopySign
                 | Intrinsic::Unary(_)
                 | Intrinsic::LRint
                 | Intrinsic::LifetimeStart
