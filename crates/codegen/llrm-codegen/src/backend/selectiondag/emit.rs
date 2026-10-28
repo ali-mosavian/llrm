@@ -2445,18 +2445,22 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             // An indirect sibling call: the callee's address is pinned to one
-            // of EAX, ECX, EDX (`GR32_TC`) the arguments do not take, as the
-            // epilogue restores every other register before the jump.
-            "TCRETURNri" => {
+            // of `GR32_TC` (EAX, ECX, EDX) or `GR64_TC` the arguments do not
+            // take, as the epilogue restores every other register before the
+            // jump.
+            "TCRETURNri" | "TCRETURNri64" => {
                 let Loc::Held(callee) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
                 };
-                use llrm_lir::registers::RegId;
                 let mut requires = std::mem::take(&mut self.arguments);
-                let free = [RegId::EAX, RegId::ECX, RegId::EDX]
-                    .into_iter()
+                let registers = self.ctx.registers;
+                let free = registers
+                    .entries()
+                    .filter(|(_, one)| one.classes & llrm_lir::registers::class::TAIL_CALL != 0)
+                    .map(|(id, _)| id)
                     .find(|one| {
-                        self.ctx.caller_saved.contains(one) && requires.iter().all(|(_, taken)| taken.root() != *one)
+                        self.ctx.caller_saved.contains(&registers.root(*one))
+                            && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(*one))
                     })
                     .ok_or_else(|| EmitError::Unsupported("a sibling call with no free register".to_owned()))?;
                 requires.push((callee, free));

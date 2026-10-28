@@ -61,11 +61,10 @@ fn run() -> Result<(), String> {
     write("ids.rs", ids_rs::render(&ids, &extras, &instructions))?;
     let m16 = inc::parse(&read(inc_m16, "--inc-m16")?, &ids)?;
     let m16_decoded = decode::decode(&m16.matcher_table, &m16.operand_lists, &ids, &decode::HwModes(vec![i32, i32]))?;
-    // `getValueTypeForHwMode`: in the `X86_64` mode (index 1) a pointer is
-    // `i64`.
+    // `getValueTypeForHwMode`: in the `X86_64` mode both indices are `i64`.
     let i64 = llrm_dagisel::matcher::Vt(ids.get("MVT::i64")? as u16);
     let decoded_64 =
-        decode::decode(&parsed.matcher_table, &parsed.operand_lists, &ids, &decode::HwModes(vec![i32, i64]))?;
+        decode::decode(&parsed.matcher_table, &parsed.operand_lists, &ids, &decode::HwModes(vec![i64, i64]))?;
     for (table, tree, cpus) in
         [(&parsed, &decoded, &CPUS[..]), (&m16, &m16_decoded, &M16_CPUS[..]), (&parsed, &decoded_64, &X64_CPUS[..])]
     {
