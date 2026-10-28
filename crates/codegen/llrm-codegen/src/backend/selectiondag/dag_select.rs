@@ -76,10 +76,24 @@ pub fn select_block(
     }
     // `PreprocessISelDAG`: the rewrites that need no matcher.
     super::x86_preprocess::preprocess(dag, temporaries, lowering.sse2);
+    remove_assertions(dag);
     do_instruction_selection(dag, selector, hooks)?;
     let root = dag.get_root();
     let units = schedule(dag, root, info);
     emit_in(dag, &units, ctx, state, first_at).map_err(Refusal::Emit)
+}
+
+/// `SelectCodeCommon` for `AssertSext` and `AssertZext`: each is its operand.
+/// DEVIATE SD43: the pin drops them while matching; here ahead of the matcher,
+/// which has no id for them. Same selected code.
+fn remove_assertions(dag: &mut SelectionDAG) {
+    for node in dag.node_ids().collect::<Vec<_>>() {
+        let value = SDValue { node, res: 0 };
+        if matches!(dag.opcode(value), ISD::AssertSext | ISD::AssertZext) {
+            let operand = dag.operand(value, 0);
+            dag.replace_all_uses_with(value, operand);
+        }
+    }
 }
 
 /// `CodeGenAndEmitDAG` up to selection: `Combine` at each of three levels
