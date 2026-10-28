@@ -28,7 +28,7 @@
 //! allocator's own facts are carried to the next round and edited where they
 //! are (`edit`, `Indexes::patch`): nothing else holds them (`release` clears
 //! the spiller's copy, `snapshot` keeps the touched values' old intervals for
-//! `LiveUnion::refresh_among`), so a round copies nothing of the values it did
+//! the allocator's refresh), so a round copies nothing of the values it did
 //! not name. The
 //! allocator also leaves its latest intervals in a thread-local (`hold`); the
 //! spiller it calls takes them back (`held`) when the body is exactly the one
@@ -40,8 +40,8 @@
 //! allocator's result.
 //!
 //! # Used by
-//! `allocate` builds and edits it; `spiller`, `splitkit`, `regclass` and
-//! `liveunion` read it (through the [`Ranges`] trait where only the intervals
+//! `allocate` builds and edits it; `spiller`, `splitkit` and `regclass`
+//! read it (through the [`Ranges`] trait where only the intervals
 //! matter).
 
 use std::sync::Arc;
@@ -211,7 +211,7 @@ impl LiveRanges {
     }
 
     /// The intervals of `touched` as they are, to be asked after this is edited
-    /// (`LiveUnion::refresh_among` asks where a value was).
+    /// (the allocator's refresh asks where a value was).
     pub fn snapshot(
         &self,
         touched: &crate::support::hash::HashSet<u32>,
