@@ -157,6 +157,8 @@ pub enum ISD {
 
     Load,
     Store,
+    /// `ATOMIC_SWAP`: `(chain, ptr, value)` to the old value and a chain.
+    AtomicSwap,
     CallSeqStart,
     CallSeqEnd,
     DynamicStackAlloc,
@@ -316,6 +318,7 @@ impl ISD {
             BrInd => "brind",
             Load => "load",
             Store => "store",
+            AtomicSwap => "atomic_swap",
             CallSeqStart => "callseq_start",
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",

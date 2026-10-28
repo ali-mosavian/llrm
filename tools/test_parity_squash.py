@@ -107,7 +107,7 @@ def test_the_smoke_binaries_default_to_the_release_dir_when_all_three_are_there(
     try:
         ps.smoke_bins(env)
     except SystemExit as why:
-        assert "lacks llrm-c, llrm-qb, llrm-nib" in str(why)
+        assert "lacks llrm-cc, llrm-llc, llrm-qb, llrm-nib" in str(why)
     else:
         raise AssertionError("an empty release dir was accepted")
     for name in ps.BINARIES:
@@ -2027,3 +2027,19 @@ def test_two_halves_that_build_apart_and_fail_together_name_the_later_pr():
     assert refused == ["3"]
     assert pending == ["1", "2", "4"]
     assert ["1", "2", "3"] in tested
+
+
+def test_the_tests_get_the_clang_of_the_trees_own_pin(tmp_path):
+    """#5789 bumped the pin's m16 sha in a batch while the runner's LLRM_CLANG_M16 stayed the old build: the dosbatch tests refused the batch ("not the pinned clang")."""
+    (tmp_path / "tree/toolchain/clang").mkdir(parents=True)
+    (tmp_path / "tree/toolchain/clang/pin").write_text("aaaa # upstream\nbbbb # m16 fork\n")
+    for sha in ("bbbb", "cccc"):
+        (tmp_path / "by" / sha / "bin").mkdir(parents=True)
+        (tmp_path / "by" / sha / "bin/clang").write_text("")
+    env = {"LLRM_CLANG_M16": "/old/clang"}
+    ps.with_pinned_clang(env, tmp_path / "tree", tmp_path / "by")
+    assert env["LLRM_CLANG_M16"] == str(tmp_path / "by/bbbb/bin/clang")
+    (tmp_path / "tree/toolchain/clang/pin").write_text("aaaa\ndddd\n")
+    env = {"LLRM_CLANG_M16": "/old/clang"}
+    ps.with_pinned_clang(env, tmp_path / "tree", tmp_path / "by")
+    assert env["LLRM_CLANG_M16"] == "/old/clang", "no build for the sha: the runner's value stays"
