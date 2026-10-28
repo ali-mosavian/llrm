@@ -342,6 +342,23 @@ pub struct AsmInfo {
     /// Whether that writer places a frame cell from the canonical frame
     /// address.
     pub cfa_locations: bool,
+    /// How the format says where a function's caller is
+    /// (`MCAsmInfo::ExceptionsType`, `getExceptionHandlingType`).
+    pub unwind: UnwindKind,
+}
+
+/// The unwind information a format carries for a function.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum UnwindKind {
+    /// None: DOS's OMF has no place for it.
+    #[default]
+    None,
+    /// `.eh_frame` (ELF).
+    EhFrame,
+    /// Mach-O's `__compact_unwind` with `__eh_frame` for what it cannot encode.
+    Compact,
+    /// `.pdata` and `.xdata` (Win64 COFF).
+    Win64,
 }
 
 /// What a writer cannot say. A writer returns it; it never writes something
