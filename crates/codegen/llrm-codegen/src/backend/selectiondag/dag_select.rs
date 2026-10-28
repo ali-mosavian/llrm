@@ -157,6 +157,14 @@ pub(crate) fn do_instruction_selection(
             continue;
         }
         let before = adapter.dag.nodes().len();
+        // The pin's `Select` keeps these as they are and marks them selected
+        // (`SelectionDAGISel.cpp`, "Mark selected").
+        if matches!(
+            adapter.dag.nodes()[node as usize].opcode,
+            ISD::TokenFactor | ISD::CopyFromReg | ISD::CopyToReg
+        ) {
+            adapter.mark_selected(node);
+        }
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
         if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));

@@ -25,7 +25,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         // DEVIATE SD256: a shared load is read again as the integer when every
         // user of the cast is a call argument's store.
-        let shared = self.dag.use_count(load.node) != 1;
+        let shared = !self.dag.has_one_use(load.node);
         if shared && !self.only_call_argument_stores(node) {
             return None;
         }
