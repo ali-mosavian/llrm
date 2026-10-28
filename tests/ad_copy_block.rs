@@ -16,7 +16,16 @@ fn listing(
         .args(flags)
         .args(["-O2", "-S", "-o", "ad.s"])
         .args(["-I", &format!("{root}/runtime/qb/dos/{directory}")])
-        .args(["-I", &format!("{root}/runtime/qb/dos"), "-I", &format!("{root}/runtime/qb")])
+        .args([
+            "-I",
+            &format!("{root}/runtime/qb/dev/dos/{directory}"),
+            "-I",
+            &format!("{root}/runtime/qb/dev"),
+            "-I",
+            &format!("{root}/runtime/qb/dos"),
+            "-I",
+            &format!("{root}/runtime/qb"),
+        ])
         .arg(format!("{root}/runtime/qb/dos/{directory}/ad.c"))
         .output()
         .unwrap();

@@ -124,6 +124,15 @@ pub struct Convention {
     /// sp,N`: the 486 takes 14 clocks against 3 (Intel 240440-002), and neither
     /// GCC nor LLVM emits it.
     pub frame_enter: bool,
+    /// A size build may set the frame up after an early exit that shares its
+    /// return with the late path (the exit then jumps over the epilogue). Left
+    /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
+    pub frame_wrap_split_size: bool,
+    /// The registers a frame of one stack slot pushes and pops instead of a
+    /// `sub`/`add` of the stack pointer: the pushed one holds nothing a
+    /// push may not read, the popped one is a caller-saved register no result
+    /// or tail call argument is in.
+    pub frame_slot_scratch: Option<(String, String)>,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -225,6 +234,9 @@ const KEYS: &[&str] = &[
     "frame",
     "frame_optional",
     "frame_enter",
+    "frame_wrap_split_size",
+    "frame_slot_push",
+    "frame_slot_pop",
     "stack",
     "preserved",
     "clobbered",
@@ -658,6 +670,11 @@ impl Convention {
             frame: text("frame")?,
             frame_optional: flag("frame_optional")?,
             frame_enter: flag("frame_enter")?,
+            frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_slot_scratch: table
+                .contains_key("frame_slot_push")
+                .then(|| Ok::<_, String>((text("frame_slot_push")?, text("frame_slot_pop")?)))
+                .transpose()?,
             stack: text("stack")?,
             preserved,
             clobbered: names(table.get("clobbered"), "clobbered")?,
