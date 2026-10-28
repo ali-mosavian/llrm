@@ -1810,6 +1810,10 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+def test_precheck_runs_no_ratchet_the_batch_smoke_runs_them_all():
+    """Precheck ran the 12 ratchets (median 80 s a PR at load 70) that every batch's smoke runs again on the merged tree and the head: 12 PRs of pre-flight held the first batch 40 min."""
+    assert [name for name, _ in ps.precheck_checks(Path("."), Path("."))] == ["fmt", "docs"]
+
 
 def test_a_conflict_detail_names_the_owner_and_the_conflicting_file(tmp_path):
     """#5456 and #5462 were refused at squash for merge conflicts: the line said neither who owns them nor where (dag_function_tests.rs); the coordinator ran git merge-tree by hand."""

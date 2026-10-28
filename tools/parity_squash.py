@@ -309,17 +309,9 @@ def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
 
 
 def precheck_checks(dev: Path, target: Path):
-    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: a ratchet's name, fmt's files, the docs' stale pages. Run on the
+    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: fmt's files, the docs' stale pages. Run on the
     dev checkout against the persistent dev target; the items are what a head's own failures are told apart from a PR's by."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import parity_smoke  # noqa: PLC0415
-    from buildslot import slotted  # noqa: PLC0415
-
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-
-    def ratchets(root: Path) -> dict[str, set[str]]:
-        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True, errors="replace"))
-        return {name: {name} for name in failed}
 
     def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
         if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
@@ -337,7 +329,8 @@ def precheck_checks(dev: Path, target: Path):
         return {"docs": {line.strip() for line in out if line.strip().startswith("docs/")} or {"docsbuild --check failed"}}
 
     fmt.takes_only = True
-    return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
+    # no ratchets here: the batch's smoke runs all of them on the merged tree and on the head, so a red one is refused there (seconds to minutes per PR, median 80 s at load 70, were spent twice)
+    return [("fmt", fmt), ("docs", docs)]
 
 
 def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None, only: list[str] | None = None) -> dict[str, set[str]]:
