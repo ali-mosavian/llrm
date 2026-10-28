@@ -105,9 +105,9 @@ _RUNTIME_LOCK = threading.Lock()
 
 
 def with_isel(command: list[str]) -> list[str]:
-    """`command` with `--isel=$LLRM_ISEL` after `llrm-c`, `llrm-qb` or `llrm-nib`, when the variable is set: the same programs through the other instruction selector."""
+    """`command` with `--isel=$LLRM_ISEL` after `llrm-cc`, `llrm-qb` or `llrm-nib`, when the variable is set: the same programs through the other instruction selector."""
     mode = os.environ.get("LLRM_ISEL")
-    if mode and Path(command[0]).name in ("llrm-c", "llrm-cc", "llrm-qb", "llrm-nib"):
+    if mode and Path(command[0]).name in ("llrm-cc", "llrm-qb", "llrm-nib"):
         return [command[0], f"--isel={mode}", *command[1:]]
     return command
 
@@ -175,14 +175,11 @@ WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 
 
 def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str], extra: list[str] = ()) -> tuple[list[str], dict[str, str]]:
-    """(command, environment) that builds the C `source` for `target`: llrm-c, or llrm-cc over clang where LLRM_C_FRONTEND=llrm-cc names it (the
-    target is then a row of its table, not a flag)."""
-    if c_frontend() == "llrm-cc":
-        if target_bits(target) not in WATCOM_ROWS:
-            raise BuildError(f"llrm-cc has no row for {target}")
-        row = {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
-        return [str(BIN / "llrm-cc"), level, "-c", *abi, *extra, str(source), "-o", str(obj)], row  # the row's -isystem has llrm_os.h; `include` is llrm-c's
-    return [str(BIN / "llrm-c"), str(source), "-I", str(include), m_flag(target), *abi, level, *extra, "-o", str(obj)], {}
+    """(command, environment) that builds the C `source` for `target`: llrm-cc over clang, the target a row of its table, not a flag.
+    `include` is unused: the row's -isystem has llrm_os.h."""
+    if target_bits(target) not in WATCOM_ROWS:
+        raise BuildError(f"llrm-cc has no row for {target}")
+    return [str(BIN / "llrm-cc"), level, "-c", *abi, *extra, str(source), "-o", str(obj)], {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
 
 
 def m_flag(target: str) -> str:
@@ -287,12 +284,12 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
 # The 16-bit target the loop corpus and the C helpers build for.
 REAL_MODE = linkrecipe.named(16)
 
-_COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
+_COMPILERS = {"nib": "llrm-nib"}
 
 
 def c_frontend() -> str:
-    """The C compiler a run builds with: llrm-cc over clang, or llrm-c where LLRM_C_FRONTEND=llrm-c asks (a build with the c-legacy feature)."""
-    return "llrm-c" if os.environ.get("LLRM_C_FRONTEND") == "llrm-c" else "llrm-cc"
+    """The C compiler a run builds with: llrm-cc over clang."""
+    return "llrm-cc"
 
 
 def os_layer(target: str, field: str, language: str) -> str:
@@ -309,8 +306,7 @@ def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str,
     """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
     defines = tuple(os_layer(target, "defines", language).split())
     # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
-    # And under llrm-c, a program built with -mabi=watcom.
-    watcom = abi == "watcom" or (abi not in ("sysv", "cdecl", "ia16") and c_frontend() == "llrm-cc")
+    watcom = abi == "watcom" or abi not in ("sysv", "cdecl", "ia16")
     return (*defines, "LL_MAIN=main_") if language == "c" and watcom else defines
 
 
@@ -322,7 +318,7 @@ def os_start(target: str, language: str) -> list[str]:
 
 
 def c_include(target: str, work: Path) -> Path:
-    """A directory of `work` holding the OS layer's C header for `target` as llrm_os.h (`llrm-c --os-layer header`)."""
+    """A directory of `work` holding the OS layer's C header for `target` as llrm_os.h (`llrm-cc --os-layer header`)."""
     directory = work / f"{target}-include"
     directory.mkdir(exist_ok=True)
     header = os_layer(target, "header", "c") + "\n"

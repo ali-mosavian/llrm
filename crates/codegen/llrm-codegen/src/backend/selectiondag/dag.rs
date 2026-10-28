@@ -239,7 +239,7 @@ pub struct SelectionDAG {
     pub cur_order: u32,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
-    pub lines: Vec<u32>,
+    pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,

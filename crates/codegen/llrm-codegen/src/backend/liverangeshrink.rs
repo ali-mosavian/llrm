@@ -318,6 +318,15 @@ fn landing(
         if !is_copy(site) && (site.call.is_some() || !site.delivers.iter().any(|(held, _)| held.value == *value)) {
             eligible += 1;
         }
+        // The pin's `COPY` of the result follows the call frame's close, which
+        // is a barrier: it is in the stretch after it, not before. A call
+        // behind the barrier is defined at the stretch's first instruction.
+        let def = match order.get(def) {
+            Some(None) if block == block_at && site.call.is_some() => {
+                order.iter().position(|slot| *slot == Some(0)).unwrap_or(def)
+            }
+            _ => def,
+        };
         insert = dominated(block, block_at, def, insert, position, order);
     }
     (eligible > 1).then_some(insert?)

@@ -148,7 +148,7 @@ pub struct Insn {
     /// A return that reads only its `requires` and the epilogue's registers.
     pub reads_complete: bool,
     /// The source line of the MIR instruction it was selected from (`!dbg`).
-    pub line: Option<u32>,
+    pub line: Option<SrcLoc>,
     pub debug: DebugTags,
     /// What it does to the registers (`liveness::effect`), worked out once for
     /// everything that asks.
@@ -412,15 +412,31 @@ impl LirBody {
     }
 }
 
-/// The line of one instruction standing for two
-/// (`DILocation::getMergedLocation`): the line both have, none where either has
-/// none, else line 0, which a debugger does not stop at.
+/// A source position (`DILocation`'s line and column; column 0 is unknown).
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub struct SrcLoc {
+    pub line: u32,
+    pub column: u32,
+}
+
+impl SrcLoc {
+    pub const fn line(line: u32) -> Self {
+        Self { line, column: 0 }
+    }
+}
+
+/// The location of one instruction standing for two
+/// (`DILocation::getMergedLocation`): what both have, none where either has
+/// none, else line 0, which a debugger does not stop at. DEVIATE: two places
+/// of one line keep the line with no column, not line 0.
 pub fn merged_line(
-    one: Option<u32>,
-    other: Option<u32>,
-) -> Option<u32> {
+    one: Option<SrcLoc>,
+    other: Option<SrcLoc>,
+) -> Option<SrcLoc> {
     match (one, other) {
-        (Some(a), Some(b)) => Some(if a == b { a } else { 0 }),
+        (Some(a), Some(b)) if a == b => Some(a),
+        (Some(a), Some(b)) if a.line == b.line => Some(SrcLoc::line(a.line)),
+        (Some(_), Some(_)) => Some(SrcLoc::default()),
         _ => None,
     }
 }

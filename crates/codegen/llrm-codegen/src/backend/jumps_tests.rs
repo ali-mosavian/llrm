@@ -2253,7 +2253,7 @@ fn lined(
     one: Arc<Insn>,
     line: u32,
 ) -> Arc<Insn> {
-    Arc::new(Insn { line: Some(line), ..(*one).clone() })
+    Arc::new(Insn { line: Some(crate::model::lir::SrcLoc::line(line)), ..(*one).clone() })
 }
 
 fn zero_lines(
@@ -2278,6 +2278,7 @@ fn zero_lines(
         .flat_map(|block| block.insns.iter())
         .filter(|insn| insn.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("xor")))
         .map(|insn| insn.line)
+        .map(|one| one.map(|at| at.line))
         .collect()
 }
 
@@ -2315,6 +2316,7 @@ fn test_merged_tails_of_different_lines_have_line_zero() {
         .flat_map(|block| block.insns.iter())
         .filter(|insn| insn.what.as_ref().is_some_and(|what| what.op == Operation::Move))
         .map(|insn| insn.line)
+        .map(|one| one.map(|at| at.line))
         .collect();
     assert_eq!(lines, [Some(0)]);
 }

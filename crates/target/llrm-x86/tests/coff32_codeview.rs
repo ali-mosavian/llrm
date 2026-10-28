@@ -150,6 +150,7 @@ fn object() -> Object {
         symbols: vec![public("_f", 0, 0), public("_g", 1, 0)],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug: Some(info),
     }
 }

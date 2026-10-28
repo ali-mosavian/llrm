@@ -1229,6 +1229,27 @@ define i32 @f(i32 %a, i32 %b) {
     let module = llrm_mir::parse::module(ir).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
-    let lines: Vec<u32> = done.body.insns().iter().filter_map(|one| one.line).collect();
+    let lines: Vec<u32> = done.body.insns().iter().filter_map(|one| one.line.map(|at| at.line)).collect();
     assert!(lines.contains(&7) && lines.contains(&8), "{lines:?}");
+}
+
+/// A `!DILocation` column was dropped: every row of the line table said
+/// column 0. The instructions selected from it carry (line, column).
+#[test]
+fn a_dbg_column_reaches_the_instructions_selected_from_it() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(i32 %a, i32 %b) {
+  %s = sub i32 %a, %b, !dbg !0
+  %t = mul i32 %s, %b, !dbg !1
+  ret i32 %t, !dbg !1
+}
+!0 = !DILocation(line: 7, column: 5)
+!1 = !DILocation(line: 8, column: 12)
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let places: Vec<(u32, u32)> =
+        done.body.insns().iter().filter_map(|one| one.line.map(|at| (at.line, at.column))).collect();
+    assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
 }

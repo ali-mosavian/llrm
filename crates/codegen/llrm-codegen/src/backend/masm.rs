@@ -122,7 +122,7 @@ use llrm_lir::registers::{RegId, RegSet};
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
-use crate::model::lir;
+use crate::model::lir::{self, SrcLoc};
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::Repr;
 
@@ -587,7 +587,7 @@ pub enum Item {
 pub enum Mark {
     /// The code after it is this source line's: the procedure's `index`th
     /// line, where [`line_label`] names it.
-    Line { line: u32, index: u32 },
+    Line { line: SrcLoc, index: u32 },
     /// The procedure's own code starts, its prologue done: the first code
     /// of a source line.
     BodyStart,
@@ -819,7 +819,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     let eligible = procedure.entry == 0
         && procedure.interrupt.is_none()
         && !procedure.far
-        && procedure.body.bits == 32
+        && matches!(procedure.body.bits, 32 | 64)
         && procedure.reserve != 0
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
@@ -1360,7 +1360,7 @@ fn built(
     // The prologue is the first line's, not the previous procedure's last.
     let mut line = first.and_then(|one| one.line);
     let mut lines = 0..;
-    let mut marked = |line: u32| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
+    let mut marked = |line: SrcLoc| Item::Mark(Mark::Line { line, index: lines.next().expect("unbounded") });
     // The arguments are in their registers from the first byte: what the entry
     // says of them stands before the prologue.
     let arrival = blocks.iter().flat_map(|block| &block.insns).find(|one| one.arrival());
@@ -2086,7 +2086,7 @@ pub fn line_starts(
     Ok(listing(procedure, number)?
         .into_iter()
         .filter_map(|item| match item {
-            Item::Mark(Mark::Line { line, index }) => Some((line_label(number, index), line)),
+            Item::Mark(Mark::Line { line, index }) => Some((line_label(number, index), line.line)),
             _ => None,
         })
         .collect())
