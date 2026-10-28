@@ -1053,6 +1053,13 @@ pub fn _prune(body: &mut LirBody) {
             })
         })
         .collect();
+    // A block dropped whole leaves the table with it.
+    let present: HashSet<i64> = body.blocks.iter().map(|one| one.at).collect();
+    if let Some(kept) = body.frequencies.as_mut().filter(|kept| kept.0.keys().any(|at| !present.contains(at))) {
+        *kept = Arc::new(lir::BlockFrequencies(
+            kept.0.iter().filter(|(at, _)| present.contains(at)).map(|(at, runs)| (*at, *runs)).collect(),
+        ));
+    }
 }
 
 #[cfg(test)]

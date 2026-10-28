@@ -36,7 +36,11 @@
 //! virtual-register cycle check (`initVRegCycle`, only for blocks that branch
 //! to themselves). Reason: they need register classes of the matcher's output
 //! for copies. Exit: before the switch gate. Owner: sdag-d. Review
-//! 2026-12-03.
+//! 2026-12-03. Hits (vsgcc corpus, `--isel=dag`, m32 and m16, O1/O2/Os,
+//! 2026-10-27): the held unit going anyway 0, the clone 0, `BacktrackBottomUp`
+//! 15; the comparator (`BURRSort`, `checkSpecialNodes`, `BUCompareLatency`
+//! without the virtual-register cycle, `calcMaxScratches`, `closestSucc`) is
+//! the pin's.
 //!
 //! DEVIATE SD31: no IR order (`SDNode::getIROrder`), so the call-ordering tie
 //! break in `BURRSort` never fires. Reason: SD10 drops `SDLoc` and IR order.
@@ -216,6 +220,12 @@ fn is_passive(opcode: ISD) -> bool {
             | ISD::ExternalSymbol
             | ISD::FrameIndex
             | ISD::ConstantPool
+            | ISD::TargetConstantPool
+            | ISD::TargetFrameIndex
+            | ISD::TargetExternalSymbolNode
+            | ISD::JumpTable
+            | ISD::TargetJumpTable
+            | ISD::RegisterMask
             | ISD::BasicBlock
             | ISD::EntryToken
     )
@@ -234,7 +244,7 @@ pub fn schedule(
     let mut queue = Queue::default();
     queue.init(&mut graph, &mut topo);
     let order = graph.list_schedule_bottom_up(root, &mut queue);
-    order.into_iter().map(|su| Unit { nodes: graph.sus[su].nodes.clone() }).collect()
+    order.into_iter().map(|su| Unit { nodes: std::mem::take(&mut graph.sus[su].nodes) }).collect()
 }
 
 struct Graph<'a> {
@@ -243,8 +253,10 @@ struct Graph<'a> {
     sus: Vec<SUnit>,
     /// `SDNode::getNodeId`: the unit a node is in; -1 for none.
     node_id: Vec<i32>,
-    /// The live users of each node (`N->users()`), by node.
-    users: Vec<Vec<u32>>,
+    /// The live users of each node (`N->users()`): node `n`'s are
+    /// `user_list[user_start[n]..user_start[n + 1]]`.
+    user_start: Vec<u32>,
+    user_list: Vec<u32>,
     cur_cycle: u32,
     /// `LiveRegDefs`: the unit whose definition of a physical register is
     /// still wanted by a unit already scheduled below it.
@@ -256,6 +268,8 @@ struct Graph<'a> {
     interferences: Vec<(usize, Vec<u16>)>,
     /// `Sequence`: the units scheduled so far, bottom first.
     sequence: Vec<usize>,
+    /// The work stack of the depth and height walks, kept between calls.
+    walk: Vec<usize>,
 }
 
 impl<'a> Graph<'a> {
@@ -305,22 +319,53 @@ impl<'a> Graph<'a> {
     fn live_users(
         dag: &SelectionDAG,
         root: SDValue,
-    ) -> Vec<Vec<u32>> {
-        let mut users = vec![Vec::new(); dag.node_count()];
+    ) -> (Vec<u32>, Vec<u32>) {
+        let reachable = Self::reachable_ops(dag, root);
+        let mut start = vec![0u32; dag.node_count() + 1];
+        for &(operand, _) in &reachable {
+            start[operand as usize + 1] += 1;
+        }
+        for n in 0..dag.node_count() {
+            start[n + 1] += start[n];
+        }
+        let mut next = start.clone();
+        let mut list = vec![0u32; reachable.len()];
+        for &(operand, user) in &reachable {
+            list[next[operand as usize] as usize] = user;
+            next[operand as usize] += 1;
+        }
+        (start, list)
+    }
+
+    /// The (operand, user) pairs among the nodes reachable from `root`, each
+    /// pair once.
+    fn reachable_ops(
+        dag: &SelectionDAG,
+        root: SDValue,
+    ) -> Vec<(u32, u32)> {
+        let mut pairs: Vec<(u32, u32)> = Vec::new();
         let mut seen = vec![false; dag.node_count()];
         let mut work = vec![root.node];
         seen[root.node as usize] = true;
         while let Some(n) = work.pop() {
+            let first = pairs.len();
             for op in &dag.node(SDValue { node: n, res: 0 }).ops {
-                if !users[op.node as usize].contains(&n) {
-                    users[op.node as usize].push(n);
+                if !pairs[first..].contains(&(op.node, n)) {
+                    pairs.push((op.node, n));
                 }
                 if !std::mem::replace(&mut seen[op.node as usize], true) {
                     work.push(op.node);
                 }
             }
         }
-        users
+        pairs
+    }
+
+    fn users_of(
+        &self,
+        n: u32,
+    ) -> &[u32] {
+        &self.user_list[self.user_start[n as usize] as usize..self.user_start[n as usize + 1] as usize]
     }
 
     /// `BuildSchedGraph`.
@@ -329,17 +374,20 @@ impl<'a> Graph<'a> {
         root: SDValue,
         info: &'a dyn SchedInfo,
     ) -> Graph<'a> {
+        let (user_start, user_list) = Self::live_users(dag, root);
         let mut graph = Graph {
             dag,
             info,
             sus: Vec::new(),
             node_id: vec![-1; dag.node_count()],
-            users: Self::live_users(dag, root),
+            user_start,
+            user_list,
             cur_cycle: 0,
             live_reg_defs: HashMap::default(),
             live_reg_gens: HashMap::default(),
             interferences: Vec::new(),
             sequence: Vec::new(),
+            walk: Vec::new(),
         };
         graph.build_sched_units(root);
         graph.add_sched_edges();
@@ -356,7 +404,8 @@ impl<'a> Graph<'a> {
         visited[root.node as usize] = true;
         let mut calls = Vec::new();
         while let Some(ni) = work.pop() {
-            for op in self.ops(ni).to_vec() {
+            let dag = self.dag;
+            for op in &dag.node(SDValue { node: ni, res: 0 }).ops {
                 if !std::mem::replace(&mut visited[op.node as usize], true) {
                     work.push(op.node);
                 }
@@ -381,7 +430,7 @@ impl<'a> Graph<'a> {
             let mut n = ni;
             while self.values(n).last() == Some(&EVT::GLUE) {
                 let glue = SDValue { node: n, res: (self.values(n).len() - 1) as u8 };
-                let user = self.users[n as usize].iter().copied().find(|&u| self.ops(u).contains(&glue));
+                let user = self.users_of(n).iter().copied().find(|&u| self.ops(u).contains(&glue));
                 let Some(user) = user else { break };
                 self.node_id[n as usize] = num as i32;
                 n = user;
@@ -437,7 +486,7 @@ impl<'a> Graph<'a> {
         n: u32,
         res: usize,
     ) -> bool {
-        self.users[n as usize].iter().any(|&u| self.ops(u).iter().any(|op| op.node == n && usize::from(op.res) == res))
+        self.users_of(n).iter().any(|&u| self.ops(u).iter().any(|op| op.node == n && usize::from(op.res) == res))
     }
 
     /// `AddSchedEdges`.
@@ -584,7 +633,8 @@ impl<'a> Graph<'a> {
         if !self.sus[su].height_current {
             return;
         }
-        let mut work = vec![su];
+        let mut work = std::mem::take(&mut self.walk);
+        work.push(su);
         while let Some(cur) = work.pop() {
             if !self.sus[cur].height_current {
                 continue;
@@ -592,6 +642,7 @@ impl<'a> Graph<'a> {
             self.sus[cur].height_current = false;
             work.extend(self.sus[cur].preds.iter().map(|p| p.su));
         }
+        self.walk = work;
     }
 
     /// `SUnit::getHeight`.
@@ -620,7 +671,8 @@ impl<'a> Graph<'a> {
         &mut self,
         su: usize,
     ) {
-        let mut work = vec![su];
+        let mut work = std::mem::take(&mut self.walk);
+        work.push(su);
         while let Some(&cur) = work.last() {
             if let Some(p) = self.sus[cur].preds.iter().find(|p| !self.sus[p.su].depth_current) {
                 work.push(p.su);
@@ -631,13 +683,15 @@ impl<'a> Graph<'a> {
             self.sus[cur].depth = max;
             self.sus[cur].depth_current = true;
         }
+        self.walk = work;
     }
 
     fn compute_height(
         &mut self,
         su: usize,
     ) {
-        let mut work = vec![su];
+        let mut work = std::mem::take(&mut self.walk);
+        work.push(su);
         while let Some(&cur) = work.last() {
             if let Some(s) = self.sus[cur].succs.iter().find(|s| !self.sus[s.su].height_current) {
                 work.push(s.su);
@@ -648,6 +702,7 @@ impl<'a> Graph<'a> {
             self.sus[cur].height = max;
             self.sus[cur].height_current = true;
         }
+        self.walk = work;
     }
 
     /// `SUnit::setHeightToAtLeast`.
@@ -1280,6 +1335,8 @@ struct Queue {
     queue: Vec<usize>,
     cur_queue_id: u32,
     sethi_ullman: Vec<u32>,
+    /// The work stack of `calc_sethi_ullman`, kept between calls.
+    walk: Vec<(usize, usize)>,
 }
 
 impl Queue {
@@ -1371,7 +1428,8 @@ impl Queue {
         if self.sethi_ullman[su] != 0 {
             return;
         }
-        let mut work = vec![(su, 0usize)];
+        let mut work = std::mem::take(&mut self.walk);
+        work.push((su, 0usize));
         while let Some(&(cur, processed)) = work.last() {
             let mut known = true;
             for p in processed..sus[cur].preds.len() {
@@ -1402,6 +1460,7 @@ impl Queue {
             self.sethi_ullman[cur] = (number + extra).max(1);
             work.pop();
         }
+        self.walk = work;
     }
 
     /// `getNodePriority`.

@@ -2,7 +2,7 @@
 
 use std::process::Command;
 
-const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @llvm.memmove.p0.p0.i16(ptr, ptr, i16, i1)
 define void @f(ptr %d, ptr %s, i16 %n) #0 {
   call void @llvm.memmove.p0.p0.i16(ptr align 1 %d, ptr align 1 %s, i16 %n, i1 false), !llrm.backward !0

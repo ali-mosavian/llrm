@@ -104,6 +104,8 @@
 
 pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
 pub mod address_analysis;
+pub mod bitcast_combine;
+pub mod bitreverse_combine;
 pub mod bswap_combine;
 pub mod builder;
 mod chain_combine;
@@ -120,20 +122,28 @@ pub mod div_combine;
 pub mod div_const;
 pub mod dump;
 pub mod emit;
+pub mod expand_divrem_const;
+pub mod expand_fixed;
+pub mod expand_funnel;
+pub mod expand_sat;
 pub mod fold;
 pub mod fp_combine;
 pub mod fp_value;
 pub mod function_lowering;
+pub mod iminmax_combine;
 pub mod inline_asm;
 pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
 pub mod logic_setcc;
+mod match_rotate;
 pub mod opcodes;
 mod reassociate;
+pub mod reduce_load_width;
 pub mod schedule;
 pub mod switchcg;
+pub mod x86_carry;
 pub mod x86_lowering;
 pub mod x86_preprocess;
 
@@ -197,6 +207,8 @@ mod freeze_tests;
 mod gaps_tests;
 #[cfg(test)]
 mod invoke_tests;
+#[cfg(test)]
+mod match_rotate_tests;
 #[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]

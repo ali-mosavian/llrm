@@ -734,6 +734,7 @@ pub mod x86 {
     pub const AND32mr: u16 = 855;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const ANDPSrm: u16 = 977;
     pub const AX: u16 = 3;
     pub const CDQ: u16 = 1202;
     pub const CL: u16 = 11;
@@ -773,6 +774,8 @@ pub mod x86 {
     pub const IMUL32r: u16 = 1824;
     pub const IMUL64m: u16 = 1849;
     pub const IMUL64r: u16 = 1852;
+    pub const IMUL8m: u16 = 1877;
+    pub const IMUL8r: u16 = 1880;
     pub const INC16m: u16 = 1901;
     pub const INC32m: u16 = 1912;
     pub const INC8m: u16 = 1933;
@@ -783,10 +786,14 @@ pub mod x86 {
     pub const MOVZX16rm8: u16 = 2763;
     pub const MOVZX16rr8: u16 = 2765;
     pub const MOVZX32rr8_NOREX: u16 = 2771;
+    pub const MUL16m: u16 = 2778;
+    pub const MUL16r: u16 = 2781;
     pub const MUL32m: u16 = 2784;
     pub const MUL32r: u16 = 2787;
     pub const MUL64m: u16 = 2790;
     pub const MUL64r: u16 = 2793;
+    pub const MUL8m: u16 = 2796;
+    pub const MUL8r: u16 = 2799;
     pub const NEG16m: u16 = 2849;
     pub const NEG16r: u16 = 2854;
     pub const NEG32m: u16 = 2859;
@@ -799,6 +806,7 @@ pub mod x86 {
     pub const OR32mr: u16 = 2973;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const ORPSrm: u16 = 3079;
     pub const RAX: u16 = 51;
     pub const RDX: u16 = 56;
     pub const RIP: u16 = 58;
@@ -832,6 +840,7 @@ pub mod x86 {
     pub const XOR32mr: u16 = 22637;
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
+    pub const XORPSrm: u16 = 22744;
     pub const sub_16bit: u16 = 4;
     pub const sub_32bit: u16 = 6;
     pub const sub_8bit: u16 = 1;
@@ -857,6 +866,7 @@ pub mod x86 {
         (855, "AND32mr"),
         (927, "AND8mi"),
         (933, "AND8mr"),
+        (977, "ANDPSrm"),
         (1202, "CDQ"),
         (1396, "CQO"),
         (1506, "CWD"),
@@ -884,6 +894,8 @@ pub mod x86 {
         (1824, "IMUL32r"),
         (1849, "IMUL64m"),
         (1852, "IMUL64r"),
+        (1877, "IMUL8m"),
+        (1880, "IMUL8r"),
         (1901, "INC16m"),
         (1912, "INC32m"),
         (1933, "INC8m"),
@@ -893,10 +905,14 @@ pub mod x86 {
         (2763, "MOVZX16rm8"),
         (2765, "MOVZX16rr8"),
         (2771, "MOVZX32rr8_NOREX"),
+        (2778, "MUL16m"),
+        (2781, "MUL16r"),
         (2784, "MUL32m"),
         (2787, "MUL32r"),
         (2790, "MUL64m"),
         (2793, "MUL64r"),
+        (2796, "MUL8m"),
+        (2799, "MUL8r"),
         (2849, "NEG16m"),
         (2854, "NEG16r"),
         (2859, "NEG32m"),
@@ -909,6 +925,7 @@ pub mod x86 {
         (2973, "OR32mr"),
         (3045, "OR8mi"),
         (3051, "OR8mr"),
+        (3079, "ORPSrm"),
         (4033, "SAHF"),
         (4165, "SBB16mi"),
         (4171, "SBB16mr"),
@@ -938,6 +955,7 @@ pub mod x86 {
         (22637, "XOR32mr"),
         (22709, "XOR8mi"),
         (22715, "XOR8mr"),
+        (22744, "XORPSrm"),
     ];
 }
 
