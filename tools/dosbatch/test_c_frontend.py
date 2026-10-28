@@ -165,3 +165,21 @@ def test_the_real_mode_start_up_finds_qb_start_by_the_name_start_asm_calls(tmp_p
     qbruntime._compile_c(dosbatch.ROOT / "runtime/qb/rtinit.c", obj, dosbatch.c_include(dosbatch.REAL_MODE, tmp_path))
     names = obj.read_bytes()
     assert b"\x09_qb_start" in names and b"_qb_start@3" not in names
+
+
+@pytest.mark.parametrize("model", ["m16", "m32"])
+def test_an_initializer_lands_in_the_xi_segments_start_up_walks(tmp_path, model):
+    """`#pragma data_seg("XI", ...)` is ignored by the fork clang: nh_xinit's table entry sat in plain data, nothing registered the heap component,
+    and every m32 QB program died at start-up ("Out of memory", "String formula too complex")."""
+    import qb32
+    import qbruntime
+
+    if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
+        pytest.skip("needs LLRM_CLANG_M16 and LLRM_OW")
+    target, platform = (dosbatch.REAL_MODE, qbruntime.platform_directory()) if model == "m16" else (qb32.TARGET, qb32.PLATFORM)
+    include = dosbatch.c_include(target, tmp_path)
+    obj = tmp_path / "nheap.obj"
+    flags = ["-I", str(qbruntime.RUNTIME), "-I", str(platform), *qbruntime.device_includes(platform)]
+    dosbatch._host(*dosbatch.c_compile(dosbatch.ROOT / "runtime/qb/nheap.c", obj, target, "-Os", include, [], flags))
+    names = obj.read_bytes()
+    assert all(bytes([len(name)]) + name in names for name in (b"XIB", b"XI", b"XIE"))
