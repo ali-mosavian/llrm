@@ -315,6 +315,7 @@ dependencies = [
 name = "llrm-cc"
 version = "0.1.0"
 dependencies = [
+ "llrm-driver",
  "llrm-mir",
  "llrm-target",
  "llrm-x86-m16",

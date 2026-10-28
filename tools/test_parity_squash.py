@@ -352,7 +352,7 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
 
 GENERATOR = """import sys
 from pathlib import Path
-root = Path(__file__).resolve().parents[2]
+root = Path(__file__).resolve().parents[3]
 pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
 want = "".join(f"- {name}\\n" for name in ["a", *pages])
 index = root / "docs/optimizations/passes/readme.md"
@@ -1832,10 +1832,34 @@ def test_a_diff_that_touches_a_tool_runs_that_tools_python_tests_and_a_red_one_r
         stdout = "FAILED tools/test_other.py::test_x\n1 failed"
         stderr = ""
 
-    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done()) == ["FAILED tools/test_other.py::test_x", "1 failed"]
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done(), ensure=lambda: "") == ["FAILED tools/test_other.py::test_x", "1 failed"]
     assert "tools/test_other.py" in ran[0]
     assert ps.tool_test_failures(["docs/a.md"], tmp_path, run=lambda *a, **k: ran.append("never")) == [] and "never" not in ran
+
+
+def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(tmp_path):
+    """The 02:32 batch was refused ("stale binaries ... run cargo build --release --bins") by its own tool-tests stage: pytest ran before the build stage had refreshed the release binaries."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+    order = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: order.append("pytest") or Done(), ensure=lambda: order.append("ensure") or "") == []
+    assert order == ["ensure", "pytest"], order
+    order.clear()
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda *a, **k: order.append("pytest"), ensure=lambda: "binaries still older than the merged tree") == ["binaries still older than the merged tree"]
+    assert "pytest" not in order
     import inspect
 
     assert "tool_test_failures(" in inspect.getsource(ps.merge_batch)
 
+
+
+def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
+    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
+    assert "c-legacy" not in ps.bins_command(tmp_path)
+    (tmp_path / "llrm-c").write_text("")
+    assert ps.bins_command(tmp_path)[-2:] == ["--features", "c-legacy"]
