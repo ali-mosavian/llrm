@@ -138,6 +138,11 @@ impl OpcodeMap {
         let name = name.strip_suffix("_alt").unwrap_or(name);
         // A target with no SSE forms (the 32-bit one) keeps these as vector
         // opcodes below.
+        // A move between a general and an SSE register: the pin's names for
+        // the direction, the form is the one with that encoding.
+        if let Some(iced) = gpr_xmm_move(name) {
+            return self.forms.iter().position(|f| f.iced.as_deref() == Some(iced)).ok_or(Unmapped::NoForm);
+        }
         if let Some((mnemonic, width, result, letters)) =
             sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
         {
@@ -194,6 +199,18 @@ impl OpcodeMap {
             _ => Err(Unmapped::Ambiguous(found)),
         }
     }
+}
+
+/// `MOVSDto64rr`: `movq r64, xmm`; the iced name of the form each pin name
+/// of a move between a general and an SSE register selects.
+fn gpr_xmm_move(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "MOVSDto64rr" => "Movq_rm64_xmm",
+        "MOV64toSDrr" => "Movq_xmm_rm64",
+        "MOVSS2DIrr" => "Movd_rm32_xmm",
+        "MOVDI2SSrr" => "Movd_xmm_rm32",
+        _ => return None,
+    })
 }
 
 /// The scalar SSE instructions the pin names `ADDSDrr`, `MOVSSrm`, `XORPSrr`,

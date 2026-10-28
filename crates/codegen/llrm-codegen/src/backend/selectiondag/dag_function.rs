@@ -927,6 +927,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut pops = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
     let mut sinks: HashSet<i64> = HashSet::default();
@@ -975,6 +976,7 @@ fn selected_in(
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }
         let from = emitted.len();
+        pops.extend(done.pops.iter().copied());
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
@@ -1158,6 +1160,54 @@ fn selected_in(
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
     body.sealed_arguments = true;
     body.ordered = true;
+    // `-g`: the parameters where the convention passes them, and each declared
+    // variable in the frame cell its alloca has.
+    body.variables = crate::backend::isel::parameters(module, function, name, &convention, &IndexMap::default());
+    body.cfa_variables = true;
+    for record in function.debug_records() {
+        let (llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)), Some(variable)) =
+            (record.what, llrm_mir::debuginfo::read_variable(module, record.variable))
+        else {
+            continue;
+        };
+        let Some((disp, _)) =
+            info.static_allocas.get(&address).and_then(|&k| frame.locals.borrow().get(k as usize).copied())
+        else {
+            continue;
+        };
+        if variable.scope != name {
+            continue;
+        }
+        let said = crate::model::lir::DebugVariable {
+            name: variable.name,
+            r#type: variable.r#type,
+            place: crate::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
+            parameter: variable.parameter,
+            argument: variable.argument,
+            arrives: None,
+        };
+        // A parameter is said once. One the convention passes in a register is
+        // in its declared cell (`-O0`'s copy of it), not in the register the
+        // allocator then reuses; the register it arrived in is `arrives`, until
+        // the store.
+        match body.variables.iter_mut().find(|one| said.parameter && one.parameter && one.name == said.name) {
+            Some(one) if matches!(one.place, crate::model::lir::DebugPlace::Register(_)) => {
+                *one = crate::model::lir::DebugVariable { argument: said.argument.or(one.argument), ..said }
+            }
+            // passed in a cell, which holds it from the entry
+            Some(_) => {}
+            None => body.variables.push(said),
+        }
+    }
+    for one in &mut body.variables {
+        if let (Some(argument), crate::model::lir::DebugPlace::At(_)) = (one.argument, &one.place) {
+            one.arrives = match usize::try_from(argument).ok().and_then(|argument| convention.parameters.get(argument))
+            {
+                Some(Parameter::Registers(registers)) if registers.len() == 1 => Some(registers[0]),
+                _ => None,
+            };
+        }
+    }
     set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
@@ -1216,7 +1266,7 @@ fn selected_in(
         inline_places,
         inline_symbols: IndexMap::default(),
         far,
-        pops: IndexMap::default(),
+        pops,
         depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
