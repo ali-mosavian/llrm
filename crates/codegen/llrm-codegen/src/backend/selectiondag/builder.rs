@@ -1398,6 +1398,30 @@ impl Builder<'_> {
             // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
             // return register each
             let leaves = self.leaves(result_type)?;
+            // A struct of one float is answered as the float is: in st(0), or
+            // in the vector register the convention names.
+            if let ([(leaf, _)], true) = (leaves.as_slice(), plan.returns.is_empty()) {
+                let leaf_vt = self.type_of(*leaf)?;
+                if leaf_vt.is_floating_point() {
+                    let piece = if let Some(xmm) = plan.float_result {
+                        let copy = self.dag.get_copy_from_phys_reg(chain, xmm, leaf_vt, glue);
+                        self.dag.set_root(SDValue { node: copy.node, res: 1 });
+                        SDValue { node: copy.node, res: 0 }
+                    } else {
+                        let fp0 = self.dag.get_phys_register(leaf_vt, RegId::MM0);
+                        let pop = self
+                            .dag
+                            .get_node_multi(
+                                super::x86isd::POP_FROM_X87_REG,
+                                &[leaf_vt, EVT::OTHER, EVT::GLUE],
+                                &[chain, fp0, glue],
+                            );
+                        self.dag.set_root(SDValue { node: pop.node, res: 1 });
+                        pop
+                    };
+                    return Ok(Some(self.merge(&[piece])));
+                }
+            }
             if plan.returns.len() != leaves.len() {
                 return Err(Refused("an aggregate result that is not one register a member"));
             }
@@ -1484,16 +1508,34 @@ impl Builder<'_> {
         if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
             // `LowerReturn` over the leaves: one return register each
             let parts = self.value_parts(operand)?;
-            if parts.len() != self.convention.returns.len() {
-                return Err(Refused("an aggregate result that is not one register a member"));
-            }
-            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
-                let piece_vt = self.dag.value_type(piece);
-                let reg = self.sized_register(reg, piece_vt);
-                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
-                chain = SDValue { node: copy.node, res: 0 };
-                glue = Some(SDValue { node: copy.node, res: 1 });
-                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            // A struct of one float leaves as the float does: in st(0), or in
+            // the vector register the convention names.
+            let float_leaf = match (parts.as_slice(), self.convention.returns.is_empty()) {
+                ([leaf], true) if self.dag.value_type(*leaf).is_floating_point() => Some(*leaf),
+                _ => None,
+            };
+            if let Some(leaf) = float_leaf {
+                let vt = self.dag.value_type(leaf);
+                if let Some(xmm) = self.convention.float_result {
+                    let copy = self.dag.get_copy_to_phys_reg(chain, xmm, leaf, glue);
+                    chain = SDValue { node: copy.node, res: 0 };
+                    glue = Some(SDValue { node: copy.node, res: 1 });
+                    ops.push(self.dag.get_phys_register(vt, xmm));
+                } else {
+                    ops.push(leaf);
+                }
+            } else {
+                if parts.len() != self.convention.returns.len() {
+                    return Err(Refused("an aggregate result that is not one register a member"));
+                }
+                for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                    let piece_vt = self.dag.value_type(piece);
+                    let reg = self.sized_register(reg, piece_vt);
+                    let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                    chain = SDValue { node: copy.node, res: 0 };
+                    glue = Some(SDValue { node: copy.node, res: 1 });
+                    ops.push(self.dag.get_phys_register(piece_vt, reg));
+                }
             }
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
