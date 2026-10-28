@@ -129,6 +129,31 @@ fn overflow_intrinsics_wrap_and_say_so() {
     assert_eq!(pair("umul", 256, 256), wrapped(0, 1));
 }
 
+/// `llvm.{s,u}{add,sub}.sat` stopped the parser at the unknown name; each
+/// answer is derived by hand.
+#[test]
+fn saturating_intrinsics_clamp_to_the_range() {
+    let sat = |intrinsic: &str, a: i16, b: i16| {
+        result(&format!(
+            "declare i16 @llvm.{intrinsic}.sat.i16(i16, i16)
+define i16 @f() {{
+  %r = call i16 @llvm.{intrinsic}.sat.i16(i16 {a}, i16 {b})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    assert_eq!(sat("sadd", 32767, 1), int(0x7fff, 16));
+    assert_eq!(sat("sadd", -32768, -1), int(0x8000, 16));
+    assert_eq!(sat("sadd", 5, -7), int(0xfffe, 16));
+    assert_eq!(sat("ssub", -32768, 1), int(0x8000, 16));
+    assert_eq!(sat("ssub", 32767, -1), int(0x7fff, 16));
+    assert_eq!(sat("uadd", -1, 1), int(0xffff, 16));
+    assert_eq!(sat("uadd", 3, 4), int(7, 16));
+    assert_eq!(sat("usub", 3, 4), int(0, 16));
+    assert_eq!(sat("usub", 4, 3), int(1, 16));
+}
+
 #[test]
 fn min_max_intrinsics_compare_as_their_names_say() {
     let chosen = |intrinsic: &str, a: i16, b: i16| {
@@ -514,4 +539,71 @@ fn a_value_outside_its_stated_range_is_reported() {
 #[test]
 fn undef_reads_as_a_value_not_poison() {
     assert_eq!(result("define i16 @f() {\nentry:\n  %a = add i16 undef, 5\n  ret i16 %a\n}\n"), int(5, 16));
+}
+
+/// `atomicrmw`, `cmpxchg` and the atomic loads and stores had no parser and no
+/// interpreter: one thread runs, so each is the plain access with LLVM's result
+/// (the old value; `{ old, hit }`).
+#[test]
+fn an_atomic_access_is_the_plain_one_on_one_thread() {
+    let text = "define i32 @f() {
+entry:
+  %p = alloca i32, align 4
+  store atomic i32 7, ptr %p seq_cst, align 4
+  %old = atomicrmw add ptr %p, i32 5 acq_rel
+  %miss = cmpxchg ptr %p, i32 1, i32 100 seq_cst seq_cst
+  %hit = cmpxchg ptr %p, i32 12, i32 40 seq_cst seq_cst
+  %flag = extractvalue { i32, i1 } %hit, 1
+  %f = zext i1 %flag to i32
+  %now = load atomic i32, ptr %p acquire, align 4
+  fence seq_cst
+  %a = mul i32 %old, 1000
+  %b = mul i32 %now, 10
+  %c = add i32 %a, %b
+  %d = add i32 %c, %f
+  ret i32 %d
+}
+";
+    // old 7, then 12 -> 40 on the hit: 7000 + 400 + 1.
+    assert_eq!(result(text), int(7401, 32));
+}
+
+/// `llvm.umul.fix`, `llvm.{s,u}mul.fix.sat` and `llvm.{s,u}shl.sat` were
+/// unknown names to the parser; each answer is derived by hand at 16 bits.
+#[test]
+fn fixed_multiplies_and_saturating_shifts_clamp_to_the_range() {
+    let fixed = |name: &str, a: i16, b: i16, scale: u32| {
+        result(&format!(
+            "declare i16 @llvm.{name}.i16(i16, i16, i32)
+define i16 @f() {{
+  %r = call i16 @llvm.{name}.i16(i16 {a}, i16 {b}, i32 {scale})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    let shift = |name: &str, a: i16, by: i16| {
+        result(&format!(
+            "declare i16 @llvm.{name}.i16(i16, i16)
+define i16 @f() {{
+  %r = call i16 @llvm.{name}.i16(i16 {a}, i16 {by})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    // 1.5 * 1.5 = 2.25 with 8 fraction bits.
+    assert_eq!(fixed("umul.fix", 384, 384, 8), int(576, 16));
+    assert_eq!(fixed("umul.fix.sat", 384, 384, 8), int(576, 16));
+    // 200 * 200 = 40000 wraps to -25536 as signed, saturates to the maximum.
+    assert_eq!(fixed("umul.fix", 200, 200, 0), int(40000, 16));
+    assert_eq!(fixed("umul.fix.sat", -1, -1, 0), int(0xffff, 16));
+    assert_eq!(fixed("smul.fix.sat", 200, 200, 0), int(0x7fff, 16));
+    assert_eq!(fixed("smul.fix.sat", 200, -200, 0), int(0x8000, 16));
+    assert_eq!(fixed("smul.fix.sat", -384, 384, 8), int(0xfdc0, 16));
+    assert_eq!(shift("sshl.sat", 0x4000, 1), int(0x7fff, 16));
+    assert_eq!(shift("sshl.sat", -0x4001, 1), int(0x8000, 16));
+    assert_eq!(shift("sshl.sat", 3, 2), int(12, 16));
+    assert_eq!(shift("ushl.sat", -1, 1), int(0xffff, 16));
+    assert_eq!(shift("ushl.sat", 3, 2), int(12, 16));
 }

@@ -21,7 +21,8 @@
 //!   frontend facts. llrm-c declares it for the targets whose C link resolves
 //!   it; llrm-qb and llrm-nib declare nothing and never form it. Exit: a
 //!   `Target::library` with the name and convention for the C targets. Owner
-//!   w-6, review 2026-11-30.
+//!   w-6, review 2026-11-30. A function with `"no-builtins"` forms none
+//!   (`LoopIdiomRecognize::libcall`, the one availability every idiom asks).
 //! - D12: `wcslen` is not formed: there is no `wchar_t` width in the target's
 //!   library facts (`getWCharSize`). Exit with D11.
 //! - Calls count as side effects in the body scan, where LLVM lets a call that
@@ -47,7 +48,7 @@ use llrm_analysis::scev::expr::Use;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{CallInfo, Flags, IntPredicate, Opcode};
+use llrm_mir::opcode::{Attribute, CallInfo, Flags, IntPredicate, Opcode};
 use llrm_mir::types::Type;
 
 use super::LoopIdiomRecognize;
@@ -98,12 +99,15 @@ impl LoopIdiomRecognize {
         &mut self,
         run: &mut Run,
     ) -> bool {
-        if self.options.disable_all {
+        let no_builtins =
+            run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins"));
+        if self.options.disable_all || no_builtins {
             return false;
         }
         let Some(verified) = self.verify_strlen_idiom(run) else { return false };
         // D11: the compile says the program links `strlen`.
-        let Some(routine) = self.routines.iter().find(|one| one.standard == "strlen").cloned() else { return false };
+        let stated = self.routines.iter().find(|one| one.standard == "strlen").cloned();
+        let Some(routine) = stated.filter(|_| self.libcall(true)) else { return false };
 
         let preheader = run.cur_loop.get_loop_preheader(run.function).expect("verified to have one");
         let loop_body = run.cur_loop.get_blocks()[0];
@@ -381,10 +385,33 @@ exit:
         assert!(!after.contains("call cc 1003"), "{after}");
     }
 
+    /// The pin's x_strlen.ll (functions carry `"no-builtins"`): the pin's
+    /// asm had no `strlen` call and ours had two, since only memset and
+    /// memcpy read the attribute.
+    #[test]
+    fn a_function_with_no_builtins_keeps_its_strlen_loop() {
+        let text = MESSAGE.replace("define i32 @len(ptr %s) {", "define i32 @len(ptr %s) \"no-builtins\" {");
+        let after = run(&text);
+        assert!(!after.contains("strlen"), "{after}");
+        // The same function without the attribute still forms the call.
+        assert!(run(MESSAGE).contains("call cc 1003 i64 @_strlen(ptr %s)"));
+    }
+
     #[test]
     fn a_compile_that_states_no_strlen_keeps_its_loop() {
         let after = run_with(MESSAGE, false);
         assert!(!after.contains("strlen"), "{after}");
+    }
+
+    /// x_strlen (Open Watcom, `-fno-builtin`) got a `call _strlen` in a
+    /// `"no-builtins"` function, which the pin's TLI forbids (+15
+    /// instructions).
+    #[test]
+    fn a_no_builtins_function_keeps_its_strlen_loop() {
+        let text = MESSAGE.replace("@len(ptr %s) {", "@len(ptr %s) \"no-builtins\" {");
+        let after = run(&text);
+        assert!(!after.contains("strlen"), "{after}");
+        assert!(run(MESSAGE).contains("strlen"));
     }
 
     #[test]

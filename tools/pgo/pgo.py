@@ -43,10 +43,12 @@ def sh(command: list, check: bool = True, **kw) -> subprocess.CompletedProcess:
     return subprocess.run([str(c) for c in command], capture_output=True, text=True, check=check, **kw)
 
 
-def corpus(root: Path = ROOT, exclude: frozenset[str] = frozenset(), qcport: Path | None = None) -> list[tuple[str, list[str], Path, bool]]:
+def corpus(root: Path = ROOT, exclude: frozenset[str] = frozenset(), qcport: Path | None = None, driver: bool = False) -> list[tuple[str, list[str], Path, bool]]:
     """(name, compiler arguments before `-o`, source, whether it is wrapped) per training compile: tools/pgo/corpus.toml's globs, at its levels, less `exclude`
     (names without .c). QCport's modules come from `qcport` (its src directory) when given: they are not in this repository."""
     config = tomllib.loads((HERE / "corpus.toml").read_text())
+    if driver:  # trained through llrm-cc: not the programs it cannot build yet
+        exclude = exclude | frozenset(config["llrm-cc"]["unbuilt"])
     jobs = []
     for pattern in config["bench"]["globs"]:
         for source in sorted(root.glob(pattern)):
@@ -72,8 +74,18 @@ def corpus(root: Path = ROOT, exclude: frozenset[str] = frozenset(), qcport: Pat
     return jobs
 
 
-def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]]) -> tuple[int, list[str]]:
-    """(compiles that worked, one line per compile that failed): the caller fails on any, a corpus that does not compile trains less than it says."""
+ROWS = {"-m16": "x86_16-wat", "-m32": "x86_32-wat"}
+
+
+def through_driver(driver: Path, binary: Path, arguments: list[str], source: Path, out: str) -> tuple[list[str], dict[str, str]]:
+    """The llrm-cc command (and environment) that compiles `source` with llrm-c's `arguments`, the backend being `binary`: the target a row, not a flag."""
+    row = next((ROWS[one] for one in arguments if one in ROWS), ROWS["-m16"])
+    return [str(driver), "-c", *(one for one in arguments if one not in ROWS), "-o", out, str(source)], {**os.environ, "LLRM_LLC": str(binary), "LLRM_CC_TARGET": row}
+
+
+def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]], driver: Path | None = None) -> tuple[int, list[str]]:
+    """(compiles that worked, one line per compile that failed): the caller fails on any, a corpus that does not compile trains less than it says.
+    With `driver` (llrm-cc), `binary` is the backend (llrm-llc) it runs."""
     work = Path(tempfile.mkdtemp(prefix="pgo-train-"))
 
     def one(job: tuple[int, tuple[str, list[str], Path, bool]]) -> str:
@@ -84,7 +96,11 @@ def train(binary: Path, jobs: list[tuple[str, list[str], Path, bool]]) -> tuple[
             source = wrapped
         # an object, not /dev/null: llrm-c encodes only for `.o`/`.obj`, so the profile of a compile has the encoder in it
         with llrmbin.with_object([str(binary), *arguments, "-o", llrmbin.OBJECT, str(source)]) as command:
-            done = sh(command, check=False)
+            if driver:
+                command, env = through_driver(driver, binary, arguments, source, command[command.index("-o") + 1])
+                done = sh(command, check=False, env=env)
+            else:
+                done = sh(command, check=False)
         return "" if done.returncode == 0 else f"{name} {' '.join(arguments)}: " + " ".join((done.stderr or done.stdout).split())[:200]
 
     try:
@@ -122,20 +138,22 @@ def work_dir(profile_dir: Path) -> Path:
     return profile_dir.parent / (profile_dir.name + "-work")
 
 
-def cargo(root: Path, target: Path, flags: str) -> subprocess.CompletedProcess:
+def cargo(root: Path, target: Path, flags: str, binary: str = "llrm-c") -> subprocess.CompletedProcess:
     env = {**os.environ, "CARGO_TARGET_DIR": str(target), "RUSTFLAGS": flags}
-    return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", "llrm-c"], cwd=root, env=env, capture_output=True, text=True)
+    # llrm-c is built only with its feature (wccq: the toolchain it compiles with): without, "requires the features: c-legacy".
+    features = ["--features", "wccq"] if binary == "llrm-c" else []
+    return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", binary, *features], cwd=root, env=env, capture_output=True, text=True)
 
 
-def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport: Path | None) -> None:
+def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-c") -> None:
     """Instrumented build, the corpus through it, merged into profile_dir/profile.profdata."""
     raw, target = work_dir(profile_dir) / "raw", work_dir(profile_dir) / "instrumented"
     shutil.rmtree(raw, ignore_errors=True)
     raw.mkdir(parents=True)
-    built = cargo(root, target, f"-Cprofile-generate={raw}")
+    built = cargo(root, target, f"-Cprofile-generate={raw}", binary)
     if built.returncode:
         raise SystemExit("pgo: the instrumented build failed:\n" + built.stderr[-2000:])
-    ok, failed = train(target / "dist" / "llrm-c", corpus(root, exclude, qcport))
+    ok, failed = train(target / "dist" / binary, corpus(root, exclude, qcport, binary == "llrm-llc"), driver=llrmbin.bin_dir() / "llrm-cc" if binary == "llrm-llc" else None)
     print(f"pgo: trained on {ok} compiles ({len(failed)} failed), {len(list(raw.glob('*.profraw')))} raw profiles", flush=True)
     if failed:
         raise SystemExit("pgo: the training corpus does not compile:\n  " + "\n  ".join(failed[:20]))
@@ -149,18 +167,18 @@ def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport:
     shutil.rmtree(target, ignore_errors=True)
 
 
-def build(root: Path, out: Path, profile_dir: Path, siblings: Path | None, exclude: frozenset[str], qcport: Path | None) -> list[str]:
+def build(root: Path, out: Path, profile_dir: Path, siblings: Path | None, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-c") -> list[str]:
     """DIR/llrm-c built with the profile (made first when none or stale); the functions the profile has no data for."""
     if stale(profile_dir, root) != 0:
-        make_profile(root, profile_dir, exclude, qcport)
+        make_profile(root, profile_dir, exclude, qcport, binary)
     target = work_dir(profile_dir) / "final"
-    built = cargo(root, target, f"-Cprofile-use={profile_dir / 'profile.profdata'} -Cllvm-args=-pgo-warn-missing-function")
+    built = cargo(root, target, f"-Cprofile-use={profile_dir / 'profile.profdata'} -Cllvm-args=-pgo-warn-missing-function", binary)
     if built.returncode:
         raise SystemExit("pgo: the profile-use build failed:\n" + built.stderr[-2000:])
     out.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(target / "dist" / "llrm-c", out / "llrm-c")
+    shutil.copy2(target / "dist" / binary, out / binary)
     for one in sorted(siblings.iterdir()) if siblings else []:  # the tools identical.py looks for beside a compiler
-        if one.is_file() and os.access(one, os.X_OK) and one.name != "llrm-c" and not (out / one.name).exists():
+        if one.is_file() and os.access(one, os.X_OK) and one.name != binary and not (out / one.name).exists():
             (out / one.name).symlink_to(one.resolve())
     return sorted(set(WARNING.findall(built.stderr)))
 
@@ -172,7 +190,7 @@ def summary(missing: list[str], profile_dir: Path) -> str:
     return "\n".join([head, *(f"  {name}" for name in missing[:20]), *([f"  ... and {len(missing) - 20} more"] if len(missing) > 20 else [])])
 
 
-def main() -> int:
+def parse(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("build", "stale", "train"):
@@ -181,23 +199,29 @@ def main() -> int:
         if name == "build":
             one.add_argument("--out", type=Path, required=True)
             one.add_argument("--siblings", type=Path)
+            one.add_argument("--binary", choices=("llrm-c", "llrm-llc"), default="llrm-c", help="the compiler built with the profile; llrm-llc is trained through llrm-cc")
         if name == "train":
             one.add_argument("binary", type=Path)
         else:
             one.add_argument("--profile-dir", type=Path, default=Path(os.environ.get("PGO_DIR", ROOT / "target" / "pgo")))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     for name in ("profile_dir", "out", "siblings", "binary"):  # the builds run in the repository: a relative path is read from there
-        if getattr(args, name, None):
+        if isinstance(getattr(args, name, None), Path):  # `build --binary` is a compiler's name, not a path
             setattr(args, name, getattr(args, name).resolve())
+    return args
+
+
+def main() -> int:
+    args = parse()
     qcport = Path(os.environ["QCPORT"]) if os.environ.get("QCPORT") else None
     exclude = frozenset(args.exclude)
     if args.command == "stale":
         return stale(args.profile_dir)
     if args.command == "train":
-        ok, failed = train(args.binary, corpus(ROOT, exclude, qcport))
+        ok, failed = train(args.binary, corpus(ROOT, exclude, qcport, args.binary.name == "llrm-llc"), driver=args.binary.with_name("llrm-cc") if args.binary.name == "llrm-llc" else None)
         print(f"trained on {ok} compiles, {len(failed)} failed", *failed, sep="\n  ")
         return 1 if failed else 0
-    missing = build(ROOT, args.out, args.profile_dir, args.siblings, exclude, qcport)
+    missing = build(ROOT, args.out, args.profile_dir, args.siblings, exclude, qcport, args.binary)
     text = summary(missing, args.profile_dir)
     print(text)
     if os.environ.get("GITHUB_STEP_SUMMARY"):

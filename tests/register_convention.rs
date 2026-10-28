@@ -190,9 +190,14 @@ fn a_callee_saves_the_register_a_call_it_makes_clobbers() {
 /// stored a word, whatever the target: on -m32 every function with `...` that
 /// read an argument read through half a pointer (found by
 /// gcc.c-torture/20030914-2).
+/// llrm-cc: the source calls `va_start` and `va_arg`; clang drops the list of a
+/// function that never reads it, where llrm-c always built one.
 #[test]
 fn a_variadic_function_on_a_flat_target_makes_a_full_width_list_pointer() {
-    let text = c_listing(&["-m32"], "int f(int a, int b, ...) { return b; }\n");
+    let text = c_listing(
+        &["-m32"],
+        "int f(int a, int b, ...)\n{\n    __builtin_va_list ap;\n    __builtin_va_start(ap, b);\n    int c = __builtin_va_arg(ap, int);\n    __builtin_va_end(ap);\n    return c;\n}\n",
+    );
     let lines = procedure(&text, "f_");
     assert!(lines.iter().any(|one| one.starts_with("lea eax, [esp+")), "{lines:?}");
     assert!(!lines.iter().any(|one| one.starts_with("lea ax,") || one.starts_with("mov word ptr")), "{lines:?}");

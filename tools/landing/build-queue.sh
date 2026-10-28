@@ -20,9 +20,10 @@ ready=$(echo "$ready" | while read -r n m o h; do grep -qx "$n $h" "$HELD" 2>/de
 # A PR that is not MERGEABLE is merged against feat/parity locally (git merge-tree, no checkout); a conflict marks it CONFLICTING. A failed fetch keeps it (fail open).
 # PREFLIGHT_CMD overrides the check in tests: `$PREFLIGHT_CMD <PR>` exits 0 when the PR conflicts.
 REPO=${PREFLIGHT_REPO:-$(cd "$HERE/../.." && pwd)}
+# -c maintenance.auto=false -c gc.auto=0: every fetch ran `git maintenance run --auto` (reflog expire, minutes under load): ~80 PRs x 2 fetches took build-queue 10 min at 23:47.
 conflicts_with_parity() {
   [ -n "$PREFLIGHT_CMD" ] && { $PREFLIGHT_CMD "$1"; return; }
-  git -C "$REPO" fetch -q origin feat/parity 2>/dev/null && git -C "$REPO" fetch -q origin "refs/pull/$1/head" 2>/dev/null && ! git -C "$REPO" merge-tree --write-tree origin/feat/parity FETCH_HEAD >/dev/null 2>&1
+  git -C "$REPO" -c maintenance.auto=false -c gc.auto=0 fetch -q origin feat/parity 2>/dev/null && git -C "$REPO" -c maintenance.auto=false -c gc.auto=0 fetch -q origin "refs/pull/$1/head" 2>/dev/null && ! git -C "$REPO" merge-tree --write-tree origin/feat/parity FETCH_HEAD >/dev/null 2>&1
 }
 ready=$(echo "$ready" | while read -r n m o h; do [ "$m" != MERGEABLE ] && [ "$m" != CONFLICTING ] && conflicts_with_parity "$n" && m=CONFLICTING; echo "$n $m $o $h"; done)
 # GitHub's mergeable flag is against the base: a PR that conflicts with feat/parity cannot land, alone or in a batch

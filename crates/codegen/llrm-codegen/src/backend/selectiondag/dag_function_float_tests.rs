@@ -3,6 +3,7 @@
 
 use super::dag_function::selected;
 use super::dag_function_tests::{names, select_with_contracts};
+use crate::testing::m16_ir;
 
 const FLOAT_RESULT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define double @f(double %x) {
@@ -101,7 +102,7 @@ fn a_float_compare_is_an_fcom_and_a_set() {
     assert!(whats[compare..].iter().any(|w| w.name.as_deref().is_some_and(|n| n.starts_with("set"))));
 }
 
-const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const FLOAT_COMPARE_AND_ADD: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 
 define internal cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
 b1:
@@ -183,7 +184,7 @@ declare cc 1000 void @llrm.qb.B$PER8(double) addrspace(1) nocallback
 /// the fifth pass of a loop (`fcom; add ax, 5; jae`).
 #[test]
 fn nothing_that_writes_the_flags_sits_between_an_fcom_and_its_branch() {
-    let done = select_with_contracts(FLOAT_COMPARE_AND_ADD).unwrap_or_else(|why| panic!("{why}"));
+    let done = select_with_contracts(m16_ir(FLOAT_COMPARE_AND_ADD)).unwrap_or_else(|why| panic!("{why}"));
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     let compare = names.iter().position(|n| n == "fcom").expect("an fcom");
@@ -496,7 +497,7 @@ fn a_double_argument_is_stored_through_a_copy_of_sp_at_m16() {
     assert!(cell.base.is_some() && cell.through == llrm_lir::registers::RegId::None, "{cell:?}");
 }
 
-const FPROUND_F32: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const FPROUND_F32: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 define cc 1000 ptr @h(ptr %0, ptr %1) addrspace(1) {
 b1:
   %2 = load float, ptr %0
@@ -512,12 +513,12 @@ b1:
 /// `byref2.bas`, a rounded SINGLE).
 #[test]
 fn a_rounded_float_has_its_slot_in_the_frame() {
-    let module = llrm_mir::parse::module(FPROUND_F32).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(FPROUND_F32)).expect("parses");
     selected(&module, "h", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|why| panic!("{}", why.0));
 }
 
-const ROUNDED_STORE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const ROUNDED_STORE: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 define cc 1000 void @h(ptr %0, ptr %1, ptr %2) addrspace(1) {
 b1:
   %3 = load double, ptr %0
@@ -535,7 +536,7 @@ b1:
 #[test]
 fn a_rounded_float_stored_is_one_truncating_store() {
     use crate::model::ir::Operation;
-    let module = llrm_mir::parse::module(ROUNDED_STORE).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(ROUNDED_STORE)).expect("parses");
     let done = selected(&module, "h", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
         .unwrap_or_else(|why| panic!("{}", why.0));
     let stores =
@@ -753,7 +754,7 @@ fn a_round_read_only_as_a_call_argument_is_not_stored_to_a_slot_first() {
     assert_eq!(count(ROUNDED_ARGUMENT), count(PLAIN_ARGUMENT));
 }
 
-const HUGE_DIFFERENCE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const HUGE_DIFFERENCE: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i32 @llrm.ia16.ptrdiff.i32.p3(ptr addrspace(3), ptr addrspace(3))
 define cc 1005 i32 @f(ptr addrspace(3) %0, ptr addrspace(3) %1) addrspace(1) {
 b1:
@@ -767,7 +768,7 @@ b1:
 /// and a `movzx` more for each selector in `d7`, 2 B each at m16 -Os).
 #[test]
 fn a_far_pointer_read_as_data_is_loaded_into_movzx() {
-    let module = llrm_mir::parse::module(HUGE_DIFFERENCE).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(HUGE_DIFFERENCE)).expect("parses");
     let done = super::dag_function::selected(
         &module,
         "f",
@@ -803,4 +804,37 @@ fn a_bswap_of_which_one_byte_is_demanded_is_a_shift() {
     let made = super::dag_function_tests::names(BITREVERSE_OF_A_HIGH_BYTE).unwrap_or_else(|why| panic!("{why}"));
     assert!(!made.iter().any(|name| name == "bswap"), "{made:?}");
     assert!(made.len() <= 17, "{made:?}");
+}
+
+const U16_TO_FLOAT: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(i16 zeroext %a) {
+entry:
+  %r = uitofp i16 %a to float
+  ret float %r
+}
+";
+
+/// `(float)a` of an `unsigned short` was promoted to an unsigned dword and
+/// converted through a 64-bit buffer with a zero high dword and `fild qword`;
+/// the pin's `LowerUINT_TO_FP` makes a nonnegative source signed: one `fild`
+/// of the dword (uitofp_nneg, -Os).
+#[test]
+fn an_unsigned_short_converts_with_a_dword_fild_not_a_qword_buffer() {
+    let module = llrm_mir::parse::module(U16_TO_FLOAT).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    let widths: Vec<u32> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.name.as_deref() == Some("fild"))
+        .flat_map(|w| w.sources.iter())
+        .filter_map(|source| match source {
+            crate::model::ir::Loc::Mem(m) => Some(m.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths, [4], "the fild reads a dword, not a 64-bit buffer: {names:?}");
 }

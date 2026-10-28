@@ -88,8 +88,9 @@ pub fn space(
 
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
-/// is free, so one no assembler takes becomes `G$n`; an external one must
-/// be a symbol once mangled. An intrinsic has none.
+/// is free, so one no assembler takes becomes `G$n`, as does an external one
+/// defined here (a frontend names it for the object); an imported one must be
+/// a symbol once mangled. An intrinsic has none.
 /// The group index naming a far variable's segment, `seg name`.
 pub fn segment_of(global: GlobalId) -> i64 {
     SEGMENTS + i64::from(global.0)
@@ -107,13 +108,15 @@ pub fn names(
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         // An intrinsic is lowered where it is called, never linked.
-        if global.name.as_deref().is_some_and(|name| llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) {
+        if global.name.as_deref().is_some_and(|name| {
+            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) || llrm_mir::atomic::decode(name).is_some()
+        }) {
             continue;
         }
         let name = linked(global.name.as_deref().unwrap_or_default());
         let symbol = if is_symbol(&name) {
             name
-        } else if global.linkage == llrm_mir::Linkage::External {
+        } else if global.linkage == llrm_mir::Linkage::External && space(module, id) == Space::External {
             return Err(format!("@{name} is no assembler symbol"));
         } else {
             format!("G${at}")
@@ -342,8 +345,14 @@ impl Initializer<'_> {
                     self.bytes(&vec![0; (total - at) as usize]);
                 }
                 _ => {
+                    // An element takes its alloc size: an `x86_fp80` is 10
+                    // bytes stored and 12 apart at f80:32.
                     for member in members.clone() {
                         self.constant(member)?;
+                        let types = &self.module.context.types;
+                        let ty = self.module.context.get(member).ty;
+                        let padding = self.layout.alloc_size(types, ty) - self.layout.store_size(types, ty);
+                        self.bytes(&vec![0; padding as usize]);
                     }
                 }
             },

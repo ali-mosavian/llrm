@@ -246,7 +246,40 @@ pub struct Graph {
     /// `tryCandidate` only prefers the one with fewer left.
     pub weak_preds: Vec<Vec<usize>>,
     pub weak_succs: Vec<Vec<usize>>,
+    topo: Topo,
 }
+
+/// `ScheduleDAGTopologicalSort`: a topological order of the instructions,
+/// kept as weak edges are added (Pearce and Kelly), so a reachability query
+/// only walks the nodes between the two ends. It is a cache of the edges and
+/// takes no part in comparing graphs.
+#[derive(Debug, Default)]
+struct Topo {
+    /// Where each instruction stands in the order.
+    index: Vec<usize>,
+    /// The instruction at each place.
+    at: Vec<usize>,
+    /// Walk marks: `marks[node] == epoch` is seen in this walk.
+    marks: std::cell::RefCell<(Vec<u32>, u32)>,
+}
+
+impl Topo {
+    /// The program order, which every edge of a new graph follows.
+    fn new(n: usize) -> Topo {
+        Topo { index: (0..n).collect(), at: (0..n).collect(), marks: std::cell::RefCell::new((vec![0; n], 0)) }
+    }
+}
+
+impl PartialEq for Topo {
+    fn eq(
+        &self,
+        _: &Topo,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for Topo {}
 
 impl Graph {
     /// Whether `to` follows `from` through the edges, weak ones too
@@ -256,18 +289,74 @@ impl Graph {
         from: usize,
         to: usize,
     ) -> bool {
-        let mut seen = vec![false; self.succs.len()];
+        if from == to {
+            return true;
+        }
+        let limit = self.topo.index[to];
+        if self.topo.index[from] > limit {
+            return false;
+        }
+        let mut marks = self.topo.marks.borrow_mut();
+        marks.1 += 1;
+        let epoch = marks.1;
         let mut stack = vec![from];
+        marks.0[from] = epoch;
         while let Some(node) = stack.pop() {
-            if node == to {
-                return true;
+            for &next in self.succs[node].iter().chain(&self.weak_succs[node]) {
+                if next == to {
+                    return true;
+                }
+                if self.topo.index[next] < limit && marks.0[next] != epoch {
+                    marks.0[next] = epoch;
+                    stack.push(next);
+                }
             }
-            if std::mem::replace(&mut seen[node], true) {
-                continue;
-            }
-            stack.extend(self.succs[node].iter().chain(&self.weak_succs[node]).copied());
         }
         false
+    }
+
+    /// `ScheduleDAGTopologicalSort::AddPred`'s reordering for the edge
+    /// `before -> after`: the nodes between them that follow `after` move
+    /// behind the ones that precede `before`.
+    fn reorder(
+        &mut self,
+        before: usize,
+        after: usize,
+    ) {
+        let (low, high) = (self.topo.index[after], self.topo.index[before]);
+        if low > high {
+            return;
+        }
+        let (mut forward, mut stack) = (vec![after], vec![after]);
+        let mut seen = vec![after];
+        while let Some(node) = stack.pop() {
+            for &next in self.succs[node].iter().chain(&self.weak_succs[node]) {
+                if self.topo.index[next] <= high && !seen.contains(&next) {
+                    seen.push(next);
+                    forward.push(next);
+                    stack.push(next);
+                }
+            }
+        }
+        let (mut backward, mut stack) = (vec![before], vec![before]);
+        let mut seen = vec![before];
+        while let Some(node) = stack.pop() {
+            for &prev in self.preds[node].iter().chain(&self.weak_preds[node]) {
+                if self.topo.index[prev] >= low && !seen.contains(&prev) {
+                    seen.push(prev);
+                    backward.push(prev);
+                    stack.push(prev);
+                }
+            }
+        }
+        forward.sort_unstable_by_key(|&node| self.topo.index[node]);
+        backward.sort_unstable_by_key(|&node| self.topo.index[node]);
+        let mut places: Vec<usize> = forward.iter().chain(&backward).map(|&node| self.topo.index[node]).collect();
+        places.sort_unstable();
+        for (&node, place) in backward.iter().chain(&forward).zip(places) {
+            self.topo.index[node] = place;
+            self.topo.at[place] = node;
+        }
     }
 
     fn add_weak(
@@ -278,6 +367,7 @@ impl Graph {
         if !self.weak_preds[after].contains(&before) {
             self.weak_preds[after].push(before);
             self.weak_succs[before].push(after);
+            self.reorder(before, after);
         }
     }
 }
@@ -314,6 +404,16 @@ fn bits_of(mut mask: u128) -> impl Iterator<Item = usize> {
     })
 }
 
+/// What `graph` knows of one register lane: the defs standing (a live def
+/// replaces them, a dead one joins them), the one live def among them, and
+/// the readers since.
+#[derive(Clone, Default)]
+struct Lane {
+    defs: Vec<usize>,
+    live_def: Option<usize>,
+    readers: Vec<usize>,
+}
+
 /// The graph of `insns`, one region (every instruction schedulable).
 pub fn graph(
     insns: &[Arc<Insn>],
@@ -341,7 +441,7 @@ pub fn graph(
     let mut by_value: HashMap<u32, (Option<usize>, Vec<usize>)> = HashMap::default();
     // Per lane: the defs still standing (a live def replaces them, a dead one
     // joins them, as the pin's `Defs`) and the readers since.
-    let mut by_lane: Vec<(Vec<usize>, Vec<usize>)> = vec![(Vec::new(), Vec::new()); 128];
+    let mut by_lane: Vec<Lane> = vec![Lane::default(); 128];
     // The lanes each instruction writes that nothing reads before the next
     // write (`MO.isDead()`); what is live below the region is not known, so the
     // last write of a lane is live.
@@ -382,21 +482,21 @@ pub fn graph(
         match masks {
             Some((reads, writes)) => {
                 for bit in bits_of(reads) {
-                    if let Some(&def) = by_lane[bit].0.last() {
+                    if let Some(&def) = by_lane[bit].defs.last() {
                         edges.push((def, def_latency(&insns[def])));
                     }
                 }
                 for bit in bits_of(writes) {
                     // No output edge between two dead defs (`addPhysRegDeps`).
                     let this_dead = dead[later] >> bit & 1 == 1;
-                    edges.extend(
-                        by_lane[bit]
-                            .0
-                            .iter()
-                            .filter(|&&earlier| !(this_dead && dead[earlier] >> bit & 1 == 1))
-                            .map(|&earlier| (earlier, 1)),
-                    );
-                    edges.extend(by_lane[bit].1.iter().map(|&earlier| (earlier, 0)));
+                    // A dead write is ordered after the live def only, the dead
+                    // defs standing before it being the ones it has no edge to.
+                    if this_dead {
+                        edges.extend(by_lane[bit].live_def.map(|earlier| (earlier, 1)));
+                    } else {
+                        edges.extend(by_lane[bit].defs.iter().map(|&earlier| (earlier, 1)));
+                    }
+                    edges.extend(by_lane[bit].readers.iter().map(|&earlier| (earlier, 0)));
                 }
             }
             // An unknown effect is ordered with everything before it.
@@ -431,7 +531,7 @@ pub fn graph(
         }
         if let Some((reads, writes)) = masks {
             for bit in bits_of(reads) {
-                by_lane[bit].1.push(later);
+                by_lane[bit].readers.push(later);
             }
             for bit in bits_of(writes) {
                 // A dead write leaves the defs and readers standing: a later
@@ -439,17 +539,18 @@ pub fn graph(
                 // live def before it.
                 let entry = &mut by_lane[bit];
                 if dead[later] >> bit & 1 == 0 {
-                    entry.0.clear();
-                    entry.1.clear();
+                    entry.defs.clear();
+                    entry.readers.clear();
+                    entry.live_def = Some(later);
                 }
-                entry.0.push(later);
+                entry.defs.push(later);
             }
         } else {
             unknown = Some(later);
             since.clear();
             // Everything before it is behind it now.
             by_value.clear();
-            by_lane.iter_mut().for_each(|entry| *entry = (Vec::new(), Vec::new()));
+            by_lane.iter_mut().for_each(|entry| *entry = Lane::default());
             store = None;
             loads.clear();
         }
@@ -466,7 +567,14 @@ pub fn graph(
             succs[earlier].push(later);
         }
     }
-    Graph { preds, succs, latencies, weak_preds: vec![Vec::new(); n], weak_succs: vec![Vec::new(); n] }
+    Graph {
+        preds,
+        succs,
+        latencies,
+        weak_preds: vec![Vec::new(); n],
+        weak_succs: vec![Vec::new(); n],
+        topo: Topo::new(n),
+    }
 }
 
 /// One live range segment of a value in a region, in slots: a position `p`
@@ -479,18 +587,68 @@ struct Segment {
 const LIVE_IN_SLOT: i64 = -1;
 const LIVE_OUT_SLOT: i64 = i64::MAX;
 
+/// The positions in a region that read and that define each value, in order
+/// (the pin's use-def lists): one pass over the region, so a query for a
+/// value does not scan it.
+#[derive(Default)]
+struct Occurrences {
+    reads: HashMap<u32, Vec<usize>>,
+    defs: HashMap<u32, Vec<usize>>,
+}
+
+impl Occurrences {
+    fn of(insns: &[Arc<Insn>]) -> Occurrences {
+        let mut found = Occurrences::default();
+        for (at, one) in insns.iter().enumerate() {
+            for (list, values) in [(&mut found.reads, &one.uses), (&mut found.defs, &one.defines)] {
+                for &value in values.iter() {
+                    let positions = list.entry(value).or_default();
+                    if positions.last() != Some(&at) {
+                        positions.push(at);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    fn reads(
+        &self,
+        value: u32,
+    ) -> &[usize] {
+        self.reads.get(&value).map_or(&[], Vec::as_slice)
+    }
+
+    fn defs(
+        &self,
+        value: u32,
+    ) -> &[usize] {
+        self.defs.get(&value).map_or(&[], Vec::as_slice)
+    }
+}
+
 /// The segments of `value` in `insns` and the positions of its defs. A def
 /// that reads the value (two-address) ends one segment and starts the next at
 /// the same instruction, as the pin's live intervals do.
 fn segments_of(
-    insns: &[Arc<Insn>],
+    occurrences: &Occurrences,
     value: u32,
     live_out: bool,
 ) -> (Vec<Segment>, Vec<usize>) {
     let mut segments: Vec<Segment> = Vec::new();
     let mut defs = Vec::new();
-    for (at, one) in insns.iter().enumerate() {
-        let (reads, defines) = (one.uses.contains(&value), one.defines.contains(&value));
+    let (reads_at, defs_at) = (occurrences.reads(value), occurrences.defs(value));
+    let (mut r, mut d) = (0, 0);
+    while r < reads_at.len() || d < defs_at.len() {
+        let at = match (reads_at.get(r), defs_at.get(d)) {
+            (Some(&read), Some(&def)) => read.min(def),
+            (Some(&read), None) => read,
+            (None, Some(&def)) => def,
+            (None, None) => unreachable!("one list has a position left"),
+        };
+        let (reads, defines) = (reads_at.get(r) == Some(&at), defs_at.get(d) == Some(&at));
+        r += usize::from(reads);
+        d += usize::from(defines);
         let slot = 2 * at as i64;
         if reads {
             match segments.last_mut() {
@@ -527,19 +685,20 @@ pub fn copy_constrain(
     graph: &mut Graph,
     live_out: &dyn Fn(u32) -> bool,
 ) {
+    let occurrences = Occurrences::of(insns);
     let mut ranges: HashMap<u32, (Vec<Segment>, Vec<usize>)> = HashMap::default();
     for (copy, one) in insns.iter().enumerate() {
         let Some((dst, src)) = copy_of(one) else { continue };
         for value in [dst, src] {
-            ranges.entry(value).or_insert_with(|| segments_of(insns, value, live_out(value)));
+            ranges.entry(value).or_insert_with(|| segments_of(&occurrences, value, live_out(value)));
         }
-        constrain_local_copy(insns, graph, &ranges, copy, dst, src);
+        constrain_local_copy(&occurrences, graph, &ranges, copy, dst, src);
     }
 }
 
 /// `constrainLocalCopy`.
 fn constrain_local_copy(
-    insns: &[Arc<Insn>],
+    occurrences: &Occurrences,
     graph: &mut Graph,
     ranges: &HashMap<u32, (Vec<Segment>, Vec<usize>)>,
     copy: usize,
@@ -587,16 +746,24 @@ fn constrain_local_copy(
     let first_local = (begin / 2) as usize;
     // The uses of the last local def go before the global def.
     let last_local_def = *local_defs.last().expect("a local range has a def");
-    let local_uses: Vec<usize> = (last_local_def + 1..insns.len())
-        .filter(|&at| at != global_def && insns[at].uses.contains(&local_value))
+    let reads = occurrences.reads(local_value);
+    let local_uses: Vec<usize> = reads[reads.partition_point(|&at| at <= last_local_def)..]
+        .iter()
+        .copied()
+        .filter(|&at| at != global_def)
         .collect();
     if local_uses.iter().any(|&user| graph.reaches(global_def, user)) {
         return;
     }
     // And the earlier readers of the global before the start of the local.
     let after = global_defs.iter().copied().filter(|&at| at < global_def).max().map_or(0, |at| at + 1);
-    let global_uses: Vec<usize> =
-        (after..global_def).filter(|&at| at != first_local && insns[at].uses.contains(&global_value)).collect();
+    let reads = occurrences.reads(global_value);
+    let global_uses: Vec<usize> = reads
+        [reads.partition_point(|&at| at < after)..reads.partition_point(|&at| at < global_def)]
+        .iter()
+        .copied()
+        .filter(|&at| at != first_local)
+        .collect();
     if global_uses.iter().any(|&user| graph.reaches(first_local, user)) {
         return;
     }
@@ -616,8 +783,7 @@ fn constrain_local_copy(
 /// `LLRM_MS_TRACE`: each pick with the reason `tracePick` of the pin names, for
 /// a line-by-line reading against `llc -debug-only=machine-scheduler`.
 fn trace() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LLRM_MS_TRACE").is_some())
+    llrm_support::env_flag!("LLRM_MS_TRACE")
 }
 
 /// What the tracker needs to follow a region's pressure bottom-up.
@@ -1015,6 +1181,60 @@ mod tests {
             insn(2, semantics(Operation::Move, "mov", vec![held(3)], vec![cell(8)]), vec![3], vec![]),
             insn(3, semantics(Operation::Move, "mov", vec![cell(0)], vec![held(2)]), vec![], vec![2]),
         ]
+    }
+
+    /// A write whose flags nothing reads joined the defs standing in its
+    /// lane, and every later write scanned them all for the live def to order
+    /// after: a region of 40,000 flag-writing instructions took seconds
+    /// (machinesched `graph` 12.9 M scans of 4,290 instructions).
+    #[test]
+    fn test_a_long_run_of_dead_flag_writes_builds_its_graph_in_linear_time() {
+        use super::graph;
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let insns: Vec<_> = (0..40_000u32)
+            .map(|k| {
+                let at = i64::from(k);
+                insn(
+                    at,
+                    semantics(Operation::Binary, "add", vec![held(k + 1)], vec![held(k), imm(1)]),
+                    vec![k + 1],
+                    vec![k],
+                )
+            })
+            .collect();
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let started = std::time::Instant::now();
+        let found = graph(&insns, regs, 16);
+        assert_eq!(found.preds.len(), insns.len());
+        assert!(started.elapsed().as_millis() < 1000, "{:?} for 40,000 adds", started.elapsed());
+    }
+
+    /// `copy_constrain` scanned the whole region for each value's ranges and
+    /// uses, and walked the whole graph for each reachability query: a region
+    /// of 6,000 copies took seconds (machinesched 187 -> 704 Minstr from 128
+    /// to 256 statements of a block).
+    #[test]
+    fn test_constraining_the_copies_of_a_long_region_is_not_quadratic() {
+        use super::{copy_constrain, graph};
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 4, address: None });
+        let mut insns = Vec::new();
+        for k in 0..6_000u32 {
+            let (l, g, t, x) = (10 + 4 * k, 11 + 4 * k, 12 + 4 * k, 13 + 4 * k);
+            let at = insns.len() as i64;
+            insns.push(insn(at, semantics(Operation::Move, "mov", vec![held(l)], vec![held(g)]), vec![l], vec![g]));
+            insns.push(insn(at + 1, semantics(Operation::Move, "mov", vec![held(g)], vec![held(x)]), vec![g], vec![x]));
+            insns.push(insn(
+                at + 2,
+                semantics(Operation::Binary, "imul", vec![held(t)], vec![held(l), imm(3)]),
+                vec![t],
+                vec![l],
+            ));
+        }
+        let regs = llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO);
+        let mut found = graph(&insns, regs, 16);
+        let started = std::time::Instant::now();
+        copy_constrain(&insns, &mut found, &|_| false);
+        assert!(started.elapsed().as_millis() < 1000, "{:?} to constrain 6,000 copies", started.elapsed());
     }
 
     /// `l = g; g = x; t = l * 3; out = t + g` (x_iir's `%2 = COPY %8`, `%8 =

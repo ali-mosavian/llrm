@@ -48,6 +48,8 @@ pub mod x86isd {
     use super::ISD;
 
     pub const ADC: ISD = ISD::Target(477);
+    pub const FSHL: ISD = ISD::Target(625);
+    pub const FSHR: ISD = ISD::Target(626);
     pub const SMUL: ISD = ISD::Target(744);
     pub const UMUL: ISD = ISD::Target(776);
     pub const ADD: ISD = ISD::Target(478);
@@ -321,6 +323,8 @@ impl Hooks for X86Lowering {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::SSubSat => Some(lower_ssubsat(dag, node)),
+            ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
@@ -335,6 +339,10 @@ impl Hooks for X86Lowering {
             }
             // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
             // `f32` to `f64` is returned as is and selected by pattern.
+            // DEVIATE SD107. `lowerFaddFsub`: the node itself unless an operand
+            // pair is a horizontal add (SSE3 `haddps`), which the target does
+            // not describe; so the scalar op is selected by pattern.
+            ISD::FAdd | ISD::FSub => Some(node),
             ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
@@ -1413,6 +1421,30 @@ fn lower_setcc_carry(
     dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags])
 }
 
+/// The two halves of `expandFP_TO_UINT` for an `i64`: `value` less 2^63 when it
+/// is at least that, and the sign bit (`1 << 63`) to put back when it was.
+fn unsigned_fixup_operands(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    float: MVT,
+) -> (SDValue, SDValue) {
+    let value_vt = dag.value_type(value);
+    // 2^63, the first value that does not fit a signed `i64`.
+    let threshold = match float {
+        MVT::F32 => 0x5F00_0000u128,
+        MVT::F64 => 0x43E0_0000_0000_0000,
+        _ => (0x403Eu128 << 64) | (1u128 << 63),
+    };
+    let threshold = dag.get_constant_fp(threshold, value_vt);
+    let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
+    let sixty_three = dag.get_constant(63, EVT::I8);
+    let adjust = dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]);
+    let zero = dag.get_constant_fp(0, value_vt);
+    let offset = dag.get_select(value_vt, at_least, threshold, zero);
+    (dag.get_node(ISD::FSub, value_vt, &[value, offset]), adjust)
+}
+
 /// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
 /// result's size, then a load of it. An unsigned `i32` goes through an `i64`
 /// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
@@ -1443,6 +1475,14 @@ fn lower_fp_to_int(
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
         }
+        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
+        // when it is at least that, converted signed, with the sign bit put
+        // back.
+        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
+            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
+            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
+            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
+        }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
@@ -1452,20 +1492,9 @@ fn lower_fp_to_int(
     let chain = dag.entry_node();
     let mut adjust = None;
     if unsigned_fixup {
-        // 2^63, the first value that does not fit a signed `i64`.
-        let threshold = match float {
-            MVT::F32 => 0x5F00_0000u128,
-            MVT::F64 => 0x43E0_0000_0000_0000,
-            _ => (0x403Eu128 << 64) | (1u128 << 63),
-        };
-        let threshold = dag.get_constant_fp(threshold, value_vt);
-        let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
-        let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
-        let sixty_three = dag.get_constant(63, EVT::I8);
-        adjust = Some(dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]));
-        let zero = dag.get_constant_fp(0, value_vt);
-        let offset = dag.get_select(value_vt, at_least, threshold, zero);
-        value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+        let (shifted, flip) = unsigned_fixup_operands(dag, value, float);
+        value = shifted;
+        adjust = Some(flip);
     }
     let info =
         MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
@@ -1532,6 +1561,12 @@ fn lower_int_to_fp(
     let src_vt = dag.value_type(src);
     if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !src_vt.is_integer() {
         return None;
+    }
+    // The combiner leaves a custom `UINT_TO_FP` alone, so `LowerUINT_TO_FP`
+    // makes it signed itself when the sign bit is known clear: an `i16`
+    // promoted by zero extension is one `fild` of a dword.
+    if !signed && combine_uint_to_fp(dag, node).is_some() {
+        return Some(dag.get_node(ISD::SIntToFp, dst, &[src]));
     }
     let pointer = dag.config().pointer;
     if sse2 && matches!(dst, EVT::Simple(MVT::F32 | MVT::F64)) {
@@ -1795,6 +1830,64 @@ fn combine_mul(
     new_mul
 }
 
+/// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
+/// is done in a dword: `fshl(x,y,z)` is `(((aext x << 8) | zext y) << (z & 7))
+/// >> 8`. An `i8` by a constant is two shifts and an `or`
+/// (`expandFunnelShift`). An `i16` is the target node with the amount modulo
+/// 16 (`SHLD16`/`SHRD16`); the dword is already legal.
+///
+/// DEVIATE SD247: the `isSHLDSlow` expansion of `i16` is not translated (no
+/// target of ours sets it). Owner sdag-b.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L32188
+fn lower_funnel_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let is_fshr = dag.opcode(node) == ISD::FShr;
+    let (op0, op1, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let amount_vt = dag.value_type(amount);
+    let bits = vt.size_in_bits();
+    if vt == EVT::I8 {
+        if let Some(by) = dag.constant(amount) {
+            let by = (by % u128::from(bits)) as u32;
+            if by == 0 {
+                return Some(if is_fshr { op1 } else { op0 });
+            }
+            let (left, right) = if is_fshr { (bits - by, by) } else { (by, bits - by) };
+            let high = dag.get_constant(u128::from(left), amount_vt);
+            let low = dag.get_constant(u128::from(right), amount_vt);
+            let high = dag.get_node(ISD::Shl, vt, &[op0, high]);
+            let low = dag.get_node(ISD::Srl, vt, &[op1, low]);
+            return Some(dag.get_node(ISD::Or, vt, &[high, low]));
+        }
+        let wide = EVT::I32;
+        let mask = dag.get_constant(u128::from(bits - 1), amount_vt);
+        let shift = dag.get_constant(u128::from(bits), amount_vt);
+        let hi = dag.get_node(ISD::AnyExtend, wide, &[op0]);
+        let lo = dag.get_zext_or_trunc(op1, wide);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let hi = dag.get_node(ISD::Shl, wide, &[hi, shift]);
+        let mut result = dag.get_node(ISD::Or, wide, &[hi, lo]);
+        if is_fshr {
+            result = dag.get_node(ISD::Srl, wide, &[result, amount]);
+        } else {
+            result = dag.get_node(ISD::Shl, wide, &[result, amount]);
+            result = dag.get_node(ISD::Srl, wide, &[result, shift]);
+        }
+        return Some(dag.get_node(ISD::Truncate, vt, &[result]));
+    }
+    if vt == EVT::I16 {
+        let mask = dag.get_constant(15, amount_vt);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let op = if is_fshr { x86isd::FSHR } else { x86isd::FSHL };
+        return Some(dag.get_node(op, vt, &[op0, op1, amount]));
+    }
+    None
+}
+
 /// `LowerShiftParts` (`TargetLowering::expandShiftParts`): a double-width
 /// shift by a variable amount as two shifts, a funnel shift and selects on
 /// bit 5 of the amount.
@@ -1855,7 +1948,7 @@ fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
 
 /// `LowerFABSorFNEG` for a scalar: no scalar bitwise SSE instruction exists, so
 /// the sign bit is cleared (`FAND`), flipped (`FXOR`) or set (`FOR`, for
-/// `fneg (fabs x)`) by a 16-byte pool mask whose low lane is the sign mask.
+/// `fneg (fabs x)`) by a 16-byte pool mask, the sign mask in every lane.
 fn lower_fabs_or_fneg(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1881,10 +1974,23 @@ fn lower_fabs_or_fneg(
         (false, true) => (x86isd::FOR, sign),
         (false, false) => (x86isd::FXOR, sign),
     };
-    let pointer = dag.config().pointer;
-    let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
-    let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+    let address = mask_address(dag, mask, vt);
     Some(dag.get_node(op, vt, &[x, address]))
+}
+
+/// The address of the 16-byte constant `mask` of a scalar `vt` repeated in each
+/// lane: the pin's `getConstantFP` of a `v4f32` or `v2f64` splat, a pool entry
+/// the bitwise instruction reads whole.
+fn mask_address(
+    dag: &mut SelectionDAG,
+    mask: u128,
+    vt: EVT,
+) -> SDValue {
+    let lane = vt.size_in_bits();
+    let splat = (0..128 / lane).fold(0u128, |all, at| all | mask << (at * lane));
+    let pointer = dag.config().pointer;
+    let pool = dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
+    dag.get_node(wrapper_kind(pointer), pointer, &[pool])
 }
 
 /// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign
@@ -1909,10 +2015,8 @@ fn lower_fcopysign(
             dag.get_node(ISD::FpRound, vt, &[sgn, zero])
         };
     }
-    let pointer = dag.config().pointer;
     let masked = |dag: &mut SelectionDAG, op, value, mask| {
-        let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
-        let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+        let address = mask_address(dag, mask, vt);
         dag.get_node(op, vt, &[value, address])
     };
     let magnitude = masked(dag, x86isd::FAND, mag, sign - 1);
@@ -1958,6 +2062,29 @@ fn lower_abs(
     let flags = SDValue { node: neg.node, res: 1 };
     let code = cond_code(dag, cond::NS);
     dag.get_node(x86isd::CMOV, vt, &[x, neg, code, flags])
+}
+
+/// `LowerADDSAT_SUBSAT` for a scalar `SSUBSAT` ([L29900][pin]): the signed
+/// difference with overflow, and on overflow the maximum if the wrapped
+/// difference is negative, else the minimum.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L29900
+fn lower_ssubsat(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = dag.value_type(node);
+    let (x, y) = (dag.operand(node, 0), dag.operand(node, 1));
+    let min = 1u128 << (vt.size_in_bits() - 1);
+    let zero = dag.get_constant(0, vt);
+    let result = dag.get_node_multi(ISD::SSubO, &[vt, EVT::I8], &[x, y]);
+    let (difference, overflow) = (result, SDValue { node: result.node, res: 1 });
+    let sat_min = dag.get_constant(min, vt);
+    let sat_max = dag.get_constant(min - 1, vt);
+    let negative = dag.get_setcc(EVT::I8, difference, zero, CondCode::SetLt);
+    let saturated = dag.get_select(vt, negative, sat_max, sat_min);
+    dag.get_select(vt, overflow, saturated, difference)
 }
 
 /// `LowerCTLZ` ([L29730][pin]): `bsr`, a `cmov` for a zero source, and
