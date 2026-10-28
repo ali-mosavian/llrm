@@ -54,7 +54,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         // "If the sole user is a token factor, make sure we have a chance to
         // merge them together."
-        if self.dag.use_count(node.node) == 1 {
+        if self.dag.has_one_use(node.node) {
             let user = self.dag.users(node).next();
             if let Some(user) = user.filter(|&u| self.dag.opcode(SDValue { node: u, res: 0 }) == ISD::TokenFactor) {
                 self.add_to_worklist(user);
@@ -78,7 +78,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             for op in self.dag.node(tf).ops.clone() {
                 match self.dag.opcode(op) {
                     ISD::EntryToken => changed = true,
-                    ISD::TokenFactor if self.dag.use_count(op.node) == 1 && !token_factors.contains(&op) => {
+                    ISD::TokenFactor if self.dag.has_one_use(op.node) && !token_factors.contains(&op) => {
                         token_factors.push(op);
                         changed = true;
                     }
