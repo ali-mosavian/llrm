@@ -1260,6 +1260,20 @@ def red_members(members: list[str], red_with, alone_red) -> list[str]:
     return found or [number for number in members if alone_red(number)]
 
 
+def named_files(text: str) -> set[str]:
+    """The file paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`, `tools/pairs/dyn.py: 1 copies`)."""
+    return set(re.findall(r"[\w-]+(?:/[\w.-]+)+\.\w+", text))
+
+
+def red_members_suspects_first(members: list[str], suspects: list[str], red_with, alone_red) -> list[str]:
+    """`red_members`, asking the `suspects` (the PRs whose diff touches a file the failure names) first and the rest only when none of them is red: the 06:53 batch walked 37 PRs one by one,
+    80 s each, for a copy in fpregs.rs that one PR touched."""
+    suspects = [number for number in members if number in suspects]
+    if not suspects or len(suspects) == len(members):
+        return red_members(members, red_with, alone_red)
+    return red_members(suspects, red_with, alone_red) or red_members([number for number in members if number not in suspects], red_with, alone_red)
+
+
 def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -> list[str]:
     """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else the backend PRs found by halving (`red_with`),
     else (an interaction: no half is red) each backend PR merged alone and asked."""
@@ -2146,7 +2160,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 return []
             targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
-            return red_members(group, red_with, lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets)))
+            alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            failure_files = named_files(parity_smoke_module().causes_of(failed_units))
+            suspects = [number for number in group if failure_files & set(head_files(infos[number]['headRefOid']))]
+            return red_members_suspects_first(group, suspects, red_with, alone_red)
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:

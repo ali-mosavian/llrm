@@ -1902,3 +1902,17 @@ def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp
 
     got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=slow, ensure=lambda: "")
     assert got and "600 s" in got[0], got
+
+
+def test_a_red_naming_a_file_asks_the_prs_touching_it_before_the_rest():
+    """The 06:53 batch refused a target_facts red naming fpregs.rs and then asked 37 PRs one by one, 80 s each; one PR touched that file."""
+    asked = []
+    alone = lambda number: asked.append(number) or number == "3"  # noqa: E731
+    assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["3"]
+    assert asked == ["3"], asked
+    asked.clear()
+    alone = lambda number: asked.append(number) or number == "5"  # noqa: E731
+    assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["5"]
+    assert asked[0] == "3", asked
+    assert ps.named_files("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
+    assert ps.named_files("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file
