@@ -411,11 +411,9 @@ impl Options {
         }
     }
 
-    /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
-    /// threshold bounds a body's size, and what it admits, a body called
-    /// once or one whose copies cost less than the calls they remove,
-    /// shrinks the code here. A lower one would also refuse a constant-site
-    /// clone that folds away.
+    /// -Os: no copy grows the code. The limit stays -O2's 225, but every
+    /// caller is `optsize` (D8), so a call is held to 50, 487 with an
+    /// `inlinehint`, as the pin holds it (audit row 3: mirrored).
     pub fn size() -> Self {
         Self {
             limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
