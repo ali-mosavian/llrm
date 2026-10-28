@@ -1644,12 +1644,3 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); dse alone 326 -> 793 -> 2494 Minstr at N=820/1640/3280 (x2.4, x3.1). No event counter grows; scan limits are the pin's (150/90/5), defs per block under 5000, so the superlinear part is not located"
 
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "assemble"
-ratio = 3.95
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 7.8 -> 29.3 Minstr (x3.75) on parity ee5a419f8a, not red before it"
-
