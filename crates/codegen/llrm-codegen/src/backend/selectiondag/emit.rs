@@ -304,6 +304,9 @@ struct Emitter<'a, 'd> {
     /// The carry a flag producer made, saved in a byte before another unit
     /// wrote the flags, for the `adc`/`sbb` that still reads it.
     saved_carry: HashMap<u32, Held>,
+    /// The machine nodes emitted: the scheduler's clone of a unit emits its
+    /// node again.
+    machine_emitted: llrm_support::hash::HashSet<u32>,
     /// The `CopyToReg EFLAGS` nodes emitted.
     flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
@@ -420,6 +423,7 @@ pub fn emit_in(
         last_select: None,
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
+        machine_emitted: Default::default(),
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         glue_users: {
@@ -1414,12 +1418,21 @@ impl Emitter<'_, '_> {
         let form = &self.ctx.map.forms()[form];
         let node = self.dag.node(SDValue { node: n, res: 0 });
         // The results: the first `num_defs` values that are not chain or glue.
+        // A clone of the unit (`CopyAndMoveSuccessors`) is there for the flags
+        // it leaves: its results are values of their own, and the
+        // readers keep the first one's.
+        let cloned = !self.machine_emitted.insert(n);
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = self
-                .exported_register(SDValue { node: n, res: i as u8 })
-                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)));
-            self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
+            let held = if cloned {
+                self.fresh(width(self.ctx.map.scalar_sse(), *vt))
+            } else {
+                self.exported_register(SDValue { node: n, res: i as u8 })
+                    .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)))
+            };
+            if !cloned {
+                self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
+            }
             dests.push(Loc::Held(held));
         }
         let cell_width =
