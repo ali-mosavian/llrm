@@ -144,15 +144,6 @@ why = "measured 5530 -> 17937 (x3.24)"
 
 [[debt]]
 kind = "events"
-axis = "cases"
-name = "lvi_icmp_patterns"
-ratio = 3.68
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: measured 39226 -> 137384 (x3.50); 3N-pred block, MAX_PROCESSED_PER_VALUE=500 with pin-faithful solveBlockValueNonLocal restart"
-
-[[debt]]
-kind = "events"
 axis = "unrolled"
 name = "lvi_icmp_patterns"
 ratio = 2.4
