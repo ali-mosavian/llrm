@@ -1558,6 +1558,21 @@ pub fn bit_test_immediate(
     _assemble(&raised(Instruction::with2(code, register.iced(), bit).map_err(|error| error.to_string())), at, true)
 }
 
+/// `bt [cell], imm8`.
+pub fn bit_test_cell(
+    cell: &ir::Mem,
+    bit: i64,
+    at: At,
+) -> Option<Emitted> {
+    if ![2, 4].contains(&cell.width) {
+        return None;
+    }
+    let code = code_of!("BT_RM", cell.width * 8, "_IMM8")?;
+    let bit = i32::try_from(bit).ok().filter(|bit| (0..256).contains(bit))?;
+    let (r#where, symbolic) = operand_of(cell, at.bits)?;
+    _assemble(&create_mem_i32(code, r#where, i64::from(bit)).ok()?, at, symbolic)
+}
+
 /// `cmp a,b` or `test a,b` -- both flags-only, and not the same question.
 pub fn compare_registers(
     name: &str,
@@ -2796,6 +2811,7 @@ pub fn emit_in(
         return match (&sources[0], &sources[1]) {
             (_, Loc::Imm(imm)) if what.name.as_deref() == Some("test") => test_immediate(&sources[0], imm.value, at),
             (Loc::Reg(into), Loc::Imm(bit)) if named == "bt" => bit_test_immediate(into.register, bit.value, at),
+            (Loc::Mem(cell), Loc::Imm(bit)) if named == "bt" => bit_test_cell(cell, bit.value, at),
             (_, Loc::Imm(imm)) if named == "cmp" => compare(&sources[0], imm.value, at, relocated),
             (Loc::Reg(into), Loc::Mem(cell)) if named == "cmp" => compare_mem(into.register, cell, at),
             (Loc::Reg(into), Loc::Reg(outof)) => compare_registers(named, into.register, outof.register, at),
