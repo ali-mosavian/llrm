@@ -1,9 +1,10 @@
 //! An [`Object`] as an ELF relocatable file, of either class. What a machine
 //! adds is its ELF machine number, its relocation types, and whether its
 //! relocations carry an addend (RELA) or leave it in the field (REL): see
-//! [`Machine`]. `llrm-elf32` and `llrm-elf64` are the machines.
+//! [`Machine`]. `llrm-x86`'s `mc::elf32` and `mc::elf64` and `llrm-arm64`'s
+//! `mc::elf` are the machines.
 
-use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_SYMTAB: u32 = 2;
@@ -35,7 +36,8 @@ pub struct Relocation {
 
 /// What a machine says of its ELF.
 pub trait Machine {
-    const ARCH: Arch;
+    /// The width of a near offset, in bits, of the objects this machine takes.
+    const BITS: u8;
     /// ELFCLASS64 rather than ELFCLASS32.
     const WIDE: bool;
     /// `e_machine`.
@@ -43,7 +45,7 @@ pub trait Machine {
     /// Relocations carry their addend (RELA); else it is in the field (REL).
     const ADDEND: bool;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported>;
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -123,7 +125,7 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no ELF section", section.name))),
         // Named as the DWARF writer names it.
         Role::InitFunctions => (".init_array", SHT_INIT_ARRAY, SHF_ALLOC | SHF_WRITE),
-        Role::Debug => (".debug", SHT_PROGBITS, 0),
+        Role::Debug(_) => (".debug", SHT_PROGBITS, 0),
     })
 }
 
@@ -136,39 +138,15 @@ fn align(
     }
 }
 
-/// Whether `addend` is a value of a field of `width` bytes: signed where
-/// pc-relative.
-fn fits(
-    addend: i64,
-    width: usize,
-    pcrel: bool,
-) -> bool {
-    match (width, pcrel) {
-        (8, _) => true,
-        (4, true) => i32::try_from(addend).is_ok(),
-        (4, false) => i32::try_from(addend).is_ok() || u32::try_from(addend).is_ok(),
-        (2, true) => i16::try_from(addend).is_ok(),
-        (2, false) => i16::try_from(addend).is_ok() || u16::try_from(addend).is_ok(),
-        (_, true) => i8::try_from(addend).is_ok(),
-        _ => i8::try_from(addend).is_ok() || u8::try_from(addend).is_ok(),
-    }
-}
-
 /// `object` as an ELF relocatable file of machine `M`.
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    if object.arch != M::ARCH {
-        return Err(unsupported(format!("{:?} is not the {:?} this ELF writer is for", object.arch, M::ARCH)));
+    if object.bits != M::BITS {
+        return Err(unsupported(format!(
+            "a {}-bit object is not the {}-bit this ELF writer is for",
+            object.bits,
+            M::BITS
+        )));
     }
-    // DWARF's sections are this writer's, made from the object's debug
-    // information.
-    let expanded;
-    let object = match &object.debug {
-        Some(info) => {
-            expanded = llrm_debuginfo::expanded(object, info)?;
-            &expanded
-        }
-        None => object,
-    };
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
     }
@@ -180,8 +158,9 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // apart by its own name.
     let mut section_names: Vec<String> = Vec::new();
     for (index, section) in object.sections.iter().enumerate() {
-        let taken = section.role != Role::Debug && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
-        section_names.push(if section.role == Role::Debug {
+        let taken =
+            !matches!(section.role, Role::Debug(_)) && spelled[..index].iter().any(|one| one.0 == spelled[index].0);
+        section_names.push(if matches!(section.role, Role::Debug(_)) {
             section.name.clone()
         } else if taken {
             format!("{}.{}", spelled[index].0, section.name)
@@ -248,7 +227,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from } = M::relocation(one.kind)?;
+            let Relocation { kind, width, from } = M::relocation(one)?;
             let (symbol, own) = match one.target {
                 Target::OmfGroup(_) => return Err(unsupported("a reference to a group is OMF's")),
                 // The section's own symbol.
@@ -262,12 +241,10 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             };
             // S + A - P, where the model's value is S + addend - (at + from).
             let addend = one.addend + own - from as i64;
-            if !fits(addend, width, one.kind.relative()) {
-                return Err(unsupported(format!(
-                    "{}: an addend of {addend} does not fit its {width}-byte field",
-                    section.name
-                )));
-            }
+            // Checked for RELA too: the addend must fit the field the linker
+            // would have patched.
+            let mut field = [0u8; 8];
+            apply_fixup(&mut field, 0, width, one.pc_rel, addend, &section.name)?;
             put_word::<M>(&mut entries, one.at as u64);
             if M::WIDE {
                 entries.extend((u64::from(symbol) << 32 | u64::from(kind)).to_le_bytes());
@@ -277,7 +254,7 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
             if M::ADDEND {
                 entries.extend(addend.to_le_bytes());
             } else {
-                image[one.at..one.at + width].copy_from_slice(&addend.to_le_bytes()[..width]);
+                image[one.at..one.at + width].copy_from_slice(&field[..width]);
             }
         }
         images.push(image);
