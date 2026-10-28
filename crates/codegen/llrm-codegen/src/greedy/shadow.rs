@@ -228,7 +228,7 @@ impl BodySplitEnv {
     ) -> Option<u32> {
         lis.operands(from)
             .iter()
-            .flat_map(|op| crate::backend::allocate::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
+            .flat_map(|op| crate::backend::widths::_named_widths(lis.instr(op.instr)).collect::<Vec<_>>())
             .filter(|(value, _)| *value == from)
             .map(|(_, width)| width)
             .max()
@@ -1124,7 +1124,7 @@ pub fn decide_with_split(
     let floats = crate::backend::floatassign::_floating_values(body);
     // A value named only as a byte is of the GR8 class, whose order names the
     // high bytes too (X86RegisterInfo.td); the others hold their root.
-    let widest = crate::backend::allocate::_widest(body);
+    let widest = crate::backend::widths::_widest(body);
     let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
@@ -1151,8 +1151,8 @@ pub fn decide_with_split(
     // so a read after the call, around a loop, or through a copy of the value
     // keeps it wide.
     let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
-    let read_widths = if lanes { crate::backend::allocate::_widest_read(body) } else { Default::default() };
-    for (value, width) in crate::backend::allocate::_widest(body) {
+    let read_widths = if lanes { crate::backend::widths::_widest_read(body) } else { Default::default() };
+    for (value, width) in crate::backend::widths::_widest(body) {
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
@@ -1163,7 +1163,7 @@ pub fn decide_with_split(
         for (at, block) in body.blocks.iter().enumerate() {
             for one in &block.insns {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
-                for (value, _) in crate::backend::allocate::_read_widths(one).into_iter().filter(|(_, w)| *w > 2) {
+                for (value, _) in crate::backend::widths::_read_widths(one).into_iter().filter(|(_, w)| *w > 2) {
                     wide_reads.entry(value).or_default().push((slot.clone(), at));
                 }
             }
