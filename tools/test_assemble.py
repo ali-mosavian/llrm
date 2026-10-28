@@ -383,8 +383,8 @@ def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp
     (work / "stray.txt").write_text("left by the last PR\n")
     ps._alone_checkout(work, "main", repo)
     assert work.is_dir() and not (work / "stray.txt").exists()
-    first, lock_a = ps._claim_slot(tmp_path / "slots", 2)
-    second, lock_b = ps._claim_slot(tmp_path / "slots", 2)
+    first, lock_a = ps._claim_slot(tmp_path / "slots", 2, reserved=0)
+    second, lock_b = ps._claim_slot(tmp_path / "slots", 2, reserved=0)
     assert {first, second} == {0, 1}
     lock_a.close()
     lock_b.close()
@@ -440,12 +440,12 @@ def test_an_alone_check_runs_the_source_scanning_lib_tests_of_a_crate_upstream_o
     assert seen and "llrm-mir" in seen[0], seen
 
 
-def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
-    """#4673 fixed a test without removing its xfail entry; alone dropped the `xpass` names and said clean, and batches 19 and 20 were refused for it."""
+def test_a_pr_that_makes_a_listed_unit_test_pass_warns_alone_and_so_does_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
+    """An xpass is a warning, not a refusal (08daf86026); this test still asserted the old refusal and failed on parity alone: the 08:09 pass was refused for it. The integration target an xpass reaches is still run."""
     repo, head = alone_scratch(tmp_path)
     smoke = ps.parity_smoke_module()
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set(), units=lambda _: {"xpass unit llrm-x::t_a"})
-    assert why and "xpass unit llrm-x::t_a" in why[0], why
+    assert why == [], why
 
     seen = []
     import xfail
@@ -457,7 +457,7 @@ def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_li
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
     monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
-    assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
+    assert "header_copy" in seen and why == [], (seen, why)
 
 
 def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_path):

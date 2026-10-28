@@ -1,14 +1,9 @@
 //! An [`Object`] as a COFF object file, the format link.exe, lld-link and wlink
 //! read. What a machine adds is its COFF machine number and its relocation
-//! types: see [`Machine`]. `llrm-coff32` and `llrm-coff64` are the machines.
+//! types: see [`Machine`]. `llrm-x86`'s `mc::coff32` and `mc::coff64` are the
+//! machines.
 
-/// C13 gives each local the ranges its place holds over.
-pub const LOCATION_RANGES: bool = true;
-pub const CFA_LOCATIONS: bool = false;
-
-pub mod codeview;
-
-use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const SCN_CNT_CODE: u32 = 0x20;
 const SCN_CNT_INITIALIZED_DATA: u32 = 0x40;
@@ -38,7 +33,8 @@ pub struct Relocation {
 
 /// What a machine says of its COFF.
 pub trait Machine {
-    const ARCH: Arch;
+    /// The width of a near offset, in bits, of the objects this machine takes.
+    const BITS: u8;
     /// `IMAGE_FILE_MACHINE_*`.
     const NUMBER: u16;
     /// `@feat.00` bit 0: no exception handler is left unregistered. A 32-bit
@@ -46,7 +42,7 @@ pub trait Machine {
     /// so; x86-64 has no such table.
     const SAFE_SEH: bool = false;
 
-    fn relocation(kind: Kind) -> Result<Relocation, Unsupported>;
+    fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported>;
 }
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
@@ -155,7 +151,7 @@ fn spelling(
         Role::InitFunctions => {
             return Err(unsupported(format!("{}: COFF has no init-function section here", section.name)));
         }
-        Role::Debug => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
+        Role::Debug(_) => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_DISCARDABLE),
     };
     if !section.align.is_power_of_two() || section.align > 8192 {
         return Err(unsupported(format!(
@@ -164,7 +160,11 @@ fn spelling(
         )));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
-    let name = if taken && section.role != Role::Debug { format!("{base}${}", section.name) } else { base.to_owned() };
+    let name = if taken && !matches!(section.role, Role::Debug(_)) {
+        format!("{base}${}", section.name)
+    } else {
+        base.to_owned()
+    };
     Ok((name, flags | align))
 }
 
@@ -177,32 +177,15 @@ fn pad(
     }
 }
 
-/// `object` as a COFF object file of machine `M`, its debug information, if
-/// any, as C13.
+/// `object` as a COFF object file of machine `M`; its debug information, if
+/// any, is already C13 sections (`llrm_codeview::expanded`).
 pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    let expanded;
-    let object = match &object.debug {
-        Some(info) => {
-            let encoded = codeview::encode(object, info)?;
-            let section = |name: &str, one: codeview::Section| Section {
-                name: name.to_owned(),
-                role: Role::Debug,
-                near: true,
-                align: 1,
-                spans: vec![[0, one.image.len()]],
-                image: one.image,
-                relocs: one.relocs,
-            };
-            let mut sections = object.sections.clone();
-            sections.push(section(".debug$S", encoded.symbols));
-            sections.push(section(".debug$T", encoded.types));
-            expanded = Object { sections, debug: None, ..object.clone() };
-            &expanded
-        }
-        None => object,
-    };
-    if object.arch != M::ARCH {
-        return Err(unsupported(format!("{:?} is not the {:?} this COFF writer is for", object.arch, M::ARCH)));
+    if object.bits != M::BITS {
+        return Err(unsupported(format!(
+            "a {}-bit object is not the {}-bit this COFF writer is for",
+            object.bits,
+            M::BITS
+        )));
     }
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
@@ -252,26 +235,15 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut entries = Vec::new();
         for one in &section.relocs {
-            let Relocation { kind, width, from, baked } = M::relocation(one.kind)?;
+            let Relocation { kind, width, from, baked } = M::relocation(one)?;
             let Target::Symbol(target) = one.target else { return Err(unsupported("a reference to a group is OMF's")) };
             // The linker adds S + field (- P - baked, if relative); the model
             // wants S + addend - (at + from).
-            let field = if one.kind.relative() { one.addend - (from as i64 - baked as i64) } else { one.addend };
-            let fits = match width {
-                8 => true,
-                4 => i32::try_from(field).is_ok() || (!one.kind.relative() && u32::try_from(field).is_ok()),
-                _ => i16::try_from(field).is_ok() || (!one.kind.relative() && u16::try_from(field).is_ok()),
-            };
-            if !fits {
-                return Err(unsupported(format!(
-                    "{}: a value of {field} does not fit its {width}-byte field",
-                    section.name
-                )));
-            }
+            let field = if one.pc_rel { one.addend - (from as i64 - baked as i64) } else { one.addend };
+            apply_fixup(&mut image, one.at, width, one.pc_rel, field, &section.name)?;
             put32(&mut entries, one.at as u32);
             put32(&mut entries, coff_symbol[target]);
             put16(&mut entries, kind);
-            image[one.at..one.at + width].copy_from_slice(&field.to_le_bytes()[..width]);
         }
         reloc_counts.push(section.relocs.len());
         images.push(image);

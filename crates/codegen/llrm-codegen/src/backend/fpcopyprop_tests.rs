@@ -4,7 +4,7 @@ use crate::model::lir::LirBlock;
 use crate::support::hash::IndexMap;
 
 fn fp(at: usize) -> Loc {
-    Loc::Reg(Reg { register: RFP[at], width: 10 })
+    Loc::Reg(Reg { register: llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers()[at], width: 10 })
 }
 
 fn cell() -> Loc {
