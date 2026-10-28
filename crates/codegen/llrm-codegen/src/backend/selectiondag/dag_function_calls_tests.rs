@@ -650,6 +650,7 @@ fn a_runtime_call_pops_every_argument_it_is_given() {
         segments: &crate::backend::target::BASIC,
         runtime: true,
         frame_zeroed: false,
+        facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
@@ -942,6 +943,7 @@ declare cc 1000 void @user(i16) addrspace(1)
         segments: &crate::backend::target::BASIC,
         runtime: false,
         frame_zeroed: false,
+        facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(

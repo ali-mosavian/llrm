@@ -3219,7 +3219,7 @@ mod tests {
     fn test_copy_hint_cannot_override_a_register_requirement() {
         for barrier in ["overlap", "clobber", "class", "fixed"] {
             let mut body = call_copy();
-            let insns: Vec<Insn> = body.insns().iter().map(|one| (**one).clone()).collect();
+            let insns: Vec<Insn> = body.iter_insns().map(|one| (**one).clone()).collect();
             let (define, copy, used) = (insns[0].clone(), insns[1].clone(), insns[2].clone());
             let mut pinned = body.pins.clone();
             match barrier {
@@ -3367,7 +3367,7 @@ mod tests {
             crate::backend::rewriter::rewrite(&body, &assignment, &crate::backend::classes::RegisterClasses::m16())
                 .expect("applies");
         let accesses: Vec<Semantics> =
-            placed.insns().iter().filter(|one| [4, 5].contains(&one.at)).filter_map(|one| one.what.clone()).collect();
+            placed.iter_insns().filter(|one| [4, 5].contains(&one.at)).filter_map(|one| one.what.clone()).collect();
         assert!(accesses.iter().all(|what| select::emit(what, 0, None, false, false, None).is_some()), "{accesses:?}");
     }
 
@@ -3585,7 +3585,7 @@ mod tests {
                 "source_load" => vec![load],
                 _ => insns,
             };
-            let got: Vec<Insn> = result.insns().iter().map(|one| (**one).clone()).collect();
+            let got: Vec<Insn> = result.iter_insns().map(|one| (**one).clone()).collect();
             assert_eq!(got, expected, "{keep}");
         }
     }
