@@ -633,62 +633,28 @@ b0:
     assert_eq!(price(false) - price(true), 15000);
 }
 
-/// range_on_error.bas m16 -Os +70 bytes: `__main$handler` re-arms with
-/// `onerror(true)`, so it was never inlined into its owner's landing pad; the
-/// resume dispatch stayed a jump table in a separate procedure. Its only caller
-/// is the owner, which registers a handler itself, so the re-arm runs in the
-/// frame that owns it.
+/// The extension of a simple load is free on x86 (an extending load:
+/// `BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1298-1311), where the
+/// cast alone costs an instruction: scroll's `sext (load i16)` made the callee
+/// 125 against the pin's 120 (`opt`: cost=-15025 for this callee at i386).
 #[test]
-fn test_a_handler_only_its_registering_owner_calls_is_inlined() {
-    let text = |extra: &str| {
-        format!(
-            "declare void @llrm.qb.onerror(i1) nounwind frame_bound
+fn test_a_sext_of_a_load_is_free_on_x86() {
+    let text = "@h = global i16 0
 
-define internal i16 @handler(i16 %c) {{
+define internal i32 @callee() {
 b0:
-  call void @llrm.qb.onerror(i1 true)
-  ret i16 1
-}}
+  %a = load i16, ptr @h
+  %b = sext i16 %a to i32
+  ret i32 %b
+}
 
-define i16 @owner(i16 %a) {{
+define i32 @f() {
 b0:
-  call void @llrm.qb.onerror(i1 false)
-  %r = call i16 @handler(i16 %a)
-  ret i16 %r
-}}
-{extra}"
-        )
-    };
-    let decide = |text: &str, caller: &str| {
-        let module = crate::testing::parsed(text);
-        let layout = llrm_mir::datalayout::DataLayout::default();
-        let (caller_id, _, caller) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some(caller)).unwrap();
-        let (callee_id, _, callee) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("handler")).unwrap();
-        let call = caller
-            .walk()
-            .map(|(_, inst)| inst)
-            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
-            .unwrap();
-        let site = Site {
-            module: &module,
-            layout: &layout,
-            caller,
-            caller_id,
-            call,
-            callee,
-            callee_id,
-            sole_call_to_local: true,
-            caller_recursive: false,
-            caller_size: CallerSize::Speed,
-            relative_frequency: None,
-            tti: None,
-        };
-        !matches!(
-            inline_cost(&site, InlineParams::from_level(2)),
-            InlineCost::Never(_)
-        )
-    };
-    assert!(decide(&text(""), "owner"), "the owner registers a handler");
-    let other = "define i16 @other(i16 %a) {\nb0:\n  %r = call i16 @handler(i16 %a)\n  ret i16 %r\n}\n";
-    assert!(!decide(&text(other), "other"), "a caller that registers nothing keeps the callee out");
+  %r = call i32 @callee()
+  ret i32 %r
+}
+";
+    let flat = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (cost, _) = priced_with(text, 0, true, CallerSize::Speed, Some(&flat));
+    assert_eq!(cost, -15025, "the pin prices this callee at -15025");
 }

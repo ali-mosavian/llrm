@@ -183,7 +183,9 @@ fn met(
 }
 
 /// The near pointer a constant far cast is made of: `addrspacecast (ptr @g to
-/// ptr addrspace(1))` is `@g`, a global's address in the data space.
+/// ptr addrspace(1))` is `@g`, a global's address in the data space, and a
+/// constant step of one is the same step of the global (a field of a forwarded
+/// struct).
 fn near_of_constant(
     context: &Context,
     layout: &DataLayout,
@@ -191,12 +193,38 @@ fn near_of_constant(
     operand: Operand,
 ) -> Option<Operand> {
     let Operand::Constant(id) = operand else { return None };
+    near_constant(context, layout, spaces, id).map(Operand::Constant)
+}
+
+fn near_constant(
+    context: &Context,
+    layout: &DataLayout,
+    spaces: Spaces,
+    id: llrm_mir::context::ConstantId,
+) -> Option<llrm_mir::context::ConstantId> {
     let constant = context.get(id);
     far(context, layout, constant.ty)?;
-    let ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) = constant.kind else {
-        return None;
-    };
-    (near(context, spaces, context.get(value).ty) == Some(spaces.data)).then_some(Operand::Constant(value))
+    match constant.kind.clone() {
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
+            (near(context, spaces, context.get(value).ty) == Some(spaces.data)).then_some(value)
+        }
+        ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nusw, nuw, operands }) => {
+            let base = near_constant(context, layout, spaces, operands[0])?;
+            let mut stepped = operands;
+            stepped[0] = base;
+            Some(context.constant(llrm_mir::context::Constant {
+                ty: context.types.ptr(spaces.data),
+                kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+                    source,
+                    inbounds,
+                    nusw,
+                    nuw,
+                    operands: stepped,
+                }),
+            }))
+        }
+        _ => None,
+    }
 }
 
 /// Whether every user of `value` reads it through memory or steps it on to one

@@ -1079,3 +1079,39 @@ entry:
         }
     }
 }
+
+/// `llvm.umul.fix`, `llvm.{s,u}mul.fix.sat` and `llvm.{s,u}shl.sat` were
+/// unknown names (the selector panicked in the assembler on the call to a
+/// function nothing defines); `smul.fix` of an `i8`, `i16` or `i64` stopped the
+/// legalizer with `Unsupported { op: SMulFix, what: "convert node to libcall"
+/// }`. Each is a multiply (a shift) and selects.
+#[test]
+fn fixed_point_multiplies_and_saturating_shifts_select_at_every_width() {
+    for width in [8, 16, 32, 64] {
+        for (name, extra) in [
+            ("smul.fix", ", i32 3"),
+            ("umul.fix", ", i32 3"),
+            ("smul.fix.sat", ", i32 3"),
+            ("umul.fix.sat", ", i32 3"),
+            ("smul.fix.sat", ", i32 0"),
+            ("umul.fix.sat", ", i32 0"),
+            ("sshl.sat", ""),
+            ("ushl.sat", ""),
+        ] {
+            let scale = if extra.is_empty() { "" } else { ", i32" };
+            let ir = format!(
+                "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+declare i{width} @llvm.{name}.i{width}(i{width}, i{width}{scale})
+define i{width} @f(i{width} %a, i{width} %b) {{
+entry:
+  %r = call i{width} @llvm.{name}.i{width}(i{width} %a, i{width} %b{extra})
+  ret i{width} %r
+}}
+"
+            );
+            let module = llrm_mir::parse::module(&ir).expect("parses");
+            selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+                .unwrap_or_else(|e| panic!("{name}{extra} i{width}: {}", e.0));
+        }
+    }
+}

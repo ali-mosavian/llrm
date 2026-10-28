@@ -5,6 +5,17 @@
 # `report(long)` set LLRM_CC_DIR to a directory of freestanding programs.
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
+# The segmented DOS/Watcom/Borland rows read `#pragma aux` link names only in the pinned fork clang (toolchain/clang/pin, line 2).
+# Without it libm names stay unmangled and every program fails to link (`_atan` undefined): stop here with one line instead.
+case ${LLRM_CC_TARGET:-} in
+x86_16-* | x86_32-dos | x86_32-wat)
+  want=$(sed -n 2p "$root/toolchain/clang/pin" | cut -c1-12)
+  have=$("${LLRM_CLANG_M16:-/nonexistent}" --version 2>/dev/null | grep -o '[0-9a-f]\{40\})' | cut -c1-12)
+  if [ "$have" != "$want" ]; then
+    echo "cc_check: $LLRM_CC_TARGET needs LLRM_CLANG_M16 = the fork clang at $want (toolchain/clang/pin); got '${LLRM_CLANG_M16:-unset}' at '${have:-none}'" >&2
+    exit 2
+  fi ;;
+esac
 clang=${LLRM_PIN_CLANG:-$HOME/scratch/llvm-build/bin/clang}
 bin=$(python3 "$root/tools/llrmbin.py" bin)
 cc=${LLRM_CC:-$bin/llrm-cc}

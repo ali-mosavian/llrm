@@ -287,6 +287,13 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             || flag == "--help"
         {
             passthrough = true;
+        } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
+            && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
+        {
+            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // `stack` checks SP on entry; `bounds` checks nothing in IR, which
+            // carries no subscripts.
+            build.llc.push(flag.to_owned());
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {
@@ -320,6 +327,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 build.clang.push("-funsigned-char".to_owned());
             }
             build.llc.push(flag.to_owned());
+            if flag == "-mabi=watcom" {
+                build.clang.push("-funsigned-char".to_owned());
+            }
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());
@@ -654,7 +664,33 @@ fn build(
 }
 
 /// Exit status: the failing tool's, 1 for a refusal of the driver's own.
+/// `--os-layer FIELD -m16|-m32`: what the target's OS layer says of C's runtime
+/// (the tools that assemble the start-up ask; no clang runs).
+pub fn os_layer(argv: &[String]) -> Option<Result<String, String>> {
+    let at = argv.iter().position(|one| one == "--os-layer")?;
+    let field = argv.get(at + 1).ok_or("--os-layer: expected one argument");
+    let mode = argv.iter().find_map(|one| one.strip_prefix("-m").filter(|bits| matches!(*bits, "16" | "32")));
+    Some(field.map_err(String::from).and_then(|field| {
+        let name = format!("x86-m{}", mode.ok_or("--os-layer needs -m16 or -m32")?);
+        let target = llrm_driver::all().into_iter().find(|one| one.name() == name).ok_or("no such target")?;
+        let layer = target.os_layer().ok_or("this target has no OS layer")?;
+        layer.report(&target.runtime("c").ok_or("this target has no C runtime")?, field)
+    }))
+}
+
 pub fn run_main(argv: &[String]) -> i32 {
+    if let Some(told) = os_layer(argv) {
+        return match told {
+            Ok(text) => {
+                println!("{}", text.trim_end());
+                0
+            }
+            Err(why) => {
+                eprintln!("llrm-cc: {why}");
+                2
+            }
+        };
+    }
     let go = || -> Result<(), i32> {
         let table = targets(TARGETS).map_err(|why| {
             eprintln!("llrm-cc: {why}");
