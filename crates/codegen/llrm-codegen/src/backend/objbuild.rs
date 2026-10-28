@@ -1275,8 +1275,7 @@ fn declared_frames(
 ) -> Vec<llrm_object::Frame> {
     use llrm_object::assembler::Cfi;
     use llrm_object::debug::FrameRow;
-    let name = |number: u16| llrm_x86::mc::unwind::register_name(bits, u64::from(number)).unwrap_or("rip").to_owned();
-    let (stack, slot) = if bits == 32 { ("esp", 4) } else { ("rsp", 8) };
+    let name = |number: u16| llrm_x86::mc::unwind::register_label(bits, number);
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
@@ -1285,7 +1284,7 @@ fn declared_frames(
             if !segment.declared.iter().any(within) {
                 continue;
             }
-            let entry = FrameRow { offset: 0, cfa_register: stack.into(), cfa_offset: slot, saved: Vec::new() };
+            let entry = llrm_x86::mc::unwind::entry_row(bits);
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
             for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {

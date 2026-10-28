@@ -1495,8 +1495,7 @@ fn built(
     // Call frame information, declared as the entry and the exits are written:
     // only for a plain frame (no shrink-wrapping, interrupt, `enter` or stack
     // check), which is what the rows below are right for.
-    let flat = matches!(procedure.body.bits, 32 | 64);
-    let plain = flat
+    let plain = llrm_x86::mc::unwind::declares(procedure.body.bits)
         && wrap.is_none()
         && procedure.interrupt.is_none()
         && procedure.entry == 0

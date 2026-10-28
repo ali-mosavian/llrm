@@ -37,6 +37,25 @@ pub fn register_name(
     if bits == 32 { NAMES32.get(number as usize).copied() } else { NAMES.get(number as usize).copied() }
 }
 
+/// Whether functions of `bits`-bit code are given call frame information.
+pub fn declares(bits: u32) -> bool {
+    matches!(bits, 32 | 64)
+}
+
+/// A register's name by its DWARF number, `rip` for any that has none.
+pub fn register_label(
+    bits: u32,
+    number: u16,
+) -> String {
+    register_name(bits, u64::from(number)).unwrap_or("rip").to_owned()
+}
+
+/// A function's frame at its entry: the frame address one return address
+/// past the stack pointer.
+pub fn entry_row(bits: u32) -> FrameRow {
+    if bits == 32 { eh_target32().entry } else { eh_target().entry }
+}
+
 /// At a function's entry the frame address is 8 past the stack pointer and
 /// the return address is just below it.
 pub fn eh_target() -> EhTarget<'static> {
