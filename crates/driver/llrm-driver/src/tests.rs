@@ -1141,6 +1141,31 @@ fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
     assert!(!built.debug.expect("debug info").procedures.is_empty());
 }
 
+/// `llrm-llc` left the object's debug format at its default whatever `-g...`
+/// asked: `-gtd` and `-gdwarf-2` at m16 OMF both wrote CodeView (class 0xA1),
+/// and `-gtd` was never Borland's.
+#[test]
+fn the_debug_flavor_asked_for_reaches_the_object() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let asked = |flag: &str| {
+        let (built, _) = crate::llc::compiled(&flags(&["-m32", flag, "-fobject-format=omf"]), &text, "dbgfix").unwrap();
+        built.debug.expect("debug info").format
+    };
+    assert_eq!(asked("-gdwarf-2"), llrm_object::debug::Format::Dwarf { version: 2 });
+    assert_eq!(asked("-gcodeview"), llrm_object::debug::Format::CodeView);
+}
+
 /// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
 /// writes as subfields; the writer refused the unit ("a location list holds
 /// only registers and frame cells") and no object came out.
