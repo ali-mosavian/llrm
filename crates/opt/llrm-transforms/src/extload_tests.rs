@@ -196,3 +196,21 @@ b0:
     let before = crate::testing::printed(&module);
     assert_eq!(managed(&mut module, ExtLoad), before);
 }
+
+/// A block of N loads nothing extends: each load scanned the rest of the block
+/// for an extension, N^2/2 steps (`mir extload` at `equal` N=8192: 5882 Minstr,
+/// x4.5 a doubling). The readers of a load name its extensions.
+#[test]
+fn test_a_load_nothing_extends_does_not_scan_the_block() {
+    let n = 400;
+    let mut body = String::from("define i32 @f(ptr %p) {\nb0:\n");
+    for k in 0..n {
+        body.push_str(&format!("  %g{k} = getelementptr i32, ptr %p, i16 {k}\n  %v{k} = load i32, ptr %g{k}\n"));
+    }
+    body.push_str("  %s = add i32 %v0, %v1\n  ret i32 %s\n}\n");
+    super::SCANNED.with(|one| one.set(0));
+    let after = run(&body);
+    assert!(after.contains("load i32"), "{after}");
+    let steps = super::SCANNED.with(std::cell::Cell::get);
+    assert!(steps <= 4 * n, "{steps} instructions scanned for {n} loads");
+}
