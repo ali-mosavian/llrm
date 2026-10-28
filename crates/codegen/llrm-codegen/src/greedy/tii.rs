@@ -308,3 +308,28 @@ pub(crate) fn is_encodable(
     };
     Ok(crate::backend::select::priced_in(bits, &probe, 0, None, false, false, None).is_some())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::ir::{Addr, Space};
+
+    /// gfxdev.c at m16 -Os panicked in the spiller ("v48 is erased while an
+    /// instruction names it"): a folded `add [cell], v` still listed the
+    /// spilled register as undef.
+    #[test]
+    fn test_a_fold_drops_the_spilled_register_from_the_undefs() {
+        let held = |value: u32| Loc::Held(Held { value, width: 2 });
+        let what = Semantics {
+            name: Some("add".into()),
+            dests: vec![held(1)],
+            sources: vec![held(1), held(2)],
+            ..Semantics::new(Operation::Binary)
+        };
+        let mut add = Insn::new(0, None, Some(what), vec![1], vec![1, 2]);
+        add.undefs = vec![1];
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -2)), 2);
+        let folded = fold_memory_operand(&Arc::new(add), 1, &cell, 16, &RegisterClasses::m16()).expect("folds");
+        assert!(folded.undefs.is_empty(), "the folded add still names v1: {folded:?}");
+    }
+}

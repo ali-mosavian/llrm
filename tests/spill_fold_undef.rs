@@ -1,6 +1,6 @@
 //! Folding a spilled register out of an instruction leaves nothing naming it.
 
-use std::process::Command;
+mod common;
 
 /// gfxdev.c at m16 -Os panicked in the spiller ("v48 is erased while an
 /// instruction names it"): a folded `sbb [cell], v` still listed the spilled
@@ -9,7 +9,7 @@ use std::process::Command;
 fn test_a_fold_drops_the_spilled_register_from_the_undefs() {
     let root = env!("CARGO_MANIFEST_DIR");
     let scratch = tempfile::tempdir().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let mut command = common::cc::llrm_c();
     command.current_dir(scratch.path()).args(["-m16", "-Os", "--isel=dag", "-mbss-begin"]);
     for directory in ["runtime/qb", "runtime/qb/dos/m16", "runtime/qb/dev", "runtime/qb/dev/dos/m16"] {
         command.arg(format!("-I{root}/{directory}"));
