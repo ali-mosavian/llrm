@@ -38,7 +38,9 @@ fn linked(
 ) -> Vec<u8> {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codeview");
     std::fs::copy(fixtures.join("m.c"), scratch.join("m.c")).unwrap();
+    // Borland's C0M and CM name their symbols with a leading underscore.
     let made = common::cc::llrm_c()
+        .env("LLRM_CC_TARGET", "x86_16-bcc")
         .args(["-m16", "-g", "-O0"])
         .arg(scratch.join("m.c"))
         .arg("-o")
@@ -199,6 +201,7 @@ fn synthetic() -> (llrm_object::Object, String) {
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug: Some(info),
     };
     (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())

@@ -1,4 +1,4 @@
-"""`c_compile` names the C compiler a run builds its programs with: llrm-c, or llrm-cc where LLRM_C_FRONTEND says so."""
+"""`c_compile` names the C compiler a run builds its programs with: llrm-cc."""
 
 import os
 import sys
@@ -11,29 +11,23 @@ import dosbatch  # noqa: E402
 import run_tests  # noqa: E402
 
 
-def command(monkeypatch, frontend, target="dos16"):
+def command(monkeypatch, target="dos16"):
     monkeypatch.setattr(dosbatch, "m_flag", lambda target: "-m16" if target == "dos16" else "-m32")
     monkeypatch.setattr(dosbatch, "target_bits", lambda target: 16 if target == "dos16" else 32)
-    if frontend:
-        monkeypatch.setenv("LLRM_C_FRONTEND", frontend)
-    else:
-        monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
     return dosbatch.c_compile(Path("a.c"), Path("a.obj"), target, "-O2", Path("inc"), ["-mabi=sysv"])
 
 
-def test_llrm_cc_is_the_default_and_llrm_c_only_where_asked(monkeypatch):
+def test_llrm_cc_is_the_c_frontend(monkeypatch):
     """The default was llrm-c, which a build without the c-legacy feature lacks: every tests/run C program failed in the landing's behavioural stage."""
-    words, env = command(monkeypatch, None)
+    words, env = command(monkeypatch)
     assert Path(words[0]).name == "llrm-cc" and env
     assert dosbatch.c_frontend() == "llrm-cc" and Path(run_tests.compile_command(run_tests.Program(source=Path("a.c"), flags=[], known=None), Path("a.obj"))[0]).name == "llrm-cc"
-    words, env = command(monkeypatch, "llrm-c")
-    assert Path(words[0]).name == "llrm-c" and "-m16" in words and env == {}
 
 
 def test_llrm_cc_takes_the_target_as_a_row_not_a_flag(monkeypatch):
     """Passed -m16, llrm-cc handed clang a flag it has no meaning for; the target is LLRM_CC_TARGET."""
     for target, row in (("dos16", "x86_16-wat"), ("dos32", "x86_32-wat")):
-        words, env = command(monkeypatch, "llrm-cc", target)
+        words, env = command(monkeypatch, target)
         assert Path(words[0]).name == "llrm-cc" and "-m16" not in words and "-m32" not in words
         assert env == {"LLRM_CC_TARGET": row} and "-c" in words and words[-2:] == ["-o", "a.obj"]
 
@@ -46,7 +40,6 @@ def test_the_isel_switch_reaches_llrm_cc_too(monkeypatch):
 def test_a_target_without_a_row_is_a_build_error_not_a_key_error(monkeypatch):
     """x86-m64 has no Watcom row: the run died in a KeyError: 64 instead of skipping the program with a reason."""
     monkeypatch.setattr(dosbatch, "target_bits", lambda target: 64)
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     try:
         dosbatch.c_compile(Path("a.c"), Path("a.obj"), "x86-m64", "-O2", Path("inc"), [])
     except dosbatch.BuildError as why:
@@ -60,7 +53,6 @@ def test_a_c_program_itself_is_built_by_llrm_cc_where_the_run_names_it(monkeypat
     (wccq errors in its log), and passed with LLRM_CLANG_M16 unset."""
     import run_tests  # noqa: E402
 
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
@@ -76,17 +68,13 @@ def test_the_start_up_of_a_llrm_cc_c_program_enters_main_(monkeypatch):
     """The Watcom rows name the entry `main_`: with the start-up asking for `_main`, 420 of 463 programs failed to link
     ("E2028: _main is an undefined reference")."""
     monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1 B=2")
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     assert dosbatch.os_defines("x86-m16", "c") == ("A=1", "B=2", "LL_MAIN=main_")
     assert dosbatch.os_defines("x86-m16", "nib") == ("A=1", "B=2")
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
-    assert dosbatch.os_defines("x86-m16", "c") == ("A=1", "B=2")
 
 
 def test_a_sysv_or_cdecl_program_keeps_the_start_ups_default_entry(monkeypatch):
     """-mabi=sysv names `_main`, not Watcom's `main_`: 21 rows failed "main_ is an undefined reference"."""
     monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     assert dosbatch.os_defines("x86-m32", "c", "sysv") == ("A=1",)
     assert dosbatch.os_defines("x86-m32", "c", "cdecl") == ("A=1",)
     assert dosbatch.os_defines("x86-m16", "c", "ia16") == ("A=1",)  # ia16_abi: "main_ is an undefined reference"
@@ -106,7 +94,6 @@ def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path)
     pragmas and read -6 for 6 (7 programs of the DOSBox pass)."""
     import run_tests  # noqa: E402
 
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     monkeypatch.delenv("LLRM_ISEL", raising=False)
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
@@ -116,13 +103,11 @@ def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path)
     assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]
 
 
-def test_a_watcom_abi_program_links_the_start_up_that_calls_main_whichever_frontend_built_it(monkeypatch):
-    """-mabi=watcom spells `main` as `main_` under llrm-c too: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed failed to link
-    ('_main is an undefined reference') when only llrm-cc's runs asked for LL_MAIN=main_ (#5540)."""
+def test_a_watcom_abi_program_links_the_start_up_that_calls_main_(monkeypatch):
+    """-mabi=watcom spells `main` as `main_`: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed failed to link
+    ('_main is an undefined reference') when only some runs asked for LL_MAIN=main_ (#5540)."""
     monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
-    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     assert dosbatch.os_defines("x86-m16", "c", "watcom") == ("A=1", "LL_MAIN=main_")
-    assert dosbatch.os_defines("x86-m16", "c", None) == ("A=1",)
 
 
 def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
@@ -136,7 +121,6 @@ def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypat
     import qb32
     import qbruntime
 
-    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
     asked = []
     monkeypatch.setattr(dosbatch, "_host", lambda command, env=None: asked.append((command, env)))
     qbruntime._compile_c(Path("a.c"), tmp_path / "a.obj", tmp_path)
@@ -148,7 +132,6 @@ def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypat
 
 def test_a_qb_program_links_the_start_up_that_calls_underscore_main(monkeypatch):
     """The QB link took C's defines, so under llrm-cc its start-up asked for `main_`, which no QB program defines (jwlink E2028: main_ is an undefined reference)."""
-    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
     monkeypatch.setattr(dosbatch, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: type("R", (), {"stdout": "A=1"})())}))
     assert dosbatch.os_defines("x86-m32", "c") == ("A=1", "LL_MAIN=main_")
     assert dosbatch.os_defines("x86-m32", "qb") == ("A=1",)

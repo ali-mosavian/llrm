@@ -162,27 +162,21 @@ def compile_command(program: Program, obj: Path) -> list[str]:
     tool, *rest = COMPILERS[program.source.suffix]
     tool = dosbatch.c_frontend() if program.source.suffix == ".c" else tool
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
-    target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
-    if program.source.suffix == ".c":
-        # llrm-cc reads the row's own llrm_os.h (-isystem); llrm-c's is for llrm-c's pragmas
-        dialect = [] if dosbatch.c_frontend() == "llrm-cc" else ["-I", str(dosbatch.c_include(target, obj.parent))]
     # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
     excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
     extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
-    if program.source.suffix == ".c" and dosbatch.c_frontend() == "llrm-cc":
+    if program.source.suffix == ".c":
         # llrm-cc takes the target as a row (compile_env), not a -m flag, and stops at the object with -c.
         tool, flags = "llrm-cc", [one for one in program.flags if one not in ("-m16", "-m32")]
         command = [str(BIN / tool), "-c", str(program.source), *rest, *dialect, *flags, *excess, *extra, "-o", str(obj)]
         return dosbatch.with_isel(command)
     command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, *excess, *extra, "-o", str(obj)]
-    # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
-    real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
-    return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)
+    return dosbatch.with_isel(command)
 
 
 def compile_env(program: Program) -> dict[str, str]:
     """What `compile_command` needs set: llrm-cc's target row, for a C program where the run builds C with it."""
-    if program.source.suffix != ".c" or dosbatch.c_frontend() != "llrm-cc":
+    if program.source.suffix != ".c":
         return {}
     return dosbatch.c_compile(program.source, Path("x.obj"), dosbatch.target_of(program.flags, dosbatch.REAL_MODE), "-O2", Path("."), [])[1]
 
