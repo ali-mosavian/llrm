@@ -30,6 +30,14 @@ START_FILES = [str((PLATFORM / "start.asm").relative_to(dosbatch.ROOT)), str((SH
 OBJECTS = Path.home() / ".cache" / "llrm" / "qb32-objs"
 
 
+EXTENDER_NOTE = re.compile(rb"DOS/32A warning \(9003\): real mode interrupt vector has been modified: INT [0-9A-Fa-f]+h\r?\n")
+
+
+def without_extender_notes(output: bytes) -> bytes:
+    """`output` without DOS/32A's exit note that a program changed a real-mode interrupt vector (paint_queue sets INT 43h, the font pointer): the extender's line, not the program's."""
+    return EXTENDER_NOTE.sub(b"", output)
+
+
 def _stamp(*names: str) -> str:
     """Which build of the tools these are: the size and time of each."""
     parts = []
@@ -292,7 +300,7 @@ def flat_programs(names: list[str], work: Path) -> dict[str, str]:
                 found[name] = f"run: {results[job.stem].status}"
                 continue
             want = (dosbatch.ROOT / "tests" / "qbflat" / f"{name}.out").read_bytes()
-            got = qbruntime.raw_output(work / "run", job.stem)
+            got = without_extender_notes(qbruntime.raw_output(work / "run", job.stem))
             found[name] = qbruntime.first_byte_difference(want.replace(b"\r\n", b"\n"), got.replace(b"\r\n", b"\n"))
     return found
 
