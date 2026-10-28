@@ -1386,3 +1386,41 @@ fn aa_eval_over_the_corpus() {
     }
     println!("AA_EVAL no={no} may={may} must={must} partial=0 slices_narrowed={narrow}");
 }
+
+/// `Summaries` was worked out for the whole module again after every pass that
+/// changed a body (267 times at `chain(256)`, one per function: `analysis
+/// summaries` 0.69 G of chain512's 34.9 G, 3.9x a doubling), though a summary
+/// is made of a function's declaration and of what `GlobalsAA` and
+/// `GlobalsModRef` hold. While those stand, so does it.
+#[test]
+fn summaries_stand_while_only_bodies_change() {
+    let mut text = String::new();
+    for at in 0..8 {
+        text.push_str(&format!("define i16 @f{at}(i16 %x) {{\nentry:\n  %y = add i16 %x, {at}\n  ret i16 %y\n}}\n\n"));
+    }
+    let mut module = parsed(&text);
+    let mut passes = PassManager::default();
+    passes.require_cached::<GlobalsAA>();
+    passes.require_cached::<super::GlobalsModRefAnalysis>();
+    passes.require::<Summaries>();
+    for _ in 0..4 {
+        // Each pass edits a body and keeps no analysis.
+        passes.add(step(
+            |unit, _| {
+                let function = &mut *unit.function;
+                let add = function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
+                    .unwrap();
+                let operands = function.instruction(add).operands.iter().rev().copied().collect();
+                function.set_operands(add, operands);
+            },
+            PreservedAnalyses::none(),
+        ));
+    }
+    let before = crate::attrsummary::summaries_made();
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let made = crate::attrsummary::summaries_made() - before;
+    assert!(made <= 1, "the summaries of the module were made {made} times for edits to bodies alone");
+}
