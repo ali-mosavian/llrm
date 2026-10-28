@@ -74,6 +74,7 @@ pub fn rewrite(
     }
     let body = _dead_insertions(body);
     let held = &got.r#where;
+    let undef_super = _undef_supers(&body);
     let failed: RefCell<Option<Unplaced>> = RefCell::new(None);
     let blocks = body
         .blocks
@@ -84,6 +85,9 @@ pub fn rewrite(
                 &block.insns,
                 |one| _discardable_identity(one),
                 Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held, classes) {
+                    Ok(placed) if undef_super.contains(&ranges::key(one)) => {
+                        Arc::new(Insn { undef_super: true, ..(*placed).clone() })
+                    }
                     Ok(placed) => placed,
                     Err(error) => {
                         failed.borrow_mut().get_or_insert(error);
@@ -110,6 +114,54 @@ pub fn rewrite(
         ordered: body.ordered,
         ..body.with_blocks(blocks)
     })
+}
+
+/// The instructions that define a narrower part of a value than the value is
+/// read at while the value is not live before them: what `VirtRegRewriter`
+/// gives an `implicit-def` of the super register and no implicit use, which
+/// `X86FixupBWInsts::getSuperRegDestIfDead` reads as "the rest is undefined".
+/// DEVIATE W1 above has no sub-register operands, so the widths of the value's
+/// operands stand in for the sub-register indices.
+fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
+    let mut widest: IndexMap<u32, u32> = IndexMap::default();
+    let held_places = |one: &Insn| {
+        one.what
+            .iter()
+            .flat_map(|what| what.dests.iter().chain(&what.sources))
+            .filter_map(|place| match place {
+                Loc::Held(held) => Some(*held),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for block in &body.blocks {
+        for one in block.insns.iter() {
+            for held in held_places(one) {
+                let width = u32::from(held.width);
+                widest.entry(held.value).and_modify(|most| *most = (*most).max(width)).or_insert(width);
+            }
+        }
+    }
+    let index = ranges::indexed_shared(body);
+    let live = ranges::intervals_shared(body, Some(&index));
+    let mut found = BTreeSet::new();
+    for block in &body.blocks {
+        for (position, one) in block.insns.iter().enumerate() {
+            let Some(what) = &one.what else { continue };
+            let slot = index.slot(block, position);
+            for place in &what.dests {
+                let Loc::Held(held) = place else { continue };
+                let narrower = u32::from(held.width) < widest.get(&held.value).copied().unwrap_or(0);
+                let live_before = live
+                    .get(&held.value)
+                    .is_some_and(|value| value.segments.iter().any(|run| run.start <= slot && slot < run.end));
+                if narrower && !live_before && !one.uses.contains(&held.value) {
+                    found.insert(ranges::key(one));
+                }
+            }
+        }
+    }
+    found
 }
 
 /// Delete unused allocator copies before physical identity loses their use

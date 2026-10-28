@@ -308,3 +308,63 @@ fn a_constant_minus_a_masked_constant_sub_is_a_masked_add() {
         "  %0 = and i32 %x, -64\n  %1 = add i32 %0, 100\n  ret i32 %1\n",
     );
 }
+
+/// `f` as `visitSub` leaves it, its declarations aside: `body` after `visitSub`
+/// is `after`.
+fn check_calls(
+    body: &str,
+    after: &str,
+) {
+    let declares = "declare i32 @llvm.umax.i32(i32, i32)\ndeclare i32 @llvm.umin.i32(i32, i32)\ndeclare i32 @llvm.usub.sat.i32(i32, i32)\n";
+    let mut module = parsed(&format!("{declares}define i32 @f(i32 %x, i32 %y) {{\nb0:\n{body}}}\n"));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let printed = printed(&module);
+    let found = &printed[printed.find("define").expect("a definition")..];
+    assert_eq!(found, format!("define i32 @f(i32 %x, i32 %y) {{\nb0:\n{after}}}\n"));
+}
+
+/// `umax(x, y) - y` stayed a `umax` and a `sub` where `opt` makes one
+/// `usub.sat`: next_byte cost 5 more than the pin's and jpeg_single.nib kept
+/// `get_bit` inlined.
+#[test]
+fn a_umax_minus_its_operand_is_a_saturating_sub() {
+    check_calls(
+        "  %m = call i32 @llvm.umax.i32(i32 %x, i32 %y)\n  %r = sub i32 %m, %y\n  ret i32 %r\n",
+        "  %m = call i32 @llvm.umax.i32(i32 %x, i32 %y)\n  %0 = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n  ret i32 %0\n",
+    );
+}
+
+/// `x - umin(x, y)` is `usub.sat(x, y)` (`opt` agrees).
+#[test]
+fn a_value_minus_its_umin_is_a_saturating_sub() {
+    check_calls(
+        "  %m = call i32 @llvm.umin.i32(i32 %x, i32 %y)\n  %r = sub i32 %x, %m\n  ret i32 %r\n",
+        "  %m = call i32 @llvm.umin.i32(i32 %x, i32 %y)\n  %0 = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n  ret i32 %0\n",
+    );
+}
+
+/// `y - umax(x, y)` is `0 - usub.sat(x, y)`, and `umin(x, y) - y` is `0 -
+/// usub.sat(y, x)` (`opt` agrees).
+#[test]
+fn a_difference_with_the_other_extreme_is_a_negated_saturating_sub() {
+    check_calls(
+        "  %m = call i32 @llvm.umax.i32(i32 %x, i32 %y)\n  %r = sub i32 %y, %m\n  ret i32 %r\n",
+        "  %m = call i32 @llvm.umax.i32(i32 %x, i32 %y)\n  %0 = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n  %1 = sub i32 0, %0\n  ret i32 %1\n",
+    );
+    check_calls(
+        "  %m = call i32 @llvm.umin.i32(i32 %x, i32 %y)\n  %r = sub i32 %m, %y\n  ret i32 %r\n",
+        "  %m = call i32 @llvm.umin.i32(i32 %x, i32 %y)\n  %0 = call i32 @llvm.usub.sat.i32(i32 %y, i32 %x)\n  %1 = sub i32 0, %0\n  ret i32 %1\n",
+    );
+}
+
+/// `x - usub.sat(x, y)` is `umin(x, y)` (`opt` agrees).
+#[test]
+fn a_value_minus_its_saturating_sub_is_a_umin() {
+    check_calls(
+        "  %m = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n  %r = sub i32 %x, %m\n  ret i32 %r\n",
+        "  %m = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n  %0 = call i32 @llvm.umin.i32(i32 %x, i32 %y)\n  ret i32 %0\n",
+    );
+}

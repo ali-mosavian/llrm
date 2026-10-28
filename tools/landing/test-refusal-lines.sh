@@ -20,3 +20,10 @@ case "$(batch_refusal_reason $d/crash.log 5082)" in *"TypeError: docs_stale()"*)
 printf '05:10:00 #7: REFUSED: left out: conflicts\n' > $d/named.log
 case "$(batch_refusal_reason $d/named.log 7)" in "#7: REFUSED: left out: conflicts"*|*"REFUSED: left out: conflicts"*) echo PASS-named;; *) echo "FAIL: a named refusal lost its reason"; exit 1;; esac
 grep -q 'batch_refusal_reason' "$here/queue-runner.sh" || { echo "FAIL: queue-runner does not use batch_refusal_reason"; exit 1; }
+
+# Regression: the two PRs of each one-push batch (c8b4d4e8dd, be7e11f7d0) were reported `REFUSED: ... PUSHED` because GitHub marks them MERGED a few seconds after the push.
+d=$(mktemp -d); printf '#!/bin/sh\nn=$(cat %s/n 2>/dev/null || echo 0); echo $((n+1)) > %s/n\n[ "$n" -ge 2 ] && echo MERGED || echo OPEN\n' $d $d > $d/gh; chmod +x $d/gh
+printf '02:47:09 PUSHED: abc to feat/parity with #7 #8\n' > $d/pushed.log
+PATH=$d:$PATH PUSH_SETTLE=0 bash -c 'source "$1/refusal-lines.sh"; [ "$(landed_state $2/pushed.log 7)" = MERGED ]' _ "$here" "$d" && echo PASS-pushed || { echo "FAIL: a pushed PR read as not merged"; exit 1; }
+rm -f $d/n; printf 'LANDED: -  REFUSED: #9\n' > $d/none.log
+[ "$(PATH=$d:$PATH PUSH_SETTLE=0 bash -c 'source "$1/refusal-lines.sh"; landed_state $2/none.log 9' _ "$here" "$d")" = OPEN ] && [ "$(cat $d/n)" = 1 ] && echo PASS-no-wait || { echo "FAIL: a PR not pushed was waited for"; exit 1; }

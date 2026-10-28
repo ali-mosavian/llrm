@@ -6,7 +6,8 @@ mod common;
 /// vsgcc's x_reverse at -O1: the second byte of the swap went to a register of
 /// its own and the loop's counter was evicted and spilled, so the byte was
 /// widened with `movzx` (3 clocks on a 486) and `n` was read from the stack.
-/// The pin loads it with `mov ch, byte [reg]` and spills nothing.
+/// The pin loads it with `mov ch, byte [reg]` and spills nothing; which of
+/// esi and edi holds the pointer is the allocation's choice.
 #[test]
 fn two_bytes_of_a_swap_share_a_register_and_nothing_spills() {
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -162,6 +162,8 @@ fn _segment(object_: &model::DataObject) -> &'static str {
         "FSL_CONST"
     } else if object_.readonly {
         "BC_CN"
+    } else if object_.segment.as_deref() == Some("COMMON") {
+        "COMMON"
     } else {
         "BC_DATA"
     }
@@ -271,6 +273,9 @@ fn _compiler_switches(program: &model::Program) -> Result<i64, CompileError> {
         }
         return Ok(0x1088); // BC /O /FPa /G2
     }
+    if program.run_time_module && program.runtime != model::RuntimeProfile::Qb45 {
+        return emission("the run-time module is only measured for QB 4.5");
+    }
     let mut flags = match program.runtime {
         // BC /O /FPi; llrm keeps QB's
         model::RuntimeProfile::Qb45 | model::RuntimeProfile::Llrm => 0x1080,
@@ -282,6 +287,9 @@ fn _compiler_switches(program: &model::Program) -> Result<i64, CompileError> {
             return Err(CompileError::Value(format!("KeyError: {}", program.runtime.repr())));
         }
     };
+    if program.run_time_module {
+        flags &= !0x1000; // BC without /O: 0x0080 for /FPi
+    }
     if program.runtime == model::RuntimeProfile::Vbdos && program.array_order == model::ArrayOrder::RowMajor {
         flags |= 0x0100; // /R
     }
@@ -305,12 +313,19 @@ fn _header(
     // bytes keep the marker and the switches where they were.
     let words = driver::basic::HeaderWords::of(bitness);
     // The marker and the switches are the header's last four bytes.
-    let mut out: Vec<u8> = [b"bl".to_vec(), name].concat();
+    let mut out: Vec<u8> = [if program.run_time_module { b"bm".to_vec() } else { b"bl".to_vec() }, name].concat();
     out.resize(words.size - 4, 0);
     out.extend([0xff, 0xff]);
     out.extend((_compiler_switches(program)? as u16).to_le_bytes());
     if out.len() != words.size {
         return Err(CompileError::Value("MODULE_CODE is exactly O_ENT bytes".into()));
+    }
+    // SZ_COM, the word after OF_COM: BC records the size of COMMON, which CHAIN
+    // copies (16-bit objects).
+    if words.width == 2 {
+        let at = words.segments[3] + 2;
+        let size: usize = _placed(module).filter(|one| _segment(one) == "COMMON").map(|one| one.bytes.len()).sum();
+        out[at..at + 2].copy_from_slice(&(size as u16).to_le_bytes());
     }
     // The addends live in the image. The remaining words are zero.
     // OF_DS is BC_DS + 2.
@@ -443,14 +458,14 @@ fn rich_assembled(
         .map(|((_, id), name)| (id, name))
         .collect();
     let mut placed: IndexMap<&str, Vec<basic::Item>> =
-        ["BC_DATA", "BC_CN", "FSL_CONST"].into_iter().map(|name| (name, Vec::new())).collect();
+        ["BC_DATA", "BC_CN", "FSL_CONST", "COMMON"].into_iter().map(|name| (name, Vec::new())).collect();
     for object_ in _placed(module) {
         placed[_segment(object_)].push(basic::Item::Object(object_.id));
     }
     // A host has no B$ENRA: every procedure frames itself (the zero fill above
     // covers what the runtime's frame would have cleared).
     let hosted = llrm_target::object::Format::parse(codegen.object_format)
-        .is_ok_and(|one| one != llrm_target::object::Format::Omf);
+        .is_ok_and(|one| llrm_codegen::backend::objbuild::asm_info(one).hosted);
     let frames = module
         .functions
         .iter()
@@ -471,6 +486,10 @@ fn rich_assembled(
         (0.._read_data_lines(module)?.len() as u16).map(|row| masm::Datum::Bytes(row.to_le_bytes().to_vec())).collect();
     let read_data = _read_data_items(module, rows)?;
     let graphics = _graphics_dependencies(module);
+    // What BC names so that LINK pulls the loader of BRUN45 in (measured on QB
+    // 4.5, PDS 7.1 and VBDOS objects).
+    let run_time_module: Vec<String> =
+        if program.run_time_module { ["$AC", "$DAC", "b$seg"].map(str::to_owned).to_vec() } else { Vec::new() };
     let datum = basic::Item::Datum;
     let label = |name: &str| datum(masm::Datum::Label(masm::Label { name: name.to_owned() }));
     // The object's pointer cells are the target's: a far pointer's width and a
@@ -483,7 +502,7 @@ fn rich_assembled(
     let mut segments: Vec<(&str, Vec<basic::Item>)> = vec![
         ("BR_DATA", vec![]),
         ("BR_SKYS", vec![]),
-        ("COMMON", vec![]),
+        ("COMMON", placed.swap_remove("COMMON").unwrap_or_default()),
         (
             "BC_DATA",
             [
@@ -548,7 +567,7 @@ fn rich_assembled(
             .collect(),
         constants: "BC_CN".to_owned(),
         private,
-        requests: graphics,
+        requests: graphics.into_iter().chain(run_time_module).collect(),
         frames,
         line_numbers: module.line_numbers.iter().copied().collect(),
         stack_check: program.stack_check.clone(),

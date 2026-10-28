@@ -10,7 +10,7 @@ fn compiled(source: &str) -> Result<(), String> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "RESUME.BAS", source.as_bytes());
     let program = qb_driver::parsed(&path, &qb_driver::Frontend::new("qb45", "qb45"), None).map_err(|error| error.0)?;
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     qb_compile::assembled(&program, None, &codegen).map(|_| ()).map_err(|error| error.to_string())
 }
 
