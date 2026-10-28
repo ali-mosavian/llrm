@@ -838,3 +838,34 @@ fn an_unsigned_short_converts_with_a_dword_fild_not_a_qword_buffer() {
         .collect();
     assert_eq!(widths, [4], "the fild reads a dword, not a 64-bit buffer: {names:?}");
 }
+
+const INT_TO_FLOAT_MULTIPLIED: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define float @f(ptr %p, float %c) {
+entry:
+  %x = load i32, ptr %p
+  %v = sitofp i32 %x to float
+  %r = fmul float %c, %v
+  ret float %r
+}
+";
+
+/// As the pin, under `-fexcess-precision=standard` a conversion that only
+/// feeds a multiplication is not rounded: `fimul` folds it (`s += c[i] *
+/// (float)p[i]` was `fild; fstp; fmul` where the pin has `fimul`: +3.6%
+/// instructions on jpeg_single bq32 -Os).
+#[test]
+fn an_integer_feeding_a_multiplication_is_not_rounded_under_float_store() {
+    let module = llrm_mir::parse::module(INT_TO_FLOAT_MULTIPLIED).expect("parses");
+    let stores = |float_store: bool| {
+        let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+        cpu.float_store = float_store;
+        let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.op == crate::model::ir::Operation::FloatStore)
+            .count()
+    };
+    assert_eq!(stores(true), stores(false));
+}
