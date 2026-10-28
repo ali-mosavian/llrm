@@ -81,7 +81,6 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::live_among;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::floatalloc;
 use crate::backend::floatalloc::{
@@ -89,6 +88,7 @@ use crate::backend::floatalloc::{
 };
 use crate::backend::floatassign;
 use crate::backend::floatregions::{Raised, clears_stack};
+use crate::backend::liverows::live_among;
 use crate::backend::spillplacement;
 use crate::model::ir::{Held, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{Block, Insn, LirBody};

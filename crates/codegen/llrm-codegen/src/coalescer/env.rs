@@ -22,7 +22,7 @@
 //! `v2 := mov v1; ...; read v2` with palettes that share a register: one value.
 //!
 //! # Used by
-//! `backend::coalesce`.
+//! `coalescer::pass`.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
