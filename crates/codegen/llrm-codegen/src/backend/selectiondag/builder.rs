@@ -1593,8 +1593,9 @@ impl Builder<'_> {
                     return Err(Refused("an aggregate result that is not one register a member"));
                 }
                 for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
-                    // `getCopyToParts`: a member between the legal widths (`i48`)
-                    // is any-extended to the register type
+                    // `getCopyToParts`: a member between the legal widths
+                    // (`i48`) is any-extended to the
+                    // register type
                     let piece = match self.register_type(self.dag.value_type(piece)) {
                         Ok(reg_vt)
                             if reg_vt != self.dag.value_type(piece) && self.dag.value_type(piece).is_integer() =>

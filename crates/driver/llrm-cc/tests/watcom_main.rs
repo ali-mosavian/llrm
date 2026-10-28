@@ -622,7 +622,8 @@ fn the_wat_rows_predefine_the_watcom_cpu_macro() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Code written for Open Watcom and GCC assigns function pointers of other types (torture 930608-1); clang 16+ makes that an error by default.
+/// Code written for Open Watcom and GCC assigns function pointers of other
+/// types (torture 930608-1); clang 16+ makes that an error by default.
 #[test]
 fn the_wat_rows_take_incompatible_function_pointer_assignments_as_warnings() {
     if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
