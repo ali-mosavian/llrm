@@ -46,6 +46,16 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// `-fsanitize=stack` and `bounds` were refused with "not translated yet",
+/// so stackover.c, stackdeep.c, es_across_copy.c and idioms.c (8 configs)
+/// could not compile under llrm-cc; the backend takes them.
+#[test]
+fn the_stack_and_bounds_checks_reach_the_backend() {
+    let one = built("-fsanitize=stack -fsanitize=bounds -c x.c");
+    assert_eq!(one.llc, words("-fsanitize=stack -fsanitize=bounds"));
+    assert!(parse(&words("-fsanitize=signed-integer-overflow x.c")).is_err());
+}
+
 /// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
 /// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
 /// for 1485 under llrm-cc.
@@ -163,6 +173,15 @@ fn the_object_format_goes_to_the_backend_and_omax_is_clangs_o3() {
     assert_eq!(one.llc, words("-fobject-format=elf"));
     assert_eq!(one.clang, words("-O3"));
     assert_eq!(one.level, "max");
+}
+
+/// `-fverify-ir` went to clang ("unknown argument") and the backend never
+/// checked the IR it was given.
+#[test]
+fn fverify_ir_reaches_the_backend() {
+    let one = built("-fverify-ir -c x.c");
+    assert_eq!(one.llc, words("-fverify-ir"));
+    assert!(one.clang.is_empty(), "{:?}", one.clang);
 }
 
 /// The m16 datalayout is stated in the target's `datalayout.toml` and again in

@@ -183,8 +183,14 @@ pub fn optimized(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, _) = tails_merged(placed, size, calls)?;
+    let (merged, any) = tails_merged(placed, size, calls)?;
     placed = merged;
+    if any {
+        // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
+        // tail merging creates/removes/moves blocks."
+        let explicit = placed.with_blocks(_explicit(&placed)?);
+        placed = threaded(&_placed(&explicit, size, cpu.aggressive)?);
+    }
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
     #[cfg(test)]
@@ -1010,7 +1016,35 @@ pub fn _reachable(
     // map keeps the others when BranchFolding erases a block.
     let mut made = body.with_blocks(blocks);
     _prune(&mut made);
+    _forget_moved_inflow(body, &mut made);
     made
+}
+
+/// The table of `after` without the blocks whose predecessors differ from
+/// `before`'s: a block that gained or lost an edge (copied, threaded, merged)
+/// runs as often as what now reaches it, and a block the table does not hold
+/// is worked out from its predecessors. A stale entry stays until a later
+/// rewrite leaves the verifier ("runs 1.000 times, its predecessors 0.383").
+pub(super) fn _forget_moved_inflow(
+    before: &LirBody,
+    after: &mut LirBody,
+) {
+    let Some(kept) = after.frequencies.as_ref() else { return };
+    let reached = |body: &LirBody| {
+        let mut from: IndexMap<i64, BTreeSet<i64>> = IndexMap::default();
+        for one in &body.blocks {
+            for to in one.succ.iter() {
+                from.entry(*to).or_default().insert(one.at);
+            }
+        }
+        from
+    };
+    let (was, is) = (reached(before), reached(after));
+    if !kept.0.keys().any(|at| was.get(at) != is.get(at)) {
+        return;
+    }
+    let table = kept.0.iter().filter(|(at, _)| was.get(*at) == is.get(*at)).map(|(at, runs)| (*at, *runs)).collect();
+    after.frequencies = Some(Arc::new(lir::BlockFrequencies(table)));
 }
 
 /// `body` with the blocks its entry does not reach stripped to their source

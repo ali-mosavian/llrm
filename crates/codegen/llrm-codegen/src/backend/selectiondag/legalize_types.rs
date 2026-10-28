@@ -437,6 +437,8 @@ impl<'a> TypeLegalizer<'a> {
                 let opcode = if vt.size_in_bits() % 8 == 0 { ISD::SignExtend } else { ISD::ZeroExtend };
                 self.dag.get_node(opcode, to, &[value])
             }
+            // `PromoteIntRes_UNDEF`: an undef of the promoted type.
+            ISD::Undef | ISD::Poison => self.dag.get_undef(to),
             ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
                 let (lhs, rhs) = (self.promoted_integer(lhs), self.promoted_integer(rhs));

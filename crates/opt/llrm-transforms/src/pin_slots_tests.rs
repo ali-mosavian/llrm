@@ -437,7 +437,7 @@ const ROWS: &[Disposition] = &[
         "DEVIATE (ipsccp.rs): ipo-early (walk::ModuleIpo: run_ipsccp); no FunctionSpecializer, ipa-cp clones stand for it (ipsccp.rs DEVIATE 1)",
         "",
     ),
-    row(Module, "called-value-propagation", Why::Missing, "indirect calls only; not measured", "w-6, 11-09"),
+    row(Module, "called-value-propagation", Why::Executed, "ipo-early (after ipsccp; calledvaluepropagation)", ""),
     row(Module, "globalopt", Why::Executed, "globalopt (first), writeonly, calleepop: a subset of GlobalOpt", ""),
     row(Module, "always-inline", Why::Executed, "walk (the CGSCC walk's inliner)", ""),
     row(Module, "inline", Why::Executed, "walk, and interprocedural (inlines again after the clones)", ""),
@@ -448,7 +448,13 @@ const ROWS: &[Disposition] = &[
         "interprocedural (states what each body does); not compared pass by pass",
         "",
     ),
-    row(Module, "rpo-function-attrs", Why::Missing, "no stage of ours is known to do it; unverified", "w-6, 11-09"),
+    row(
+        Module,
+        "rpo-function-attrs",
+        Why::Executed,
+        "rpo-function-attrs (norecurse only; nofpclass is not a MIR attribute)",
+        "",
+    ),
     row(
         Module,
         "deadargelim",

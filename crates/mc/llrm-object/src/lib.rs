@@ -1,31 +1,19 @@
 //! The object the backend lays out, which one writer per format writes. See
 //! `docs/formats/object-model.md`.
 
+pub mod assembler;
 pub mod debug;
 
-/// The machine an object's code is for.
+/// Which debug format a [`Role::Debug`] section belongs to, so a writer needs
+/// no name to tell them apart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Arch {
-    /// 16-bit x86: real mode.
-    I8086,
-    /// 32-bit x86.
-    I386,
-    /// x86-64.
-    X8664,
-    /// arm64 (AArch64).
-    Arm64,
-}
-
-impl Arch {
-    /// The width of a near offset, in bits.
-    pub fn bits(self) -> u32 {
-        match self {
-            Arch::I8086 => 16,
-            Arch::I386 => 32,
-            Arch::X8664 | Arch::Arm64 => 64,
-        }
-    }
+pub enum DebugSection {
+    /// A `.debug_*` section of DWARF.
+    Dwarf,
+    /// CodeView's symbols: OMF's `$$SYMBOLS`, COFF's `.debug$S`.
+    CodeViewSymbols,
+    /// CodeView's types: OMF's `$$TYPES`, COFF's `.debug$T`.
+    CodeViewTypes,
 }
 
 /// What a section holds, which each format spells its own way.
@@ -40,81 +28,163 @@ pub enum Role {
     /// The linker's stack: concatenated with the other objects' stacks.
     Stack,
     /// A format's debug section, which only that format's writer makes.
-    Debug,
+    Debug(DebugSection),
     /// Pointers to the functions the loader calls before `main`, in order
     /// (`llvm.global_ctors`): `__mod_init_func`, `.init_array`.
     InitFunctions,
 }
 
-/// The field a relocation patches, and what the value is relative to.
+/// What a fixup patches (LLVM's `MCFixupKind`): an open number. The generic
+/// kinds are below `FIRST_TARGET`; a target's own are above it. The kinds from
+/// `FIRST_TARGET` are the targets'; only the segmented-addressing pair stays
+/// here, which OMF and the debug writers share.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct FixupKind(pub u16);
+
+/// What a fixup kind says of the field it patches (LLVM's `MCFixupKindInfo`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[non_exhaustive]
-pub enum Kind {
-    /// The target's address, `width` bytes.
-    Abs { width: usize },
-    /// The target's address minus the place `from` bytes past the field's
-    /// start: an x86 call's is `width`, the field's end.
-    PcRel { width: usize, from: usize },
-    /// A call or jump's target, `width` bytes relative to the field's end: what
-    /// `PcRel { width, from: width }` says, for the formats that tell a
-    /// branch from a data reference (Mach-O's `BRANCH`, which a linker may
-    /// send through a stub).
-    Branch { width: usize },
-    /// COFF: the 1-based index of the target's section, 2 bytes
-    /// (`IMAGE_REL_*_SECTION`).
-    SectionIndex,
-    /// COFF: the target's offset within its section, `width` bytes
-    /// (`IMAGE_REL_*_SECREL`).
-    SectionOffset { width: usize },
-    /// OMF: the selector of the target's segment.
-    SegmentBase,
-    /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
-    FarPointer,
-    /// arm64: the word offset to the target in the low 26 bits of a `b` or
-    /// `bl`.
-    Branch26,
-    /// arm64: the 4 KiB page of the target, relative to the place's page, in an
-    /// `adrp`.
-    Page21,
-    /// arm64: the target's offset in its page, in the 12-bit immediate of an
-    /// `add` (`access` is `None`) or of a load or store of `1 << access` bytes.
-    PageOffset12 { access: Option<u8> },
-    /// x86-64: the place's offset from the target's global offset table entry,
-    /// `width` bytes relative to the place `from` bytes past the field's
-    /// start (`R_X86_64_REX_GOTPCRELX`): the entry holds the target's address.
-    GotPcRel { width: usize, from: usize },
-    /// arm64: `Page21` of the target's GOT entry.
-    GotPage21,
-    /// arm64: the offset of the target's GOT entry in its page, in an 8-byte
-    /// load.
-    GotPageOffset12,
+pub struct FixupKindInfo {
+    pub name: &'static str,
+    /// Bits from the field's first byte to the bits the fixup patches.
+    pub offset: u8,
+    /// Bits the fixup patches; the field is `bits / 8` bytes (rounded up).
+    pub bits: u8,
 }
 
-impl Kind {
-    /// Field bytes this kind patches.
-    pub fn width(self) -> usize {
-        match self {
-            Kind::Abs { width } | Kind::PcRel { width, .. } | Kind::GotPcRel { width, .. } | Kind::Branch { width } => {
-                width
-            }
-            Kind::SectionIndex | Kind::SegmentBase => 2,
-            Kind::SectionOffset { width } => width,
-            Kind::FarPointer => 4,
-            Kind::Branch26 | Kind::Page21 | Kind::PageOffset12 { .. } | Kind::GotPage21 | Kind::GotPageOffset12 => 4,
-        }
+impl FixupKind {
+    pub const NONE: Self = Self(4000);
+    pub const DATA_1: Self = Self(4001);
+    pub const DATA_2: Self = Self(4002);
+    pub const DATA_4: Self = Self(4003);
+    pub const DATA_8: Self = Self(4004);
+    /// COFF: the 1-based index of the target's section (`FK_SecRel_2`).
+    pub const SECREL_2: Self = Self(4005);
+    /// COFF: the target's offset within its section (`FK_SecRel_4`).
+    pub const SECREL_4: Self = Self(4006);
+    /// OMF: the selector of the target's segment.
+    pub const SEGMENT_BASE: Self = Self(4007);
+    /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
+    pub const FAR_POINTER: Self = Self(4008);
+    /// A target's kinds start here and are its own (`FIRST_TARGET + n`), so two
+    /// targets reuse the numbers.
+    pub const FIRST_TARGET: Self = Self(4010);
+
+    /// The kinds' table; a target's replace it (each target crate states its
+    /// own `INFOS`).
+    pub fn info(self) -> FixupKindInfo {
+        let (name, bits) = match self {
+            Self::DATA_1 => ("FK_Data_1", 8),
+            Self::DATA_2 => ("FK_Data_2", 16),
+            Self::DATA_4 => ("FK_Data_4", 32),
+            Self::DATA_8 => ("FK_Data_8", 64),
+            Self::SECREL_2 => ("FK_SecRel_2", 16),
+            Self::SECREL_4 => ("FK_SecRel_4", 32),
+            Self::SEGMENT_BASE => ("segment_base", 16),
+            Self::FAR_POINTER => ("far_pointer", 32),
+            _ => ("none", 0),
+        };
+        FixupKindInfo { name, offset: 0, bits }
     }
 
-    pub fn relative(self) -> bool {
-        matches!(
-            self,
-            Kind::PcRel { .. }
-                | Kind::GotPcRel { .. }
-                | Kind::Branch { .. }
-                | Kind::Branch26
-                | Kind::Page21
-                | Kind::GotPage21
-        )
+    /// Field bytes this kind patches.
+    pub fn width(self) -> usize {
+        usize::from(self.info().bits).div_ceil(8)
     }
+}
+
+/// The part of a [`Reloc`] that does not say where it is or what it names:
+/// kind, whether it is relative to the place, the bytes between the field's
+/// start and that place, and the specifier. What the backend builds before it
+/// places a fixup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Fix {
+    pub kind: FixupKind,
+    /// The value is relative to the place (`MCFixup::PCRel`).
+    pub pc_rel: bool,
+    /// The bytes from the field's start to the place a pc-relative value is
+    /// relative to: an x86 call's is the field's width, the field's end.
+    /// DEVIATE: LLVM folds it into the addend. llrm keeps it apart because two
+    /// writers choose by it alone: coff64's `REL32_1..5` against LLVM's
+    /// `REL32`, and Mach-O's `SIGNED_n`, which llvm-mc picks from the total
+    /// addend. `cmpb $1, x(%rip)` and `lea x-1(%rip)` share the total -5 and -1
+    /// and one object in LLVM, and two here.
+    pub pc_bias: usize,
+    /// The value's specifier (`S_ABS`, `S_GOT`).
+    pub spec: u8,
+}
+
+impl Fix {
+    pub const S_ABS: u8 = 0;
+    pub const S_GOT: u8 = 1;
+    pub const SEGMENT_BASE: Fix = Fix::plain(FixupKind::SEGMENT_BASE);
+    pub const FAR_POINTER: Fix = Fix::plain(FixupKind::FAR_POINTER);
+    pub const SECTION_INDEX: Fix = Fix::plain(FixupKind::SECREL_2);
+
+    /// An absolute fixup of `kind`.
+    pub const fn plain(kind: FixupKind) -> Fix {
+        Fix { kind, pc_rel: false, pc_bias: 0, spec: Fix::S_ABS }
+    }
+
+    /// A fixup of `kind` relative to the place `pc_bias` bytes past the field's
+    /// start.
+    pub const fn relative(
+        kind: FixupKind,
+        pc_bias: usize,
+    ) -> Fix {
+        Fix { kind, pc_rel: true, pc_bias, spec: Fix::S_ABS }
+    }
+
+    /// The target's address, `width` bytes.
+    pub const fn abs(width: usize) -> Fix {
+        Fix::plain(match width {
+            1 => FixupKind::DATA_1,
+            2 => FixupKind::DATA_2,
+            4 => FixupKind::DATA_4,
+            8 => FixupKind::DATA_8,
+            _ => FixupKind::NONE,
+        })
+    }
+
+    /// The target's address minus the place `from` bytes past the field's
+    /// start.
+    pub const fn pc_rel(
+        width: usize,
+        from: usize,
+    ) -> Fix {
+        Fix::relative(Fix::abs(width).kind, from)
+    }
+
+    /// COFF: the target's offset within its section, `width` bytes.
+    pub const fn section_offset(width: usize) -> Fix {
+        Fix::plain(match width {
+            4 => FixupKind::SECREL_4,
+            _ => FixupKind::NONE,
+        })
+    }
+}
+
+/// Writes `value` into the `width`-byte field at `at` of a section's `image`
+/// (LLVM's `applyFixup` for a data fixup), and refuses what the field cannot
+/// hold: a pc-relative value is signed, any other may be signed or unsigned.
+pub fn apply_fixup(
+    image: &mut [u8],
+    at: usize,
+    width: usize,
+    pc_rel: bool,
+    value: i64,
+    section: &str,
+) -> Result<(), Unsupported> {
+    let fits = match width {
+        8 => true,
+        4 => i32::try_from(value).is_ok() || (!pc_rel && u32::try_from(value).is_ok()),
+        2 => i16::try_from(value).is_ok() || (!pc_rel && u16::try_from(value).is_ok()),
+        _ => i8::try_from(value).is_ok() || (!pc_rel && u8::try_from(value).is_ok()),
+    };
+    if !fits {
+        return Err(Unsupported(format!("{section}: a value of {value} does not fit its {width}-byte field")));
+    }
+    image[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -133,11 +203,37 @@ pub enum Target {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Reloc {
     pub at: usize,
-    pub kind: Kind,
+    pub kind: FixupKind,
+    /// The value is relative to the place (`MCFixup::PCRel`).
+    pub pc_rel: bool,
+    /// See [`Fix::pc_bias`].
+    pub pc_bias: usize,
+    /// See [`Fix::spec`].
+    pub spec: u8,
     pub target: Target,
     /// What is added to the target's address; sign-extended from the field's
     /// width.
     pub addend: i64,
+}
+
+impl Reloc {
+    pub fn new(
+        at: usize,
+        fix: Fix,
+        target: Target,
+        addend: i64,
+    ) -> Self {
+        Reloc { at, kind: fix.kind, pc_rel: fix.pc_rel, pc_bias: fix.pc_bias, spec: fix.spec, target, addend }
+    }
+
+    pub fn fix(&self) -> Fix {
+        Fix { kind: self.kind, pc_rel: self.pc_rel, pc_bias: self.pc_bias, spec: self.spec }
+    }
+
+    /// Field bytes this relocation patches.
+    pub fn width(&self) -> usize {
+        self.kind.width()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +291,8 @@ pub struct OmfGroup {
 pub struct Object {
     /// The source's name.
     pub name: String,
-    pub arch: Arch,
+    /// The width of a near offset, in bits: 16 is real mode's segmented x86.
+    pub bits: u8,
     pub sections: Vec<Section>,
     /// Defined symbols in the order they were defined, then the undefined ones
     /// in the order they are declared.
@@ -207,6 +304,44 @@ pub struct Object {
     /// that names it. Indices into `sections`.
     pub omf_comdat: Vec<usize>,
     pub debug: Option<debug::Info>,
+}
+
+/// What a target says of the object files it writes, so the code that holds an
+/// [`Object`] names no writer crate (LLVM's `MCObjectTargetWriter` dispatch, in
+/// one place per target).
+pub trait ObjectTarget {
+    /// `object` as a file of `format` (`"elf"`, `"coff"`, `"macho"`); a format
+    /// the target has no writer for is [`Unsupported`].
+    fn write_object(
+        &self,
+        format: &str,
+        object: &Object,
+    ) -> Result<Vec<u8>, Unsupported>;
+
+    /// What the target says of `format`'s assembly and debug conventions
+    /// (LLVM's `MCAsmInfo`); `None` for a format it does not write.
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo>;
+}
+
+/// What an object format says of the code it holds, so the code that lays it
+/// out names no format.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AsmInfo {
+    /// A function's preferred alignment is `.prefalign` (no more than its body
+    /// fills), not `.p2align`.
+    pub pref_align: bool,
+    /// A host's linker and C name the runtime's `B$X` as `B_X`: the object is
+    /// not DOS's.
+    pub hosted: bool,
+    /// Whether the format's own debug writer says where a value is over a range
+    /// of code.
+    pub location_ranges: bool,
+    /// Whether that writer places a frame cell from the canonical frame
+    /// address.
+    pub cfa_locations: bool,
 }
 
 /// What a writer cannot say. A writer returns it; it never writes something
@@ -224,3 +359,48 @@ impl std::fmt::Display for Unsupported {
 }
 
 impl std::error::Error for Unsupported {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Three containers each had their own range check, and Mach-O's refused a
+    /// negative absolute 32-bit field the others took: one check now,
+    /// signed where pc-relative, either where not.
+    #[test]
+    fn a_field_takes_what_its_width_holds() {
+        let mut image = [0u8; 8];
+        assert!(apply_fixup(&mut image, 0, 4, false, -2, "t").is_ok() && image[..4] == [0xFE, 0xFF, 0xFF, 0xFF]);
+        assert!(apply_fixup(&mut image, 0, 4, false, 0xFFFF_FFFF, "t").is_ok());
+        assert!(apply_fixup(&mut image, 0, 4, true, 0xFFFF_FFFF, "t").unwrap_err().0.contains("4-byte"));
+        assert!(apply_fixup(&mut image, 0, 2, false, 70_000, "t").is_err());
+        assert!(apply_fixup(&mut image, 0, 8, true, i64::MIN, "t").is_ok());
+    }
+
+    /// A kind without a width entry patched zero bytes, so `Reloc::width` and
+    /// the writers' field sizes were silently 0.
+    #[test]
+    fn every_kind_a_fix_builds_patches_its_field() {
+        let widths = [
+            (Fix::abs(1), 1),
+            (Fix::abs(2), 2),
+            (Fix::abs(4), 4),
+            (Fix::abs(8), 8),
+            (Fix::pc_rel(4, 5), 4),
+            (Fix::SEGMENT_BASE, 2),
+            (Fix::FAR_POINTER, 4),
+            (Fix::section_offset(4), 4),
+        ];
+        for (fix, width) in widths {
+            assert_eq!(fix.kind.width(), width, "{fix:?}");
+            assert_eq!(Reloc::new(0, fix, Target::Symbol(0), 0).fix(), fix);
+        }
+    }
+
+    /// `Fix::abs` of an unsupported width has no kind, never a wrong one.
+    #[test]
+    fn an_unsupported_width_is_none() {
+        assert_eq!(Fix::abs(3).kind, FixupKind::NONE);
+        assert_eq!(FixupKind::NONE.width(), 0);
+    }
+}
