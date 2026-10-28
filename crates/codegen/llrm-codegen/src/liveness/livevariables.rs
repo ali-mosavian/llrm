@@ -126,6 +126,13 @@ pub struct LiveVariables {
     top: usize,
 }
 
+// The instructions `segment_kills` walked, for a test that an edit walks the
+// ones naming the value and not the block.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The kills of one value in a block, in order: the instructions that end a
 /// segment of it (see [`LiveVariables::from_dataflow`]).
 pub fn segment_kills<'a>(
@@ -140,6 +147,8 @@ pub fn segment_kills<'a>(
     let mut open: Option<Site> = None;
     let mut is_open = live_in;
     for one in insns {
+        #[cfg(test)]
+        WALKED.with(|walked| walked.set(walked.get() + 1));
         let here = Site::Insn(one.id());
         if one.uses.contains(&reg) {
             open = Some(here);
