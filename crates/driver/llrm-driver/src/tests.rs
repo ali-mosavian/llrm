@@ -1486,6 +1486,7 @@ fn a_frame_register_function_rebases_the_frame_address_on_it_and_back() {
     let frame = eh_frame_of(&text);
     let has = |pattern: &[u8]| frame.windows(pattern.len()).any(|window| window == pattern);
     assert!(has(&[0x0D, 0x06]) && has(&[0x0C, 0x07, 0x08]) && has(&[0x86, 0x02]), "{frame:02x?}");
+}
 
 /// Constant stores to one array interleaved with variable stores to another
 /// stayed word and dword stores: `GatherAllAliases` gave up after 6 chain hops
