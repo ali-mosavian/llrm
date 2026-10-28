@@ -4313,7 +4313,8 @@ fn simplify_load(
         Operand::Value(_) => {
             let (object, _) = crate::valuetracking::underlying(q.context, q.layout, q.function, ptr);
             let Operand::Constant(object) = object else { return None };
-            // The offset counts only where stripping constant steps reaches the object.
+            // The offset counts only where stripping constant steps reaches the
+            // object.
             let (base, offset) =
                 crate::valuetracking::pointer_base_with_constant_offset(q.context, q.layout, q.function, ptr);
             let offset = (base == Operand::Constant(object)).then_some(offset);

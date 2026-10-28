@@ -724,8 +724,9 @@ impl Builder<'_> {
                     // x86 takes them unaligned
                     (None, Intrinsic::MemCpy, Some(bytes))
                         if !self.runtime_has("memcpy")
-                            // the tail of a far copy is made from the far pointers
-                            // moved on, which the string tail at size is not
+                            // the tail of a far copy is made from the far
+                            // pointers moved on, which the string tail at size
+                            // is not
                             && (opt_size || bytes % 4 == 0 || !(self.is_far(dst) || self.is_far(other))) =>
                     {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?

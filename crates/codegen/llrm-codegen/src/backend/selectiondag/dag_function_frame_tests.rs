@@ -1206,9 +1206,9 @@ entry:
 }
 ";
 
-/// A 12-byte copy from a far pointer at -Os was `rep movsb` with cx = 12 (QCport
-/// atk_army): the near copy of the same size is `rep movsd` with cx = 3, and the
-/// segment override does not change the unit.
+/// A 12-byte copy from a far pointer at -Os was `rep movsb` with cx = 12
+/// (QCport atk_army): the near copy of the same size is `rep movsd` with cx =
+/// 3, and the segment override does not change the unit.
 #[test]
 fn at_os_a_12_byte_far_copy_moves_dwords() {
     let module = llrm_mir::parse::module(M16_FAR_COPY_12).expect("parses");

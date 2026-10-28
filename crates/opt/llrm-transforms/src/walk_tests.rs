@@ -622,7 +622,8 @@ b0:
     assert!(peeled <= 2, "power was copied into itself, {peeled} remainders:\n{power}");
 }
 
-// Not internal: an internal table nothing stores to is constant, and its zeros fold the loads away.
+// Not internal: an internal table nothing stores to is constant, and its zeros
+// fold the loads away.
 const CHOP: &str = "@values = global [64 x i32] zeroinitializer
 
 define internal i32 @chop(i32 %lo, i32 %hi) {
