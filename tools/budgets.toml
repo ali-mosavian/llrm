@@ -1699,15 +1699,6 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w13 regalloc"
 why = "measured 36.9 -> 87.3 Minstr (x2.37)"
 
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "lir optimizephis"
-ratio = 2.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.2 -> 12.0 Minstr (x2.31)"
-
 # [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
 # test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
 
@@ -1777,7 +1768,7 @@ name = "mir walk"
 ratio = 2.42
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); not red on llrm-c IR; at the limit (x2.30), reads differ by host; not profiled"
 
 [[debt]]
 kind = "steps"
@@ -1813,7 +1804,7 @@ name = "lir jumps"
 ratio = 2.66
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53); joins lir jumps was already x2.66 on llrm-c IR at parity f22ca211ad; not bisected"
 
 [[debt]]
 kind = "steps"
