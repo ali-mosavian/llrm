@@ -574,3 +574,25 @@ fn test_an_expression_that_exists_is_found_without_copying_its_operands() {
         first
     });
 }
+
+/// `scev_nodes` counts expressions made from values. A constant asked for again
+/// was counted each time: the unbounded climb of
+/// `isBasicBlockEntryGuardedByCond` over 128 guarded loops read 46077 of 50000
+/// "nodes" as constants and failed the `functions` event slope (17272 ->
+/// 51992).
+#[test]
+fn test_asking_for_a_constant_again_makes_no_node() {
+    let _ = expanded(|se, cx, _| {
+        let entry = cx.function.entry().expect("an entry");
+        let ret = cx.function.terminator(entry).expect("a ret");
+        let zero = cx.function.instruction(ret).operands[0];
+        assert!(matches!(zero, Operand::Constant(_)), "premise: the ret returns a constant");
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::ScevNodes);
+        let first = se.get_scev(cx, zero);
+        for _ in 0..10 {
+            assert_eq!(se.get_scev(cx, zero), first);
+        }
+        assert_eq!(llrm_mir::counts::get(llrm_mir::counts::Event::ScevNodes), before, "a constant is not a node");
+        first
+    });
+}
