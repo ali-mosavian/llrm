@@ -670,7 +670,12 @@ fn argument_of(
         bytes: i64::from(size),
         integer: types.int_bits(ty).is_some(),
         pointer: matches!(types.get(ty), Type::Pointer(_)),
-        floating: matches!(types.get(ty), Type::Float(_)),
+        // An extended real is not a vector-register float: it travels in
+        // memory.
+        floating: matches!(
+            types.get(ty),
+            Type::Float(kind) if !matches!(kind, llrm_mir::types::FloatKind::X86Fp80)
+        ),
         memory: class == Some(llrm_mir::opcode::MEMORY),
     }
 }
