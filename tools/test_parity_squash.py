@@ -107,7 +107,7 @@ def test_the_smoke_binaries_default_to_the_release_dir_when_all_three_are_there(
     try:
         ps.smoke_bins(env)
     except SystemExit as why:
-        assert "lacks llrm-c, llrm-qb, llrm-nib" in str(why)
+        assert "lacks llrm-cc, llrm-llc, llrm-qb, llrm-nib" in str(why)
     else:
         raise AssertionError("an empty release dir was accepted")
     for name in ps.BINARIES:

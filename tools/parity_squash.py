@@ -9,7 +9,7 @@ Subset rule: the fast set runs on the head (origin/feat/parity, failure set cach
 when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
 Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
 LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
-PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
+PARITY_BIN names the directory of the built release llrm-cc, llrm-llc, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
 `--known-red sc=2438` skips ONLY that smoke step (named, with its issue), still runs every other check, and puts one line in the squash's body:
 `Known red: sc (#2438)`.
@@ -427,7 +427,7 @@ def pr_body(number: str) -> str:
     return done.stdout if done.returncode == 0 else ""
 
 
-BINARIES = ("llrm-c", "llrm-qb", "llrm-nib")
+BINARIES = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib")
 
 
 def smoke_bins(env: dict | None = None) -> str:
@@ -441,7 +441,7 @@ def smoke_bins(env: dict | None = None) -> str:
     found = llrmbin.bin_dir(env)
     if all((found / name).is_file() for name in BINARIES):
         return str(found)
-    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
+    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bins`, or set PARITY_BIN to a directory that has them")
 
 
 def bins_command(directory: Path) -> list[str]:
@@ -1220,7 +1220,7 @@ def alone_link_failures(files: list[str], cwd: Path, target: Path | None, run=su
     built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
     if built.returncode:
         return [f"release: {(built.stdout + built.stderr).strip().splitlines()[-1:] or ['the bins do not build']}"]
-    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+    for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront"):
         (out / "release" / name).touch()  # the runners refuse a binary older than its sources
     done = run([sys.executable, "tools/link_check.py", str(out / "link-check")], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release")}, capture_output=True, text=True, errors="replace")
     return [line for line in done.stdout.splitlines() if line.startswith(("qb ", "c "))]
@@ -1320,7 +1320,7 @@ def _link_programs() -> list[str]:
     import link_check  # noqa: PLC0415
 
     target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
-    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+    for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront"):
         (target / "release" / name).touch()  # the runners refuse a binary older than its sources
     os.environ["LLRM_BIN"] = str(target / "release")
     return link_check.link_failures(target / "link-check")
