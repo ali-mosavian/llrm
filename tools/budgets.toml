@@ -69,15 +69,6 @@ why = "measured 18.5 -> 52.2 Minstr (x2.82)"
 
 [[debt]]
 kind = "steps"
-axis = "cases"
-name = "analysis exposed-frames"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.2 -> 18.7 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
 axis = "nest"
 name = "lir coalesce"
 ratio = 3.3
@@ -1086,24 +1077,6 @@ ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 9.1 -> 23.9 Minstr (x2.64)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir decide@675"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.3 -> 15.7 Minstr (x2.96)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir decide@690"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.3 -> 15.7 Minstr (x2.97)"
 
 [[debt]]
 kind = "steps"
