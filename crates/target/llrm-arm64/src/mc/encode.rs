@@ -421,6 +421,36 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x1E20_0000 | width.sf() << 31 | size.field() << 22 | rmode << 19 | opcode << 16 | source << 5 | destination
         }
         Inst::Svc { imm16 } => 0xD400_0001 | u32::from(*imm16) << 5,
+        Inst::Atomic { op, size, acquire, release, rs, rt, rn } => {
+            let (size, a, l) = (u32::from(*size), u32::from(*acquire), u32::from(*release));
+            if size > 3 {
+                return error(format!("an atomic access of 2^{size} bytes"));
+            }
+            let (rs, rt, rn) = (reg(*rs)?, reg(*rt)?, reg(*rn)?);
+            let memory = |opc: u32, o3: u32| {
+                0x3820_0000 | size << 30 | a << 23 | l << 22 | rs << 16 | o3 << 15 | opc << 12 | rn << 5 | rt
+            };
+            match op {
+                Atomic::Ldar => 0x08DF_FC00 | size << 30 | rn << 5 | rt,
+                Atomic::Stlr => 0x089F_FC00 | size << 30 | rn << 5 | rt,
+                Atomic::Ldapr => 0x38BF_C000 | size << 30 | rn << 5 | rt,
+                Atomic::Cas => 0x08A0_7C00 | size << 30 | a << 22 | l << 15 | rs << 16 | rn << 5 | rt,
+                Atomic::Swp => memory(0, 1),
+                Atomic::Ldadd => memory(0, 0),
+                Atomic::Ldclr => memory(1, 0),
+                Atomic::Ldeor => memory(2, 0),
+                Atomic::Ldset => memory(3, 0),
+                Atomic::Ldsmax => memory(4, 0),
+                Atomic::Ldsmin => memory(5, 0),
+                Atomic::Ldumax => memory(6, 0),
+                Atomic::Ldumin => memory(7, 0),
+            }
+        }
+        Inst::Dmb { barrier } => match barrier {
+            Barrier::Ish => 0xD503_3BBF,
+            Barrier::IshLd => 0xD503_39BF,
+            Barrier::IshSt => 0xD503_3ABF,
+        },
         Inst::Brk { imm16 } => 0xD420_0000 | u32::from(*imm16) << 5,
         Inst::Nop => 0xD503_201F,
     };
