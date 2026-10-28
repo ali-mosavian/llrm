@@ -239,7 +239,7 @@ pub struct SelectionDAG {
     pub cur_order: u32,
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
-    pub lines: Vec<u32>,
+    pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
     /// The IR instruction each `IROrder` was made for, in order: what a
     /// debug record's `before` names.
     pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,

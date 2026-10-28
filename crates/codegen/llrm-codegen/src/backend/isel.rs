@@ -174,6 +174,7 @@ use crate::backend::target::Segments;
 use crate::backend::valuefacts::{self, Span, ValueFacts};
 use crate::backend::{addressforms, division};
 use crate::model::ir::{self, Addr, AddressRef, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
+use crate::model::lir::SrcLoc;
 use crate::model::lir::{
     Block, BlockOdds, DebugNote, DebugPlace, DebugTags, DebugVariable, Insn, LirBlock, LirBody, NoteValue, Phi,
 };
@@ -1384,21 +1385,19 @@ pub(crate) fn dbg_line(
     module: &Module,
     function: &Function,
     inst: InstId,
-) -> Option<u32> {
-    function
-        .instruction(inst)
-        .metadata
-        .iter()
-        .find(|(kind, _)| kind == "dbg")
-        .and_then(
-            |&(_, node)| match module.metadata[node.0 as usize].operands.first() {
-                Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
-                    llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
-                    _ => None,
-                },
-                _ => None,
-            },
-        )
+) -> Option<SrcLoc> {
+    let (_, node) = function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "dbg")?;
+    let operands = &module.metadata[node.0 as usize].operands;
+    let number = |at: usize| match operands.get(at) {
+        Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
+            llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
+            _ => None,
+        },
+        _ => None,
+    };
+    let named =
+        |field: &str| module.special.get(node).and_then(|special| special.fields.iter().position(|one| one == field));
+    Some(SrcLoc { line: number(named("line").unwrap_or(0))?, column: named("column").and_then(number).unwrap_or(0) })
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
@@ -1409,7 +1408,7 @@ fn lined(
     ats: &IndexMap<InstId, i64>,
     body: LirBody,
 ) -> LirBody {
-    let mut lines: IndexMap<i64, u32> = IndexMap::default();
+    let mut lines: IndexMap<i64, SrcLoc> = IndexMap::default();
     for (&inst, &at) in ats {
         let line = dbg_line(module, function, inst);
         if let Some(line) = line {

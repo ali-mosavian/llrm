@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/forging.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/forging.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/forging.rs sha256:f7d4c4ecc4195262a6a55ce94705f323583040ca0575e04899e8e4f4abbf3882 -->
+<!-- src: crates/opt/llrm-analysis/src/forging.rs sha256:5ec22c47566f7c06306f3327c91b48af3f0f7b9692ec1867457ac27e2b18bddf -->
 
 # forging
 
@@ -23,6 +23,10 @@ program object occupies. The data segment's own value is a load-time
 relocation, never a number a source can write, so a constant cannot name
 it; a selector computed (`VARSEG`, arithmetic, a `PEEK` result) is not
 exempt.
+
+A selector read from an array descriptor (an `inttoptr` the frontend marks
+`!llrm.descriptor`) is exempt too: it is the array's own segment, which an
+access in bounds never leaves.
 
 The runtime's own code is no forger of the program's: its bodies are
 `available_externally`, and the runtime module is another module; both are
