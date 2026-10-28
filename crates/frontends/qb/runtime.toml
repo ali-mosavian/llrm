@@ -1857,7 +1857,7 @@ reads = "NONE"
 clobbers = ["flags"]
 established = true
 inputs = []
-evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
+evidence = "POC: runtime/qb/dos/m32/fpu.asm B$CHKEXP, B$CHKEX2, B$CHKLOG: the range check of EXP/LOG, one double in, the same double out."
 
 ["B$CHKEX2"]
 cleanup = 8
@@ -1870,7 +1870,7 @@ reads = "NONE"
 clobbers = ["flags"]
 established = true
 inputs = []
-evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
+evidence = "POC: runtime/qb/dos/m32/fpu.asm B$CHKEXP, B$CHKEX2, B$CHKLOG: the range check of EXP/LOG, one double in, the same double out."
 
 ["B$CHKLOG"]
 cleanup = 8
@@ -1883,4 +1883,4 @@ reads = "NONE"
 clobbers = ["flags"]
 established = true
 inputs = []
-evidence = "POC: the llrm runtime's range check of EXP/LOG, one double in, the same double out."
+evidence = "POC: runtime/qb/dos/m32/fpu.asm B$CHKEXP, B$CHKEX2, B$CHKLOG: the range check of EXP/LOG, one double in, the same double out."

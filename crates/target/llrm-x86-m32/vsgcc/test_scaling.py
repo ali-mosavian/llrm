@@ -130,8 +130,11 @@ def test_the_budget_of_a_run_is_its_cpu_not_the_wall_clock_so_load_cannot_break_
 def test_the_wall_backstop_of_a_short_budget_is_not_shorter_than_a_loaded_host_needs_to_start_the_run(monkeypatch):
     """A 1 s CPU budget had a 10 s wall backstop: under load the run had not started by then, and `perf stat` timed out (the gate's pytest)."""
     seen = []
+    real = subprocess.run
 
     def fake(cmd, **kw):
+        if "timeout" not in kw:  # the probes (`perf`, the binary's stamp) run as they do
+            return real(cmd, **kw)
         seen.append(kw["timeout"])
         raise subprocess.TimeoutExpired(cmd, kw["timeout"])
 
