@@ -51,10 +51,11 @@ def test_the_scan_counts_the_copies_in_a_tree(tmp_path: Path):
     layout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
     (tmp_path / "crates/target/llrm-x86-m16/src/machines").mkdir(parents=True)
     (tmp_path / "crates/target/llrm-x86-m16/src/machines/datalayout.toml").write_text(f'datalayout = "{layout}"\n')
-    (tmp_path / "t.ll").write_text(f'target datalayout = "{layout}"\n"{layout}-ni:2:3"\n')
+    (tmp_path / "t.rs").write_text(f'target datalayout = "{layout}"\n"{layout}-ni:2:3"\n')
     (tmp_path / "crates/opt/llrm-analysis/corpus/emitted").mkdir(parents=True)
     (tmp_path / "crates/opt/llrm-analysis/corpus/emitted/g.ll").write_text(f'target datalayout = "{layout}"\n')
+    (tmp_path / "f.mir").write_text(f'target datalayout = "{layout}"\n')
     import subprocess
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
-    assert sync.copies(tmp_path) == {"t.ll": 2}, "the generated corpus is not scanned: 455 of its files were baseline rows no one could shrink"
+    assert sync.copies(tmp_path) == {"t.rs": 2}, "neither the generated corpus nor .ll/.mir fixtures are counted: ~500 rows no one could shrink"

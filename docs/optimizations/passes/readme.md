@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 215 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 216 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -15,6 +15,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | availableexternally | LLVM's EliminateAvailableExternally: a body held only to inline from becomes a declaration again once inlining is done. | A program pass. At -O1 and above it runs after the interprocedural step and | [availableexternally](availableexternally.md) |
 | bdce | Bit-tracking dead code elimination: a translation of LLVM's BDCE (`BDCE.cpp` at d1106deb71cc). | LLVM runs it after SCCP, before ADCE (slot 34 of the pipeline). Not in | [bdce](bdce.md) |
 | branchtocommon | A block that is only a comparison (and a few instructions that can run early) and a branch is folded into a predecessor that branches to it and to one of its successors: SimplifyCFG's `foldBranchToCommonDest`. | Named by `condtocond`, `simplifycfg`, `switchvalue`. | [branchtocommon](branchtocommon.md) |
+| calledvaluepropagation | LLVM's `CalledValuePropagationPass`: `!callees` on an indirect call whose targets are few and known. | After IPSCCP (PassBuilderPipelines.cpp:1232), inside the early | [calledvaluepropagation](calledvaluepropagation.md) |
 | calleepop | Callee-pops calling convention (LLVM's GlobalOpt giving an internal function a `fastcc`): an internal function all of whose callers are seen pops its own stack arguments. | A module pass, once, after the interprocedural step, `globaldce` and | [calleepop](calleepop.md) |
 | canonexit | A loop's exit compare of a zero-extended counter is made unsigned, and the extension is moved off the counter onto the invariant side. | Not wired in: [`crate::indvars`](indvars.md) will run `canonicalized` after the | [canonexit](canonexit.md) |
 | canonfreeze | LLVM's `CanonicalizeFreezeInLoops` (`canon-freeze`; CanonicalizeFreezeInLoops.cpp at `d1106deb71cc`): a freeze of an induction variable or of its step is pushed out of the loop, to the preheader. | In the strength slot, before `lsr` (the pin runs it with loop-reduce). | [canonfreeze](canonfreeze.md) |
@@ -183,7 +184,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
 | rpoattrs | LLVM's `ReversePostOrderFunctionAttrsPass`: `norecurse` for an internal function whose every use is a call from a `norecurse` function. | After `available-externally` in the module pipeline | [rpoattrs](rpoattrs.md) |
 | runtimechecks | Runtime memory checks: code that proves, when a loop is entered, that the groups of pointers it accesses do not overlap. | Called by [`crate::loopversioning`](loopversioning.md); the vectorizer will call it too. | [runtimechecks](runtimechecks.md) |
-| sccp | Sparse conditional constant propagation. | Named by `ipsccp`, `pipeline`. | [sccp](sccp.md) |
+| sccp | Sparse conditional constant propagation. | Named by `calledvaluepropagation`, `ipsccp`, `pipeline`. | [sccp](sccp.md) |
 | sccpsolver | Sparse conditional constant propagation: the solver. | Named by `ipsccp`, `sccp`. | [sccpsolver](sccpsolver.md) |
 | settled | What each pass found nothing to do on, kept from one run of the pipeline over a body to the next: a body goes through its pipeline again only where something a pass read of it has changed. | `Settled` (the records, held by the module's `Context`) and `slice`. | [settled](settled.md) |
 | simpleloopunswitch | `SimpleLoopUnswitch`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip (trivial). | In the `trivialunswitch@732` slot of LLVM's order, LPM1 after the second | [simpleloopunswitch](simpleloopunswitch.md) |
