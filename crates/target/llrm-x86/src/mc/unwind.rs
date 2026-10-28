@@ -18,6 +18,26 @@ pub fn register_name(number: u64) -> Option<&'static str> {
     NAMES.get(number as usize).copied()
 }
 
+/// The DWARF numbers of the registers a 64-bit function must preserve, which
+/// the prologue's pushes are told apart by (rbp among them).
+pub const CALLEE_SAVED: [u16; 6] = [3, 6, 12, 13, 14, 15];
+
+/// Whether functions of `bits`-bit code are given call frame information.
+pub fn declares(bits: u32) -> bool {
+    bits == 64
+}
+
+/// A register's name by its DWARF number, `rip` for any that has none.
+pub fn register_label(number: u16) -> String {
+    register_name(u64::from(number)).unwrap_or("rip").to_owned()
+}
+
+/// A function's frame at its entry: the frame address 8 past the stack
+/// pointer.
+pub fn entry_row() -> FrameRow {
+    eh_target().entry
+}
+
 /// At a function's entry the frame address is 8 past the stack pointer and
 /// the return address is just below it.
 pub fn eh_target() -> EhTarget<'static> {

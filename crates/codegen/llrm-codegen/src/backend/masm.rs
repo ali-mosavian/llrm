@@ -1481,7 +1481,7 @@ fn built(
     // Call frame information, declared as the entry and the exits are written:
     // only for a plain frame (no shrink-wrapping, interrupt, `enter` or stack
     // check), which is what the rows below are right for.
-    let plain = procedure.body.bits == 64
+    let plain = llrm_x86::mc::unwind::declares(procedure.body.bits)
         && wrap.is_none()
         && procedure.interrupt.is_none()
         && procedure.entry == 0
@@ -1506,7 +1506,8 @@ fn built(
             // (the frame register's own push is told apart by its name).
             if one.op == Operation::Push
                 && let Loc::Reg(pushed) = &one.sources[0]
-                && let Some(register) = dwarf(pushed.register).filter(|number| [3, 6, 12, 13, 14, 15].contains(number))
+                && let Some(register) =
+                    dwarf(pushed.register).filter(|number| llrm_x86::mc::unwind::CALLEE_SAVED.contains(number))
             {
                 // A callee-saved register's own offset is declared after the
                 // whole prologue (`emitCalleeSavedFrameMoves`).
