@@ -2116,6 +2116,15 @@ fn assert_block_between_its_constraints(mix: &str) {
     assert!(!Regex::new(r"\b(e?cx|cl|ch)\b").unwrap().is_match(&found[3]), "cx is clobbered before `shr cx, 8`: {mix}");
 }
 
+/// The block check is not looser than the bug it guards: a `cx` write between
+/// the block and `shr cx, 8` destroys `ch`, and the helper refuses it.
+#[test]
+#[should_panic(expected = "cx is clobbered")]
+fn test_the_block_check_refuses_a_clobbered_cx() {
+    let mix = "    or ax, 1792\n    mov dx, si\n    mov cx, si\n    db 089h,0cbh,001h,0d3h,000h,0c3h\n    mov cx, 5\n    shr cx, 8\n";
+    assert_block_between_its_constraints(mix);
+}
+
 /// An inline block is its bytes in place of a call, fed and read in the
 /// registers it names: `a` goes to both cx and dx, `b` and 7 are packed into
 /// ax, and `sum` and `high` come out of bx and ch.
