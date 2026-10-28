@@ -379,3 +379,10 @@ def test_a_step_over_its_limit_at_one_doubling_only_is_not_growth_and_at_two_is(
     assert not flip
     assert corroborated(2.3, 3.0, 7.8, 29.3, lambda: 29.3 * 1.8), "over at N/2 -> N too"
     assert corroborated(2.3, 7.0, 7.8, 29.3, lambda: 29.3 * 2.6), "over at 2N -> 4N too"
+
+
+def test_the_assembler_relaxation_step_on_cases_is_a_window_step_not_a_regime_change():
+    """cases `assemble` read 6.25 / 9.99 / 31.49 Minstr at N=64/128/256 net of the empty program 2.15 (jump 0.96, 1.0 on the runner's tree) and refused #5923 (round 2):
+    a 16-byte shift of the object makes the assembler's relaxation loop take another pass, a step that moves with any code-size change. It is a window row."""
+    assert regime_change(6.25 - 2.15, 9.99 - 2.15, 31.49 - 2.15) > 0.9
+    assert any(row["axis"] == "cases" and row["name"] == "assemble" for row in WINDOWS)
