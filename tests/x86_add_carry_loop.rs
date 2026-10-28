@@ -41,3 +41,45 @@ fn test_a_loop_exit_at_minus_one_reads_the_carry_of_the_add() {
         "loops of {ours:?} instructions, the pin's llc has {pins:?}: {asm}"
     );
 }
+
+const HANOI: &str = "
+static int hanoi(int n, int a, int b, int c)
+{
+    if (n == 0) return 0;
+    return hanoi(n - 1, a, c, b) + a + hanoi(n - 1, c, b, a);
+}
+int f(int n) { return hanoi(n, 1, 3, 2); }
+";
+
+fn hanoi_listing(selector: &str) -> String {
+    let scratch = tempfile::tempdir().unwrap();
+    std::fs::write(scratch.path().join("a.c"), HANOI).unwrap();
+    let flags = [selector, "-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions"];
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "-", "a.c"]).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+/// hanoi's exit at -1 was `dec ebx; cmp ebx, -1; jne`; the pin reads the carry
+/// of `add ebx, -1` (`jb`). The old selector still emits the compare, so this
+/// is gated on the DAG selector becoming the default (#4512): it runs
+/// `--isel=dag` and the old selector's shape is asserted to differ.
+///
+/// llrm-cc: the kernel is the original (tests/return_duplication.rs); clang's
+/// IR for it keeps the `-1` exit that the loop above lost.
+#[test]
+fn test_hanoi_exit_at_minus_one_reads_the_carry_of_the_add() {
+    let reads_carry = |asm: &str| {
+        let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+        let add = |line: &&str| line.starts_with("add e") && line.ends_with(", -1");
+        lines
+            .iter()
+            .enumerate()
+            .any(|(at, line)| add(line) && lines[at + 1..].iter().take(4).any(|next| next.starts_with("jb ")))
+    };
+    let dag = hanoi_listing("--isel=dag");
+    assert!(reads_carry(&dag), "{dag}");
+    assert!(!dag.contains(", -1\n    jne"), "a compare with -1 stayed: {dag}");
+    assert!(!reads_carry(&hanoi_listing("--isel=old")), "the old selector reads the carry: the gate is open");
+}
