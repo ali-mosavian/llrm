@@ -823,13 +823,14 @@ pub fn laid_out(
         info.code.push(model::Range { section, offset: first, length: segments[section].image.len() - first });
     }
     for (section, segment) in segments.iter().enumerate() {
-        info.lines.extend(segment.lines.iter().map(|&(line, offset)| model::Line {
-            section,
-            offset,
-            file: 0,
-            line: line.line,
-            column: line.column,
-        }));
+        // The scopes a place is in are the blocks', not the line table's: a
+        // change of scope alone is not a new row.
+        let mut before = None;
+        for &(line, offset) in &segment.lines {
+            if before.replace(line.row()) != Some(line.row()) {
+                info.lines.push(model::Line { section, offset, file: 0, line: line.line, column: line.column });
+            }
+        }
     }
     Ok(info)
 }
