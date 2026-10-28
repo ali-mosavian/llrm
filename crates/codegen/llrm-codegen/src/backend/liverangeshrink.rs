@@ -230,6 +230,9 @@ pub fn shrunk(
             };
             build(0, &ident, &insns, &mut order);
             let mut saw_store = false;
+            // Where the order map starts: the block's phis are in it only if
+            // this is 0.
+            let mut stretch = 0;
             let mut at = 0;
             while at < insns.len() {
                 let me = ident[at];
@@ -238,13 +241,25 @@ pub fn shrunk(
                     // A barrier: later instructions must not move above it.
                     if code_motion_barrier(&one) && at + 1 < insns.len() {
                         build(at + 1, &ident, &insns, &mut order);
+                        stretch = at + 1;
                         saw_store = false;
                     }
                     at += 1;
                     continue;
                 }
-                let target =
-                    landing(&one, body, &position, &order, block_at, &def_site, &phi_site, &defined, &read, &class_of);
+                let target = landing(
+                    &one,
+                    body,
+                    &position,
+                    &order,
+                    block_at,
+                    stretch == 0,
+                    &def_site,
+                    &phi_site,
+                    &defined,
+                    &read,
+                    &class_of,
+                );
                 at += 1;
                 let Some(after) = target else { continue };
                 let place = if after == PHI { 0 } else { position[after] + 1 };
@@ -282,6 +297,7 @@ fn landing(
     position: &[usize],
     order: &[Option<u32>],
     block_at: usize,
+    phis_in_order: bool,
     def_site: &IndexMap<u32, (usize, usize)>,
     phi_site: &IndexMap<u32, usize>,
     defined: &IndexMap<u32, usize>,
@@ -299,9 +315,14 @@ fn landing(
             return None;
         }
         // A phi of this block is the first thing in its order map.
+        // Past a barrier the map starts after it, and the phis are not in it
+        // (`FindDominatedInstruction` leaves `Old`): a landing there is above
+        // the barrier.
         if phi_site.get(value) == Some(&block_at) {
             eligible += 1;
-            insert = insert.or(Some(PHI));
+            if phis_in_order {
+                insert = insert.or(Some(PHI));
+            }
             continue;
         }
         // A value with no definition here (an input) is defined outside any
