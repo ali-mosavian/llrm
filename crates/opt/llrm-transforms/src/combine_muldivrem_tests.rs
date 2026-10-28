@@ -891,3 +891,48 @@ fn a_division_by_a_select_with_a_zero_arm_uses_the_other_arm() {
         "  %r = udiv i16 %x, %y\n  ret i16 %r\n",
     );
 }
+
+/// `(A - B) * -4` sank the negation into the subtraction: `(B - A) * 4`, then
+/// the shift. Without `Negator` the product stayed a multiply by `-4`.
+#[test]
+fn a_difference_times_a_negated_power_of_two_swaps_the_difference() {
+    check(
+        "i16",
+        "i16 %a, i16 %b",
+        "  %s = sub i16 %a, %b\n  %r = mul i16 %s, -4\n  ret i16 %r\n",
+        "  %0 = sub i16 %b, %a\n  %1 = shl i16 %0, 2\n  ret i16 %1\n",
+    );
+}
+
+/// `(-X * Y) * -X` is `(X * Y) * X` when `-X` has another use. Without
+/// `Negator` the first operand stayed negated.
+#[test]
+fn a_negated_product_times_the_same_negation_cancels() {
+    check(
+        "i16",
+        "i16 %x, i16 %y",
+        "  %n = sub i16 0, %x\n  %p = mul i16 %n, %y\n  %r = mul i16 %p, %n\n  %t = add i16 %r, %n\n  ret i16 %t\n",
+        "  %n = sub i16 0, %x\n  %0 = mul i16 %x, %y\n  %1 = mul i16 %0, %x\n  %t = add i16 %1, %n\n  ret i16 %t\n",
+    );
+}
+
+/// `SimplifyDemandedInstructionBits` in `commonIDivTransforms`: a divide by
+/// four does not read the low two bits of the dividend, so the mask loses them
+/// (`opt` agrees). Left at 255 before.
+#[test]
+fn a_divide_by_four_drops_the_dividend_bits_it_does_not_read() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = and i32 %x, 255\n  %r = udiv i32 %a, 4\n  ret i32 %r\n",
+        "  %a = and i32 %x, 252\n  %0 = lshr i32 %a, 2\n  ret i32 %0\n",
+    );
+}
+
+/// `SimplifyDemandedInstructionBits` in `commonIRemTransforms`: the bits a
+/// remainder by 256 of a shifted value reads are all zero, so it is zero.
+/// Stayed an `and` before.
+#[test]
+fn a_remainder_of_shifted_out_bits_is_zero() {
+    check("i32", "i32 %x", "  %a = shl i32 %x, 8\n  %r = urem i32 %a, 256\n  ret i32 %r\n", "  ret i32 0\n");
+}

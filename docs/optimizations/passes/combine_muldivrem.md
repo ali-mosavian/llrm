@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_muldivrem.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_muldivrem.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:1b4da7ddd6bb64cf4bfbd8e8ddc7069278cc043e861be18c66ff2531f15f934e -->
+<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:cace34e2a0077e577cf562578187e2a82a9c4fd894fc051a27c2e51d44b4cb14 -->
 
 # combine_muldivrem
 
@@ -42,14 +42,6 @@ the fold is skipped where the constants do not fold to a number.
 
 DEVIATE 5 (temporary): `narrowMathIfNoOverflow` (`InstructionCombining.cpp`,
 shared with `visitAdd`) is left out until `combine_shared` has it.
-
-DEVIATE 6 (temporary): `Negator::Negate` is not translated; it is taken to
-fail, so the two folds that use it are skipped and the step after each
-(the `zext`/`sext` multiply by `-1 << C`) is tried where C++ would stop.
-
-DEVIATE 7 (temporary): `SimplifyDemandedInstructionBits` is not translated
-(no demanded-bits simplifier in `combine`); its steps in
-`commonIDivTransforms` and `commonIRemTransforms` are left out.
 
 DEVIATE 8: `simplifyICmpInst` in `visitURem` is asked without the context
 instruction, dominator tree and assumptions (no query that takes them):

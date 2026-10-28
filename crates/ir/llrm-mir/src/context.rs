@@ -4,7 +4,7 @@ use std::cell::RefCell;
 
 use crate::arena::Arena;
 use crate::hash::HashMap;
-use crate::opcode::CastOp;
+use crate::opcode::{BinaryOp, CastOp};
 use crate::types::{TypeId, Types};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -59,6 +59,13 @@ pub enum ConstantExpr {
     Cast {
         op: CastOp,
         value: ConstantId,
+    },
+    /// `add`, `sub` and `xor` are the binary operators LLVM still has as
+    /// constant expressions (`add (i32 ptrtoint (ptr @a to i32), i32 3)`).
+    Binary {
+        op: BinaryOp,
+        lhs: ConstantId,
+        rhs: ConstantId,
     },
 }
 

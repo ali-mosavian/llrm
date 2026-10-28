@@ -4,7 +4,7 @@
 
 #[test]
 fn every_compiler_binary_uses_the_slab_allocator() {
-    for bin in ["llrm-c", "llrm-qb", "llrm-nib", "llrm-mir"] {
+    for bin in ["llrm-llc", "llrm-qb", "llrm-nib", "llrm-mir"] {
         let source = std::fs::read_to_string(format!("{}/src/bin/{bin}.rs", env!("CARGO_MANIFEST_DIR"))).unwrap();
         assert!(
             source.contains("#[global_allocator]") && source.contains("llrm_alloc::Slab"),
