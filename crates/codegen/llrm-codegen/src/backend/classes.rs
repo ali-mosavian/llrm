@@ -174,10 +174,16 @@ impl RegisterClasses {
     /// false): the frame register is one more general register, the last to
     /// be given out, and an address may be made of its word.
     pub fn with_frame_free(&self) -> Self {
-        let whole = self.frame;
+        // The root the register file names a family by (`ebp`, whatever the
+        // target calls its frame register: `rbp` in long mode).
+        let whole = self.registers.root(self.frame);
         let mut free = self.clone();
         if !free.available.contains(&whole) {
-            free.available.push(whole);
+            // The pin's order (`X86RegisterInfo.td`): ebp follows ebx among the
+            // callee-saved registers, ahead of r14, r15, r12, r13 in long mode.
+            let at =
+                free.available.iter().position(|one| *one == RegId::EBX).map_or(free.available.len(), |ebx| ebx + 1);
+            free.available.insert(at, whole);
         }
         if let Some(word) = llrm_x86::registers::word_of(whole) {
             free.word_bases.insert(word);
