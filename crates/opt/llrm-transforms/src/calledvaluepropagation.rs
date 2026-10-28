@@ -2,14 +2,15 @@
 //! targets are few and known.
 //!
 //! # How it works
-//! A sparse solver over a lattice of function sets (at most four functions, then
-//! overdefined) in three groups: SSA registers, function returns and the memory
-//! of a global variable only loaded and stored whole. Arguments of a local
-//! function whose address is not taken are tracked through its direct calls;
-//! returns of a function with an exact definition through its callers.
+//! A sparse solver over a lattice of function sets (at most four functions,
+//! then overdefined) in three groups: SSA registers, function returns and the
+//! memory of a global variable only loaded and stored whole. Arguments of a
+//! local function whose address is not taken are tracked through its direct
+//! calls; returns of a function with an exact definition through its callers.
 //! Control flow is followed as `SparseSolver` does: only executable blocks and
-//! feasible edges are visited. After it settles, each indirect call whose called
-//! value is a non-empty function set gets `!callees` listing them, by name.
+//! feasible edges are visited. After it settles, each indirect call whose
+//! called value is a non-empty function set gets `!callees` listing them, by
+//! name.
 //!
 //! # Example
 //! ```text
@@ -181,24 +182,33 @@ impl<'a> Solver<'a> {
         {
             return false;
         }
-        self.users.get(&id).into_iter().flatten().all(|&(caller, inst)| {
-            let function = self.function(caller);
-            let instruction = function.instruction(inst);
-            let ty_of = |operand: Operand| function.operand_type(&self.module.context, operand);
-            let named = |operand: Operand| {
-                matches!(operand, Operand::Constant(c) if self.module.context.get(c).kind == ConstantKind::Global(id))
-            };
-            match instruction.opcode {
-                Opcode::Store { volatile, .. } => {
-                    !volatile
-                        && named(instruction.operands[1])
-                        && !named(instruction.operands[0])
-                        && ty_of(instruction.operands[0]) == Some(variable.ty)
-                }
-                Opcode::Load { volatile, .. } => !volatile && instruction.ty == variable.ty,
-                _ => false,
-            }
-        })
+        self.users
+            .get(&id)
+            .into_iter()
+            .flatten()
+            .all(
+                |&(caller, inst)| {
+                    let function = self.function(caller);
+                    let instruction = function.instruction(inst);
+                    let ty_of = |operand: Operand| function.operand_type(&self.module.context, operand);
+                    let named = |operand: Operand| {
+                        matches!(
+                            operand,
+                            Operand::Constant(c) if self.module.context.get(c).kind == ConstantKind::Global(id)
+                        )
+                    };
+                    match instruction.opcode {
+                        Opcode::Store { volatile, .. } => {
+                            !volatile
+                                && named(instruction.operands[1])
+                                && !named(instruction.operands[0])
+                                && ty_of(instruction.operands[0]) == Some(variable.ty)
+                        }
+                        Opcode::Load { volatile, .. } => !volatile && instruction.ty == variable.ty,
+                        _ => false,
+                    }
+                },
+            )
     }
 
     fn key(
@@ -450,8 +460,10 @@ impl<'a> Solver<'a> {
             }
             Opcode::Select => {
                 if let Some(register) = register {
-                    let (a, b) =
-                        (self.get(self.key(function, instruction.operands[1])), self.get(self.key(function, instruction.operands[2])));
+                    let (a, b) = (
+                        self.get(self.key(function, instruction.operands[1])),
+                        self.get(self.key(function, instruction.operands[2])),
+                    );
                     changed.push((register, self.merge(&a, &b)));
                 }
             }
@@ -525,12 +537,9 @@ impl<'a> Solver<'a> {
         while !self.blocks.is_empty() || !self.values.is_empty() {
             while let Some(work) = self.values.pop() {
                 let users: Vec<(GlobalId, InstId)> = match work {
-                    Work::Value(function, value) => self
-                        .function(function)
-                        .users(value)
-                        .into_iter()
-                        .map(|one| (function, one.user))
-                        .collect(),
+                    Work::Value(function, value) => {
+                        self.function(function).users(value).into_iter().map(|one| (function, one.user)).collect()
+                    }
                     Work::Global(global) => self.users.get(&global).cloned().unwrap_or_default(),
                 };
                 for (function, inst) in users {
