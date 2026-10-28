@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 212 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 213 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -23,6 +23,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | cgpaddr | CodeGenPrepare: comparison and address sinking, so isel sees one form: LLVM's `sinkCmpExpression`, `sinkAndCmp0Expression` and `optimizeMemoryInst` (address-mode sinking, below), and GVNSink's merge of equal arms. | Once, last of the function passes before `spares` and `homes`, after | [cgpaddr](cgpaddr.md) |
 | cgpbranch | CodeGenPrepare's `optimizeBranch`: a branch on a compare with a constant becomes a branch on a compare with zero of a value a successor computes anyway, where the target prefers one ([CodeGenPrepare.cpp#L8878](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8878)). | In `cgpaddr`'s run, before the compare sinks. | [cgpbranch](cgpbranch.md) |
 | cgpmemalign | The alignment of a memory intrinsic's pointers, raised to what is known of them: `CodeGenPrepare::optimizeCallInst`, which sets the destination (and the source of a transfer) `align` to `getKnownAlignment` where that is larger than the call states. | In `cgpaddr`, with the pass's other CodeGenPrepare rewrites. | [cgpmemalign](cgpmemalign.md) |
+| cgpretdup | CodeGenPrepare's `dupRetToEnableTailCallOpts`: a return block that only returns what a tail call produced is copied into the predecessors that end in that call ([CodeGenPrepare.cpp#L3014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L3014)). | In `cgpaddr`'s run, after the empty blocks go. | [cgpretdup](cgpretdup.md) |
 | cgpswitch | CodeGenPrepare's `optimizeSwitchType`: a switch on an integer narrower than the target's preferred width is a switch on the extended condition ([CodeGenPrepare.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp)). | In `cgpaddr`'s run. | [cgpswitch](cgpswitch.md) |
 | cmpopt | CodeGenPrepare's `optimizeCmp` steps after the overflow combines: the power-of-two test of `ctpop` unfolded, an equality made the opposite of the signed compare that dominates it, and compare operands swapped to match a subtract ([CodeGenPrepare.cpp#L8805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8805)). | In `cgpaddr`'s run, after the compare sinks. | [cmpopt](cmpopt.md) |
 | combine | One worklist over a function's instructions: each is visited, simplified to a value it equals when its operands say so, and what read it is visited again. | `combine_pass::Combine`, the `combine@N` slots of LLVM's order. | [combine](combine.md) |
