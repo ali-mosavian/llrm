@@ -39,4 +39,6 @@ pub mod x86_test;
 /// A small DAG and hooks for the tests and for `examples/price.rs`.
 pub mod testing;
 #[cfg(test)]
+mod aarch64_tests;
+#[cfg(test)]
 mod tests;
