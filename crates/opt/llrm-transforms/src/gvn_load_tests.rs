@@ -3,6 +3,7 @@
 //! with the value coerced where the sizes differ. Each case runs the
 //! interpreter before and after.
 
+use llrm_analysis::testing::m16_ir;
 use llrm_mir::module::Module;
 use llrm_mir::passes::Outer;
 
@@ -365,7 +366,7 @@ b0:
 #[test]
 fn test_a_load_through_a_far_cast_of_a_global_sees_the_store_to_its_own_offset() {
     let mut module = parsed(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+        m16_ir("target datalayout = \"@m16-datalayout@-ni:2:3\"
 @c = internal global [48 x i8] zeroinitializer
 @b = internal global [6 x i8] zeroinitializer
 define i32 @f(i16 %0) {
@@ -376,7 +377,7 @@ b1:
   %2 = ptrtoint ptr addrspace(1) %1 to i32
   ret i32 %2
 }
-",
+"),
     );
     let layout = llrm_analysis::testing::layout(&module);
     let outer = Outer::of(&module, None);

@@ -366,7 +366,7 @@ mod tests {
     }
 
     fn names(body: &LirBody) -> Vec<String> {
-        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+        body.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }
 
     fn zero(value: u32) -> Arc<Insn> {

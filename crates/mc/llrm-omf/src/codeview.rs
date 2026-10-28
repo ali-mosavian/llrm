@@ -3,7 +3,7 @@
 //! CodeView 4 as `cvwrite` writes it cannot say is refused with what it was.
 
 use llrm_object::debug::{self as model, Info, Location};
-use llrm_object::{Definition, Kind as Fixup, Object, Reloc, Role, Section, Target};
+use llrm_object::{DebugSection, Definition, Fix, Object, Reloc, Role, Section, Target};
 
 use crate::cvwrite::{self, Flavor, Reach, Scalar, Type};
 use crate::write::Error;
@@ -242,16 +242,28 @@ pub fn sections(
         // The image holds zeros where LINK fills in, the displacement is the
         // addend.
         image[one.at..one.at + 2].fill(0);
-        relocs.push(Reloc {
-            at: one.at,
-            kind: if one.far { Fixup::FarPointer } else { Fixup::Abs { width: 2 } },
-            target: Target::Symbol(symbol),
-            addend: i64::from(one.displacement as i16),
-        });
+        relocs.push(Reloc::new(
+            one.at,
+            if one.far { Fix::FAR_POINTER } else { Fix::abs(2) },
+            Target::Symbol(symbol),
+            i64::from(one.displacement as i16),
+        ));
     }
     let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| {
         let spans = if image.is_empty() { Vec::new() } else { vec![[0, image.len()]] };
-        Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, image, spans, relocs }
+        Section {
+            name: name.to_owned(),
+            role: Role::Debug(if name == SYMBOLS {
+                DebugSection::CodeViewSymbols
+            } else {
+                DebugSection::CodeViewTypes
+            }),
+            near: true,
+            align: 1,
+            image,
+            spans,
+            relocs,
+        }
     };
     Ok([section(SYMBOLS, image, relocs), section(TYPES, encoded.types, Vec::new())])
 }
@@ -278,7 +290,7 @@ pub fn lines(
 #[cfg(test)]
 mod tests {
     use llrm_object::debug::{Function, Line, Range, Scalar as S, Type as T, Variable};
-    use llrm_object::{Arch, Binding, Definition, Symbol};
+    use llrm_object::{Binding, Definition, Symbol};
 
     use super::*;
     use crate::{cvinfo, omf, write};
@@ -327,7 +339,7 @@ mod tests {
         };
         Object {
             name: "f.c".into(),
-            arch: Arch::I8086,
+            bits: 16,
             sections: vec![text],
             symbols: vec![Symbol {
                 name: "_f".into(),
@@ -363,7 +375,7 @@ mod tests {
             vec![local("x", model::Kind::Parameter, 4), local("y", model::Kind::Local, -2)],
             vec![int(), procedure()],
         );
-        let records = omf::parse(&write::write(&made).unwrap()).unwrap();
+        let records = omf::parse(&write::write_generic(&made).unwrap()).unwrap();
         let shape = cvinfo::parse(&records).shape();
         assert_eq!(
             shape,
@@ -399,7 +411,7 @@ mod tests {
             kind: model::Kind::Parameter,
             location: Location::Register("ax".into()),
         };
-        let why = write::write(&object(vec![in_register], vec![int(), procedure()])).unwrap_err().to_string();
+        let why = write::write_generic(&object(vec![in_register], vec![int(), procedure()])).unwrap_err().to_string();
         assert!(why.contains("x is in register ax"), "{why}");
     }
 
@@ -417,7 +429,7 @@ mod tests {
         let mut made = made;
         made.debug.as_mut().unwrap().functions[0].variables[1].r#type = 1;
         made.debug.as_mut().unwrap().functions[0].r#type = 2;
-        let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
+        let shape = cvinfo::parse(&omf::parse(&write::write_generic(&made).unwrap()).unwrap()).shape();
         // `void` reads as STRING in CodeView's raw return code, as it does for
         // any void function.
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 () -> STRING"], "{shape:#?}");
@@ -442,7 +454,7 @@ mod tests {
             location: Location::List(Vec::new()),
         };
         let made = object(vec![local("x", model::Kind::Parameter, 4), in_register, removed], vec![int(), procedure()]);
-        let shape = cvinfo::parse(&omf::parse(&write::write(&made).unwrap()).unwrap()).shape();
+        let shape = cvinfo::parse(&omf::parse(&write::write_generic(&made).unwrap()).unwrap()).shape();
         assert_eq!(shape, ["PARAM f.x: INTEGER", "PROC f flags 0 (INTEGER) -> INTEGER"], "{shape:#?}");
     }
 }

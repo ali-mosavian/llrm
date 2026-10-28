@@ -1,6 +1,7 @@
 """The per-merge tests of feat/parity: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -330,7 +331,7 @@ def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
         def __init__(self, out, code):
             self.stdout, self.stderr, self.returncode = out, "", code
 
-    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
+    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
     failed = ps.docs_failures(run=lambda command: Done(stale, 1))
     assert any("docs/optimizations/backend/jumps.md" in name for name in failed) and all("--sync" in why for why in failed.values()), failed
     assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
@@ -683,6 +684,17 @@ assertion `left == right` failed: a node on the worklist is ready
     assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"
 
 
+def test_the_compile_smoke_drives_the_c_compiler_llrm_cc_names(tmp_path, monkeypatch):
+    """C2 switches the C compiler to llrm-cc: a smoke that compiled with the name "llrm-c" would still pass on a dist that has only the old binary."""
+    seen = []
+    monkeypatch.setattr(ps, "compile_ok", lambda command, env: seen.append(Path(command[0]).name))
+    for name in ("llrm-cc", "llrm-c"):
+        (tmp_path / name).write_text("")
+    ps.programs(tmp_path)
+    assert {"llrm-cc"} <= set(seen) and "llrm-c" not in seen
+
+
+
 def test_a_failing_scanner_names_the_stale_pages_in_its_cause():
     """docs_in_sync was refused at 01:41, 01:44 and 02:08 as a bare test name; w1 could not tell which page, and the scratch tree passed."""
     output = """\
@@ -696,7 +708,7 @@ failures:
 ---- test_no_generated_page_is_stale stdout ----
 
 thread 'test_no_generated_page_is_stale' (123) panicked at tests/docs_in_sync.rs:24:5:
-run python3 tools/docsbuild/build.py --sync:
+run python3 tools/docs/docsbuild/build.py --sync:
   docs/optimizations/passes/lsr_solve.md
   docs/optimizations/passes/sinkcast.md
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
@@ -710,3 +722,32 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
     cause = ps.causes_of(failed)
     assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
+
+
+def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
+    """llrm-codegen had no ranking, so a codegen PR ran its whole lib: 168 G of 60 G, #5325's batch refused four times."""
+    ranking = ps.selection().get("units", {})
+    for crate in ("llrm-codegen", "llrm-mir", "llrm-cc"):
+        assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
+
+
+def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
+    """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
+    if shutil.which("perf") is None:
+        pytest.skip("no perf")
+    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
+    with ps.Meter() as counted:
+        code, _ = ps.run_cut([sys.executable, "-c", "while True: pass"], 1.0, tmp_path)
+    assert code is None
+    assert counted.value is not None and counted.value > 100_000_000, counted.value
+
+
+def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
+    """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
+    seen = []
+    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: seen.append(env) or (0, ""))
+    monkeypatch.setattr(ps, "selection", lambda: {"units": {"ranked": {"tests": [["t_a", 0.1]]}}})
+    monkeypatch.setattr(ps.xfail, "load_for", lambda root: {})
+    ps.unit_step("unranked", 5.0)(Path("."))
+    ps.unit_step("ranked", 5.0)(Path("."))
+    assert seen[0]["RUST_TEST_THREADS"] == "1" and seen[1] is None, seen

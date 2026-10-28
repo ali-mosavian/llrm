@@ -78,6 +78,21 @@ evidence = '''
 rt/rtterm.asm: `cProc B$CEND,<PUBLIC,FAR,FORCEFRAME>`, no parameters, `Exceptions: Does not return.` -- END and SYSTEM. It zeroes b$errnum and branches to the END executor, closing files and terminating the runtime.
 '''
 
+["B$CENC"]
+cleanup = 2
+control = "never"
+enters_user_code = false
+raises_error = false
+error_handling = false
+writes = "OWN"
+reads = "OWN"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = true
+inputs = []
+evidence = '''
+rt/rtterm.asm (PDS 7.1 BCL71ENR.LIB module rtterm, disassembled): B$CENC is `push bp; mov bp,sp; mov ax,[bp+6]; mov b$ExitCode,al` and falls into B$CEND's body, so it takes one word (the exit code, low byte used) and never returns. BC 7.1 and VBDOS emit `mov ax,n; push ax; call far B$CENC` for `END n` and `SYSTEM n`; QB 4.5 BC rejects `END 3` as a syntax error.
+'''
+
 ["B$CENP"]
 cleanup = 0
 control = "never"
@@ -1276,6 +1291,9 @@ check = { when = "$0 < 0 or 255 < $0", raise = 5 }
 "B$DRAW" = 2
 "B$VARP" = 4
 "B$SADD" = 2
+# PDS 7.1 BCL71ENR.LIB stcommon.asm at 0035: `push bp / mov bp,sp / mov bx,[bp+6] / mov ax,ds`, one near
+# descriptor word, the tail `pop bp / retf 2`; the segment comes back in ax.
+"B$SSEG" = 2
 "B$SDAT" = 2
 "B$STIM" = 2
 "B$FDAT" = 0
@@ -1687,3 +1705,144 @@ established = false
 evidence = '''
 rt/bload.asm: `cProc B$BLOD,<PUBLIC,FAR>` with three ParmW (pFileName, Offs, third), so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''
+
+["B$SCLR"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/clear.asm: `cProc B$SCLR,<FAR,PUBLIC>` with parmW stack and parmW fStack, so it returns with `ret 4`. It zeroes the program's data segment, closes the files, starts the heaps afresh and may move the stack, so every register and every byte of memory is conceded, as is a callback into the program.
+'''
+
+["B$SCHN"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+BC 4.50 on `CHAIN "NEXT"`: `mov ax,<descriptor> / push ax / call far B$SCHN`, then B$CENP; BCOM45.LIB osrun.asm B$SCHN opens with `push bp / mov bp,sp / mov bx,[bp+6]`, one word. Only the cleanup is claimed: it loads and runs another program, so every register and every byte of memory is conceded.
+'''
+
+["B$DTSR"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+VBDCL10E.LIB evalfn.asm defines B$DTSR. VBDOS BC on `d = DATESERIAL(1992, 2, 29)`: three `mov ax,<word> / push ax`, `call far B$DTSR`, then `mov si,ax` and four MOVSW copy the R8 AX points to into the variable, with nothing popped after the call, so the callee pops its three words (ret 6). Only the cleanup is claimed: the body was not read, so every register and every byte of memory is conceded.
+'''
+
+["B$FLDP"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/field.asm: `cProc B$FLDP,<PUBLIC,FAR>,<SI>` with one ParmW (Channel), so it returns with `ret 2`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$FIEL"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/field.asm: `cProc B$FIEL,<PUBLIC,FAR>,<SI>` with two ParmW (Wid, psdStringVar), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$GET1"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$GET1,<PUBLIC,FAR>` with one ParmW (Channel), so it returns with `ret 2`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$PUT1"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$PUT1,<PUBLIC,FAR>` with one ParmW (Channel), so it returns with `ret 2`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$GET2"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$GET2,<PUBLIC,FAR>` with a ParmW channel and a ParmD record number, so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$PUT2"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$PUT2,<PUBLIC,FAR>` with a ParmW channel and a ParmD record number, so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$PCPY"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/grview.asm: `cProc B$PCPY,<PUBLIC,FAR>` with two ParmW (FromPage, ToPage), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+

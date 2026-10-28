@@ -213,6 +213,9 @@ pub struct RuntimeContracts<'a> {
     /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
     /// then dropped.
     pub frame_zeroed: bool,
+    /// What the module's finished callees wrote, which a call of one destroys
+    /// and no more (`isel`'s `written`).
+    pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
 }
 
 /// For each call in `function` of a `llrm.qb.` routine: `Ok` when the
@@ -285,8 +288,10 @@ fn modelled(
         return Err("QB runtime routine that returns to an inline table");
     }
     // The callee pops all it was pushed (16/32-bit routines), or the caller
-    // pops it and the routine cleans nothing (SysV, where QB calls are C).
-    if contract.cleanup != Some(plan.popped) || (plan.popped != pushed && plan.popped != 0) {
+    // pops it and the routine cleans nothing (SysV, where QB calls are C). As
+    // the old selector reads it: the caller removes `caller_cleanup` bytes and
+    // the callee the rest, whatever its 16-bit table block declares.
+    if pushed - contract.caller_cleanup != plan.popped || (plan.popped != pushed && plan.popped != 0) {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })
@@ -302,6 +307,28 @@ impl CallConventions<'_> {
         let (contracts, Some(Callee::Global(id))) = (self.contracts?, callee) else { return None };
         let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
         contracts.abi.contract(&name, false, 0).ok()
+    }
+
+    /// The convention a call of `callee` follows: its function's own, or, for
+    /// a variadic function, the one that entry names (`variadic = "cdecl32"`).
+    fn convention_of(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<&'static llrm_target::calling::Convention> {
+        let (number, variadic) = match callee {
+            Some(Callee::Global(id)) => self
+                .module
+                .global(llrm_mir::context::GlobalId(*id))
+                .function()
+                .map_or((0, false), |function| (function.calling_convention, self.module.signature(function.ty).2)),
+            _ => (0, false),
+        };
+        let calling = self.arch.calling();
+        let found = calling.by_number(number)?;
+        match found.variadic.as_deref().filter(|_| variadic) {
+            Some(name) => calling.named(name),
+            None => Some(found),
+        }
     }
 
     fn contract_clobbers(
@@ -337,17 +364,24 @@ impl CallConventions<'_> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn written(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<(
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    )> {
+        let Some(Callee::Global(id)) = callee else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned()?;
+        let written = self.contracts?.facts?.written(&name)?;
+        Some((written.whole, written.high))
+    }
+
     fn clobbers_high(
         &self,
         callee: Option<&Callee>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
-        let number = match callee {
-            Some(Callee::Global(id)) => {
-                self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
-            }
-            _ => 0,
-        };
-        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_high(callee) };
+        let Some(found) = self.convention_of(callee) else { return self.contract_high(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         self.arch
             .convention_callee_saved(found)
@@ -395,15 +429,9 @@ impl super::emit::Conventions for CallConventions<'_> {
                 return Some(routine.clobbers.iter().map(|reg| regs.root(*reg)).collect());
             }
         }
-        let number = match callee {
-            Some(Callee::Global(id)) => {
-                self.module.global(llrm_mir::context::GlobalId(*id)).function().map_or(0, |f| f.calling_convention)
-            }
-            _ => 0,
-        };
         // BASIC's convention (and any other with no row in calling.toml) is
         // the ABI's contract of the routine, as the old selector reads it.
-        let Some(found) = self.arch.calling().by_number(number) else { return self.contract_clobbers(callee) };
+        let Some(found) = self.convention_of(callee) else { return self.contract_clobbers(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         let mut out: std::collections::BTreeSet<_> = found
             .clobbered
@@ -448,7 +476,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     slots
         .entry(bits)
         .or_insert_with(|| {
-            let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let forms = llrm_target::instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
             let opcodes = match bits {
                 16 => x86_m16::MACHINE_OPCODES,
                 64 => x86_x64::MACHINE_OPCODES,
@@ -676,6 +704,10 @@ fn selected_in(
     };
     let Some(text) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(text).map_err(Unselected)?;
+    // The pin's combineMul declines only at `minsize`. Where a pointer is
+    // narrower than the widest native integer (m16), -Os keeps `imul` as well:
+    // the chains grow its objects (27 of 175 by 3550 B, tests/run/c -Os).
+    let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
@@ -684,7 +716,7 @@ fn selected_in(
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
-        TargetLowering::x86_64(Features::default(), MVT::I64)
+        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), ..Features::default() }, MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -718,10 +750,12 @@ fn selected_in(
         .with_runtime_calls(libcalls)
         .with_float_store(cpu.float_store)
         // DIV-OPTSIZE-1: llrm's -Os keeps the divide too (the pin: minsize
-        // only). Flipping it grows m32 -Os +250 B and m16 -Os +301 B; only
-        // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
-        // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
-        // +59 B in 4 spill slots).
+        // only). Flipping it at --isel=dag grows m32 -Os +467 B over 126
+        // programs and m16 -Os +763 B over 309; matmul gains 20/3 B. Exit:
+        // keep the divide unless the expansion forces spills (matmul's `urem
+        // i16 %x,3` costs +59 B in 4 spill slots). Cost: an idiv is ~40 clocks
+        // on a 486 where the multiply is ~13; div_constants_long m32 -Os is
+        // 5095 B against the pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
@@ -886,12 +920,14 @@ fn selected_in(
         block_at: &block_at,
         frame: &frame,
         address_mode,
+        opt_size: cpu.size || cpu.min_size,
         call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
         map: &tables.map,
         names: &tables.names,
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut pops = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
     let mut sinks: HashSet<i64> = HashSet::default();
@@ -909,7 +945,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
+            &mut X86Lowering { cmov: false, sse2: arch.scalar_sse(), min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },
@@ -940,6 +976,7 @@ fn selected_in(
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }
         let from = emitted.len();
+        pops.extend(done.pops.iter().copied());
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
@@ -1123,6 +1160,44 @@ fn selected_in(
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
     body.sealed_arguments = true;
     body.ordered = true;
+    // `-g`: the parameters where the convention passes them, and each declared
+    // variable in the frame cell its alloca has.
+    body.variables = crate::backend::isel::parameters(module, function, name, &convention, &IndexMap::default());
+    body.cfa_variables = true;
+    for record in function.debug_records() {
+        let (llrm_mir::DebugWhat::Declare(llrm_mir::Operand::Value(address)), Some(variable)) =
+            (record.what, llrm_mir::debuginfo::read_variable(module, record.variable))
+        else {
+            continue;
+        };
+        let Some((disp, _)) =
+            info.static_allocas.get(&address).and_then(|&k| frame.locals.borrow().get(k as usize).copied())
+        else {
+            continue;
+        };
+        // A parameter is said once: where the convention passes it.
+        if variable.scope == name
+            && !(variable.parameter && body.variables.iter().any(|one| one.parameter && one.name == variable.name))
+        {
+            body.variables.push(crate::model::lir::DebugVariable {
+                name: variable.name,
+                r#type: variable.r#type,
+                place: crate::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
+                parameter: variable.parameter,
+                argument: variable.argument,
+                arrives: None,
+            });
+        }
+    }
+    for one in &mut body.variables {
+        if let (Some(argument), crate::model::lir::DebugPlace::At(_)) = (one.argument, &one.place) {
+            one.arrives = match usize::try_from(argument).ok().and_then(|argument| convention.parameters.get(argument))
+            {
+                Some(Parameter::Registers(registers)) if registers.len() == 1 => Some(registers[0]),
+                _ => None,
+            };
+        }
+    }
     set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):
@@ -1181,7 +1256,7 @@ fn selected_in(
         inline_places,
         inline_symbols: IndexMap::default(),
         far,
-        pops: IndexMap::default(),
+        pops,
         depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
@@ -1312,7 +1387,7 @@ fn set_odds(
     let mut stated: IndexMap<(i64, i64), u64> = IndexMap::default();
     // The pieces a block became: it, then the blocks after it in the body that
     // no IR block starts.
-    let first_of_ir: std::collections::HashSet<i64> = block_at.values().copied().collect();
+    let first_of_ir: HashSet<i64> = block_at.values().copied().collect();
     let mut piece_of: HashMap<i64, i64> = HashMap::default();
     let mut current = None;
     for one in &body.blocks {

@@ -27,7 +27,7 @@ def build(source: Path, out: Path) -> list[Path]:
             raise SystemExit(f"compile {name}: {reason}")
         exe, listing = out / f"{name}.EXE", out / f"{name}.MAP"
         loaders = dosbatch.link_target(
-            qb32.TARGET, obj, exe, out, listing=listing, before=debug, runtime=(qb32.START_FILES, []), objects_after=tuple(qb32.closure(obj, runtime))
+            qb32.TARGET, obj, exe, out, listing=listing, before=debug, runtime=(qb32.START_FILES, []), objects_after=tuple(qb32.closure(obj, runtime)), defines=dosbatch.os_defines(qb32.TARGET, "qb")
         )
         for loader in loaders:
             shutil.copy(loader, out / "DOS32A.EXE")

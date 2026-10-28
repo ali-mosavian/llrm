@@ -678,3 +678,205 @@ entry:
     let select = selected(&module, "s", &llrm_x86_m64::M64, cpu, &[]).expect("a double select is selected");
     assert!(select.body.blocks.len() >= 3, "a branch and a sink: {} blocks", select.body.blocks.len());
 }
+
+/// `fneg` and `fabs` of a `double` or `float` at m64 stopped at
+/// `CannotSelect(FXOR)`: the pin selects the sign mask's bitwise instruction
+/// with the 16-byte pool constant as its memory operand (`xorps`/`andps`).
+#[test]
+fn an_m64_fneg_and_fabs_are_a_bitwise_op_on_a_16_byte_mask() {
+    for (op, ty, name) in [
+        ("fneg double %x", "double", "xorps"),
+        ("call double @llvm.fabs.f64(double %x)", "double", "andps"),
+        ("fneg float %x", "float", "xorps"),
+        ("call float @llvm.fabs.f32(float %x)", "float", "andps"),
+    ] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare double @llvm.fabs.f64(double)
+declare float @llvm.fabs.f32(float)
+define {ty} @f({ty} %x) {{
+entry:
+  %r = {op}
+  ret {ty} %r
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{op}: {}", e.0));
+        let logic: Vec<_> = done
+            .body
+            .insns()
+            .iter()
+            .filter_map(|i| i.what.as_ref())
+            .filter(|w| w.name.as_deref() == Some(name))
+            .filter_map(|w| match w.sources.last() {
+                Some(crate::model::ir::Loc::Mem(m)) => Some(m.width),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(logic, [16], "{op}");
+    }
+}
+
+/// A bitcast between a float and an integer stopped at emit with
+/// `Unmapped("MOVSDto64rr")` (`fconst`); the pin moves between the general and
+/// the xmm register with `movq`/`movd`.
+#[test]
+fn an_m64_float_integer_bitcast_is_a_movq_or_movd() {
+    for (from, to, name) in
+        [("double", "i64", "movq"), ("i64", "double", "movq_x"), ("float", "i32", "movd"), ("i32", "float", "movd_x")]
+    {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define {to} @f({from} %x) {{
+entry:
+  %r = bitcast {from} %x to {to}
+  ret {to} %r
+}}
+"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{from}: {}", e.0));
+        let insns = done.body.insns();
+        let found = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+        assert_eq!(found, 1, "{from} to {to}");
+    }
+}
+
+/// `llvm.copysign` was a call to the C library at m64; the pin selects the
+/// magnitude and sign masks (`andps` x2) and joins them (`orps`).
+#[test]
+fn an_m64_copysign_is_two_masks_and_an_or() {
+    for ty in ["double", "float"] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare {ty} @llvm.copysign.{s}({ty}, {ty})
+define {ty} @f({ty} %x, {ty} %y) {{
+entry:
+  %r = call {ty} @llvm.copysign.{s}({ty} %x, {ty} %y)
+  ret {ty} %r
+}}
+",
+            s = if ty == "double" { "f64" } else { "f32" }
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{ty}: {}", e.0));
+        let insns = done.body.insns();
+        let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        let count = |n: &str| names.iter().filter(|x| **x == n).count();
+        assert_eq!((count("andps"), count("orps")), (2, 1), "{ty}: {names:?}");
+    }
+}
+
+/// `umul.with.overflow.i64` at m64 stopped at `CannotSelect("Target(776)")`:
+/// `X86ISD::UMUL` had the one-operand `mul` at 8, 16 and 32 bits only. It is
+/// `mul` with the operand in `rax`.
+#[test]
+fn an_m64_unsigned_multiply_with_overflow_is_a_quadword_mul() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare { i64, i1 } @llvm.umul.with.overflow.i64(i64, i64)
+define i64 @f(i64 %a, i64 %b) {
+entry:
+  %r = call { i64, i1 } @llvm.umul.with.overflow.i64(i64 %a, i64 %b)
+  %v = extractvalue { i64, i1 } %r, 0
+  %o = extractvalue { i64, i1 } %r, 1
+  %z = select i1 %o, i64 0, i64 %v
+  ret i64 %z
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "mul"), "{names:?}");
+}
+
+/// `sitofp i32 to double` at m64 stopped at `CannotSelect("Target(586)")`:
+/// the conversion took the x87 `fild` because the lowering was told there is
+/// no SSE2. x86-64 has it, and the conversion is `cvtsi2sd`.
+#[test]
+fn an_m64_integer_to_double_conversion_is_cvtsi2sd() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to double
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "cvtsi2sd"), "{names:?}");
+}
+
+/// A call in tail position at m64 stopped at `Unmapped("TCRETURNdi64")`
+/// (`gfx_set_background`, `B_SPLY` of the QB runtime): the sibling call of the
+/// 64-bit target is the 32-bit target's, a `jmp` to the callee.
+#[test]
+fn an_m64_sibling_call_is_a_jump_to_the_callee() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare i64 @g(i64)
+define i64 @f(i64 %a) {
+entry:
+  %r = tail call i64 @g(i64 %a)
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Return && w.name.as_deref() == Some("jmp"));
+    assert!(jump.is_some(), "a jmp that returns");
+}
+
+/// A function returning a `double` at m64 carried the x87 return pseudo (an
+/// unnamed `FloatStore` with no destination) that the stackifier reads at m32;
+/// the listing printer indexed its empty destinations and panicked
+/// (`masm.rs:2361`), and the ELF writer refused it. The result is in `xmm0`.
+#[test]
+fn an_m64_double_result_has_no_x87_return_store() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define double @f(i32 %a) {
+entry:
+  %r = sitofp i32 %a to double
+  ret double %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    assert!(
+        insns.iter().filter_map(|i| i.what.as_ref()).all(|w| w.op != crate::model::ir::Operation::FloatStore),
+        "{insns:?}"
+    );
+}
+
+/// `fptoui float to i64` at m64 was refused (no SSE form for an unsigned
+/// quadword) or went through the x87 `fist` in memory. It is the signed
+/// `cvttss2si` of the value less 2^63 when it is at least that, with the sign
+/// bit put back.
+#[test]
+fn an_m64_unsigned_quadword_from_a_float_is_cvttss2si() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i64 @f(float %a) {
+entry:
+  %r = fptoui float %a to i64
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
+    assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
+}

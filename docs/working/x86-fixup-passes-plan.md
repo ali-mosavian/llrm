@@ -21,3 +21,11 @@ Evidence: changed code in 63 (-O2) and 62 (-Os) of 77 IRs; objsweep, rows, QCpor
 
 ## Order and dates
 Notes (this file) 10-22; 48 PR 11-02 (draft first; lands once it builds and passes the runner's gate); 54 and 98 PRs 11-04. Size/clock/compile rows are numbered in each PR and never block; wrong output or a compile failure found after landing is that day's top item.
+
+## F2 (DEVIATE candidate, after switch-over): `MOVZX16rr8` in FixupSetCC
+
+The pin rewrites `setcc` + `MOVZX32rr8` only. At m16 a bool zero-extended to `i16` is `MOVZX16rr8`, so
+`setb al; movzx di,al` is the pin's own output (my first reading came from an i386 llc, which promotes the
+`i16` shl to `i32`). Extending `fixupsetcc.rs` to the 16-bit form saves about 1 B per bool zext; the zero
+register must be byte-addressable, so some cases cost a `mov`. Seen: `tests/run/huge/copy1d.c` -Os, dag 164 B
+against old 159 B (the carry step `select(carry, 4096, 0)`). Owner w1. Exit: tuning after switch-over.

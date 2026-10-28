@@ -360,7 +360,13 @@ impl Walk<'_> {
             .get(&id)
             .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
             .and_then(|one| one.what.as_ref())
-            .is_some_and(|what| what.op == Operation::Move)
+            .is_some_and(|what| {
+                what.op == Operation::Move
+                    && matches!(
+                        (what.dests.as_slice(), what.sources.as_slice()),
+                        ([Loc::Held(_)], [Loc::Held(_)])
+                    )
+            })
     }
 
     /// `PhysRegDefsReach`: the flags the instruction that defines `value` in
@@ -1118,6 +1124,38 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// A store of a constant is not a copy: heuristic 2 took any `mov` that
+    /// reads the value for one, so the segment constant a hoisted poke loads
+    /// twice (`pop es`, `pop fs`) stayed two values (qb textfill's Fill loop).
+    #[test]
+    fn test_a_constant_only_stores_read_is_made_once() {
+        let make = |at: i64, result: u32| {
+            let imm = Loc::Imm(llrm_lir::Imm { value: 47104, width: 2, address: None });
+            insn(at, Operation::Move, "mov", vec![held(result)], vec![imm], vec![result], vec![])
+        };
+        let store = |at: i64, value: u32, disp: i64| {
+            let cell = Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, disp)), 2));
+            insn(at, Operation::Move, "mov", vec![cell], vec![held(value)], vec![], vec![value])
+        };
+        let mut body = LirBody::new(
+            "stores",
+            0,
+            vec![LirBlock::new(0, vec![make(0, 10), make(1, 11), store(2, 10, 4), store(3, 11, 6)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let constants = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.uses.is_empty() && !one.defines.is_empty())
+                .count()
+        };
+        assert_eq!(constants(&body), 2, "the premise: two constants");
+        assert_eq!(constants(&shared(&body, &RegisterClasses::m16())), 1);
     }
 
     /// Two blocks: `first` ends in a branch on the flags of `sub v1, v2`;

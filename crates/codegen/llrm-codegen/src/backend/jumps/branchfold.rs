@@ -154,6 +154,7 @@ pub fn folded(
     let mut done = body.with_blocks(folder.blocks);
     done.odds = folder.odds;
     super::_prune(&mut done);
+    super::_forget_moved_inflow(body, &mut done);
     done
 }
 
