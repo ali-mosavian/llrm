@@ -1237,6 +1237,33 @@ fn at_os_a_12_byte_far_copy_moves_dwords() {
     assert_eq!(moves, ["movsd"], "one string move of dwords");
 }
 
+/// `(x >> 16)` of a loaded `i64` was `shrd` of the two halves loaded apart
+/// (`f_lshr_16` at m16, 8 instructions against the pin's 6): the pin's
+/// `visitFunnelShift` joins the funnel of consecutive loads into one load at
+/// the byte offset, and the high half is a narrower load.
+#[test]
+fn a_funnel_of_consecutive_loads_is_one_load_at_the_offset() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(ptr %p) {
+entry:
+  %v = load i64, ptr %p
+  %r = lshr i64 %v, 16
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n == "shrd"), "{names:?}");
+}
+
 /// A far string move left the dword each pointer was joined into for the string
 /// registers (`or(movzx off, shl sel, 16)`) in the body, read by no one. Its
 /// `shl` read the selector at four bytes, the allocator held the word in a
