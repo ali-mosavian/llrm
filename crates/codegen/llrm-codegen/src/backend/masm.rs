@@ -1491,10 +1491,8 @@ fn built(
         && sequences.entry.iter().all(|one| one.name.as_deref() != Some("enter"));
     let bp = reg(FRAME);
     // The DWARF numbers the directives name, from the target's table.
-    let dwarf = |register: RegId| {
-        let name = format!("{register:?}").to_lowercase();
-        llrm_x86::mc::unwind::register(&name).map(|number| number as u16)
-    };
+    let dwarf =
+        |register: RegId| regs.name(register).and_then(llrm_x86::mc::unwind::register).map(|number| number as u16);
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
     let mut cfi =
         numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
