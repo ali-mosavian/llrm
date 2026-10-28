@@ -730,15 +730,6 @@ why = "measured 124.6 -> 322.6 -> 15.2 (4N) Minstr (x2.59)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir decide@832"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 56.7 -> 202.0 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "mir decide@1244"
 ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
