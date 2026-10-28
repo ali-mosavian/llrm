@@ -150,6 +150,13 @@ fn opposite(cond: &str) -> &'static str {
         .expect("a condition code")
 }
 
+/// `cmovCC` as `cmov!CC`: the move that takes the other source on the
+/// opposite condition (`X86InstrInfo::commuteInstruction`, CMOV).
+pub(crate) fn opposite_cmov(name: &str) -> Option<String> {
+    let code = cond(name.strip_prefix("cmov")?)?;
+    Some(format!("cmov{}", opposite(code)))
+}
+
 /// What an instruction does with the flags it reads.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Reads {
