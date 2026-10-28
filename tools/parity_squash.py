@@ -736,6 +736,15 @@ def waiting(number: str, path: str | None = None) -> bool:
     return number in re.sub(r"#.*", "", text).split()
 
 
+def conflict_detail(head: str, body: str, base: str = BASE, cwd: Path = ROOT) -> str:
+    """` [owner W; conflicts in: file file]` for a PR whose squash GitHub refused for merge conflicts: the files `git merge-tree` finds when `head` meets `base`, and the `Owner:` line of its
+    description. #5456 and #5462 were refused at squash with neither, and the coordinator probed each by hand."""
+    done = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", base, head], cwd=cwd, capture_output=True, text=True, errors="replace")
+    files = done.stdout.splitlines()[1:] if done.returncode == 1 else []
+    owner = (re.search(r"^\s*Owner:\s*(\S+)", body or "", re.M) or [None, "unknown"])[1]
+    return f" [owner {owner}; conflicts in: {' '.join(files[:6]) or 'none found'}]"
+
+
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
     """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     run = rate_limit_proof(run)
@@ -770,7 +779,9 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         return False
     if done.returncode:
         # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
-        print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")
+        why = ' '.join((done.stderr or done.stdout or 'no message').split())[-200:]
+        detail = conflict_detail(info["headRefOid"], info.get("body") or pr_body(number)) if "merge conflicts" in why else ""
+        print(f"#{number}: REFUSED: the squash was refused by GitHub: {why}{detail}")
     return done.returncode == 0
 
 
@@ -1274,7 +1285,7 @@ def red_members(members: list[str], red_with, alone_red) -> list[str]:
     return found or [number for number in members if alone_red(number)]
 
 
-def named_files(text: str) -> set[str]:
+def files_named_in(text: str) -> set[str]:
     """The file paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`, `tools/pairs/dyn.py: 1 copies`)."""
     return set(re.findall(r"[\w-]+(?:/[\w.-]+)+\.\w+", text))
 
@@ -1872,12 +1883,19 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
         git("worktree", "add", "-q", "--detach", str(work), base, cwd=cwd)
         try:
             claimed: dict[str, str] = {}  # a name a kept PR adds -> that PR
+            started = time.monotonic()
+
+            def progress(number: str, outcome: str) -> None:
+                """One line per candidate on stderr (the runner's assemble.log): a 13-minute assembly printed nothing and nobody knew how far it was."""
+                print(f"assemble: #{number} {outcome} ({len(kept)}/{limit} kept, {time.monotonic() - started:.0f} s)", file=sys.stderr, flush=True)
+
             for number in numbers:
                 if len(kept) >= limit:
                     break
                 names = added_names(heads[number], base, cwd)
                 if clash := sorted(name for name in names if name in claimed):
                     waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
+                    progress(number, "waits (same name)")
                     continue
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
                 if merge.returncode:
@@ -1885,12 +1903,15 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                     if conflicts and not regenerate(conflicts, work):
                         kept.append(number)
                         claimed.update(dict.fromkeys(names, number))
+                        progress(number, "kept (regenerated)")
                         continue
                     subprocess.run(["git", "merge", "--abort"], cwd=work, capture_output=True)
                     waits[number] = "conflicts with an earlier PR of the batch: " + ", ".join(conflicts or ["the tree"])
+                    progress(number, "waits (conflict)")
                 else:
                     kept.append(number)
                     claimed.update(dict.fromkeys(names, number))
+                    progress(number, "kept")
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
     return kept, waits
@@ -2175,7 +2196,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
-            failure_files = named_files(parity_smoke_module().causes_of(failed_units))
+            failure_files = files_named_in(parity_smoke_module().causes_of(failed_units))
             suspects = [number for number in group if failure_files & set(head_files(infos[number]['headRefOid']))]
             return red_members_suspects_first(group, suspects, red_with, alone_red)
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
