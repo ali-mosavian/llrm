@@ -211,6 +211,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 
 | SD200 | sdag-b | condition lowering without the reassociated/immediate bit-test forms and the carry folds | `selectiondag/x86_lowering.rs` |
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
+| SD43 | w9 | `AssertSext`/`AssertZext` dropped ahead of the matcher, not inside `SelectCodeCommon` | `selectiondag/dag_select.rs` |
 | SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD403 | sdag-d | the DAG path (`--isel=dag`): no branch odds or counted-loop trip counts, calls, locals, register arguments, switch lowering or multi-register phis yet; exit D1e, review 2026-12-03 | `selectiondag/dag_function.rs` |
 | SD404 | sdag-d | a rep-stos/rep-movs idiom for a word fill and a descending copy (`std; rep movs; cld`). The pin keeps both as counted loops, so this is a deviation: priced by the 486 loop at 4 instructions a trip against `rep stosw` at 5 + n clocks, and by the 5 bytes the loop's bounds check costs; unmeasured on a program. No code until priced on a program set | `selectiondag/emit.rs` |
