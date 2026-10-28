@@ -59,7 +59,6 @@ Every layer prints its failures as names and the gate compares them with the hea
 | llrm-elf64 | 5 | 0 | 0 |
 | llrm-object | 3 | 0 | 0 |
 | llrm-coff64 | 3 | 0 | 0 |
-| llrm-instr | 2 | 0 | 0 |
 | llrm-x86-m64 | 2 | 0 | 0 |
 | llrm-elf-arm64 | 2 | 0 | 0 |
 | llrm-env | 1 | 0 | 0 |

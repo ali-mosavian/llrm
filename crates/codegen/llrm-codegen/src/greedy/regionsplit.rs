@@ -28,7 +28,8 @@
 //!
 //! DEVIATE D-RS3: no `trySplitAroundHintReg` (as in `greedy`);
 //! `shouldRegionSplitForVirtReg` is true (it only declines a huge
-//! rematerializable value, and rematerialization is not recognised, D-E1).
+//! rematerializable value, and rematerialization is recognised per definition,
+//! `greedy/remat.rs`).
 //!
 //! DEVIATE D-RS4: `DebugVars->splitRegister` and the verifier calls are not
 //! here: LIR has neither.

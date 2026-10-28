@@ -129,6 +129,7 @@ pub mod fold;
 pub mod fp_combine;
 pub mod fp_value;
 pub mod function_lowering;
+pub mod iminmax_combine;
 pub mod inline_asm;
 pub mod known_bits;
 pub mod legalize_dag;
