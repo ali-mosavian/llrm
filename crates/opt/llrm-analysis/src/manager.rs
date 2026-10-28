@@ -283,7 +283,7 @@ impl ModuleAnalysis for ForgedSelectors {
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
-    type Result = Result<Rc<IndexMap<String, Summary>>, String>;
+    type Result = Result<Rc<IndexMap<String, Rc<Summary>>>, String>;
     const NAME: &'static str = "summaries";
     fn covers(
         stale: &Self::Result,

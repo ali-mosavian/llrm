@@ -30,6 +30,8 @@
 //! `mod_ref_for_global` says, and `globals_listed` keeps the unknown access
 //! from reaching it. Without a `FunctionInfo` the unknown access reaches it.
 
+use std::rc::Rc;
+
 use llrm_mir::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::Facts;
@@ -61,7 +63,7 @@ pub struct Last<'a> {
     pub declared_now: &'a [GlobalValue],
     pub found: &'a crate::globalsmodref::GlobalsModRef,
     pub tracked: &'a std::collections::BTreeSet<GlobalId>,
-    pub made: &'a mut IndexMap<String, Summary>,
+    pub made: &'a mut IndexMap<String, Rc<Summary>>,
 }
 
 /// How many times this thread has brought the summaries up to date after
@@ -86,7 +88,7 @@ pub fn summaries(
     layout: &DataLayout,
     tracked: &std::collections::BTreeSet<GlobalId>,
     found: &crate::globalsmodref::GlobalsModRef,
-) -> IndexMap<String, Summary> {
+) -> IndexMap<String, Rc<Summary>> {
     summaries_reusing(module, layout, tracked, found, None)
 }
 
@@ -100,7 +102,7 @@ pub fn summaries_reusing(
     tracked: &std::collections::BTreeSet<GlobalId>,
     found: &crate::globalsmodref::GlobalsModRef,
     last: Option<Last>,
-) -> IndexMap<String, Summary> {
+) -> IndexMap<String, Rc<Summary>> {
     MADE.with(|made| made.set(made.get() + 1));
     let objects = ObjectInterner::of(&module.context);
     let listable = tracked.iter().all(|&id| found.is_non_address_taken(id));
@@ -126,7 +128,7 @@ pub fn summaries_reusing(
         }
         SUMMARIZED.with(|made| made.set(made.get() + 1));
         let summary = summary_of(module, layout, tracked, found, listable, &objects, id, function);
-        out.insert(name.clone(), summary);
+        out.insert(name.clone(), Rc::new(summary));
     }
     out
 }
@@ -139,7 +141,7 @@ pub fn resummarized(
     layout: &DataLayout,
     tracked: &std::collections::BTreeSet<GlobalId>,
     found: &crate::globalsmodref::GlobalsModRef,
-    made: &mut IndexMap<String, Summary>,
+    made: &mut IndexMap<String, Rc<Summary>>,
     ids: impl IntoIterator<Item = GlobalId>,
 ) {
     BROUGHT_UP.with(|made| made.set(made.get() + 1));
@@ -151,7 +153,10 @@ pub fn resummarized(
         match global.function().filter(|function| !function.is_declaration()) {
             Some(function) => {
                 SUMMARIZED.with(|made| made.set(made.get() + 1));
-                made.insert(name.clone(), summary_of(module, layout, tracked, found, listable, &objects, id, function));
+                made.insert(
+                    name.clone(),
+                    Rc::new(summary_of(module, layout, tracked, found, listable, &objects, id, function)),
+                );
             }
             None => {
                 made.swap_remove(name);
