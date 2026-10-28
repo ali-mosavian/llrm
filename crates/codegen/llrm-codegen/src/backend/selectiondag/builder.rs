@@ -1096,6 +1096,7 @@ impl Builder<'_> {
         let mut values = Vec::new();
         for argument in arguments {
             let value = self.get_value(*argument)?;
+            let value = self.pass_float_bits(*argument, value);
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1213,6 +1214,30 @@ impl Builder<'_> {
 
     /// `LowerCall` for arguments already evaluated: the sequence from
     /// `callseq_start` to the result read back; the result, if any.
+    /// DEVIATE SD256: at optsize an `f32` argument that is only a memory value
+    /// (its load has no other user) is passed as the dword it is. The pin
+    /// loads it onto the x87 stack and stores it to the argument slot (`fld;
+    /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
+    /// `push dword ptr [m]`.
+    fn pass_float_bits(
+        &mut self,
+        argument: Operand,
+        value: SDValue,
+    ) -> SDValue {
+        let sole = matches!(
+            argument,
+            Operand::Value(result) if self.function.users(result).into_iter().count() == 1
+        );
+        if sole
+            && self.has_opt_size()
+            && self.dag.value_type(value) == EVT::Simple(MVT::F32)
+            && self.dag.opcode(value) == ISD::Load
+        {
+            return self.dag.get_node(ISD::BitCast, EVT::Simple(MVT::I32), &[value]);
+        }
+        value
+    }
+
     pub(super) fn lower_call(
         &mut self,
         callee_node: SDValue,
