@@ -289,6 +289,7 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
+ "llrm-c",
  "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
