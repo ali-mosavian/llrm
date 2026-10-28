@@ -392,6 +392,19 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
 }
 
+/// `x == 0xFFFFFFF7` on an `i64` stopped the encoder at `cmp rdi, 0xfffffff7`:
+/// `foldImmediate` put a zero-extended 32-bit constant in a 64-bit immediate,
+/// which the CPU sign-extends. It stays in a register.
+#[test]
+fn a_64_bit_constant_past_the_signed_32_bit_range_is_not_folded() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(i64 %x) {\n  %r = icmp eq i64 %x, 4294967287\n  ret i1 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("4294967287") || listing.contains("mov"), "{listing}");
+}
+
 /// A `double` argument came in `xmm0` and went to `rax` and back
 /// (`mov rax, xmm0; mov xmm0, rax; addsd xmm0, xmm1`): the value delivered in
 /// an xmm register named no xmm operand, so the allocator took a
