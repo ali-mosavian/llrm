@@ -18,29 +18,13 @@
 //! DEVIATE 1: `foldVectorBinop` is not translated: MIR has no vector
 //! operations, so no `ConstantVector` case either.
 //!
-//! DEVIATE 2 (temporary): steps that call a helper another family owns are
-//! left out and named where they stood: `foldBinopWithPhiOperands` (phi
-//! family),
-//! `foldBinOpIntoSelectOrPhi`, `foldBinOpSelectBinOp`,
-//! `foldBinOpOfSelectAndCastOfSelectCondition` and `FoldOpIntoSelect` (select
-//! family). Each is a
-//! `// DEVIATE 2:` comment at its place in the order.
-//!
-//! DEVIATE 3 (temporary): the folds that build an intrinsic call (`abs`,
-//! `umin`, `umax`, `cttz`) are left out until the Builder can declare an
-//! intrinsic (`combine_build` DEVIATE 2); each is a `// DEVIATE 3:` comment at
-//! its place. `takeLog2` cannot look through `umin`/`umax` for the same reason.
+//! DEVIATE 2 (temporary): `foldBinOpSelectBinOp` and
+//! `foldBinOpOfSelectAndCastOfSelectCondition` (select family) are left out,
+//! each a `// DEVIATE 2:` comment at its place in the order.
 //!
 //! DEVIATE 4: a constant that `ConstantExpr::getNeg` or `getShl` would leave
 //! as an expression is not built (MIR holds no binary constant expressions):
 //! the fold is skipped where the constants do not fold to a number.
-//!
-//! DEVIATE 5 (temporary): `narrowMathIfNoOverflow` (`InstructionCombining.cpp`,
-//! shared with `visitAdd`) is left out until `combine_shared` has it.
-//!
-//! DEVIATE 6 (temporary): `Negator::Negate` is not translated; it is taken to
-//! fail, so the two folds that use it are skipped and the step after each
-//! (the `zext`/`sext` multiply by `-1 << C`) is tried where C++ would stop.
 //!
 //! DEVIATE 8: `simplifyICmpInst` in `visitURem` is asked without the context
 //! instruction, dominator tree and assumptions (no query that takes them):
@@ -577,17 +561,23 @@ fn fold_mul_of_exact_shr(
 }
 
 /// `Op0->hasOneUse() && match(Op1, m_NegatedPower2())`: `X * (-1<<C)` as `(-X)
-/// * (1<<C)`; DEVIATE 6 for the `Negator` half.
+/// * (1<<C)`.
 fn fold_mul_by_negated_power_of_two(
     c: &mut Combiner,
     inst: InstId,
 ) -> Option<Visit> {
-    let (op0, op1, _) = parts(c, inst);
+    let (op0, op1, flags) = parts(c, inst);
     let (neg_pow2, w) = apint(c, op1)?;
     if !has_one_use(c, op0) || !is_negated_power2(neg_pow2, w) {
         return None;
     }
-    // DEVIATE 6: Negator::Negate(/*IsNegation*/ true, HasNSW, Op0).
+    // Interpret X * (-1<<C) as (-X) * (1<<C) and try to sink the negation.
+    let has_nsw = flags.contains(Flags::NSW);
+    if let Some(neg_op0) = c.negate(true, has_nsw, op0) {
+        let neg_c = negate(c, op1)?;
+        let nsw = has_nsw && is_not_min_signed(c, op1);
+        return Some(Visit::Replace(c.create_binop(inst, BinaryOp::Mul, neg_op0, neg_c, wrap(false, nsw))));
+    }
 
     // ({z/s}ext X) * (-1<<C) --> (zext (-X)) << C
     let x = {
@@ -963,7 +953,24 @@ pub(crate) fn take_log2(
         return Some(if do_fold { c.create_select(at, cond, log_x, log_y) } else { op });
     }
 
-    // DEVIATE 3: log2(umin(X, Y)) -> umin(log2(X), log2(Y)), and umax.
+    // log2(umin(X, Y)) -> umin(log2(X), log2(Y))
+    // log2(umax(X, Y)) -> umax(log2(X), log2(Y))
+    if has_one_use(c, op) {
+        for base in ["umin", "umax"] {
+            let args = {
+                let q = query(c, None);
+                pattern::intrinsic_call(&q, op, &format!("llvm.{base}")).map(|(_, args)| args.to_vec())
+            };
+            // Use AssumeNonZero as false here. Otherwise we can hit case where
+            // log2(umax(X, Y)) != umax(log2(X), log2(Y)) (because overflow).
+            if let Some([x, y]) = args.as_deref()
+                && let Some(log_x) = take_log2(c, at, *x, depth, false, do_fold)
+                && let Some(log_y) = take_log2(c, at, *y, depth, false, do_fold)
+            {
+                return Some(if do_fold { c.create_intrinsic(at, base, ty, &[log_x, log_y]) } else { op });
+            }
+        }
+    }
 
     // log2(X + 1) IIF X[0,1] -> X
     if width(c, op) != 1
@@ -1002,7 +1009,10 @@ pub fn visit_mul(
         return Visit::Changed;
     }
     // DEVIATE 1: foldVectorBinop.
-    // DEVIATE 2: foldBinopWithPhiOperands.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return phi;
+    }
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
     }
@@ -1025,7 +1035,10 @@ pub fn visit_mul(
     if let Some(r) = fold_mul_by_negated_power_of_two(c, inst) {
         return r;
     }
-    // DEVIATE 2: foldBinOpIntoSelectOrPhi.
+    let folded = c.fold_bin_op_into_select_or_phi(inst);
+    if !matches!(folded, Visit::None) {
+        return folded;
+    }
     // DEVIATE 2: foldBinOpSelectBinOp.
     if let Some(folded) = fold_mul_select_to_negate(c, inst) {
         return Visit::Replace(folded);
@@ -1047,7 +1060,22 @@ pub fn visit_mul(
     {
         return c.replace_with_binop(inst, BinaryOp::Mul, args[0], args[0], Flags::default());
     }
-    // DEVIATE 3: abs(X) * abs(Y) -> abs(X * Y)
+    // abs(X) * abs(Y) -> abs(X * Y)
+    if flags.contains(Flags::NSW) && has_one_use(c, op0) && has_one_use(c, op1) {
+        let abs_of = |c: &Combiner, v: Operand| {
+            let q = query(c, None);
+            let (_, call) = pattern::intrinsic(&q, v, IntrinsicId::Abs)?;
+            let args = pattern::call_arguments(call);
+            pattern::one(&q, args[1]).then_some(args[0])
+        };
+        if let (Some(x), Some(y)) = (abs_of(c, op0), abs_of(c, op1)) {
+            let product = c.create_binop(inst, BinaryOp::Mul, x, y, wrap(false, true));
+            let ty = c.type_of(product);
+            let i1 = c.context.types.int(1);
+            let poison = c.int(i1, 1);
+            return Visit::Replace(c.create_intrinsic(inst, "abs", ty, &[product, poison]));
+        }
+    }
 
     // -X * C --> X * -C
     let neg0 = pattern::neg(&query(c, Some(inst)), op0);
@@ -1081,7 +1109,11 @@ pub fn visit_mul(
 
     // (-X * Y) * -X --> (X * Y) * X
     // (-X << Y) * -X --> (X << Y) * X
-    // DEVIATE 6: Negator::Negate(false, /*IsNSW*/ false, Op0) when Op1 is -X.
+    if let Some((_, x, _)) = neg1
+        && let Some(neg_op0) = c.negate(false, false, op0)
+    {
+        return Visit::Replace(c.create_binop(inst, BinaryOp::Mul, neg_op0, x, Flags::default()));
+    }
 
     if let Some(r) = fold_mul_of_exact_div(c, inst) {
         return r;
@@ -1113,8 +1145,34 @@ pub fn visit_mul(
     if let Some(r) = fold_mul_to_select(c, inst) {
         return r;
     }
-    // DEVIATE 3: ((ashr X, 31) | 1) * X --> abs(X)
-    // DEVIATE 5: narrowMathIfNoOverflow.
+    // ((ashr X, 31) | 1) * X --> abs(X)
+    // X * ((ashr X, 31) | 1) --> abs(X)
+    let sign_or_one = |c: &Combiner, v: Operand| {
+        let q = query(c, None);
+        let bits = width(c, v);
+        let (l, r, _) = binop(&q, v, BinaryOp::Or)?;
+        [(l, r), (r, l)]
+            .into_iter()
+            .find_map(
+                |(shifted, one)| {
+                    if !pattern::one(&q, one) {
+                        return None;
+                    }
+                    let (x, amount, _) = binop(&q, shifted, BinaryOp::AShr)?;
+                    pattern::apint(&q, amount).is_some_and(|(value, _)| value == (bits - 1) as u128).then_some(x)
+                },
+            )
+    };
+    let abs_of = [(op0, op1), (op1, op0)].into_iter().find_map(|(or, x)| (sign_or_one(c, or) == Some(x)).then_some(x));
+    if let Some(x) = abs_of {
+        let i1 = c.context.types.int(1);
+        let poison = c.int(i1, u128::from(has_nsw));
+        let ty = c.type_of(x);
+        return Visit::Replace(c.create_intrinsic(inst, "abs", ty, &[x, poison]));
+    }
+    if let Some(narrowed) = c.narrow_math_if_no_overflow(inst) {
+        return narrowed;
+    }
     // DEVIATE 2: foldBinOpOfSelectAndCastOfSelectCondition.
 
     // (mul Op0 Op1): if Log2(Op0) folds away -> (shl Op1, Log2(Op0)), and if
@@ -1396,7 +1454,10 @@ fn common_idiv_rem_transforms(
     inst: InstId,
 ) -> Option<Visit> {
     // DEVIATE 1: a constant vector divisor with a zero or undef element.
-    // DEVIATE 2: foldBinopWithPhiOperands.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return Some(phi);
+    }
 
     // The RHS is known non-zero.
     let divisor = c.function.instruction(inst).operands[1];
@@ -1408,7 +1469,19 @@ fn common_idiv_rem_transforms(
     if simplify_div_rem_of_select_with_zero_op(c, inst) {
         return Some(Visit::Changed);
     }
-    // DEVIATE 2: FoldOpIntoSelect, C div/rem (select Cond, TrueC, FalseC).
+    // If the divisor is a select-of-constants, try to constant fold all div
+    // ops: C div/rem (select Cond, TrueC, FalseC) --> select Cond, (C div/rem
+    // TrueC), (C div/rem FalseC)
+    let (op0, op1, _) = parts(c, inst);
+    if imm_constant(c, op0)
+        && let Some(select) = inst_def(c, op1).filter(|&def| c.function.instruction(def).opcode == Opcode::Select)
+        && c.function.instruction(select).operands[1..].iter().all(|&arm| imm_constant(c, arm))
+    {
+        let found = c.fold_op_into_select(inst, select, true, false);
+        if !matches!(found, Visit::None) {
+            return Some(found);
+        }
+    }
     None
 }
 
@@ -1557,7 +1630,12 @@ fn common_idiv_transforms(
             }
         }
 
-        // DEVIATE 2: foldBinOpIntoSelectOrPhi (when C2 is not zero).
+        if c2 != 0 {
+            let folded = c.fold_bin_op_into_select_or_phi(inst);
+            if !matches!(folded, Visit::None) {
+                return Some(folded);
+            }
+        }
     }
 
     if pattern::one(&query(c, Some(inst)), op0) {
@@ -1859,7 +1937,15 @@ pub fn visit_udiv(
         let shr = c.create_binop(inst, BinaryOp::LShr, op0, log2, exact_if(exact));
         return Visit::Replace(shr);
     }
-    // DEVIATE 3: Op0 udiv Op1 -> Op0 lshr cttz(Op1), if Op1 is a power of 2.
+    // Op0 udiv Op1 -> Op0 lshr cttz(Op1), if Op1 is a power of 2. This will
+    // increase instruction count but it's okay since bitwise operations are
+    // substantially faster than division.
+    if is_power_of_two_at(c, inst, op1, true) {
+        let i1 = c.context.types.int(1);
+        let poison_on_zero = c.int(i1, 1);
+        let cttz = c.create_intrinsic(inst, "cttz", ty, &[op1, poison_on_zero]);
+        return Visit::Replace(c.create_binop(inst, BinaryOp::LShr, op0, cttz, exact_if(exact)));
+    }
     Visit::None
 }
 
@@ -2152,8 +2238,12 @@ fn common_irem_transforms(
         && let Some(def) = inst_def(c, op0)
     {
         match c.function.instruction(def).opcode {
-            // DEVIATE 2: FoldOpIntoSelect(I, SI).
-            Opcode::Select => {}
+            Opcode::Select => {
+                let found = c.fold_op_into_select(inst, def, false, false);
+                if !matches!(found, Visit::None) {
+                    return Some(found);
+                }
+            }
             Opcode::Phi => {
                 // foldOpIntoPhi will speculate instructions to the end of the
                 // PHI's predecessor blocks, so do this only if we know the srem

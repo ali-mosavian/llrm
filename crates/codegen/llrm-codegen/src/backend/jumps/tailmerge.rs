@@ -256,6 +256,9 @@ struct Folder {
     /// The body as it came: what `runs` and the loops are of.
     source: LirBody,
     tried: HashSet<i64>,
+    /// The blocks changed since the predecessor map was last made current, with
+    /// the successors they had (`None` for a block made since).
+    touched: IndexMap<i64, Option<Vec<i64>>>,
     rename: IndexMap<u32, u32>,
     next: i64,
     minimum: usize,
@@ -270,6 +273,7 @@ struct Folder {
 thread_local! {
     pub(crate) static ITEMS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static SELF_LOOP_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static PREDECESSOR_MAPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The blocks on a cycle: members of a component of two or more, or a block
@@ -323,6 +327,8 @@ impl Folder {
 
     /// The distinct predecessors of each block, in layout order.
     fn predecessors(&self) -> IndexMap<i64, Vec<i64>> {
+        #[cfg(test)]
+        PREDECESSOR_MAPS.with(|one| one.set(one.get() + 1));
         let mut preds: IndexMap<i64, Vec<i64>> = IndexMap::default();
         for block in &self.order {
             for (slot, to) in block.succ.iter().enumerate() {
@@ -534,8 +540,41 @@ impl Folder {
         &mut self,
         block: LirBlock,
     ) {
+        self.touch(block.at);
         let index = self.pos[&block.at];
         self.order[index] = block.into();
+    }
+
+    /// Remember the successors `at` has now, once, for `refresh`.
+    fn touch(
+        &mut self,
+        at: i64,
+    ) {
+        if !self.touched.contains_key(&at) {
+            let old = self.block(at).succ.iter().copied().collect();
+            self.touched.insert(at, Some(old));
+        }
+    }
+
+    /// The predecessor map `preds` brought up to date with the blocks changed
+    /// since: what the pin has for free (a block keeps its predecessor list).
+    fn refresh(
+        &mut self,
+        preds: &mut IndexMap<i64, Vec<i64>>,
+    ) {
+        for (at, old) in std::mem::take(&mut self.touched) {
+            for to in old.into_iter().flatten() {
+                if let Some(list) = preds.get_mut(&to) {
+                    list.retain(|pred| *pred != at);
+                }
+            }
+            for to in self.block(at).succ.iter() {
+                let list = preds.entry(*to).or_default();
+                if !list.contains(&at) {
+                    list.push(at);
+                }
+            }
+        }
     }
 
     /// `SplitMBBAt`: the block `at` up to `cut`, then a jump to a new block of
@@ -563,6 +602,8 @@ impl Folder {
             succ: _leaving(&block.succ, &block.insns[..cut], Some(made)).into(),
             ..block.clone()
         };
+        self.touch(at);
+        self.touched.insert(made, None);
         let index = self.pos[&at];
         self.order[index] = head.into();
         self.order.insert(index + 1, tail.into());
@@ -800,6 +841,7 @@ impl Folder {
         if pots.len() >= 2 {
             self.try_merge(pots, None, None);
         }
+        self.touched.clear();
         let mut preds = self.predecessors();
         let mut index = 1;
         while index < self.order.len() {
@@ -811,6 +853,8 @@ impl Folder {
             }
             let mut pots = Vec::new();
             unique.retain(|at| self.pos.contains_key(at));
+            // Layout order, as the map made afresh has it.
+            unique.sort_by_key(|at| self.pos[at]);
             for at in unique {
                 if pots.len() == THRESHOLD {
                     break;
@@ -865,7 +909,7 @@ impl Folder {
                 if self.order.len() != before {
                     // Blocks were split: the places after this one moved.
                     index = self.pos[&ibb];
-                    preds = self.predecessors();
+                    self.refresh(&mut preds);
                 }
             }
             index += 1;
@@ -927,6 +971,7 @@ pub fn merged(
         cyclic: HashSet::default(),
         source: body.clone(),
         tried: HashSet::default(),
+        touched: IndexMap::default(),
         rename: IndexMap::default(),
         next: body.blocks.iter().map(|block| block.at).max().unwrap_or(0) + 1,
         minimum: if size { 2 } else { 3 },

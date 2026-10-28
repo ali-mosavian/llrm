@@ -627,6 +627,13 @@ def error_files(text: str) -> set[str]:
     return set(re.findall(r"[\w./-]+\.rs(?=:\d)", text))
 
 
+def integration_probe(failed_units: set[str], red_on_base: set[str]) -> tuple[set[str], list[str]]:
+    """(the `integration <target>::<test>` names the batch failed and the base passes, their targets). The names stay in the form `integration_failures` returns: stripped of
+    `integration `, `probe & integration_failures(...)` was always empty, no PR was ever red alone or with its half, and the 16:17 batch cleared #5784 (target_facts) in 37 s."""
+    probe = {name for name in failed_units if name.startswith("integration ")} - red_on_base
+    return probe, sorted({name[len("integration ") :].split("::", 1)[0] for name in probe})
+
+
 def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None, suspects=None) -> list[str]:
     """The PRs of `group` whose own merge on the head does not build: `merge_alone(number)` merges one onto a clean head (False when it cannot), `check()` is the build error or "". A batch that
     fails to build with no PR at fault alone (two halves that compile apart) names none and is halved. The 21:02 batch (#3763's new ISD variants against #3806's) refused every PR.
@@ -1093,7 +1100,7 @@ def scanners_for(files: list[str]) -> tuple[str, ...]:
     return ALWAYS_SCANNERS
 
 
-# Tests that launch DOSBox bench programs for minutes each (29 min for one pytest id): the CI gate runs them, a landing batch does not (its cap is 600 s).
+# Tests that launch DOSBox bench programs for minutes each (29 min for one pytest id): the CI gate runs them, a landing batch does not (its cap is TOOLTEST_CAP, 1800 s).
 # Ids are relative to tools/, pytest's rootdir.
 GATE_ONLY_TESTS = ("dosbatch/test_qb32.py::test_bench_program_prints_what_it_should_on_both_targets",)
 
@@ -1119,10 +1126,11 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
     if why := (ensure or ensure_bins)():  # the tools resolve the release binaries and refuse stale ones: the 02:32 batch died on "stale binaries" here, before the build stage ran
         return [why]
     stage("tool-tests")
+    cap = float(os.environ.get("TOOLTEST_CAP") or 1800)  # runner.env: seconds; a test file that runs 10-20 min refused every batch at the old 600
     try:
-        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *[f"--deselect={one}" for one in GATE_ONLY_TESTS], *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *[f"--deselect={one}" for one in GATE_ONLY_TESTS], *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=cap)
     except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
-        return ["the tool tests ran past 600 s"]
+        return [f"the tool tests ran past {cap:g} s"]
     if done.returncode == 0:
         return []
     lines = (done.stdout + done.stderr).strip().splitlines()
@@ -2227,11 +2235,9 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if integration:
             # a test the base fails too is no PR's: every PR merged on a red base fails it alone
             clean_checkout(BASE)
-            failed_names = {name[len("integration ") :] for name in failed_units if name.startswith("integration ")}
-            probe = failed_names - parity_smoke_module().integration_failures(sorted(integration))
+            probe, targets = integration_probe(failed_units, parity_smoke_module().integration_failures(sorted(integration)))
             if not probe:
                 return []
-            targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             failure_files = files_named_in(parity_smoke_module().causes_of(failed_units))
