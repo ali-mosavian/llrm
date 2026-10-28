@@ -11,12 +11,15 @@ use super::inst::{Addr, AddSub, Gpr, Inst, Memory, Vreg};
 
 /// The DWARF number of a register by name.
 pub fn register(name: &str) -> Option<u64> {
+    if name == "sp" {
+        return Some(31);
+    }
     let (class, number) = name.split_at(1);
     let number: u64 = number.parse().ok().filter(|number| *number < 32)?;
     match class {
         "x" if number < 31 => Some(number),
         "d" => Some(64 + number),
-        _ => (name == "sp").then_some(31),
+        _ => None,
     }
 }
 
@@ -85,7 +88,7 @@ pub fn frame(
     let mut remembered: Option<FrameRow> = None;
     // The frame address from the stack pointer, while x29 is the frame register.
     let mut from_sp = 0;
-    let mut change = |state: &mut FrameRow, rows: &mut Vec<FrameRow>, at: usize| {
+    let change = |state: &mut FrameRow, rows: &mut Vec<FrameRow>, at: usize| {
         state.offset = at;
         rows.push(state.clone());
     };
@@ -175,19 +178,27 @@ mod tests {
     use super::*;
     use crate::mc::inst::Width;
 
-    fn sub_sp(amount: u16) -> Inst {
+    fn add_sub(
+        subtract: bool,
+        rd: Gpr,
+        amount: u16,
+    ) -> Inst {
         Inst::AddSubImm {
-            op: AddSub { subtract: true, set_flags: false },
+            op: AddSub { subtract, set_flags: false },
             width: Width::X,
-            rd: Gpr::R31,
+            rd,
             rn: Gpr::R31,
             imm12: amount,
             shift12: false,
         }
     }
 
+    fn sub_sp(amount: u16) -> Inst {
+        add_sub(true, Gpr::R31, amount)
+    }
+
     fn add_sp(amount: u16) -> Inst {
-        Inst::AddSubImm { op: AddSub { subtract: false, set_flags: false }, ..sub_sp(amount) }
+        add_sub(false, Gpr::R31, amount)
     }
 
     fn pair(
@@ -206,7 +217,7 @@ mod tests {
     /// `sub sp,#32; stp x29,x30,[sp]; add x29,sp,#0; ldp; add sp,#32; ret`.
     #[test]
     fn a_frame_record_is_saved_found_and_given_back() {
-        let make_fp = Inst::AddSubImm { rd: Gpr::FP, ..add_sp(0) };
+        let make_fp = add_sub(false, Gpr::FP, 0);
         let insts = [sub_sp(32), pair(true, 0), make_fp, pair(false, 0), add_sp(32), Inst::Ret { rn: Gpr::LR }];
         let frame = frame(0, 0, &insts.iter().collect::<Vec<_>>()).expect("a frame");
         let row = |offset, register: &str, cfa_offset, saved: &[(&str, i64)]| FrameRow {
