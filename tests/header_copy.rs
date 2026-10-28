@@ -131,13 +131,20 @@ fn test_a_counted_exits_number_lets_its_counter_step_in_place() {
     // lays the exit (`je exit; jmp top` or `jne top; jmp exit`).
     let in_place = lines
         .windows(4)
-        .any(|quad| {
-            quad[0].strip_prefix("inc e").is_some_and(|register| {
-                // a `mov` may sit between the test and its branch; it keeps the flags
-                quad[1] == format!("cmp e{register}, 32")
-                    && quad[2..].iter().any(|line| line.starts_with("je ") || line.starts_with("jne "))
-            })
-        });
+        .any(
+            |quad| {
+                quad[0]
+                    .strip_prefix("inc e")
+                    .is_some_and(
+                        |register| {
+                            // a `mov` may sit between the test and its branch;
+                            // it keeps the flags
+                            quad[1] == format!("cmp e{register}, 32")
+                                && quad[2..].iter().any(|line| line.starts_with("je ") || line.starts_with("jne "))
+                        },
+                    )
+            },
+        );
     assert!(in_place, "{text}");
     assert!(!text.contains("lea eax, [edx+1]"), "the old counter is kept alive past its step: {text}");
 }
@@ -344,9 +351,14 @@ fn test_an_early_return_through_a_spilled_sum_sets_up_nothing() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     let lines: Vec<&str> = text.lines().map(str::trim).filter(|line| !line.ends_with(':')).collect();
-    let early = lines.windows(3).any(|trio| {
-        trio[0].starts_with("mov word ptr [bp-") && trio[0].ends_with("], 1") && trio[1].starts_with("cmp ") && trio[2].starts_with("je ")
-    });
+    let early = lines
+        .windows(3)
+        .any(
+            |trio| trio[0].starts_with("mov word ptr [bp-")
+                && trio[0].ends_with("], 1")
+                && trio[1].starts_with("cmp ")
+                && trio[2].starts_with("je "),
+        );
     assert!(early, "{text}");
 }
 
