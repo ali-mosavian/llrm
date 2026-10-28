@@ -317,7 +317,20 @@ impl FunctionPass for IndVars {
             }
         };
         // The edits after the last step (lftr, the sinking, the dead code).
-        session.forget_since(unit.context, unit.layout, &outer.globals, &outer.metadata, unit.function, mark);
+        // The sinking moves instructions no count reads, LFTR keeps the exit
+        // count it was built from and the dead code is values
+        // (forgotten as erased); the pin forgets a loop only after
+        // `optimizeLoopExits` and `predicateLoopExits`, the steps
+        // above.
+        session.forget_since_keeping(
+            unit.context,
+            unit.layout,
+            &outer.globals,
+            &outer.metadata,
+            unit.function,
+            mark,
+            true,
+        );
         held.put(session.into_scev());
         if compared || rewrote || canonical || optimized || predicated || tested || sunk || merged || dead {
             // Blocks and edges are as they were.
