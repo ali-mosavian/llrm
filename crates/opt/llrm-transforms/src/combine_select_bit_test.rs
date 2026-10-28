@@ -11,6 +11,11 @@
 //!
 //! DEVIATE 2 (temporary): `foldSelectICmpAndBinOp` is not made.
 //!
+//! Also `foldSelectICmpAndAnd`
+//! ([L752](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineSelect.cpp#L752)):
+//! `select ((x & y) == 0), (x >> z) & 1, 1` as `zext ((x & (y | 1 << z)) !=
+//! 0)`.
+//!
 //! # Example
 //! ```text
 //! %a = and i32 %v, 2                          %a = and i32 %v, 2
@@ -38,6 +43,92 @@ struct BitTest {
     and_mask: u128,
     create_and: bool,
     pred: IntPredicate,
+}
+
+/// `m_One`.
+fn is_one(
+    q: &llrm_mir::valuetracking::Query,
+    v: Operand,
+) -> bool {
+    q.int_constant(v).is_some_and(|(bits, _)| bits == 1)
+}
+
+/// `foldSelectICmpAndAnd`: `((X & Y) == 0) ? ((X >> Z) & 1) : 1` is
+/// `(X & (Y | (1 << Z))) != 0`, widened.
+pub(crate) fn select_icmp_and_and(
+    c: &mut Combiner,
+    inst: InstId,
+    sel: &Sel,
+) -> Option<Visit> {
+    let q = query(c, Some(inst));
+    let cond_one_use = has_one_use(c, sel.cond);
+    let mut num_replaced = 1 + u32::from(cond_one_use);
+    let (mut x, mut y, pred);
+    if let Some((_, _, x_op)) = pattern::cast(&q, sel.cond, CastOp::Trunc) {
+        x = x_op;
+        y = c.int(c.type_of(x), 1);
+        pred = IntPredicate::Ne;
+    } else {
+        let (_, _, found, lhs, rhs) = pattern::icmp(&q, sel.cond)?;
+        if !matches!(found.pred, IntPredicate::Eq | IntPredicate::Ne) || !pattern::zero(&q, rhs) {
+            return None;
+        }
+        let (_, _, a, b) = pattern::binary(&q, lhs, BinaryOp::And)?;
+        (x, y, pred) = (a, b, found.pred);
+        num_replaced += u32::from(cond_one_use && has_one_use(c, lhs));
+    }
+    let (t_val, f_val) =
+        if pred == IntPredicate::Ne { (sel.if_false, sel.if_true) } else { (sel.if_true, sel.if_false) };
+    if !is_one(&q, f_val) {
+        return None;
+    }
+    // The TrueVal has general form of: and %B, 1
+    let (_, _, a0, a1) = pattern::binary(&q, t_val, BinaryOp::And)?;
+    let a = if is_one(&q, a1) {
+        a0
+    } else if is_one(&q, a0) {
+        a1
+    } else {
+        return None;
+    };
+    let bits = c.context.types.int_bits(sel.ty)?;
+    // `X`, or `X >> Z` for a constant `Z` below the width.
+    let shifted = |x: Operand| -> Option<Option<Operand>> {
+        if a == x {
+            return Some(None);
+        }
+        let (_, _, base, z) = pattern::binary(&q, a, BinaryOp::LShr)?;
+        (base == x && q.int_constant(z).is_some_and(|(z, _)| z < u128::from(bits))).then_some(Some(z))
+    };
+    let shift = match shifted(x) {
+        Some(shift) => shift,
+        None => {
+            std::mem::swap(&mut x, &mut y);
+            shifted(x)?
+        }
+    };
+    if has_one_use(c, t_val) {
+        num_replaced += 1 + u32::from(shift.is_some() && has_one_use(c, a));
+    }
+    if num_replaced < 4 - u32::from(matches!(y, Operand::Constant(_))) {
+        return None;
+    }
+    let one = c.int(sel.ty, 1);
+    let mask_b = match shift {
+        Some(z) => c.create_binop(inst, BinaryOp::Shl, one, z, Flags::default()),
+        None => one,
+    };
+    let full_mask = c.create_binop(inst, BinaryOp::Or, y, mask_b, Flags::default());
+    let masked_x = c.create_binop(inst, BinaryOp::And, x, full_mask, Flags::default());
+    let zero = c.int(sel.ty, 0);
+    let is_not_null = c.create_icmp(inst, IntPredicate::Ne, masked_x, zero);
+    Some(c.replace_with_new(
+        inst,
+        llrm_mir::opcode::Opcode::Cast(CastOp::ZExt),
+        sel.ty,
+        vec![is_not_null],
+        Flags::default(),
+    ))
 }
 
 pub(crate) fn select_bit_test(

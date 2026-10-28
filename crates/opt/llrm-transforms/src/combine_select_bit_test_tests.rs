@@ -58,3 +58,26 @@ fn unrelated_constants_stay_a_select() {
     let out = combined("  %a = and i32 %x, 2\n  %c = icmp eq i32 %a, 0\n  %r = select i1 %c, i32 7, i32 4\n");
     assert!(out.contains("select"), "{out}");
 }
+
+/// Opt: `((x & 4) == 0) ? ((x >> 1) & 1) : 1` is `(x & (4 | 1 << 1)) != 0`,
+/// widened. Without the fold the select stayed over four instructions.
+#[test]
+fn a_shifted_bit_or_one_is_one_masked_test() {
+    let out = combined(
+        "  %a = and i32 %x, 4\n  %c = icmp eq i32 %a, 0\n  %s = lshr i32 %x, 1\n  %t = and i32 %s, 1\n  %r = select i1 %c, i32 %t, i32 1\n",
+    );
+    assert!(
+        out.contains("and i32 %x, 6") && out.contains("icmp ne") && out.contains("zext") && !out.contains("select"),
+        "{out}"
+    );
+}
+
+/// The shift amount must stay below the width: `x >> 40` is poison, so it
+/// stays a select.
+#[test]
+fn a_shift_past_the_width_stays_a_select() {
+    let out = combined(
+        "  %a = and i32 %x, 4\n  %c = icmp eq i32 %a, 0\n  %s = lshr i32 %x, 40\n  %t = and i32 %s, 1\n  %r = select i1 %c, i32 %t, i32 1\n",
+    );
+    assert!(out.contains("select"), "{out}");
+}
