@@ -254,6 +254,20 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// `(float)u` read `rdi` whole: the dword move that zeroes its upper half was
+/// taken for a copy and coalesced away, so garbage above `edi` was converted.
+#[test]
+fn an_unsigned_dword_converted_at_m64_is_zero_extended_first() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %u) {\n  %r = uitofp i32 %u to float\n  ret float %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let convert = lines.iter().position(|line| line.starts_with("cvtsi2ss")).expect("the convert");
+    assert!(lines[..convert].iter().any(|line| line.starts_with("movzx r")), "{listing}");
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
