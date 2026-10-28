@@ -480,3 +480,17 @@ fn objectsize_of_an_unknown_object_is_minus_one_or_zero() {
     assert!(body("_maximum").contains("#-1") || body("_maximum").contains("movn"), "{asm}");
     assert!(body("_minimum").contains("#0") || body("_minimum").contains("xzr"), "{asm}");
 }
+
+/// A `weak` or `linkonce_odr` definition was exported as a strong one: the QB runtime's weak no-op
+/// hooks (`__attribute__((weak))`) were "duplicate symbols" against the real ones at link time.
+#[test]
+fn a_weak_definition_is_exported_weak() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+target triple = \"arm64-apple-macosx27.2.0\"\n\
+define weak void @hook() {\n  ret void\n}\n\
+define void @strong() {\n  ret void\n}\n";
+    let object = driver::object(text, Platform::Darwin, "weak.o", true).expect("lowers");
+    let binding = |name: &str| object.symbols.iter().find(|symbol| symbol.name == name).unwrap().binding;
+    assert_eq!(binding("_hook"), llrm_object::Binding::Weak);
+    assert_eq!(binding("_strong"), llrm_object::Binding::Public);
+}
