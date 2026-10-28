@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:3325dd2b1134d3aa8f91b0dae5aa94dbc7dba6ffdd15e65c18f6f04163c5c549 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:4c6407b4c8dff0d8f7d790edfcc0f9de55444d315e8ce5943f91cecd1d78c4b6 -->
 
 # machinesink
 
@@ -57,12 +57,12 @@ identical). The rule had bought -85 B of QCport -Os on the old allocator.
 
 Row M5 (was DEVIATE M5 #2903, retired 2026-10-28): a build for size breaks
 a critical edge as the pin does (`isWorthBreakingCriticalEdge` has no size
-check). Measured (llrm-cc, bench and tests/run C programs, -Os, own binaries a
-pair): m16 179 programs +42 B (8 smaller, 12 larger by at most 7, one by 24),
-every changed program within +9 B of main's figure; m32 182 programs +82 B (18
-larger by 4 to 12, one by 24, none smaller): each split edge costs a jump. QB
-`parity/branch` -Os bq32 kept an arm's `shl`, `sub` and `add` above the test
-(47 instructions against 30).
+check). Measured (llrm-cc, bench and tests/run C programs, -Os, own
+binaries a pair): m16 179 programs +42 B (8 smaller, 12 larger by at most
+7, one by 24), every changed program within +9 B of main's figure; m32 182
+programs +82 B (18 larger by 4 to 12, one by 24, none smaller): each
+split edge costs a jump. QB `parity/branch` -Os bq32 kept the `shl`, `sub`
+and `add` of one arm above the test (47 instructions against 30).
 
 Row M6: an edge of a loop is broken in a build for size too (x_collatz -Os
 m32 313 -> 309 B, m16 340 -> 334, no object grows): the

@@ -886,10 +886,16 @@ impl Function {
         block: BlockId,
     ) -> Option<BlockId> {
         let last = self.terminator(block)?;
-        let mut blocks = self.instruction(last).operands.iter().filter_map(|operand| match operand {
-            Operand::Block(target) => Some(*target),
-            _ => None,
-        });
+        let mut blocks = self
+            .instruction(last)
+            .operands
+            .iter()
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(target) => Some(*target),
+                    _ => None,
+                },
+            );
         let first = blocks.next()?;
         blocks.all(|other| other == first).then_some(first)
     }
