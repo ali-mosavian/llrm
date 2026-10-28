@@ -202,3 +202,12 @@ fn a_conversions_memory_operand_is_its_sources_size() {
         [Some(8), Some(4), Some(4), Some(8), Some(4), Some(8), Some(16), Some(8)]
     );
 }
+
+/// The second of two byte stores of `o` and `o >> 8` is `MOV8mr_NOREX` (the
+/// store of `AH`); its name has no width the parser reads, so its cell was a
+/// dword and the encoder refused a byte register stored into it.
+#[test]
+fn a_norex_byte_store_is_one_byte() {
+    assert_eq!(super::opcodes::memory_bytes("MOV8mr_NOREX"), Some(1));
+    assert_eq!(super::opcodes::memory_bytes("MOV8mr"), Some(1));
+}

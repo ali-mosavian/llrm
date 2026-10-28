@@ -1659,15 +1659,17 @@ pub fn funnel(
     count: Option<i64>,
     at: At,
 ) -> Option<Emitted> {
-    if !["shld", "shrd"].contains(&name) || width_of(dest) != Some(4) || width_of(other) != Some(4) {
+    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4) && width_of(other) == Some(*bytes))?;
+    if !["shld", "shrd"].contains(&name) {
         return None;
     }
     let opcode = name.to_uppercase();
+    let bits = width * 8;
     let Some(count) = count else {
-        let code = code_of!(opcode, "_RM32_R32_CL")?;
+        let code = code_of!(opcode, "_RM", bits, "_R", bits, "_CL")?;
         return _assemble(&raised(create_reg_reg_reg(code, dest, other, RegId::CL)), at, true);
     };
-    let code = code_of!(opcode, "_RM32_R32_IMM8")?;
+    let code = code_of!(opcode, "_RM", bits, "_R", bits, "_IMM8")?;
     _assemble(&raised(create_reg_reg_i32(code, dest, other, count)), at, true)
 }
 

@@ -10,6 +10,7 @@ pub mod effects;
 #[cfg(test)]
 mod instructioncost_tests;
 pub mod lowering;
+pub mod mc;
 pub use llrm_target::instr as parse;
 pub mod select;
 pub mod tti;

@@ -578,3 +578,43 @@ entry:
     // old 7, then 12 -> 40 on the hit: 7000 + 400 + 1.
     assert_eq!(result(text), int(7401, 32));
 }
+
+/// `llvm.umul.fix`, `llvm.{s,u}mul.fix.sat` and `llvm.{s,u}shl.sat` were
+/// unknown names to the parser; each answer is derived by hand at 16 bits.
+#[test]
+fn fixed_multiplies_and_saturating_shifts_clamp_to_the_range() {
+    let fixed = |name: &str, a: i16, b: i16, scale: u32| {
+        result(&format!(
+            "declare i16 @llvm.{name}.i16(i16, i16, i32)
+define i16 @f() {{
+  %r = call i16 @llvm.{name}.i16(i16 {a}, i16 {b}, i32 {scale})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    let shift = |name: &str, a: i16, by: i16| {
+        result(&format!(
+            "declare i16 @llvm.{name}.i16(i16, i16)
+define i16 @f() {{
+  %r = call i16 @llvm.{name}.i16(i16 {a}, i16 {by})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    // 1.5 * 1.5 = 2.25 with 8 fraction bits.
+    assert_eq!(fixed("umul.fix", 384, 384, 8), int(576, 16));
+    assert_eq!(fixed("umul.fix.sat", 384, 384, 8), int(576, 16));
+    // 200 * 200 = 40000 wraps to -25536 as signed, saturates to the maximum.
+    assert_eq!(fixed("umul.fix", 200, 200, 0), int(40000, 16));
+    assert_eq!(fixed("umul.fix.sat", -1, -1, 0), int(0xffff, 16));
+    assert_eq!(fixed("smul.fix.sat", 200, 200, 0), int(0x7fff, 16));
+    assert_eq!(fixed("smul.fix.sat", 200, -200, 0), int(0x8000, 16));
+    assert_eq!(fixed("smul.fix.sat", -384, 384, 8), int(0xfdc0, 16));
+    assert_eq!(shift("sshl.sat", 0x4000, 1), int(0x7fff, 16));
+    assert_eq!(shift("sshl.sat", -0x4001, 1), int(0x8000, 16));
+    assert_eq!(shift("sshl.sat", 3, 2), int(12, 16));
+    assert_eq!(shift("ushl.sat", -1, 1), int(0xffff, 16));
+    assert_eq!(shift("ushl.sat", 3, 2), int(12, 16));
+}

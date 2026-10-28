@@ -888,7 +888,21 @@ impl<'a> Analyzer<'a> {
                 match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
                     (Some(tti), Some(kind), Some(src), Some(dst)) => {
                         let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
-                        cost.valid && cost.value == 0
+                        // BasicTTIImpl.h:1298-1311: the extension of a simple
+                        // load.
+                        let of_load = match operation.operands[0] {
+                            Operand::Value(value) => match self.callee.value(value).def {
+                                llrm_mir::module::ValueDef::Instruction(def) => {
+                                    matches!(
+                                        self.callee.instruction(def).opcode,
+                                        Opcode::Load { volatile: false, .. }
+                                    )
+                                }
+                                llrm_mir::module::ValueDef::Argument(_) => false,
+                            },
+                            _ => false,
+                        };
+                        (cost.valid && cost.value == 0) || (of_load && tti.ext_load_free(kind, dst, src))
                     }
                     _ => false,
                 }

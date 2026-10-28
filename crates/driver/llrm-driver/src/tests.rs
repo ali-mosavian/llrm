@@ -392,6 +392,32 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
 }
 
+/// A `select` of a loaded value stopped the matcher at m64 ("node transform
+/// `GetOppositeBranchCondition` is not translated"): the table folds the load
+/// into `cmov` with the condition inverted (`inv_cond_XFORM`).
+#[test]
+fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @f(ptr %p, i64 %x, i64 %y, i64 %z) {\n  %a = load i64, ptr %p\n  %c = icmp slt i64 %x, %y\n  %r = select i1 %c, i64 %z, i64 %a\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
+}
+
+/// Setting a bit of an `i64` by a variable index stopped the emitter
+/// (`Unmapped("BTS64rr")`): the x86-64 file had `bt` and `btc` but not `bts`,
+/// which the table selects from `or` with a shifted bit.
+#[test]
+fn a_variable_bit_set_of_a_quadword_is_bts() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @set(i64 %x, i64 %n) {\n  %b = shl i64 1, %n\n  %r = or i64 %x, %b\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "set").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("bts")), "{listing}");
+}
+
 /// `x == 0xFFFFFFF7` on an `i64` stopped the encoder at `cmp rdi, 0xfffffff7`:
 /// `foldImmediate` put a zero-extended 32-bit constant in a 64-bit immediate,
 /// which the CPU sign-extends. It stays in a register.
@@ -846,7 +872,13 @@ fn a_floor_intrinsic_is_a_call_of_floor() {
                 define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("call ") && line.contains("floor")), "{listing}");
+    // the DAG default, as the pin does, jumps to the libcall at a return
+    assert!(
+        listing
+            .lines()
+            .any(|line| ["call ", "jmp "].iter().any(|op| line.trim().starts_with(op)) && line.contains("floor")),
+        "{listing}"
+    );
 }
 
 /// `__builtin_prefetch` is `llvm.prefetch`; the 386/486 have no instruction for
@@ -1063,7 +1095,9 @@ fn m16_library_calls_are_the_watcom_register_convention() {
     for name in ["atan2_", "strlen_", "printf_", "getch_", "ceil_"] {
         assert!(listing.contains(&format!("call {name}")), "{name}: {listing}");
     }
-    assert!(listing.contains("call _mine@3"), "{listing}");
+    // `mine` is in return position: the DAG default jumps to it, as the pin
+    // does
+    assert!(listing.contains("call _mine@3") || listing.contains("jmp _mine@3"), "{listing}");
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,
@@ -1107,6 +1141,34 @@ fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
     assert!(!built.debug.expect("debug info").procedures.is_empty());
 }
 
+/// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
+/// writes as subfields; the writer refused the unit ("a location list holds
+/// only registers and frame cells") and no object came out.
+#[test]
+fn a_variable_in_two_registers_is_written_to_coff_as_subfields() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg_pieces.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) =
+        crate::llc::compiled(&flags(&["-m32", "-O2", "-g", "-fobject-format=coff"]), &text, "dbgpieces").unwrap();
+    llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "dbgpieces.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+    )
+    .unwrap();
+}
+
 /// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
 /// not the `.ll` file: the debugger could not find the text.
 #[test]
@@ -1127,6 +1189,81 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let source = built.debug.expect("debug info").source;
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
+}
+
+/// An array of `long double` at m32 was laid out 10 bytes apart (the store
+/// size) while the code indexed it 12 apart (the alloc size): `table[1]` read
+/// the middle of the first two elements, and long_double_layout.c printed
+/// -2147483645 for 15.
+#[test]
+fn an_array_of_long_doubles_is_laid_out_at_the_alloc_size() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}@t = global [2 x x86_fp80] [x86_fp80 0xK3FFF8000000000000000, x86_fp80 0xK40008000000000000000], align 4\n\
+         define i32 @main() {{\n  %v = load x86_fp80, ptr getelementptr inbounds (i8, ptr @t, i32 12), align 4\n  %i = fptosi x86_fp80 %v to i32\n  ret i32 %i\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), &text, "t").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let data: usize = listing
+        .lines()
+        .filter(|line| line.starts_with("db "))
+        .map(|line| line.trim_start_matches("db ").split(',').count())
+        .sum();
+    assert_eq!(data, 24, "{listing}");
+}
+
+const SMALL_STRUCT_BY_VALUE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    declare i16 @wc_small(ptr byval(%struct.T) align 2, i16) addrspace(1)\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  store i8 5, ptr %t, align 1\n  \
+    %r = call addrspace(1) i16 @wc_small(ptr byval(%struct.T) align 2 %t, i16 6)\n  ret i16 %r\n}\n\
+    define i16 @g(ptr byval(%struct.T) align 2 %t, i16 %a) addrspace(1) {\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  %r = add i16 %w, %a\n  ret i16 %r\n}\n";
+
+/// clang passes `struct { char x; }` `byval`, in memory; Open Watcom's register
+/// convention takes it in AL with the next argument in DX. The call pushed it
+/// and the callee read memory, so wc16_mixed.c's `wc_small(t, 6)` was 50, not
+/// 56, against Watcom's own object.
+#[test]
+fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
+    let (built, _) = crate::llc::compiled(&flags(&["-mabi=watcom", "-m16"]), SMALL_STRUCT_BY_VALUE, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov al, 5") && listing.contains("mov dx, 6"), "{listing}");
+    assert!(!listing.contains("sub sp") && !listing.contains("push 6") && !listing.contains("pushw 6"), "{listing}");
+    assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
+}
+
+/// `-fno-inline=sum5` named the function as the source does, but the module
+/// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
+/// looked up: "the program defines no function of that name", so
+/// tail_calls_edges.c failed to compile under llrm-cc at every ABI.
+#[test]
+fn no_inline_takes_the_source_name_under_every_abi() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @sum5(i32 %a) {\n  %r = add i32 %a, 5\n  ret i32 %r\n}\n";
+    for abi in ["sysv", "watcom"] {
+        let flags = flags(&["-fobject-format=omf", &format!("-mabi={abi}"), "-fno-inline=sum5"]);
+        crate::llc::compiled(&flags, text, "sum5").unwrap_or_else(|why| panic!("{abi}: {why}"));
+    }
+}
+
+/// `-fsanitize=stack` reached llrm-llc from llrm-cc and did nothing for IR:
+/// llrm-c marked the functions it compiled, an IR module's were never marked,
+/// so `stackover.c` ran off the stack instead of ending in "Stack Overflow!".
+#[test]
+fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @deep(i32 %a) {\n  %r = add i32 %a, 5\n  ret i32 %r\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-fobject-format=omf", "-mabi=sysv"];
+        arguments.extend(extra);
+        let (built, _) = crate::llc::compiled(&flags(&arguments), text, "deep").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(!listing(&[]).contains("STKOVERFLOW"), "unchecked");
+    assert!(listing(&["-fsanitize=stack"]).contains("STKOVERFLOW"), "checked");
 }
 
 /// An x86-64 target had no C runtime description, so no library routine: a
@@ -1175,4 +1312,29 @@ fn a_one_slot_frame_at_m64_is_push_and_pop() {
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     assert!(lines.contains(&"push rax") && lines.contains(&"pop rcx"), "{listing}");
     assert!(!lines.iter().any(|line| line.starts_with("sub rsp") || line.starts_with("add rsp")), "{listing}");
+}
+
+/// Two byte stores of a value and of its high byte stopped the encoder at
+/// m64 (`mov [bp+13] width 4, dil`): the high byte's store is `MOV8mr_NOREX`
+/// and its cell was taken for a dword.
+#[test]
+fn a_store_of_the_high_byte_is_a_byte_store() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i32 %o) {\n  %h = alloca [7 x i8], align 1\n  %lo = trunc i32 %o to i8\n  %p3 = getelementptr i8, ptr %h, i64 3\n  store i8 %lo, ptr %p3\n  %s = lshr i32 %o, 8\n  %hi = trunc i32 %s to i8\n  %p4 = getelementptr i8, ptr %h, i64 4\n  store i8 %hi, ptr %p4\n  call void @use(ptr %h)\n  ret void\n}\n";
+    crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+}
+
+/// Clearing a bit of an `i64` by a variable index was `mov rax,-1; btc rax,n;
+/// and`: the pin folds `xor (shl 1, n), -1` to `rotl -2, n` (DAGCombiner),
+/// which the table selects with the `and` as `btr`.
+#[test]
+fn a_variable_bit_clear_of_a_quadword_is_btr() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @clear(i64 %x, i64 %n) {\n  %b = shl i64 1, %n\n  %m = xor i64 %b, -1\n  %r = and i64 %x, %m\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "clear").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
 }
