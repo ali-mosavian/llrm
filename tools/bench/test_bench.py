@@ -310,6 +310,18 @@ class OwnFramesTests(unittest.TestCase):
         self.assertNotIn("--runtime-frames", command)
         self.assertNotIn("--own-frames", command)
 
+    def test_the_basic_build_passes_the_selector_the_run_asks_for(self):
+        """`LLRM_ISEL=old` left llrm-qb's command line alone, so an A/B of the selectors on QB compared the default with itself (123 identical rows)."""
+        import os
+        import tempfile
+        from unittest import mock
+
+        variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bq16")
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run, mock.patch.dict(os.environ, {"LLRM_ISEL": "old"}):
+            run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
+            bench.build(variant, "O2", Path(where), "V000")
+        self.assertIn("--isel=old", run.call_args[0][0])
+
 
 class StartupTests(unittest.TestCase):
     def test_every_language_has_a_startup_program(self):
