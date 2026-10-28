@@ -577,6 +577,21 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
 }
 
+/// A zero live across a call stayed in a callee-saved register under
+/// `--isel=dag` (`xor ebx, ebx; mov rdi, rbx; call g; mov rax, rbx`): the
+/// allocator did not rematerialize `MOV32r0` where the pin does, a `xor` at
+/// each use (`isTriviallyReMaterializable`).
+#[test]
+fn a_zero_used_around_a_call_is_a_xor_at_each_use_under_the_dag_selector() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64)\n\
+                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("xor edi, edi") && listing.contains("xor eax, eax") && !listing.contains("rbx"), "{listing}");
+}
+
 /// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only
 /// words and dwords. It is `xor eax, eax`.
 #[test]
