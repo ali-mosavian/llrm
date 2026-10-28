@@ -267,6 +267,35 @@ pub fn hoisted(
             })
             .flat_map(|one| one.uses.iter().copied())
             .collect();
+        let copied = {
+            // `HasLoopPHIUse`: a def a phi of the loop (or of an exit block,
+            // for any of its predecessors) takes, directly or through copies
+            // in the loop: the join of a state machine takes a constant from
+            // each case, and 262 of them hoisted were live across all the
+            // loop.
+            let mut taken = copied;
+            let exits = inside
+                .iter()
+                .flat_map(|at| blocks[place[at]].succ.iter().copied())
+                .filter(|to| !inside.contains(to) && place.contains_key(to));
+            for at in inside.iter().copied().chain(exits) {
+                for phi in blocks[place[&at]].phis.iter() {
+                    taken.extend(phi.incoming.iter().map(|(_, value)| *value));
+                }
+            }
+            let copies: Vec<(u32, Vec<u32>)> = inside
+                .iter()
+                .flat_map(|at| blocks[place[at]].insns.iter())
+                .filter(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Move))
+                .filter_map(|one| Some((*one.defines.first()?, one.uses.to_vec())))
+                .collect();
+            while copies
+                .iter()
+                .any(|(result, uses)| taken.contains(result) && uses.iter().any(|value| taken.insert(*value)))
+            {
+            }
+            taken
+        };
         let limit = classes.available.len();
         // An x87 value cannot be live across a call (`floatassign` does not
         // spill across one), and the stack holds `float_stack` values.
@@ -604,5 +633,44 @@ mod tests {
         // recfloat -O2: the pin's `FLDCW` for the `fptosi` after the loop
         // makes `$fpcw` non-constant, so `fld1` stays in the loop.
         assert_eq!(run(false, true), ["jmp"]);
+    }
+
+    /// A constant made in the loop that a phi of the loop takes (the join of a
+    /// state machine takes one from each case) stays where it is: the pin's
+    /// `HasLoopPHIUse` keeps a cheap instruction from making a copy in the
+    /// loop. Hoisted it was live across the whole loop, and the 262 of them in
+    /// a 256-case state machine cost 29 times the pin's segment work in
+    /// `LiveRangeCalc::extend` (206550 adds against 7056 at N=256).
+    #[test]
+    fn test_a_constant_a_loop_phi_takes_stays_in_the_loop() {
+        use crate::model::lir::Phi;
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let imm = Loc::Imm(llrm_lir::Imm { value: 7, width: 4, address: None });
+        let run = |phi_takes_it: bool| {
+            let constant = insn(10, Operation::Move, "mov", vec![held(10)], vec![imm.clone()], vec![10], vec![]);
+            let mut header = block(1, vec![1, 2], vec![constant, branch(11)]);
+            let taken = if phi_takes_it { 10 } else { 1 };
+            header.phis = vec![Phi { result: 20, incoming: vec![(0, 1), (1, taken)] }].into();
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    header.into(),
+                    block(2, vec![], vec![insn(12, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted(&body, &RegisterClasses::m16());
+            (done.blocks[0].insns.len(), done.blocks[1].insns.len())
+        };
+        assert_eq!(run(true), (1, 2), "the phi's copy stays");
+        assert_eq!(run(false), (2, 1), "no phi takes it: hoisted");
     }
 }
