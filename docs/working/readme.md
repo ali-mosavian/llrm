@@ -64,6 +64,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [bsf-bsr-cost-row](bsf-bsr-cost-row.md) | BSF/BSR cost row and the pin's `rep` prefix rule on BSF (2026-10-26) |
 | [combine-forward-load-rows.md](combine-forward-load-rows.md) | m16 -Os growers of the load forwarding in combine (#5008) |
 | [simplifycfg-resimplify-rows.md](simplifycfg-resimplify-rows.md) | QCport growers of SimplifyCFG's repeated block visit (#5662) |
+| [icmp-mul-constant-rows.md](icmp-mul-constant-rows.md) | QCport growers of `foldICmpMulConstant` (#5670) |
 | [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
