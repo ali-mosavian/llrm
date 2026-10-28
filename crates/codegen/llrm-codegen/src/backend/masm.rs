@@ -722,7 +722,7 @@ impl CfiState {
                 self.frame = self.depth;
                 out.push(Cfi::DefCfaRegister { register: self.bp });
             }
-            (Operation::Binary, Some(name @ ("sub" | "add"))) => {
+            (Operation::Binary, Some(name @ ("sub" | "add"))) if what.dests.first() == Some(&sp_reg()) => {
                 let size = what.sources.get(1).and_then(imm).unwrap_or(0);
                 self.depth += if name == "sub" { size } else { -size };
                 if !self.framed && size != 0 {

@@ -1491,3 +1491,17 @@ fn saved_registers_are_declared_last_pushed_first() {
     let offsets = |window: &[u8]| window[0] & 0xC0 == 0x80 && window[2] & 0xC0 == 0x80 && window[1] > window[3];
     assert!(frame.windows(4).any(offsets), "{frame:02x?}");
 }
+
+/// An `add eax, 2` was read as a move of the stack pointer: the frame address
+/// went 2 lower (`def_cfa_offset 14`, then 6) in the middle of the function.
+/// The bytes are the pin's for `push rax; call; add eax,2; pop rcx; ret`.
+#[test]
+fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_address() {
+    let text = format!(
+        "{SYSV}declare i32 @g()\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g()\n  %s = add i32 %r, 2\n  ret i32 %s\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c070890010000140000001c000000000000000b00000000410e10490e0800")
+    );
+}
