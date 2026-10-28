@@ -297,6 +297,48 @@ fn test_jump_over_a_block_nothing_reaches_is_dropped() {
     );
 }
 
+/// `_reachable` emptied the table of frequencies, so the next `Frequency::of`
+/// worked out all 257 blocks of d_faces again (2.12 M Ir in `inverted`).
+#[test]
+fn test_pruning_unreachable_blocks_keeps_the_frequencies_of_the_others() {
+    let mut start = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
+            block(5, vec![], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ],
+    );
+    start.frequencies =
+        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (5, 0.5), (9, 1.0)].into_iter().collect())));
+    let kept = _reachable(&start, start.blocks.clone());
+    let table = &kept.frequencies.as_ref().expect("a table").0;
+    assert_eq!(table.get(&1), Some(&1.0));
+    assert_eq!(table.get(&9), Some(&1.0));
+    assert!(crate::analysis::frequency::Frequency::violations(&kept).is_empty());
+}
+
+/// Folding branches pruned the unreachable block 5 in place and left it in
+/// the kept table: the verifier said "frequency kept for block 0x5, which is
+/// gone" after `jumps`, and every QB and Nib program failed to compile.
+#[test]
+fn test_folding_branches_drops_the_frequency_of_a_pruned_block() {
+    let mut start = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
+            block(5, vec![], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ],
+    );
+    start.frequencies =
+        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (5, 0.5), (9, 1.0)].into_iter().collect())));
+    let done = branchfold::folded(&start, &std::collections::BTreeSet::new());
+    assert_eq!(crate::analysis::frequency::Frequency::violations(&done), Vec::<String>::new());
+}
+
 fn nothing(
     at: i64,
     covers: Option<(i64, i64)>,

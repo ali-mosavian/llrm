@@ -167,6 +167,7 @@ fn commutative(
     if let Some(intrinsic) = intrinsic {
         return match intrinsic {
             Intrinsic::WithOverflow { op, .. } => matches!(op, BinaryOp::Add | BinaryOp::Mul),
+            Intrinsic::Saturating { op, .. } => matches!(op, BinaryOp::Add),
             Intrinsic::MinMax { .. } | Intrinsic::FMulAdd | Intrinsic::CopySign => true,
             Intrinsic::Fixed { divide } => !divide,
             _ => false,

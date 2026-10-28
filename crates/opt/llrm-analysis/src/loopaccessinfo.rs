@@ -727,6 +727,7 @@ fn is_vector_intrinsic_call(
         cx.query(None).intrinsic(inst),
         Some(
             Intrinsic::WithOverflow { .. }
+                | Intrinsic::Saturating { .. }
                 | Intrinsic::MinMax { .. }
                 | Intrinsic::Fixed { .. }
                 | Intrinsic::BitCount(_)

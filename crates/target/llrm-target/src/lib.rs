@@ -3,6 +3,7 @@
 
 pub mod addressing;
 pub mod calling;
+pub mod instr;
 pub mod isa;
 pub mod layout;
 pub mod machine;
@@ -342,6 +343,11 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
+    /// Whether `--isel` unnamed selects through the DAG, not the old selector.
+    fn selects_by_dag(&self) -> bool {
+        false
+    }
+
     /// The linear ranges its platform states no program data occupies, where it
     /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
     /// worked out once, not for each profile.
@@ -481,7 +487,7 @@ pub trait Target {
     fn forms_text(&self) -> String;
 
     /// What the reader of `forms_text` must know of this target's family.
-    fn dialect(&self) -> &'static llrm_instr::Dialect;
+    fn dialect(&self) -> &'static instr::Dialect;
 
     /// The operand size an instruction has without a size prefix, in bytes.
     fn operand_bytes(&self) -> i64;
