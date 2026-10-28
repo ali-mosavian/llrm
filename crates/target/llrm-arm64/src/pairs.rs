@@ -119,10 +119,6 @@ fn ordered(inst: &Inst) -> bool {
     matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
 }
 
-fn is_store(inst: &Inst) -> bool {
-    matches!(inst, Inst::Store { .. } | Inst::StorePair { .. })
-}
-
 pub(crate) fn leaves_the_block(inst: &Inst) -> bool {
     matches!(
         inst,
