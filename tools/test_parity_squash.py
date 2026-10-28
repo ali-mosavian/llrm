@@ -1983,3 +1983,18 @@ def test_no_function_assigns_a_local_that_shadows_a_module_function_it_calls():
             calls = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
             clashes += [f"{fn.name}: {name}" for name in sorted(stores & calls & module_functions)]
     assert clashes == [], clashes
+
+
+def test_format_tip_commits_a_generated_page_that_is_new(tmp_path):
+    """New-pass pages (rpoattrs, deadmi, calledvaluepropagation) landed without their generated .md three times: the sync wrote them untracked, `commit -a` skipped them and --check passed on the file on disk."""
+    sh(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "tools" / "docs" / "docsbuild").mkdir(parents=True)
+    (tmp_path / "tools" / "fmt.sh").write_text("#!/bin/sh\n")
+    (tmp_path / "tools" / "fmt.sh").chmod(0o755)
+    (tmp_path / "tools" / "docs" / "docsbuild" / "build.py").write_text(
+        "import pathlib\npathlib.Path('docs/optimizations/passes').mkdir(parents=True, exist_ok=True)\npathlib.Path('docs/optimizations/passes/newpass.md').write_text('# newpass\\n')\n"
+    )
+    sh(tmp_path, "add", "-A")
+    sh(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    assert ps.format_tip(tmp_path) is True
+    assert "docs/optimizations/passes/newpass.md" in sh(tmp_path, "ls-files"), "the new page is not in the tip"

@@ -1451,6 +1451,7 @@ def format_tip(cwd: Path = ROOT) -> bool:
     """tools/fmt.sh and the docs sync on the batch tip, committed when they change anything (the squash path pushes the same to each PR's branch). True when a commit was made."""
     subprocess.run(["tools/fmt.sh"], cwd=cwd, capture_output=True)
     subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=cwd, capture_output=True)
+    git("add", "-A", "docs", cwd=cwd)  # a new pass's generated page is untracked: `commit -a` skipped it, --check passed on the file on disk, and rpoattrs, deadmi and calledvaluepropagation landed without their page
     if not git("status", "--porcelain", "--untracked-files=no", cwd=cwd).strip():
         return False
     git("commit", "-qam", "style: fmt and generated docs of the batch", cwd=cwd)
