@@ -693,7 +693,10 @@ fn a_zero_used_around_a_call_is_a_xor_at_each_use_under_the_dag_selector() {
                 define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("xor edi, edi") && listing.contains("xor eax, eax") && !listing.contains("rbx"), "{listing}");
+    assert!(
+        listing.contains("xor edi, edi") && listing.contains("xor eax, eax") && !listing.contains("rbx"),
+        "{listing}"
+    );
 }
 
 /// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only

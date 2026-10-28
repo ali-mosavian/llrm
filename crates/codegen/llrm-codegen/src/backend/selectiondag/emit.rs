@@ -3961,8 +3961,8 @@ impl Emitter<'_, '_> {
     }
 
     /// DEVIATE SD440 (cites C1, C2 of the coalescer): a constant that a call or
-    /// a return needs in a fixed register, once something read it, is made again
-    /// for that use. The pin
+    /// a return needs in a fixed register, once something read it, is made
+    /// again for that use. The pin
     /// copies it to the physical register (`$rdi = COPY %0`), which cannot join
     /// where the call clobbers the register, so `reMaterializeDef` turns the
     /// copy into the constant. The coalescer here has no physical copies (a

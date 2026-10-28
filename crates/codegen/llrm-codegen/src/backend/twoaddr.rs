@@ -460,8 +460,7 @@ pub fn commutative(what: &Semantics) -> bool {
 
 pub(crate) fn swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
-    let cmov = what.op == Operation::Select
-        && what.name.as_deref().and_then(super::flagscopy::opposite_cmov).is_some();
+    let cmov = what.op == Operation::Select && what.name.as_deref().and_then(super::flagscopy::opposite_cmov).is_some();
     if !(commutative(what) || cmov)
         || what.dests.len() != 1
         || what.sources.len() != 2
