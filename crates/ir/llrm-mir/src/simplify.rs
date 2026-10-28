@@ -4296,9 +4296,9 @@ fn simplify_gep(
 /// `simplifyLoadInst`
 /// ([:7702](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7702)):
 /// the value a non-volatile load of a constant address reads from a constant
-/// global's definitive initializer (`ConstantFoldLoadFromConstPtr`). DEVIATE
-/// 4a of the header: the half for an address that is an instruction is not
-/// translated.
+/// global's definitive initializer (`ConstantFoldLoadFromConstPtr`), and one
+/// of an instruction over a constant global (uniform initializer, or a constant
+/// offset).
 fn simplify_load(
     q: &Query,
     volatile: bool,
@@ -4308,7 +4308,22 @@ fn simplify_load(
     if volatile {
         return None;
     }
-    let Operand::Constant(ptr) = ptr else { return None };
+    let ptr = match ptr {
+        Operand::Constant(ptr) => ptr,
+        Operand::Value(_) => {
+            let (object, _) = crate::valuetracking::underlying(q.context, q.layout, q.function, ptr);
+            let Operand::Constant(object) = object else { return None };
+            // The offset counts only where stripping constant steps reaches the object.
+            let (base, offset) =
+                crate::valuetracking::pointer_base_with_constant_offset(q.context, q.layout, q.function, ptr);
+            let offset = (base == Operand::Constant(object)).then_some(offset);
+            return constantfolding::constant_fold_load_from_global_object(
+                q.context, q.layout, q.globals, object, offset, ty,
+            )
+            .map(Operand::Constant);
+        }
+        Operand::Block(_) => return None,
+    };
     constantfolding::constant_fold_load_from_const_ptr(q.context, q.layout, q.globals, ptr, ty).map(Operand::Constant)
 }
 
