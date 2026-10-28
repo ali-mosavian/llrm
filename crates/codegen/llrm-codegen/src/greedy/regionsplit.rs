@@ -28,7 +28,8 @@
 //!
 //! DEVIATE D-RS3: no `trySplitAroundHintReg` (as in `greedy`);
 //! `shouldRegionSplitForVirtReg` is true (it only declines a huge
-//! rematerializable value, and rematerialization is not recognised, D-E1).
+//! rematerializable value, and rematerialization is recognised per definition,
+//! `greedy/remat.rs`).
 //!
 //! DEVIATE D-RS4: `DebugVars->splitRegister` and the verifier calls are not
 //! here: LIR has neither.
@@ -188,6 +189,18 @@ impl Splitter<'_> {
     /// try to split `virt`, making it assignable. Returns a register when it
     /// may be assigned; `new_vregs` gets the ranges the split made.
     pub fn try_split(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        new_vregs: &mut Vec<u32>,
+    ) -> Option<RegId> {
+        self.matrix.fixed().set_lane(Some(virt.reg()));
+        let phys = self.try_split_for(virt, order, new_vregs);
+        self.matrix.fixed().set_lane(None);
+        phys
+    }
+
+    fn try_split_for(
         &mut self,
         virt: &Rc<LiveInterval>,
         order: &AllocationOrder,

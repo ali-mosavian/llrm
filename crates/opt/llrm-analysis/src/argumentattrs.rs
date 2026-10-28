@@ -19,11 +19,17 @@
 //! A parameter no use can free is `nofree` too (`IsFree`): a write through it
 //! by a call whose site, callee and parameter do not say `nofree` may free it.
 //!
+//! A parameter the entry block's guaranteed calls pass on to a `nonnull`
+//! `noundef` parameter of their callee is `nonnull`
+//! (`addArgumentAttrsFromCallsites`): the call runs on every entry, so the
+//! value is non-null throughout. DEVIATE A4: `nofpclass` has no MIR spelling,
+//! so only `nonnull` is propagated.
+//!
 //! DEVIATE A1: `nofree_obj` has no MIR spelling, so only `nofree` is looked
 //! for. DEVIATE A2: only `captures(none)` can be stated (see
 //! [`crate::capturetracking`]), so a parameter that would be
 //! `captures(ret: ...)` stays unstated. Not translated yet:
-//! `addArgumentAttrsFromCallsites` (nonnull), `returned`; `inferInitializes` is
+//! `returned`; `inferInitializes` is
 //! [`crate::initializes`].
 //!
 //! # Example
@@ -51,10 +57,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::context::GlobalId;
+use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::{Fact, Facts};
-use llrm_mir::module::{Function, InstId, Linkage, Module, Use};
+use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, Use};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::types::Type;
+use llrm_mir::valuetracking::Query;
+use llrm_mir::valuetracking::guarantee::is_guaranteed_to_transfer_execution_to_successor;
+use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use llrm_support::hash::HashSet;
 
 use crate::aa::{IRMemLocation, MemoryEffects};
@@ -404,6 +414,69 @@ fn determine_pointer_access_attrs(
     access
 }
 
+/// `Argument::hasNonNullAttr(AllowUndefOrPoison)`.
+fn has_non_null_attr(
+    module: &Module,
+    function: &Function,
+    index: usize,
+    allow_undef_or_poison: bool,
+) -> bool {
+    let attrs = &function.parameter_attrs[index];
+    let facts = Facts::of(attrs);
+    if facts.non_null() && (allow_undef_or_poison || facts.no_undef()) {
+        return true;
+    }
+    let dereferenceable = attrs
+        .iter()
+        .any(
+            |one| matches!(
+                one,
+                Attribute::Int(name, bytes) if name == "dereferenceable" && *bytes > 0
+            ),
+        );
+    let space = match module.context.types.get(function.value(function.parameters()[index]).ty) {
+        Type::Pointer(space) => *space,
+        _ => return false,
+    };
+    dereferenceable && !null_pointer_is_defined(Some(function), space)
+}
+
+/// `addArgumentAttrsFromCallsites` (FunctionAttrs.cpp:1022): the parameters of
+/// `id` that a call of its entry block, reached on every call of it, passes to
+/// a `nonnull noundef` parameter of the callee.
+fn non_null_from_callsites(
+    module: &Module,
+    id: GlobalId,
+) -> Vec<usize> {
+    let function = module.global(id).function().expect("a procedure");
+    let Some(entry) = function.entry() else { return Vec::new() };
+    let layout = DataLayout::default();
+    let q = Query::new(module, function, &layout);
+    let mut found = Vec::new();
+    for inst in function.iter_block(entry) {
+        let instruction = function.instruction(inst);
+        if matches!(instruction.opcode, Opcode::Call(_) | Opcode::Invoke(_))
+            && let Some(callee) =
+                llrm_mir::memory::callee(&module.context, function, inst).and_then(|one| module.global(one).function())
+        {
+            for index in 0..callee.parameters().len().min(instruction.operands.len().saturating_sub(1)) {
+                let Operand::Value(value) = instruction.operands[index] else { continue };
+                let Some(ours) = function.parameters().iter().position(|&one| one == value) else { continue };
+                if has_non_null_attr(module, callee, index, false)
+                    && !has_non_null_attr(module, function, ours, true)
+                    && !found.contains(&ours)
+                {
+                    found.push(ours);
+                }
+            }
+        }
+        if !is_guaranteed_to_transfer_execution_to_successor(&q, inst) {
+            break;
+        }
+    }
+    found
+}
+
 /// `addAccessAttrs` (FunctionAttrs.cpp:1074): whether the parameter changed.
 fn add_access_attrs(
     module: &mut Module,
@@ -576,6 +649,13 @@ pub fn add_argument_attrs(
     for &id in members {
         if !exact_definition(module, id) {
             continue;
+        }
+        let from_callsites = non_null_from_callsites(module, id);
+        if !from_callsites.is_empty() {
+            for &index in &from_callsites {
+                parameter_mut(module, Arg { function: id, index }).extend(Fact::NonNull.attribute());
+            }
+            changed.insert(id);
         }
         let function = module.global(id).function().expect("a procedure");
         let count = function.parameters().len();

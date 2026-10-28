@@ -131,6 +131,20 @@ pub trait Conventions {
         clobbers.clone()
     }
 
+    /// What a call of `callee` wrote, where it took part in interprocedural
+    /// register use and was machined first: the registers it destroys whole,
+    /// and those it keeps only the pushed half of. These replace the
+    /// convention's.
+    fn written(
+        &self,
+        _callee: Option<&Callee>,
+    ) -> Option<(
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    )> {
+        None
+    }
+
     /// The registers a call of `callee` keeps only the pushed part of (a
     /// 16-bit push of a 32-bit register): their upper half is destroyed.
     fn clobbers_high(
@@ -1146,6 +1160,9 @@ impl Emitter<'_, '_> {
                         };
                         Some(Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone())))
                     }
+                    // An `add` has no cheaper form: made again with a result of
+                    // its own, as the pin's scheduler clones the unit.
+                    (Operation::Binary, Some("add")) if what.sources.len() == 2 => Some(Arc::clone(last)),
                     _ => None,
                 });
                 if let Some(again) = again {
@@ -1635,8 +1652,16 @@ impl Emitter<'_, '_> {
         let at = self.next_address();
         // The convention's destroyed registers and the ones the arguments
         // went in (the callee's to use); a result joins them in `deliver`.
-        let mut clobbers = self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
-        clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+        let written = self.ctx.conventions.written(callee);
+        let clobbers = match &written {
+            Some((whole, _)) => whole.clone(),
+            None => {
+                let mut clobbers =
+                    self.ctx.conventions.clobbers(callee).unwrap_or_else(|| self.ctx.caller_saved.clone());
+                clobbers.extend(self.arguments.iter().map(|(_, register)| *register));
+                clobbers
+            }
+        };
         let memory = Arc::new(crate::model::lir::CallMemory {
             effects: llrm_mir::memory::Effects::ANY,
             private: Vec::new(),
@@ -1654,7 +1679,10 @@ impl Emitter<'_, '_> {
         let mut uses = _read(&what);
         let requires = std::mem::take(&mut self.arguments);
         uses.extend(requires.iter().map(|(held, _)| held.value));
-        let clobbers_high = self.ctx.conventions.clobbers_high(callee);
+        let clobbers_high = match written {
+            Some((_, high)) => high,
+            None => self.ctx.conventions.clobbers_high(callee),
+        };
         let insn = Insn {
             call: Some(memory),
             clobbers,
@@ -1717,6 +1745,9 @@ impl Emitter<'_, '_> {
             // fudge of an unsigned conversion).
             EVT::Simple(MVT::I64) => 8,
             EVT::Simple(MVT::I32) => 4,
+            // The 16-byte mask of `fabs`, `fneg` and `copysign` (the pin's
+            // vector constant): the bitwise SSE instruction reads all of it.
+            EVT::Simple(MVT::I128) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))

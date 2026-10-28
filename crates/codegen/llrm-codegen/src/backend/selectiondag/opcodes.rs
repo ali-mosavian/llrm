@@ -24,9 +24,9 @@
 //! The emitter (D1b), which builds LIR `Semantics` from the form.
 //!
 //! # See also
-//! `llrm_instr::Form`; the pin's `X86GenInstrInfo.inc` for the names.
+//! `llrm_target::instr::Form`; the pin's `X86GenInstrInfo.inc` for the names.
 
-use llrm_instr::Form;
+use llrm_target::instr::Form;
 
 /// Why an opcode has no single form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -336,6 +336,6 @@ fn admits(
     }
     let (dests, sources) = letters.split_at(form.dests.len());
     // `r` also names an xmm register in the pin's names (`ADDSDrr`).
-    let allows = |l: char, o: &llrm_instr::Operand| o.allows(l) || l == 'r' && o.allows('x');
+    let allows = |l: char, o: &llrm_target::instr::Operand| o.allows(l) || l == 'r' && o.allows('x');
     dests.iter().zip(&form.dests).all(|(&l, d)| allows(l, d)) && sources.iter().zip(&untied).all(|(&l, s)| allows(l, s))
 }

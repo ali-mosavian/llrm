@@ -506,6 +506,20 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::MinSize).1, 5);
 }
 
+/// An `optsize` caller still raises an `inlinehint` callee to the hint
+/// threshold (`OptSizeHintThreshold` = `HintThreshold`, InlineCost.cpp:3394;
+/// opt: threshold 487 hinted, 75 not). `Threshold::for_size` once stated 1.
+#[test]
+fn test_an_inline_hint_still_raises_the_budget_at_an_optsize_caller() {
+    let text = |attrs: &str| {
+        format!(
+            "{GLOBAL}define internal i32 @callee(i32 %x) {attrs} {{\nb0:\n  %a = load i32, ptr @g\n  ret i32 %a\n}}\n\ndefine i32 @f(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n"
+        )
+    };
+    assert_eq!(priced(&text(""), 0, false, CallerSize::OptSize).1, 75);
+    assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::OptSize).1, 487);
+}
+
 /// intrinsics_errors_qb45.bas m32 -O1: the module handler registers the error
 /// handler of the frame that runs it (`onerror(true)`); inlined into a
 /// procedure's pad, the registration belonged to a frame that returns, and the
@@ -617,4 +631,64 @@ b0:
         }
     };
     assert_eq!(price(false) - price(true), 15000);
+}
+
+/// range_on_error.bas m16 -Os +70 bytes: `__main$handler` re-arms with
+/// `onerror(true)`, so it was never inlined into its owner's landing pad; the
+/// resume dispatch stayed a jump table in a separate procedure. Its only caller
+/// is the owner, which registers a handler itself, so the re-arm runs in the
+/// frame that owns it.
+#[test]
+fn test_a_handler_only_its_registering_owner_calls_is_inlined() {
+    let text = |extra: &str| {
+        format!(
+            "declare void @llrm.qb.onerror(i1) nounwind frame_bound
+
+define internal i16 @handler(i16 %c) {{
+b0:
+  call void @llrm.qb.onerror(i1 true)
+  ret i16 1
+}}
+
+define i16 @owner(i16 %a) {{
+b0:
+  call void @llrm.qb.onerror(i1 false)
+  %r = call i16 @handler(i16 %a)
+  ret i16 %r
+}}
+{extra}"
+        )
+    };
+    let decide = |text: &str, caller: &str| {
+        let module = crate::testing::parsed(text);
+        let layout = llrm_mir::datalayout::DataLayout::default();
+        let (caller_id, _, caller) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some(caller)).unwrap();
+        let (callee_id, _, callee) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("handler")).unwrap();
+        let call = caller
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+            .unwrap();
+        let site = Site {
+            module: &module,
+            layout: &layout,
+            caller,
+            caller_id,
+            call,
+            callee,
+            callee_id,
+            sole_call_to_local: true,
+            caller_recursive: false,
+            caller_size: CallerSize::Speed,
+            relative_frequency: None,
+            tti: None,
+        };
+        !matches!(
+            inline_cost(&site, InlineParams::from_level(2)),
+            InlineCost::Never(_)
+        )
+    };
+    assert!(decide(&text(""), "owner"), "the owner registers a handler");
+    let other = "define i16 @other(i16 %a) {\nb0:\n  %r = call i16 @handler(i16 %a)\n  ret i16 %r\n}\n";
+    assert!(!decide(&text(other), "other"), "a caller that registers nothing keeps the callee out");
 }
