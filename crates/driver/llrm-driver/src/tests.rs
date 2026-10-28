@@ -1618,6 +1618,24 @@ fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_add
     );
 }
 
+/// A frame whose registers are pushed before the locals' space (`saved_first`,
+/// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
+/// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
+/// add rsp, 32; pop rbx; ret`.
+#[test]
+fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr, i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [6 x i32]\n  \
+         %x = call i32 @g(ptr %buf, i32 %a)\n  %y = call i32 @h(i32 %x)\n  %z = add i32 %y, %x\n  ret i32 %z\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c07089001000\
+             01c0000001c000000000000002200000000410e10440e3083025b0e10410e0800")
+    );
+}
+
 /// `fptoui double to i64` on a target with no conditional move
 /// (`double_to_uint64.c` at i486 -Os) was two branches before the DAG: the high
 /// word was `mov edx, -2147483648 / xor eax, eax` in the arms and the threshold
