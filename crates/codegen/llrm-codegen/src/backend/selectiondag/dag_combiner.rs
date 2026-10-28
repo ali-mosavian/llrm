@@ -345,6 +345,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
+            ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
             _ => None,

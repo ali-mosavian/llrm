@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -O3 -march=i486 --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -O3 -march=i486 --isel=dag -S -o /dev/stdout
 // CHECK: _main proc near
 // CHECK: _main endp
 // CHECK-NOT: proc near

@@ -357,8 +357,7 @@ pub fn compiled_dumping(
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
     decorate(&mut module, bound.target.calling(), default, format.name());
-    // After the names are decorated: the debug nodes name the symbols the
-    // object has.
+    // After the rename: the debug info names the symbols the object has.
     llrm_mir::dbgimport::types_and_globals(&mut module);
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     if let Some(dump) = dump {
