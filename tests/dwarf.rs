@@ -508,11 +508,42 @@ fn a_64_bit_variable_is_in_dwarf_with_its_value_and_codeview_still_writes() {
         .output()
         .unwrap();
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
-    for expected in
-        ["$1 = 5000000000", "$2 = 3", "$3 = 4294967297", "$4 = 5000000003", "$5 = 7", "type = __int64 (__int64, int)"]
-    {
+    for expected in [
+        "$1 = 5000000000",
+        "$2 = 3",
+        "$3 = 4294967297",
+        "$4 = 5000000003",
+        "$5 = 7",
+        "type = long long (long long, int)",
+    ] {
         assert!(text.contains(expected), "no {expected:?} in:\n{text}");
     }
+}
+
+/// `sum(long long a, int b)` listed `b` before `a`: `a` arrives in two
+/// registers, so it was located after the others from its declared cell, and
+/// gdb showed `sum (b=3, a=5000000000)` and `long long (int, long long)`.
+#[test]
+fn a_parameter_in_two_registers_keeps_its_place_among_the_parameters() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("wide.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/wide.c");
+    let made = compile(&source, &["-m32", "-O0", "-gdwarf", "-fobject-format=elf"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let said = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let text = String::from_utf8_lossy(&said.stdout).into_owned();
+    let sum = text.split("DW_AT_name\t(\"sum\")").nth(1).expect("sum is described");
+    let names: Vec<&str> = sum
+        .split("DW_TAG_formal_parameter")
+        .skip(1)
+        .take(2)
+        .filter_map(|one| one.split("DW_AT_name\t(\"").nth(1)?.split('"').next())
+        .collect();
+    assert_eq!(names, ["a", "b"], "{text}");
 }
 
 /// A function with no variable has no frame register, and its stack pointer

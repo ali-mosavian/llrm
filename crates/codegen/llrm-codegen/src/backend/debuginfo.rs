@@ -102,6 +102,8 @@ pub struct Procedure {
     pub r#type: model::TypeId,
     /// The module's own code, whose variables are the module's.
     pub module: bool,
+    /// Its parameters' names, in the order the source declares them.
+    pub parameters: Vec<String>,
 }
 
 /// A variable in data; `scope` the symbol of the procedure declaring it.
@@ -286,7 +288,12 @@ pub fn described(
         let Some(at) = symbol(&function.function) else { continue };
         procedures.insert(
             at,
-            Procedure { name: function.name.clone(), r#type: node(function.r#type)?, module: function.module },
+            Procedure {
+                name: function.name.clone(),
+                r#type: node(function.r#type)?,
+                module: function.module,
+                parameters: function.parameters.iter().map(|(_, name, _)| name.clone()).collect(),
+            },
         );
     }
     let mut out = Vec::new();
@@ -532,7 +539,16 @@ pub fn laid_out(
                     .ok()
                 },
             );
-        for one in &procedure.body.variables {
+        // The source's order: a parameter held in two registers is located
+        // after the others, from its declared cell.
+        let mut ordered: Vec<&crate::model::lir::DebugVariable> = procedure.body.variables.iter().collect();
+        if !described.parameters.is_empty() {
+            ordered.sort_by_key(|one| {
+                let at = described.parameters.iter().position(|name| *name == one.name);
+                (!one.parameter, at.unwrap_or(usize::MAX))
+            });
+        }
+        for one in ordered {
             let r#type = type_of(one.r#type)?;
             let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
             let addr = match &one.place {
