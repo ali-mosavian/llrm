@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 134 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -62,7 +62,6 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | frameobjects | Where each frame object goes and how big the frame is: LLVM's `PEIImpl::calculateFrameObjectOffsets` ([PrologEpilogInserter.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PrologEpilogInserter.cpp#L856)). | Nothing yet (FO-1). | [frameobjects](frameobjects.md) |
 | funnel | Expands `llvm.fshl` and `llvm.fshr` into shifts and an or in MIR before instruction selection, for the targets whose description lists `fshl` or `fshr` under `expand`. | Once per module in `driver::optimized`, for a target that lists `fshl` or | [funnel](funnel.md) |
 | globals | Turns a MIR module's globals into assembler symbols and data: names, and each initializer's bytes with a relocation for every address in it. | `global names` and the data loop in `assemble::assembled_by`, once per | [globals](globals.md) |
-| hintwalk | The register each value is wanted in because of the copies that lead to it from a pinned value, kept up to date by what a rewrite names. | `HintWalk`: `fresh`, `update`, `wanted`. | [hintwalk](hintwalk.md) |
 | incremental | A dataflow answer over a body's blocks, held between asks and brought up to date from the blocks that changed. | `liveness`, `upperzero` and `peephole` (flag liveness). | [incremental](incremental.md) |
 | inline_asm | Names the QB runtime's registers for inline assembly operands and clobbers. | `abi/qb.rs` and the nib frontend (`llrm-nib` `semantic/assembly.rs`). | [inline_asm](inline_asm.md) |
 | intbits | Integers of a given width held in an `i64`: the masks and wraps that stay defined at eight bytes, where `1 << 64` is not. | `stepflags` (the constant of a compare against a step) and `peephole` | [intbits](intbits.md) |
