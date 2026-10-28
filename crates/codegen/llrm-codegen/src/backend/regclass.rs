@@ -96,6 +96,7 @@
 //! intervals and clobber masks (`allocate`).
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
@@ -104,9 +105,9 @@ use crate::analysis::intervals as ranges;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::masks::{_clobbered, _masks};
 use crate::backend::target::{self, Segments};
-use crate::model::ir::{Loc, Operation, Space};
+use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
-use crate::support::hash::{HashSet, IndexMap};
+use crate::support::hash::{HashSet, IndexMap, IndexSet};
 
 pub type Classes = IndexMap<u32, BTreeSet<RegId>>;
 
@@ -1513,4 +1514,93 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
         }
     }
     out
+}
+
+/// Each far cell whose selector is also read as a number, or pinned to a
+/// general register, reached through ES: None where no cell is rewritten.
+pub fn explicit_selectors_given(
+    body: &LirBody,
+    pinned: Option<&IndexMap<u32, RegId>>,
+    segments: &Segments,
+    confined: &Classes,
+) -> Option<LirBody> {
+    let regs = body.regs();
+    let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
+    let empty = IndexMap::default();
+    let pinned = pinned.unwrap_or(&empty);
+    let mut conflicted: BTreeSet<u32> = BTreeSet::new();
+    for block in &body.blocks {
+        for one in &block.insns {
+            let Some(what) = &one.what else {
+                continue;
+            };
+            for place in what.dests.iter().chain(&what.sources) {
+                if let Loc::Mem(cell) = place {
+                    if let Some(selector) = cell.selector {
+                        if confined.get(&selector.value) != Some(&selectors)
+                            || !regs.is_segment(*pinned.get(&selector.value).unwrap_or(&regs.far()))
+                        {
+                            conflicted.insert(selector.value);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if conflicted.is_empty() {
+        return None;
+    }
+
+    let through_es = |place: &Loc| -> Loc {
+        if let Loc::Mem(cell) = place {
+            if cell.selector.is_some_and(|selector| conflicted.contains(&selector.value)) {
+                let addr = cell.addr.expect("a far cell has an address");
+                return Loc::Mem(Mem {
+                    selector: None,
+                    addr: Some(Addr { segment: regs.far().iced(), ..addr }),
+                    ..cell.clone()
+                });
+            }
+        }
+        place.clone()
+    };
+
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        let mut insns = Vec::new();
+        for one in &block.insns {
+            let named: Vec<Held> = match &one.what {
+                None => Vec::new(),
+                Some(what) => what
+                    .dests
+                    .iter()
+                    .chain(&what.sources)
+                    .filter_map(|place| match place {
+                        Loc::Mem(cell) => cell.selector.filter(|selector| conflicted.contains(&selector.value)),
+                        _ => None,
+                    })
+                    .collect(),
+            };
+            if named.is_empty() {
+                insns.push(Arc::clone(one));
+                continue;
+            }
+            let what = one.what.as_ref().expect("named is empty without semantics");
+            let what = Semantics {
+                dests: what.dests.iter().map(&through_es).collect(),
+                sources: what.sources.iter().map(&through_es).collect(),
+                ..what.clone()
+            };
+            let requires: IndexSet<(Held, RegId)> =
+                one.requires.iter().copied().chain(named.iter().map(|held| (*held, regs.far()))).collect();
+            let uses: IndexSet<u32> = one.uses.iter().copied().chain(named.iter().map(|held| held.value)).collect();
+            let mut made = (**one).clone();
+            made.what = Some(what);
+            made.requires = requires.into_iter().collect();
+            made.uses = uses.into_iter().collect();
+            insns.push(Arc::new(made));
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    Some(body.with_blocks(blocks))
 }

@@ -881,6 +881,34 @@ entry:
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
 
+/// Two `long double` arguments at m64 were required in XMM0 and XMM1 (the
+/// float argument registers), so the allocator could not place an x87 value in
+/// them: "the greedy allocator could not place every range"
+/// (tests/run/c/long_double_variadic.c). SysV passes an extended real in
+/// memory.
+#[test]
+fn an_m64_long_double_argument_is_not_required_in_a_vector_register() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @g(x86_fp80, x86_fp80)
+define void @f(x86_fp80 %a, x86_fp80 %b) {
+entry:
+  call void @g(x86_fp80 %b, x86_fp80 %a)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let call = done
+        .body
+        .insns()
+        .into_iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call")))
+        .expect("a call");
+    let in_vectors: Vec<_> = call.requires.iter().filter(|(_, reg)| reg.is_xmm()).collect();
+    assert!(in_vectors.is_empty(), "long doubles required in {in_vectors:?}");
+}
+
 /// An address with an index and no base (`4 + 4*x`, a select of 4 and 8) at m64
 /// widened `$noreg` like a value: `LEA64_32r`'s base was an `INSERT_SUBREG` of
 /// nothing and the function was refused ("value N is read and not defined on
@@ -972,4 +1000,33 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// A store of an `i48` (a packed struct's member) stopped at
+/// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
+/// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.
+#[test]
+fn an_m64_store_of_an_odd_width_integer_is_two_stores() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, i64 %x) {
+entry:
+  %t = trunc i64 %x to i48
+  store i48 %t, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("mov") && matches!(w.dests.first(), Some(crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .count();
+    assert_eq!(stores, 2, "a dword and a word");
 }
