@@ -490,3 +490,34 @@ fn a_struct_has_its_natural_layout_at_m32_and_is_byte_packed_at_m16() {
     assert!(flat.contains("mov eax, 8"), "{flat}");
     assert!(real.contains("mov ax, 3"), "{real}");
 }
+
+/// `int (far *fp)(int) = callee;` with `int far callee(int)` was refused by the
+/// fork's clang ("incompatible function pointer types"): `far` qualified the
+/// result of `callee` instead of its code, and the pointer's `far` was dropped
+/// or made a far pointer to a near function. Every m16 function is far.
+#[test]
+fn a_far_function_pointer_takes_a_far_function() {
+    let Some(fork) = std::env::var_os("LLRM_CLANG_M16") else {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set");
+        return;
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-fp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("p.c"),
+        "int far callee(int x) { return x + 1; }\nint (far *fp)(int) = callee;\nint (*np)(int) = callee;\nint (* far fq)(int) = callee;\nint apply(int (far *f)(int), int v) { return f(v); }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_CLANG_M16", fork)
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O0", "-w", "-c", "-o"])
+        .arg(dir.join("p.o"))
+        .arg(dir.join("p.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}

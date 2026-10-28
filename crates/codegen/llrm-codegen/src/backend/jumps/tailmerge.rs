@@ -698,6 +698,9 @@ impl Folder {
         }
         // Their values are the kept tail's.
         let kept = &pots[same[keep].pot].seq.items[same[keep].start..];
+        // The line of each kept instruction: what it and its copies share
+        // (BranchFolding.cpp:933).
+        let mut lines: IndexMap<usize, Option<u32>> = kept.iter().map(|item| (item.index, item.insn.line)).collect();
         for (index, one) in same.iter().enumerate() {
             if index == keep {
                 continue;
@@ -715,6 +718,8 @@ impl Folder {
                 pairs.extend(dropped.defines.iter().zip(&dropped.uses).map(|(from, to)| (*from, *to)));
             }
             for (item, wanted) in seq.items[one.start..].iter().zip(kept) {
+                let line = lines.get_mut(&wanted.index).expect("a kept item");
+                *line = crate::model::lir::merged_line(*line, item.insn.line);
                 pairs.extend(
                     item.insn
                         .defines
@@ -738,6 +743,17 @@ impl Folder {
             };
             self.set(ended);
         }
+        let block = self.block(tail).clone();
+        let insns: Vec<Arc<Insn>> = block
+            .insns
+            .iter()
+            .enumerate()
+            .map(|(at, insn)| match lines.get(&at) {
+                Some(line) if *line != insn.line => Arc::new(Insn { line: *line, ..(**insn).clone() }),
+                _ => Arc::clone(insn),
+            })
+            .collect();
+        self.set(block.with_insns(insns).into_inner());
     }
 
     /// The candidates whose hash another has, with the whole of their blocks

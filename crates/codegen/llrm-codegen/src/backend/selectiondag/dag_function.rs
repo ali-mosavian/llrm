@@ -927,6 +927,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut pops = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
     let mut sinks: HashSet<i64> = HashSet::default();
@@ -975,6 +976,7 @@ fn selected_in(
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }
         let from = emitted.len();
+        pops.extend(done.pops.iter().copied());
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
@@ -1173,18 +1175,28 @@ fn selected_in(
         else {
             continue;
         };
-        // A parameter is said once: where the convention passes it.
-        if variable.scope == name
-            && !(variable.parameter && body.variables.iter().any(|one| one.parameter && one.name == variable.name))
-        {
-            body.variables.push(crate::model::lir::DebugVariable {
-                name: variable.name,
-                r#type: variable.r#type,
-                place: crate::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
-                parameter: variable.parameter,
-                argument: variable.argument,
-                arrives: None,
-            });
+        if variable.scope != name {
+            continue;
+        }
+        let said = crate::model::lir::DebugVariable {
+            name: variable.name,
+            r#type: variable.r#type,
+            place: crate::model::lir::DebugPlace::At(Addr::new(Space::Frame, disp + variable.offset)),
+            parameter: variable.parameter,
+            argument: variable.argument,
+            arrives: None,
+        };
+        // A parameter is said once. One the convention passes in a register is
+        // in its declared cell (`-O0`'s copy of it), not in the register the
+        // allocator then reuses; the register it arrived in is `arrives`, until
+        // the store.
+        match body.variables.iter_mut().find(|one| said.parameter && one.parameter && one.name == said.name) {
+            Some(one) if matches!(one.place, crate::model::lir::DebugPlace::Register(_)) => {
+                *one = crate::model::lir::DebugVariable { argument: said.argument.or(one.argument), ..said }
+            }
+            // passed in a cell, which holds it from the entry
+            Some(_) => {}
+            None => body.variables.push(said),
         }
     }
     for one in &mut body.variables {
@@ -1254,7 +1266,7 @@ fn selected_in(
         inline_places,
         inline_symbols: IndexMap::default(),
         far,
-        pops: IndexMap::default(),
+        pops,
         depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
