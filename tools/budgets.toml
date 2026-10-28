@@ -69,15 +69,6 @@ why = "measured 18.5 -> 52.2 Minstr (x2.82)"
 
 [[debt]]
 kind = "steps"
-axis = "cases"
-name = "analysis exposed-frames"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.2 -> 18.7 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
 axis = "nest"
 name = "lir coalesce"
 ratio = 3.3
@@ -141,15 +132,6 @@ ratio = 3.45
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 5530 -> 17937 (x3.24)"
-
-[[debt]]
-kind = "events"
-axis = "cases"
-name = "lvi_icmp_patterns"
-ratio = 3.68
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: measured 39226 -> 137384 (x3.50); 3N-pred block, MAX_PROCESSED_PER_VALUE=500 with pin-faithful solveBlockValueNonLocal restart"
 
 [[debt]]
 kind = "events"
@@ -532,15 +514,6 @@ why = "measured 9.1 -> 37.9 Minstr (x4.14)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "settled remember"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 11.4 -> 36.4 Minstr (x3.19)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "mir combine@1499"
 ratio = 3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -667,15 +640,6 @@ why = "measured 3.4 -> 9.9 Minstr (x2.88)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "analysis exposed-frames"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.2 -> 9.6 Minstr (x2.95)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "analysis mssa"
 ratio = 3.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -766,15 +730,6 @@ why = "measured 124.6 -> 322.6 -> 15.2 (4N) Minstr (x2.59)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir decide@832"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 56.7 -> 202.0 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "mir decide@1244"
 ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -825,15 +780,6 @@ ratio = 3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 28.2 -> 78.3 Minstr (x2.77)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir dfajumpthreading@806"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 19.0 -> 68.9 Minstr (x3.63)"
 
 [[debt]]
 kind = "steps"
@@ -901,24 +847,6 @@ why = "measured 14.7 -> 36.8 Minstr (x2.50)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir simplifycfg@1438"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 9.7 -> 29.4 Minstr (x3.02)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir simplifycfg@1682"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 8.3 -> 26.7 Minstr (x3.20)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "lir split returns"
 ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -951,15 +879,6 @@ ratio = 3.56
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 1.8 -> 6.2 Minstr (x3.39); N=128/256/512: 16.4 / 38.3 / 59.2 Minstr (x2.3, x1.5); the doubling past 256 is under the limit, cause not located"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir cgpaddr"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.3 -> 6.0 Minstr (x2.63)"
 
 [[debt]]
 kind = "steps"
@@ -1505,6 +1424,11 @@ why = "greedy region split on N values live across a call; ours x2.3/doubling vs
 # test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
 
 [[window]]
+axis = "cases"
+name = "assemble"
+why = "b74aef4830 (machinelicm keeps a loop phi's constant in the loop) moved the object by 16 bytes and the assembler's relaxation loop takes one more pass past a threshold: 6.25/9.99/17.86 -> 6.25/9.98/31.49 Minstr at N=64/128/256, equal again at 512. A step on the curve that moves with any code-size change, not a slope (w17, 2026-10-28)."
+
+[[window]]
 axis = "joins"
 name = "mir dse@820"
 why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
@@ -1592,15 +1516,6 @@ why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 
 
 [[debt]]
 kind = "steps"
-axis = "cases"
-name = "mir adce@815"
-ratio = 2.49
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: measured 2.1 -> 5.1 Minstr (x2.37); N=128/256/512: 2.1 / 5.1 / 3.2 Minstr; @815 is a different pipeline instance at 512, so not one pass across N; cause not located"
-
-[[debt]]
-kind = "steps"
 axis = "fjoins"
 name = "lir jumps"
 ratio = 2.66
@@ -1617,3 +1532,11 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); dse alone 326 -> 793 -> 2494 Minstr at N=820/1640/3280 (x2.4, x3.1). No event counter grows; scan limits are the pin's (150/90/5), defs per block under 5000, so the superlinear part is not located"
 
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir machinecp"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w13"
+why = "long-standing quadratic hidden by the 5.0 Minstr floor, exposed by #5802's +20%; 1.231/2.234/5.581/15.07 Minstr at N=64..512; MCP linearization post-FF"
