@@ -20,9 +20,6 @@
 //! `foldExtractionOfVectorDeinterleave`, the shuffle step of
 //! `commonCastTransforms` and the `vscale` folds are not translated.
 //!
-//! DEVIATE 2 (temporary): `FoldOpIntoSelect`, the select step of
-//! `commonCastTransforms`, is left out until the select family lands it.
-//!
 //! DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
 //! `usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are
 //! left out until the Builder can declare an intrinsic (`combine_build`
@@ -729,7 +726,28 @@ pub fn common_cast_transforms(
         let from = c.function.instruction(inner).operands[0];
         return Some(c.replace_with_new(inst, Opcode::Cast(new_op), ty, vec![from], Flags::default()));
     }
-    // DEVIATE 2: FoldOpIntoSelect of a cast of a select.
+    // We are casting a select. Try to fold the cast into the select if the
+    // select does not have a compare instruction with matching operand types
+    // or the select is likely better done in a narrow type. Creating a select
+    // with operands that are different sizes than its condition may inhibit
+    // other folds and lead to worse codegen.
+    if let Some(select) = def_of(c, src).filter(|&def| c.function.instruction(def).opcode == Opcode::Select) {
+        let cmp = def_of(c, c.function.instruction(select).operands[0])
+            .filter(|&def| matches!(c.function.instruction(def).opcode, Opcode::ICmp(_) | Opcode::FCmp(_)));
+        let compares_select_type =
+            cmp.is_some_and(|cmp| c.type_of(c.function.instruction(cmp).operands[0]) == c.type_of(src));
+        let narrows = matches!(c.function.instruction(inst).opcode, Opcode::Cast(CastOp::Trunc))
+            && matches!(
+                (c.context.types.int_bits(c.type_of(src)), c.context.types.int_bits(ty)),
+                (Some(from), Some(to)) if should_change_type(c, from, to)
+            );
+        if !compares_select_type || narrows {
+            let found = c.fold_op_into_select(inst, select, false, false);
+            if !matches!(found, Visit::None) {
+                return Some(found);
+            }
+        }
+    }
 
     // If we are casting a PHI, then fold the cast into the PHI.
     if let Some(phi) = def_of(c, src)

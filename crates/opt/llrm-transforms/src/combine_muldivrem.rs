@@ -18,13 +18,9 @@
 //! DEVIATE 1: `foldVectorBinop` is not translated: MIR has no vector
 //! operations, so no `ConstantVector` case either.
 //!
-//! DEVIATE 2 (temporary): steps that call a helper another family owns are
-//! left out and named where they stood: `foldBinopWithPhiOperands` (phi
-//! family),
-//! `foldBinOpIntoSelectOrPhi`, `foldBinOpSelectBinOp`,
-//! `foldBinOpOfSelectAndCastOfSelectCondition` and `FoldOpIntoSelect` (select
-//! family). Each is a
-//! `// DEVIATE 2:` comment at its place in the order.
+//! DEVIATE 2 (temporary): `foldBinOpSelectBinOp` and
+//! `foldBinOpOfSelectAndCastOfSelectCondition` (select family) are left out,
+//! each a `// DEVIATE 2:` comment at its place in the order.
 //!
 //! DEVIATE 3 (temporary): the folds that build an intrinsic call (`abs`,
 //! `umin`, `umax`, `cttz`) are left out until the Builder can declare an
@@ -1003,7 +999,10 @@ pub fn visit_mul(
         return Visit::Changed;
     }
     // DEVIATE 1: foldVectorBinop.
-    // DEVIATE 2: foldBinopWithPhiOperands.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return phi;
+    }
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
     }
@@ -1026,7 +1025,10 @@ pub fn visit_mul(
     if let Some(r) = fold_mul_by_negated_power_of_two(c, inst) {
         return r;
     }
-    // DEVIATE 2: foldBinOpIntoSelectOrPhi.
+    let folded = c.fold_bin_op_into_select_or_phi(inst);
+    if !matches!(folded, Visit::None) {
+        return folded;
+    }
     // DEVIATE 2: foldBinOpSelectBinOp.
     if let Some(folded) = fold_mul_select_to_negate(c, inst) {
         return Visit::Replace(folded);
@@ -1399,7 +1401,10 @@ fn common_idiv_rem_transforms(
     inst: InstId,
 ) -> Option<Visit> {
     // DEVIATE 1: a constant vector divisor with a zero or undef element.
-    // DEVIATE 2: foldBinopWithPhiOperands.
+    let phi = c.fold_binop_with_phi_operands(inst);
+    if !matches!(phi, Visit::None) {
+        return Some(phi);
+    }
 
     // The RHS is known non-zero.
     let divisor = c.function.instruction(inst).operands[1];
@@ -1411,7 +1416,19 @@ fn common_idiv_rem_transforms(
     if simplify_div_rem_of_select_with_zero_op(c, inst) {
         return Some(Visit::Changed);
     }
-    // DEVIATE 2: FoldOpIntoSelect, C div/rem (select Cond, TrueC, FalseC).
+    // If the divisor is a select-of-constants, try to constant fold all div
+    // ops: C div/rem (select Cond, TrueC, FalseC) --> select Cond, (C div/rem
+    // TrueC), (C div/rem FalseC)
+    let (op0, op1, _) = parts(c, inst);
+    if imm_constant(c, op0)
+        && let Some(select) = inst_def(c, op1).filter(|&def| c.function.instruction(def).opcode == Opcode::Select)
+        && c.function.instruction(select).operands[1..].iter().all(|&arm| imm_constant(c, arm))
+    {
+        let found = c.fold_op_into_select(inst, select, true, false);
+        if !matches!(found, Visit::None) {
+            return Some(found);
+        }
+    }
     None
 }
 
@@ -1560,7 +1577,12 @@ fn common_idiv_transforms(
             }
         }
 
-        // DEVIATE 2: foldBinOpIntoSelectOrPhi (when C2 is not zero).
+        if c2 != 0 {
+            let folded = c.fold_bin_op_into_select_or_phi(inst);
+            if !matches!(folded, Visit::None) {
+                return Some(folded);
+            }
+        }
     }
 
     if pattern::one(&query(c, Some(inst)), op0) {
@@ -2151,8 +2173,12 @@ fn common_irem_transforms(
         && let Some(def) = inst_def(c, op0)
     {
         match c.function.instruction(def).opcode {
-            // DEVIATE 2: FoldOpIntoSelect(I, SI).
-            Opcode::Select => {}
+            Opcode::Select => {
+                let found = c.fold_op_into_select(inst, def, false, false);
+                if !matches!(found, Visit::None) {
+                    return Some(found);
+                }
+            }
             Opcode::Phi => {
                 // foldOpIntoPhi will speculate instructions to the end of the
                 // PHI's predecessor blocks, so do this only if we know the srem
