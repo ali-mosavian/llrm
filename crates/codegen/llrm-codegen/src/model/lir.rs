@@ -1070,6 +1070,9 @@ pub struct DebugVariable {
     /// The register that argument arrives in, where one does: it holds the
     /// value until the function stores it into the home.
     pub arrives: Option<RegId>,
+    /// The lexical block (`!DILexicalBlock`) it is declared in; none for the
+    /// function's own scope.
+    pub scope: Option<llrm_mir::MetadataId>,
 }
 
 /// Where a `-g` variable is.

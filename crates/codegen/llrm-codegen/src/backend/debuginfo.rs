@@ -148,6 +148,8 @@ pub struct Debug {
     /// The unit's source file where the frontend named one: its name, and the
     /// MD5 of its text.
     pub source: Option<(String, Option<Vec<u8>>)>,
+    /// The scopes the locations of the code name.
+    pub scopes: Scopes,
 }
 
 fn narrow<T: TryFrom<i64>>(
@@ -346,7 +348,126 @@ pub fn described(
         procedures,
         globals: out,
         source: di::file(module).map(|(name, md5)| (name, md5.and_then(|hex| unhexed(&hex)))),
+        scopes: Scopes::of(module),
     }))
+}
+
+/// The scope tree of a module's `!DILocation`s, by [`SrcLoc`] numbering
+/// (metadata id plus one).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Scopes {
+    /// A lexical block by id: the scope it is in.
+    pub parent: IndexMap<u32, u32>,
+    /// A location by id: its scope, and the call it was inlined at.
+    pub calls: IndexMap<u32, (u32, u32)>,
+}
+
+impl Scopes {
+    fn of(module: &llrm_mir::Module) -> Self {
+        let field = |id: MetadataId, name: &str| {
+            let at = module.special.get(&id)?.fields.iter().position(|one| one == name)?;
+            match module.metadata.get(id.0 as usize)?.operands.get(at)? {
+                llrm_mir::MetadataOperand::Node(node) => Some(node.0 + 1),
+                _ => None,
+            }
+        };
+        let mut scopes = Self::default();
+        for (&id, special) in &module.special {
+            let key = id.0 + 1;
+            match special.kind.as_str() {
+                "DILexicalBlock" | "DILexicalBlockFile" => {
+                    scopes.parent.insert(key, field(id, "scope").unwrap_or(0));
+                }
+                "DILocation" => {
+                    scopes.calls.insert(key, (field(id, "scope").unwrap_or(0), field(id, "inlinedAt").unwrap_or(0)));
+                }
+                _ => {}
+            }
+        }
+        scopes
+    }
+
+    /// The lexical blocks a place is in, innermost first, as its function
+    /// sees them: a place inlined from another function is in the blocks of
+    /// the call.
+    fn blocks_of(
+        &self,
+        place: crate::model::lir::SrcLoc,
+    ) -> Vec<u32> {
+        let (mut scope, mut call) = (place.scope, place.inlined_at);
+        while call != 0 {
+            let Some(&(outer, next)) = self.calls.get(&call) else { break };
+            (scope, call) = (outer, next);
+        }
+        let mut chain = Vec::new();
+        while let Some(&parent) = self.parent.get(&scope) {
+            chain.push(scope);
+            scope = parent;
+        }
+        chain
+    }
+}
+
+/// The function's variables split into those of its own scope and the lexical
+/// blocks of `rows` (the code's places, from `start` to `end`) that hold them.
+fn in_blocks(
+    scopes: &Scopes,
+    rows: &[(crate::model::lir::SrcLoc, usize)],
+    (section, start, end): (usize, usize, usize),
+    variables: Vec<(Variable, Option<MetadataId>)>,
+) -> (Vec<Variable>, Vec<model::Block>) {
+    let mut ranges: IndexMap<u32, Vec<model::Range>> = IndexMap::default();
+    let inside: Vec<&(crate::model::lir::SrcLoc, usize)> =
+        rows.iter().filter(|(_, at)| (start..end).contains(at)).collect();
+    for (index, &&(place, at)) in inside.iter().enumerate() {
+        let to = inside.get(index + 1).map_or(end, |next| next.1);
+        for block in scopes.blocks_of(place) {
+            let list = ranges.entry(block).or_default();
+            match list.last_mut() {
+                Some(last) if last.offset + last.length == at => last.length += to - at,
+                _ if to > at => list.push(model::Range { section, offset: at, length: to - at }),
+                _ => {}
+            }
+        }
+    }
+    let mut own = Vec::new();
+    let mut held: IndexMap<u32, Vec<Variable>> = IndexMap::default();
+    for (variable, scope) in variables {
+        match scope.map(|one| one.0 + 1).filter(|id| ranges.contains_key(id)) {
+            Some(id) => held.entry(id).or_default().push(variable),
+            None => own.push(variable),
+        }
+    }
+    fn tree(
+        of: u32,
+        scopes: &Scopes,
+        ranges: &IndexMap<u32, Vec<model::Range>>,
+        held: &mut IndexMap<u32, Vec<Variable>>,
+    ) -> Vec<model::Block> {
+        let mut children: Vec<u32> =
+            ranges.keys().copied().filter(|id| scopes.parent.get(id).is_some_and(|parent| *parent == of)).collect();
+        children.sort_by_key(|id| ranges[id][0].offset);
+        children
+            .into_iter()
+            .map(|id| model::Block {
+                ranges: ranges[&id].clone(),
+                variables: held.swap_remove(&id).unwrap_or_default(),
+                blocks: tree(id, scopes, ranges, held),
+            })
+            .collect()
+    }
+    // The outermost blocks are those whose parent is no block (the function).
+    let mut roots: Vec<u32> = ranges.keys().copied().filter(|id| !ranges.contains_key(&scopes.parent[id])).collect();
+    roots.sort_by_key(|id| ranges[id][0].offset);
+    let blocks = roots
+        .into_iter()
+        .map(|id| model::Block {
+            ranges: ranges[&id].clone(),
+            variables: held.swap_remove(&id).unwrap_or_default(),
+            blocks: tree(id, scopes, &ranges, &mut held),
+        })
+        .collect();
+    (own, blocks)
 }
 
 /// The bytes a hex string spells.
@@ -546,7 +667,12 @@ pub fn laid_out(
                 (!one.parameter, at.unwrap_or(usize::MAX))
             });
         }
+        // The scope of each variable of `variables`: its own statics have none.
+        let mut scoped: Vec<Option<MetadataId>> = vec![None; variables.len()];
+        let mut last = None;
         for one in ordered {
+            scoped.resize(variables.len(), last);
+            last = one.scope;
             let r#type = type_of(one.r#type)?;
             let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
             let addr = match &one.place {
@@ -735,6 +861,7 @@ pub fn laid_out(
                 }
             }
         }
+        scoped.resize(variables.len(), last);
         // A format that finds a cell by the frame register says nothing of one
         // in a function that keeps none (the code is not changed for
         // `-g` to keep it), nor of a place that is in a cell of a list: it is
@@ -755,54 +882,61 @@ pub fn laid_out(
             let bias = debug.frame.map(|(.., entry)| entry[usize::from(procedure.far)] + entry[0]);
             let rows = frame.as_deref().filter(|_| debug.ranges);
             let stack = debug.frame.map(|(_, stack, _)| format!("{stack:?}").to_lowercase());
-            variables = variables
+            (variables, scoped) = variables
                 .into_iter()
-                .filter_map(|one| match (&one.location, rows, bias) {
-                    (Location::Frame { disp }, Some(rows), Some(bias)) => {
-                        let entries: Vec<(model::Range, Location)> = rows
-                            .iter()
-                            .enumerate()
-                            .map(|(at, row)| {
-                                let to = rows.get(at + 1).map_or(end - start, |next| next.offset);
-                                (
-                                    model::Range { section, offset: start + row.offset, length: to - row.offset },
-                                    Location::Relative {
-                                        register: row.cfa_register.clone(),
-                                        disp: disp - bias + row.cfa_offset,
-                                    },
-                                )
+                .zip(scoped)
+                .filter_map(|(one, scope)| {
+                    match (&one.location, rows, bias) {
+                        (Location::Frame { disp }, Some(rows), Some(bias)) => {
+                            let entries: Vec<(model::Range, Location)> = rows
+                                .iter()
+                                .enumerate()
+                                .map(|(at, row)| {
+                                    let to = rows.get(at + 1).map_or(end - start, |next| next.offset);
+                                    (
+                                        model::Range { section, offset: start + row.offset, length: to - row.offset },
+                                        Location::Relative {
+                                            register: row.cfa_register.clone(),
+                                            disp: disp - bias + row.cfa_offset,
+                                        },
+                                    )
+                                })
+                                .filter(|(range, _)| range.length > 0)
+                                .collect();
+                            Some(Variable { location: Location::List(entries), ..one })
+                        }
+                        // A format with one place for a scope says a cell
+                        // through the stack pointer when the pointer is the
+                        // same distance from the frame address over the whole
+                        // body.
+                        (Location::Frame { disp }, None, Some(bias)) => {
+                            let rows = frame.as_deref()?;
+                            let inside: Vec<&model::FrameRow> = rows
+                                .iter()
+                                .enumerate()
+                                .filter(|&(at, row)| {
+                                    row.offset <= body.1 && rows.get(at + 1).is_none_or(|next| next.offset > body.0)
+                                })
+                                .map(|(_, row)| row)
+                                .collect();
+                            let [row] = inside[..] else { return None };
+                            (Some(&row.cfa_register) == stack.as_ref()).then(|| Variable {
+                                location: Location::Relative {
+                                    register: row.cfa_register.clone(),
+                                    disp: disp - bias + row.cfa_offset,
+                                },
+                                ..one
                             })
-                            .filter(|(range, _)| range.length > 0)
-                            .collect();
-                        Some(Variable { location: Location::List(entries), ..one })
+                        }
+                        (location, ..) if framed(location) => None,
+                        _ => Some(one),
                     }
-                    // A format with one place for a scope says a cell through
-                    // the stack pointer when the pointer is the same distance
-                    // from the frame address over the whole body.
-                    (Location::Frame { disp }, None, Some(bias)) => {
-                        let rows = frame.as_deref()?;
-                        let inside: Vec<&model::FrameRow> = rows
-                            .iter()
-                            .enumerate()
-                            .filter(|&(at, row)| {
-                                row.offset <= body.1 && rows.get(at + 1).is_none_or(|next| next.offset > body.0)
-                            })
-                            .map(|(_, row)| row)
-                            .collect();
-                        let [row] = inside[..] else { return None };
-                        (Some(&row.cfa_register) == stack.as_ref()).then(|| Variable {
-                            location: Location::Relative {
-                                register: row.cfa_register.clone(),
-                                disp: disp - bias + row.cfa_offset,
-                            },
-                            ..one
-                        })
-                    }
-                    (location, ..) if framed(location) => None,
-                    _ => Some(one),
+                    .map(|one| (one, scope))
                 })
-                .collect();
+                .unzip();
         }
+        let (variables, blocks) =
+            in_blocks(&debug.scopes, &code.lines, (section, start, end), variables.into_iter().zip(scoped).collect());
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],
@@ -812,7 +946,7 @@ pub fn laid_out(
             far: procedure.far,
             module: described.module,
             variables,
-            blocks: Vec::new(),
+            blocks,
             frame: frame.unwrap_or_default(),
         });
     }

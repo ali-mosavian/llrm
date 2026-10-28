@@ -1285,7 +1285,7 @@ pub(crate) fn parameters(
                 ),
                 _ => None,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None })
+            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None, scope: None })
         })
         .collect()
 }
@@ -1665,6 +1665,7 @@ fn noted(
                 parameter: variable.parameter,
                 argument: variable.argument,
                 arrives: None,
+                scope: variable.block,
             });
         }
     }
@@ -3691,6 +3692,7 @@ impl Selector<'_, '_, '_> {
                     parameter: variable.parameter,
                     argument: variable.argument,
                     arrives: None,
+                    scope: variable.block,
                 },
             ));
         }
