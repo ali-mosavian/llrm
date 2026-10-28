@@ -12,6 +12,8 @@ pub const AT_NAME: u16 = 0x03;
 pub const AT_BYTE_SIZE: u16 = 0x0b;
 pub const AT_BIT_SIZE: u16 = 0x0d;
 pub const AT_STMT_LIST: u16 = 0x10;
+pub const AT_RANGES: u16 = 0x55;
+pub const AT_RNGLISTS_BASE: u16 = 0x74;
 pub const AT_LOW_PC: u16 = 0x11;
 pub const AT_HIGH_PC: u16 = 0x12;
 pub const AT_LANGUAGE: u16 = 0x13;
@@ -62,6 +64,13 @@ pub enum Value {
     ExprSegment {
         section: usize,
     },
+    /// A base address of 0, beside the ranges of a DIE.
+    NoAddr,
+    /// The list of ranges at this index: its offset in `.debug_ranges` (before
+    /// 5), its index in `.debug_rnglists` (5).
+    Ranges(usize),
+    /// `DW_AT_rnglists_base`: where the offsets of `.debug_rnglists` start.
+    RangesBase,
 }
 
 #[derive(Clone, Debug)]
@@ -87,6 +96,9 @@ pub struct Places {
     pub line_strings: Option<usize>,
     /// `.debug_loclists` (5) or `.debug_loc` (4), where a variable has a list.
     pub locations: Option<usize>,
+    /// `.debug_rnglists` (5) or `.debug_ranges` (4), where a DIE has several
+    /// code ranges.
+    pub ranges: Option<usize>,
 }
 
 pub struct Out {
@@ -97,6 +109,8 @@ pub struct Out {
     pub line_strings: Strings,
     /// The target's fixup kind for a segment's selector.
     pub segment: Option<llrm_object::FixupKind>,
+    /// Each list of ranges' offset in the section of them.
+    pub range_offsets: Vec<u32>,
 }
 
 impl Out {
@@ -109,7 +123,15 @@ impl Out {
         address: u8,
         places: Places,
     ) -> Self {
-        Self { version, address, places, strings: Strings::default(), line_strings: Strings::default(), segment: None }
+        Self {
+            version,
+            address,
+            places,
+            strings: Strings::default(),
+            line_strings: Strings::default(),
+            segment: None,
+            range_offsets: Vec::new(),
+        }
     }
 }
 
@@ -136,8 +158,10 @@ fn form(
             }
         }
         Value::Ref(_) => 0x13,
-        Value::Addr { .. } => 0x01,
-        Value::Line | Value::LocList(_) => {
+        Value::Addr { .. } | Value::NoAddr => 0x01,
+        Value::Ranges(_) if version >= 5 => 0x23, // DW_FORM_rnglistx
+        Value::RangesBase => 0x17,
+        Value::Line | Value::LocList(_) | Value::Ranges(_) => {
             if version < 4 {
                 0x06
             } else {
@@ -160,13 +184,15 @@ fn size(
     version: u16,
 ) -> usize {
     match value {
-        Value::Str(_) | Value::Len(_) | Value::Ref(_) | Value::Line | Value::LocList(_) => 4,
+        Value::Str(_) | Value::Len(_) | Value::Ref(_) | Value::Line | Value::LocList(_) | Value::RangesBase => 4,
+        Value::Ranges(at) if version >= 5 => uleb(*at as u64).len(),
+        Value::Ranges(_) => 4,
         Value::U8(_) => 1,
         Value::U16(_) => 2,
         Value::Udata(one) => uleb(*one).len(),
         Value::Sdata(one) => crate::buffer::sleb(*one).len(),
         Value::Flag => usize::from(version < 4),
-        Value::Addr { .. } => address,
+        Value::Addr { .. } | Value::NoAddr => address,
         Value::Expr(bytes) => block(bytes.len(), version) + bytes.len(),
         Value::ExprAddr { .. } => block(1 + address, version) + 1 + address,
         Value::ExprSegment { .. } => block(3, version) + 3,
@@ -195,8 +221,15 @@ pub fn unit(
     object: &Object,
     info: &Info,
     out: &mut Out,
-) -> Result<(Done, Done, Done), Unsupported> {
-    let (dies, locations) = crate::types::tree(object, info, out.version, usize::from(out.address))?;
+) -> Result<(Done, Done, Done, Option<Done>), Unsupported> {
+    let (dies, locations, lists) = crate::types::tree(object, info, out.version, usize::from(out.address))?;
+    let ranges = if lists.is_empty() {
+        None
+    } else {
+        let (part, offsets) = crate::ranges::section(object, &lists, out.version, usize::from(out.address))?;
+        out.range_offsets = offsets;
+        Some(part)
+    };
     let address = usize::from(out.address);
     // Abbreviations in the order DIEs are first met, and each DIE's offset.
     let mut layout = Layout {
@@ -239,7 +272,7 @@ pub fn unit(
         abbrev.uleb(0);
     }
     abbrev.uleb(0);
-    Ok((buf.done(), abbrev.done(), locations))
+    Ok((buf.done(), abbrev.done(), locations, ranges))
 }
 
 struct Layout {
@@ -308,6 +341,14 @@ fn write(
             Value::Ref(target) => buf.u32(offsets[*target] as u32),
             Value::Addr { symbol, delta } => buf.address(address, *symbol, *delta),
             Value::Line => buf.section_offset(out.places.line, 0),
+            Value::NoAddr => buf.bytes.extend(std::iter::repeat_n(0, address)),
+            Value::Ranges(at) if out.version >= 5 => buf.uleb(*at as u64),
+            Value::Ranges(at) => {
+                buf.section_offset(out.places.ranges.expect("a section of ranges"), out.range_offsets[*at]);
+            }
+            Value::RangesBase => {
+                buf.section_offset(out.places.ranges.expect("a section of ranges"), crate::ranges::LISTS_BASE)
+            }
             Value::LocList(at) => buf.section_offset(out.places.locations.expect("a section of lists"), *at),
             Value::Expr(bytes) => {
                 length(buf, bytes.len(), out.version)?;
