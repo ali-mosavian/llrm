@@ -2452,18 +2452,13 @@ impl Emitter<'_, '_> {
                 let Loc::Held(callee) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
                 };
-                use llrm_lir::registers::RegId;
                 let mut requires = std::mem::take(&mut self.arguments);
-                let pool: &[RegId] = if name == "TCRETURNri64" {
-                    &[RegId::RAX, RegId::RCX, RegId::RDX, RegId::RSI, RegId::RDI, RegId::R8, RegId::R9, RegId::R11]
-                } else {
-                    &[RegId::EAX, RegId::ECX, RegId::EDX]
-                };
-                let free = pool
-                    .iter()
-                    .copied()
+                let registers = self.ctx.registers;
+                let free = registers
+                    .entries()
+                    .filter(|(_, one)| one.classes & llrm_lir::registers::class::TAIL_CALL != 0)
+                    .map(|(id, _)| id)
                     .find(|one| {
-                        let registers = self.ctx.registers;
                         self.ctx.caller_saved.contains(&registers.root(*one))
                             && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(*one))
                     })
