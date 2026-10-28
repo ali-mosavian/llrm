@@ -8,8 +8,8 @@
 //! [`BaseIndexOffset::equal_base_index`] says whether two share base and index
 //! and how many bytes apart they are; [`compute_aliasing`] turns that, or the
 //! kinds of their bases (frame index, global, constant pool), into a verdict.
-//! The verdict itself is `llrm_analysis::placealias::alias_of`, shared with arm64's
-//! load/store pairing; this file only reads the DAG into its inputs.
+//! The verdict itself is `llrm_analysis::placealias::alias_of`, shared with
+//! arm64's load/store pairing; this file only reads the DAG into its inputs.
 //!
 //! DEVIATE AA1: no indexed loads or stores (x86 has none) and no lifetime
 //! nodes (the builder drops the markers): `matchLSNode`'s pre-inc/pre-dec and
@@ -210,7 +210,9 @@ pub fn compute_aliasing(
     let ptr1 = BaseIndexOffset::matching(dag, op1);
     let (base0, base1) = (ptr0.base?, ptr1.base?);
     let object = |value: SDValue| match dag.node(value).data {
-        NodeData::FrameIndex(index) => Some(Object::Frame { id: i64::from(index), fixed: dag.fixed_offsets.contains_key(&index) }),
+        NodeData::FrameIndex(index) => {
+            Some(Object::Frame { id: i64::from(index), fixed: dag.fixed_offsets.contains_key(&index) })
+        }
         NodeData::Global { symbol, .. } => Some(Object::Global(symbol)),
         NodeData::PoolIndex(..) => Some(Object::Pool),
         _ => None,

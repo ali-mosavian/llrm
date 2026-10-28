@@ -335,10 +335,11 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
     }
 }
 
-/// A `weak` callee is never inlined: the QB runtime's `__attribute__((weak)) void music_tick(void) {}`
-/// was inlined into the tick thread as nothing, so the real `music_tick` of another object never
-/// ran and a program that waited on music hung. `weak_odr` and `linkonce_odr` bodies are
-/// equivalent by promise and are inlined.
+/// A `weak` callee is never inlined: the QB runtime's `__attribute__((weak))
+/// void music_tick(void) {}` was inlined into the tick thread as nothing, so
+/// the real `music_tick` of another object never ran and a program that waited
+/// on music hung. `weak_odr` and `linkonce_odr` bodies are equivalent by
+/// promise and are inlined.
 #[test]
 fn an_interposable_callee_is_not_inlined() {
     let text = |linkage: &str| {

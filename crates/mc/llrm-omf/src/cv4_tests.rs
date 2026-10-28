@@ -397,6 +397,7 @@ fn a_block_is_a_scope_with_its_variables_and_an_end() {
             ranges: vec![Range { section: 0, offset: 8, length: 6 }],
             variables: vec![variable("i", 0, Kind::Local, Location::Frame { disp: -4 })],
             blocks: Vec::new(),
+            inlined: None,
         }];
     });
     let (symbols, _, relocs) = written(&made);

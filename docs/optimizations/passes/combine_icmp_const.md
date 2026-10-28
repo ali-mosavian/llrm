@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:5b5fe544dea9ef24869b02edb62a1bebd6b4337873881f8450d345829259ae10 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:2723f36439aef68f15dad5def4fbe6fb6330e01fb8a9b7cd3c4c0371dc8cf3a3 -->
 
 # combine_icmp_const
 
@@ -23,8 +23,9 @@ OWED, each at its place as a `// OWED:` comment: the other opcodes of
 `foldICmpShlConstant`, `foldICmpShrConstant`,
 `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
 ),
-the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
-truncate, intrinsic and `extractvalue` arms of `foldICmpInstWithConstant`.
+the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
+truth-table fold, and the select, truncate, intrinsic and `extractvalue`
+arms of `foldICmpInstWithConstant`.
 
 DEVIATE 1: the load from an indexed global fold
 (`foldCmpLoadFromIndexedGlobal`) and the floating-point class folds on a

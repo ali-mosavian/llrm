@@ -10,8 +10,9 @@ fn body(name: &str) -> String {
     rest[..rest[1..].find("\n_").map_or(rest.len(), |end| end + 1)].to_owned()
 }
 
-/// `x / 7` took the product's high half with its own `ubfm` and then added the dividend: seven instructions
-/// after the constant; clang adds the dividend to the product shifted (`add x8, x0, x8, lsr #32`).
+/// `x / 7` took the product's high half with its own `ubfm` and then added the
+/// dividend: seven instructions after the constant; clang adds the dividend to
+/// the product shifted (`add x8, x0, x8, lsr #32`).
 #[test]
 fn the_high_half_of_the_product_is_a_shifted_operand_of_the_adjusting_add() {
     let asm = body("by_seven");
@@ -19,7 +20,8 @@ fn the_high_half_of_the_product_is_a_shifted_operand_of_the_adjusting_add() {
     assert!(!asm.contains("ubfm"), "{asm}");
 }
 
-/// Without an adjustment the quotient's shift and the high half are one `asr x, #32+shift`.
+/// Without an adjustment the quotient's shift and the high half are one `asr x,
+/// #32+shift`.
 #[test]
 fn the_quotient_shift_and_the_high_half_are_one_shift() {
     let asm = body("by_five");

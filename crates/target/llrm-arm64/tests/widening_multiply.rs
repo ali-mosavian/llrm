@@ -10,7 +10,8 @@ fn body(name: &str) -> String {
     asm[start..start + 1 + rest.find("\n_").unwrap_or(rest.len())].to_owned()
 }
 
-/// `acc + (long)(a * b)` was `madd w`, `sbfm`, `add`: three instructions where `smaddl` is one.
+/// `acc + (long)(a * b)` was `madd w`, `sbfm`, `add`: three instructions where
+/// `smaddl` is one.
 #[test]
 fn a_widened_product_added_is_smaddl() {
     let asm = body("accumulate");
@@ -27,7 +28,8 @@ fn a_widened_product_alone_is_smull() {
     assert!(asm.contains("smaddl x") && asm.contains("xzr"), "{asm}");
 }
 
-/// Without `nsw` the 32-bit product may wrap before it is extended, so the 64-bit product is another value.
+/// Without `nsw` the 32-bit product may wrap before it is extended, so the
+/// 64-bit product is another value.
 #[test]
 fn a_product_that_may_wrap_is_not_widened() {
     let asm = body("may_wrap");

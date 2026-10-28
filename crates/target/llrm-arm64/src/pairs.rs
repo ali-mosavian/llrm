@@ -41,8 +41,9 @@ pub(crate) fn touch(inst: &Inst) -> Option<Touch<'_>> {
     Some(Touch { store, mmo, bytes, at })
 }
 
-/// Whether `a` and `b` may swap places: two loads always may; otherwise their bytes must be provably apart,
-/// by object (two globals, two frame objects) or by offsets from one register nothing has changed.
+/// Whether `a` and `b` may swap places: two loads always may; otherwise their
+/// bytes must be provably apart, by object (two globals, two frame objects) or
+/// by offsets from one register nothing has changed.
 pub(crate) fn commutes(
     a: &Touch<'_>,
     b: &Touch<'_>,
@@ -53,7 +54,10 @@ pub(crate) fn commutes(
     if a.mmo.disjoint(a.bytes, b.mmo, b.bytes) {
         return true;
     }
-    matches!((a.at, b.at), (Some((x, i)), Some((y, j))) if x == y && (i + a.bytes <= j || j + b.bytes <= i))
+    matches!(
+        (a.at, b.at),
+        (Some((x, i)), Some((y, j))) if x == y && (i + a.bytes <= j || j + b.bytes <= i)
+    )
 }
 
 pub(crate) fn access(inst: &Inst) -> Option<Access> {
@@ -119,10 +123,6 @@ fn ordered(inst: &Inst) -> bool {
     matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
 }
 
-fn is_store(inst: &Inst) -> bool {
-    matches!(inst, Inst::Store { .. } | Inst::StorePair { .. })
-}
-
 pub(crate) fn leaves_the_block(inst: &Inst) -> bool {
     matches!(
         inst,
@@ -156,7 +156,8 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
                     // register. A store moves up: they must not change the
                     // register it stores.
                     let register_free = !defines_or_uses(between, float, number, !first.load);
-                    // It also passes their memory accesses: they must commute with it.
+                    // It also passes their memory accesses: they must commute
+                    // with it.
                     let second_touch = touch_of(&second);
                     register_free && touch(between).is_none_or(|other| commutes(&second_touch, &other))
                 })
@@ -196,7 +197,8 @@ pub(crate) fn pair_of(
         && second.bytes == first.bytes
         && std::mem::discriminant(&second.mem) == std::mem::discriminant(&first.mem)
         && (second.imm == first.imm + first.bytes || second.imm == first.imm - first.bytes)
-        // Two loads into one register leave the pair undefined; two stores of one register are `stp q0, q0`.
+        // Two loads into one register leave the pair undefined; two stores of
+        // one register are `stp q0, q0`.
         && (!first.load || (second_float, second_number) != (first_float, first_number));
     // A load into the base register would change the address of the other.
     let base_loaded = first.load
@@ -212,7 +214,14 @@ pub(crate) fn pair_of(
         Inst::StorePair { first: low.mem, second: high.mem, addr }
     };
     Some(Pair {
-        low: Access { load: low.load, mem: low.mem, base: low.base, imm: low.imm, bytes: low.bytes, mmo: low.mmo.clone() },
+        low: Access {
+            load: low.load,
+            mem: low.mem,
+            base: low.base,
+            imm: low.imm,
+            bytes: low.bytes,
+            mmo: low.mmo.clone(),
+        },
         inst,
     })
 }
@@ -327,7 +336,8 @@ mod tests {
         }
     }
 
-    /// A store to another global between two stores of one pair does not stop them, one to the same bytes does.
+    /// A store to another global between two stores of one pair does not stop
+    /// them, one to the same bytes does.
     #[test]
     fn stores_pair_across_a_store_to_another_object_but_not_to_the_same_bytes() {
         let other = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 0, "_b", 0), store_to(3, 20, 8, "_a", 8)]);
@@ -336,7 +346,8 @@ mod tests {
         assert!(!same.iter().any(|inst| matches!(inst, Inst::StorePair { .. })), "{same:?}");
     }
 
-    /// Stores of one register (a fill, `stp xzr, xzr`) were never paired; loads into one register still are not.
+    /// Stores of one register (a fill, `stp xzr, xzr`) were never paired; loads
+    /// into one register still are not.
     #[test]
     fn stores_of_one_register_pair_but_loads_into_one_do_not() {
         let stores = folded(vec![store(5, 20, 0), store(5, 20, 8)]);

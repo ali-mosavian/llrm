@@ -27,7 +27,7 @@ pub(super) struct Chain {
 
 /// The chains of a function: by their root's value, and every value in any.
 #[derive(Default)]
-pub(super) struct Chains {
+pub(crate) struct Chains {
     pub(super) roots: llrm_mir::dense::IdMap<ValueId, Chain>,
     members: IdSet<ValueId>,
 }

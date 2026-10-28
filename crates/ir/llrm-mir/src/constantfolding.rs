@@ -2637,7 +2637,8 @@ fn constant_fold_scalar_call3(
             let fits = signed(quotient as u128 & mask(width), width) == quotient;
             fits.then(|| int(context, ty_width, quotient as u128 & mask(width)))
         }
-        // `fusedMultiplyAdd` to nearest, ties to even, for both: LLVM folds `fmuladd` fused.
+        // `fusedMultiplyAdd` to nearest, ties to even, for both: LLVM
+        // folds `fmuladd` fused.
         IntrinsicId::Fma | IntrinsicId::Fmuladd => {
             let Type::Float(kind) = context.types.get(ty) else { return None };
             let bits = |operand: ConstantId| match context.get(operand).kind {

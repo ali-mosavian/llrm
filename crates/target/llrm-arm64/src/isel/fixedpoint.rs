@@ -45,12 +45,14 @@ impl Selector<'_> {
         (own == self.function.parent(user)).then(|| self.function.instruction(user))
     }
 
-    /// The width of the register a conversion of an integer of `bits` bits works in.
+    /// The width of the register a conversion of an integer of `bits` bits
+    /// works in.
     fn conversion_width(bits: u32) -> u32 {
         if bits <= 32 { 32 } else { 64 }
     }
 
-    /// The one operand of `mul` that is not the constant, and the constant's exponent.
+    /// The one operand of `mul` that is not the constant, and the constant's
+    /// exponent.
     fn scaled(
         &self,
         mul: &Instruction,
@@ -62,8 +64,9 @@ impl Selector<'_> {
         }
     }
 
-    /// Whether the float multiply `mul` is read only by a float-to-integer conversion of 32 or 64
-    /// bits, and by a power of two that fits its fractional bits.
+    /// Whether the float multiply `mul` is read only by a float-to-integer
+    /// conversion of 32 or 64 bits, and by a power of two that fits its
+    /// fractional bits.
     pub(super) fn mul_folds_into_conversion(
         &self,
         mul: &Instruction,
@@ -76,8 +79,9 @@ impl Selector<'_> {
             && (1..=self.types().int_bits(reader.ty).unwrap_or(0) as i32).contains(&exponent)
     }
 
-    /// Whether the integer-to-float conversion `conv` is read only by a multiply by a power of two below
-    /// one that does not itself fold into a float-to-integer conversion.
+    /// Whether the integer-to-float conversion `conv` is read only by a
+    /// multiply by a power of two below one that does not itself fold into
+    /// a float-to-integer conversion.
     pub(super) fn conversion_folds_into_mul(
         &self,
         conv: &Instruction,
@@ -94,7 +98,8 @@ impl Selector<'_> {
         other == Operand::Value(result) && (1..=Self::conversion_width(bits) as i32).contains(&-exponent)
     }
 
-    /// `mul` as a fixed-point conversion of the fused integer-to-float conversion it reads, if it reads one.
+    /// `mul` as a fixed-point conversion of the fused integer-to-float
+    /// conversion it reads, if it reads one.
     pub(super) fn fixed_from_integer(
         &mut self,
         mul: &Instruction,
@@ -128,7 +133,8 @@ impl Selector<'_> {
         Ok(true)
     }
 
-    /// The float-to-integer `conversion` as a fixed-point one of the fused multiply it reads, if it reads one.
+    /// The float-to-integer `conversion` as a fixed-point one of the fused
+    /// multiply it reads, if it reads one.
     pub(super) fn fixed_to_integer(
         &mut self,
         conversion: &Instruction,

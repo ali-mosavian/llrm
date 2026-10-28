@@ -649,3 +649,21 @@ fn a_segmented_function_of_two_ranges_is_refused_by_name() {
     let why = expanded(&made, made.debug.as_ref().unwrap()).err().expect("refused");
     assert!(why.0.contains("segmented"), "{}", why.0);
 }
+
+/// A lexical block in two pieces on a segmented target was refused ("a DIE of
+/// several code ranges on a segmented target"), so every optimised 16-bit
+/// `-g` compile with a nested scope failed. It is written over its first byte
+/// to its last, as the formats with no list of ranges do.
+#[test]
+fn a_segmented_block_of_two_ranges_is_written_over_its_hull() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
+    made.bits = 16;
+    let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
+    made.debug.as_mut().unwrap().target =
+        Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
+    let pieces = vec![Range { section: 0, offset: 2, length: 2 }, Range { section: 0, offset: 6, length: 2 }];
+    made.debug.as_mut().unwrap().functions[0].blocks =
+        vec![llrm_object::debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new(), inlined: None }];
+    let written = expanded(&made, made.debug.as_ref().unwrap());
+    assert!(written.is_ok(), "{:?}", written.err().map(|why| why.0));
+}

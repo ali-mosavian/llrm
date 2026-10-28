@@ -1,17 +1,20 @@
-//! `memcpy`, `memmove` and `memset` of a constant length that fits the pin's budget are expanded in place
-//! (`AArch64TargetLowering`'s `MaxStoresPerMem*`, `TargetLowering::findOptimalMemOpLowering`): 16-byte
-//! `q` accesses, then the next smaller power of two for the remainder. A remainder that a smaller access
-//! would not cover is covered by the last size again, overlapping the bytes before it.
+//! `memcpy`, `memmove` and `memset` of a constant length that fits the pin's
+//! budget are expanded in place (`AArch64TargetLowering`'s `MaxStoresPerMem*`,
+//! `TargetLowering::findOptimalMemOpLowering`): 16-byte `q` accesses, then the
+//! next smaller power of two for the remainder. A remainder that a smaller
+//! access would not cover is covered by the last size again, overlapping the
+//! bytes before it.
 //!
-//! Copies load a batch before storing it, so `pairs` makes `ldp`/`stp q` of them. A `memmove` loads all
-//! before it stores.
+//! Copies load a batch before storing it, so `pairs` makes `ldp`/`stp q` of
+//! them. A `memmove` loads all before it stores.
 
 use llrm_mir::Operand;
 
 use super::{Selected, Selector, Src};
 use crate::mc::inst::*;
 
-/// Accesses a copy of up to this many may use, and a fill; half of each under `minsize`.
+/// Accesses a copy of up to this many may use, and a fill; half of each under
+/// `minsize`.
 const COPY_OPS: usize = 16;
 const FILL_OPS: usize = 32;
 /// Loads a copy has in flight before it stores them.
@@ -40,14 +43,16 @@ fn pieces(total: u64) -> Vec<(u8, u64)> {
     ops
 }
 
-/// The `q` accesses that cover `total >= 16` bytes, the last overlapping the one before it.
+/// The `q` accesses that cover `total >= 16` bytes, the last overlapping the
+/// one before it.
 fn wide_pieces(total: u64) -> Vec<(u8, u64)> {
     (0..total.div_ceil(16)).map(|at| (16, (at * 16).min(total - 16))).collect()
 }
 
 impl Selector<'_> {
-    /// The pointer `operand`, a global's address made in a register: a page-offset relocation of an access
-    /// wider than a byte needs an offset that is a multiple of its size, and these start anywhere.
+    /// The pointer `operand`, a global's address made in a register: a
+    /// page-offset relocation of an access wider than a byte needs an
+    /// offset that is a multiple of its size, and these start anywhere.
     fn in_register(
         &mut self,
         operand: Operand,
@@ -74,8 +79,8 @@ impl Selector<'_> {
         })
     }
 
-    /// Expands `base` (`memcpy`, `memmove` or `memset`) when its length is constant and within budget;
-    /// whether it did.
+    /// Expands `base` (`memcpy`, `memmove` or `memset`) when its length is
+    /// constant and within budget; whether it did.
     pub(super) fn inline_memory(
         &mut self,
         base: &str,
@@ -124,7 +129,8 @@ impl Selector<'_> {
             Src::Int { value, .. } => Some(value as u8),
             _ => None,
         };
-        // A byte that is not constant fills `q` registers whole, which needs a first 16 bytes.
+        // A byte that is not constant fills `q` registers whole, which needs a
+        // first 16 bytes.
         let ops = if byte.is_none() {
             if total < 16 {
                 return Ok(false);
@@ -162,7 +168,9 @@ impl Selector<'_> {
         for (bytes, offset) in ops {
             let mem = match (bytes, vector) {
                 (16, Some(reg)) => Memory::Fp { bytes, reg },
-                _ => Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg: scalar },
+                _ => {
+                    Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg: scalar }
+                }
             };
             let at = super::val::AddrExpr { offset: destination.offset + offset as i64, ..destination.clone() };
             let addr = self.addressing(&at, bytes)?;

@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 
 use llrm_dagisel::generated::ids::mvt;
-use llrm_dagisel_gen::{decode, emit, features, flatten, ids_rs, inc, prune};
+use llrm_dagisel_gen::{decode, emit, features, flatten, ids_rs, inc, prune, target};
 
 const FEATURES: &str = include_str!("../features.toml");
 /// The pin's table, pruned for each of these.
@@ -18,9 +18,8 @@ const X64_CPUS: [&str; 1] = ["x64"];
 
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let (mut inc_path, mut ids_path, mut pin, mut out, mut extras, mut memflags, mut inc_m16) =
-        (None, None, None, None, None, None, None);
-    let (mut target, mut features_path, mut cpu_name) = (None, None, None);
+    let (mut inc_path, mut ids_path, mut pin, mut out, mut extras, mut memflags, mut inc_m16, mut record) =
+        (None, None, None, None, None, None, None, None);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--inc" => inc_path = args.next(),
@@ -30,9 +29,7 @@ fn run() -> Result<(), String> {
             "--extras" => extras = args.next(),
             "--inc-m16" => inc_m16 = args.next(),
             "--instrinfo" => memflags = args.next(),
-            "--target" => target = args.next(),
-            "--features" => features_path = args.next(),
-            "--cpu" => cpu_name = args.next(),
+            "--target" => record = args.next(),
             other => return Err(format!("unknown argument `{other}`")),
         }
     }
@@ -40,13 +37,21 @@ fn run() -> Result<(), String> {
         let p = p.ok_or_else(|| format!("missing {what}"))?;
         std::fs::read_to_string(&p).map_err(|e| format!("{p}: {e}"))
     };
+    if let Some(record) = record {
+        let out = out.ok_or("missing --out")?;
+        return target::run(&target::Inputs {
+            record: std::path::Path::new(&record),
+            inc: &read(inc_path, "--inc")?,
+            ids: &read(ids_path, "--ids")?,
+            pin: &pin.ok_or("missing --pin")?,
+            instrinfo: &read(memflags, "--instrinfo")?,
+            out: std::path::Path::new(&out),
+        });
+    }
     let ids = inc::Ids::parse(&read(ids_path, "--ids")?)?;
     let parsed = inc::parse(&read(inc_path, "--inc")?, &ids)?;
     let pin = pin.ok_or("missing --pin")?;
     let out = std::path::PathBuf::from(out.ok_or("missing --out")?);
-    if target.as_deref() == Some("aarch64") {
-        return aarch64(&ids, &parsed, &pin, &out, &read(features_path, "--features")?, cpu_name, &read(memflags, "--instrinfo")?);
-    }
 
     // `getValueTypeForHwMode`: both indices are i32 outside 64-bit mode.
     let i32 = llrm_dagisel::matcher::Vt(ids.get("MVT::i32")? as u16);
@@ -68,11 +73,10 @@ fn run() -> Result<(), String> {
     write("ids.rs", ids_rs::render(&ids, &extras, &instructions))?;
     let m16 = inc::parse(&read(inc_m16, "--inc-m16")?, &ids)?;
     let m16_decoded = decode::decode(&m16.matcher_table, &m16.operand_lists, &ids, &decode::HwModes(vec![i32, i32]))?;
-    // `getValueTypeForHwMode`: in the `X86_64` mode (index 1) a pointer is
-    // `i64`.
+    // `getValueTypeForHwMode`: in the `X86_64` mode both indices are `i64`.
     let i64 = llrm_dagisel::matcher::Vt(ids.get("MVT::i64")? as u16);
     let decoded_64 =
-        decode::decode(&parsed.matcher_table, &parsed.operand_lists, &ids, &decode::HwModes(vec![i32, i64]))?;
+        decode::decode(&parsed.matcher_table, &parsed.operand_lists, &ids, &decode::HwModes(vec![i64, i64]))?;
     for (table, tree, cpus) in
         [(&parsed, &decoded, &CPUS[..]), (&m16, &m16_decoded, &M16_CPUS[..]), (&parsed, &decoded_64, &X64_CPUS[..])]
     {
@@ -82,7 +86,7 @@ fn run() -> Result<(), String> {
             let kept = pruner.prune(&tree.root);
             let flat = flatten::flatten(&kept, &tree.lists);
             let source = emit::Source {
-                flavor: emit::Flavor::X86,
+                style: &emit::Style::X86,
                 cpu_name,
                 cpu: &cpu,
                 pin: &pin,
@@ -112,70 +116,8 @@ fn run() -> Result<(), String> {
     {
         emitted.insert(ids.get(name)? as u16);
     }
-    write("instrinfo.rs", emit::render_instr_info(&instrinfo, &ids, &emitted, emit::Flavor::X86)?)?;
+    write("instrinfo.rs", emit::render_instr_info(&instrinfo, &ids, &emitted, &emit::Style::X86)?)?;
     write("mod.rs", modules)
-}
-
-/// `--target aarch64`: the pin's AArch64 table pruned for one CPU, written under `OUT/aarch64/`.
-fn aarch64(
-    ids: &inc::Ids,
-    parsed: &inc::Inc,
-    pin: &str,
-    out: &std::path::Path,
-    features: &str,
-    cpu_name: Option<String>,
-    instrinfo: &str,
-) -> Result<(), String> {
-    let cpu_name = cpu_name.unwrap_or_else(|| "apple-m1".into());
-    let i64 = llrm_dagisel::matcher::Vt(ids.get("MVT::i64")? as u16);
-    let decoded = decode::decode(&parsed.matcher_table, &parsed.operand_lists, ids, &decode::HwModes(vec![i64, i64]))?;
-    let cpu = features::Cpu::load(features, &cpu_name)?;
-    let mut pruner = prune::Pruner::new(&cpu, &parsed.pattern_predicates, ids)?;
-    let kept = pruner.prune(&decoded.root);
-    let flat = flatten::flatten(&kept, &decoded.lists);
-    let instructions: std::collections::BTreeSet<String> =
-        instrinfo.lines().filter_map(|l| l.split(' ').next()).map(str::to_string).collect();
-    let source = emit::Source {
-        flavor: emit::Flavor::AArch64,
-        cpu_name: &cpu_name,
-        cpu: &cpu,
-        pin,
-        flat: &flat,
-        ids,
-        open: &pruner.open,
-        node_predicates: &parsed.node_predicates,
-        complex_patterns: &parsed.complex_patterns,
-        xforms: &parsed.xforms,
-        instructions: &instructions,
-    };
-    let emitted: std::collections::BTreeSet<u16> = flat
-        .items
-        .iter()
-        .filter_map(|m| match m {
-            llrm_dagisel::matcher::Matcher::EmitNode(e) | llrm_dagisel::matcher::Matcher::MorphNodeTo(e) => {
-                Some(e.opcode)
-            }
-            _ => None,
-        })
-        .collect();
-    let dir = out.join("aarch64");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let write = |name: &str, text: String| {
-        let path = dir.join(name);
-        std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
-    };
-    let module = cpu_name.replace('-', "_");
-    write(&format!("{module}.rs"), emit::render(&source)?)?;
-    write("ids.rs", ids_rs::render_aarch64(ids, &emitted, &instructions))?;
-    write("instrinfo.rs", emit::render_instr_info(instrinfo, ids, &emitted, emit::Flavor::AArch64)?)?;
-    write(
-        "mod.rs",
-        format!(
-            "//! Generated by `crates/backend/llrm-dagisel-gen/aarch64/regen.sh`; do not edit.\n\npub mod ids;\npub mod instrinfo;\npub mod {module};\n"
-        ),
-    )?;
-    eprintln!("{cpu_name}: {} items, {} operand entries", flat.items.len(), flat.operands.len());
-    Ok(())
 }
 
 fn main() -> ExitCode {

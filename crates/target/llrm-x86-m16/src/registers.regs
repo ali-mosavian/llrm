@@ -28,7 +28,7 @@
 eax     32   eax  0    gpr,byte,int  0  17
 ecx     32   ecx  0    gpr,byte,int  1  18
 edx     32   edx  0    gpr,byte,int  2  19
-ebx     32   ebx  0    gpr,byte,base,int  3  20
+ebx     32   ebx  0    gpr,byte,base,int,frame_follows  3  20
 esi     32   esi  0    gpr,index,int  6  23
 edi     32   edi  0    gpr,index,int  7  24
 ebp     32   ebp  0    reserved,frame,base,int  5  22

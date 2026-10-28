@@ -763,6 +763,9 @@ pub struct Selected {
     /// `depth` and are handed to the frame as spill slots, which
     /// `slots::slots_colored` shares by their live ranges.
     pub temporaries: usize,
+    /// The locals wanting more than the stack's alignment: (displacement,
+    /// alignment).
+    pub over_aligned: Vec<(i64, i64)>,
     /// The `at` of what starts the landing pad, which the runtime enters.
     pub landing: Option<i64>,
 }
@@ -861,6 +864,13 @@ pub(super) fn width_of(
         // it is two halves (`is_wide`).
         (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
+        // An integer between the legal widths (`i24`, a three-byte struct
+        // coerced) is promoted to the next one.
+        (TypeClass::Other, Type::Int(bits))
+            if *bits > 0 && bits.next_power_of_two() <= layout.largest_legal_integer() =>
+        {
+            Ok(bits.next_power_of_two().max(8) / 8)
+        }
         // An x87 register holds any float, extended.
         (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
@@ -1132,6 +1142,7 @@ pub fn selected_with<'c>(
         extents: Vec::new(),
         allocas: 0,
         frame_objects: Vec::new(),
+        over_aligned: Vec::new(),
         scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -1207,8 +1218,12 @@ pub fn selected_with<'c>(
     }
     body.variables = parameters(module, function, name, &convention, &selector.homes);
     body.cfa_variables = true;
-    let mut body =
-        noted(module, function, name, &selector.ats, &selector.values, &selector.wides, &selector.variables, body);
+    let mut body = {
+        let ats = selector.ats.iter().map(|(&inst, &at)| (inst, at)).collect();
+        let values = selector.values.iter().map(|(&id, &vreg)| (id, vreg)).collect();
+        let wides = selector.wides.iter().map(|(&id, &pair)| (id, pair)).collect();
+        noted(module, function, name, &ats, &values, &wides, &selector.variables, body)
+    };
     // An argument the caller pushed is in its cell from the entry.
     let named = body.named_values();
     let cells: Vec<(u32, i64, u32)> = function
@@ -1249,9 +1264,13 @@ pub fn selected_with<'c>(
         depth: selector.depth,
         extents: selector.extents,
         temporaries: 0,
+        over_aligned: selector.over_aligned,
         landing: selector.landing,
     })
 }
+
+/// The alignment the frame keeps a local to without realigning the stack.
+pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
@@ -1303,7 +1322,7 @@ pub(crate) fn parameters(
                 ),
                 _ => None,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None })
+            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None, scope: None })
         })
         .collect()
 }
@@ -1415,7 +1434,16 @@ pub(crate) fn dbg_line(
     };
     let named =
         |field: &str| module.special.get(node).and_then(|special| special.fields.iter().position(|one| one == field));
-    Some(SrcLoc { line: number(named("line").unwrap_or(0))?, column: named("column").and_then(number).unwrap_or(0) })
+    let node_of = |field: &str| match named(field).and_then(|at| operands.get(at)) {
+        Some(llrm_mir::MetadataOperand::Node(id)) => id.0 + 1,
+        _ => 0,
+    };
+    Some(SrcLoc {
+        line: number(named("line").unwrap_or(0))?,
+        column: named("column").and_then(number).unwrap_or(0),
+        scope: node_of("scope"),
+        inlined_at: node_of("inlinedAt"),
+    })
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
@@ -1464,9 +1492,9 @@ pub(crate) fn noted(
     module: &Module,
     function: &Function,
     name: &str,
-    ats: &IndexMap<InstId, i64>,
-    values: &IndexMap<ValueId, u32>,
-    wides: &IndexMap<ValueId, (Held, Held)>,
+    ats: &llrm_mir::dense::IdMap<InstId, i64>,
+    values: &llrm_mir::dense::IdMap<ValueId, u32>,
+    wides: &llrm_mir::dense::IdMap<ValueId, (Held, Held)>,
     declared: &[(String, DebugVariable)],
     body: LirBody,
 ) -> LirBody {
@@ -1674,6 +1702,7 @@ pub(crate) fn noted(
                 parameter: variable.parameter,
                 argument: variable.argument,
                 arrives: None,
+                scope: variable.block,
             });
         }
     }
@@ -1767,6 +1796,8 @@ pub struct Selector<'m, 'c, 'p> {
     allocas: i64,
     /// Each alloca's frame displacement and size.
     frame_objects: Vec<(i64, i64)>,
+    /// The groups' slots wanting more than the stack's alignment.
+    over_aligned: Vec<(i64, i64)>,
     /// The temporaries' bytes the instruction being selected has taken:
     /// a temporary lives only within the instruction that made it.
     scratch: i64,
@@ -1949,13 +1980,17 @@ impl Selector<'_, '_, '_> {
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
-                if let (&Opcode::Alloca { allocated, .. }, Some(size)) =
+                if let (&Opcode::Alloca { allocated, align: wanted, .. }, Some(size)) =
                     (&function.instruction(inst).opcode, self.alloca_bytes(inst))
                 {
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
+                    // More than the frame keeps the stack aligned to: the frame
+                    // realigns the stack pointer for it.
+                    let wanted = wanted.map_or(0, |one| one as i64);
+                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
@@ -1987,6 +2022,9 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
+            if align > OVER_ALIGNED {
+                self.over_aligned.push((disp, align));
+            }
             homes.insert(group, disp);
         }
         for &block in layout {
@@ -3700,6 +3738,7 @@ impl Selector<'_, '_, '_> {
                     parameter: variable.parameter,
                     argument: variable.argument,
                     arrives: None,
+                    scope: variable.block,
                 },
             ));
         }

@@ -192,8 +192,9 @@ fn a_store_and_a_load_of_unrelated_types_do_not_touch_through_the_aggregate() {
     assert_eq!(chain.get_mod_ref_info(store, Some(&load("c")), aaqi), ModRefInfo::Mod, "int against char");
 }
 
-/// QB's `LhEntry`, as clang emits it: a `long`, two `char`s and an `any pointer` at 16, with a global
-/// of `p1 omnipotent char` (a pointer to a char) beside it.
+/// QB's `LhEntry`, as clang emits it: a `long`, two `char`s and an `any
+/// pointer` at 16, with a global of `p1 omnipotent char` (a pointer to a char)
+/// beside it.
 const ENTRY: &str = "define void @g(ptr %p, ptr %q) {
 b:
   %heap_top = load ptr, ptr %q, !tbaa !101
@@ -231,9 +232,10 @@ fn entry_tags() -> (llrm_mir::module::Module, Vec<(String, Option<MetadataId>)>)
     (module, tags)
 }
 
-/// `heap_top` (a `p1 omnipotent char` global) and a store of `LhEntry`'s `any pointer` field were
-/// taken to alias because a struct-path tag "said nothing": `first_fit` reloaded `heap_top` every trip
-/// of its loop (one more priced load, 235 against the pin's 230).
+/// `heap_top` (a `p1 omnipotent char` global) and a store of `LhEntry`'s `any
+/// pointer` field were taken to alias because a struct-path tag "said nothing":
+/// `first_fit` reloaded `heap_top` every trip of its loop (one more priced
+/// load, 235 against the pin's 230).
 #[test]
 fn a_field_of_any_pointer_is_apart_from_a_pointer_to_char_and_from_the_other_fields() {
     let (module, tags) = entry_tags();
@@ -244,7 +246,8 @@ fn a_field_of_any_pointer_is_apart_from_a_pointer_to_char_and_from_the_other_fie
     assert!(!may_alias(&module, tag("heap_top"), tag("size")));
 }
 
-/// A field and a scalar access of its own type, or of an ancestor of it, may alias.
+/// A field and a scalar access of its own type, or of an ancestor of it, may
+/// alias.
 #[test]
 fn a_field_may_alias_a_scalar_of_its_type_or_an_ancestor_of_it() {
     let (module, tags) = entry_tags();

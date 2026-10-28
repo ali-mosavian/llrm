@@ -832,10 +832,10 @@ b0:
     assert!(across.contains("icmp ult ptr"), "offsets on two sides of the boundary are left: {across}");
 }
 
-/// `foldSelectICmp`: `(c ? 0 : y) == 0` with `c = y u< 32` is `c`: the compare folds into the arms
-/// (`true`, and `y == 0` which `c` implies), and the select into a logical or. Left alone, QB `carve`
-/// kept a priced `icmp` the pin's does not (first_fit 240 against 230, so it was not inlined as the
-/// pin's is).
+/// `foldSelectICmp`: `(c ? 0 : y) == 0` with `c = y u< 32` is `c`: the compare
+/// folds into the arms (`true`, and `y == 0` which `c` implies), and the select
+/// into a logical or. Left alone, QB `carve` kept a priced `icmp` the pin's
+/// does not (first_fit 240 against 230, so it was not inlined as the pin's is).
 #[test]
 fn test_a_compare_of_a_select_folds_into_its_arms() {
     let after = combined(
@@ -848,11 +848,13 @@ b0:
 }
 ",
     );
-    // `c` implies `y != 0` when false: both arms fold to constants (the select itself is `visitSelectInst`'s).
+    // `c` implies `y != 0` when false: both arms fold to constants (the select
+    // itself is `visitSelectInst`'s).
     assert!(after.contains("select i1 %c, i1 true, i1 false") && !after.contains("select i1 %c, i64"), "{after}");
 }
 
-/// With a single use the compare is moved into both arms: `(c ? a : b) < 5` is `c ? a < 5 : b < 5`.
+/// With a single use the compare is moved into both arms: `(c ? a : b) < 5` is
+/// `c ? a < 5 : b < 5`.
 #[test]
 fn test_a_compare_of_a_one_use_select_with_a_folding_arm_becomes_a_select_of_compares() {
     let after = combined(

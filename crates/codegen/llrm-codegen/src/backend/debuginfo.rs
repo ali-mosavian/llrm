@@ -148,6 +148,8 @@ pub struct Debug {
     /// The unit's source file where the frontend named one: its name, and the
     /// MD5 of its text.
     pub source: Option<(String, Option<Vec<u8>>)>,
+    /// The scopes the locations of the code name.
+    pub scopes: Scopes,
 }
 
 fn narrow<T: TryFrom<i64>>(
@@ -346,7 +348,240 @@ pub fn described(
         procedures,
         globals: out,
         source: di::file(module).map(|(name, md5)| (name, md5.and_then(|hex| unhexed(&hex)))),
+        scopes: Scopes::of(module),
     }))
+}
+
+/// The scope tree of a module's `!DILocation`s, by [`SrcLoc`] numbering
+/// (metadata id plus one).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Scopes {
+    /// A lexical block by id: the scope it is in.
+    pub parent: IndexMap<u32, u32>,
+    /// A location by id: its scope, and the call it was inlined at.
+    pub calls: IndexMap<u32, (u32, u32)>,
+    /// A location by id: its line and column.
+    pub places: IndexMap<u32, (u32, u32)>,
+    /// A function (`!DISubprogram`) by id: its name.
+    pub names: IndexMap<u32, String>,
+}
+
+/// One step into a place: a lexical block (by scope id), or the inlined body
+/// of a call (by the call's location id).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Step {
+    Block(u32),
+    Inlined { call: u32, callee: u32 },
+}
+
+impl Scopes {
+    fn of(module: &llrm_mir::Module) -> Self {
+        let field = |id: MetadataId, name: &str| {
+            let at = module.special.get(&id)?.fields.iter().position(|one| one == name)?;
+            module.metadata.get(id.0 as usize)?.operands.get(at)
+        };
+        let node = |id: MetadataId, name: &str| match field(id, name)? {
+            llrm_mir::MetadataOperand::Node(node) => Some(node.0 + 1),
+            _ => None,
+        };
+        let number = |id: MetadataId, name: &str| match field(id, name)? {
+            llrm_mir::MetadataOperand::Constant(value) => match module.context.get(*value).kind {
+                llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut scopes = Self::default();
+        for (&id, special) in &module.special {
+            let key = id.0 + 1;
+            match special.kind.as_str() {
+                "DILexicalBlock" | "DILexicalBlockFile" => {
+                    scopes.parent.insert(key, node(id, "scope").unwrap_or(0));
+                }
+                "DILocation" => {
+                    scopes.calls.insert(key, (node(id, "scope").unwrap_or(0), node(id, "inlinedAt").unwrap_or(0)));
+                    scopes.places.insert(key, (number(id, "line").unwrap_or(0), number(id, "column").unwrap_or(0)));
+                }
+                "DISubprogram" => {
+                    if let Some(llrm_mir::MetadataOperand::String(name)) = field(id, "name") {
+                        scopes.names.insert(key, name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        scopes
+    }
+
+    /// The lexical blocks `scope` is in, outermost first.
+    fn chain(
+        &self,
+        mut scope: u32,
+    ) -> Vec<u32> {
+        let mut chain = Vec::new();
+        while let Some(&parent) = self.parent.get(&scope) {
+            chain.push(scope);
+            scope = parent;
+        }
+        chain.reverse();
+        chain
+    }
+
+    /// The function a scope is in.
+    fn function_of(
+        &self,
+        mut scope: u32,
+    ) -> u32 {
+        while let Some(&parent) = self.parent.get(&scope) {
+            scope = parent;
+        }
+        scope
+    }
+
+    /// Where a place is, from the function inwards: its lexical blocks, and
+    /// for code inlined from another function the call it was inlined at,
+    /// then the callee's blocks.
+    fn path(
+        &self,
+        place: crate::model::lir::SrcLoc,
+    ) -> Vec<Step> {
+        // The place and the calls that inlined it, innermost first: each
+        // level's scope, and the call that inlined it (none for the function).
+        let mut levels = vec![(place.scope, place.inlined_at)];
+        while let Some(&(_, call)) = levels.last()
+            && call != 0
+            && let Some(&(outer, next)) = self.calls.get(&call)
+        {
+            levels.push((outer, next));
+        }
+        let mut path = Vec::new();
+        for &(scope, call) in levels.iter().rev() {
+            if call != 0 {
+                path.push(Step::Inlined { call, callee: self.function_of(scope) });
+            }
+            path.extend(self.chain(scope).into_iter().map(Step::Block));
+        }
+        path
+    }
+}
+
+/// A trie of the steps of the code's places, each with the ranges of code
+/// under it.
+#[derive(Default)]
+struct Steps {
+    step: Option<Step>,
+    ranges: Vec<model::Range>,
+    inside: Vec<Steps>,
+}
+
+impl Steps {
+    fn add(
+        &mut self,
+        path: &[Step],
+        range: model::Range,
+    ) {
+        let Some((&first, rest)) = path.split_first() else { return };
+        let at = match self.inside.iter().position(|one| one.step == Some(first)) {
+            Some(at) => at,
+            None => {
+                self.inside.push(Steps { step: Some(first), ..Steps::default() });
+                self.inside.len() - 1
+            }
+        };
+        let next = &mut self.inside[at];
+        match next.ranges.last_mut() {
+            Some(last) if last.offset + last.length == range.offset => last.length += range.length,
+            _ => next.ranges.push(range),
+        }
+        next.add(rest, range);
+    }
+
+    /// The block of lexical block `id` that is not inside an inlined body.
+    fn find(
+        &mut self,
+        id: u32,
+    ) -> Option<&mut Steps> {
+        for one in &mut self.inside {
+            match one.step {
+                Some(Step::Block(block)) if block == id => return Some(one),
+                Some(Step::Block(_)) => {
+                    if let Some(found) = one.find(id) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// The function's variables split into those of its own scope and the blocks of
+/// `rows` (the code's places, from `start` to `end`) that hold them.
+fn in_blocks(
+    scopes: &Scopes,
+    rows: &[(crate::model::lir::SrcLoc, usize)],
+    (section, start, end): (usize, usize, usize),
+    variables: Vec<(Variable, Option<MetadataId>)>,
+) -> (Vec<Variable>, Vec<model::Block>) {
+    let inside: Vec<&(crate::model::lir::SrcLoc, usize)> =
+        rows.iter().filter(|(_, at)| (start..end).contains(at)).collect();
+    let mut trie = Steps::default();
+    for (index, &&(place, at)) in inside.iter().enumerate() {
+        let to = inside.get(index + 1).map_or(end, |next| next.1);
+        if to > at {
+            trie.add(&scopes.path(place), model::Range { section, offset: at, length: to - at });
+        }
+    }
+    let mut own = Vec::new();
+    let mut held: Vec<(u32, Variable)> = Vec::new();
+    for (variable, scope) in variables {
+        match scope.map(|one| one.0 + 1).filter(|&id| trie.find(id).is_some()) {
+            Some(id) => held.push((id, variable)),
+            None => own.push(variable),
+        }
+    }
+    fn blocks(
+        of: &Steps,
+        scopes: &Scopes,
+        held: &mut Vec<(u32, Variable)>,
+        top: bool,
+    ) -> Vec<model::Block> {
+        let mut made: Vec<model::Block> = of
+            .inside
+            .iter()
+            .map(|one| {
+                let (inlined, variables) = match one.step {
+                    Some(Step::Inlined { call, callee }) => {
+                        let name = scopes.names.get(&callee).cloned().unwrap_or_default();
+                        let (line, column) = scopes.places.get(&call).copied().unwrap_or_default();
+                        (Some(model::Inlined { name, file: 0, line, column }), Vec::new())
+                    }
+                    Some(Step::Block(id)) if top => {
+                        let mut mine = Vec::new();
+                        held.retain(|(scope, variable)| {
+                            if *scope == id {
+                                mine.push(variable.clone());
+                            }
+                            *scope != id
+                        });
+                        (None, mine)
+                    }
+                    _ => (None, Vec::new()),
+                };
+                model::Block {
+                    ranges: one.ranges.clone(),
+                    variables,
+                    blocks: blocks(one, scopes, held, top && !matches!(one.step, Some(Step::Inlined { .. }))),
+                    inlined,
+                }
+            })
+            .collect();
+        made.sort_by_key(|one| one.ranges.first().map_or(0, |range| range.offset));
+        made
+    }
+    let blocks = blocks(&trie, scopes, &mut held, true);
+    (own, blocks)
 }
 
 /// The bytes a hex string spells.
@@ -553,7 +788,12 @@ pub fn laid_out(
                 (!one.parameter, at.unwrap_or(usize::MAX))
             });
         }
+        // The scope of each variable of `variables`: its own statics have none.
+        let mut scoped: Vec<Option<MetadataId>> = vec![None; variables.len()];
+        let mut last = None;
         for one in ordered {
+            scoped.resize(variables.len(), last);
+            last = one.scope;
             let r#type = type_of(one.r#type)?;
             let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
             let addr = match &one.place {
@@ -742,6 +982,7 @@ pub fn laid_out(
                 }
             }
         }
+        scoped.resize(variables.len(), last);
         // A format that finds a cell by the frame register says nothing of one
         // in a function that keeps none (the code is not changed for
         // `-g` to keep it), nor of a place that is in a cell of a list: it is
@@ -762,54 +1003,61 @@ pub fn laid_out(
             let bias = debug.frame.map(|(.., entry)| entry[usize::from(procedure.far)] + entry[0]);
             let rows = frame.as_deref().filter(|_| debug.ranges);
             let stack = debug.frame.map(|(_, stack, _)| format!("{stack:?}").to_lowercase());
-            variables = variables
+            (variables, scoped) = variables
                 .into_iter()
-                .filter_map(|one| match (&one.location, rows, bias) {
-                    (Location::Frame { disp }, Some(rows), Some(bias)) => {
-                        let entries: Vec<(model::Range, Location)> = rows
-                            .iter()
-                            .enumerate()
-                            .map(|(at, row)| {
-                                let to = rows.get(at + 1).map_or(end - start, |next| next.offset);
-                                (
-                                    model::Range { section, offset: start + row.offset, length: to - row.offset },
-                                    Location::Relative {
-                                        register: row.cfa_register.clone(),
-                                        disp: disp - bias + row.cfa_offset,
-                                    },
-                                )
+                .zip(scoped)
+                .filter_map(|(one, scope)| {
+                    match (&one.location, rows, bias) {
+                        (Location::Frame { disp }, Some(rows), Some(bias)) => {
+                            let entries: Vec<(model::Range, Location)> = rows
+                                .iter()
+                                .enumerate()
+                                .map(|(at, row)| {
+                                    let to = rows.get(at + 1).map_or(end - start, |next| next.offset);
+                                    (
+                                        model::Range { section, offset: start + row.offset, length: to - row.offset },
+                                        Location::Relative {
+                                            register: row.cfa_register.clone(),
+                                            disp: disp - bias + row.cfa_offset,
+                                        },
+                                    )
+                                })
+                                .filter(|(range, _)| range.length > 0)
+                                .collect();
+                            Some(Variable { location: Location::List(entries), ..one })
+                        }
+                        // A format with one place for a scope says a cell
+                        // through the stack pointer when the pointer is the
+                        // same distance from the frame address over the whole
+                        // body.
+                        (Location::Frame { disp }, None, Some(bias)) => {
+                            let rows = frame.as_deref()?;
+                            let inside: Vec<&model::FrameRow> = rows
+                                .iter()
+                                .enumerate()
+                                .filter(|&(at, row)| {
+                                    row.offset <= body.1 && rows.get(at + 1).is_none_or(|next| next.offset > body.0)
+                                })
+                                .map(|(_, row)| row)
+                                .collect();
+                            let [row] = inside[..] else { return None };
+                            (Some(&row.cfa_register) == stack.as_ref()).then(|| Variable {
+                                location: Location::Relative {
+                                    register: row.cfa_register.clone(),
+                                    disp: disp - bias + row.cfa_offset,
+                                },
+                                ..one
                             })
-                            .filter(|(range, _)| range.length > 0)
-                            .collect();
-                        Some(Variable { location: Location::List(entries), ..one })
+                        }
+                        (location, ..) if framed(location) => None,
+                        _ => Some(one),
                     }
-                    // A format with one place for a scope says a cell through
-                    // the stack pointer when the pointer is the same distance
-                    // from the frame address over the whole body.
-                    (Location::Frame { disp }, None, Some(bias)) => {
-                        let rows = frame.as_deref()?;
-                        let inside: Vec<&model::FrameRow> = rows
-                            .iter()
-                            .enumerate()
-                            .filter(|&(at, row)| {
-                                row.offset <= body.1 && rows.get(at + 1).is_none_or(|next| next.offset > body.0)
-                            })
-                            .map(|(_, row)| row)
-                            .collect();
-                        let [row] = inside[..] else { return None };
-                        (Some(&row.cfa_register) == stack.as_ref()).then(|| Variable {
-                            location: Location::Relative {
-                                register: row.cfa_register.clone(),
-                                disp: disp - bias + row.cfa_offset,
-                            },
-                            ..one
-                        })
-                    }
-                    (location, ..) if framed(location) => None,
-                    _ => Some(one),
+                    .map(|one| (one, scope))
                 })
-                .collect();
+                .unzip();
         }
+        let (variables, blocks) =
+            in_blocks(&debug.scopes, &code.lines, (section, start, end), variables.into_iter().zip(scoped).collect());
         info.functions.push(model::Function {
             name: described.name.clone(),
             symbol: ids[&procedure.name],
@@ -819,7 +1067,7 @@ pub fn laid_out(
             far: procedure.far,
             module: described.module,
             variables,
-            blocks: Vec::new(),
+            blocks,
             frame: frame.unwrap_or_default(),
         });
     }
@@ -830,13 +1078,14 @@ pub fn laid_out(
         info.code.push(model::Range { section, offset: first, length: segments[section].image.len() - first });
     }
     for (section, segment) in segments.iter().enumerate() {
-        info.lines.extend(segment.lines.iter().map(|&(line, offset)| model::Line {
-            section,
-            offset,
-            file: 0,
-            line: line.line,
-            column: line.column,
-        }));
+        // The scopes a place is in are the blocks', not the line table's: a
+        // change of scope alone is not a new row.
+        let mut before = None;
+        for &(line, offset) in &segment.lines {
+            if before.replace(line.row()) != Some(line.row()) {
+                info.lines.push(model::Line { section, offset, file: 0, line: line.line, column: line.column });
+            }
+        }
     }
     Ok(info)
 }

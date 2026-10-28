@@ -309,6 +309,19 @@ impl CallConventions<'_> {
         contracts.abi.contract(&name, false, 0).ok()
     }
 
+    /// Whether `callee` is a function the module defines whose convention has
+    /// no row in `calling.toml`.
+    fn defined_without_a_convention(
+        &self,
+        callee: Option<&Callee>,
+    ) -> bool {
+        let Some(Callee::Global(id)) = callee else { return false };
+        let global = self.module.global(llrm_mir::context::GlobalId(*id));
+        global.function().is_some_and(|function| !function.is_declaration())
+            && !global.name.owned().is_some_and(|name| name.starts_with(crate::hir::mir::RUNTIME))
+            && self.convention_of(callee).is_none()
+    }
+
     /// The convention a call of `callee` follows: its function's own, or, for
     /// a variadic function, the one that entry names (`variadic = "cdecl32"`).
     fn convention_of(
@@ -398,20 +411,14 @@ impl super::emit::Conventions for CallConventions<'_> {
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
-            // A call of a function the module defines disturbs what its
-            // convention says, not the contract's whole clobber list: a caller
-            // saves for its own caller only that (`isel.rs`, `disturbs`).
-            _ if matches!(callee, Some(Callee::Global(_))) && self.written(callee).is_none() => {
-                let regs = llrm_lir::registers::Regs(self.arch.registers());
-                self.convention_of(callee).map_or_else(Default::default, |found| {
-                    found
-                        .clobbered
-                        .iter()
-                        .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                        .map(|name| regs.root(self.arch.register_named(name)))
-                        .collect()
-                })
-            }
+            // A call of a BASIC function the module defines, which has no row
+            // in `calling.toml`, disturbs nothing: it keeps every register, as
+            // the old selector has it (`isel.rs`, `disturbs`). Anything else
+            // disturbs what `clobbers` says: a convention's row names only
+            // part (a watcall callee also changes the registers its arguments
+            // arrive in), and a runtime routine's contract names more still
+            // (SI and DI at m16, FS and GS).
+            _ if self.defined_without_a_convention(callee) && self.written(callee).is_none() => Default::default(),
             _ => clobbers.clone(),
         }
     }
@@ -812,7 +819,7 @@ fn selected_in(
             return refuse("an alloca that is not an instruction");
         };
         let instruction = function.instruction(def);
-        let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
+        let llrm_mir::opcode::Opcode::Alloca { allocated, align: wanted, .. } = instruction.opcode else {
             return refuse("an alloca that is not an alloca");
         };
         // `FunctionLoweringInfo`: a constant count multiplies the type's size
@@ -835,6 +842,10 @@ fn selected_in(
         };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        // More than the frame keeps the stack aligned to: the frame realigns
+        // the stack pointer for it.
+        let wanted = wanted.map_or(0, |one| one as i64);
+        let align = if wanted > crate::backend::isel::OVER_ALIGNED { wanted } else { align };
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
@@ -846,9 +857,13 @@ fn selected_in(
         let object = &mut objects[*group as usize];
         *object = (object.0.max(*size), object.1.max(*align));
     }
+    let mut over_aligned: Vec<(i64, i64)> = Vec::new();
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
+        if align > crate::backend::isel::OVER_ALIGNED {
+            over_aligned.push((frame.locals.borrow()[index].0, align));
+        }
     }
     // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
     // registers and 8 * 16 of vector ones.
@@ -948,9 +963,9 @@ fn selected_in(
     let mut emitted: Vec<EmitBlock> = Vec::new();
     // What the debug records name: the LIR value of each IR value, and the
     // address each IR instruction's code starts at.
-    let mut noted_values: crate::support::hash::IndexMap<ValueId, u32> = Default::default();
-    let mut noted_wides: crate::support::hash::IndexMap<ValueId, (Held, Held)> = Default::default();
-    let mut noted_ats: crate::support::hash::IndexMap<llrm_mir::module::InstId, i64> = Default::default();
+    let mut noted_values: llrm_mir::dense::IdMap<ValueId, u32> = Default::default();
+    let mut noted_wides: llrm_mir::dense::IdMap<ValueId, (Held, Held)> = Default::default();
+    let mut noted_ats: llrm_mir::dense::IdMap<llrm_mir::module::InstId, i64> = Default::default();
     let mut calls = IndexMap::default();
     let mut pops = IndexMap::default();
     let mut call_pops = IndexMap::default();
@@ -963,6 +978,7 @@ fn selected_in(
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
+    let sse2 = arch.scalar_sse();
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
@@ -971,11 +987,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering {
-                cmov: tli.can_use_cmov(),
-                sse2: arch.scalar_sse(),
-                min_size: cpu.min_size || bytes_beat_clocks,
-            },
+            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2, min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },
@@ -1042,7 +1054,7 @@ fn selected_in(
         }
         for &(id, value) in &built.values {
             if let Some(&made) = done.values.get(&built.dag.resolve(value)) {
-                noted_values.entry(id).or_insert(made);
+                noted_values.get_or_insert_with(id, || made);
             }
             // A value type legalization expanded is its two halves.
             if let Some(&(low, high)) = built.dag.expanded_integers.get(&value)
@@ -1050,7 +1062,8 @@ fn selected_in(
                     (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
             {
                 let width = built.dag.value_type(low).size_in_bits() / 8;
-                noted_wides.entry(id).or_insert((Held { value: low_made, width }, Held { value: high_made, width }));
+                noted_wides
+                    .get_or_insert_with(id, || (Held { value: low_made, width }, Held { value: high_made, width }));
             }
         }
         emitted.extend(done.blocks);
@@ -1237,6 +1250,7 @@ fn selected_in(
             parameter: variable.parameter,
             argument: variable.argument,
             arrives: None,
+            scope: variable.block,
         };
         // A parameter is said once. One the convention passes in a register is
         // in its declared cell (`-O0`'s copy of it), not in the register the
@@ -1264,7 +1278,7 @@ fn selected_in(
     // or the one that carries it out of its block.
     for (id, &vreg) in info.value_regs.iter() {
         if let Some(&made) = state.vregs.get(&vreg) {
-            noted_values.entry(id).or_insert(made);
+            noted_values.get_or_insert_with(id, || made);
         }
     }
     let mut body =
@@ -1331,6 +1345,7 @@ fn selected_in(
         depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
+        over_aligned,
         landing,
     })
 }

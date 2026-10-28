@@ -93,7 +93,8 @@ impl Tags<'_> {
         }
     }
 
-    /// `isNewFormatTypeNode`: the size-aware format, whose first operand is a node.
+    /// `isNewFormatTypeNode`: the size-aware format, whose first operand is a
+    /// node.
     fn type_is_new_format(
         &self,
         ty: MetadataId,
@@ -212,9 +213,9 @@ impl Tags<'_> {
         }
         let new = self.type_is_new_format(base);
         let (first, per) = if new { (3, 3) } else { (1, 2) };
-        (0..self.field_count(base)).filter_map(|i| self.node_at(base, first + i * per)).any(|ty| {
-            ty == field || self.has_field(ty, field, depth + 1)
-        })
+        (0..self.field_count(base))
+            .filter_map(|i| self.node_at(base, first + i * per))
+            .any(|ty| ty == field || self.has_field(ty, field, depth + 1))
     }
 
     /// `mayBeAccessToSubobjectOf`: `None` where it returns false, else whether
@@ -347,11 +348,7 @@ impl AAResults for TypeBasedAA<'_> {
         _: &mut AAQueryInfo,
         _: Option<InstId>,
     ) -> AliasResult {
-        if self.aliases(a.aa_info.tbaa, b.aa_info.tbaa) {
-            AliasResult::MayAlias
-        } else {
-            AliasResult::NoAlias
-        }
+        if self.aliases(a.aa_info.tbaa, b.aa_info.tbaa) { AliasResult::MayAlias } else { AliasResult::NoAlias }
     }
 
     fn get_mod_ref_info_mask(
@@ -397,9 +394,7 @@ impl AAResults for TypeBasedAA<'_> {
         // type.
         let call = AAInfo::of(op).tbaa;
         match (loc.and_then(|loc| loc.aa_info.tbaa), call) {
-            (Some(location), Some(call)) if !self.aliases(Some(location), Some(call)) => {
-                ModRefInfo::NoModRef
-            }
+            (Some(location), Some(call)) if !self.aliases(Some(location), Some(call)) => ModRefInfo::NoModRef,
             _ => ModRefInfo::ModRef,
         }
     }

@@ -50,7 +50,7 @@ struct Shape {
 /// The `and`/`or` trees that are emitted as a chain of `ccmp`s: by root, and
 /// every value in any (comparisons and joiners).
 #[derive(Default)]
-pub(super) struct Conjunctions {
+pub(crate) struct Conjunctions {
     roots: IdSet<ValueId>,
     members: IdSet<ValueId>,
 }

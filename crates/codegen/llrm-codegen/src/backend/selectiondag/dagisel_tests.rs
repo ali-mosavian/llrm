@@ -504,3 +504,152 @@ fn walking_a_long_chain_for_a_predecessor_is_linear() {
     assert!(!found);
     assert!(started.elapsed().as_secs() < 2, "{:?} to walk 200,000 nodes", started.elapsed());
 }
+
+/// `hasPredecessorHelper` ignored `TopologicalPrune`, which every caller in the
+/// pin asks for: a search for a node later in the numbering than the worklist's
+/// walked everything before it. `IsLegalToFold`'s walk (a cap of 8192) then
+/// gave up on the store-to-xor folds past ~3000 statements of `equal`, where
+/// the pin keeps folding: 1146 more tied pairs and x2.8 per doubling in
+/// twoaddr, coalesce and regalloc.
+#[test]
+fn a_search_for_a_later_node_does_not_walk_the_earlier_ones() {
+    use llrm_dagisel::dag::{Dag, Visited};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let mut chain = vec![base];
+    for i in 0..1000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        let last = *chain.last().unwrap();
+        chain.push(dag.get_node(ISD::Add, EVT::I32, &[last, k]));
+    }
+    dag.set_root(*chain.last().unwrap());
+    let adapter = DagisAdapter::new(&mut dag);
+
+    let mut visited = Visited::new();
+    let found = adapter.has_predecessor_helper(chain[900].node, &mut visited, &mut vec![chain[500].node], 0);
+    assert!(!found, "a later node is no predecessor of an earlier one");
+    assert_eq!(visited.len(), 0, "the earlier node's operands were walked");
+
+    let mut visited = Visited::new();
+    assert!(adapter.has_predecessor_helper(chain[100].node, &mut visited, &mut vec![chain[900].node], 0));
+}
+
+/// A replacement makes the users of its result unprunable
+/// (`EnforceNodeIdInvariant`): they may now read what the numbering puts after
+/// them.
+#[test]
+fn a_user_of_a_replacement_is_walked_through_not_pruned() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue, Visited};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let one = dag.get_constant(1, EVT::I32);
+    let early = dag.get_node(ISD::Add, EVT::I32, &[base, one]);
+    let mut late = early;
+    for i in 2..20u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        late = dag.get_node(ISD::Add, EVT::I32, &[late, k]);
+    }
+    dag.set_root(late);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    // `early` now reads `late`: its user `early + 2` is older in the numbering
+    // than `late`.
+    let user =
+        adapter.dag.nodes().iter().position(|n| n.ops.first().map(|o| o.node) == Some(early.node)).unwrap() as u32;
+    adapter.replace_uses(PinValue { node: early.node, res: 0 }, PinValue { node: late.node, res: 0 });
+    let mut visited = Visited::new();
+    adapter.has_predecessor_helper(late.node, &mut visited, &mut vec![user], 0);
+    assert!(visited.len() > 0, "the user of a replacement was pruned");
+}
+
+/// The combiner asked `use_count(n) == 1` of a value read 4096 times (the
+/// shared `a*7+b` of `equal`), reading the whole use list for every combine
+/// that looked at it: 1.9 G of dag isel at 4096, x3 per doubling. A one-use
+/// check reads two users, as `hasOneUse` does.
+#[test]
+fn a_one_use_check_of_a_widely_read_value_reads_two_users() {
+    use super::dag::USERS_READ;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let shared = input(&mut dag, 40);
+    for i in 1..=1000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        dag.get_node(ISD::Add, EVT::I32, &[shared, k]);
+    }
+    USERS_READ.with(|n| n.set(0));
+    assert!(!dag.has_one_use(shared.node));
+    assert!(USERS_READ.with(std::cell::Cell::get) <= 2, "{} users read", USERS_READ.with(std::cell::Cell::get));
+    assert_eq!(dag.use_count_up_to(shared.node, 3), 3);
+    assert_eq!(dag.use_count(shared.node), 1000);
+}
+
+/// Every `live_users` query read the whole use list to see whether it was
+/// sorted: x3.2 per doubling at 8192 on `equal`, where one value has a use
+/// list of that length. A list pushed in order is walked as it is.
+#[test]
+fn a_use_list_pushed_in_order_is_not_checked_or_sorted_per_query() {
+    use super::dag::USERS_SORTED;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let shared = input(&mut dag, 40);
+    for i in 1..=2000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        dag.get_node(ISD::Add, EVT::I32, &[shared, k]);
+    }
+    USERS_SORTED.with(|n| n.set(0));
+    for _ in 0..50 {
+        assert!(!dag.has_one_use(shared.node));
+    }
+    assert_eq!(USERS_SORTED.with(std::cell::Cell::get), 0, "the list was copied and sorted");
+}
+
+/// A node morphed in place keeps its slot but reads new operands, so its id
+/// is reset (`MorphNodeTo`): left small, a search for a later node it now reads
+/// was pruned at it, `IsLegalToFold` found no path, and a fold made a cycle.
+#[test]
+fn a_node_morphed_to_read_a_later_node_is_walked_through() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue, Visited};
+    use llrm_dagisel::generated::ids::mvt;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let other = input(&mut dag, 41);
+    let one = dag.get_constant(1, EVT::I32);
+    let a = dag.get_node(ISD::Add, EVT::I32, &[base, one]);
+    let user = dag.get_node(ISD::Add, EVT::I32, &[a, one]);
+    let mut z = other;
+    for i in 2..12u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        z = dag.get_node(ISD::Add, EVT::I32, &[z, k]);
+    }
+    let root = dag.get_node(ISD::Add, EVT::I32, &[z, user]);
+    dag.set_root(root);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    assert!(adapter.id_of(a.node) < adapter.id_of(z.node), "the premise: the morphed node is earlier");
+    let morphed = adapter.morph_node_to(a.node, 1, &[mvt::i32], &[PinValue { node: z.node, res: 0 }]).0;
+    assert_eq!(morphed, a.node, "the premise: reused in place");
+    let mut visited = Visited::new();
+    assert!(
+        adapter.has_predecessor_helper(z.node, &mut visited, &mut vec![user.node], 0),
+        "the morphed node was pruned from a search for what it now reads"
+    );
+}
+
+/// A node marked selected (`setNodeId(-1)`) ends the spread of
+/// `EnforceNodeIdInvariant`: a replacement invalidates the unselected users
+/// above it, not everything after the selected node.
+#[test]
+fn a_selected_node_stops_the_spread_of_invalidated_ids() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let other = input(&mut dag, 41);
+    let mut nodes = vec![dag.get_node(ISD::Add, EVT::I32, &[base, other])];
+    for i in 0..3u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        let last = *nodes.last().unwrap();
+        nodes.push(dag.get_node(ISD::Add, EVT::I32, &[last, k]));
+    }
+    dag.set_root(nodes[3]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    adapter.mark_selected(nodes[2].node);
+    adapter.replace_uses(PinValue { node: nodes[0].node, res: 0 }, PinValue { node: other.node, res: 0 });
+    assert!(adapter.id_of(nodes[1].node) < -1, "the unselected user of the replacement is invalidated");
+    assert!(adapter.id_of(nodes[3].node) > 0, "invalidation ran through the selected node");
+}

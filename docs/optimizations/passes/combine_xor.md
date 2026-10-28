@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:8e050d6f3d81ad521f5f86edeb300a202fee303fef9cd6253229c45111926dd3 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:44735c3ba87661e83d1e3fcc5de286b814ac3f3c14703cb8246dee57e4249e56 -->
 
 # combine_xor
 
@@ -17,9 +17,9 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 `undef` lanes are not matched or made).
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the `ctlz`/`cttz` and
-`fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
-`foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
+each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
+`ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
+(A | C)`, `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 `canonicalizeConditionalNegationViaMathToSelect`,
 `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and

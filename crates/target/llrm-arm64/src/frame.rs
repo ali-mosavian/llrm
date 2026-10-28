@@ -8,9 +8,11 @@
 //!
 //! A frame of only saved registers moves the stack pointer in the first pair's
 //! store and last load (`stp [sp, #-N]!`, `ldp [sp], #N`). A `Return` that
-//! carries a callee is a sibling call ([`crate::sibcall`]): the epilogue, then `b`.
+//! carries a callee is a sibling call ([`crate::sibcall`]): the epilogue, then
+//! `b`.
 //!
-//! Shrink wrapping: where the prologue and epilogue go is [`crate::shrinkwrap`]'s.
+//! Shrink wrapping: where the prologue and epilogue go is
+//! [`crate::shrinkwrap`]'s.
 
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -68,15 +70,13 @@ fn layout(
         saves.push((Save::FprPair(first, second), top));
         top += 16;
     }
-    // A moving stack pointer is addressed from, and put back by, the frame pointer: a leaf with a dynamic alloca too.
-    let frame_record = (function.calls || function.dynamic)
-        .then(
-            || {
-                let at = top;
-                top += 16;
-                at
-            },
-        );
+    // A moving stack pointer is addressed from, and put back by, the frame
+    // pointer: a leaf with a dynamic alloca too.
+    let frame_record = (function.calls || function.dynamic).then(|| {
+        let at = top;
+        top += 16;
+        at
+    });
     Layout { size: top, dynamic: function.dynamic, slots, saves, frame_record }
 }
 
@@ -185,8 +185,9 @@ pub fn lower(
         if index == save {
             prologue(&frame, &mut emitter);
         }
-        // Without a placement every return takes the frame down; with one, the Restore's
-        // return does, or the blocks that end the frame at their end.
+        // Without a placement every return takes the frame down; with one, the
+        // Restore's return does, or the blocks that end the frame at
+        // their end.
         let framed = wrapped.as_ref().is_none_or(|one| !one.at_end && one.restores.contains(&index));
         for op in &block.ops {
             match op {

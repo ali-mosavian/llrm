@@ -4657,6 +4657,7 @@ fn test_dbg_lines_become_linnum() {
         procedures: Default::default(),
         globals: Vec::new(),
         source: None,
+        scopes: Default::default(),
     });
     let records = records(&assembled);
     let lines: Vec<(u16, u16)> = records

@@ -308,7 +308,14 @@ impl fmt::Display for Inst {
                     "{} {}, {}",
                     if *page { "adrp" } else { "adr" },
                     gpr(*rd, Width::X, false),
-                    target(to, match (page, got) { (true, true) => "@GOTPAGE", (true, false) => "@PAGE", _ => "" })
+                    target(
+                        to,
+                        match (page, got) {
+                            (true, true) => "@GOTPAGE",
+                            (true, false) => "@PAGE",
+                            _ => "",
+                        }
+                    )
                 )
             }
             Inst::FpUnary { op, size, rd, rn } => {

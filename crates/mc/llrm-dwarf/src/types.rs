@@ -12,6 +12,12 @@ const TAG_ARRAY: u16 = 0x01;
 const TAG_ENUMERATION: u16 = 0x04;
 const TAG_FORMAL_PARAMETER: u16 = 0x05;
 const TAG_LEXICAL_BLOCK: u16 = 0x0b;
+const TAG_INLINED_SUBROUTINE: u16 = 0x1d;
+const AT_INLINE: u16 = 0x20;
+const AT_ABSTRACT_ORIGIN: u16 = 0x31;
+const AT_CALL_COLUMN: u16 = 0x57;
+const AT_CALL_FILE: u16 = 0x58;
+const AT_CALL_LINE: u16 = 0x59;
 const TAG_MEMBER: u16 = 0x0d;
 const TAG_POINTER: u16 = 0x0f;
 const TAG_REFERENCE: u16 = 0x10;
@@ -60,6 +66,9 @@ struct Tree<'a> {
     /// The code ranges of each DIE that has several, in `.debug_ranges` or
     /// `.debug_rnglists`.
     ranges: Vec<Vec<model::Range>>,
+    /// The out-of-line description of each function inlined somewhere (what an
+    /// inlined subroutine is an abstract origin of), by name.
+    origins: Vec<(String, usize)>,
 }
 
 impl Tree<'_> {
@@ -465,13 +474,51 @@ impl Tree<'_> {
             }
         }
         for block in blocks {
-            let mut inner = Die::new(TAG_LEXICAL_BLOCK);
-            self.code(&mut inner, &block.ranges)?;
+            let mut inner = match &block.inlined {
+                Some(site) => self.inlined_subroutine(site),
+                None => Die::new(TAG_LEXICAL_BLOCK),
+            };
+            // A segmented target cannot list ranges (one segment per DIE): a
+            // block in pieces is written over its first byte to its last.
+            match block.hull() {
+                Some(hull) if self.address == 2 && block.ranges.len() > 1 => self.code(&mut inner, &[hull])?,
+                _ => self.code(&mut inner, &block.ranges)?,
+            }
             self.scope(&mut inner, &block.variables, &block.blocks)?;
             let at = self.push(inner);
             die.children.push(at);
         }
         Ok(())
+    }
+
+    /// The DIE of an inlined body: the function it is the body of, and the
+    /// call.
+    fn inlined_subroutine(
+        &mut self,
+        site: &model::Inlined,
+    ) -> Die {
+        let origin = match self.origins.iter().find(|(name, _)| *name == site.name) {
+            Some(&(_, at)) => at,
+            None => {
+                let mut abstract_function = Die::new(TAG_SUBPROGRAM);
+                abstract_function.attrs.push((AT_NAME, Value::Str(site.name.clone())));
+                // `DW_INL_inlined`: inlined, though not declared so.
+                abstract_function.attrs.push((AT_INLINE, Value::U8(1)));
+                let at = self.push(abstract_function);
+                self.origins.push((site.name.clone(), at));
+                at
+            }
+        };
+        let mut die = Die::new(TAG_INLINED_SUBROUTINE);
+        die.attrs.push((AT_ABSTRACT_ORIGIN, Value::Ref(origin)));
+        // Files number from 0 in version 5, from 1 before.
+        let file = site.file as u64 + u64::from(self.version < 5);
+        die.attrs.push((AT_CALL_FILE, Value::Udata(file)));
+        die.attrs.push((AT_CALL_LINE, Value::Udata(u64::from(site.line))));
+        if site.column != 0 {
+            die.attrs.push((AT_CALL_COLUMN, Value::Udata(u64::from(site.column))));
+        }
+        die
     }
 
     fn function(
@@ -598,6 +645,7 @@ pub fn tree(
         far: false,
         locations: crate::buffer::Buf::default(),
         ranges: Vec::new(),
+        origins: Vec::new(),
     };
     let mut unit = Die::new(TAG_COMPILE_UNIT);
     unit.attrs.push((AT_PRODUCER, Value::Str("llrm".into())));
@@ -649,6 +697,7 @@ pub fn tree(
         let at = tree.function(function)?;
         children.push(at);
     }
+    children.extend(tree.origins.iter().map(|(_, at)| *at));
     tree.dies[0].children = children;
     if version >= 5 && tree.locations.at() > 0 {
         let length = tree.locations.at() as u32 - 4;

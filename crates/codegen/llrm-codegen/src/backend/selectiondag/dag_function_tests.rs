@@ -1254,6 +1254,29 @@ define i32 @f(i32 %a, i32 %b) {
     assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
 }
 
+/// The scope and inlining call of a `!DILocation` were dropped: a function
+/// inlined twice left no way to tell the two bodies' instructions apart.
+#[test]
+fn a_dbg_scope_and_inlined_at_reach_the_instructions_selected_from_it() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(i32 %a, i32 %b) {
+  %s = sub i32 %a, %b, !dbg !1
+  %t = mul i32 %s, %b, !dbg !3
+  ret i32 %t, !dbg !3
+}
+!0 = distinct !DISubprogram(name: \"f\")
+!1 = !DILocation(line: 7, column: 5, scope: !0)
+!2 = !DILocation(line: 9, column: 1, scope: !0)
+!3 = !DILocation(line: 8, column: 12, scope: !0, inlinedAt: !2)
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let places: Vec<(u32, u32, u32)> =
+        done.body.insns().iter().filter_map(|one| one.line.map(|at| (at.line, at.scope, at.inlined_at))).collect();
+    assert!(places.contains(&(7, 1, 0)) && places.contains(&(8, 1, 3)), "{places:?}");
+}
+
 /// A runtime routine called under a convention its declaration does not state
 /// destroys what that convention names, not the contract's whole list: a QB
 /// `PUT32` held `rest` and `i` in ESI and EDI across `B$SMID` in the old
@@ -1328,4 +1351,43 @@ define cc 1000 i16 @f(i16 %a) {
     let insns = done.body.insns();
     let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
     assert!(call.clobbers.contains(&RegId::ESI) && call.clobbers.contains(&RegId::EDI), "{:?}", call.clobbers);
+}
+
+/// A caller's own disturbed set took only the convention's registers for a
+/// runtime routine (302389dd83), so a caller that held SI or DI across
+/// `B$DDIM` did not save them for its caller: QCport died with CPU exception 6.
+/// The routine's contract (runtime.toml) names SI and DI.
+#[test]
+fn at_m16_a_runtime_call_disturbs_what_its_contract_names() {
+    use llrm_lir::registers::RegId;
+    let ir = "target datalayout = \"e-p:16:16-i32:16-n8:16\"
+declare i16 @llrm.qb.B$X(i16)
+define cc 1000 i16 @f(i16 %a) {
+  %r = call cc 1002 i16 @llrm.qb.B$X(i16 %a)
+  ret i16 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+        frame_zeroed: false,
+        facts: None,
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
+    let disturbs = &call.call.as_ref().expect("a call").disturbs;
+    assert!(disturbs.contains(&RegId::ESI) && disturbs.contains(&RegId::EDI), "{disturbs:?}");
 }

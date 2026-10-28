@@ -466,25 +466,25 @@ impl Combiner<'_> {
                     Opcode::Phi | Opcode::Select => work.push((result?, true)),
                     Opcode::Cast(CastOp::AddrSpaceCast) => work.push((result?, is_offset)),
                     Opcode::GetElementPtr { .. } => {
-                        let zero = instruction.operands[1..]
-                            .iter()
-                            .all(|&index| {
-                                matches!(
-                                    index,
-                                    Operand::Constant(id)
-                                        if matches!(self.context.get(id).kind, ConstantKind::Int(0) | ConstantKind::Zero)
-                                )
-                            });
+                        let zero = instruction.operands[1..].iter().all(|&index| {
+                            matches!(
+                                index,
+                                Operand::Constant(id)
+                                    if matches!(self.context.get(id).kind, ConstantKind::Int(0) | ConstantKind::Zero)
+                            )
+                        });
                         work.push((result?, is_offset || !zero));
                     }
                     Opcode::Call(_) => match self.intrinsic_of(one.user)? {
                         Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd => markers.push(one.user),
                         Intrinsic::MemCpy | Intrinsic::MemMove => {
                             let volatile = match instruction.operands.get(3) {
-                                Some(Operand::Constant(id)) => !matches!(
-                                    self.context.get(*id).kind,
-                                    ConstantKind::Int(0) | ConstantKind::Zero
-                                ),
+                                Some(Operand::Constant(id)) => {
+                                    !matches!(
+                                        self.context.get(*id).kind,
+                                        ConstantKind::Int(0) | ConstantKind::Zero
+                                    )
+                                }
                                 _ => true,
                             };
                             if volatile {

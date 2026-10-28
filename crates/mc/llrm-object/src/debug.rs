@@ -379,6 +379,35 @@ pub struct Block {
     pub ranges: Vec<Range>,
     pub variables: Vec<Variable>,
     pub blocks: Vec<Block>,
+    /// The call this block is the inlined body of; none for a lexical block.
+    pub inlined: Option<Inlined>,
+}
+
+/// A function's body inlined into another: which function, and the call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Inlined {
+    /// As the source names the callee.
+    pub name: String,
+    /// The call's place (`DW_AT_call_file`, `_line`, `_column`).
+    pub file: FileId,
+    pub line: u32,
+    pub column: u32,
+}
+
+impl Block {
+    /// The one range from the block's first byte to its last, for a format
+    /// that has no list of ranges: it takes in code between the pieces that is
+    /// not the block's. None where the pieces are in more than one section (or
+    /// there are none).
+    pub fn hull(&self) -> Option<Range> {
+        let first = self.ranges.first()?;
+        if self.ranges.iter().any(|one| one.section != first.section) {
+            return None;
+        }
+        let start = self.ranges.iter().map(|one| one.offset).min()?;
+        let end = self.ranges.iter().map(|one| one.offset + one.length).max()?;
+        Some(Range { section: first.section, offset: start, length: end - start })
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

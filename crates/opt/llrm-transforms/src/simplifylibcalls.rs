@@ -19,12 +19,12 @@
 //! 0. All but the empty format and the empty `fwrite` need the result unused.
 //!
 //! # Deviations
-//! - D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where the compile states them
-//!   in `Options::library`, as `strlen` is (loopidiom D11); the pin reads the
-//!   triple. Exit: `Target::library` naming them.
+//! - D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where
+//!   the compile states them in `Options::library`, as `strlen` is (loopidiom
+//!   D11); the pin reads the triple. Exit: `Target::library` naming them.
 //! - D2: the other arms (`sprintf`, `snprintf`, `str*`, `mem*`, math) are
-//!   untranslated, and so are `iprintf`/`__small_printf`, `optimizeErrorReporting`
-//!   and the argument annotations.
+//!   untranslated, and so are `iprintf`/`__small_printf`,
+//!   `optimizeErrorReporting` and the argument annotations.
 //!
 //! # Keeps
 //! Blocks and edges are unchanged: dominators and loops are preserved.
@@ -95,10 +95,8 @@ fn emit(
     at: InstId,
 ) -> Option<InstId> {
     let routine = routines.iter().find(|one| one.standard == new.standard)?;
-    let ty = unit
-        .context
-        .types
-        .intern(Type::Function { returns: new.returns, parameters: new.params, variadic: false });
+    let ty =
+        unit.context.types.intern(Type::Function { returns: new.returns, parameters: new.params, variadic: false });
     let attrs = vec![llrm_mir::facts::Fact::NoUnwind.carrier()];
     let pointer = unit.context.types.ptr(0);
     let callee_id =
@@ -292,8 +290,8 @@ fn fwrite(
     })
 }
 
-/// `optimizeFPuts`: `fputs(s, F)` of a constant string is `fwrite(s, len, 1, F)`
-/// (not when optimizing for size: `fwrite` takes more arguments).
+/// `optimizeFPuts`: `fputs(s, F)` of a constant string is `fwrite(s, len, 1,
+/// F)` (not when optimizing for size: `fwrite` takes more arguments).
 fn fputs(
     unit: &mut Unit,
     site: &Site,
@@ -307,7 +305,8 @@ fn fputs(
     }
     let operands = unit.function.instruction(site.call).operands.to_vec();
     let text = constant_string(unit, site.env, operands[0])?;
-    // `GetStringLength` is zero for a string that is not one (and counts the NUL).
+    // `GetStringLength` is zero for a string that is not one (and counts the
+    // NUL).
     Some(fwrite(unit, site, operands[0], text.len() as u64, operands[1]))
 }
 
@@ -336,13 +335,15 @@ fn fwrite_call(
     }
     // fwrite(S, 1, 1, F) --> fputc(S[0], F)
     let i8 = unit.context.types.int(8);
-    let load = unit.function.create_instruction(
-        Opcode::Load { align: None, volatile: false },
-        i8,
-        vec![operands[0]],
-        Flags::default(),
-        None,
-    );
+    let load = unit
+        .function
+        .create_instruction(
+            Opcode::Load { align: None, volatile: false },
+            i8,
+            vec![operands[0]],
+            Flags::default(),
+            None,
+        );
     unit.function.insert(load, Position::Before(site.call)).expect("a placed load");
     let character = Operand::Value(unit.function.instruction(load).result.expect("a load has a result"));
     let value = int_cast(unit, site, character, true)?;
@@ -421,12 +422,18 @@ impl FunctionPass for SimplifyLibCalls {
             .function
             .attrs
             .iter()
-            .any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"));
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(name) if name == "optsize" || name == "minsize"
+                ),
+            );
         let int = unit.context.types.int(info.int_bits());
         let size = unit.context.types.int(size_bits);
         for call in calls {
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
-            let Some(func) = outer.globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&unit.context.types, one))
+            let Some(func) =
+                outer.globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&unit.context.types, one))
             else {
                 continue;
             };

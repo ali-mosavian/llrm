@@ -10,6 +10,17 @@
 //! object, two different globals, or two frame objects of which one is an
 //! alloca, are apart; anything else is `MayAlias`.
 //!
+//! # Example
+//! Two 4-byte accesses on one base, 3 bytes apart, overlap by one byte; with
+//! no distance, two different globals are apart:
+//!
+//! ```text
+//! alias_of::<&str>(Some(3), None, Some(4), None, Some(4))
+//!     == PartialAlias { offset: Some(-3) }
+//! alias_of(None, Some(&Global("a")), Some(4), Some(&Global("b")), Some(4))
+//!     == NoAlias
+//! ```
+//!
 //! # Used by
 //! The DAG combiner's chain walk (`mayAlias`) and arm64's load/store pairing.
 
@@ -19,7 +30,10 @@ use crate::aa::AliasResult;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Object<G> {
     /// A frame object; `fixed` ones (incoming arguments) sit at known places.
-    Frame { id: i64, fixed: bool },
+    Frame {
+        id: i64,
+        fixed: bool,
+    },
     Global(G),
     /// A constant pool entry.
     Pool,
@@ -57,8 +71,9 @@ pub fn alias_of<G: Eq>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use AliasResult::{MayAlias, MustAlias, NoAlias, PartialAlias};
+
+    use super::*;
 
     const GLOBAL: Object<&str> = Object::Global("g");
 

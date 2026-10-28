@@ -454,9 +454,10 @@ b0:
     assert!(out.contains("load volatile"), "{out}");
 }
 
-/// `int a[] = {1, 2, 3}; return a[i]` copied the constant into the frame and read the copy, so
-/// no loop over it folded (`numeric`'s CRC: 504 bytes against 420): an alloca only read after
-/// one `memcpy` from a constant global is that global.
+/// `int a[] = {1, 2, 3}; return a[i]` copied the constant into the frame and
+/// read the copy, so no loop over it folded (`numeric`'s CRC: 504 bytes against
+/// 420): an alloca only read after one `memcpy` from a constant global is that
+/// global.
 #[test]
 fn an_alloca_only_copied_from_a_constant_global_is_the_global() {
     let text = combined(
@@ -476,7 +477,8 @@ b0:
     assert!(text.contains("getelementptr inbounds i32, ptr @g, i64 %i"), "{text}");
 }
 
-/// A second write to the alloca, or the alloca passed on as a stored value, keeps the copy.
+/// A second write to the alloca, or the alloca passed on as a stored value,
+/// keeps the copy.
 #[test]
 fn an_alloca_written_besides_the_copy_stays() {
     let text = combined(

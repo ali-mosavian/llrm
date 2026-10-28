@@ -4412,8 +4412,9 @@ fn simplify_instruction_with_operands(
 
 /// `simplifyExtractValueInst`
 /// ([:5526](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L5526)):
-/// a constant aggregate's member, or the value an `insertvalue` of the same path put in.
-/// DEVIATE: the `umul.with.overflow` by one case is `lazyvalueinfo`'s alone.
+/// a constant aggregate's member, or the value an `insertvalue` of the same
+/// path put in. DEVIATE: the `umul.with.overflow` by one case is
+/// `lazyvalueinfo`'s alone.
 fn simplify_extract_value(
     q: &Query,
     agg: Operand,
@@ -4461,7 +4462,10 @@ fn simplify_insert_value(
     // insertvalue x, (extractvalue x, n), n -> x
     let def = q.definition(value)?;
     let read = q.function.instruction(def);
-    (matches!(&read.opcode, Opcode::ExtractValue(path) if path[..] == *indices) && read.operands[0] == agg)
+    (matches!(
+        &read.opcode,
+        Opcode::ExtractValue(path) if path[..] == *indices
+    ) && read.operands[0] == agg)
         .then_some(agg)
 }
 

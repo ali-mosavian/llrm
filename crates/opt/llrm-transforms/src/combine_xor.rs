@@ -12,9 +12,9 @@
 //! `undef` lanes are not matched or made).
 //!
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
-//! each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the `ctlz`/`cttz` and
-//! `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
-//! `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
+//! each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
+//! `ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
+//! (A | C)`, `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 //! `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 //! `canonicalizeConditionalNegationViaMathToSelect`,
 //! `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and

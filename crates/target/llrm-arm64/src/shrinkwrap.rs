@@ -2,17 +2,17 @@
 //! The placement is the shared `llrm_mir::saverestore` (`ShrinkWrapImpl`); this
 //! module says which blocks need the frame and gives the pass the machine
 //! function's graph. The prologue goes at the top of the Save block, and the
-//! epilogue before the return of the Restore block, or, where a return is shared
-//! with a path that never made the frame (`tryToSplitRestore`), at the end of each
-//! block that reaches it through the frame.
+//! epilogue before the return of the Restore block, or, where a return is
+//! shared with a path that never made the frame (`tryToSplitRestore`), at the
+//! end of each block that reaches it through the frame.
 
 use std::collections::HashMap;
 
+use llrm_analysis::saverestore::{self, Frame, Frequencies};
 use llrm_mir::blocklist::BlockList;
 use llrm_mir::cycleinfo::FlowGraph;
 use llrm_mir::domtree::{DomGraph, DomTreeBase};
 use llrm_mir::module::BlockId;
-use llrm_analysis::saverestore::{self, Frame, Frequencies};
 
 use crate::mc::inst::{Addr, Inst};
 use crate::mfunc::{MFunc, Op, successors_of};
@@ -24,7 +24,8 @@ pub struct Wrapped {
     /// The blocks whose end takes the frame down: the Restore block, or the
     /// blocks that reach it through the frame when it is shared.
     pub restores: Vec<usize>,
-    /// Whether the epilogue goes at a block's end (split) and not before its return.
+    /// Whether the epilogue goes at a block's end (split) and not before its
+    /// return.
     pub at_end: bool,
 }
 
@@ -85,7 +86,8 @@ fn needs_frame(op: &Op) -> bool {
     }
 }
 
-/// The index where the branches that end `ops` begin: the epilogue goes before them.
+/// The index where the branches that end `ops` begin: the epilogue goes before
+/// them.
 pub fn terminators_start(ops: &[Op]) -> usize {
     ops.iter()
         .rposition(|op| {
@@ -113,8 +115,7 @@ impl Frame for Uses<'_> {
         stack_address_used: bool,
     ) -> bool {
         self.function.blocks[block.0 as usize].ops.iter().any(|op| {
-            needs_frame(op)
-                || (stack_address_used && matches!(op, Op::I(Inst::Load { .. } | Inst::Store { .. })))
+            needs_frame(op) || (stack_address_used && matches!(op, Op::I(Inst::Load { .. } | Inst::Store { .. })))
         })
     }
 
@@ -130,11 +131,15 @@ impl Frame for Uses<'_> {
         &self,
         block: BlockId,
     ) -> bool {
-        matches!(self.function.blocks[block.0 as usize].ops.last(), Some(Op::Return { .. }))
+        matches!(
+            self.function.blocks[block.0 as usize].ops.last(),
+            Some(Op::Return { .. })
+        )
     }
 }
 
-/// `MachineBlockFrequencyInfo` by loop depth: a block in a loop is ten times the depth below it.
+/// `MachineBlockFrequencyInfo` by loop depth: a block in a loop is ten times
+/// the depth below it.
 struct Depth(Vec<u64>);
 
 impl Frequencies for Depth {
@@ -184,18 +189,19 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
     let uses = Uses { function };
     let (restores, at_end) = match &placement.split {
         Some(split) => {
-            // The epilogue goes at the end of a block whose only way on is the shared return.
+            // The epilogue goes at the end of a block whose only way on is the
+            // shared return.
             if !split.iter().all(|one| graph.successors[one.0 as usize] == [restore]) {
                 return None;
             }
             (split.iter().map(|one| one.0 as usize).collect::<Vec<_>>(), true)
         }
-        // The Restore's return, or the end of a Restore that does not return: what follows
-        // it needs no frame.
+        // The Restore's return, or the end of a Restore that does not return:
+        // what follows it needs no frame.
         None => (vec![restore], !uses.is_return(placement.restore)),
     };
-    // A block the frame reaches is entered with the frame made only by the Save: any other way in
-    // would find the stack as the caller left it.
+    // A block the frame reaches is entered with the frame made only by the
+    // Save: any other way in would find the stack as the caller left it.
     let mut dominators = DomTreeBase::<false>::new();
     dominators.recalculate(&graph);
     let mut seen = vec![false; count];

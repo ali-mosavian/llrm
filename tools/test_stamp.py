@@ -67,3 +67,17 @@ def test_an_llrm_cc_is_stamped_by_the_llrm_llc_beside_it(tmp_path):
     cc = stub(tmp_path, "llrm-cc", "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc)")
     stub(tmp_path, "llrm-llc", "llrm-llc aaaa1111")
     assert stamp.check(cc, "aaaa1111") == "aaaa1111"
+
+
+def test_an_incremental_build_is_refused_for_a_count_unless_allowed(tmp_path, monkeypatch):
+    """equal `object write` read 10.942 Minstr on an incremental build of a commit and 9.471 on the cost gate's CARGO_INCREMENTAL=0 build of the same one (-13%):
+    budgets.toml rows measured on a dev tree's build were baselined on the wrong binary and #5744 was refused three times for it."""
+    monkeypatch.delenv("LLRM_ALLOW_INCREMENTAL", raising=False)
+    cold = stub(tmp_path, "llrm-llc", "llrm-llc aaaa1111")
+    warm = stub(tmp_path, "llrm-c", "llrm-c aaaa1111+dirty+incremental")
+    stamp.refuse_incremental(cold)
+    assert stamp.read(warm) == ("aaaa1111", True)
+    with pytest.raises(SystemExit, match="built from aaaa1111 incrementally"):
+        stamp.refuse_incremental(warm)
+    monkeypatch.setenv("LLRM_ALLOW_INCREMENTAL", "1")
+    stamp.refuse_incremental(warm)

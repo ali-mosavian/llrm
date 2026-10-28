@@ -11,11 +11,11 @@ import sys
 from pathlib import Path
 
 
-def read(binary) -> tuple[str, bool]:
-    """(sha, dirty) a binary prints for --version; SystemExit if it prints none (built before the stamp). `llrm-cc` forwards
-    --version to the pinned clang: its stamp is the `llrm-llc` beside it."""
-    if Path(binary).name == "llrm-cc":
-        binary = Path(binary).with_name("llrm-llc")
+def flags(binary) -> tuple[str, set[str]]:
+    """(sha, flags) of the stamp `llrm-llc SHA[+dirty][+incremental]`; SystemExit if it prints none."""
+    binary = Path(binary)
+    if binary.name == "llrm-cc":
+        binary = binary.with_name("llrm-llc")
     try:
         done = subprocess.run([str(binary), "--version"], capture_output=True, text=True)
     except OSError as why:
@@ -23,8 +23,25 @@ def read(binary) -> tuple[str, bool]:
     words = done.stdout.split()
     if done.returncode != 0 or len(words) != 2:
         raise SystemExit(f"{binary}: no build stamp (`--version` printed {done.stdout.strip()!r}); rebuild it from the tree being measured")
-    sha, _, flag = words[1].partition("+")
-    return sha, flag == "dirty"
+    sha, *found = words[1].split("+")
+    return sha, set(found)
+
+
+def refuse_incremental(binary) -> None:
+    """A count measured on an incremental build is not the cost gate's: the object writer runs ~13% more instructions in one (equal `object write`
+    9.5 -> 10.9 Minstr on one commit, #5744 round 1), so budgets.toml rows are baselined on CARGO_INCREMENTAL=0 builds. LLRM_ALLOW_INCREMENTAL=1 measures anyway."""
+    if os.environ.get("LLRM_ALLOW_INCREMENTAL") == "1":
+        return
+    sha, found = flags(binary)
+    if "incremental" in found:
+        raise SystemExit(f"{binary} was built from {sha} incrementally: its instruction counts are not the gate's; rebuild with CARGO_INCREMENTAL=0 (LLRM_ALLOW_INCREMENTAL=1 to measure anyway)")
+
+
+def read(binary) -> tuple[str, bool]:
+    """(sha, dirty) a binary prints for --version; SystemExit if it prints none (built before the stamp). `llrm-cc` forwards
+    --version to the pinned clang: its stamp is the `llrm-llc` beside it."""
+    sha, found = flags(binary)
+    return sha, "dirty" in found
 
 
 def verify_dist(binary) -> None:

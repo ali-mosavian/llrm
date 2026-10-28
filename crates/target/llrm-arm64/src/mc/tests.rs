@@ -459,15 +459,19 @@ fn floating_point() {
     check(&all);
 }
 
-/// The `adrp` before a GOT load was fixed up as a plain page (`ARM64_RELOC_PAGE21`), so `ld` refused
-/// `extdata` ("target ___stdoutp does not have address"); it takes the GOT page like its load.
+/// The `adrp` before a GOT load was fixed up as a plain page
+/// (`ARM64_RELOC_PAGE21`), so `ld` refused `extdata` ("target ___stdoutp does
+/// not have address"); it takes the GOT page like its load.
 #[test]
 fn an_adrp_of_a_got_slot_is_fixed_up_as_a_got_page() {
     let target = Target::Symbol { name: "_ext".into(), addend: 0 };
     let adrp = |got| encode(&Inst::Adr { page: true, rd: Gpr(3), target: target.clone(), got }).unwrap().fixup.unwrap();
     assert_eq!(adrp(true).kind, super::encode::FixupKind::GotPage21);
     assert_eq!(adrp(false).kind, super::encode::FixupKind::Page21);
-    assert_eq!(Inst::Adr { page: true, rd: Gpr(3), target: target.clone(), got: true }.to_string(), "adrp x3, _ext@GOTPAGE");
+    assert_eq!(
+        Inst::Adr { page: true, rd: Gpr(3), target: target.clone(), got: true }.to_string(),
+        "adrp x3, _ext@GOTPAGE"
+    );
 }
 
 /// The atomic instructions as Apple's `clang` (apple-m1, with LSE and RCPC)

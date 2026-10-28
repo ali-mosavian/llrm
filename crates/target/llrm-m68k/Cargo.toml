@@ -1,0 +1,11 @@
+[package]
+name = "llrm-m68k"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The m68k target: its descriptions and DAG selector tables, generated from LLVM's M68k .td"
+
+[dependencies]
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
+llrm-codegen = { workspace = true }
+llrm-x86 = { workspace = true }

@@ -3,11 +3,11 @@
 //! clusters such stores: `AArch64InstrInfo::shouldClusterMemOps`).
 //!
 //! # How it works
-//! Machine form, virtual registers, before allocation. A store to `[base, #imm]`
-//! looks a few instructions ahead for a store of the same size to the next or
-//! previous slot from the same base. It passes instructions that neither
-//! redefine the base or the value it stores, nor touch memory it does not
-//! commute with, and is placed right before the second. Moved before
+//! Machine form, virtual registers, before allocation. A store to `[base,
+//! #imm]` looks a few instructions ahead for a store of the same size to the
+//! next or previous slot from the same base. It passes instructions that
+//! neither redefine the base or the value it stores, nor touch memory it does
+//! not commute with, and is placed right before the second. Moved before
 //! allocation, it costs nothing in registers the way moving it afterwards
 //! would: the value lives to the second store, instead of the allocator
 //! reusing its register for the value computed between them.

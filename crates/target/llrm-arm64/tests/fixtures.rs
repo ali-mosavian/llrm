@@ -1,7 +1,8 @@
 use std::path::Path;
 
-/// `tests/darwin/division.ll` divided by a literal zero (`(signed char)-256` is 0): undefined, so the
-/// pin folded the whole function to `poison` and the parity table read 8840 bytes against 272 as a gap.
+/// `tests/darwin/division.ll` divided by a literal zero (`(signed char)-256` is
+/// 0): undefined, so the pin folded the whole function to `poison` and the
+/// parity table read 8840 bytes against 272 as a gap.
 #[test]
 fn no_darwin_fixture_divides_by_a_literal_zero() {
     let mut bad = Vec::new();

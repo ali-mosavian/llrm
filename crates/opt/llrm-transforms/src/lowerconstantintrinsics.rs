@@ -139,7 +139,8 @@ pub fn lowered(
                 instruction.operands.first(),
                 Some(Operand::Constant(id)) if is_manifest_constant(context, *id)
             )),
-            // Unknown: all ones, or zero where the minimum is asked (operand 1).
+            // Unknown: all ones, or zero where the minimum is asked (operand
+            // 1).
             Lowered::ObjectSize => match instruction.operands.get(1) {
                 Some(Operand::Constant(id)) if !matches!(context.get(*id).kind, ConstantKind::Int(0)) => 0,
                 _ => u128::MAX,
@@ -149,7 +150,8 @@ pub fn lowered(
             llrm_mir::types::Type::Int(bits) => u32::from(*bits),
             _ => 1,
         };
-        let answer = context.constant(Constant { ty: instruction.ty, kind: ConstantKind::Int(value & (u128::MAX >> (128 - bits))) });
+        let answer = context
+            .constant(Constant { ty: instruction.ty, kind: ConstantKind::Int(value & (u128::MAX >> (128 - bits))) });
         replaced_and_simplified(context, layout, globals, function, call, Operand::Constant(answer), &mut branches);
     }
     let mut dead_blocks = false;
@@ -241,12 +243,19 @@ fn branch_folded(
 /// lowered, at any optimization level. A module with no call is untouched.
 pub fn module_lowered(module: &mut llrm_mir::module::Module) -> Result<(), String> {
     let has_call = |module: &llrm_mir::module::Module| {
-        module.globals.iter().any(|global| {
-            let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { return false };
-            function.layout().iter().any(|&block| {
-                function.iter_block(block).any(|inst| constant_intrinsic(&module.context, &module.globals, function, inst).is_some())
-            })
-        })
+        module
+            .globals
+            .iter()
+            .any(
+                |global| {
+                    let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { return false };
+                    function.layout().iter().any(|&block| {
+                        function
+                            .iter_block(block)
+                            .any(|inst| constant_intrinsic(&module.context, &module.globals, function, inst).is_some())
+                    })
+                },
+            )
     };
     if !has_call(module) {
         return Ok(());

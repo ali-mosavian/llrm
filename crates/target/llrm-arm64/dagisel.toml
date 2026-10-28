@@ -1,3 +1,22 @@
+# The AArch64 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The tables sit in llrm-dagisel (`in_dagisel`) and list their node predicates by name until the AArch64 hooks exist.
+[target]
+name = "aarch64"
+ns = "AArch64::"
+isd = "AArch64ISD::"
+llvm_dir = "AArch64"
+td = "AArch64.td"
+cpus = ["apple-m1"]
+hw_modes = ["i64", "i64"]
+in_dagisel = true
+# The directory of the checked-in tables, from this file.
+out = "../../backend/llrm-dagisel/src/generated/aarch64"
+listed_predicates = true
+ids_includes = [
+  '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
+  '#include "AArch64SelectionDAGInfo.h"',
+]
+
 # AArch64 pattern-predicate atoms for the scalar subset (NEON, SVE and SME off): the dry run of
 # docs/working/arm64-selectiondag-plan.md. `[atom]` rows are what the pin's Subtarget says; an atom nothing states is an error.
 # apple-m1: the pin's `Processor` list, the scalar subset.

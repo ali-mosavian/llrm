@@ -359,7 +359,7 @@ fn machine_condition<D: AddrDag>(
 
 /// `findNonImmUse`: `def` is reachable from `root` by a path that avoids
 /// `immediate_use`'s edge.
-fn find_non_imm_use<D: AddrDag>(
+pub fn find_non_imm_use<D: AddrDag>(
     dag: &D,
     root: u32,
     def: u32,
