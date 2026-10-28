@@ -227,6 +227,9 @@ pub struct SelectionDAG {
     /// Per node, the nodes that have read one of its results (may hold
     /// stale or repeated entries; `users` filters them).
     uses: Vec<Vec<u32>>,
+    /// Whether a node's use list was pushed out of order: a sorted one is
+    /// walked in place without checking it again for each query.
+    uses_unsorted: Vec<bool>,
     cse: Cse,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
@@ -324,6 +327,7 @@ impl SelectionDAG {
         let mut dag = SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
+            uses_unsorted: Vec::new(),
             cse: Cse::default(),
             deleted: Vec::new(),
             dead_work: Vec::new(),
@@ -415,9 +419,11 @@ impl SelectionDAG {
         node: u32,
     ) -> LiveUsers<'_> {
         let list = self.uses.get(node as usize).map_or(&[][..], Vec::as_slice);
-        let inner = if list.windows(2).all(|pair| pair[0] <= pair[1]) {
+        let inner = if !self.uses_unsorted.get(node as usize).copied().unwrap_or(false) {
             UserList::Sorted(list.iter())
         } else {
+            #[cfg(test)]
+            USERS_SORTED.with(|n| n.set(n.get() + list.len()));
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -548,8 +554,20 @@ impl SelectionDAG {
     ) {
         for at in 0..self.nodes[user as usize].ops.len() {
             let operand = self.nodes[user as usize].ops[at].node as usize;
-            self.uses[operand].push(user);
+            self.push_use(operand, user);
         }
+    }
+
+    fn push_use(
+        &mut self,
+        node: usize,
+        user: u32,
+    ) {
+        let list = &mut self.uses[node];
+        if list.last().is_some_and(|&last| last > user) {
+            self.uses_unsorted[node] = true;
+        }
+        list.push(user);
     }
 
     /// The hash `node` is filed under; none for a node with glue.
@@ -691,7 +709,7 @@ impl SelectionDAG {
                         *op = to;
                     }
                 }
-                self.uses[to.node as usize].push(user);
+                self.push_use(to.node as usize, user);
                 let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
@@ -889,6 +907,7 @@ impl SelectionDAG {
             data,
         });
         self.uses.push(Vec::new());
+        self.uses_unsorted.push(false);
         self.note_uses(index);
         if shareable {
             self.cse_link(cse_hash(opcode, values, ops, &data), index);
@@ -1504,6 +1523,13 @@ struct LiveUsers<'a> {
 #[cfg(test)]
 thread_local! {
     pub(crate) static USERS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// The use-list entries copied and sorted for a query, for a test that a list
+// pushed in order is not.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USERS_SORTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 impl Iterator for LiveUsers<'_> {

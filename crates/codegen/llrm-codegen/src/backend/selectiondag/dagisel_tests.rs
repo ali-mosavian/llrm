@@ -580,3 +580,22 @@ fn a_one_use_check_of_a_widely_read_value_reads_two_users() {
     assert_eq!(dag.use_count_up_to(shared.node, 3), 3);
     assert_eq!(dag.use_count(shared.node), 1000);
 }
+
+/// Every `live_users` query read the whole use list to see whether it was
+/// sorted: x3.2 per doubling at 8192 on `equal`, where one value has a use
+/// list of that length. A list pushed in order is walked as it is.
+#[test]
+fn a_use_list_pushed_in_order_is_not_checked_or_sorted_per_query() {
+    use super::dag::USERS_SORTED;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let shared = input(&mut dag, 40);
+    for i in 1..=2000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        dag.get_node(ISD::Add, EVT::I32, &[shared, k]);
+    }
+    USERS_SORTED.with(|n| n.set(0));
+    for _ in 0..50 {
+        assert!(!dag.has_one_use(shared.node));
+    }
+    assert_eq!(USERS_SORTED.with(std::cell::Cell::get), 0, "the list was copied and sorted");
+}
