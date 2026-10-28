@@ -121,3 +121,26 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
     let flags = u32::from_le_bytes(file[at + 64..at + 68].try_into().unwrap());
     assert_eq!(flags, 9, "S_MOD_INIT_FUNC_POINTERS");
 }
+
+/// A `{ T, i1 }` carried round a back edge in a phi (a cmpxchg retry loop has
+/// one) was refused with "a phi with no register": an aggregate phi is copied
+/// member by member.
+#[test]
+fn an_aggregate_phi_lowers() {
+    let asm = driver::assembly(include_str!("data/agg_phi.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.matches("bl _step").count() >= 2, "{asm}");
+}
+
+/// A name clang writes `"\01_pthread_join"` is the symbol as given; the Mach-O
+/// underscore was added again, and `ld` looked for `__pthread_join`.
+#[test]
+fn a_verbatim_name_gets_no_underscore() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+target triple = \"arm64-apple-macosx27.2.0\"\n\
+declare i32 @\"\\01_pthread_join\"(ptr, ptr)\n\
+define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null)\n  ret i32 %r\n}\n";
+    let object = driver::object(text, Platform::Darwin, "verbatim.o", true).expect("lowers");
+    let names: Vec<&str> = object.symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+    assert!(names.contains(&"_pthread_join"), "{names:?}");
+    assert!(!names.contains(&"__pthread_join"), "{names:?}");
+}

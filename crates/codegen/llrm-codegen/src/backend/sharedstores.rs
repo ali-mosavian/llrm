@@ -223,7 +223,7 @@ fn shared_run(
     }
     let first = &run[0];
     let made = Arc::new(Insn {
-        line: first.line,
+        line: run.iter().skip(1).fold(first.line, |line, one| crate::model::lir::merged_line(line, one.line)),
         ..Insn::new(first.at, Some((first.at, first.at)), Some(load), vec![], vec![])
     });
     let mut out = vec![made];
