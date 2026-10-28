@@ -928,6 +928,7 @@ fn selected_in(
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
     let mut pops = IndexMap::default();
+    let mut call_pops = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
     let mut sinks: HashSet<i64> = HashSet::default();
@@ -977,6 +978,7 @@ fn selected_in(
         }
         let from = emitted.len();
         pops.extend(done.pops.iter().copied());
+        call_pops.extend(done.indirect_pops.iter().copied());
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
@@ -1158,6 +1160,7 @@ fn selected_in(
     }
     body.returns_twice = llrm_mir::memory::calls_returns_twice(module, function);
     body.min_size = cpu.min_size || llrm_mir::memory::has(&function.attrs, "minsize");
+    body.call_pops = std::sync::Arc::new(call_pops);
     body.sealed_arguments = true;
     body.ordered = true;
     // `-g`: the parameters where the convention passes them, and each declared

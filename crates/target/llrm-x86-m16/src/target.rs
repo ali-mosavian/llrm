@@ -156,6 +156,7 @@ impl Machine for Dos {
             huge_space: crate::spaces().huge,
             inline_size_guard: true,
             float_code_size_percent: 200,
+            unroll_size_few_trips: (3, 30),
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)

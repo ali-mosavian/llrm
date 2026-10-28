@@ -8,11 +8,13 @@ use std::process::Command;
 /// clang's -O0 IR of tile.c's `bench_tile`: a 40-trip inner loop over `tile[(y
 /// + 61) & 63][(x + 7) & 63]`. The early unroll costs the body at 6 and refuses
 /// (162 against 150); once the constant is in the address it costs 5.
+/// `tile` is external: an internal, never-stored table is all zeros, the loads
+/// fold and the pin too leaves `ret i32 0`, with no loop to unroll.
 /// `llrm-llc` had no late unroll and left the loop rolled: 8321 clocks against
 /// the pin's 4277.
 fn tile() -> String {
     r#"target datalayout = "@LAYOUT@"
-@tile = internal global [64 x [64 x i16]] zeroinitializer, align 2
+@tile = global [64 x [64 x i16]] zeroinitializer, align 2
 
 define i32 @bench_tile() {
   %1 = alloca i16, align 2
