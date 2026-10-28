@@ -36,8 +36,9 @@ fn graphs() -> Vec<(String, Vec<cfg::Block>)> {
 /// Both are the pin's own passes, run as it runs them; the pin does not keep
 /// loops reducible:
 /// - `entries/@main`: the late SimplifyCFG's `sinkCommonCodeFromPredecessors`
-///   after a loop peel gives the loop header a second entry (`-fno-unroll-loops`
-///   hides it). The pin's `opt` makes the same split block from the same CFG:
+///   after a loop peel gives the loop header a second entry
+///   (`-fno-unroll-loops` hides it). The pin's `opt` makes the same split block
+///   from the same CFG:
 ///   `tests/fixtures/pin-simplifycfg/sink_split_irreducible.*.ll`.
 /// - `pipeline/@$state3.next`: DFAJumpThreading on a state machine (on in the
 ///   pin; `LLRM_NO_DFAJUMPTHREADING=1` makes it reducible).
