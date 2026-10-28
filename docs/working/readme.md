@@ -95,6 +95,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [gate-coverage](gate-coverage.md) | What the landing gate runs, and what it does not |
 | [instruction-gap-vs-pin](instruction-gap-vs-pin.md) | Instructions against the pin's llc, on the same IR |
 | [irreducible-counts](irreducible-counts.md) | Irreducible cycles in the corpora (BRIDGE-1) |
+| [joins-window](joins-window.md) | joins/fjoins steps over the slope limit at N=128 and N=256 (2026-10-28); the N=64 window rows are in `tools/budgets.toml` |
 | [homes-spares](homes-spares.md) | Homes and Spares against the pin's InlineSpiller: what each decides, measured effect, plan to 11-17 |
 | [intervals-once](intervals-once.md) | Live intervals built once, as the pin does: three builders today, steps, owners, dates |
 | [ivusers-order](ivusers-order.md) | IVUsers user order (IU1) |
