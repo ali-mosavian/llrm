@@ -1,6 +1,7 @@
 """`uv run --project tools python -m unittest discover -s tools/torture`"""
 
 import shutil
+import tempfile
 import sys
 import unittest
 from unittest import mock
@@ -11,6 +12,18 @@ sys.path.insert(0, str(Path(__file__).parent))
 import torture  # noqa: E402
 
 
+class CompilerTests(unittest.TestCase):
+    def test_the_programs_and_the_support_library_are_built_by_llrm_cc_on_one_row(self):
+        """libc.c was built by llrm-c while the programs' calling convention came from the other front end's rows: on parity it failed (E1034 memcpy "already defined")
+        and the harness stopped before the first program."""
+        seen = []
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(torture, "run_within_cpu", lambda command, seconds, env=None: seen.append((command, env)) or None):
+            (Path(tmp) / "a.c").write_text("int main(void) { return 0; }\n")
+            torture.build(Path(tmp) / "a.c", "O2", "x86-m32", Path(tmp), Path(tmp) / "libc.obj", "T0", [])
+        command, env = seen[-1]
+        self.assertEqual((Path(command[0]).name, env["LLRM_CC_TARGET"]), ("llrm-cc", "x86_32-wat"))
+
+
 class CauseTests(unittest.TestCase):
     def test_a_compile_error_is_counted_by_what_it_says_not_where_or_of_what(self):
         """clang prints its warnings before the error that stops it: the first line was a warning, so 'loop-2d' and 20031211-2 were counted as warnings."""
@@ -18,6 +31,11 @@ class CauseTests(unittest.TestCase):
         self.assertEqual(torture.cause(text), "error: use of undeclared identifier '_'")
         self.assertEqual(torture.cause("llrm-llc: foo_: place n45 has incomplete extent"), "llrm-llc: foo_: place nN has incomplete extent")
         self.assertEqual(torture.cause("/x/y.c:5:1: warning: w\nllrm-llc: loop-2d: line 61: expected a constant, found `add`"), "llrm-llc: loop-2d: line N: expected a constant, found `add`")
+
+    def test_a_clang_error_is_the_cause_not_the_warning_before_it(self):
+        """A warning on the first line was every finding's cause: 920411-1 and 930718-1 counted by their warnings under llrm-cc."""
+        text = "/x/y.c:3:1: warning: a function definition without a prototype is deprecated [-Wdeprecated-non-prototype]\n/x/y.c:9:5: error: call to undeclared function 'f'\n"
+        self.assertEqual(torture.cause(text), "error: call to undeclared function '_'")
 
     def test_a_refusal_is_matched_on_the_cause_and_names_its_reason(self):
         rules = torture.expected()
@@ -59,6 +77,44 @@ class OptionTests(unittest.TestCase):
         """920711-1 says `{ dg-options "-fwrapv" }`, which the runner did not read: `--a > 0` of the smallest int was folded to
         `a > 1` on the no-wrap promise of a build that had asked for wrapping, and the program aborted (-O2 and -Os)."""
         self.assertEqual(torture.program_options('/* { dg-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
+
+    def test_the_braced_dg_options_form_and_std_gnu89_are_read(self):
+        """930529-1 says `{ dg-options { "-fwrapv" } }`, which the pattern missed: built without it the loop past INT_MAX ran forever (stopped
+        at the 15 s limit). loop-2d asks for -std=gnu89, without which clang refuses its implicit int."""
+        self.assertEqual(torture.program_options('/* { dg-options { "-fwrapv" } } */\nint x;'), ["-fwrapv"])
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-std=gnu89" } */\nint x;'), ["-std=gnu89"])
+
+
+    def test_every_program_is_built_as_gnu89(self):
+        """20020819-1 and 960218-1 (implicit int) and 20000412-3 (an undeclared function) were compile findings: clang 24 refuses them
+        unless told the suite's dialect (24 of 32 m32 gate faults)."""
+        self.assertIn("-std=gnu89", torture.DIALECT)
+        self.assertIn("-Wno-implicit-int", torture.DIALECT)
+        self.assertIn("-Wno-implicit-function-declaration", torture.DIALECT)
+
+
+    def test_a_64_bit_program_runs_natively_and_its_abort_is_a_finding(self):
+        """There was no m64 gate: `--bits 64` was no choice. A program that exits 0 passes; one that aborts is `aborted`."""
+        import subprocess
+
+        done = subprocess.run(["cc", "-x", "c", "-", "-o", "/dev/null"], input="int main(void){return 0;}", capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, "the host has a cc")
+        with tempfile.TemporaryDirectory() as directory:
+            exe = Path(directory) / "aborts"
+            subprocess.run(["cc", "-x", "c", "-", "-o", str(exe)], input="void abort(void); int main(void){abort();}", text=True, check=True)
+            self.assertEqual(torture.run_native(exe), ("wrong", "aborted"))
+            ok = Path(directory) / "ok"
+            subprocess.run(["cc", "-x", "c", "-", "-o", str(ok)], input="int main(void){return 0;}", text=True, check=True)
+            self.assertEqual(torture.run_native(ok), ("pass", ""))
+
+
+    def test_out_is_written_whatever_the_gate_says(self):
+        """A failing --gate returned before --out was written: the 32-bit gate's 32 findings left no file to read them from."""
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "gate.json"
+            torture.write_out(mock.Mock(out=out), {(Path("a.c"), "O2"): ("compile", "why")})
+            self.assertEqual(out.read_text().count("a@O2"), 1)
+
 
 class BracedOptionTests(unittest.TestCase):
     def test_options_in_braces_are_read_too(self):
@@ -174,3 +230,16 @@ def test_a_launch_that_raises_fails_the_run_instead_of_vanishing(tmp_path):
 
     with pytest.raises(RuntimeError):
         torture.run_batches([[1], [2]], launch, tmp_path)
+
+
+def test_int_max_follows_the_compilers_int_not_a_target_macro():
+    """llrm-cc's 32-bit row does not define `__386__`: limits.h gave INT_MAX 32767 there and 20040409-1 (wrong-xor) aborted at m32 at every level."""
+    import subprocess
+
+    include = Path(__file__).parent / "include"
+    for width in ("32767", "2147483647"):
+        done = subprocess.run(
+            ["cc", "-E", "-P", "-U__INT_MAX__", f"-D__INT_MAX__={width}", "-I", str(include), "-"],
+            input="#include <limits.h>\nINT_MAX\n", capture_output=True, text=True, check=True,
+        )
+        assert done.stdout.strip() == width

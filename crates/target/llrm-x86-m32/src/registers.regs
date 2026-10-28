@@ -28,9 +28,9 @@
 @bytes al cl dl ah ch dh bl bh
 #
 # name  bits root lane classes dwarf codeview
-eax     32   eax  0    gpr,byte,base,index,int  0  17
-ecx     32   ecx  0    gpr,byte,base,index,int  1  18
-edx     32   edx  0    gpr,byte,base,index,int  2  19
+eax     32   eax  0    gpr,byte,base,index,int,tail_call  0  17
+ecx     32   ecx  0    gpr,byte,base,index,int,tail_call  1  18
+edx     32   edx  0    gpr,byte,base,index,int,tail_call  2  19
 esi     32   esi  0    gpr,base,index,int  6  23
 edi     32   edi  0    gpr,base,index,int  7  24
 ebx     32   ebx  0    gpr,byte,base,index,int  3  20
