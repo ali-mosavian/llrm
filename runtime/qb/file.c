@@ -261,6 +261,8 @@ static int get_byte(Fdb *fdb)
     return (byte)buffer[used++];
 }
 
+static int in_buffer(const Fdb *fdb, const SD *variable);
+
 /* The strings FIELD mapped onto the buffer, which is about to go: each becomes empty. */
 static void unfield(Fdb *fdb)
 {
