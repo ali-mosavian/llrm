@@ -6,7 +6,7 @@
 The oracle sweep (tools/oracle_sweep.py) compiles BASIC and Nib programs; the C corpus it lacked is where an unsound memory
 summary survived to main and was found only by running QCport's `sc`. Here each module of QCport's six source directories is
 compiled at each level with every `LLRM_CHECK_*` oracle on (a panic, or an exit with no message, is a finding, as there); the -O2
-objects, built with the oracles on, are linked and run by tools/qcport-run.py against the Borland build, which must draw the same
+objects, built with the oracles on, are linked and run by tools/qcport-run-cc.py against the Borland build, which must draw the same
 frames, polygons and picture. Premise: the run drew (its summary line names frames and polygons, both above zero); a run that
 printed nothing, or drew nothing, fails the tier whatever else it says. Exit 1 on a finding or a difference, 2 on a failed premise.
 """
@@ -28,7 +28,7 @@ import llrmbin  # noqa: E402
 import oracle_sweep  # noqa: E402
 
 MODULES = ("host", "render", "model", "game", "sound", "ui")
-SUMMARY = re.compile(r"(\d+) modules by llrm-c draw what the Borland build draws: (\d+) frames, (\d+) polys")
+SUMMARY = re.compile(r"(\d+) modules at \S+ draw what the Borland build draws: (\d+) frames, (\d+) polys")
 
 
 def flags(qcport: Path, include: Path) -> list[str]:
@@ -51,7 +51,7 @@ def compile_module(compiler: Path, source: Path, level: str, extra: list[str], o
 
 
 def drew(output: str) -> tuple[int, int] | None:
-    """(frames, polys) of qcport-run's summary line; None where it printed none, or the run drew nothing."""
+    """(frames, polys) of qcport-run-cc's summary line; None where it printed none, or the run drew nothing."""
     found = SUMMARY.search(output)
     return (int(found[2]), int(found[3])) if found and int(found[2]) and int(found[3]) else None
 
@@ -100,7 +100,7 @@ def main() -> int:
     if "-O2" not in levels:
         print("the run needs -O2 objects: nothing to run")
         return 2
-    run = subprocess.run([sys.executable, str(HERE / "qcport-run.py"), str(compiler)], capture_output=True, text=True, env=oracle_env({**os.environ, "QCPORT_OBJECTS": str(objects)}))
+    run = subprocess.run([sys.executable, str(HERE / "qcport-run-cc.py")], capture_output=True, text=True, env=oracle_env({**os.environ, "QCPORT_OBJECTS": str(objects)}))
     print(run.stdout.strip())
     if run.returncode and not drew(run.stdout):
         print(run.stderr.strip()[-600:])

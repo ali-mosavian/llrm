@@ -14,12 +14,6 @@ owner = "funcattrs-port"
 date = "2026-10-27"
 why = "stale expectation: 4f82e22e1 (MemorySSA queries ask the AA stack with TBAA) leaves a volatile store through a far pointer as the pin does, so the cells it may reach are read every trip; the memory-space model of #3994 is the tuning that restores the hoist"
 [[xfail]]
-id = "run qcport-attract -O2"
-issue = 4325
-owner = "w-6"
-date = "2026-11-06"
-why = "AM-QC-1: QCport -O2 runs out of memory (miptex.bin) in the attract loop: code 329,553 against Borland's 296,085; the -Os build (342,560) plays all three"
-[[xfail]]
 id = "unit llrm-qb::a_power_of_a_variable_base_covers_the_whole_domain"
 issue = 2848
 owner = "alim"

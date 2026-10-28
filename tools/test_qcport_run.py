@@ -1,12 +1,9 @@
 """`uv run --project tools python -m pytest tools/test_qcport_run.py`"""
-import importlib.util
 import sys
 from pathlib import Path
 
-spec = importlib.util.spec_from_file_location("qcport_run", Path(__file__).parent / "qcport-run.py")
-qcport_run = importlib.util.module_from_spec(spec)
-sys.modules["qcport_run"] = qcport_run
-spec.loader.exec_module(qcport_run)
+sys.path.insert(0, str(Path(__file__).parent))
+import qcport_run  # noqa: E402
 
 LISTING = """format dos
 option quiet, map=/elsewhere/QCPORT.MAP
@@ -160,15 +157,9 @@ def test_demos_the_emulator_logged_count_before_run_sh_has_written_cstep(tmp_pat
     assert qcport_run.attract_problems(tmp_path) == []
 
 
-def test_the_attract_verdict_lets_o2_fail_only_while_it_is_listed_and_never_os():
-    """QCport -O2 runs out of memory in the attract loop (AM-QC-1); the shipped -Os build must play all three."""
+def test_the_attract_verdict_names_each_run_that_misses_a_demo():
+    """The attract loop must play all three demos on both builds; QCport -O2 once ran out of memory loading miptex.bin and passed the benchmark."""
     bad = ["never started: demo2.qdc demo3.qdc", "miptex.bin: out of memory"]
-    listed = {qcport_run.ATTRACT_O2: {"issue": 1}}
-    assert qcport_run.attract_verdict({"borland": [], "llrm -O2": bad, "llrm -Os": []}, listed) == ([], [f"llrm -O2: {'; '.join(bad)}"])
-    failures, known = qcport_run.attract_verdict({"borland": [], "llrm -O2": bad, "llrm -Os": []}, {})
-    assert failures == [f"llrm -O2: {'; '.join(bad)}"] and known == [], "unlisted, -O2 fails the gate"
-    failures, _ = qcport_run.attract_verdict({"borland": [], "llrm -O2": bad, "llrm -Os": bad}, listed)
-    assert failures == [f"llrm -Os: {'; '.join(bad)}"], "-Os is never excused"
-    failures, _ = qcport_run.attract_verdict({"borland": [], "llrm -O2": [], "llrm -Os": []}, listed)
-    assert "remove the entry" in failures[0], "a listed -O2 that plays says so"
-    assert qcport_run.attract_verdict({"borland": ["never started: demo1.qdc"], "llrm -O2": [], "llrm -Os": []}, {})[0] == ["borland: never started: demo1.qdc"]
+    assert qcport_run.attract_verdict({"borland": [], "llrm": []}) == []
+    assert qcport_run.attract_verdict({"borland": [], "llrm": bad}) == [f"llrm: {'; '.join(bad)}"]
+    assert qcport_run.attract_verdict({"borland": ["never started: demo1.qdc"], "llrm": []}) == ["borland: never started: demo1.qdc"]
