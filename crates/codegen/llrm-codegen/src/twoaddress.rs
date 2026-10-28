@@ -77,7 +77,7 @@
 
 use std::sync::Arc;
 
-use crate::model::ir::{self, Loc, Semantics};
+use crate::model::ir::{self, Held, Loc, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::HashMap;
 
@@ -99,13 +99,24 @@ pub struct BodyFacts {
 
 struct State {
     insns: HashMap<InstrKey, Arc<Insn>>,
-    /// The instructions of each block, in order.
-    blocks: Vec<Vec<Arc<Insn>>>,
+    /// The instructions of each block by order stamp: the stamps rise along the
+    /// block, with gaps, so an instruction goes between two others (or moves)
+    /// without renumbering the rest, as the pin's intrusive list does.
+    blocks: Vec<std::collections::BTreeMap<u64, Arc<Insn>>>,
+    /// The stamp of each instruction in its block.
+    stamp_of: HashMap<InstrKey, u64>,
     block_of: HashMap<InstrKey, usize>,
     /// The instructions that read or define each value, and whether each
     /// defines it (`use_def_nodbg_operands`).
     operands: HashMap<u32, Vec<(InstrKey, bool)>>,
     lv: crate::liveness::livevariables::LiveVariables,
+}
+
+// The instructions the reschedules looked at to find a source's kill, for a
+// test that the search does not walk the rest of the block.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static KILL_SEARCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 // The values whose kills were made again from a block, for a test that an edit
@@ -131,15 +142,65 @@ impl State {
         REFRESHED.with(|seen| seen.borrow_mut().push(value));
         let live_in = self.lv.is_live_in_block(value, block);
         let live_out = self.lv.is_live_out_block(value, block);
+        // Only the instructions naming the value can end a segment of it: they
+        // are read from its operand list, not found by walking the block.
+        let mut naming: Vec<(u64, &Arc<Insn>)> = self
+            .operands
+            .get(&value)
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| self.block_of.get(key) == Some(&block))
+            .map(|(key, _)| (self.stamp_of[key], &self.insns[key]))
+            .collect();
+        naming.sort_unstable_by_key(|(stamp, _)| *stamp);
+        naming.dedup_by_key(|(stamp, _)| *stamp);
         let sites = crate::liveness::livevariables::segment_kills(
             value,
-            self.blocks[block].iter().map(|one| &**one),
+            naming.into_iter().map(|(_, one)| &**one),
             live_in,
             live_out,
         );
         let info = self.lv.get_var_info(value);
         info.kills.retain(|kill| kill.block != block);
         info.kills.extend(sites.into_iter().map(|site: Site| Kill { site, block }));
+    }
+
+    /// `count` stamps strictly between `lo` and `hi` (the block's ends where
+    /// none), renumbering the block when the gap is too small.
+    fn stamps_between(
+        &mut self,
+        block: usize,
+        lo: Option<u64>,
+        hi: Option<u64>,
+        count: usize,
+    ) -> (Vec<u64>, Option<u64>, Option<u64>) {
+        const GAP: u64 = 1 << 20;
+        let fits = |lo: Option<u64>, hi: Option<u64>| {
+            let (low, high) = (lo.map_or(0, |one| one + 1), hi.unwrap_or(u64::MAX / 2));
+            (high > low && (high - low) as u128 > count as u128).then_some((low, high))
+        };
+        let (mut lo, mut hi) = (lo, hi);
+        let span = match fits(lo, hi) {
+            Some(span) => span,
+            None => {
+                // Renumber the block evenly and look for the neighbours again.
+                let (lo_key, hi_key) = (
+                    lo.map(|one| Arc::clone(&self.blocks[block][&one])),
+                    hi.map(|one| Arc::clone(&self.blocks[block][&one])),
+                );
+                let old = std::mem::take(&mut self.blocks[block]);
+                for (n, (_, one)) in old.into_iter().enumerate() {
+                    let stamp = (n as u64 + 1) * GAP;
+                    self.stamp_of.insert(one.id(), stamp);
+                    self.blocks[block].insert(stamp, one);
+                }
+                lo = lo_key.map(|one| self.stamp_of[&one.id()]);
+                hi = hi_key.map(|one| self.stamp_of[&one.id()]);
+                fits(lo, hi).expect("a renumbered block has room")
+            }
+        };
+        let step = (span.1 - span.0) / (count as u64 + 1);
+        ((1..=count as u64).map(|n| span.0 + n * step).collect(), lo, hi)
     }
 
     /// [`State::refresh_kills`] of every value `one` names.
@@ -212,14 +273,17 @@ impl BodyFacts {
         let mut state = State {
             insns: HashMap::default(),
             blocks: Vec::new(),
+            stamp_of: HashMap::default(),
             block_of: HashMap::default(),
             operands: HashMap::default(),
             lv: crate::liveness::livevariables::LiveVariables::from_dataflow(body),
         };
         for (at, block) in body.blocks.iter().enumerate() {
-            let mut kept = Vec::with_capacity(block.insns.len());
-            for one in block.insns.iter() {
-                kept.push(Arc::clone(one));
+            let mut kept = std::collections::BTreeMap::new();
+            for (n, one) in block.insns.iter().enumerate() {
+                let stamp = (n as u64 + 1) << 20;
+                kept.insert(stamp, Arc::clone(one));
+                state.stamp_of.insert(one.id(), stamp);
                 state.insns.insert(one.id(), Arc::clone(one));
                 state.block_of.insert(one.id(), at);
                 state.add_operands(one);
@@ -252,6 +316,32 @@ impl BodyFacts {
         Arc::clone(&self.state.borrow().insns[&key])
     }
 
+    /// The last reader of `value` in `block` after `after`, when no definition
+    /// of it follows (the pin reads it from `LiveVariables::findKill`).
+    pub fn last_reader_after(
+        &self,
+        block: usize,
+        after: InstrKey,
+        value: u32,
+    ) -> Option<InstrKey> {
+        let state = self.state.borrow();
+        let floor = *state.stamp_of.get(&after)?;
+        let (mut reader, mut def): (Option<(u64, InstrKey)>, Option<u64>) = (None, None);
+        for &(key, defines) in state.operands.get(&value)? {
+            if state.block_of.get(&key) != Some(&block) {
+                continue;
+            }
+            let stamp = state.stamp_of[&key];
+            if defines {
+                def = def.max(Some(stamp));
+            } else if stamp > floor && reader.is_none_or(|(best, _)| stamp > best) {
+                reader = Some((stamp, key));
+            }
+        }
+        let (stamp, key) = reader?;
+        def.is_none_or(|def| def <= stamp).then_some(key)
+    }
+
     /// `isPlainlyKilled(MI, Reg)`: `MI` is the kill of `value` in its block
     /// (`LV->getVarInfo(Reg).findKill(MI->getParent()) == MI`).
     pub fn killed(
@@ -277,8 +367,9 @@ impl BodyFacts {
         state.remove_operands(&before);
         state.insns.remove(&old);
         state.block_of.remove(&old);
-        let at = state.blocks[block].iter().position(|one| one.id() == old).expect("an instruction of the block");
-        state.blocks[block][at] = Arc::clone(&new);
+        let at = state.stamp_of.remove(&old).expect("an instruction of the block");
+        state.blocks[block].insert(at, Arc::clone(&new));
+        state.stamp_of.insert(new.id(), at);
         state.block_of.insert(new.id(), block);
         state.add_operands(&new);
         state.insns.insert(new.id(), Arc::clone(&new));
@@ -296,12 +387,17 @@ impl BodyFacts {
         before: Option<InstrKey>,
     ) {
         let mut state = self.state.borrow_mut();
-        let order = &mut state.blocks[block];
-        let from = order.iter().position(|one| one.id() == key).expect("an instruction of the block");
-        let moved = order.remove(from);
-        let to =
-            before.map_or(order.len(), |one| order.iter().position(|other| other.id() == one).expect("a block mate"));
-        order.insert(to, moved);
+        let from = state.stamp_of.remove(&key).expect("an instruction of the block");
+        let moved = state.blocks[block].remove(&from).expect("an instruction of the block");
+        let after = match before {
+            Some(one) => state.stamp_of[&one],
+            None => u64::MAX,
+        };
+        let lo = state.blocks[block].range(..after).next_back().map(|(stamp, _)| *stamp);
+        let hi = (after != u64::MAX).then_some(after);
+        let (stamps, ..) = state.stamps_between(block, lo, hi, 1);
+        state.blocks[block].insert(stamps[0], Arc::clone(&moved));
+        state.stamp_of.insert(key, stamps[0]);
         let moved = Arc::clone(&state.insns[&key]);
         state.refresh_named(&moved, block);
     }
@@ -323,15 +419,29 @@ impl BodyFacts {
         state.remove_operands(&before);
         state.insns.remove(&one.id());
         state.block_of.remove(&one.id());
-        let at =
-            state.blocks[block].iter().position(|other| other.id() == one.id()).expect("an instruction of the block");
-        for (place, new) in rest.iter().enumerate() {
-            state.blocks[block].insert(at + place, Arc::clone(new));
+        let at = state.stamp_of.remove(&one.id()).expect("an instruction of the block");
+        let lo = state.blocks[block].range(..at).next_back().map(|(stamp, _)| *stamp);
+        let (stamps, ..) = state.stamps_between(block, lo, Some(at), rest.len());
+        // A renumbering moved `one` too: its stamp is read again.
+        let at = if rest.is_empty() {
+            at
+        } else {
+            state.blocks[block]
+                .range(stamps[rest.len() - 1]..)
+                .next()
+                .map(|(stamp, _)| *stamp)
+                .expect("the next of the block")
+        };
+        for (new, stamp) in rest.iter().zip(&stamps) {
+            state.blocks[block].insert(*stamp, Arc::clone(new));
+            state.stamp_of.insert(new.id(), *stamp);
             state.block_of.insert(new.id(), block);
             state.add_operands(new);
             state.insns.insert(new.id(), Arc::clone(new));
         }
-        state.blocks[block][at + rest.len()] = Arc::clone(last);
+        state.stamp_of.remove(&one.id());
+        state.blocks[block].insert(at, Arc::clone(last));
+        state.stamp_of.insert(last.id(), at);
         state.block_of.insert(last.id(), block);
         state.add_operands(last);
         state.insns.insert(last.id(), Arc::clone(last));
@@ -366,8 +476,12 @@ impl BodyFacts {
         body: &LirBody,
     ) -> LirBody {
         let state = self.state.borrow();
-        let blocks =
-            body.blocks.iter().enumerate().map(|(at, block)| block.with_insns(state.blocks[at].clone())).collect();
+        let blocks = body
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(at, block)| block.with_insns(state.blocks[at].values().cloned().collect()))
+            .collect();
         body.with_blocks(blocks)
     }
 }
@@ -463,6 +577,9 @@ pub enum ThreeAddress {
     /// takes a 16-bit address form: `lea ax, [bx + k]`.
     AddSubWords,
     All,
+    /// `All` on a target that addresses with 64-bit registers: `lea eax, [rdi +
+    /// k]` (`LEA64_32r`), the base read at its full width.
+    Wide,
 }
 
 /// The `lea` of `d := a + k` or `d := a + b`, three-address, or None where the
@@ -496,7 +613,11 @@ pub fn three_address(
             op: Operation::Address,
             name: Some("lea".into()),
             dests: vec![Loc::Held(*into)],
-            sources: vec![Loc::Mem(Mem { base: Some(*base), offset, ..Mem::new(None, 4) })],
+            sources: vec![Loc::Mem(Mem {
+                base: Some(if mode == ThreeAddress::Wide { Held { width: 8, ..*base } } else { *base }),
+                offset,
+                ..Mem::new(None, 4)
+            })],
             ..Semantics::new(Operation::Address)
         });
         return Some(Arc::new(made));
@@ -519,17 +640,22 @@ pub fn three_address(
     if !(width == 4 || word) || base.width != width || into.value == base.value {
         return None;
     }
+    let wide = |held: &Held| if mode == ThreeAddress::Wide { Held { width: 8, ..*held } } else { *held };
     let cell = match (&what.sources[1], what.name.as_deref()) {
         // `SHL32ri` by 1 to 3: `[a + a]` for 1, `[a*4]`, `[a*8]` for the rest
         // (the index alone takes a 32-bit displacement, as the pin's does).
-        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl")) if mode == ThreeAddress::All => Mem {
-            base: (*shift == 1).then_some(*base),
-            index: Some(*base),
-            scale: if *shift == 1 { 1 } else { 1 << shift },
-            offset: 0,
-            disp_width: if *shift == 1 { 0 } else { 4 },
-            ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
-        },
+        (Loc::Imm(Imm { value: shift @ 1..=3, address: None, .. }), Some("shl"))
+            if matches!(mode, ThreeAddress::All | ThreeAddress::Wide) =>
+        {
+            Mem {
+                base: (*shift == 1).then_some(wide(base)),
+                index: Some(wide(base)),
+                scale: if *shift == 1 { 1 } else { 1 << shift },
+                offset: 0,
+                disp_width: if *shift == 1 { 0 } else { 4 },
+                ..Mem::new(Some(ir::Addr::new(ir::Space::Literal, 0)), 4)
+            }
+        }
         (_, Some("shl")) => return None,
         (Loc::Imm(Imm { value, address: None, .. }), name) => {
             let step = if name == Some("sub") { value.checked_neg()? } else { *value };
@@ -539,10 +665,10 @@ pub fn three_address(
             if word && step.abs() == 1 {
                 return None;
             }
-            Mem { base: Some(*base), offset: step, ..Mem::new(None, width) }
+            Mem { base: Some(wide(base)), offset: step, ..Mem::new(None, width) }
         }
         (Loc::Held(index), Some("add")) if index.width == 4 && index.value != into.value => {
-            Mem { base: Some(*base), index: Some(*index), scale: 1, offset: 0, ..Mem::new(None, 4) }
+            Mem { base: Some(wide(base)), index: Some(wide(index)), scale: 1, offset: 0, ..Mem::new(None, 4) }
         }
         _ => return None,
     };
@@ -1153,13 +1279,11 @@ impl<'a> Commuter<'a> {
         }
         // The last reader of `reg` in the block, which must be the kill and no
         // later definition.
-        let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
-            return false;
-        };
-        if work[last + 1..].iter().any(|one| one.defines.contains(&reg)) || !self.facts.killed(work[last].id(), reg) {
+        let Some(kill_key) = self.facts.last_reader_after(self.block, mi.id(), reg) else { return false };
+        if !self.facts.killed(kill_key, reg) {
             return false;
         }
-        let kill = Arc::clone(&work[last]);
+        let kill = self.facts.insn(kill_key);
         if crate::coalescer::pair::full_copy(&kill).is_some() || barrier(&kill) {
             return false;
         }
@@ -1188,9 +1312,15 @@ impl<'a> Commuter<'a> {
         }
         // The flags it reads or writes are not to be read or written between.
         let writes_flags = flags_touched(&mi, regs, bits);
-        if end > last {
+        // The kill is within the eleven instructions the walk below allows.
+        let Some(found) = work[end.min(work.len())..].iter().take(11).position(|one| {
+            #[cfg(test)]
+            KILL_SEARCHED.with(|n| n.set(n.get() + 1));
+            one.id() == kill_key
+        }) else {
             return false;
-        }
+        };
+        let last = end + found;
         let mut visited = 0;
         for other in &work[end..=last] {
             if visited > 10 {
@@ -1294,13 +1424,11 @@ impl<'a> Commuter<'a> {
         }
         let reg = source.value;
         let Some(&dist) = self.distance.get(&mi.id()) else { return false };
-        let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
-            return false;
-        };
-        if work[last + 1..].iter().any(|one| one.defines.contains(&reg)) || !self.facts.killed(work[last].id(), reg) {
+        let Some(kill_key) = self.facts.last_reader_after(self.block, mi.id(), reg) else { return false };
+        if !self.facts.killed(kill_key, reg) {
             return false;
         }
-        let kill = Arc::clone(&work[last]);
+        let kill = self.facts.insn(kill_key);
         // A copy is left to the coalescer (the pin moves one only for a folded
         // load, which has no case here).
         if crate::coalescer::pair::full_copy(&kill).is_some() || !movable(&kill) {
@@ -1331,6 +1459,15 @@ impl<'a> Commuter<'a> {
             }
         }
         let touches_flags = flags_touched(&kill, regs, bits);
+        // The kill is within the eleven instructions the walk below allows.
+        let Some(found) = work[at + 1..].iter().take(11).position(|one| {
+            #[cfg(test)]
+            KILL_SEARCHED.with(|n| n.set(n.get() + 1));
+            one.id() == kill_key
+        }) else {
+            return false;
+        };
+        let last = at + 1 + found;
         let mut visited = 0;
         for other in &work[at..last] {
             if visited > 10 {
@@ -1484,5 +1621,45 @@ mod tests {
         let seen = REFRESHED.with(|seen| seen.borrow().clone());
         assert!(!seen.is_empty(), "the premise: the copy's values are remade");
         assert!(!seen.contains(&2), "v2 is read by `one` and by the new add alike: {seen:?}");
+    }
+
+    /// A tied pair replaced in a long block walked the whole block for every
+    /// value it named (quadratic in the block; the pin's lists are O(1)): the
+    /// walk is now the instructions naming the value, whatever the block holds.
+    #[test]
+    fn test_replacing_tied_pairs_walks_the_instructions_naming_the_value_not_the_block() {
+        use crate::liveness::livevariables::WALKED;
+        let held = |value: u32| Held { value, width: 4 };
+        let make = |at: i64, op: Operation, name: &str, defines: Vec<u32>, uses: Vec<u32>| {
+            let what = Semantics {
+                name: Some(name.into()),
+                dests: defines.iter().map(|&value| Loc::Held(held(value))).collect(),
+                sources: uses.iter().map(|&value| Loc::Held(held(value))).collect(),
+                ..Semantics::new(op)
+            };
+            Arc::new(Insn::new(at, Some((at, at)), Some(what), defines, uses))
+        };
+        let walked_in = |filler: i64| {
+            let mut insns: Vec<Arc<Insn>> =
+                (0..filler).map(|n| make(n, Operation::Move, "mov", vec![100 + n as u32], vec![])).collect();
+            let adds: Vec<Arc<Insn>> =
+                (0..20).map(|n| make(filler + n, Operation::Binary, "add", vec![10 + n as u32], vec![1, 2])).collect();
+            insns.extend(adds.iter().cloned());
+            let body =
+                LirBody::new("t", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+            let facts = BodyFacts::of(&body);
+            WALKED.with(|walked| walked.set(0));
+            for (n, one) in adds.iter().enumerate() {
+                let n = n as i64;
+                let copy = make(10_000 + 2 * n, Operation::Move, "mov", vec![1000 + n as u32], vec![1]);
+                let last =
+                    make(10_001 + 2 * n, Operation::Binary, "add", vec![10 + n as u32], vec![1000 + n as u32, 2]);
+                facts.replace(0, one, &[copy, last]);
+            }
+            WALKED.with(std::cell::Cell::get)
+        };
+        let (small, large) = (walked_in(250), walked_in(1000));
+        assert!(small > 0, "the premise: the kills are remade");
+        assert!(large <= 2 * small, "4x the block walked {large} against {small}: the whole block is walked");
     }
 }

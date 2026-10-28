@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -march=i486 -O2 -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -march=i486 -O2 -S -o /dev/stdout
 // A call through a table of four functions is a switch of direct calls (jumptableswitch@672), and the pin's inliner, which repeats
 // while the simplification makes calls direct (DevirtSCCRepeatedPass<4>), takes them: clang's loop holds the four bodies. x_funcptr
 // had four call sites and code 1.60 over clang.

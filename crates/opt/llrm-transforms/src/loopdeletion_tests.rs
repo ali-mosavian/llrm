@@ -293,3 +293,68 @@ fn the_debug_records_before_the_preheaders_branch_survive_a_deletion() {
     let after = deleted(&text, INPUTS);
     assert!(!after.contains("phi") && after.contains("#dbg_value(i16 %n"), "{after}");
 }
+
+/// `n` guarded counted loops in a row, each storing, so none is deleted.
+fn live_sequence(n: usize) -> String {
+    let mut text = String::from(
+        "@a = global i32 0\n@arr = global [4096 x i32] zeroinitializer\n\ndefine void @f(i32 %n) {\nb0:\n  %g = icmp sgt i32 %n, 0\n  br i1 %g, label %p0, label %end\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("p{}", k + 1) };
+        text += &format!(
+            "p{k}:\n  br label %l{k}\n\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %n{k}, %l{k} ]\n  %m{k} = mul nuw nsw i32 %i{k}, 3\n  %q{k} = and i32 %m{k}, 4095\n  %p{k} = getelementptr inbounds i32, ptr @arr, i32 %q{k}\n  %v{k} = load i32, ptr %p{k}\n  store i32 %v{k}, ptr @a\n  %n{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %x{k}, label %l{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text += "end:\n  ret void\n}\n";
+    text
+}
+
+/// The guards of a loop climb every block above it, and the blocks seen were a
+/// list searched whole at each step: 128 loops in a row cost `loopdeletion`
+/// 32 M instructions in `collect_from_block` where the pin's set costs 9 M, and
+/// the work grew with the cube of the loops. A membership test costs one
+/// probe, whatever the climb has seen.
+#[test]
+fn collecting_loop_guards_probes_each_visited_block_once() {
+    let probes = |n: usize| {
+        let mut module = parsed(&live_sequence(n));
+        let before = llrm_analysis::scev::guards::visits();
+        managed(&mut module, LoopDeletion);
+        let after = llrm_analysis::scev::guards::visits();
+        (after.0 - before.0, after.1 - before.1)
+    };
+    let (inserts, examined) = probes(128);
+    assert!(inserts > 128 * 64, "the climb reaches the earlier loops: {inserts}");
+    assert!(examined <= 2 * inserts, "{examined} elements examined for {inserts} inserts");
+}
+
+/// `n` counted loops in a row, each storing, to the same bound `%n`.
+fn stored_loops(n: usize) -> String {
+    let mut text = String::from(
+        "@a = global i32 0\n\ndefine void @f(i32 %n) {\nb0:\n  %g = icmp sgt i32 %n, 0\n  br i1 %g, label %p0, label %end\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("p{}", k + 1) };
+        text += &format!(
+            "p{k}:\n  br label %l{k}\n\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %n{k}, %l{k} ]\n  store i32 %i{k}, ptr @a\n  %n{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %x{k}, label %l{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text + "end:\n  ret void\n}\n"
+}
+
+/// The disposition of an expression was held in a list searched whole, and an
+/// expression that every loop of a function asks about (the bound `%n`) had a
+/// list as long as the function's loops: 7 M entries looked at for 81 K
+/// lookups over 128 nests, 20 M of the 233 M instructions of
+/// `loop-load-elim`. A lookup costs the same whatever the loops before it.
+#[test]
+fn a_disposition_lookup_costs_the_same_whatever_the_loops_before_it() {
+    let looked_at = |n: usize| {
+        let mut module = parsed(&stored_loops(n));
+        let before = llrm_analysis::scev::disposition::examined();
+        managed(&mut module, LoopDeletion);
+        llrm_analysis::scev::disposition::examined() - before
+    };
+    let (a, b) = (looked_at(32), looked_at(128));
+    assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
+}
