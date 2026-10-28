@@ -268,6 +268,55 @@ fn an_unsigned_dword_converted_at_m64_is_zero_extended_first() {
     assert!(lines[..convert].iter().any(|line| line.starts_with("movzx r")), "{listing}");
 }
 
+/// `x >> (64 - n)` masked the count with 31, the dword's mask: a rotate by
+/// 1..31 of a quadword came out wrong (`rotl64(x, 1)` gave `x` with the top bit
+/// lost) at -m64, 32 of 63 counts.
+#[test]
+fn a_quadword_shift_by_64_minus_n_is_not_masked_to_31_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("and cl, 31"), "{listing}");
+}
+
+/// `(x << n) | (x >> (64 - n))` is one `rol r, cl` in the pin; `MatchRotate`
+/// took constant amounts only, so it stayed shl/neg/shr/or (8 instructions
+/// against 4 at -m64).
+#[test]
+fn a_rotate_by_a_variable_amount_is_one_rotate_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rol rax, cl"), "{listing}");
+}
+
+/// `x < 0 ? -x : x` is `neg; cmovs` in the pin (`LowerABS`, custom wherever
+/// `canUseCMOV`). The DAG path was built with `cmov: false` at -m64 as well, so
+/// it expanded to `sar; xor; sub`, one instruction more.
+///
+/// C's `abs` is `llvm.abs(x, true)` (ABS_MIN_POISON): it had no legalization
+/// and failed with `CannotSelect("AbsMinPoison")`.
+#[test]
+fn an_abs_is_a_negate_and_a_cmov_at_m64() {
+    for poison in ["false", "true"] {
+        let text = format!(
+            "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             declare i32 @llvm.abs.i32(i32, i1)\n\
+             define i32 @f(i32 %x) {{\n  %r = call i32 @llvm.abs.i32(i32 %x, i1 {poison})\n  ret i32 %r\n}}\n"
+        );
+        let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("neg ") && listing.contains("cmov") && !listing.contains("sar "), "{listing}");
+    }
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
