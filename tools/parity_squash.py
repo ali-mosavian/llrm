@@ -1259,8 +1259,17 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
     started = time.time()
     (build or _build_release)()
     red = behavioural.red_programs((run or _run_behavioural)())
-    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s")
+    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (LLRM_OW missing) and refused #5785
+        print(f"behavioural: {len(red)} wrong; running once more on the same tree{red_env_cause()}")
+        red = [program for program in behavioural.red_programs((run or _run_behavioural)()) if program in red]
+    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s{red_env_cause() if red else ''}")
     return red
+
+
+def red_env_cause() -> str:
+    """What a behavioural run needs from the environment and lacks, for the REFUSED line; empty when it has it."""
+    ow = os.environ.get("LLRM_OW")
+    return "" if ow and Path(ow).expanduser().is_dir() else " (LLRM_OW is unset or not a directory: a missing Open Watcom tree, not a miscompile)"
 
 
 def _run_behavioural() -> str:
@@ -1320,8 +1329,8 @@ def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -
     import behavioural  # noqa: PLC0415
 
     backend = [number for number in group if behavioural.touches(files_of(number))]
-    if len(backend) <= 1:
-        return backend
+    if len(backend) <= 1:  # a PR is blamed only after it is run alone: the batch's red may be the environment's
+        return [number for number in backend if alone_red(number)]
     return red_members(backend, red_with, alone_red)
 
 
@@ -2166,7 +2175,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
         if red:
-            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
+            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}{red_env_cause()}")
             failed_units.update(f"behavioural {program}" for program in red)
             return False
         return True
@@ -2211,8 +2220,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 lambda subset: merge_all(subset) and bool(pre_merge_behavioural(sorted({f for n in subset for f in files_of(n)}))),
             )
             for number in culprits:
-                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
-                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
+                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}{red_env_cause()}"
+                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}{red_env_cause()}")
             return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
