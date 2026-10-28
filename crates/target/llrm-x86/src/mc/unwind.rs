@@ -1,0 +1,135 @@
+//! x86-64's `.eh_frame` facts (`X86MCTargetDesc.cpp`'s initial frame state, the
+//! System V DWARF register numbers).
+
+use llrm_dwarf::eh_frame::EhTarget;
+use llrm_object::debug::FrameRow;
+
+/// The DWARF number of an x86-64 register by name.
+pub fn register(name: &str) -> Option<u64> {
+    const NAMES: [&str; 17] = [
+        "rax", "rdx", "rcx", "rbx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
+        "rip",
+    ];
+    NAMES.iter().position(|one| *one == name).map(|number| number as u64)
+}
+
+/// At a function's entry the frame address is 8 past the stack pointer and
+/// the return address is just below it.
+pub fn eh_target() -> EhTarget<'static> {
+    EhTarget {
+        address: 8,
+        return_column: 16,
+        entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
+        register: &register,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_object::debug::FrameRow;
+    use llrm_object::{Binding, Definition, Frame, Object, ObjectTarget, Reloc, Role, Section, Symbol, Target};
+
+    use super::*;
+    use crate::mc::X86Objects;
+
+    fn row(
+        offset: usize,
+        cfa_offset: i64,
+        saved: &[(&str, i64)],
+    ) -> FrameRow {
+        FrameRow {
+            offset,
+            cfa_register: "rsp".into(),
+            cfa_offset,
+            saved: saved.iter().map(|(name, at)| ((*name).to_owned(), *at)).collect(),
+        }
+    }
+
+    fn object(frames: Vec<Frame>) -> Object {
+        Object {
+            name: "f.c".into(),
+            bits: 64,
+            sections: vec![Section {
+                name: ".text".into(),
+                role: Role::Text,
+                near: true,
+                align: 16,
+                image: vec![0x90; 0x3C],
+                spans: vec![[0, 0x3C]],
+                relocs: Vec::new(),
+            }],
+            symbols: vec![Symbol {
+                name: "f".into(),
+                binding: Binding::Public,
+                definition: Definition::Defined { section: 0, offset: 0 },
+                size: 0x36,
+                group: None,
+            }],
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+            frames,
+        }
+    }
+
+    /// The `.eh_frame` pin clang writes for `x86_64-linux-gnu -O1` of a
+    /// function that pushes two registers, subtracts from the stack and
+    /// pops them (rows at 2, 3, 7, 50, 51, 53), and a leaf of 4 bytes after
+    /// it. Read with `objdump -s -j .eh_frame` and `readelf -r`.
+    const PIN: [u8; 0x58] = [
+        0x14, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x7A, 0x52, 0, 0x01, 0x78, 0x10, 0x01, 0x1B, 0x0C, 0x07, 0x08, 0x90, 0x01, 0,
+        0, 0x24, 0, 0, 0, 0x1C, 0, 0, 0, 0, 0, 0, 0, 0x36, 0, 0, 0, 0x00, 0x42, 0x0E, 0x10, 0x41, 0x0E, 0x18, 0x44,
+        0x0E, 0x40, 0x83, 0x03, 0x8E, 0x02, 0x6B, 0x0E, 0x18, 0x41, 0x0E, 0x10, 0x42, 0x0E, 0x08, 0x00, 0x14, 0, 0, 0,
+        0x44, 0, 0, 0, 0, 0, 0, 0, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// Functions with declared frames had no `.eh_frame` at all, so a C++ or
+    /// `-fexceptions` unwinder found nothing: the section is the pin's, byte
+    /// for byte, with a PC32 against `.text` for each function.
+    #[test]
+    fn the_eh_frame_is_the_pins_for_the_same_rows() {
+        let saved = [("rbx", -24), ("r14", -16)];
+        let frames = vec![
+            Frame {
+                section: 0,
+                offset: 0,
+                length: 0x36,
+                rows: vec![
+                    row(2, 16, &[]),
+                    row(3, 24, &[]),
+                    row(7, 64, &saved),
+                    row(50, 24, &saved),
+                    row(51, 16, &saved),
+                    row(53, 8, &saved),
+                ],
+            },
+            Frame { section: 0, offset: 0x38, length: 4, rows: Vec::new() },
+        ];
+        let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
+        let section = written.sections.last().unwrap();
+        assert_eq!(section.name, ".eh_frame");
+        assert_eq!(section.image, PIN);
+        assert_eq!(
+            section.relocs,
+            vec![
+                Reloc::new(0x20, llrm_object::Fix::pc_rel(4, 0), Target::Section(0), 0),
+                Reloc::new(0x48, llrm_object::Fix::pc_rel(4, 0), Target::Section(0), 0x38),
+            ]
+        );
+        assert!(written.frames.is_empty());
+        assert!(
+            X86Objects
+                .write_object("elf", &object(vec![Frame { section: 0, offset: 0, length: 4, rows: vec![] }]))
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn the_registers_have_system_v_numbers() {
+        assert_eq!(
+            (register("rbx"), register("rbp"), register("rsp"), register("r14"), register("rip")),
+            (Some(3), Some(6), Some(7), Some(14), Some(16))
+        );
+        assert_eq!(register("eax"), None);
+    }
+}

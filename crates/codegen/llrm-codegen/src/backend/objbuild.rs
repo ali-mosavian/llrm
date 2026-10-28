@@ -1237,6 +1237,7 @@ pub fn object_of(
         symbols: table,
         omf_groups,
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug,
     })
 }
