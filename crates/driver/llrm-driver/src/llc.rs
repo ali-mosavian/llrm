@@ -29,6 +29,13 @@ fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
+        // Most lines carry none of the words below: they are copied as they
+        // are.
+        if !line.contains(" dso_local") && !line.contains(CLANG_PASCAL) && !line.contains('@') {
+            kept.push_str(line);
+            kept.push('\n');
+            continue;
+        }
         let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
         kept.push_str(&port_intrinsic(&lifetime_markers_with_a_size(&line)));
         kept.push('\n');
@@ -222,22 +229,57 @@ fn with_default_convention(
         (true, 0) => variadic,
         _ => false,
     };
-    // Under the register-size convention `main` is C's: the start-up calls
-    // `_main`.
-    let keeps_main = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // Under the register-size convention `main` is Watcom's, `main_`: both
+    // its start-up and the repo's (`LL_MAIN`) call that.
+    let main_is_watcom = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    // clang gives the library functions it knows (`strlen`, `atan`) their C
+    // convention whatever the default is, so `_strlen` was called where the
+    // library has `strlen_`: a declaration or a definition of one (the float
+    // routines of floatm.c) takes the default too.
+    let library: std::collections::HashSet<llrm_mir::context::GlobalId> = {
+        module
+            .globals
+            .iter()
+            .enumerate()
+            .filter(|(_, global)| {
+                matches!(
+                    &global.kind,
+                    llrm_mir::module::GlobalKind::Function(function) if function.calling_convention == 0
+                )
+            })
+            .filter(|(_, global)| {
+                global
+                    .name
+                    .as_deref()
+                    .is_some_and(|name| llrm_mir::libfunc::TargetLibraryInfo::get_lib_func_by_name(name).is_some())
+            })
+            .map(|(at, _)| llrm_mir::context::GlobalId(at as u32))
+            .collect()
+    };
     let types = &module.context.types;
     let is_variadic = |ty| matches!(
         types.get(ty),
         llrm_mir::types::Type::Function { variadic: true, .. }
     );
-    for global in &mut module.globals {
+    for (at, global) in module.globals.iter_mut().enumerate() {
         if global.name.as_deref().is_some_and(|name| name.starts_with("llvm.") || name.starts_with("llrm.")) {
             continue;
         }
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
         // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
         let entry = global.name.as_deref() == Some("main");
-        if !(entry && keeps_main) && takes(function.calling_convention, is_variadic(function.ty) || entry) {
+        // A function the front end marked `regcall` where the default is not
+        // is the Watcom register convention (`__watcall` of its headers).
+        let watcom = !regcall_default
+            && ((entry && main_is_watcom)
+                || function.calling_convention == llrm_mir::opcode::REGCALL
+                || library.contains(&llrm_mir::context::GlobalId(at as u32)));
+        if watcom
+            || takes(
+                function.calling_convention,
+                is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
+            )
+        {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
                 if let Some(plain) = global.name.as_deref().and_then(|name| name.strip_prefix("__regcall3__")) {
@@ -248,13 +290,38 @@ fn with_default_convention(
                     global.name = Some(plain).into();
                 }
             }
-            function.calling_convention = number;
+            function.calling_convention = if watcom { llrm_mir::opcode::WATCALL } else { number };
+        }
+        if !regcall_default {
+            let watcom: Vec<_> = function
+                .walk()
+                .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
+                    llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
+                        if info.calling_convention == llrm_mir::opcode::REGCALL
+                            || (info.calling_convention == 0
+                                && llrm_mir::memory::callee(&module.context, function, inst)
+                                    .is_some_and(|one| library.contains(&one))) =>
+                    {
+                        Some(inst)
+                    }
+                    _ => None,
+                })
+                .collect();
+            for inst in watcom {
+                function.set_call_convention(inst, llrm_mir::opcode::WATCALL);
+            }
         }
         let calls: Vec<_> = function
             .walk()
             .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                 llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                    if takes(info.calling_convention, is_variadic(info.function_type)) =>
+                    if takes(
+                        info.calling_convention,
+                        is_variadic(info.function_type)
+                            || (regcall_default
+                                && llrm_mir::memory::callee(&module.context, function, inst)
+                                    .is_some_and(|one| library.contains(&one))),
+                    ) =>
                 {
                     Some(inst)
                 }
@@ -291,18 +358,28 @@ pub fn compiled_dumping(
     let machine = flags.machine(&*bound.target, bound.target.machine())?;
     let format = flags.format(&*bound.target)?;
     let default = flags.convention(&*bound.target)?;
+    refuse_debug_format(flags, format.name(), bound.target.object().bitness)?;
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
-    llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
+    // After the rename: the debug info names the symbols the object has.
+    llrm_mir::dbgimport::types_and_globals(&mut module);
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
         options.dump = Some(dump.to_path_buf());
     }
-    options.libcalls.extend(libm_calls(default, format.name()));
+    // The Watcom library is the register convention where the default is
+    // regparm3.
+    let library = default
+        .cc
+        .as_deref()
+        .filter(|cc| *cc == "regparm3")
+        .and_then(|_| bound.target.calling().by_number(llrm_mir::opcode::WATCALL))
+        .unwrap_or(default);
+    options.libcalls.extend(libm_calls(library, format.name()));
     Ok((llrm_codegen::driver::compiled_module(module, name, &options)?, format))
 }
 
@@ -323,6 +400,32 @@ fn libm_calls(
             (name, number, symbol)
         })
         .collect()
+}
+
+/// `-gcodeview` and `-gtd` where the object format cannot carry them, with the
+/// words the debug writers use: an object that holds another flavor than the
+/// one asked for must not be written.
+fn refuse_debug_format(
+    flags: &Flags,
+    format: &str,
+    bitness: u32,
+) -> Result<(), String> {
+    use llrm_object::debug::Format;
+    if !flags.debug {
+        return Ok(());
+    }
+    match flags.debug_format {
+        Format::CodeView if !matches!(format, "omf" | "coff") => {
+            Err(format!("-gcodeview: the {format} object format cannot carry CodeView"))
+        }
+        Format::TurboDebugger if format != "omf" => {
+            Err(format!("-gtd: the {format} object format cannot carry Turbo Debugger's information"))
+        }
+        Format::TurboDebugger if bitness != 16 => {
+            Err("-gtd: Borland's records are 16-bit; use a 16-bit target".to_owned())
+        }
+        _ => Ok(()),
+    }
 }
 
 /// A C `static` function may be entered by a near call wherever only its own
@@ -509,4 +612,67 @@ fn compile(
         write_output(&output, bytes)
     }
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod text_tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    use super::without_triple;
+
+    thread_local! {
+        static COUNTING: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    struct Counting;
+
+    // SAFETY: every call is `System`'s; the counter is a thread-local `Cell`.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(
+            &self,
+            layout: Layout,
+        ) -> *mut u8 {
+            let _ = COUNTING.try_with(|count| count.set(count.get().map(|n| n + 1)));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(
+            &self,
+            pointer: *mut u8,
+            layout: Layout,
+        ) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    /// Every line of the text was rewritten into fresh strings (two `replace`s,
+    /// a `format!` per port name, a copy per marker): 5,300 lines of a
+    /// jpeg_fixed.ll cost 23,000 string searches and as many allocations. A
+    /// line none of the rewrites touches costs none.
+    #[test]
+    fn a_plain_line_is_copied_once_into_the_text() {
+        let line = "  %5 = add nsw i32 %3, %4\n";
+        let text = line.repeat(5000);
+        COUNTING.with(|count| count.set(Some(0)));
+        let (_, kept) = without_triple(&text);
+        let made = COUNTING.with(|count| count.take()).expect("counting");
+        assert_eq!(kept, text);
+        assert!(made < 50, "{made} allocations for 5000 untouched lines");
+    }
+
+    #[test]
+    fn the_rewrites_still_apply() {
+        let text = "target triple = \"i386\"\n; c\n@x = dso_local global i32 0\ndeclare void @llvm.lifetime.start.p0(ptr)\n  %1 = call i16 @__inportw__(i16 %0)\n";
+        let (triple, kept) = without_triple(text);
+        assert_eq!(triple.as_deref(), Some("i386"));
+        assert_eq!(
+            kept,
+            "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
+                .replace("llvm.ia16", "llrm.ia16")
+        );
+    }
 }

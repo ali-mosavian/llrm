@@ -58,7 +58,7 @@ fn compiled_source(
     let pipeline = llrm_transforms::pipeline::Options { inline: threshold, optimize: inlined, ..Default::default() };
     let options = llrm_codegen::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     omf::parse(
@@ -171,7 +171,7 @@ fn model_of(source: &str) -> llrm_object::debug::Info {
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_codegen::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     llrm_codegen::backend::objbuild::built(&module, "probe.nib", CodeLayout::OneSegment)
@@ -239,7 +239,7 @@ fn segmented_model(
         llrm_transforms::pipeline::Options { inline: llrm_transforms::inline::Threshold::none(), ..Default::default() };
     let options = llrm_codegen::driver::Options {
         pipeline,
-        ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     let layout = if procedure_segments { CodeLayout::PerProcedure } else { CodeLayout::OneSegment };
@@ -297,7 +297,7 @@ fn regparm_model_of(
         pipeline,
         abi: Some("regparm3".into()),
         debug_format: format,
-        ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     let object = llrm_codegen::backend::objbuild::built(&module, "probe.nib", CodeLayout::OneSegment).expect("builds");
@@ -398,7 +398,7 @@ fn compiled_regparm() -> Vec<Rc<omf::Record>> {
     let options = llrm_codegen::driver::Options {
         pipeline,
         abi: Some("regparm3".into()),
-        ..llrm_driver::m16_options(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
+        ..llrm_driver::m16_options_old(crate::compile::machine(&llrm_x86_m16::M16, &crate::real_mode().os))
     };
     let module = crate::compile::assembled(&program, "main", &options, &crate::real_mode().os).expect("compiles");
     omf::parse(

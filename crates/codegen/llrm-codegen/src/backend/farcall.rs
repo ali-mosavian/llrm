@@ -268,6 +268,13 @@ fn _fold_call(
             return None;
         }
     }
+    // A value the call needs in a fixed register (the first argument) cannot
+    // also be the address base: it would be read from that register.
+    let pinned = &insns[call].requires;
+    if ir::values(&Loc::Mem(place.clone())).iter().any(|held| pinned.iter().any(|(fixed, _)| fixed.value == held.value))
+    {
+        return None;
+    }
     let mut folded: Vec<Arc<Insn>> = insns.to_vec();
     for at in sources.iter().chain(&stores) {
         folded[*at] = lir::bytes_only(&insns[*at]);
@@ -511,6 +518,21 @@ mod tests {
             out[..4].iter().all(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)),
             "loads and stores left: {out:?}"
         );
+    }
+
+    /// `s->line(s, ..)` at m16 folded the call onto the table entry through the
+    /// argument's value, which the call needs in AX: the call read `[ax+4]`, no
+    /// address register, and `llrm-c` refused `gline.c`. A base the call
+    /// requires in a fixed register keeps the cell.
+    #[test]
+    fn a_far_call_keeps_its_cell_when_the_entry_base_is_an_argument() {
+        let (mut insns, _entry) = far_call_after(None);
+        let last = insns.len() - 1;
+        let mut call = (*insns[last]).clone();
+        call.requires = vec![(Held { value: 10, width: 2 }, RegId::EAX)];
+        insns[last] = Arc::new(call);
+        let out = folded_calls(insns.clone());
+        assert_eq!(out, insns);
     }
 
     /// A store between the loads and the call may change the entry: the call
