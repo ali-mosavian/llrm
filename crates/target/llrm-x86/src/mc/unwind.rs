@@ -135,6 +135,33 @@ mod tests {
         assert!(file.windows(PIN.len()).any(|bytes| bytes == PIN));
     }
 
+    /// Pin clang's `-O1 -fomit-frame-pointer` of a function that pushes rbx,
+    /// subtracts 16 and leaves by two tail calls: the second exit re-declares
+    /// `def_cfa_offset 32` where the first left the frame, and no
+    /// `remember_state`/`restore_state` is written (`readelf`/`objdump` of
+    /// the pin's `.eh_frame`).
+    #[test]
+    fn two_exits_by_tail_call_need_no_remembered_state() {
+        const PIN: [u8; 0x40] = [
+            0x14, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x7A, 0x52, 0, 0x01, 0x78, 0x10, 0x01, 0x1B, 0x0C, 0x07, 0x08, 0x90, 0x01,
+            0, 0, 0x24, 0, 0, 0, 0x1C, 0, 0, 0, 0, 0, 0, 0, 0x33, 0, 0, 0, 0x00, 0x41, 0x0E, 0x10, 0x44, 0x0E, 0x20,
+            0x83, 0x02, 0x56, 0x0E, 0x10, 0x41, 0x0E, 0x08, 0x45, 0x0E, 0x20, 0x4C, 0x0E, 0x10, 0x41, 0x0E, 0x08,
+        ];
+        let saved = [("rbx", -16)];
+        let rows = vec![
+            row(1, 16, &[]),
+            row(5, 32, &saved),
+            row(0x1B, 16, &saved),
+            row(0x1C, 8, &saved),
+            row(0x21, 32, &saved),
+            row(0x2D, 16, &saved),
+            row(0x2E, 8, &saved),
+        ];
+        let frames = vec![Frame { section: 0, offset: 0, length: 0x33, rows }];
+        let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
+        assert_eq!(written.sections.last().unwrap().image, PIN);
+    }
+
     #[test]
     fn the_registers_have_system_v_numbers() {
         assert_eq!(
