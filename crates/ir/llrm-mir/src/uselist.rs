@@ -31,6 +31,8 @@ const NIL: u32 = u32::MAX;
 
 #[cfg(test)]
 thread_local! {
+    /// Uses linked, for a test that an edit relinks only what it changes.
+    pub(crate) static LINKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// List entries a walk has stepped over, for a test that an edit reads none
     /// to find the use it changes.
     pub(crate) static WALKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -218,7 +220,18 @@ impl UseLists {
         Users { lists: self, head: self.head_of(of) }
     }
 
-    /// Room for `len` operand slots of `inst`. Its old slots must be unlinked.
+    /// Whether `inst` has room for `len` operand slots where they are, so
+    /// that the slots in use stay linked.
+    pub fn fits(
+        &self,
+        inst: u32,
+        len: usize,
+    ) -> bool {
+        self.cap.get(inst as usize).is_some_and(|cap| *cap as usize >= len)
+    }
+
+    /// Room for `len` operand slots of `inst`. Its old slots must be unlinked,
+    /// unless `fits`.
     pub fn slots(
         &mut self,
         inst: u32,
@@ -254,6 +267,8 @@ impl UseLists {
         of: Held,
         at: Use,
     ) {
+        #[cfg(test)]
+        LINKS.with(|links| links.set(links.get() + 1));
         let node = self.node(at);
         let head = self.head_of(of);
         self.nodes[node as usize] = Node { at, prev: NIL, next: head };
