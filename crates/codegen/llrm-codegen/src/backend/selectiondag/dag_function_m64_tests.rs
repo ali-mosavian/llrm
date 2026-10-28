@@ -880,3 +880,21 @@ entry:
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
+
+/// A sibling call through a pointer at m64 was `CannotSelect("Target(6)")`: the
+/// generated table checked the callee as `i32` (`ByHwMode0` resolved to the
+/// 32-bit type), so `TCRETURNri64` never matched. tail_calls*.c were refused.
+#[test]
+fn an_m64_tail_call_through_a_pointer_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(ptr %g, i32 %x) {
+entry:
+  %r = tail call i32 %g(i32 %x)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.indirect)));
+}
