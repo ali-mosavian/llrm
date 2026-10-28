@@ -944,6 +944,26 @@ define void @f() {
     assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
 }
 
+/// `bitcast float %f to i32` of an argument was `fld; fstp; and` through a
+/// stack temporary (7 instructions); the pin reads the bits with the integer
+/// load (`(conv (load x))` is `(load (conv*)x)`).
+#[test]
+fn a_float_argument_read_as_bits_is_an_integer_load() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(float %x) {
+  %i = bitcast float %x to i32
+  %a = and i32 %i, 2147483647
+  ret i32 %a
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
+}
+
 /// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
 /// pin reads the byte at `a + 1` with one `movzx`.
 #[test]
