@@ -254,6 +254,26 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// The verifier read a 64-bit use of a register whose low word the entry
+/// delivers as 64 bits unwritten: `foo(unsigned short)` at m64 was
+/// "floatalloc: foo reads edi before every path writes it" under LLRM_VERIFY,
+/// ~50 torture m64 builds. A register with some lane defined is read whole, and
+/// "whole" is the register, not the view that was read.
+#[test]
+fn a_short_argument_read_as_a_quadword_is_no_undefined_read_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @foo(i16 zeroext %0) {\n\
+                  %2 = alloca i16\n  %3 = alloca i16\n  store i16 %0, ptr %2\n  %4 = load i16, ptr %2\n  %5 = zext i16 %4 to i32\n\
+                  %6 = icmp sgt i32 %5, 32767\n  br i1 %6, label %7, label %11\n7:\n  %8 = load i16, ptr %2\n  %9 = zext i16 %8 to i32\n\
+                  %10 = sub nsw i32 %9, 32768\n  br label %12\n11:\n  br label %12\n12:\n  %13 = phi i32 [ %10, %7 ], [ 0, %11 ]\n\
+                  %14 = trunc i32 %13 to i16\n  store i16 %14, ptr %3\n  %15 = load i16, ptr %3\n  %16 = zext i16 %15 to i32\n  ret i32 %16\n}\n";
+    for isel in ["--isel=old", "--isel=dag"] {
+        let made = crate::llc::compiled(&flags(&["-m64", "-O2", "-fverify-ir", isel]), text, "foo");
+        assert!(made.is_ok(), "{isel}: {:?}", made.err());
+    }
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
