@@ -2,13 +2,14 @@
 //! container is `llrm-coff`'s.
 
 use llrm_coff::{Machine, Relocation};
-use llrm_object::{FixupKind, Object, Reloc, Unsupported};
+use llrm_object::{Fix, FixupKind, Object, Reloc, Unsupported};
 
 use super::fixup;
 
 const ADDR64: u16 = 1;
 const ADDR32: u16 = 2;
 const REL32: u16 = 4;
+const ADDR32NB: u16 = 3;
 const SECTION: u16 = 0xA;
 const SECREL: u16 = 0xB;
 
@@ -22,6 +23,8 @@ impl Machine for X8664 {
         let from = reloc.pc_bias;
         let (kind, width, from, baked) = match (reloc.kind, reloc.pc_rel) {
             (FixupKind::DATA_8, false) => (ADDR64, 8, 0, 0),
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/MCTargetDesc/X86WinCOFFObjectWriter.cpp#L83
+            (FixupKind::DATA_4, false) if reloc.spec == Fix::S_IMGREL => (ADDR32NB, 4, 0, 0),
             (FixupKind::DATA_4, false) => (ADDR32, 4, 0, 0),
             // REL32_n (types 5 to 9) is relative to the place n bytes past the
             // field's end.
@@ -30,10 +33,10 @@ impl Machine for X8664 {
             (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
             (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
             (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
-            (FixupKind::SEGMENT_BASE, _) => {
+            (fixup::SEGMENT_BASE, _) => {
                 return Err(Unsupported("a segment selector has no COFF relocation".into()));
             }
-            (FixupKind::FAR_POINTER, _) => {
+            (fixup::FAR_POINTER, _) => {
                 return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into()));
             }
             other => return Err(Unsupported(format!("COFF x86-64 has no relocation for {other:?}"))),
@@ -118,6 +121,17 @@ mod tests {
         assert_eq!(rel(8), (8, 0));
         assert_eq!(rel(9), (9, 0));
         assert_eq!(rel(10), (4, -6));
+    }
+
+    /// An image-relative field (the `.pdata` RVAs) was written as ADDR32, an
+    /// absolute address the linker never rebases to the image; it is
+    /// ADDR32NB (type 3).
+    #[test]
+    fn an_image_relative_field_is_addr32nb() {
+        let reloc = Reloc::new(0, Fix::image_relative(4), Target::Symbol(0), 0);
+        let bytes = write(&object(vec![text(vec![0; 4], vec![reloc])], vec![defined("v", 0)])).unwrap();
+        let relocs = u32::from_le_bytes(bytes[20 + 24..20 + 28].try_into().unwrap()) as usize;
+        assert_eq!(u16::from_le_bytes([bytes[relocs + 8], bytes[relocs + 9]]), 3);
     }
 
     /// lld-link links an x86-64 object: `start` calls `f` and the call reaches

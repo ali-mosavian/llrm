@@ -26,10 +26,10 @@ impl Machine for I386 {
             (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
             (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
             (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
-            (FixupKind::SEGMENT_BASE, _) => {
+            (fixup::SEGMENT_BASE, _) => {
                 return Err(Unsupported("a segment selector has no COFF relocation".into()));
             }
-            (FixupKind::FAR_POINTER, _) => {
+            (fixup::FAR_POINTER, _) => {
                 return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into()));
             }
             other => return Err(Unsupported(format!("COFF i386 has no relocation for {other:?}"))),
@@ -273,8 +273,8 @@ mod tests {
                 vec![symbol("_f", Binding::Public, Definition::Undefined)],
             ))
         };
-        assert!(at(Fix::SEGMENT_BASE).is_err());
-        assert!(at(Fix::FAR_POINTER).is_err());
+        assert!(at(Fix::plain(fixup::SEGMENT_BASE)).is_err());
+        assert!(at(Fix::plain(fixup::FAR_POINTER)).is_err());
         assert!(at(Fix::abs(2)).is_err());
         assert!(
             write(&object(vec![Section { near: false, ..data(vec![0], vec![]) }], vec![]))

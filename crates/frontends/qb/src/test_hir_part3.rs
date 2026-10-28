@@ -290,14 +290,16 @@ fn test_a_masked_far_subscript_compiles() {
     // The masked `s(i)` is a 16-bit offset doubled by an add and cut to the
     // array's 1022 (no `shl`, no 32-bit index to widen), and the unmasked
     // `u(x)` addresses through a doubled 32-bit index whose upper half is
-    // zeroed once before the loop.
+    // zeroed once before the loop. DEVIATE LU2 (#3646): the lea that doubles
+    // the index (`lea bx, [eax+eax]`) carries the store's offset, so the loop
+    // counter runs to zero and no `movzx` widens it.
     let text = listing(&program);
     let body = &text[text.find("T proc").expect("T proc")..text.find("T endp").expect("T endp")];
     let mask = regex::Regex::new(r"and (\w+), 1022\n\s+mov \w+, word ptr fs:\[(\w+)\]").unwrap();
     let masked = mask.captures(body).is_some_and(|one| one[1] == one[2]);
-    let index = regex::Regex::new(r"es:\[(e\w\w)\+(e\w\w)(\*2)?\]").unwrap();
-    let doubled = index.captures_iter(body).any(|one| one.get(3).is_some() || one[1] == one[2]);
-    assert!(masked && doubled && body.contains("movzx") && !body.contains("shl"), "{body}");
+    let index = regex::Regex::new(r"lea \w+, \[(e\w\w)\+(e\w\w)\]").unwrap();
+    let doubled = index.captures_iter(body).any(|one| one[1] == one[2]);
+    assert!(masked && doubled && !body.contains("shl"), "{body}");
 }
 
 /// The main body of `source`'s listing.
@@ -2161,8 +2163,15 @@ END SUB
     let masked = innermost.filter(|one| one.contains("and ")).collect::<Vec<_>>();
     let [first, second] = masked.as_slice() else { panic!("{procedure}") };
     // The pin's loop-reduce on the same IR keeps these loops' two-step pointer
-    // counter and its end test (`icmp eq %p.next, 642`), as ours does.
-    assert!(!first.contains("test ") && first.contains("cmp bx, 642"), "{first}");
+    // counter and its end test (`icmp eq %p.next, 642`). DEVIATE LU2 (#3646):
+    // the offset beside two registers rides in the `lea`, so ours counts the
+    // pointer up to zero and ends on the add's flags: no `test`, no `cmp`.
+    assert!(
+        !first.contains("test ")
+            && !first.contains("cmp ")
+            && regex::Regex::new(r"add bx, 2\n\s+jne \w+\s*$").unwrap().is_match(first),
+        "{first}"
+    );
     // The stores are addressed by the pointer that counts, not a scaled copy of
     // `x`.
     let lea = regex::Regex::new(r"lea (\w+),").unwrap();

@@ -160,7 +160,7 @@ fn synthetic() -> (llrm_object::Object, String) {
     };
     let info = Info {
         language: Language::C,
-        dialect: llrm_object::debug::Dialect::Cv4,
+        options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
         frame_register: "bp".into(),
         registers: vec![Register { name: "si".into(), bits: 16, dwarf: None, codeview: Some(15) }],
         code: vec![whole],

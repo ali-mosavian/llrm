@@ -46,8 +46,9 @@ fn object(
         frame: Vec::new(),
     };
     let info = Info {
+        target: Some(crate::write::OmfTargetWriter::debug_target(&crate::write::GenericOmf, bits)),
         language: Language::C,
-        dialect: llrm_object::debug::Dialect::Cv4,
+        options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
         frame_register: if bits == 16 { "bp" } else { "ebp" }.into(),
         code: vec![range],
         types,
@@ -230,7 +231,7 @@ fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
     assert_eq!(symbols[2..], [(0x0205, proc32), (0x0200, vec![8, 0, 0, 0, 0x74, 0, 1, b'a']), (0x0006, vec![])]);
     assert_eq!(
         relocs.iter().map(|one| (one.fix(), one.at - relocs[0].at)).collect::<Vec<_>>(),
-        [(llrm_object::Fix::abs(4), 0), (llrm_object::Fix::SEGMENT_BASE, 4)]
+        [(llrm_object::Fix::abs(4), 0), (llrm_object::Fix::plain(crate::write::TEST_SEGMENT_BASE), 4)]
     );
 }
 

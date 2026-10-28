@@ -48,8 +48,8 @@ impl MachTargetWriter for X8664MachO {
             (FixupKind::DATA_4, true) if from == 5 => (X86_64_RELOC_SIGNED_1, 2, true, 1),
             (FixupKind::DATA_4, true) if from == 6 => (X86_64_RELOC_SIGNED_2, 2, true, 2),
             (FixupKind::DATA_4, true) if from == 8 => (X86_64_RELOC_SIGNED_4, 2, true, 4),
-            (FixupKind::SEGMENT_BASE, _) => return Err(unsupported("a segment selector has no Mach-O relocation")),
-            (FixupKind::FAR_POINTER, _) => return Err(unsupported("a 16:16 far pointer has no Mach-O relocation")),
+            (fixup::SEGMENT_BASE, _) => return Err(unsupported("a segment selector has no Mach-O relocation")),
+            (fixup::FAR_POINTER, _) => return Err(unsupported("a 16:16 far pointer has no Mach-O relocation")),
             other => return Err(unsupported(format!("Mach-O x86-64 has no relocation for {other:?}"))),
         };
         Ok(Described { kind, length, pcrel, beyond, addend_in_field: true })
