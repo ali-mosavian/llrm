@@ -8,6 +8,10 @@ enum { TEXT_MAX = 255 };
 
 static char text[TEXT_MAX];
 
+#pragma aux B_FCMD "B$FCMD"
+#pragma aux B_FEVI "B$FEVI"
+#pragma aux B_FEVS "B$FEVS"
+
 /* B$FCMD: COMMAND$, the command line in capitals. */
 SD *B_FCMD(void)
 {
@@ -63,7 +67,3 @@ SD *B_FEVS(SD *name)
     str_tmp_free(name);
     return made(0);
 }
-
-#pragma aux B_FCMD "B$FCMD"
-#pragma aux B_FEVI "B$FEVI"
-#pragma aux B_FEVS "B$FEVS"

@@ -3,6 +3,11 @@
 #include "nhstutil.h"
 #include "qb.h"
 
+#pragma aux B_ASSN "B$ASSN"
+#pragma aux B_LSET "B$LSET"
+#pragma aux B_RSET "B$RSET"
+#pragma aux B_LDFS "B$LDFS"
+
 /* B$ASSN: the `source_length` bytes at `source` into the `length` bytes at
    `target`: cut to fit, or padded with blanks. */
 void B_ASSN(qb_data_ptr source, int source_length, qb_data_ptr target, int length)
@@ -66,8 +71,3 @@ void B_RSET(SD *source, qb_data_ptr destination, int length)
 {
     justify(source, destination, length, 1);
 }
-
-#pragma aux B_ASSN "B$ASSN"
-#pragma aux B_LSET "B$LSET"
-#pragma aux B_RSET "B$RSET"
-#pragma aux B_LDFS "B$LDFS"

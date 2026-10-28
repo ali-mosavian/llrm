@@ -3,6 +3,18 @@
 #include "nhstutil.h"
 #include "qb.h"
 
+#pragma aux B_FASC "B$FASC"
+#pragma aux B_FHEX "B$FHEX"
+#pragma aux B_FOCT "B$FOCT"
+#pragma aux B_FMKI "B$FMKI"
+#pragma aux B_FMKL "B$FMKL"
+#pragma aux B_FMKS "B$FMKS"
+#pragma aux B_FMKD "B$FMKD"
+#pragma aux B_FCVI "B$FCVI"
+#pragma aux B_FCVL "B$FCVL"
+#pragma aux B_FCVS "B$FCVS"
+#pragma aux B_FCVD "B$FCVD"
+
 /* B$FASC: ASC(s$), the first character's code. */
 int B_FASC(SD *sd)
 {
@@ -118,15 +130,3 @@ double *B_FCVD(SD *sd)
     bytes_of(sd, &value, 8);
     return &value;
 }
-
-#pragma aux B_FASC "B$FASC"
-#pragma aux B_FHEX "B$FHEX"
-#pragma aux B_FOCT "B$FOCT"
-#pragma aux B_FMKI "B$FMKI"
-#pragma aux B_FMKL "B$FMKL"
-#pragma aux B_FMKS "B$FMKS"
-#pragma aux B_FMKD "B$FMKD"
-#pragma aux B_FCVI "B$FCVI"
-#pragma aux B_FCVL "B$FCVL"
-#pragma aux B_FCVS "B$FCVS"
-#pragma aux B_FCVD "B$FCVD"

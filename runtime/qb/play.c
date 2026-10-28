@@ -76,6 +76,10 @@ static volatile unsigned head, tail;
 static byte tick_started;
 static volatile unsigned sound_left, quiet_left;
 
+#pragma aux music_tick "B$MUSICTICK"
+#pragma aux B_SPLY "B$SPLY"
+#pragma aux B_SOND "B$SOND"
+
 /* The clock tick: counts the note out, and starts the next. */
 void music_tick(void)
 {
@@ -95,7 +99,6 @@ void music_tick(void)
     }
 }
 
-#pragma aux music_tick "B$MUSICTICK"
 
 /* The notes waiting: PLAY(n) and ON PLAY (events.c). */
 unsigned music_waiting(void)
@@ -310,7 +313,6 @@ void B_SPLY(SD *commands)
     str_tmp_free(commands);
 }
 
-#pragma aux B_SPLY "B$SPLY"
 
 /* B$SOND: SOUND frequency, duration in clock ticks (18.2 a second).  In
    foreground music a note waits for the one sounding to end; in background
@@ -349,7 +351,6 @@ void B_SOND(short hertz, float duration)
     head = (head + 1) % QUEUE;
 }
 
-#pragma aux B_SOND "B$SOND"
 
 /* The program has ended: what is queued is not played, and the speaker is
  * quiet. */

@@ -89,6 +89,34 @@ typedef struct FillOct {
     unsigned row[4], col[4], mask[4], color;
 } FillOct;
 
+#pragma aux dev_int10 "B$INT10"
+#pragma aux dev_int16 "B$INT16"
+#pragma aux dev_int17 "B$INT17"
+#pragma aux dev_int21 "B$INT21"
+#pragma aux dev_outb "B$OUTB"
+#pragma aux dev_outw "B$OUTW"
+#pragma aux dev_inb "B$INB"
+#pragma aux dev_interrupts_off "B$CLI"
+#pragma aux dev_interrupts_on "B$STI"
+#pragma aux dev_move "B$MOVE"
+#pragma aux dev_fill "B$FILL"
+#pragma aux dev_fill_select "B$FSEL"
+#pragma aux dev_line_select "B$FLSEL"
+#pragma aux dev_fill_box "B$FBOX"
+#pragma aux dev_line_linear "B$FLIN"
+#pragma aux dev_line_packed "B$FLIC"
+#pragma aux dev_line_planar "B$FLIP"
+#pragma aux dev_get_rows "B$FGET"
+#pragma aux dev_scan_linear "B$FSCL"
+#pragma aux dev_scan_planar "B$FSCP"
+#pragma aux dev_scan_packed "B$FSCC"
+#pragma aux dev_scan_run "B$FSCR"
+#pragma aux dev_octet_planar "B$FOCP"
+#pragma aux dev_octet_packed "B$FOCC"
+#pragma aux dev_put_select "B$FPSEL"
+#pragma aux dev_put_rows "B$FPUC"
+#pragma aux dev_put_planar "B$FPUP"
+
 extern void dev_int10(Regs *regs);
 /* Where protected mode has to ask for a real-mode result, the interrupt run in
  * real mode; here it is the same. */
@@ -120,32 +148,5 @@ extern void dev_put_select(unsigned how);
 extern void dev_put_rows(FillXfer *xfer);
 extern void dev_put_planar(FillXfer *xfer);
 
-#pragma aux dev_int10 "B$INT10"
-#pragma aux dev_int16 "B$INT16"
-#pragma aux dev_int17 "B$INT17"
-#pragma aux dev_int21 "B$INT21"
-#pragma aux dev_outb "B$OUTB"
-#pragma aux dev_outw "B$OUTW"
-#pragma aux dev_inb "B$INB"
-#pragma aux dev_interrupts_off "B$CLI"
-#pragma aux dev_interrupts_on "B$STI"
-#pragma aux dev_move "B$MOVE"
-#pragma aux dev_fill "B$FILL"
-#pragma aux dev_fill_select "B$FSEL"
-#pragma aux dev_line_select "B$FLSEL"
-#pragma aux dev_fill_box "B$FBOX"
-#pragma aux dev_line_linear "B$FLIN"
-#pragma aux dev_line_packed "B$FLIC"
-#pragma aux dev_line_planar "B$FLIP"
-#pragma aux dev_get_rows "B$FGET"
-#pragma aux dev_scan_linear "B$FSCL"
-#pragma aux dev_scan_planar "B$FSCP"
-#pragma aux dev_scan_packed "B$FSCC"
-#pragma aux dev_scan_run "B$FSCR"
-#pragma aux dev_octet_planar "B$FOCP"
-#pragma aux dev_octet_packed "B$FOCC"
-#pragma aux dev_put_select "B$FPSEL"
-#pragma aux dev_put_rows "B$FPUC"
-#pragma aux dev_put_planar "B$FPUP"
 
 #endif

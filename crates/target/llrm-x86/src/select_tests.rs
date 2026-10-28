@@ -1127,3 +1127,30 @@ fn test_bt_of_a_register_and_an_immediate_encodes() {
     let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EDX, 4), imm(1, 1)], None, false);
     assert_eq!(hex(&made(emitted(&bt)).code), "660fbae201");
 }
+
+/// `dec byte [bp-4]` was unprintable: the memory form took words only, so
+/// `llrm-nib -m16 -O0 runtime.nib` stopped on G$74 under the DAG selector.
+#[test]
+fn test_a_byte_memory_dec_and_inc_encode_as_fe() {
+    let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 2, ..frame(-4, 1) });
+    for (name, bytes) in [("dec", "fe4efc"), ("inc", "fe46fc")] {
+        let what = sem(Operation::Unary, Some(name), vec![cell.clone()], vec![cell.clone()], None, false);
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name}");
+    }
+}
+
+/// `shld [bp-4], dx, cl` was unprintable: the funnel shifts took registers
+/// only, so `llrm-nib -O1 runtime.nib` stopped on G$62 once the DAG selector
+/// became the default.
+#[test]
+fn test_a_funnel_shift_of_a_cell_encodes() {
+    let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 2, ..frame(-4, 2) });
+    let by = |name, count| {
+        sem(Operation::Funnel, Some(name), vec![cell.clone()], vec![cell.clone(), rg(RegId::DX, 2), count], None, false)
+    };
+    let cl = rg(RegId::CL, 1);
+    let imm = Loc::Imm(ir::Imm { value: 3, width: 1, address: None });
+    assert_eq!(hex(&made(emitted(&by("shld", cl.clone()))).code), "0fa556fc");
+    assert_eq!(hex(&made(emitted(&by("shrd", cl))).code), "0fad56fc");
+    assert_eq!(hex(&made(emitted(&by("shld", imm))).code), "0fa456fc03");
+}

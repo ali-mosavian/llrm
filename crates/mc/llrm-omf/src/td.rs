@@ -727,7 +727,7 @@ mod tests {
             frame: Vec::new(),
         };
         let mut made = Info {
-            format: Format::TurboDebugger,
+            options: llrm_object::debug::DebugOptions { format: Format::TurboDebugger, ..Default::default() },
             language: Language::C,
             code: vec![Range { section: 0, offset: 0, length: 0x20 }],
             files: vec![File { name: "t.c".into(), checksum: None }],

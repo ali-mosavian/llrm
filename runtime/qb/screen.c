@@ -42,6 +42,15 @@ static void arguments(const int *block, int *values, unsigned slots)
     }
 }
 
+#pragma aux screen_color "@screen_color@2"
+#pragma aux screen_locate "@screen_locate@2"
+#pragma aux screen_mode "@screen_mode@2"
+#pragma aux B_CSRL "B$CSRL"
+#pragma aux B_FPOS "B$FPOS"
+#pragma aux B_SCLS "B$SCLS"
+#pragma aux B_VWPT "B$VWPT"
+#pragma aux B_WIDT "B$WIDT"
+
 /* B$COLR's block: COLOR foreground, background, border. */
 void screen_color(const int *block)
 {
@@ -118,12 +127,3 @@ void B_WIDT(short columns, short rows)
 {
     cn_set_size(columns < 0 ? 0 : columns, rows < 0 ? 0 : rows);
 }
-
-#pragma aux screen_color "@screen_color@2"
-#pragma aux screen_locate "@screen_locate@2"
-#pragma aux screen_mode "@screen_mode@2"
-#pragma aux B_CSRL "B$CSRL"
-#pragma aux B_FPOS "B$FPOS"
-#pragma aux B_SCLS "B$SCLS"
-#pragma aux B_VWPT "B$VWPT"
-#pragma aux B_WIDT "B$WIDT"

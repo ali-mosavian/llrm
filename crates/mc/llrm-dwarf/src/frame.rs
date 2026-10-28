@@ -164,7 +164,7 @@ pub fn section(
         buf.u32(0);
         let (symbol, base) = crate::anchor(object, range.section)?;
         if address == 2 {
-            buf.segment(range.section);
+            buf.segment(crate::segment_kind(object, info)?, range.section);
         }
         buf.address(address, symbol, range.offset as i64 - base as i64);
         buf.bytes.extend((range.length as u64).to_le_bytes().iter().take(address));
