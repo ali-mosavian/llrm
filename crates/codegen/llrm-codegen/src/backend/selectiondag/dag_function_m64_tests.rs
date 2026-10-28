@@ -1002,6 +1002,25 @@ entry:
     selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
 }
 
+/// An `i24` parameter (a three-byte struct coerced, `struct_odd_sizes.c`) was
+/// refused with "a i24 value": the convention knew only the legal widths. It is
+/// promoted to a dword like the pin's `CCPromoteToType`.
+#[test]
+fn an_m64_parameter_of_an_odd_width_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %n, i24 %x) {
+entry:
+  %t = lshr i24 %x, 16
+  %e = zext i24 %t to i32
+  %r = add i32 %n, %e
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
 /// `llvm.ptrmask` was no known intrinsic: it was called as a global with no
 /// name and the assembler panicked ("no entry found for key", clang's
 /// `va_arg` of a `long double`, long_double_variadic.c). It is an AND.
