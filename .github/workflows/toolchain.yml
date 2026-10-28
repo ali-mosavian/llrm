@@ -17,26 +17,6 @@ jobs:
         kind: [pin, m16]
     steps:
       - uses: actions/checkout@v4
-      - id: tree
-        run: |
-          dir=$(sh toolchain/clangbuild.sh --print ${{ matrix.kind }})
-          echo "dir=$dir" >> "$GITHUB_OUTPUT"
-          echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
-      - id: restore
-        uses: actions/cache@v4
+      - uses: ./.github/actions/clang-tree
         with:
-          path: ${{ steps.tree.outputs.dir }}
-          key: llrm-${{ steps.tree.outputs.name }}
-      - name: ccache (the second tree shares most objects with the first)
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ccache
-          key: ccache-clang-${{ matrix.kind }}-${{ github.sha }}
-          restore-keys: ccache-clang-
-      - name: build
-        if: steps.restore.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ninja-build cmake ccache lld
-          sh toolchain/clangbuild.sh ${{ matrix.kind }}
-      - run: ${{ steps.tree.outputs.dir }}/bin/clang --version
+          kind: ${{ matrix.kind }}

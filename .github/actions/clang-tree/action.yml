@@ -1,0 +1,35 @@
+name: clang-tree
+description: One clang tree (toolchain/clangbuild.sh), restored from the cache or built, and saved under the ref that runs this.
+inputs:
+  kind:
+    description: pin or m16.
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: tree
+      shell: bash
+      run: |
+        dir=$(sh toolchain/clangbuild.sh --print ${{ inputs.kind }})
+        echo "dir=$dir" >> "$GITHUB_OUTPUT"
+        echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
+    - id: restore
+      uses: actions/cache@v4
+      with:
+        path: ${{ steps.tree.outputs.dir }}
+        key: llrm-${{ steps.tree.outputs.name }}
+    - name: ccache (the second tree shares most objects with the first)
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ccache
+        key: ccache-clang-${{ inputs.kind }}-${{ github.sha }}
+        restore-keys: ccache-clang-
+    - name: build
+      if: steps.restore.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq ninja-build cmake ccache lld
+        sh toolchain/clangbuild.sh ${{ inputs.kind }}
+    - shell: bash
+      run: ${{ steps.tree.outputs.dir }}/bin/clang --version
