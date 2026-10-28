@@ -1300,3 +1300,31 @@ fn a_call_of_a_basic_function_disturbs_what_its_convention_says() {
     let disturbs = &call.call.as_ref().expect("a call").disturbs;
     assert!(disturbs.is_empty(), "{disturbs:?}");
 }
+
+const WATCALL_ARGUMENTS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @w(i32, i32, i32)
+define cc 1002 i32 @f(i32 %a) {
+entry:
+  %r = call cc 1002 i32 @w(i32 %a, i32 2, i32 3)
+  ret i32 %r
+}
+";
+
+/// The registers a watcall callee's arguments arrive in are its to change
+/// (`arguments_clobbered`), though its `clobbered` list names only EAX: a call
+/// disturbed just that list (302389dd83), so a caller that keeps EDX or EBX
+/// for its own caller never saved them, and QCport (Watcom) ran into an
+/// illegal instruction.
+#[test]
+fn a_call_disturbs_the_registers_its_arguments_arrive_in() {
+    use llrm_target::Target;
+    let module = llrm_mir::parse::module(WATCALL_ARGUMENTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
+    let disturbs = &call.call.as_ref().expect("a call").disturbs;
+    let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
+    let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
+    assert!(disturbs.contains(&named("edx")) && disturbs.contains(&named("ebx")), "{disturbs:?}");
+}

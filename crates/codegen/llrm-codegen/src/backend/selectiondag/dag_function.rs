@@ -309,18 +309,17 @@ impl CallConventions<'_> {
         contracts.abi.contract(&name, false, 0).ok()
     }
 
-    /// Whether `callee` is a routine of the runtime, whose contract (not its
-    /// convention) says what it destroys.
-    fn is_runtime_routine(
+    /// Whether `callee` is a function the module defines whose convention has
+    /// no row in `calling.toml`.
+    fn defined_without_a_convention(
         &self,
         callee: Option<&Callee>,
     ) -> bool {
         let Some(Callee::Global(id)) = callee else { return false };
-        self.module
-            .global(llrm_mir::context::GlobalId(*id))
-            .name
-            .owned()
-            .is_some_and(|name| name.starts_with(crate::hir::mir::RUNTIME))
+        let global = self.module.global(llrm_mir::context::GlobalId(*id));
+        global.function().is_some_and(|function| !function.is_declaration())
+            && !global.name.owned().is_some_and(|name| name.starts_with(crate::hir::mir::RUNTIME))
+            && self.convention_of(callee).is_none()
     }
 
     /// The convention a call of `callee` follows: its function's own, or, for
@@ -412,25 +411,14 @@ impl super::emit::Conventions for CallConventions<'_> {
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
-            // A call of a function the module defines disturbs what its
-            // convention says, not the contract's whole clobber list: a caller
-            // saves for its own caller only that (`isel.rs`, `disturbs`). A
-            // runtime routine is not one: its contract names more than its
-            // convention (SI and DI at m16, FS and GS), as `clobbers` has it.
-            _ if matches!(callee, Some(Callee::Global(_)))
-                && !self.is_runtime_routine(callee)
-                && self.written(callee).is_none() =>
-            {
-                let regs = llrm_lir::registers::Regs(self.arch.registers());
-                self.convention_of(callee).map_or_else(Default::default, |found| {
-                    found
-                        .clobbered
-                        .iter()
-                        .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                        .map(|name| regs.root(self.arch.register_named(name)))
-                        .collect()
-                })
-            }
+            // A call of a BASIC function the module defines, which has no row
+            // in `calling.toml`, disturbs nothing: it keeps every register, as
+            // the old selector has it (`isel.rs`, `disturbs`). Anything else
+            // disturbs what `clobbers` says: a convention's row names only
+            // part (a watcall callee also changes the registers its arguments
+            // arrive in), and a runtime routine's contract names more still
+            // (SI and DI at m16, FS and GS).
+            _ if self.defined_without_a_convention(callee) && self.written(callee).is_none() => Default::default(),
             _ => clobbers.clone(),
         }
     }
