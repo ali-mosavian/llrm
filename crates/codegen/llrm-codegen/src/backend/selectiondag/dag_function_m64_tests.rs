@@ -881,6 +881,34 @@ entry:
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
 
+/// Two `long double` arguments at m64 were required in XMM0 and XMM1 (the
+/// float argument registers), so the allocator could not place an x87 value in
+/// them: "the greedy allocator could not place every range"
+/// (tests/run/c/long_double_variadic.c). SysV passes an extended real in
+/// memory.
+#[test]
+fn an_m64_long_double_argument_is_not_required_in_a_vector_register() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare void @g(x86_fp80, x86_fp80)
+define void @f(x86_fp80 %a, x86_fp80 %b) {
+entry:
+  call void @g(x86_fp80 %b, x86_fp80 %a)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let call = done
+        .body
+        .insns()
+        .into_iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("call")))
+        .expect("a call");
+    let in_vectors: Vec<_> = call.requires.iter().filter(|(_, reg)| reg.is_xmm()).collect();
+    assert!(in_vectors.is_empty(), "long doubles required in {in_vectors:?}");
+}
+
 /// An address with an index and no base (`4 + 4*x`, a select of 4 and 8) at m64
 /// widened `$noreg` like a value: `LEA64_32r`'s base was an `INSERT_SUBREG` of
 /// nothing and the function was refused ("value N is read and not defined on
@@ -898,4 +926,145 @@ entry:
     let module = llrm_mir::parse::module(text).expect("parses");
     let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
     selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// A `{ i64, i48 }` result (a packed struct returned in `rax:rdx`) stopped at
+/// `Legalize(Unsupported CopyToReg i48 "promote operand")` (gcc.c-torture
+/// 20131127-1): the member was copied to `rdx` at its own width. The pin
+/// any-extends it to the register type (`getCopyToParts`).
+#[test]
+fn an_m64_aggregate_result_with_an_odd_member_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+@c = global { i64, i48 } zeroinitializer
+define { i64, i48 } @f() {
+entry:
+  %v = load { i64, i48 }, ptr @c
+  ret { i64, i48 } %v
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// The caller of a `{ i64, i48 }` function read the `i48` from `rdx` at its own
+/// width (`Legalize(Unsupported CopyFromReg i48 "promote result")`, 20131127-1
+/// at -O0): the register is read whole and truncated.
+#[test]
+fn an_m64_call_of_an_aggregate_with_an_odd_member_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare { i64, i48 } @g()
+define i64 @f() {
+entry:
+  %v = call { i64, i48 } @g()
+  %b = extractvalue { i64, i48 } %v, 1
+  %z = zext i48 %b to i64
+  ret i64 %z
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// A `long double` compare at m64 was `Emit(Unmapped("UCOM_FpIr80"))`: the
+/// x86-64 CPUs have `fcomi`, so the table selects its flag-setting form.
+#[test]
+fn an_m64_long_double_compare_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-f80:128-n8:16:32:64\"
+define i1 @f(x86_fp80 %a, x86_fp80 %b) {
+entry:
+  %r = fcmp olt x86_fp80 %a, %b
+  ret i1 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fcom"))));
+}
+
+/// A `long double` converted to `u64` at m64 was
+/// `Emit(Unmapped("CMOVBE_Fp80"))` (`double_to_uint64.c`): the x87 conditional
+/// moves name their condition in the opcode, and the select's diamond was only
+/// made for `CMOV_RFP80`.
+#[test]
+fn an_m64_long_double_to_unsigned_quadword_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-f80:128-n8:16:32:64\"
+define i64 @f(x86_fp80 %d) {
+entry:
+  %r = fptoui x86_fp80 %d to i64
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// An `i24` parameter (a three-byte struct coerced, `struct_odd_sizes.c`) was
+/// refused with "a i24 value": the convention knew only the legal widths. It is
+/// promoted to a dword like the pin's `CCPromoteToType`.
+#[test]
+fn an_m64_parameter_of_an_odd_width_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %n, i24 %x) {
+entry:
+  %t = lshr i24 %x, 16
+  %e = zext i24 %t to i32
+  %r = add i32 %n, %e
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// `llvm.ptrmask` was no known intrinsic: it was called as a global with no
+/// name and the assembler panicked ("no entry found for key", clang's
+/// `va_arg` of a `long double`, long_double_variadic.c). It is an AND.
+#[test]
+fn an_m64_ptrmask_is_an_and() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare ptr @llvm.ptrmask.p0.i64(ptr, i64)
+define ptr @f(ptr %p) {
+entry:
+  %r = call ptr @llvm.ptrmask.p0.i64(ptr %p, i64 -16)
+  ret ptr %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
+}
+
+/// A store of an `i48` (a packed struct's member) stopped at
+/// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
+/// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.
+#[test]
+fn an_m64_store_of_an_odd_width_integer_is_two_stores() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, i64 %x) {
+entry:
+  %t = trunc i64 %x to i48
+  store i48 %t, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("mov") && matches!(w.dests.first(), Some(crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .count();
+    assert_eq!(stores, 2, "a dword and a word");
 }

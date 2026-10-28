@@ -1079,6 +1079,21 @@ fn staged(
         temporaries,
         landing,
     } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let mut body = body;
+    // Where no callee pops, a call through a pointer takes nothing off the
+    // stack: the frame register is not pinned by not knowing.
+    if !target.arch.callee_pops() {
+        let open: Vec<i64> = body
+            .insns()
+            .iter()
+            .filter(|one| {
+                one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Call && what.indirect)
+            })
+            .map(|one| one.at)
+            .filter(|at| !body.call_pops.contains_key(at))
+            .collect();
+        std::sync::Arc::make_mut(&mut body.call_pops).extend(open.into_iter().map(|at| (at, 0)));
+    }
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for
@@ -1205,6 +1220,7 @@ fn phased(
         classes,
         target.selection.rules(),
         &registers,
+        target.selector,
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {

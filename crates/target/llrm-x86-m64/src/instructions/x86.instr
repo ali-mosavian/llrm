@@ -10,15 +10,19 @@ call      call       -/rm               64         call_near    -               
 stosb     fill       m,r/r,r            8          rep_stos     s0=ax,s1=di,d1=di       es,-ax,ax*  -       DF/-            Stosb_m8_AL
 stosw     fill       m,r/r,r            16         rep_stos     s0=ax,s1=di,d1=di       es,-ax,ax*  -       DF/-            Stosw_m16_AX
 stosd     fill       m,r/r,r            32         rep_stos     s0=ax,s1=di,d1=di       es,-ax,ax*  -       DF/-            Stosd_m32_EAX
+stosq     fill       m,r/r,r            64         rep_stos     s0=ax,s1=di,d1=di       es,-ax,ax*  -       DF/-            Stosq_m64_RAX
 stosb     fill       m,r,r/r,r,r        8          rep_stos     s0=ax,s1=cx,s2=di,d1=di,d2=cx  es,-ax,ax*  rep     DF/-            Stosb_m8_AL
 stosw     fill       m,r,r/r,r,r        16         rep_stos     s0=ax,s1=cx,s2=di,d1=di,d2=cx  es,-ax,ax*  rep     DF/-            Stosw_m16_AX
 stosd     fill       m,r,r/r,r,r        32         rep_stos     s0=ax,s1=cx,s2=di,d1=di,d2=cx  es,-ax,ax*  rep     DF/-            Stosd_m32_EAX
+stosq     fill       m,r,r/r,r,r        64         rep_stos     s0=ax,s1=cx,s2=di,d1=di,d2=cx  es,-ax,ax*  rep     DF/-            Stosq_m64_RAX
 movsb     copy       m,r,r/r,r          8          rep_movs     s0=si,s1=di,d1=si,d2=di  ds,es   -       DF/-            Movsb_m8_m8
 movsw     copy       m,r,r/r,r          16         rep_movs     s0=si,s1=di,d1=si,d2=di  ds,es   -       DF/-            Movsw_m16_m16
 movsd     copy       m,r,r/r,r          32         rep_movs     s0=si,s1=di,d1=si,d2=di  ds,es   -       DF/-            Movsd_m32_m32
+movsq     copy       m,r,r/r,r          64         rep_movs     s0=si,s1=di,d1=si,d2=di  ds,es   -       DF/-            Movsq_m64_m64
 movsb     copy       m,r,r,r/r,r,r      8          rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsb_m8_m8
 movsw     copy       m,r,r,r/r,r,r      16         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsw_m16_m16
 movsd     copy       m,r,r,r/r,r,r      32         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsd_m32_m32
+movsq     copy       m,r,r,r/r,r,r      64         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsq_m64_m64
 
 # The sign extension of rax into rdx before a quadword divide.
 cqo       extend     r/r                64         cdq          s0=ax,d0=dx             -       -       -/-             Cqo
@@ -66,8 +70,11 @@ test    cmp    -/rm,ri    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,CF,PF    
 bt    cmp    -/r,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_r{w}
 bt    cmp    -/r,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_imm8
 btc    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btc_rm{w}_r{w}
+btc    binary    r/^0,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btc_rm{w}_imm8
 bts    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bts_rm{w}_r{w}
+bts    binary    r/^0,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bts_rm{w}_imm8
 btr    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btr_rm{w}_r{w}
+btr    binary    r/^0,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btr_rm{w}_imm8
 push    push    -/rmi    64    push_r    -    sp,ss    sp    -/-    Push_r{w}
 pop    pop    rm/-    64    pop_r    -    sp,ss    sp    -/-    Pop_r{w}
 # movsxd: the sign extension of a dword into a quadword.

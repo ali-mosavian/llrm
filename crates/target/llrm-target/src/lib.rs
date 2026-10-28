@@ -665,6 +665,13 @@ pub trait Target {
         }
     }
 
+    /// Whether a callee may take its arguments off the stack as it returns
+    /// (some convention of `calling.toml` has `cleanup = "callee"`): where none
+    /// does, a call through a pointer leaves the stack where it found it.
+    fn callee_pops(&self) -> bool {
+        true
+    }
+
     /// Whether a function that needs no frame register may leave it out
     /// (`calling.toml`'s `frame_optional`).
     fn frame_optional(&self) -> bool {

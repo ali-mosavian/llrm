@@ -1562,7 +1562,15 @@ impl<'a> Commuter<'a> {
         }
         // `commuteInstruction`: the sources swap.
         let mut made = (**one).clone();
-        made.what = Some(Semantics { sources: vec![Loc::Held(*second), Loc::Held(*first)], ..what.clone() });
+        // A `cmov` also takes the opposite condition.
+        let name = what.name.as_deref().and_then(|name| {
+            (what.op == ir::Operation::Select).then(|| crate::backend::flagscopy::opposite_cmov(name)).flatten()
+        });
+        made.what = Some(Semantics {
+            sources: vec![Loc::Held(*second), Loc::Held(*first)],
+            name: name.map(Into::into).or_else(|| what.name.clone()),
+            ..what.clone()
+        });
         Some(Arc::new(made))
     }
 }

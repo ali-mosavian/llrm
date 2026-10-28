@@ -283,7 +283,7 @@ impl ModuleAnalysis for ForgedSelectors {
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
-    type Result = Result<IndexMap<String, Summary>, String>;
+    type Result = Result<Rc<IndexMap<String, Rc<Summary>>>, String>;
     const NAME: &'static str = "summaries";
     fn covers(
         stale: &Self::Result,
@@ -306,9 +306,52 @@ impl ModuleAnalysis for Summaries {
             Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
             None => &none,
         };
-        let summaries = Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &inputs.found));
-        *analyses.memo::<Option<SummaryInputs>>() = Some(inputs);
-        summaries
+        let program = Rc::clone(analyses.program());
+        let layout = &program.layout;
+        let then = analyses.memo::<Option<SummariesMade>>().take();
+        // The result of the last run, if it is the one `then` describes; the
+        // only holder of it where nothing else holds it.
+        let before = match analyses.take_dropped::<Summaries>() {
+            Some(held) if then.is_some() => match Rc::try_unwrap(held) {
+                Ok(Ok(map)) => Some(Rc::try_unwrap(map).unwrap_or_else(|shared| (*shared).clone())),
+                Ok(Err(_)) => None,
+                Err(shared) => Result::as_ref(&*shared).ok().map(|map| (**map).clone()),
+            },
+            _ => None,
+        };
+        let log = (analyses.log_epoch(), analyses.edit_log().len());
+        let resets = analyses.resets();
+        let made = match (then, before) {
+            (Some(then), Some(mut before)) => {
+                // Only bodies edited since the last run moved, where what a
+                // summary is of besides its body is as then.
+                let alone = then.epoch == log.0
+                    && then.resets == resets
+                    && then.globals == module.globals.len()
+                    && then.tracked == *tracked
+                    && then.inputs.is_the_last_but_declarations(&inputs);
+                if alone {
+                    let edited: BTreeSet<GlobalId> = analyses.edit_log()[then.logged..].iter().copied().collect();
+                    crate::attrsummary::resummarized(module, layout, tracked, &inputs.found, &mut before, edited);
+                    before
+                } else {
+                    let last = crate::attrsummary::Last {
+                        declared: &then.inputs.declared,
+                        declared_now: &inputs.declared,
+                        found: &then.inputs.found,
+                        tracked: &then.tracked,
+                        made: &mut before,
+                    };
+                    crate::attrsummary::summaries_reusing(module, layout, tracked, &inputs.found, Some(last))
+                }
+            }
+            _ => crate::attrsummary::summaries(module, layout, tracked, &inputs.found),
+        };
+        let tracked = tracked.clone();
+        let globals = module.globals.len();
+        *analyses.memo::<Option<SummariesMade>>() =
+            Some(SummariesMade { inputs, tracked, globals, epoch: log.0, logged: log.1, resets });
+        Ok(Rc::new(made))
     }
 
     /// A summary is made of its function's declaration (attributes and
@@ -322,8 +365,21 @@ impl ModuleAnalysis for Summaries {
         _: &Self::Result,
     ) -> bool {
         let now = SummaryInputs::of(module, analyses);
-        analyses.memo::<Option<SummaryInputs>>().as_ref().is_some_and(|last| now.is_the_last(last))
+        analyses.memo::<Option<SummariesMade>>().as_ref().is_some_and(|last| now.is_the_last(&last.inputs))
     }
+}
+
+/// What the last `Summaries::run` read and made.
+struct SummariesMade {
+    inputs: SummaryInputs,
+    tracked: BTreeSet<GlobalId>,
+    /// The globals, and the position in the log of edits, the run was at.
+    globals: usize,
+    epoch: u64,
+    logged: usize,
+    /// `ModuleAnalyses::resets` then: a pass since that said anything may have
+    /// changed left the declarations to be compared, not read from the log.
+    resets: u64,
 }
 
 /// The results `Summaries::run` read.
@@ -350,6 +406,19 @@ impl SummaryInputs {
         let found = analyses.get::<GlobalsModRefAnalysis>(module);
         let declared = analyses.get::<llrm_mir::passes::Declarations>(module);
         Self { declared, globals_held, found }
+    }
+
+    /// As `is_the_last`, the declarations left to the log of edits.
+    fn is_the_last_but_declarations(
+        &self,
+        now: &Self,
+    ) -> bool {
+        Rc::ptr_eq(&self.found, &now.found)
+            && match (&self.globals_held, &now.globals_held) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     fn is_the_last(
@@ -773,6 +842,12 @@ impl Analysis for ExposedFrames {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
+        // No alloca before or after: no edit can change the empty answer, and
+        // reading the edits costs their operands (a phi of N arms edited N
+        // times is N^2).
+        if previous.is_empty() && !crate::frameescape::has_alloca(function) {
+            return Some(previous.clone());
+        }
         let mut touched = Vec::<ValueId>::new();
         let mut read = |operand: &Operand| {
             if let Operand::Value(value) = operand {
@@ -805,6 +880,7 @@ impl Analysis for ExposedFrames {
                 Change::Substituted { .. } => {}
             }
         }
+        crate::frameescape::count_reads(touched.len());
         let unit = Unit::within(context, layout, function, analyses.outer());
         Some(
             crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst, at| {

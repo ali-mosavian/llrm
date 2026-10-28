@@ -447,7 +447,13 @@ impl Options {
 
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
-        Self { unroll: false, peel: false, has_min_size: true, ..Self::size() }
+        Self {
+            unroll: false,
+            peel: false,
+            has_min_size: true,
+            inline: inline::Threshold::default().for_min_size(),
+            ..Self::size()
+        }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -1774,7 +1780,7 @@ struct Run {
     rerun: bool,
     /// What each pass last found nothing on in this run: where, and what it
     /// read.
-    idle_at: Vec<(&'static str, llrm_mir::module::Mark, u8, llrm_mir::footprint::Footprint)>,
+    idle_at: Vec<(&'static str, llrm_mir::module::Mark, u8)>,
 }
 
 impl Run {
@@ -1808,9 +1814,10 @@ impl Run {
         self.stretches[len..].iter().fold(llrm_mir::footprint::Footprint::NONE, |all, reached| all | *reached)
     }
 
-    /// The passes that found nothing and that no edit since reaches are
-    /// recorded as settled on the body as it is: a later run starts none of
-    /// them where what they read is as it was (`settled`).
+    /// The passes that found nothing are recorded as settled on the body as
+    /// they found it: a later run starts none of them where what they read is
+    /// as it was (`settled`), which the edits since are asked of then, not
+    /// here.
     fn remember(
         &mut self,
         unit: &Unit,
@@ -1821,22 +1828,8 @@ impl Run {
         }
         let _span = llrm_support::debug::span("settled remember");
         let slice = self.slice(unit, analyses);
-        let mut classified: Vec<(usize, llrm_mir::footprint::Footprint)> = Vec::new();
-        for &(name, mark, bits, reads) in &self.idle_at {
-            let reached = match classified.iter().find(|(at, _)| *at == mark.position()) {
-                Some(&(_, found)) => found,
-                None => {
-                    let found =
-                        unit.function.changes_since(mark).map_or(llrm_mir::footprint::Footprint::ALL, |changes| {
-                            llrm_mir::footprint::of(unit.function, changes)
-                        });
-                    classified.push((mark.position(), found));
-                    found
-                }
-            };
-            if !reached.meets(reads) {
-                self.records.note(name, unit.function, slice, bits);
-            }
+        for &(name, mark, bits) in &self.idle_at {
+            self.records.note(name, mark, slice, bits);
         }
     }
 
@@ -1928,7 +1921,7 @@ impl Run {
             // put back).
             analyses.vouch(unit.function);
             self.idle_at.retain(|one| one.0 != name);
-            self.idle_at.push((name, unit.function.mark(), read, pass.reads()));
+            self.idle_at.push((name, unit.function.mark(), read));
             return false;
         }
         self.idle_at.retain(|one| one.0 != name);
