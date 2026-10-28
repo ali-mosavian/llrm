@@ -1283,61 +1283,11 @@ pub struct Special {
 }
 
 /// The metadata of a [`Module`] borrowed apart from its functions, so a pass
-/// working on one function can add nodes.
+/// can read it while it edits one.
+#[derive(Clone, Copy)]
 pub struct Metadata<'a> {
-    pub nodes: &'a mut Vec<MetadataNode>,
-    pub special: &'a mut std::collections::BTreeMap<MetadataId, Special>,
-    /// `(loc, call)` to the location made of them, one per site.
-    made: std::collections::HashMap<(MetadataId, MetadataId), MetadataId>,
-}
-
-impl<'a> Metadata<'a> {
-    pub fn new(
-        nodes: &'a mut Vec<MetadataNode>,
-        special: &'a mut std::collections::BTreeMap<MetadataId, Special>,
-    ) -> Self {
-        Self { nodes, special, made: Default::default() }
-    }
-
-    /// `loc`, a `DILocation` of an inlined body, as seen from the call it was
-    /// inlined at, `call`: the same line, column and scope with `inlinedAt`
-    /// ending in `call` (`fixupLineNumbers`, LLVM's inliner). Not a
-    /// `DILocation` with named fields: `call` alone.
-    pub fn inlined_at(
-        &mut self,
-        loc: MetadataId,
-        call: MetadataId,
-    ) -> MetadataId {
-        if let Some(&made) = self.made.get(&(loc, call)) {
-            return made;
-        }
-        let Some(special) = self.special.get(&loc).filter(|one| one.kind == "DILocation") else {
-            return call;
-        };
-        let mut fields = special.fields.clone();
-        let mut operands = self.nodes[loc.0 as usize].operands.clone();
-        let at = fields.iter().position(|one| one == "inlinedAt");
-        let outer = match at.and_then(|at| operands.get(at).cloned()) {
-            Some(MetadataOperand::Node(prev)) => self.inlined_at(prev, call),
-            _ => call,
-        };
-        match at {
-            Some(at) => operands[at] = MetadataOperand::Node(outer),
-            None => {
-                if fields.len() != operands.len() {
-                    return call;
-                }
-                fields.push("inlinedAt".to_owned());
-                operands.push(MetadataOperand::Node(outer));
-            }
-        }
-        let distinct = self.nodes[loc.0 as usize].distinct;
-        let id = MetadataId(self.nodes.len() as u32);
-        self.nodes.push(MetadataNode { distinct, operands });
-        self.special.insert(id, Special { kind: "DILocation".to_owned(), fields });
-        self.made.insert((loc, call), id);
-        id
-    }
+    pub nodes: &'a [MetadataNode],
+    pub special: &'a std::collections::BTreeMap<MetadataId, Special>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1405,7 +1355,7 @@ impl Module {
         let Module { context, globals, metadata, special, .. } = self;
         let global = globals.iter_mut().find(|one| one.name.as_deref() == Some(name))?;
         match &mut global.kind {
-            GlobalKind::Function(function) => Some((context, function, Metadata::new(metadata, special))),
+            GlobalKind::Function(function) => Some((context, function, Metadata { nodes: metadata, special })),
             GlobalKind::Variable(_) => None,
         }
     }

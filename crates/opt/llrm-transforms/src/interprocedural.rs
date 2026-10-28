@@ -1095,7 +1095,7 @@ pub(crate) fn function_and_metadata_mut(
 ) -> (&mut llrm_mir::context::Context, &mut llrm_mir::module::Function, llrm_mir::module::Metadata<'_>) {
     let Module { context, globals, metadata, special, .. } = module;
     match &mut globals[id.0 as usize].kind {
-        GlobalKind::Function(function) => (context, function, llrm_mir::module::Metadata::new(metadata, special)),
+        GlobalKind::Function(function) => (context, function, llrm_mir::module::Metadata { nodes: metadata, special }),
         GlobalKind::Variable(_) => unreachable!("a procedure is a function"),
     }
 }

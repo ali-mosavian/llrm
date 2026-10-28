@@ -48,8 +48,8 @@ fn inline_with(
     loop {
         let available = every_body(module, &layout);
         let mut declared = llrm_mir::passes::Declared::of(module);
-        let (context, function, mut metadata) = module.function_and_metadata_mut(caller).unwrap();
-        let spliced = expanded_all(context, function, &by, &available, None, &mut declared, &mut metadata).unwrap();
+        let (context, function, metadata) = module.function_and_metadata_mut(caller).unwrap();
+        let spliced = expanded_all(context, function, &by, &available, None, &mut declared, metadata).unwrap();
         declared.place(module).unwrap();
         if spliced == 0 {
             return changed;
@@ -614,8 +614,8 @@ fn self_inlined(ops: usize) -> (usize, i64) {
     let frequencies = SparseIdMap::default();
     let by = Caller { layout: &layout, recursive: true, self_inlining: Some(&frequencies), peeling: false };
     let mut declared = llrm_mir::passes::Declared::of(&module);
-    let (context, function, mut metadata) = module.function_and_metadata_mut("down").unwrap();
-    expanded_all(context, function, &by, &available, None, &mut declared, &mut metadata).unwrap();
+    let (context, function, metadata) = module.function_and_metadata_mut("down").unwrap();
+    expanded_all(context, function, &by, &available, None, &mut declared, metadata).unwrap();
     declared.place(&mut module).unwrap();
     let text = printed(&module);
     (text.matches("add i32").count(), before)
@@ -705,10 +705,16 @@ b1:
     );
     assert!(inline_into(&mut module, "f", 0));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
-    let mul = function.walk().map(|(_, inst)| inst).find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary { .. })).unwrap();
+    let mul = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary { .. }))
+        .unwrap();
     let (_, node) = function.instruction(mul).metadata.iter().find(|(kind, _)| kind == "dbg").unwrap();
     let special = &module.special[node];
     let at = special.fields.iter().position(|one| one == "inlinedAt").expect("an inlinedAt");
     let llrm_mir::MetadataOperand::Node(call) = module.metadata[node.0 as usize].operands[at] else { panic!() };
-    assert_eq!(call.0, 6, "inlined at the call's location");
+    let line = module.special[&call].fields.iter().position(|one| one == "line").expect("a line");
+    let llrm_mir::MetadataOperand::Constant(line) = module.metadata[call.0 as usize].operands[line] else { panic!() };
+    assert!(matches!(module.context.get(line).kind, llrm_mir::ConstantKind::Int(2)), "inlined at the call's line");
 }

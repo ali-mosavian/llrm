@@ -998,11 +998,12 @@ fn inlined_at(
     body: &Function,
     copies: &[InstId],
     site: MetadataId,
-    metadata: &mut Metadata,
+    metadata: Metadata,
+    declared: &mut Declared,
 ) {
     let originals = body.walk().filter(|&(_, inst)| body.instruction(inst).opcode != Opcode::Ret);
     for ((_, inst), &copy) in originals.zip(copies) {
-        let node = dbg_of(body, inst).map_or(site, |loc| metadata.inlined_at(loc, site));
+        let node = dbg_of(body, inst).map_or(site, |loc| declared.inlined_at(metadata, loc, site));
         function.set_metadata(copy, "dbg", Some(node));
     }
 }
@@ -1016,7 +1017,7 @@ fn executed(
     planned: &Planned,
     declared: &mut Declared,
     placed: &mut Placed,
-    metadata: &mut Metadata,
+    metadata: Metadata,
 ) -> Result<(), String> {
     let seq = planned.seq;
     let located = dbg_of(function, call);
@@ -1032,7 +1033,7 @@ fn executed(
     };
     let made = spliced(context, function, call, &planned.candidate.body, anchor);
     if let Some(site) = located {
-        inlined_at(function, &planned.candidate.body, &made.copies, site, metadata);
+        inlined_at(function, &planned.candidate.body, &made.copies, site, metadata, declared);
     }
     narrow_tail_calls(function, &made.copies, site);
     placed.lifetimes.push(unmarked_allocas(context, layout, &planned.candidate.body, &made, declared));
@@ -1102,7 +1103,7 @@ pub fn expanded_all(
     available: &IndexMap<GlobalId, Candidate>,
     constant: Option<&SparseIdMap<InstId, Candidate>>,
     declared: &mut Declared,
-    metadata: &mut Metadata,
+    metadata: Metadata,
 ) -> Result<usize, String> {
     let calls: Vec<InstId> = function.walk().map(|(_, inst)| inst).collect();
     let start = (semantic_count(function), frame(context, caller.layout, function));
