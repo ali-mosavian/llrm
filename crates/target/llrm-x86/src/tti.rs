@@ -570,7 +570,7 @@ impl Tti for X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => Cost::INVALID,
+            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
         }
     }
 

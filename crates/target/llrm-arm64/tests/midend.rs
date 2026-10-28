@@ -633,3 +633,14 @@ fn an_or_chain_of_byte_equalities_is_one_switch_not_joined_compares() {
     let after = llrm_mir::print::module(&program.modules[0]);
     assert!(!after.contains(" or i1 ") && !after.contains(" select "), "{after}");
 }
+
+/// A loop whose body holds a `memset.pattern` was sized as 5 (the intrinsic
+/// priced as one call), so 25 rows were unrolled under the threshold of 150:
+/// `gd_set_mode` carried 25 calls where clang keeps the loop. The pin prices
+/// the intrinsic 4, a body of 8.
+#[test]
+fn a_loop_of_memset_patterns_is_not_fully_unrolled() {
+    let asm = driver::assembly(include_str!("data/memset_pattern_rows.ll"), Platform::Darwin, true).expect("lowers");
+    let stores = asm.lines().filter(|line| line.trim_start().starts_with("strh")).count();
+    assert_eq!(stores, 1, "{asm}");
+}

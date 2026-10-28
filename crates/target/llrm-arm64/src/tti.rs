@@ -338,7 +338,7 @@ impl Tti for AArch64 {
             // BasicTTIImplBase::getTypeBasedIntrinsicInstrCost's
             // `SingleCallCost`.
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
-            None => Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 }),
+            None => base_intrinsic_cost(name).unwrap_or(Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 })),
         }
     }
 

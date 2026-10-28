@@ -771,7 +771,7 @@ pub trait Tti {
         kind: CostKind,
     ) -> Cost {
         let _ = (ret, args, kind);
-        if is_free_intrinsic(name) { Cost::FREE } else { Cost::INVALID }
+        if is_free_intrinsic(name) { Cost::FREE } else { base_intrinsic_cost(name).unwrap_or(Cost::INVALID) }
     }
 }
 
@@ -800,6 +800,16 @@ pub fn basic_case_clusters(
 
 /// An intrinsic that makes no code: `assume`, `lifetime`, the scope marks of
 /// `noalias` (`getIntrinsicInstrCost` returns `TCC_Free` for them).
+/// The intrinsics `BasicTTIImplBase::getTypeBasedIntrinsicInstrCost` prices
+/// itself, whatever the target and the kind: `memset.pattern` is 4, "set to
+/// match the cost of the `memset_pattern16` libcall" (BasicTTIImpl.h:2658). A
+/// loop that holds one is not small to the unroller.
+pub fn base_intrinsic_cost(name: &str) -> Option<Cost> {
+    const MEMSET_PATTERN: &str = "llvm.experimental.memset.pattern";
+    (name == MEMSET_PATTERN || name.strip_prefix(MEMSET_PATTERN).is_some_and(|rest| rest.starts_with('.')))
+        .then(|| Cost::of(4))
+}
+
 pub fn is_free_intrinsic(name: &str) -> bool {
     const FREE: [&str; 6] = [
         "llvm.assume",
