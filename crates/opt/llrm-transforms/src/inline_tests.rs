@@ -718,3 +718,39 @@ b1:
     let llrm_mir::MetadataOperand::Constant(line) = module.metadata[call.0 as usize].operands[line] else { panic!() };
     assert!(matches!(module.context.get(line).kind, llrm_mir::ConstantKind::Int(2)), "inlined at the call's line");
 }
+
+/// Nib's and QB's locations are plain `!{i32 line}` nodes, not `DILocation`s:
+/// an inlined body's took the call's line (nib `print("scaled")` of line 5
+/// read as line 11, the `scale(counter)` call), so the line table lost the
+/// callee's lines. They keep their own node; only a `DILocation` takes an
+/// `inlinedAt`.
+#[test]
+fn test_a_plain_line_node_of_an_inlined_body_keeps_its_line() {
+    let mut module = parsed(
+        "define internal i32 @sq(i32 %x) {
+b1:
+  %m = mul i32 %x, %x, !dbg !5
+  ret i32 %m
+}
+
+define i32 @f(i32 %a) {
+b1:
+  %r = call i32 @sq(i32 %a), !dbg !6
+  ret i32 %r
+}
+
+!5 = !{i32 7}
+!6 = !{i32 2}
+",
+    );
+    assert!(inline_into(&mut module, "f", 0));
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+    let mul = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary { .. }))
+        .unwrap();
+    let (_, node) = function.instruction(mul).metadata.iter().find(|(kind, _)| kind == "dbg").unwrap();
+    let llrm_mir::MetadataOperand::Constant(line) = module.metadata[node.0 as usize].operands[0] else { panic!() };
+    assert!(matches!(module.context.get(line).kind, llrm_mir::ConstantKind::Int(7)), "the callee's own line");
+}

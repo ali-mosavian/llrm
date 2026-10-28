@@ -382,15 +382,15 @@ impl Declared {
         let (node, special): (&MetadataNode, &Special) = match made_here {
             Some(at) => match (self.nodes.get(at as usize), self.special.get(&loc)) {
                 (Some(node), Some(special)) => (node, special),
-                _ => return call,
+                _ => return loc,
             },
             None => match (module.nodes.get(loc.0 as usize), module.special.get(&loc)) {
                 (Some(node), Some(special)) => (node, special),
-                _ => return call,
+                _ => return loc,
             },
         };
         if special.kind != "DILocation" || special.fields.len() != node.operands.len() {
-            return call;
+            return loc;
         }
         let mut fields = special.fields.clone();
         let mut operands = node.operands.clone();
