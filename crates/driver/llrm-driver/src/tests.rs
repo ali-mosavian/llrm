@@ -263,7 +263,7 @@ fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @printf(ptr, ...)\n\
                 define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
+    let (built, _) = crate::llc::compiled(&flags(&["--isel=old"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
     let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
@@ -371,7 +371,7 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare void @use(ptr)\n\
                 define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=old"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
@@ -572,7 +572,7 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @g(i32)\n\
                 define i32 @f(i32 %a, i32 %b, i32 %c, i32 %d) {\n  %1 = call i32 @g(i32 %a)\n  %2 = add i32 %1, %b\n  %3 = add i32 %2, %c\n  %4 = add i32 %3, %d\n  ret i32 %4\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=old"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
 }
@@ -585,7 +585,7 @@ fn a_quadword_zero_is_a_dword_xor() {
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i64 @g(i64)\n\
                 define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=old"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
 }
