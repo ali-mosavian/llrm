@@ -62,6 +62,9 @@ pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
         address: 8,
         return_column: 16,
+        data_alignment: -8,
+        padding: 8,
+        return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
         register: &register,
     }
@@ -72,6 +75,9 @@ pub fn eh_target32() -> EhTarget<'static> {
     EhTarget {
         address: 4,
         return_column: 8,
+        data_alignment: -4,
+        padding: 4,
+        return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "esp".into(), cfa_offset: 4, saved: Vec::new() },
         register: &|name| register_in(32, name),
     }

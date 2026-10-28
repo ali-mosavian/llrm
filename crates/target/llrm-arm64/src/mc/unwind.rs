@@ -29,6 +29,11 @@ pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
         address: 8,
         return_column: 30,
+        // The pin's CIE: data alignment -4 and entries padded to 4, and the
+        // return address stays in x30.
+        data_alignment: -4,
+        padding: 4,
+        return_saved: false,
         entry: FrameRow { offset: 0, cfa_register: "sp".into(), cfa_offset: 0, saved: Vec::new() },
         register: &register,
     }
@@ -254,6 +259,50 @@ mod tests {
         let push =
             Inst::StorePair { first: reg(Gpr::FP), second: reg(Gpr::LR), addr: Addr::Pre { base: Gpr::R31, imm: -16 } };
         assert!(frame(0, 0, &[&push, &Inst::Ret { rn: Gpr::LR }]).is_none());
+    }
+
+    /// The `.eh_frame` the pinned clang writes for `int main(void) { return 42;
+    /// }` (`clang -target aarch64-unknown-linux-gnu -O2 -c`): the CIE has
+    /// data alignment -4 and no saved return address, and entries are
+    /// padded to 4. The writer gave -8, an `offset x30` rule at the frame
+    /// address, and padded to 8, and refused any rule on d8 (register 72,
+    /// past the short form).
+    #[test]
+    fn the_eh_frame_of_a_leaf_is_what_the_pins_clang_writes() {
+        use llrm_object::{Frame, Object, Role, Section};
+        let object = |rows: Vec<FrameRow>| Object {
+            name: "a.c".into(),
+            bits: 64,
+            sections: vec![Section {
+                name: ".text".into(),
+                role: Role::Text,
+                near: true,
+                align: 4,
+                image: vec![0; 8],
+                spans: vec![[0, 8]],
+                relocs: Vec::new(),
+            }],
+            symbols: Vec::new(),
+            omf_groups: Vec::new(),
+            omf_comdat: Vec::new(),
+            debug: None,
+            frames: vec![Frame { section: 0, offset: 0, length: 8, rows }],
+        };
+        let image = |object: &Object| {
+            let object = llrm_dwarf::eh_frame::expanded(object, &eh_target()).expect("expands");
+            object.sections.iter().find(|one| one.name == ".eh_frame").expect("an .eh_frame").image.clone()
+        };
+        let leaf = image(&object(vec![eh_target().entry]));
+        let pin = [
+            // CIE
+            0x10u8, 0, 0, 0, 0, 0, 0, 0, 1, b'z', b'R', 0, 1, 0x7C, 0x1E, 1, 0x1B, 0x0C, 0x1F, 0, // FDE
+            0x10, 0, 0, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0,
+        ];
+        assert_eq!(leaf, pin);
+        // d8 saved 16 below the frame address: DW_CFA_offset_extended.
+        let saved = FrameRow { offset: 4, saved: vec![("d8".into(), -16)], ..eh_target().entry };
+        let bytes = image(&object(vec![eh_target().entry, saved]));
+        assert!(bytes.windows(3).any(|window| window == [0x05, 72, 4]), "{bytes:?}");
     }
 
     #[test]

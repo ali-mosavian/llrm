@@ -20,6 +20,13 @@ pub struct EhTarget<'a> {
     pub address: usize,
     /// The column of the return address.
     pub return_column: u64,
+    /// The CIE's data alignment factor: a negative slot size.
+    pub data_alignment: i64,
+    /// What entries are padded to with `DW_CFA_nop`.
+    pub padding: usize,
+    /// Whether the return address is on the stack at entry (not in a link
+    /// register).
+    pub return_saved: bool,
     /// The rule at a function's entry: the frame address and where the return
     /// address is.
     pub entry: FrameRow,
@@ -36,7 +43,7 @@ pub fn expanded(
         (target.register)(name)
             .ok_or_else(|| Unsupported(format!("DWARF: register {name} has no number, which a frame rule names")))
     };
-    let alignment = -(target.address as i64);
+    let alignment = target.data_alignment;
     let mut buf = Buf::default();
     buf.u32(0);
     buf.u32(0);
@@ -50,9 +57,11 @@ pub fn expanded(
     buf.u8(DW_CFA_DEF_CFA);
     buf.uleb(number(&target.entry.cfa_register)?);
     buf.uleb(target.entry.cfa_offset as u64);
-    buf.u8(DW_CFA_OFFSET | target.return_column as u8);
-    buf.uleb(target.entry.cfa_offset as u64 / target.address as u64);
-    pad(&mut buf, target.address);
+    if target.return_saved {
+        buf.u8(DW_CFA_OFFSET | target.return_column as u8);
+        buf.uleb(target.entry.cfa_offset as u64 / target.address as u64);
+    }
+    pad(&mut buf, target.padding);
     buf.patch32(0, buf.at() as u32 - 4);
     let initial = FrameRow { offset: 0, saved: Vec::new(), ..target.entry.clone() };
     for frame in &object.frames {
@@ -70,7 +79,7 @@ pub fn expanded(
             changes(&number, &mut buf, state, row, alignment)?;
             state = row;
         }
-        pad(&mut buf, target.address);
+        pad(&mut buf, target.padding);
         buf.patch32(start, (buf.at() - start - 4) as u32);
     }
     let part = buf.done();
