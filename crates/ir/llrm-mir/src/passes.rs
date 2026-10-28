@@ -193,6 +193,11 @@ pub struct Declared {
     pending: Vec<Pending>,
     /// Metadata nodes made, numbered after the module's.
     nodes: Vec<crate::module::MetadataNode>,
+    /// What the nodes made that are specialized (`DILocation`) are.
+    special: std::collections::BTreeMap<crate::module::MetadataId, crate::module::Special>,
+    /// The location made of an inlined body's location and the call it was
+    /// inlined at.
+    located: HashMap<(crate::module::MetadataId, crate::module::MetadataId), crate::module::MetadataId>,
     first_node: u32,
     /// The live instructions of the functions a constant names, while a pass
     /// that `wants_sizes` runs (`size_of`).
@@ -242,6 +247,8 @@ impl Declared {
             next: module.globals.len() as u32,
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: module.metadata.len() as u32,
             sizes: HashMap::default(),
         }
@@ -261,6 +268,8 @@ impl Declared {
             held: Some(held),
             pending: Vec::new(),
             nodes: Vec::new(),
+            special: Default::default(),
+            located: HashMap::default(),
             first_node: metadata as u32,
             sizes: HashMap::default(),
         }
@@ -353,6 +362,55 @@ impl Declared {
     ) -> crate::module::MetadataId {
         self.nodes.push(node);
         crate::module::MetadataId(self.first_node + self.nodes.len() as u32 - 1)
+    }
+
+    /// `loc`, a `DILocation` of an inlined body, as seen from the call it was
+    /// inlined at, `call`: the same line, column and scope with `inlinedAt`
+    /// ending in `call` (`fixupLineNumbers`, LLVM's inliner), one node per
+    /// pair. Not a `DILocation` with named fields: `call` alone.
+    pub fn inlined_at(
+        &mut self,
+        module: crate::module::Metadata<'_>,
+        loc: crate::module::MetadataId,
+        call: crate::module::MetadataId,
+    ) -> crate::module::MetadataId {
+        use crate::module::{MetadataId, MetadataNode, MetadataOperand, Special};
+        if let Some(&made) = self.located.get(&(loc, call)) {
+            return made;
+        }
+        let made_here = loc.0.checked_sub(self.first_node);
+        let (node, special): (&MetadataNode, &Special) = match made_here {
+            Some(at) => match (self.nodes.get(at as usize), self.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+            None => match (module.nodes.get(loc.0 as usize), module.special.get(&loc)) {
+                (Some(node), Some(special)) => (node, special),
+                _ => return loc,
+            },
+        };
+        if special.kind != "DILocation" || special.fields.len() != node.operands.len() {
+            return loc;
+        }
+        let mut fields = special.fields.clone();
+        let mut operands = node.operands.clone();
+        let distinct = node.distinct;
+        let at = fields.iter().position(|one| one == "inlinedAt");
+        let outer = match at.and_then(|at| operands.get(at).cloned()) {
+            Some(MetadataOperand::Node(prev)) => self.inlined_at(module, prev, call),
+            _ => call,
+        };
+        match at {
+            Some(at) => operands[at] = MetadataOperand::Node(outer),
+            None => {
+                fields.push("inlinedAt".to_owned());
+                operands.push(MetadataOperand::Node(outer));
+            }
+        }
+        let id: MetadataId = self.node(MetadataNode { distinct, operands });
+        self.special.insert(id, Special { kind: "DILocation".to_owned(), fields });
+        self.located.insert((loc, call), id);
+        id
     }
 
     /// `Module::getFunction`: the global `name`, declared by the module or by
@@ -472,6 +530,8 @@ impl Declared {
         }
         assert_eq!(module.metadata.len() as u32, self.first_node, "nodes numbered after the module's");
         module.metadata.append(&mut self.nodes);
+        module.special.append(&mut self.special);
+        self.located.clear();
         self.first_node = module.metadata.len() as u32;
         Ok(made)
     }
