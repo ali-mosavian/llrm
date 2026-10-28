@@ -331,7 +331,17 @@ impl<'a> DagisAdapter<'a> {
         DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id }
     }
 
-    fn id_of(
+    /// `Node->setNodeId(-1)`.
+    pub(super) fn mark_selected(
+        &mut self,
+        node: u32,
+    ) {
+        if let Some(id) = self.node_id.get_mut(node as usize) {
+            *id = -1;
+        }
+    }
+
+    pub(super) fn id_of(
         &self,
         node: u32,
     ) -> i32 {
@@ -862,7 +872,15 @@ impl Dag for DagisAdapter<'_> {
     ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
-        (self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops), Vec::new())
+        let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
+        // `MorphNodeTo` reuses the node with new operands and resets its id
+        // ("to the isel this is a newly allocated machine node"): left small
+        // it would be pruned from a walk toward the later nodes it now reads.
+        if morphed == node {
+            self.mark_selected(node);
+        }
+        self.enforce_node_id_invariant(morphed);
+        (morphed, Vec::new())
     }
     fn update_node_operands(
         &mut self,

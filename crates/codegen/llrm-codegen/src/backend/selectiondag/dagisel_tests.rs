@@ -599,3 +599,57 @@ fn a_use_list_pushed_in_order_is_not_checked_or_sorted_per_query() {
     }
     assert_eq!(USERS_SORTED.with(std::cell::Cell::get), 0, "the list was copied and sorted");
 }
+
+/// A node morphed in place keeps its slot but reads new operands, so its id
+/// is reset (`MorphNodeTo`): left small, a search for a later node it now reads
+/// was pruned at it, `IsLegalToFold` found no path, and a fold made a cycle.
+#[test]
+fn a_node_morphed_to_read_a_later_node_is_walked_through() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue, Visited};
+    use llrm_dagisel::generated::ids::mvt;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let other = input(&mut dag, 41);
+    let one = dag.get_constant(1, EVT::I32);
+    let a = dag.get_node(ISD::Add, EVT::I32, &[base, one]);
+    let user = dag.get_node(ISD::Add, EVT::I32, &[a, one]);
+    let mut z = other;
+    for i in 2..12u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        z = dag.get_node(ISD::Add, EVT::I32, &[z, k]);
+    }
+    let root = dag.get_node(ISD::Add, EVT::I32, &[z, user]);
+    dag.set_root(root);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    assert!(adapter.id_of(a.node) < adapter.id_of(z.node), "the premise: the morphed node is earlier");
+    let morphed = adapter.morph_node_to(a.node, 1, &[mvt::i32], &[PinValue { node: z.node, res: 0 }]).0;
+    assert_eq!(morphed, a.node, "the premise: reused in place");
+    let mut visited = Visited::new();
+    assert!(
+        adapter.has_predecessor_helper(z.node, &mut visited, &mut vec![user.node], 0),
+        "the morphed node was pruned from a search for what it now reads"
+    );
+}
+
+/// A node marked selected (`setNodeId(-1)`) ends the spread of
+/// `EnforceNodeIdInvariant`: a replacement invalidates the unselected users
+/// above it, not everything after the selected node.
+#[test]
+fn a_selected_node_stops_the_spread_of_invalidated_ids() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let other = input(&mut dag, 41);
+    let mut nodes = vec![dag.get_node(ISD::Add, EVT::I32, &[base, other])];
+    for i in 0..3u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        let last = *nodes.last().unwrap();
+        nodes.push(dag.get_node(ISD::Add, EVT::I32, &[last, k]));
+    }
+    dag.set_root(nodes[3]);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    adapter.mark_selected(nodes[2].node);
+    adapter.replace_uses(PinValue { node: nodes[0].node, res: 0 }, PinValue { node: other.node, res: 0 });
+    assert!(adapter.id_of(nodes[1].node) < -1, "the unselected user of the replacement is invalidated");
+    assert!(adapter.id_of(nodes[3].node) > 0, "invalidation ran through the selected node");
+}
