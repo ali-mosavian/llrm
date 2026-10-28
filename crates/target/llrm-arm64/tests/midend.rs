@@ -174,3 +174,12 @@ define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null
     assert!(names.contains(&"_pthread_join"), "{names:?}");
     assert!(!names.contains(&"__pthread_join"), "{names:?}");
 }
+
+/// `llvm.experimental.memset.pattern` (the pin's idiom for an `i16` fill loop) reached selection
+/// unexpanded and failed the build: `scroll`, `fill_nest` and `loop_fusion` produced no object, nor
+/// did `present.c` of the QB runtime.
+#[test]
+fn a_memset_pattern_becomes_a_store_loop() {
+    let asm = driver::assembly(include_str!("data/memset_pattern.ll"), Platform::Darwin, true).expect("the intrinsic lowers");
+    assert!(asm.contains("strh"), "{asm}");
+}

@@ -110,6 +110,11 @@ pub fn optimized(program: &mut Program) -> Result<(), String> {
     llrm_transforms::pipeline::applied(program, &Applied { dump, ..Applied::default() })
 }
 
+/// The pin's `PreISelIntrinsicLowering`: the selector never sees `memset.pattern`.
+fn expanded(program: &mut Program) -> Result<(), String> {
+    program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)
+}
+
 /// Every defined function of `program`'s one module, selected, allocated and
 /// lowered.
 pub fn functions(program: &Program) -> Result<Vec<crate::emit::Function>, String> {
@@ -161,6 +166,7 @@ pub fn object(
     if optimize {
         optimized(&mut program)?;
     }
+    expanded(&mut program)?;
     let lowered = functions(&program)?;
     crate::emit::object(&program.modules[0], &program.layout, platform, name, &lowered)
 }
@@ -175,6 +181,7 @@ pub fn assembly(
     if optimize {
         optimized(&mut program)?;
     }
+    expanded(&mut program)?;
     let mut out = String::new();
     for function in functions(&program)? {
         out.push_str(&format!("{}:\n", function.symbol));
