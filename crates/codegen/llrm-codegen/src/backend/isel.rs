@@ -254,6 +254,9 @@ pub struct Convention {
     pub parameters: Vec<Parameter>,
     /// The registers a result leaves in, low part first.
     pub returns: Vec<RegId>,
+    /// The vector register a `float` or `double` result leaves in, where the
+    /// convention has one (SysV: `xmm0`); else it is st(0).
+    pub float_result: Option<RegId>,
     /// The bytes the function pops as it returns.
     pub popped: i64,
     /// The registers its prologue may save: the convention's, but those its
@@ -614,7 +617,19 @@ pub fn convention_for(
         0
     };
     let saved = saved(arch, described, &parameters, &returns);
-    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor, first })
+    let float_result = described
+        .and_then(|one| one.float_result_register())
+        .filter(|_| {
+            matches!(
+                types.get(result),
+                Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
+            )
+        })
+        .map(|name| arch.register_named(name))
+        .filter(|register| {
+            llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
+        });
+    Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
