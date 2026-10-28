@@ -114,6 +114,13 @@ impl Builder<'_> {
                 };
                 self.dag.get_node(code, dest, &[first])
             }
+            // `visitIntrinsicCall`: an AND with the mask taken to the pointer's
+            // width
+            Intrinsic::PtrMask => {
+                let mask = self.get_value(instruction.operands[1])?;
+                let mask = self.dag.get_zext_or_trunc(mask, dest);
+                self.dag.get_node(ISD::And, dest, &[first, mask])
+            }
             Intrinsic::ByteSwap => self.dag.get_node(ISD::BSwap, dest, &[first]),
             Intrinsic::BitReverse => self.dag.get_node(ISD::BitReverse, dest, &[first]),
             Intrinsic::Abs => {

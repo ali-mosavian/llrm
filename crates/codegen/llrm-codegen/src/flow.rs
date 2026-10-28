@@ -53,6 +53,7 @@ pub fn machine<'a>(
         &crate::backend::classes::RegisterClasses::m16(),
         &crate::backend::targets::x86_m16::RULES,
         &llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
+        crate::backend::shadow::Selector::Old,
     )
 }
 
@@ -138,6 +139,7 @@ pub fn machine_with<'a>(
     classes: &Rc<crate::backend::classes::RegisterClasses>,
     rules: &'static crate::backend::peep::Rules,
     registers: &llrm_target::FrameRegisters,
+    selector: crate::backend::shadow::Selector,
 ) -> Result<Vec<Box<dyn LIRTransform + 'a>>, String> {
     let target = targets::profile(cpu)?;
     let mut pinned = pinned.clone();
@@ -276,6 +278,7 @@ pub fn machine_with<'a>(
             rules,
             registers.saved.iter().map(|(whole, _)| *whole).collect(),
             Rc::clone(classes),
+            selector,
         )?),
         // After the peephole, as the pin runs it late (X86FixupBWInsts).
         Box::new(crate::backend::fixupbw::FixupBw { size: target.size }),

@@ -1230,6 +1230,7 @@ fn phased(
         classes,
         target.selection.rules(),
         &registers,
+        target.selector,
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {

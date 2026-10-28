@@ -1002,6 +1002,44 @@ entry:
     selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
 }
 
+/// An `i24` parameter (a three-byte struct coerced, `struct_odd_sizes.c`) was
+/// refused with "a i24 value": the convention knew only the legal widths. It is
+/// promoted to a dword like the pin's `CCPromoteToType`.
+#[test]
+fn an_m64_parameter_of_an_odd_width_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %n, i24 %x) {
+entry:
+  %t = lshr i24 %x, 16
+  %e = zext i24 %t to i32
+  %r = add i32 %n, %e
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// `llvm.ptrmask` was no known intrinsic: it was called as a global with no
+/// name and the assembler panicked ("no entry found for key", clang's
+/// `va_arg` of a `long double`, long_double_variadic.c). It is an AND.
+#[test]
+fn an_m64_ptrmask_is_an_and() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare ptr @llvm.ptrmask.p0.i64(ptr, i64)
+define ptr @f(ptr %p) {
+entry:
+  %r = call ptr @llvm.ptrmask.p0.i64(ptr %p, i64 -16)
+  ret ptr %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
+}
+
 /// A store of an `i48` (a packed struct's member) stopped at
 /// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
 /// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.
