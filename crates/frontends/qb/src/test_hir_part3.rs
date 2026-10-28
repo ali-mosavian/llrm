@@ -3618,6 +3618,20 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
     }
 }
 
+/// FIELD was refused ("valid, but this compiler cannot generate code for it
+/// yet"): it is B$FLDP(channel), then B$FIEL(width, variable) per pair.
+#[test]
+fn test_field_is_a_preamble_and_one_call_per_variable() {
+    let text = listing_of(
+        "fieldcalls",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 8 AS n$, 8 AS m$\r\nLSET n$ = \"x\"\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    assert_eq!(main.matches("call far ptr B$FLDP").count(), 1, "{main}");
+    assert_eq!(main.matches("call far ptr B$FIEL").count(), 2, "{main}");
+    assert!(main.find("B$FLDP") < main.find("B$FIEL"), "{main}");
+}
+
 /// `END n` and `SYSTEM n` (PDS 7.1, VBDOS) were refused ("END with a return
 /// code"). BC pushes the code as a word and calls `B$CENC` (measured in BC 7.1
 /// and VBDOS objects), which never returns.
