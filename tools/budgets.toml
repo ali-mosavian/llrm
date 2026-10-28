@@ -1777,7 +1777,7 @@ name = "lir machinecp"
 ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w15"
-why = "measured 2.1 -> 5.4 Minstr (x2.53) after #5802. Not new: under the floor on base, where the threaded state machine made the compile twice the size; unprofiled, 5.4 Minstr at N=256"
+why = "measured 2.1 -> 5.4 Minstr (x2.53) after #5802; not new, under the floor on base while the threaded state machine doubled the compile. Cause (callgrind, llrm-llc at N=128/256): machinecp::propagated 4.9M -> 12.0M Ir, of which liveness::lanewise 4.5M -> 13.1M (x2.9, dead_at_exit): the lane-liveness worklist solve runs over a dispatch block with N back edges, so each round revisits N predecessors. The walks themselves are x1.5-1.9"
 
 [[debt]]
 kind = "steps"
@@ -1786,4 +1786,4 @@ name = "lir machinesched"
 ratio = 2.4
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w15"
-why = "measured 6.4 -> 14.8 Minstr (x2.30) after #5802. Not new: under the floor on base for the same reason as lir machinecp; unprofiled"
+why = "measured 6.4 -> 14.8 Minstr (x2.30) after #5802; not new, under the floor on base for the same reason as lir machinecp. Cause (callgrind, llrm-llc at N=128/256): no single superlinear function; the sum is the many per-block pieces each a little over x2: transform 7.0M -> 16.1M Ir (x2.32) = graph x2.13, bottom_up x2.17, with_blocks x1.93, Lane extend_with x2.0, so the excess over x2 is spread, not one loop"
