@@ -477,3 +477,42 @@ b0:
     assert!(out.contains("call i16 @llvm.ctlz.i16(i16 %a, i1 false)"), "{out}");
     assert!(out.contains("add i16 %0, 16"), "{out}");
 }
+
+/// `canEvaluateTruncated` of a min, max or abs call: the call is evaluated in
+/// the narrow type. Stayed a wide call and a truncate before.
+#[test]
+fn a_truncated_umax_and_abs_of_extensions_are_narrow_calls() {
+    let text = "declare i32 @llvm.umax.i32(i32, i32)
+declare i32 @llvm.abs.i32(i32, i1)
+
+define i16 @f(i16 %a, i16 %b) {
+b0:
+  %x = zext i16 %a to i32
+  %y = zext i16 %b to i32
+  %m = call i32 @llvm.umax.i32(i32 %x, i32 %y)
+  %r = trunc i32 %m to i16
+  ret i16 %r
+}
+
+define i16 @g(i16 %a) {
+b0:
+  %x = sext i16 %a to i32
+  %m = call i32 @llvm.abs.i32(i32 %x, i1 false)
+  %r = trunc i32 %m to i16
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    for name in ["f", "g"] {
+        let (context, function) = module.function_mut(name).expect("a function");
+        crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    }
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i16 @llvm.umax.i16(i16 %a, i16 %b)"), "{out}");
+    assert!(out.contains("call i16 @llvm.abs.i16(i16 %a, i1 false)"), "{out}");
+}

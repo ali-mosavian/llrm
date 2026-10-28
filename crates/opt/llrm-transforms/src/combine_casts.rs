@@ -452,7 +452,33 @@ impl Evaluator<'_, '_> {
                     + u32::from(op == CastOp::FPToSI);
                 bw >= min
             }
-            // DEVIATE 4: llvm.abs and the min/max intrinsics.
+            // `llvm.abs`, and the min/max intrinsics performed in the narrow
+            // type when each operand has zero high bits (umin/umax) or enough
+            // sign bits (smin/smax).
+            Opcode::Call(_) => {
+                let Some(result) = inst.result else { return false };
+                let q = query(c, Some(self.cxt));
+                let max_significant = |op: Operand| orig_bits + 1 - compute_num_sign_bits(&q, op, 0);
+                if let Some((_, args)) = pattern::intrinsic_call(&q, Operand::Value(result), "llvm.abs") {
+                    let [arg, _] = *args else { return false };
+                    return max_significant(arg) <= bw && self.can_evaluate(arg, ty, Pred::Truncated);
+                }
+                for (base, signed) in [("umin", false), ("umax", false), ("smin", true), ("smax", true)] {
+                    let Some((_, args)) = pattern::intrinsic_call(&q, Operand::Value(result), &format!("llvm.{base}"))
+                    else {
+                        continue;
+                    };
+                    let [lhs, rhs] = *args else { return false };
+                    let fits = if signed {
+                        max_significant(lhs) <= bw && max_significant(rhs) <= bw
+                    } else {
+                        let high = mask(orig_bits) & !mask(bw);
+                        known::masked_value_is_zero(&q, lhs, high, 0) && known::masked_value_is_zero(&q, rhs, high, 0)
+                    };
+                    return fits && self.all(&[lhs, rhs], ty, Pred::Truncated);
+                }
+                false
+            }
             _ => false,
         }
     }
@@ -603,6 +629,31 @@ fn evaluate_in_different_type_impl(
         let inst = c.function.instruction(i);
         (inst.opcode.clone(), inst.flags, inst.operands.clone(), inst.ty)
     };
+    if matches!(opcode, Opcode::Call(_)) {
+        let result = value_of(c, i);
+        let narrow = {
+            let q = query(c, None);
+            let abs = pattern::intrinsic_call(&q, result, "llvm.abs").map(|(_, args)| ("abs", args.to_vec()));
+            abs.or_else(|| {
+                ["umin", "umax", "smin", "smax"].into_iter().find_map(|base| {
+                    pattern::intrinsic_call(&q, result, &format!("llvm.{base}")).map(|(_, args)| (base, args.to_vec()))
+                })
+            })
+        };
+        let (base, args) = narrow.expect("`can_evaluate` accepted a call");
+        let evaluated = if base == "abs" { &args[..1] } else { &args[..2] };
+        let mut narrowed: Vec<Operand> =
+            evaluated.iter().map(|&a| evaluate_in_different_type_impl(c, a, ty, is_signed, processed)).collect();
+        if base == "abs" {
+            let i1 = c.context.types.int(1);
+            narrowed.push(c.int(i1, 0));
+        }
+        let result = c.create_intrinsic(i, base, ty, &narrowed);
+        if !shared::has_one_use(c, v) {
+            processed.insert(v, result);
+        }
+        return result;
+    }
     let (new_opcode, new_flags, new_operands) = match opcode {
         Opcode::Binary(op) => {
             let lhs = evaluate_in_different_type_impl(c, operands[0], ty, is_signed, processed);
@@ -646,7 +697,6 @@ fn evaluate_in_different_type_impl(
         Opcode::Cast(cast @ (CastOp::FPToUI | CastOp::FPToSI)) => {
             (Opcode::Cast(cast), Flags::default(), vec![operands[0]])
         }
-        // DEVIATE 4: calls (llvm.abs and the min/max intrinsics).
         other => unreachable!("`can_evaluate` accepted {other:?}"),
     };
     let new = c.insert_before(i, new_opcode, ty, new_operands, new_flags);
