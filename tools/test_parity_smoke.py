@@ -145,7 +145,7 @@ def fake_qcport(tmp_path, fail_level=None):
     (tmp_path / "src/render/d_faces.c").write_text("int x;\n")
     (tmp_path / "inc").mkdir()
     seen = tmp_path / "levels"
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text(f"#!/bin/sh\necho \"$1\" >> {seen}\ncase \"$*\" in *d_faces.c*) [ \"$1\" = \"{fail_level}\" ] && {{ echo 'llrm-c: @_d_draw_faces@3: block 964 leaves for (964) with no instruction choosing' >&2; exit 1; }};; esac\nexit 0\n")
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     return seen
@@ -200,7 +200,7 @@ def test_a_qcport_module_that_fails_at_o2_fails_the_step_whatever_d_faces_does(t
         (tmp_path / "src" / module).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / "src" / module).write_text("int x;\n")
     (tmp_path / "inc").mkdir()
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text("#!/bin/sh\ncase \"$*\" in *sound/snd.c*) echo 'llrm-c: @_snd_frame@3: BitCast of a float' >&2; exit 1;; esac\nexit 0\n")
     compiler.chmod(compiler.stat().st_mode | stat.S_IXUSR)
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
@@ -389,7 +389,7 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
     (tmp_path / "inc").mkdir()
     monkeypatch.setenv("QCPORT", str(tmp_path / "src"))
     monkeypatch.setenv("QCPORT_INC", str(tmp_path / "inc"))
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text("#!/bin/sh\ncase \"$*\" in *combat.c*|*snd.c*) echo broken >&2; exit 1;; esac\nexit 0\n")
     compiler.chmod(0o755)
     verdict, _, names = ps.qc_modules(tmp_path)
@@ -451,7 +451,7 @@ def test_every_qcport_module_is_compiled_for_a_pr_that_touches_a_crate(tmp_path)
             return [("item", "-O1", "a poison initializer"), ("item", "-Os", "a poison initializer")]
 
         assert ps.qcport_failures("/bins", sweep=sweep) == {"qc item -O1", "qc item -Os"}
-        assert str(seen["compiler"]) == "/bins/llrm-c"
+        assert str(seen["compiler"]) == "/bins/llrm-cc"
         assert ps.qcport_failures("/bins", sweep=lambda *a: []) == set()
     finally:
         del os.environ["QCPORT"], os.environ["QCPORT_INC"]
@@ -660,7 +660,7 @@ def test_a_selectiondag_change_runs_the_selectiondag_registry():
 
 def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
     """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
-    compiler = tmp_path / "llrm-c"
+    compiler = tmp_path / "llrm-cc"
     compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
     compiler.chmod(0o755)
     assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None

@@ -26,7 +26,7 @@ import xfail  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("POSTLAND", Path.home() / "scratch" / "postland"))
 TOOLS = Path(os.environ.get("POSTLAND_TOOLS", Path.home() / "scratch" / "sb-head3" / "dist"))  # jwasm, jwlink, dosbox-x
-BINS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")
+BINS = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront")
 BUILD = ["--profile", "dist", "-q", *(arg for one in BINS for arg in ("--bin", one))]
 LOW = ["nice", "-n", "19"]
 

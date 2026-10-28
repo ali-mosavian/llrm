@@ -141,7 +141,7 @@ def test_a_qcport_kind_is_asked_by_its_first_program_and_a_missing_job_is_not_ca
 
     binaries = tmp_path / "sbp-abcdefghi" / "release"
     binaries.mkdir(parents=True)
-    (binaries / "llrm-c").write_text("")
+    (binaries / "llrm-llc").write_text("")
     monkeypatch.setattr(s, "SCRATCH", tmp_path)
     monkeypatch.setattr(s.subprocess, "run", run)
     assert s.ask_at(s.Red("qcport:k", s.COMPILE, ["qcport_probe.py", "matrix.bas", "-m32", "-O1", "panic"]), "abcdefghi" + "0" * 31) is True
@@ -160,7 +160,7 @@ def test_a_qbrt_probe_is_given_its_work_directory_and_a_usage_error_is_not_red(t
 
     binaries = tmp_path / "sbp-abcdefghi" / "release"
     binaries.mkdir(parents=True)
-    (binaries / "llrm-c").write_text("")
+    (binaries / "llrm-llc").write_text("")
     monkeypatch.setattr(s, "SCRATCH", tmp_path)
     monkeypatch.setattr(s.subprocess, "run", run)
     red = s.Red("qbrt:arena_type:x86-m32", s.WRONG, ["dosbatch/qbrt_run.py", "--only", "arena_type"])

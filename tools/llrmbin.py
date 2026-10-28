@@ -12,13 +12,12 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-STAMPED = ("llrm-c", "llrm-llc")
+STAMPED = ("llrm-llc",)
 
 
 def compiler(found: Path) -> Path:
-    """The C compiler in the binaries directory `found`: llrm-cc where it is built, else llrm-c (until it is deleted).
-    Every tool names it through here."""
-    return found / "llrm-cc" if (found / "llrm-cc").is_file() else found / "llrm-c"
+    """The C compiler in the binaries directory `found`: llrm-cc. Every tool names it through here."""
+    return found / "llrm-cc"
 
 
 def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
@@ -37,7 +36,7 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
 
 
 def stamped(found: Path) -> None:
-    """Prints the commit the binaries were built from (llrm-c's or llrm-llc's stamp); refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    """Prints the commit the binaries were built from (llrm-llc's stamp); refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import stamp
 

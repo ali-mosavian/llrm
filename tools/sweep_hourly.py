@@ -37,7 +37,7 @@ WORKTREE = SCRATCH / "wt-sweep-tip"
 STATE = SCRATCH / "w8-logs" / "sweep-hourly-state.json"
 LOGS = SCRATCH / "results" / "sweep-hourly"
 DEMOS = SCRATCH / "gor"
-BINARIES = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")
+BINARIES = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront")
 WRONG = "wrong-output"
 BUILD = "build-failure"
 COMPILE = "compile"
@@ -206,8 +206,8 @@ def first_bad(
 
 
 def stamps(directory: Path) -> tuple[str, str]:
-    """(the build's sha, `llrm-c=md5 ...`) of the binaries in `directory`; refuses a binary with no stamp."""
-    sha = stamp.check(directory / "llrm-c", label="sweep")
+    """(the build's sha, `llrm-llc=md5 ...`) of the binaries in `directory`; refuses a binary with no stamp."""
+    sha = stamp.check(directory / "llrm-llc", label="sweep")
     md5s = " ".join(f"{name}={hashlib.md5((directory / name).read_bytes()).hexdigest()[:8]}" for name in BINARIES if (directory / name).exists())
     return sha, md5s
 
@@ -363,7 +363,7 @@ def ask_at(
     """Whether `red` holds at the merge `sha`: its probe run with that commit's release binaries (built once, kept as
     ~/scratch/sbp-SHA9)."""
     binaries = SCRATCH / f"sbp-{sha[:9]}" / "release"
-    if not (binaries / "llrm-c").exists():
+    if not (binaries / "llrm-llc").exists():
         worktree = SCRATCH / f"wt-sbp-{sha[:9]}"
         if not worktree.exists():
             subprocess.run(["git", "worktree", "add", "-q", "--detach", str(worktree), sha], cwd=ROOT, check=True)
