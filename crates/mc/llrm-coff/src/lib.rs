@@ -23,7 +23,7 @@ const SYMBOL: usize = 18;
 
 /// A relocation type, the bytes of the field it patches, and the distance from
 /// the field's start to the place the linker takes a pc-relative value relative
-/// to (`baked`): `REL32` is the field's end, `REL32_n` is `n` bytes past it.
+/// to (`baked`): `REL32` is the field's end.
 pub struct Relocation {
     pub kind: u16,
     pub width: usize,
