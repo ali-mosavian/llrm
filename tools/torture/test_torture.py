@@ -29,6 +29,21 @@ class CompilerTests(unittest.TestCase):
         self.assertEqual((Path(command[0]).name, env["LLRM_CC_TARGET"]), ("llrm-cc", "x86_32-wat"))
 
 
+class SupportTests(unittest.TestCase):
+    def test_the_real_mode_support_library_defines_the_names_the_programs_call(self):
+        """-fno-builtin made libc.c's `exit` and `abort` C-convention (`_exit@3`) at m16 while the programs call `exit_`: 363 of the m16 builds failed to link."""
+        import os
+
+        if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
+            self.skipTest("needs LLRM_CLANG_M16 and LLRM_OW")
+        with tempfile.TemporaryDirectory() as tmp:
+            done = torture.build_support("x86-m16", Path(tmp) / "libc.obj")
+            self.assertEqual(done.returncode, 0, done.stderr)
+            names = (Path(tmp) / "libc.obj").read_bytes()
+        self.assertIn(b"exit_", names)
+        self.assertNotIn(b"_exit@3", names)
+
+
 class CauseTests(unittest.TestCase):
     def test_a_front_end_error_is_counted_by_what_it_says_not_where_or_of_what(self):
         text = "llrm-c: wccq failed on /x/y.c:\n/x/y.c(10): Warning! W131: No prototype found for function 'f'\n/x/y.c(12): Error! E1054: Missing operand\n"

@@ -230,7 +230,7 @@ def build_support(target: str, out: Path) -> subprocess.CompletedProcess:
     import tomllib  # noqa: PLC0415
 
     have = tomllib.loads((dosbatch.ROOT / "runtime/c" / target / "c.toml").read_text()).get("libcalls", [])
-    command, row = dosbatch.c_compile(HERE / "libc.c", out, target, "-O2", Path(), [], ["-fno-builtin", *(f"-DHAVE_{name.upper()}" for name in have), "-I", str(HERE / "include")])
+    command, row = dosbatch.c_compile(HERE / "libc.c", out, target, "-O2", Path(), [], [*(f"-fno-builtin-{name}" for name in ("memcpy", "memmove", "memset")), *(f"-DHAVE_{name.upper()}" for name in have), "-I", str(HERE / "include")])
     return subprocess.run(command, capture_output=True, text=True, env={**os.environ, **row})
 
 
