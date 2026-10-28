@@ -1,10 +1,12 @@
+import importlib.util
 import json
 import subprocess
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "landing"))
-import pr_state  # noqa: E402
+# Loaded by path under its own name: tools/ci/pr_state.py is also `pr_state`, and one pytest session imports both tests.
+_spec = importlib.util.spec_from_file_location("landing_pr_state", Path(__file__).resolve().parent / "landing" / "pr_state.py")
+pr_state = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(pr_state)
 import parity_squash as ps  # noqa: E402
 
 
