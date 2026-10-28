@@ -53,7 +53,10 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         // rot i16 X, 8 --> bswap X
-        if self.dag.constant(n1) == Some(8) && bits == 2 * u128::from(u8::BITS) && self.has_rotate_operation(ISD::BSwap, vt) {
+        if self.dag.constant(n1) == Some(8)
+            && bits == 2 * u128::from(u8::BITS)
+            && self.has_rotate_operation(ISD::BSwap, vt)
+        {
             return Some(self.dag.get_node(ISD::BSwap, vt, &[n0]));
         }
         // fold (rot* (rot* x, c2), c1) -> (rot* x, ((c1 % bitsize) +- (c2 %
