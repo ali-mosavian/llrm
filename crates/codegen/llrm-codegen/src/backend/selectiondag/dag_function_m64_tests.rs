@@ -992,3 +992,32 @@ entry:
     let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
     assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
 }
+
+/// A store of an `i48` (a packed struct's member) stopped at
+/// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
+/// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.
+#[test]
+fn an_m64_store_of_an_odd_width_integer_is_two_stores() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p, i64 %x) {
+entry:
+  %t = trunc i64 %x to i48
+  store i48 %t, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let stores = done
+        .body
+        .insns()
+        .iter()
+        .filter(|i| {
+            i.what.as_ref().is_some_and(|w| {
+                w.name.as_deref() == Some("mov") && matches!(w.dests.first(), Some(crate::model::ir::Loc::Mem(_)))
+            })
+        })
+        .count();
+    assert_eq!(stores, 2, "a dword and a word");
+}
