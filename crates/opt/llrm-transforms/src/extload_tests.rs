@@ -214,3 +214,29 @@ fn test_a_load_nothing_extends_does_not_scan_the_block() {
     let steps = super::SCANNED.with(std::cell::Cell::get);
     assert!(steps <= 4 * n, "{steps} instructions scanned for {n} loads");
 }
+
+/// Several extensions of one load in its block: the compare takes the earliest,
+/// as the block scan chose it, whichever the readers list first.
+#[test]
+fn test_the_earliest_of_several_extensions_of_a_load_takes_the_compare() {
+    for (first, second, wide) in
+        [("zext i8 %c to i16", "sext i8 %c to i32", "i16"), ("sext i8 %c to i32", "zext i8 %c to i16", "i32")]
+    {
+        let after = run(&format!(
+            "define i32 @f(ptr %p) {{
+b0:
+  %c = load i8, ptr %p
+  %lt = icmp eq i8 %c, 3
+  %a = {first}
+  %b = {second}
+  br i1 %lt, label %b1, label %b2
+b1:
+  ret i32 1
+b2:
+  ret i32 0
+}}
+"
+        ));
+        assert!(after.contains(&format!("icmp eq {wide} %a, 3")), "{after}");
+    }
+}
