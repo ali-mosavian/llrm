@@ -64,3 +64,10 @@ def test_a_present_tree_sets_both_variables(tmp_path):
 def test_the_prune_step_keeps_the_clang_trees():
     """The step after the export deleted every ~/.cache/llrm tree no scripts named: the clang trees' pin file was not among them."""
     assert "toolchain/clang/pin || { echo \"pruned" in SETUP
+
+
+def test_a_built_tree_is_saved_before_the_job_ends_so_a_cancelled_run_keeps_it():
+    """ci.yml cancels a superseded pull request run; the cache action's post step does not run in a cancelled job, so a ~1 h build was lost."""
+    action = (ROOT / ".github/actions/clang-tree/action.yml").read_text()
+    assert "actions/cache/save@v4" in action and "actions/cache/restore@v4" in action and "actions/cache@v4\n      with:\n        path: ${{ steps.tree" not in action
+    assert action.index("clangbuild.sh ${{ inputs.kind }}") < action.index("actions/cache/save@v4")

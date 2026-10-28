@@ -14,7 +14,7 @@ runs:
         echo "dir=$dir" >> "$GITHUB_OUTPUT"
         echo "name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
     - id: restore
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: ${{ steps.tree.outputs.dir }}
         key: llrm-${{ steps.tree.outputs.name }}
@@ -31,5 +31,11 @@ runs:
         sudo apt-get update -qq
         sudo apt-get install -y -qq ninja-build cmake ccache lld
         sh toolchain/clangbuild.sh ${{ inputs.kind }}
+    # Saved here, not by the cache action's post step: a superseded run is cancelled and a cancelled job saves nothing, so the ~1 h build was lost.
+    - if: steps.restore.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ steps.tree.outputs.dir }}
+        key: llrm-${{ steps.tree.outputs.name }}
     - shell: bash
       run: ${{ steps.tree.outputs.dir }}/bin/clang --version
