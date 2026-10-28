@@ -1,6 +1,6 @@
 //! A broken hint is recolored after the allocation (`tryHintsRecoloring`).
 
-use std::process::Command;
+mod common;
 
 /// matmul at -O2 m32: a range that took a register other than its hint's, after
 /// an eviction freed the hint's, kept `mov ecx, edi` and `mov edi, ecx` around
@@ -9,7 +9,7 @@ use std::process::Command;
 fn test_a_broken_hint_is_recolored_once_the_register_is_free() {
     let source = format!("{}/bench/matmul/matmul.c", env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s"])
         .arg(&source)
