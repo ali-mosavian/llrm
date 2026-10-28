@@ -67,6 +67,13 @@ class OptionTests(unittest.TestCase):
         `a > 1` on the no-wrap promise of a build that had asked for wrapping, and the program aborted (-O2 and -Os)."""
         self.assertEqual(torture.program_options('/* { dg-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
 
+    def test_the_braced_dg_options_form_and_std_gnu89_are_read(self):
+        """930529-1 says `{ dg-options { "-fwrapv" } }`, which the pattern missed: built without it the loop past INT_MAX ran forever (stopped
+        at the 15 s limit). loop-2d asks for -std=gnu89, without which clang refuses its implicit int."""
+        self.assertEqual(torture.program_options('/* { dg-options { "-fwrapv" } } */\nint x;'), ["-fwrapv"])
+        self.assertEqual(torture.program_options('/* { dg-additional-options "-std=gnu89" } */\nint x;'), ["-std=gnu89"])
+
+
 class SymbolTests(unittest.TestCase):
     def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
         """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and

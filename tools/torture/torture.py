@@ -85,12 +85,12 @@ def refusal(text: str, rules: list[dict]) -> str | None:
 
 
 # The options a program asks for (dg-options, dg-additional-options) that llrm-c has: the rest tune GCC's passes.
-PROGRAM_OPTIONS = ("-fwrapv",)
+PROGRAM_OPTIONS = ("-fwrapv", "-std=gnu89")
 
 
 def program_options(text: str) -> list[str]:
     """The options of `{ dg-options "..." }` and `{ dg-additional-options "..." }` lines that llrm-c takes."""
-    asked = [word for line in re.findall(r'dg-(?:additional-)?options\s+"([^"]*)"', text) for word in line.split()]
+    asked = [word for line in re.findall(r'dg-(?:additional-)?options\s+\{?\s*"([^"]*)"', text) for word in line.split()]
     return [word for word in dict.fromkeys(asked) if word in PROGRAM_OPTIONS]
 
 # What a test is promised below what the start-up, `report` and the libc take of the stack.
