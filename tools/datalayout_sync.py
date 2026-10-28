@@ -17,7 +17,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 # LLVM's own test inputs keep the pin's spelling of x86-64's datalayout (no `i128:128`), whatever llrm's description says.
-PORTED = ("crates/opt/llrm-transforms/tests/",)
+PORTED = (
+    "crates/opt/llrm-transforms/tests/",
+    # Generated IR (emitted by the frontends, optimized by the passes): it says the layout the compiler made it with, so a copy there is output, not a source to keep in step.
+    "crates/opt/llrm-analysis/corpus/",
+)
+# Files whose old spelling is the point: a test that an old layout means what the new one states, and this tool's own test of rewriting an old copy.
+KEPT = ("crates/ir/llrm-mir/src/datalayout.rs", "tools/test_datalayout_sync.py")
 
 
 def descriptions(root: Path = ROOT) -> list[str]:
@@ -59,7 +65,7 @@ def stale(root: Path = ROOT) -> list[str]:
     layouts = descriptions(root)
     found = []
     for path in tracked(root):
-        if path.is_symlink() or not path.is_file() or str(path.relative_to(root)).startswith(PORTED):
+        if path.is_symlink() or not path.is_file() or str(path.relative_to(root)).startswith(PORTED + KEPT):
             continue
         try:
             text = path.read_text()
@@ -67,6 +73,24 @@ def stale(root: Path = ROOT) -> list[str]:
             continue
         if rewritten(text, layouts) != text:
             found.append(str(path.relative_to(root)))
+    return found
+
+
+def copies(root: Path = ROOT) -> dict[str, int]:
+    """Per tracked text file, how many copies of a description's string it holds (the description files are the source, not copies)."""
+    layouts = [one for one in descriptions(root) if one.count("-") >= 6]
+    pattern = re.compile("|".join(re.escape(anchor(one)) for one in layouts))
+    found = {}
+    for path in tracked(root):
+        name = str(path.relative_to(root))
+        if path.is_symlink() or not path.is_file() or name.endswith("/datalayout.toml") or name.startswith(PORTED + KEPT) or name == "tools/test_datalayout_copies.py":
+            continue
+        try:
+            n = len(pattern.findall(path.read_text()))
+        except (UnicodeDecodeError, OSError):
+            continue
+        if n:
+            found[name] = n
     return found
 
 

@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -march=i486 -O2 --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -march=i486 -O2 --isel=dag -S -o /dev/stdout
 // A jump table is a jump to labels the table names, all at the depth of the jump: the frame-free walk refused it ("an indirect jump")
 // and x_funcptr kept `push ebp; mov ebp, esp` and spilled its sum around the table (56 instructions, the pin 38).
 // CHECK-LABEL: _table_sum proc

@@ -76,7 +76,7 @@ selector gets none of it (it goes away). Order:
 | S1 forms | shape letter `x` (an xmm register) in `x86.instr` and the parser; `select.rs` places it, `masm` prints `xmmN`; rows for `movss/movsd/movaps` (rr, rm, mr), `add/sub/mul/div/sqrt ss/sd`, `ucomiss/sd`, `cvt` between `ss/sd` and `si32/si64`, `xorps/andps/andnps/orps/pxor` | `addsd xmm0, xmm1` encodes `F2 0F 58 C1`; without the row the form is unknown |
 | S2 class + ABI | xmm class from #3258 (a 16-byte value is confined to xmm); `calling.toml` `float_argument_registers = xmm0..xmm7`, `float_result = xmm0`; `al` already named (`variadic_vector_register`) | a `double` argument and result land in xmm0/xmm1 |
 | S3 DAG | `TargetLowering` for `X64`: `f32`/`f64` legal in FR32/FR64, `FADD..FSQRT`, `FNEG`/`FABS` (xorps/andps with a pool mask), `FP_EXTEND/ROUND`, `SINT_TO_FP`, `FP_TO_SINT`, `SETCC`/`SELECT` through `UCOMIS`; constants from the pool (rip-relative); the matcher already holds the `X86InstrSSE.td` patterns; emit arms by pin name | `fadd double` selects `ADDSDrr`; `tests/llc` float programs run |
-| S4 varargs | save `xmm0-7` under `al != 0` (the half of the register save area left unwritten, SD313); `al` set at a variadic call | `printf("%f")` through `va_arg(double)` |
+| S4 varargs | save `xmm0-7` under `al != 0` (the half of the register save area left unwritten, SD238); `al` set at a variadic call | `printf("%f")` through `va_arg(double)` |
 | S5 corpus | `tests/llc` gains float/double programs (nbody-like, sums, conversions, compares incl. NaN); native scoreboard vs clang | 0 miscompiles |
 
 Long double stays x87 (`f80`, as in the pin). Aggregates in `xmm` (a `{double,double}` return) join S3 after the

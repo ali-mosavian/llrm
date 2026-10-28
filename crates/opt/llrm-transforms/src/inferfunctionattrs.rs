@@ -8,7 +8,7 @@
 //! and `inferNonMandatoryLibFuncAttrs` of `BuildLibCalls.cpp`. A declaration
 //! whose name and prototype are a [`LibFunc`] the target's runtime has
 //! ([`TargetLibraryInfo`]) takes the attributes of its case in
-//! `libfunc/attrs.rs` (generated from the pin by `tools/gen_libattrs.py`):
+//! `libfunc/attrs.rs` (generated from the pin by `tools/gen/gen_libattrs.py`):
 //! `nounwind`, `willreturn`, `nofree`, `nosync`, `nocallback`, what it does to
 //! memory (`memory(errnomem: write)` for `sin`: it sets `errno` and touches
 //! nothing else) and what each pointer parameter is. A call of `sin(x)` twice
@@ -35,6 +35,7 @@
 //! (`PassBuilderPipelines.cpp#L1169`).
 
 use llrm_mir::context::GlobalId;
+use llrm_mir::facts::Fact;
 use llrm_mir::libfunc::attrs::infer;
 use llrm_mir::libfunc::infer::{AllocKind, Setters};
 use llrm_mir::libfunc::{Library, TargetLibraryInfo};
@@ -132,9 +133,9 @@ impl Memory {
         let mut stated = Self([MOD_REF; 4]);
         for attr in attrs {
             match attr {
-                Attribute::Flag(flag) if flag == "readnone" => stated = stated.and(Self::NONE),
-                Attribute::Flag(flag) if flag == "readonly" => stated = stated.and(Self([REF; 4])),
-                Attribute::Flag(flag) if flag == "writeonly" => stated = stated.and(Self([MOD; 4])),
+                _ if Fact::of_attribute(attr) == Some(Fact::ReadNone) => stated = stated.and(Self::NONE),
+                _ if Fact::of_attribute(attr) == Some(Fact::ReadOnly) => stated = stated.and(Self([REF; 4])),
+                _ if Fact::of_attribute(attr) == Some(Fact::WriteOnly) => stated = stated.and(Self([MOD; 4])),
                 Attribute::Memory(locations) => {
                     let access = |one: &str| match one {
                         "read" => REF,
@@ -264,8 +265,8 @@ impl<'f> Declaration<'f> {
             .retain(
                 |one| !matches!(one, Attribute::Memory(_))
                     && !matches!(
-                        one,
-                        Attribute::Flag(flag) if matches!(flag.as_str(), "readnone" | "readonly" | "writeonly")
+                        Fact::of_attribute(one),
+                        Some(Fact::ReadNone | Fact::ReadOnly | Fact::WriteOnly)
                     ),
             );
         self.function.attrs.push(after.attribute());

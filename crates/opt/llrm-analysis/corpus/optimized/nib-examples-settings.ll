@@ -1,4 +1,4 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
 @$str1 = internal constant [9 x i8] c"\08\00\02\00\02\00= \00"
 @$str2 = internal constant [12 x i8] c"\08\00\05\00\05\00level\00"
@@ -6,295 +6,191 @@ target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
 @$str4 = internal constant [34 x i8] c"\08\00\1B\00\1B\00name=Ada;role=pilot;level=7\00"
 @$str5 = internal constant [23 x i8] c"\08\00\10\00\10\00 settings, kept \00"
 
-define internal i16 @digits(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) willreturn {
-b1:
-  %1 = load i16, ptr addrspace(1) %0
-  %2 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %3 = load ptr addrspace(1), ptr addrspace(1) %2
-  br label %b2
-
-b2:
-  %4 = phi i16 [ 0, %b1 ], [ %12, %b3 ]
-  %5 = phi i16 [ 0, %b1 ], [ %13, %b3 ]
-  %6 = icmp ult i16 %5, %1
-  br i1 %6, label %b3, label %b5
-
-b3:
-  %7 = getelementptr i8, ptr addrspace(1) %3, i16 %5
-  %8 = mul i16 %4, 10
-  %9 = load i8, ptr addrspace(1) %7
-  %10 = zext i8 %9 to i16
-  %11 = add i16 %8, %10
-  %12 = add i16 %11, -48
-  %13 = add i16 %5, 1
-  br label %b2
-
-b5:
-  ret i16 %4
-}
-
-define internal void @show(ptr addrspace(1) noalias readonly dereferenceable(8) %0, ptr addrspace(1) noalias readonly dereferenceable(8) %1) addrspace(1) {
-b1:
+define cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
+  %1 = alloca [8 x i8]
   %2 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  call addrspace(1) void @N$PFLD(i8 8, i8 10, i8 32, i8 1)
-  call addrspace(1) void @N$PV(ptr addrspace(1) %0)
-  %3 = getelementptr i8, ptr @$str1, i16 6
-  call addrspace(1) void @N$PS(ptr %3)
-  call addrspace(1) void @N$PV(ptr addrspace(1) %1)
-  call addrspace(1) void @N$PN()
-  %4 = getelementptr i8, ptr @$str2, i16 6
-  %5 = getelementptr i8, ptr %4, i16 -4
-  %6 = load i16, ptr %5
-  %7 = addrspacecast ptr %4 to ptr addrspace(1)
-  store i16 %6, ptr %2, !tbaa !2
-  %8 = getelementptr inbounds i8, ptr %2, i16 2
-  store i16 %6, ptr %8, !tbaa !2
-  %9 = getelementptr inbounds i8, ptr %2, i16 4
-  store ptr addrspace(1) %7, ptr %9, !tbaa !2
-  %10 = addrspacecast ptr %2 to ptr addrspace(1)
-  %11 = call addrspace(1) i8 @N$VCMP(ptr addrspace(1) %0, ptr addrspace(1) %10)
-  %12 = icmp eq i8 %11, 0
-  br i1 %12, label %b2, label %b4
+  %3 = alloca [8 x i8]
+  %4 = alloca [8 x i8]
+  call void @llvm.lifetime.start.p0(i64 8, ptr nonnull %3)
+  call void @llvm.lifetime.start.p0(i64 8, ptr nonnull %2)
+  %5 = addrspacecast ptr %3 to ptr addrspace(1)
+  %6 = addrspacecast ptr %2 to ptr addrspace(5)
+  %7 = addrspacecast ptr %2 to ptr addrspace(1)
+  %8 = addrspacecast ptr %1 to ptr addrspace(1)
+  br label %9
 
-b2:
-  %13 = load i16, ptr addrspace(1) %1
-  %14 = getelementptr i8, ptr addrspace(1) %1, i16 4
-  %15 = load ptr addrspace(1), ptr addrspace(1) %14
-  br label %16
+9:
+  %10 = phi i16 [ %22, %17 ], [ 0, %0 ]
+  %11 = phi i16 [ 0, %0 ], [ %20, %17 ]
+  %12 = phi i16 [ 0, %0 ], [ %19, %17 ]
+  %13 = icmp eq i16 %10, 27
+  br i1 %13, label %14, label %23
+
+14:
+  %15 = icmp ult i16 %12, %10
+  br i1 %15, label %16, label %31
 
 16:
-  %17 = phi i16 [ 0, %b2 ], [ %26, %20 ]
-  %18 = phi i16 [ 0, %b2 ], [ %27, %20 ]
-  %19 = icmp ult i16 %18, %13
-  br i1 %19, label %20, label %28
+  br label %34
 
-20:
-  %21 = getelementptr i8, ptr addrspace(1) %15, i16 %18
-  %22 = mul i16 %17, 10
-  %23 = load i8, ptr addrspace(1) %21
-  %24 = zext i8 %23 to i16
-  %25 = add i16 %22, %24
-  %26 = add i16 %25, -48
-  %27 = add i16 %18, 1
-  br label %16
+17:
+  %18 = phi i16 [ %28, %27 ], [ %79, %77 ]
+  %19 = phi i16 [ %79, %77 ], [ %12, %27 ]
+  %20 = phi i16 [ %78, %77 ], [ %11, %27 ]
+  %21 = icmp samesign ugt i16 %18, 27
+  %22 = add nuw nsw i16 %10, 1
+  br i1 %21, label %81, label %9
 
-28:
-  %29 = shl i16 %17, 1
-  %30 = getelementptr i8, ptr @$str3, i16 6
-  call addrspace(1) void @N$PS(ptr %30)
-  call addrspace(1) void @N$PI2(i16 %29)
-  call addrspace(1) void @N$PN()
-  br label %b4
+23:
+  %24 = getelementptr inbounds nuw i8, ptr getelementptr inbounds nuw (i8, ptr @$str4, i16 6), i16 %10
+  %25 = load i8, ptr %24
+  %26 = icmp eq i8 %25, 59
+  br i1 %26, label %14, label %27
 
-b4:
-  ret void
-}
+27:
+  %28 = add nuw nsw i16 %10, 1
+  br label %17
 
-define internal ptr @keep(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = call addrspace(1) ptr @N$VCPY(ptr addrspace(1) %0)
-  ret ptr %1
-}
+29:
+  %30 = add i16 %35, 1
+  %exitcond1 = icmp eq i16 %10, %30
+  br i1 %exitcond1, label %31, label %34
 
-define internal i16 @each_setting(ptr addrspace(1) noalias readonly dereferenceable(8) %0) addrspace(1) {
-b1:
-  %1 = alloca [8 x i8]
-  %2 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %2, i8 0, i16 8, i1 false)
-  %3 = load i16, ptr addrspace(1) %0
-  %4 = getelementptr i8, ptr addrspace(1) %0, i16 4
-  %5 = load ptr addrspace(1), ptr addrspace(1) %4
-  %6 = getelementptr inbounds i8, ptr %2, i16 2
-  %7 = getelementptr inbounds i8, ptr %2, i16 4
-  %8 = addrspacecast ptr %2 to ptr addrspace(1)
-  %9 = getelementptr inbounds i8, ptr %1, i16 2
-  %10 = getelementptr inbounds i8, ptr %1, i16 4
-  %11 = addrspacecast ptr %1 to ptr addrspace(1)
-  br label %b2
+31:
+  %32 = phi i16 [ %12, %14 ], [ %35, %34 ], [ %30, %29 ]
+  %33 = icmp ugt i16 %32, 27
+  br i1 %33, label %40, label %41
 
-b2:
-  %12 = phi i16 [ 0, %b1 ], [ %25, %b11 ]
-  %13 = phi i16 [ 0, %b1 ], [ %26, %b11 ]
-  %14 = phi i16 [ 0, %b1 ], [ %27, %b11 ]
-  %15 = icmp ule i16 %14, %3
-  br i1 %15, label %b3, label %b4
+34:
+  %35 = phi i16 [ %30, %29 ], [ %12, %16 ]
+  %36 = getelementptr i8, ptr @$str4, i16 %35
+  %37 = getelementptr i8, ptr %36, i16 6
+  %38 = load i8, ptr %37
+  %39 = icmp eq i8 %38, 61
+  br i1 %39, label %31, label %29
 
-b3:
-  %16 = icmp eq i16 %14, %3
-  %17 = sext i1 %16 to i8
-  br i1 %16, label %b6, label %b5
-
-b4:
-  ret i16 %12
-
-b5:
-  %18 = icmp ult i16 %14, %3
-  br i1 %18, label %b7, label %b8
-
-b6:
-  %19 = phi i8 [ %17, %b3 ], [ %24, %b7 ]
-  %20 = icmp ne i8 %19, 0
-  br i1 %20, label %b9, label %b11
-
-b7:
-  %21 = getelementptr i8, ptr addrspace(1) %5, i16 %14
-  %22 = load i8, ptr addrspace(1) %21
-  %23 = icmp eq i8 %22, 59
-  %24 = sext i1 %23 to i8
-  br label %b6
-
-b8:
-  call addrspace(1) void @N$EBND()
+40:
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
-b9:
-  br label %b12
+41:
+  %42 = getelementptr inbounds i8, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str4, i16 6) to ptr addrspace(1)), i16 %12
+  %43 = sub nuw i16 %32, %12
+  store i16 %43, ptr %3, !tbaa !2
+  %44 = getelementptr i8, ptr %3, i16 2
+  store i16 %43, ptr %44, !tbaa !2
+  %45 = getelementptr i8, ptr %3, i16 4
+  store ptr addrspace(1) %42, ptr %45, !tbaa !2
+  %46 = icmp ult i16 %32, %10
+  br i1 %46, label %47, label %80
 
-b11:
-  %25 = phi i16 [ %12, %b6 ], [ %47, %b25 ]
-  %26 = phi i16 [ %13, %b6 ], [ %48, %b25 ]
-  %27 = add i16 %14, 1
-  br label %b2
+47:
+  %48 = add nuw nsw i16 %32, 1
+  %49 = getelementptr inbounds nuw i8, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str4, i16 6) to ptr addrspace(1)), i16 %48
+  %50 = sub nuw nsw i16 %10, %48
+  store i16 %50, ptr %2, !tbaa !2
+  %51 = getelementptr i8, ptr %2, i16 2
+  store i16 %50, ptr %51, !tbaa !2
+  %52 = getelementptr i8, ptr %2, i16 4
+  store ptr addrspace(1) %49, ptr %52, !tbaa !2
+  call void @llvm.lifetime.start.p0(i64 8, ptr nonnull %1)
+  call cc 1005 addrspace(1) void @N$PFLD(i8 zeroext 8, i8 zeroext 10, i8 zeroext 32, i8 zeroext 1)
+  call cc 1005 addrspace(1) void @N$PV(ptr addrspace(1) %5)
+  call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str1, i16 6))
+  call cc 1005 addrspace(1) void @N$PV(ptr addrspace(1) %7)
+  call cc 1005 addrspace(1) void @N$PN()
+  store i32 327685, ptr %1
+  %53 = getelementptr i8, ptr %1, i16 4
+  store ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str2, i16 6) to ptr addrspace(1)), ptr %53, !tbaa !2
+  %54 = call cc 1005 addrspace(1) i8 @N$VCMP(ptr addrspace(1) %5, ptr addrspace(1) %8)
+  %55 = icmp eq i8 %54, 0
+  br i1 %55, label %56, label %77
 
-b12:
-  %28 = phi i16 [ %13, %b9 ], [ %31, %b13 ]
-  %29 = icmp ult i16 %28, %14
-  %30 = sext i1 %29 to i8
-  br i1 %29, label %b15, label %b16
+56:
+  %57 = load i16, ptr addrspace(5) %6
+  %58 = icmp eq i16 %57, 0
+  br i1 %58, label %75, label %59
 
-b13:
-  %31 = add i16 %28, 1
-  br label %b12
+59:
+  %60 = getelementptr i8, ptr addrspace(5) %6, i16 4
+  %61 = load ptr addrspace(1), ptr addrspace(5) %60
+  br label %62
 
-b14:
-  %32 = icmp ule i16 %28, %3
-  br i1 %32, label %b19, label %b20
+62:
+  %63 = phi ptr addrspace(1) [ %72, %62 ], [ %61, %59 ]
+  %64 = phi i16 [ %71, %62 ], [ %57, %59 ]
+  %65 = phi i16 [ 0, %59 ], [ %70, %62 ]
+  %66 = mul i16 %65, 10
+  %67 = load i8, ptr addrspace(1) %63
+  %68 = zext i8 %67 to i16
+  %69 = add i16 %66, -48
+  %70 = add i16 %69, %68
+  %71 = add i16 %64, -1
+  %72 = getelementptr i8, ptr addrspace(1) %63, i16 1
+  %exitcond = icmp eq i16 %71, 0
+  br i1 %exitcond, label %73, label %62
 
-b15:
-  %33 = icmp ult i16 %28, %3
-  br i1 %33, label %b17, label %b18
+73:
+  %74 = shl i16 %70, 1
+  br label %75
 
-b16:
-  %34 = phi i8 [ %30, %b12 ], [ %39, %b17 ]
-  %35 = icmp ne i8 %34, 0
-  br i1 %35, label %b13, label %b14
+75:
+  %76 = phi i16 [ 0, %56 ], [ %74, %73 ]
+  call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str3, i16 6))
+  call cc 1005 addrspace(1) void @N$PI2(i16 %76)
+  call cc 1005 addrspace(1) void @N$PN()
+  br label %77
 
-b17:
-  %36 = getelementptr i8, ptr addrspace(1) %5, i16 %28
-  %37 = load i8, ptr addrspace(1) %36
-  %38 = icmp ne i8 %37, 61
-  %39 = sext i1 %38 to i8
-  br label %b16
+77:
+  call void @llvm.lifetime.end.p0(i64 8, ptr nonnull %1)
+  %78 = add i16 %11, 1
+  %79 = add nuw nsw i16 %10, 1
+  br label %17
 
-b18:
-  call addrspace(1) void @N$EBND()
+80:
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
-b19:
-  %40 = icmp ule i16 %13, %28
-  br i1 %40, label %b21, label %b22
-
-b20:
-  call addrspace(1) void @N$EBND()
-  unreachable
-
-b21:
-  %41 = getelementptr i8, ptr addrspace(1) %5, i16 %13
-  %42 = sub i16 %28, %13
-  store i16 %42, ptr %2, !tbaa !2
-  store i16 %42, ptr %6, !tbaa !2
-  store ptr addrspace(1) %41, ptr %7, !tbaa !2
-  %43 = add i16 %28, 1
-  %44 = icmp ule i16 %43, %14
-  br i1 %44, label %b25, label %b26
-
-b22:
-  call addrspace(1) void @N$EBND()
-  unreachable
-
-b25:
-  %45 = getelementptr i8, ptr addrspace(1) %5, i16 %43
-  %46 = sub i16 %14, %43
-  store i16 %46, ptr %1, !tbaa !2
-  store i16 %46, ptr %9, !tbaa !2
-  store ptr addrspace(1) %45, ptr %10, !tbaa !2
-  call addrspace(1) void @show(ptr addrspace(1) %8, ptr addrspace(1) %11)
-  %47 = add i16 %12, 1
-  %48 = add i16 %14, 1
-  br label %b11
-
-b26:
-  call addrspace(1) void @N$EBND()
-  unreachable
-}
-
-define internal i16 @main() addrspace(1) {
-b1:
-  %0 = alloca [8 x i8]
-  %1 = alloca [8 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 8, i1 false)
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 8, i1 false)
-  %2 = getelementptr i8, ptr @$str4, i16 6
-  %3 = getelementptr i8, ptr %2, i16 -4
-  %4 = load i16, ptr %3
-  %5 = addrspacecast ptr %2 to ptr addrspace(1)
-  store i16 %4, ptr %1, !tbaa !2
-  %6 = getelementptr inbounds i8, ptr %1, i16 2
-  store i16 %4, ptr %6, !tbaa !2
-  %7 = getelementptr inbounds i8, ptr %1, i16 4
-  store ptr addrspace(1) %5, ptr %7, !tbaa !2
-  %8 = addrspacecast ptr %1 to ptr addrspace(1)
-  %9 = call addrspace(1) i16 @each_setting(ptr addrspace(1) %8)
-  %10 = load i16, ptr %3
-  %11 = icmp uge i16 %10, 8
-  br i1 %11, label %b2, label %b3
-
-b2:
-  %12 = getelementptr i8, ptr addrspace(1) %5, i16 5
-  store i16 3, ptr %0, !tbaa !2
-  %13 = getelementptr inbounds i8, ptr %0, i16 2
-  store i16 3, ptr %13, !tbaa !2
-  %14 = getelementptr inbounds i8, ptr %0, i16 4
-  store ptr addrspace(1) %12, ptr %14, !tbaa !2
-  %15 = addrspacecast ptr %0 to ptr addrspace(1)
-  %16 = call addrspace(1) ptr @N$VCPY(ptr addrspace(1) %15)
-  call addrspace(1) void @N$PU2(i16 %9)
-  %17 = getelementptr i8, ptr @$str5, i16 6
-  call addrspace(1) void @N$PS(ptr %17)
-  call addrspace(1) void @N$PS(ptr %16)
-  call addrspace(1) void @N$PN()
-  call addrspace(1) void @N$BDRP(ptr %16)
-  call addrspace(1) void @N$BDRP(ptr %2)
+81:
+  call void @llvm.lifetime.end.p0(i64 8, ptr nonnull %2)
+  call void @llvm.lifetime.end.p0(i64 8, ptr nonnull %3)
+  store i32 196611, ptr %4
+  %82 = getelementptr inbounds nuw i8, ptr %4, i16 4
+  store ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) addrspacecast (ptr getelementptr inbounds nuw (i8, ptr @$str4, i16 6) to ptr addrspace(1)), i16 5), ptr %82, !tbaa !2
+  %83 = addrspacecast ptr %4 to ptr addrspace(1)
+  %84 = call cc 1005 addrspace(1) ptr @N$VCPY(ptr addrspace(1) %83)
+  call cc 1005 addrspace(1) void @N$PU2(i16 %20)
+  call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str5, i16 6))
+  call cc 1005 addrspace(1) void @N$PS(ptr %84)
+  call cc 1005 addrspace(1) void @N$PN()
+  call cc 1005 addrspace(1) void @N$BDRP(ptr %84)
+  call cc 1005 addrspace(1) void @N$BDRP(ptr getelementptr inbounds nuw (i8, ptr @$str4, i16 6))
   ret i16 0
-
-b3:
-  call addrspace(1) void @N$EBND()
-  unreachable
 }
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1005 void @N$PFLD(i8, i8, i8, i8) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PFLD(i8, i8, i8, i8) addrspace(1)
+declare cc 1005 void @N$PV(ptr addrspace(1)) addrspace(1)
 
-declare void @N$PV(ptr addrspace(1)) addrspace(1)
+declare cc 1005 void @N$PS(ptr) addrspace(1)
 
-declare void @N$PS(ptr) addrspace(1)
+declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PN() addrspace(1)
+declare cc 1005 i8 @N$VCMP(ptr addrspace(1), ptr addrspace(1)) addrspace(1) memory(read)
 
-declare i8 @N$VCMP(ptr addrspace(1), ptr addrspace(1)) addrspace(1)
+declare cc 1005 void @N$PI2(i16) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PI2(i16) addrspace(1)
+declare cc 1005 ptr @N$VCPY(ptr addrspace(1)) addrspace(1)
 
-declare ptr @N$VCPY(ptr addrspace(1)) addrspace(1)
+declare cc 1005 void @N$EBND() addrspace(1) noreturn memory(inaccessiblemem: readwrite)
 
-declare void @N$EBND() addrspace(1)
+declare cc 1005 void @N$PU2(i16) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PU2(i16) addrspace(1)
+declare cc 1005 void @N$BDRP(ptr) addrspace(1)
 
-declare void @N$BDRP(ptr) addrspace(1)
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: write)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

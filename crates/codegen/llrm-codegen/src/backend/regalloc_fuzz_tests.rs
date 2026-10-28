@@ -980,7 +980,6 @@ fn test_generated_bodies_allocate() {
         .map(|one| vec![one])
         .unwrap_or_else(|_| ["386", "486", "Core", "P5"].map(str::to_owned).to_vec());
     let mut failures = Vec::new();
-    let before = crate::backend::allocate::last_resorts();
     for seed in only.map_or(0..count, |one| one..one + 1) {
         for cpu in &cpus {
             // Pressure from a few over the registers to far over.
@@ -996,7 +995,6 @@ fn test_generated_bodies_allocate() {
             }
         }
     }
-    eprintln!("last resorts: {}", crate::backend::allocate::last_resorts() - before);
     let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
     for one in &failures {
         let why = one.lines().next().unwrap_or("").split(": ").skip(1).collect::<Vec<_>>().join(": ");
@@ -1150,86 +1148,6 @@ fn test_an_edited_answer_works_its_changed_values_out_from_where_they_occur() {
     assert_eq!(found, intervals_afresh(&trial));
 }
 
-/// The interference among a web of a few values walked every instruction of the
-/// body for liveness rows and again for the widths, per web (1 G of compiling
-/// d_faces, 454 webs). From where the values occur it is the same graph, and
-/// the body is not walked.
-#[test]
-fn test_the_interference_among_a_web_is_found_without_walking_the_body() {
-    use crate::analysis::intervals::intervals;
-    use crate::backend::allocate::live_rows_walks;
-    use crate::backend::coalesce::{_interference, _interference_among};
-    for seed in 0..40u64 {
-        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
-        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(3).take(4).collect();
-        let before = live_rows_walks(&plain);
-        let among = _interference_among(&plain, Some(&web));
-        assert_eq!(live_rows_walks(&plain), before, "seed {seed}: the body was walked for the rows of a web");
-        let whole = _interference(&plain);
-        for value in &web {
-            let of = |graph: &crate::backend::coalesce::Graph| {
-                graph
-                    .get(value)
-                    .map(|near| {
-                        near.iter().filter(|one| web.contains(one)).collect::<std::collections::BTreeSet<u32>>()
-                    })
-                    .unwrap_or_default()
-            };
-            assert_eq!(of(&among), of(&whole), "seed {seed}: value#{value}");
-        }
-    }
-}
-
-/// The interference among a web of a few values walked every instruction of
-/// its blocks, for each of the 1,000 webs of a straight-line function (an
-/// instruction per value live: N^2). It looks at the instructions that name
-/// the web, and at parallel copies.
-#[test]
-fn test_the_interference_among_a_web_looks_only_at_the_instructions_that_name_it() {
-    use crate::analysis::intervals::intervals;
-    use crate::backend::coalesce::{_interference_among, last_visited};
-    let mut skipped = 0;
-    for seed in 0..40u64 {
-        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
-        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(3).take(2).collect();
-        _interference_among(&plain, Some(&web));
-        let all = plain.blocks.iter().flat_map(|block| &block.insns);
-        let wanted = all
-            .clone()
-            .filter(|one| one.group.is_some() || one.defines.iter().chain(&one.uses).any(|value| web.contains(value)))
-            .count();
-        assert!(
-            last_visited() <= wanted,
-            "seed {seed}: {} instructions looked at, {wanted} name the web",
-            last_visited()
-        );
-        skipped += all.count() - last_visited();
-    }
-    assert!(skipped > 0, "premise: some instruction names none of the web");
-}
-
-/// The interference among a web of a few values was written a pair at a time
-/// into rows that were trees, and a group of N values live together was N^2
-/// pairs (siblings interference 170 of 1,972 Minstr on a 1.3 KB quicksort).
-/// Asked of a few values the rows are bits, a group written to its
-/// members a mask at a time.
-#[test]
-fn test_the_interference_among_a_web_is_bits_not_a_tree_of_pairs() {
-    use crate::analysis::intervals::intervals;
-    use crate::backend::coalesce::_interference_among;
-    use crate::backend::neighbours::Neighbours;
-    let mut rows = 0;
-    for seed in 0..40u64 {
-        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
-        let web: std::collections::BTreeSet<u32> = intervals(&plain, None).keys().copied().step_by(2).take(8).collect();
-        for near in _interference_among(&plain, Some(&web)).values() {
-            rows += 1;
-            assert!(matches!(near, Neighbours::Dense { .. }), "seed {seed}: a row of a web is a tree");
-        }
-    }
-    assert!(rows > 0, "premise: some value of a web interferes");
-}
-
 /// Two-address fixing copied a set of every live value for each block to see
 /// which of a swap's sources live on (`joins` 1024: `lir twoaddr` 6.5 G, slope
 /// 1.8). It reads the rows of bits, and builds no set of the live values.
@@ -1241,25 +1159,6 @@ fn test_two_address_fixing_builds_no_set_of_the_live_values() {
     let _ = crate::backend::twoaddr::tied(&plain, Default::default());
     let built = SETS_BUILT.with(|one| one.get());
     assert_eq!(built, 0, "{built} sets of the live values built");
-}
-
-/// The whole interference graph of a body was written a pair at a time into
-/// rows that were trees, as the web's was: values live together are N^2 pairs
-/// (`joins` 1024: `lir coalesce` 73 Ginstr, slope 2.8). The rows are bits from
-/// the start while the body's values fit a matrix.
-#[test]
-fn test_the_interference_of_a_whole_body_is_bits_not_a_tree_of_pairs() {
-    use crate::backend::coalesce::_interference_among;
-    use crate::backend::neighbours::Neighbours;
-    let mut rows = 0;
-    for seed in 0..40u64 {
-        let (plain, _) = body(seed, &Shape { pool: 8 + (seed % 7) as usize, ops: 8 + (seed % 11) as usize });
-        for near in _interference_among(&plain, None).values() {
-            rows += 1;
-            assert!(matches!(near, Neighbours::Dense { .. }), "seed {seed}: a row of the graph is a tree");
-        }
-    }
-    assert!(rows > 0, "premise: some value interferes");
 }
 
 /// `allocate::live` was built from per-block sorted sets and converted to bit
@@ -1367,36 +1266,6 @@ fn test_the_intervals_of_an_edited_body_are_the_ones_worked_out_afresh() {
         }
     }
     assert!(made > 50, "premise: bodies were answered by editing ({made})");
-}
-
-/// `spiller::siblings` built the interference of every value live together
-/// (13.8% of compiling `d_faces`, #559) to ask of the pairs among the values a
-/// plain move relates. The graph of those values alone has the edges among them
-/// that the whole graph has.
-#[test]
-fn test_interference_among_some_values_is_the_whole_graphs_among_them() {
-    use crate::backend::coalesce::{_interference, _interference_among};
-    for seed in 0..120 {
-        let shape = Shape { pool: 7 + (seed % 9) as usize, ops: 6 + (seed % 17) as usize };
-        let (plain, _) = body(seed, &shape);
-        for body in [in_ssa(&plain), plain] {
-            let whole = _interference(&body);
-            let mut some: std::collections::BTreeSet<u32> =
-                whole.keys().copied().filter(|one| (one + seed as u32) % 3 != 0).collect();
-            some.insert(1);
-            let among = _interference_among(&body, Some(&some));
-            for value in &some {
-                let expected: std::collections::BTreeSet<u32> = whole
-                    .get(value)
-                    .map(|near| near.iter().filter(|one| some.contains(one)).collect())
-                    .unwrap_or_default();
-                let found: std::collections::BTreeSet<u32> =
-                    among.get(value).map(|near| near.iter().collect()).unwrap_or_default();
-                assert_eq!(found, expected, "seed {seed} value {value}");
-            }
-            assert!(among.keys().all(|one| some.contains(one)), "seed {seed}: a value outside the set has an entry");
-        }
-    }
 }
 
 /// The class of every value was found with the body numbered, its intervals

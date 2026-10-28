@@ -76,7 +76,13 @@ def clang_flags(machine: str) -> tuple[str, list[str]]:
         return re.sub(r"\{env:(\w+)\}", lambda found: os.environ[found.group(1)], word)
 
     binary = os.environ.get(entry.get("clang_env", ""), "") or os.environ.get("LLRM_PIN_CLANG", "") or str(pin.PINNED_BIN / "clang")
-    return binary, [fill(word) for word in entry["clang"]]
+    words = [fill(word) for word in entry["clang"]]
+    # llrm-cc's m32 default is regcall; ours runs with the pin's (sysv), so the IR must not mark every function regcall.
+    for at in range(len(words) - 1):
+        if words[at:at + 2] == ["-Xclang", "-fdefault-calling-conv=regcall"]:
+            del words[at:at + 2]
+            break
+    return binary, words
 
 
 def pin_text_size(obj: Path) -> int:
@@ -235,6 +241,11 @@ def front_end_flags(level: str, reopt: bool) -> list[str]:
     return [f"-{level}", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *common]
 
 
+def forced_frame(asm: str, ir: str) -> bool:
+    """`push ebp; mov ebp, esp` in the pin's asm for IR that does not ask for one (frame-pointer=all made hanoi2/queens -Os look 4 bytes bigger). Stack realignment (`and esp, -N`) needs one."""
+    return bool(re.search(r"push\s+ebp\n\s+mov\s+ebp, esp", asm)) and not re.search(r"and\s+esp, -\d+", asm) and '"frame-pointer"' not in ir and "alloca i8, i32 %" not in ir and "dynamic_alloca" not in ir
+
+
 def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool, reopt: bool = False) -> dict | str:
     """The figures of one program, or why it has none."""
     cfg = MACHINES[machine]
@@ -261,9 +272,11 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     level_flag = "-O2" if level in ("O2", "Os") else f"-{level}"
     pin_asm, pin_obj = work / f"{stem}.pin.s", work / f"{stem}.pin.o"
     for args, out in ((["-x86-asm-syntax=intel", "-filetype=asm"], pin_asm), (["-filetype=obj"], pin_obj)):
-        run = pin.llc([level_flag, "-frame-pointer=all", *args, "-o", str(out)], text, target)
+        run = pin.llc([level_flag, "-frame-pointer=none", *args, "-o", str(out)], text, target)
         if run.returncode or not out.exists():
             return "pin llc: " + (run.stderr.strip().splitlines() or ["failed"])[0]
+    if forced_frame(pin_asm.read_text(), text):
+        return "pin asm keeps a frame pointer the source did not force"
 
     def ours(isel: str, *extra: str) -> subprocess.CompletedProcess:
         return subprocess.run([llc, f"-m{cfg['bits']}", f"-{level}", f"-march={cfg['march']}", f"--isel={isel}", *abi_flags(cfg, ours_text), *extra, str(ours_in)], capture_output=True, text=True)
@@ -360,7 +373,8 @@ def main(argv: list[str]) -> int:
     version = subprocess.run([args.llc, "--version"], capture_output=True, text=True).stdout.strip()
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
-    print(f"# pindiff {args.machine} -{args.level} frontend clang -fno-builtin isel=dag libgcc-divide-helpers=pin side: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
+    scope = " (backend only: --reopt feeds pin-optimised IR, ours' middle-end size gates do not run)" if args.reopt and args.level == "Os" else ""
+    print(f"# pindiff {args.machine} -{args.level}{scope} frontend clang -fno-builtin isel=dag libgcc-divide-helpers=pin side: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
     note = layout_note(pin.target(args.machine).datalayout, pin_llc_datalayout(pin.target(args.machine)))
     if note:
         print(note)
