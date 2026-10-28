@@ -383,8 +383,8 @@ def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp
     (work / "stray.txt").write_text("left by the last PR\n")
     ps._alone_checkout(work, "main", repo)
     assert work.is_dir() and not (work / "stray.txt").exists()
-    first, lock_a = ps._claim_slot(tmp_path / "slots", 2)
-    second, lock_b = ps._claim_slot(tmp_path / "slots", 2)
+    first, lock_a = ps._claim_slot(tmp_path / "slots", 2, reserved=0)
+    second, lock_b = ps._claim_slot(tmp_path / "slots", 2, reserved=0)
     assert {first, second} == {0, 1}
     lock_a.close()
     lock_b.close()
