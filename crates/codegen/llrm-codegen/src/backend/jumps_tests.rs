@@ -107,6 +107,7 @@ fn listed(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()

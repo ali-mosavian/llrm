@@ -3172,6 +3172,7 @@ mod tests {
             size: enter,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
@@ -3200,6 +3201,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         _procedure(&procedure, &no_names(), 0).unwrap();
@@ -3229,6 +3231,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         let lines: Vec<String> =
@@ -3280,6 +3283,7 @@ mod tests {
                 size: true,
                 entry: 0,
                 stack_check: None,
+                probe_stack: None,
                 registers: target.frame_registers(),
             };
             wrap_of(&procedure, &body, false, false).is_some()
@@ -3358,6 +3362,7 @@ mod tests {
             size: true,
             entry: 0,
             stack_check: check,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         let mut names = no_names();
@@ -3421,6 +3426,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: check,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
         };
         let procedure = saved_first(procedure);
@@ -3477,6 +3483,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
 
@@ -3510,6 +3517,7 @@ mod tests {
                 size: false,
                 entry: 0,
                 stack_check: None,
+                probe_stack: None,
                 registers: llrm_target::Target::frame_registers(&llrm_x86_m32::M32),
             };
             _procedure(&procedure, &no_names(), 0)
@@ -3603,6 +3611,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers,
         };
         let lines: Vec<String> =
@@ -3654,6 +3663,7 @@ mod tests {
                 size,
                 entry: 0,
                 stack_check: None,
+                probe_stack: None,
                 registers,
             };
             _procedure(&procedure, &no_names(), 0)
@@ -3724,6 +3734,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers,
         };
         _procedure(&procedure, &no_names(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
@@ -3896,6 +3907,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers,
         };
         let lines: Vec<String> =
@@ -3950,6 +3962,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         let lines: Vec<String> =
@@ -3993,6 +4006,7 @@ mod tests {
             size: false,
             entry: 0,
             stack_check: None,
+            probe_stack: None,
             registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
         };
         let lines: Vec<String> =
