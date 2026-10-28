@@ -38,14 +38,15 @@ fn instructions(text: &str) -> Vec<String> {
 fn test_callee_saved_registers_are_pushed_before_the_locals_are_reserved() {
     let text = listing(SOURCE, &["-O2", "-m32", "-mabi=sysv", "-march=i486", "--isel=dag"]);
     let lines = instructions(&text);
-    let entry = lines.iter().position(|line| line == "push ebp").expect("a frame");
-    assert_eq!(lines[entry + 1], "mov ebp, esp");
+    // The pin omits the frame pointer at -O2 (frame-pointer=none), so ebp is a saved register here.
+    let first = lines.iter().position(|line| line.starts_with("push ")).expect("saved registers");
     let sub = lines.iter().position(|line| line.starts_with("sub esp,")).expect("locals");
-    assert!(lines[entry + 2..sub].iter().all(|line| line.starts_with("push ")), "{lines:?}");
-    assert!(sub > entry + 2, "registers pushed before sub esp: {lines:?}");
+    assert!(lines[first..sub].iter().all(|line| line.starts_with("push ")), "{lines:?}");
+    assert!(sub - first >= 3, "registers pushed before sub esp: {lines:?}");
     let ret = lines.iter().position(|line| line == "ret").expect("a return");
-    assert!(lines[ret - 5].starts_with("add esp,"), "locals released first: {:?}", &lines[ret - 6..=ret]);
-    assert_eq!(lines[ret - 1], "pop ebp");
+    let pops = sub - first;
+    assert!(lines[ret - pops - 1].starts_with("add esp,"), "locals released first: {:?}", &lines[ret - pops - 2..=ret]);
+    assert!(lines[ret - pops..ret].iter().all(|line| line.starts_with("pop ")), "{lines:?}");
 }
 
 /// Three registers pushed first moved the locals 12 bytes down, so a double
@@ -65,7 +66,13 @@ int h(int n, int *p, int (*fp)(double *, int))
 }
 "#;
     let text = listing(source, &["-O2", "-m32", "-mabi=sysv", "-march=i486"]);
-    let array = text.lines().find_map(|line| line.trim().strip_prefix("lea ecx, [ebp-")).expect("the array's address");
+    // No frame register at -O2 (as the pin): the array is at [esp+K], and the entry's 4 (return address),
+    // the pushes and the locals leave esp a multiple of 8.
+    let lines = instructions(&text);
+    let pushes = lines.iter().take_while(|line| line.starts_with("push ")).count() as i64;
+    let sub: i64 = lines.iter().find_map(|line| line.strip_prefix("sub esp, ")).expect("locals").parse().unwrap();
+    assert_eq!((4 + 4 * pushes + sub) % 8, 0, "{text}");
+    let array = lines.iter().find_map(|line| line.split_once(", [esp+")).expect("the array's address").1;
     let distance: i64 = array.trim_end_matches(']').parse().unwrap();
     assert_eq!(distance % 8, 0, "{text}");
 }

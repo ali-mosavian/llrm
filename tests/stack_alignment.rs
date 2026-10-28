@@ -60,13 +60,13 @@ int f(int a) { return g(a) + g(a + 1) + (int)h(a); }
 
 /// Where the module holds a double, a function that calls it is entered with,
 /// and keeps, the stack a multiple of 8: the entry takes it down by a multiple
-/// of 8 (the return address included), and a call with an odd number of
-/// argument words pushes a pad first.
+/// of 8 (the return address included). llrm-cc: the DAG selector stores the
+/// arguments in the area it reserves, as the pin does, so no call pushes a pad.
 #[test]
 fn a_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_8() {
     let text = listing(MODULE);
     assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
-    assert!(text.contains("pushd 0"), "{text}");
+    assert!(!text.contains("pushd"), "{text}");
 }
 
 /// A module that holds no double pays nothing for it: no pad, no rounding.
