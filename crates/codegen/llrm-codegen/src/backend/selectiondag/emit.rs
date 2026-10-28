@@ -1510,7 +1510,14 @@ impl Emitter<'_, '_> {
         }
         if matches!(
             name,
-            "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32" | "CMOV_FR32" | "CMOV_FR64"
+            "CMOV_GR8"
+                | "CMOV_GR16"
+                | "CMOV_GR32"
+                | "CMOV_FR32"
+                | "CMOV_FR64"
+                | "CMOV_RFP32"
+                | "CMOV_RFP64"
+                | "CMOV_RFP80"
         ) {
             return self.lowered_select(n);
         }
@@ -2975,11 +2982,20 @@ impl Emitter<'_, '_> {
                 if index == 4 && !status && only_user && self.is_machine_named(node.ops[0], "MOVZX32rr8") {
                     self.narrow_definition(source.value, 2);
                 }
-                // DEVIATE SD237 (m16): the pin's `(i8 0)` and `(i16 0)` are the
-                // low part of a `MOV32r0`; a dword `xor` is 3 bytes here (the
-                // 66 prefix), the word's or byte's 2. A zero read only narrow
+                // DEVIATE SD237 (m16 only): the pin's `(i8 0)` and `(i16 0)`
+                // are the low part of a `MOV32r0`; a dword
+                // `xor` is 3 bytes here (the 66 prefix), the
+                // word's or byte's 2. A zero read only narrow
                 // is made narrow.
-                if matches!(index, 1 | 4) && !status && only_user && self.is_machine_named(node.ops[0], "MOV32r0") {
+                // At m32 the dword `xor` is the shorter one, and the pin's.
+                let real_mode =
+                    llrm_lir::registers::Regs(self.ctx.registers).width_of(self.ctx.stack_pointer) == Some(2);
+                if real_mode
+                    && matches!(index, 1 | 4)
+                    && !status
+                    && only_user
+                    && self.is_machine_named(node.ops[0], "MOV32r0")
+                {
                     self.narrow_definition(source.value, if index == 1 { 1 } else { 2 });
                 }
                 self.values.insert(result, source.value);

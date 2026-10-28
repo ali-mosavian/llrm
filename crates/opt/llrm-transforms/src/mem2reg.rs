@@ -578,28 +578,32 @@ fn promote_single_block_alloca(
     // First pass: decide, so a bail out changes nothing (LLVM bails before
     // the loads it has rewritten matter, as those are replaced by values that
     // stay right).
-    let mut replacements: Vec<(InstId, Operand)> = Vec::new();
+    // The value a load takes is read from its store when the load is
+    // replaced: an earlier replacement may have changed it (a store of
+    // another load of this alloca).
+    let mut replacements: Vec<(InstId, Result<InstId, Operand>)> = Vec::new();
     for &user in &uses {
         if !matches!(function.instruction(user).opcode, Opcode::Load { .. }) {
             continue;
         }
         let load_index = lbi.instruction_index(function, user);
         let at = stores.partition_point(|&(index, _)| index < load_index);
-        let value = if at == 0 {
+        let source = if at == 0 {
             if stores.is_empty() {
-                uninitialized(context, function.instruction(user).ty)
+                Err(uninitialized(context, function.instruction(user).ty))
             } else {
                 // No store before this load: it may be affected by the stores
                 // after it.
                 return false;
             }
         } else {
-            function.instruction(stores[at - 1].1).operands[0]
+            Ok(stores[at - 1].1)
         };
-        replacements.push((user, value));
+        replacements.push((user, source));
     }
-    for (load, mut value) in replacements {
+    for (load, source) in replacements {
         let load_value = function.instruction(load).result.expect("a load's value");
+        let mut value = source.map_or_else(|value| value, |store| function.instruction(store).operands[0]);
         if value == Operand::Value(load_value) {
             value = poison(context, function.instruction(load).ty);
         }
@@ -1164,6 +1168,7 @@ fn simplify_phi(
 }
 
 /// `PromoteMemToReg`: `allocas` promoted. PromoteMemoryToRegister.cpp#L1264
+
 pub(crate) fn promote_mem_to_reg(
     context: &mut Context,
     layout: &DataLayout,

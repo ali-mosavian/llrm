@@ -15,6 +15,24 @@ REPO = Path(__file__).resolve().parents[1]
 STAMPED = ("llrm-llc",)
 
 
+# llrm-cc's table row and CPU for a C compile at `bits`, and the variables it reads to find its clang and Open Watcom headers.
+C_ROWS = {16: ("x86_16-wat", "-march=i386"), 32: ("x86_32-wat", "-march=i486")}
+CC_ENV = ("LLRM_OW", "LLRM_PIN_CLANG", "LLRM_CLANG_M16")
+
+
+def c_args(bits: int) -> list[str]:
+    """What names the target to llrm-cc: its row (a flag, so the measured environment needs no variable for it) and the CPU."""
+    row, cpu = C_ROWS[bits]
+    return [f"--target={row}", cpu]
+
+
+def cc_environment() -> dict[str, str]:
+    """The variables llrm-cc needs, from the caller's, with the usual default for the Open Watcom tree."""
+    env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
+    env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
+    return env
+
+
 def compiler(found: Path) -> Path:
     """The C compiler in the binaries directory `found`: llrm-cc. Every tool names it through here."""
     return found / "llrm-cc"

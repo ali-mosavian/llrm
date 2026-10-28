@@ -1338,6 +1338,18 @@ fn watching(
     fixed
 }
 
+/// A body run once recorded its idle passes by classifying every edit since
+/// each one ran (chain512: 0.48 G in 1,544 `settled remember` spans, no pass
+/// ever skipped). Nothing is classified until a later run asks.
+#[test]
+fn a_body_run_once_classifies_no_edit_for_its_settled_records() {
+    let mut module = llrm_analysis::testing::parsed(CALLS_G);
+    let (reader, blind) = (std::rc::Rc::default(), std::rc::Rc::default());
+    let before = llrm_mir::footprint::computed();
+    crate::testing::managed(&mut module, watching(&reader, &blind));
+    assert_eq!(llrm_mir::footprint::computed(), before, "edits were classified for records no run has asked of");
+}
+
 const CALLS_G: &str = "declare i16 @g(i16)
 declare i16 @g2(i16)
 
