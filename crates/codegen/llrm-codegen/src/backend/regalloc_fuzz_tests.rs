@@ -1411,8 +1411,8 @@ fn test_the_next_value_is_one_past_the_largest_the_body_names() {
 #[test]
 fn test_classes_given_the_intervals_and_masks_are_the_classes_found_without() {
     use crate::analysis::intervals::{indexed, intervals, worked};
-    use crate::backend::allocate::_masks;
     use crate::backend::classes::RegisterClasses;
+    use crate::backend::masks::_masks;
     use crate::backend::regclass::{Found, classes, classes_given};
     let registers = RegisterClasses::m16();
     for seed in 0..150 {
@@ -1491,8 +1491,8 @@ fn _mask_at(
     during: &[RegId],
     high: &[RegId],
     before: &[RegId],
-) -> super::allocate::Mask {
-    super::allocate::Mask {
+) -> super::masks::Mask {
+    super::masks::Mask {
         slot,
         during: during.iter().copied().collect(),
         high: high.iter().copied().collect(),
@@ -1504,7 +1504,7 @@ fn _mask_at(
 /// points and values.
 #[test]
 fn test_clobbered_agrees_with_a_look_at_every_point() {
-    use super::allocate::{_clobbered, _clobbered_reference, Masks};
+    use super::masks::{_clobbered, _clobbered_reference, Masks};
     use crate::analysis::intervals::{Interval, Segment};
     let registers = [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI];
     let mut seed = 99_u64;
@@ -1555,7 +1555,7 @@ fn test_clobbered_agrees_with_a_look_at_every_point() {
 /// answered by bisection now.
 #[test]
 fn test_clobbered_does_not_look_at_every_point() {
-    use super::allocate::{_clobbered, Masks};
+    use super::masks::{_clobbered, Masks};
     use crate::analysis::intervals::{Interval, Segment};
     let masks = Masks::new((0..20_000).map(|at| _mask_at(at * 3, &[RegId::DX], &[], &[])).collect());
     let mut clobbered = 0;
@@ -1568,7 +1568,7 @@ fn test_clobbered_does_not_look_at_every_point() {
     // reference walks all 20,000 for each question, the bisection none.
     assert!(masks.walked() < 20_000, "{} points looked at for 20,000 questions", masks.walked());
     let one = Interval::new(1, vec![Segment { start: 1, end: 2 }]);
-    let _ = super::allocate::_clobbered_reference(&one, RegId::DX, &masks, 2);
+    let _ = super::masks::_clobbered_reference(&one, RegId::DX, &masks, 2);
     assert!(masks.walked() >= 20_000, "the count did not see the reference walk the points");
 }
 
@@ -1732,7 +1732,7 @@ fn test_a_gap_with_no_room_left_is_answered_by_a_fresh_numbering() {
 /// its point out or put it in, and left every other point where it was.
 #[test]
 fn test_the_points_that_destroy_registers_carried_across_a_rewrite_are_those_of_a_fresh_look() {
-    use super::allocate::{_masks, Masks};
+    use super::masks::{_masks, Masks};
     use crate::analysis::intervals::{changes, indexed};
     let segments = &crate::backend::target::BUILT_IN;
     let mut carried = 0;
