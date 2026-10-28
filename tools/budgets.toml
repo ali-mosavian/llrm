@@ -1687,8 +1687,8 @@ axis = "live"
 name = "regalloc base"
 ratio = 2.5
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w13 regalloc"
-why = "measured 36.9 -> 87.3 Minstr (x2.37)"
+owner = "w10 compile-profile"
+why = "greedy region split on N values live across a call; ours x2.3/doubling vs pin x2.9-3.3 (llc greedy minus -regalloc=fast, instructions:u)"
 
 # [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
 # test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
