@@ -7,7 +7,7 @@ use llrm_dwarf::eh_frame::EhTarget;
 use llrm_object::Frame;
 use llrm_object::debug::FrameRow;
 
-use super::inst::{Addr, AddSub, Gpr, Inst, Memory, Vreg};
+use super::inst::{AddSub, Addr, Gpr, Inst, Memory, Vreg};
 
 /// The DWARF number of a register by name.
 pub fn register(name: &str) -> Option<u64> {
@@ -61,7 +61,12 @@ fn give_back_frame_register(
 
 /// Whether `inst` moves the stack pointer by writeback or by a register.
 fn moves_sp_unmodelled(inst: &Inst) -> bool {
-    let writeback = |addr: &Addr| matches!(addr, Addr::Pre { base, .. } | Addr::Post { base, .. } if *base == Gpr::R31);
+    let writeback = |addr: &Addr| {
+        matches!(
+            addr,
+            Addr::Pre { base, .. } | Addr::Post { base, .. } if *base == Gpr::R31
+        )
+    };
     match inst {
         Inst::Load { addr, .. } | Inst::Store { addr, .. } => writeback(addr),
         Inst::LoadPair { addr, .. } | Inst::StorePair { addr, .. } => writeback(addr),
@@ -86,7 +91,8 @@ pub fn frame(
     let mut state = FrameRow { offset: 0, ..eh_target().entry };
     let mut rows = vec![state.clone()];
     let mut remembered: Option<FrameRow> = None;
-    // The frame address from the stack pointer, while x29 is the frame register.
+    // The frame address from the stack pointer, while x29 is the frame
+    // register.
     let mut from_sp = 0;
     let change = |state: &mut FrameRow, rows: &mut Vec<FrameRow>, at: usize| {
         state.offset = at;
@@ -245,13 +251,17 @@ mod tests {
     #[test]
     fn a_writeback_move_of_the_stack_pointer_gives_no_frame() {
         let reg = |reg| Memory::Int { width: Width::X, bytes: 8, sign: false, reg };
-        let push = Inst::StorePair { first: reg(Gpr::FP), second: reg(Gpr::LR), addr: Addr::Pre { base: Gpr::R31, imm: -16 } };
+        let push =
+            Inst::StorePair { first: reg(Gpr::FP), second: reg(Gpr::LR), addr: Addr::Pre { base: Gpr::R31, imm: -16 } };
         assert!(frame(0, 0, &[&push, &Inst::Ret { rn: Gpr::LR }]).is_none());
     }
 
     #[test]
     fn registers_are_numbered_as_the_aarch64_abi_does() {
-        assert_eq!([register("x0"), register("x30"), register("sp"), register("d8")], [Some(0), Some(30), Some(31), Some(72)]);
+        assert_eq!(
+            [register("x0"), register("x30"), register("sp"), register("d8")],
+            [Some(0), Some(30), Some(31), Some(72)]
+        );
         assert_eq!([register("x31"), register("d32"), register("w0")], [None, None, None]);
     }
 }
