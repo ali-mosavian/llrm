@@ -249,6 +249,10 @@ impl llrm_target::Target for M16 {
         cost_model
     }
 
+    fn selects_by_dag(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "x86-m16"
     }

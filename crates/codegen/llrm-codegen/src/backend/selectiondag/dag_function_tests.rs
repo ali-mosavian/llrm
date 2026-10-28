@@ -876,6 +876,30 @@ define void @f(i16 %n) {
     }
 }
 
+const SEGMENT_LOADED_IN_TWO_BLOCKS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) {
+b1:
+  %0 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  br label %b3
+b3:
+  %1 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  %2 = icmp ne i8 %0, %1
+  br i1 %2, label %b4, label %b3
+b4:
+  ret void
+}
+";
+
+/// A segment constant put in ES in two blocks was one value defined twice
+/// ('value N is defined 2 times in a body that should be in SSA': QB's
+/// `t = PEEK(&H6C): DO: LOOP UNTIL PEEK(&H6C) <> t`, 59 tests of llrm-qb and
+/// llrm-nib under the DAG default).
+#[test]
+fn a_selector_put_in_es_in_two_blocks_is_two_values() {
+    let selected = select_with_contracts(SEGMENT_LOADED_IN_TWO_BLOCKS).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(crate::backend::verify::verify(&selected.body, true), Vec::<String>::new());
+}
+
 fn move_3840_at_m16(metadata: &str) -> crate::backend::isel::Selected {
     let module = llrm_mir::parse::module(&format!(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
