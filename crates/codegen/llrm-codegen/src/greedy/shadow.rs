@@ -1111,7 +1111,7 @@ pub fn decide_with_split(
     let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
-            crate::backend::fpregs::RFP.to_vec()
+            inputs.registers.rfp_registers().to_vec()
         } else {
             (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
         };
@@ -1226,7 +1226,7 @@ pub fn decide_with_split(
                     |list: &BTreeSet<RegId>| -> RegSet { list.iter().map(|r| crate::model::ir::root(*r)).collect() };
                 let mut destroyed = roots(&one.clobbers);
                 if empties {
-                    destroyed.extend(crate::backend::fpregs::RFP);
+                    destroyed.extend(inputs.registers.rfp_registers().iter().copied());
                 }
                 calls.push((slot, destroyed, roots(&one.clobbers_high), read));
             }
@@ -1513,7 +1513,7 @@ mod tests {
             saved: &[],
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
-        let rfp = crate::backend::fpregs::RFP;
+        let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
         assert!(decided.placed.iter().all(|(_, reg)| rfp.contains(reg)), "{:?}", decided.placed);
         // All nine live across the empty-stack point: none keeps a register
         // (the registers placed are the reloads' and the stores' short ranges).

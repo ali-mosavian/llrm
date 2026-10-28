@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use super::*;
-use crate::backend::fpregs::RFP;
 use crate::model::ir::{Mem, Operation};
 use crate::model::lir::LirBlock;
 
 fn fp(at: usize) -> Loc {
-    Loc::Reg(Reg { register: RFP[at], width: 10 })
+    Loc::Reg(Reg { register: llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers()[at], width: 10 })
 }
 
 fn insn(

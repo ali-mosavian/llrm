@@ -3193,7 +3193,7 @@ impl Emitter<'_, '_> {
                     Arc::get_mut(last)
                         .expect("a fresh instruction")
                         .clobbers
-                        .extend(crate::backend::fpregs::RFP.iter().rev().take(scratch).copied());
+                        .extend(self.ctx.registers.rfp_registers().iter().rev().take(scratch).copied());
                 }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {

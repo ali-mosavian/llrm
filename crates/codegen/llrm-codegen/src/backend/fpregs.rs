@@ -19,20 +19,15 @@
 //! `b1 := fld [a]; b1 := fmul b1, b0`, `b1` being `fp1`'s value.
 //!
 //! # Needs
-//! [`RFP`].
+//! [`llrm_lir::registers::Regs::rfp_registers`].
 
 use std::collections::VecDeque;
 
-use llrm_lir::registers::{RegId, Regs, class};
+use llrm_lir::registers::Regs;
 
 use crate::model::ir::{Held, Loc, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashSet, IndexMap};
-
-/// The RFP registers FP0..FP6 (`class::RFP`), in allocation order.
-pub const RFP: [RegId; 7] = [RegId::MM0, RegId::MM1, RegId::MM2, RegId::MM3, RegId::MM4, RegId::MM5, RegId::MM6];
-
-const SLOTS: usize = RFP.len();
 
 /// Which of `FP0`..`FP6` `place` is.
 pub(super) fn slot_of(
@@ -42,10 +37,7 @@ pub(super) fn slot_of(
     let Loc::Reg(Reg { register, width: 10 }) = place else {
         return None;
     };
-    if !regs.in_class(*register, class::RFP) {
-        return None;
-    }
-    RFP.iter().position(|one| one == register)
+    regs.rfp_registers().iter().position(|one| one == register)
 }
 
 /// The slots `what` reads and the slots it writes, as bit masks.
@@ -123,7 +115,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
         })
         .max()
         .map_or(0, |most| most + 1);
-    let border: [u32; SLOTS] = std::array::from_fn(|at| fresh + at as u32);
+    let border: Vec<u32> = (0..regs.rfp_registers().len() as u32).map(|at| fresh + at).collect();
     let blocks = body
         .blocks
         .iter()

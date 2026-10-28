@@ -3457,10 +3457,16 @@ mod tests {
             vec![Loc::Mem(Mem::new(Some(Addr::new(Space::Frame, -8)), 8))],
         );
         let one = Arc::new(Insn::new(1, Some((1, 1)), Some(load), vec![7], vec![]));
-        let held = pins(&[(7, crate::backend::fpregs::RFP[3])]);
+        let held = pins(&[(7, llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers()[3])]);
         let placed = _placed(&one, &held, &crate::backend::classes::RegisterClasses::m16()).expect("placed");
         let what = placed.what.as_ref().expect("semantics");
-        assert_eq!(what.dests, vec![Loc::Reg(Reg { register: crate::backend::fpregs::RFP[3], width: 10 })]);
+        assert_eq!(
+            what.dests,
+            vec![Loc::Reg(Reg {
+                register: llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers()[3],
+                width: 10
+            })]
+        );
         assert!(placed.defines.is_empty(), "{:?}", placed.defines);
     }
 }
