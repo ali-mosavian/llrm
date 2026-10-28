@@ -880,3 +880,20 @@ entry:
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
+
+/// A `long double` compare at m64 was `Emit(Unmapped("UCOM_FpIr80"))`: the
+/// x86-64 CPUs have `fcomi`, so the table selects its flag-setting form.
+#[test]
+fn an_m64_long_double_compare_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-f80:128-n8:16:32:64\"
+define i1 @f(x86_fp80 %a, x86_fp80 %b) {
+entry:
+  %r = fcmp olt x86_fp80 %a, %b
+  ret i1 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("fcom"))));
+}

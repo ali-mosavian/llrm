@@ -2661,7 +2661,13 @@ impl Emitter<'_, '_> {
             // `fnstsw ax; sahf` that put its result in EFLAGS, so those pin
             // pseudos (`FNSTSW16r`, the copy of AH, `SAHF`) emit nothing and
             // `SAHF` is the producer of the flags.
-            _ if name.starts_with("UCOM_Fpr") || name.starts_with("COM_Fpr") => {
+            // `UCOM_FpIr*` (`fucomip`) sets EFLAGS itself: the same compare,
+            // with no status word between it and its user.
+            _ if name.starts_with("UCOM_Fpr")
+                || name.starts_with("COM_Fpr")
+                || name.starts_with("UCOM_FpIr")
+                || name.starts_with("COM_FpIr") =>
+            {
                 let (Loc::Held(left), Loc::Held(right)) = (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
