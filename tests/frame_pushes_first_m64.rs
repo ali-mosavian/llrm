@@ -63,3 +63,29 @@ fn test_an_omitted_m64_frame_reserves_no_cell_for_the_frame_register() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(text.lines().any(|line| line.trim() == "sub rsp, 32"), "{text}");
 }
+
+/// A call through a pointer takes nothing off the stack where no convention of
+/// the target pops (x86-64 SysV), so a function making only such calls needs no
+/// frame register: the pin's `push rax; ...; pop rcx`. llrm kept `push rbp; mov
+/// rbp, rsp; sub rsp, 16 ... leave` for it, treating the call as an opaque
+/// stack adjustment.
+#[test]
+fn test_a_call_through_a_pointer_does_not_pin_the_frame_register() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("a.c");
+    std::fs::write(
+        &source,
+        "extern long (*via)(int);\nextern void report(long);\nint main(void) { report(via(20)); return 0; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .current_dir(scratch.path())
+        .args(["-m64", "-O1", "-fno-builtin", "-S", "-o", "a.s"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(!text.contains("push rbp"), "{text}");
+    assert!(!text.contains("leave"), "{text}");
+}
