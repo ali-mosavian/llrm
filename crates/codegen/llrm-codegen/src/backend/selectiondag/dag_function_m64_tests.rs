@@ -837,6 +837,31 @@ entry:
     assert!(jump.is_some(), "a jmp that returns");
 }
 
+/// A tail call through a pointer that arrives in `rdi` jumped through a copy
+/// (`mov rax,rdi; jmp *rax`, one instruction more than the pin's `jmp *rdi`):
+/// the call's register was the first free one, not the one the pointer held.
+#[test]
+fn an_m64_sibling_call_through_an_argument_jumps_through_its_own_register() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  tail call void %p()
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.indirect && w.name.as_deref() == Some("jmp")))
+        .expect("an indirect jmp");
+    let regs = llrm_lir::registers::Regs(llrm_x86_m64::M64.registers());
+    let (_, through) = jump.requires.last().expect("the callee's register");
+    assert_eq!(regs.root(*through), regs.root(llrm_lir::registers::RegId::RDI));
+}
+
 /// A function returning a `double` at m64 carried the x87 return pseudo (an
 /// unnamed `FloatStore` with no destination) that the stackifier reads at m32;
 /// the listing printer indexed its empty destinations and panicked
