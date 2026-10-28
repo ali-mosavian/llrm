@@ -90,3 +90,31 @@ fn test_a_frame_with_alloca_returns_through_the_frame_register_and_a_pop() {
     assert_eq!(lines[at + 1], "pop rbp", "{text}");
     assert!(!lines.iter().any(|line| *line == "leave"), "{text}");
 }
+
+/// Six callee-saved registers are pushed last of the target's list first, as
+/// `spillCalleeSavedRegisters` does: `push rbp; push r15; ... push rbx`. llrm
+/// pushed `rbx` first and `rbp` last, which sets the code bytes and the order
+/// of the CFI offsets.
+#[test]
+fn test_callee_saved_registers_are_pushed_in_the_reverse_of_the_target_list() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("a.c");
+    std::fs::write(
+        &source,
+        "extern int g(int);\n\
+         int six(int a, int b, int c, int d, int e, int f) {\n\
+         int s1 = g(a), s2 = g(b), s3 = g(c), s4 = g(d), s5 = g(e), s6 = g(f);\n\
+         return s1 + s2 * s3 + s4 * s5 + s6 + a + b + c + d + e + f; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .current_dir(scratch.path())
+        .args(["-m64", "-O2", "-fno-builtin", "-S", "-o", "a.s"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let pushed: Vec<&str> = text.lines().map(str::trim).filter(|line| line.starts_with("push ")).collect();
+    assert_eq!(pushed, ["push rbp", "push r15", "push r14", "push r13", "push r12", "push rbx"], "{text}");
+}
