@@ -5,7 +5,9 @@
 //! call takes a callee-saved register or is spilled. A value that is one
 //! constant (`movz`, `adrp`, an immediate) is never spilled and never takes a
 //! callee-saved register of its own: each use makes it again (LLVM
-//! rematerializes it: `TargetInstrInfo::isReMaterializable`).
+//! rematerializes it: `TargetInstrInfo::isReMaterializable`). So is a chain of
+//! such values, each read by the next and by nothing else that could change
+//! it: the `adrp` and the `add` of a global's address are made again together.
 //!
 //! A 128-bit value (one a `q` access names) is spilled and copied whole
 //! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not keep.
@@ -379,7 +381,7 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     order.sort_by(|a, b| priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
     let candidates = rematerializable(function);
     let wide = wide_registers(function);
-    let mut made_again: HashMap<Reg, Op> = HashMap::new();
+    let mut made_again: HashMap<Reg, Vec<Op>> = HashMap::new();
     let mut assigned: HashMap<Reg, Reg> = HashMap::new();
     let mut spilled: HashMap<Reg, u32> = HashMap::new();
     let mut used_callee_saved: BTreeSet<Reg> = BTreeSet::new();
@@ -428,7 +430,8 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
             }
         }
     }
-    rewrite(function, &assigned, &spilled, &made_again, &wide);
+    let unused = unused_constants(function, &candidates, &made_again);
+    rewrite(function, &assigned, &spilled, &made_again, &unused, &wide);
     let mut allocation = Allocation::default();
     for register in used_callee_saved {
         match register {
@@ -439,6 +442,35 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     allocation
 }
 
+/// The constants nothing reads once the ones made again at each use are
+/// gone: the `adrp` whose only reader was such a global address.
+fn unused_constants(
+    function: &MFunc,
+    candidates: &HashMap<Reg, (Vec<Op>, u32)>,
+    made_again: &HashMap<Reg, Vec<Op>>,
+) -> HashSet<Reg> {
+    let mut unused: HashSet<Reg> = HashSet::new();
+    loop {
+        let mut read: HashSet<Reg> = HashSet::new();
+        for op in function.blocks.iter().flat_map(|block| &block.ops) {
+            let (defs, uses) = op.defs_and_uses();
+            if defs.iter().any(|register| made_again.contains_key(register) || unused.contains(register)) {
+                continue;
+            }
+            read.extend(uses);
+        }
+        let more: Vec<Reg> = candidates
+            .keys()
+            .copied()
+            .filter(|register| !made_again.contains_key(register) && !unused.contains(register) && !read.contains(register))
+            .collect();
+        if more.is_empty() {
+            return unused;
+        }
+        unused.extend(more);
+    }
+}
+
 /// Replaces each virtual register with its physical one; a spilled one is
 /// reloaded into a scratch register before each use and stored after each
 /// definition.
@@ -446,14 +478,15 @@ fn rewrite(
     function: &mut MFunc,
     assigned: &HashMap<Reg, Reg>,
     spilled: &HashMap<Reg, u32>,
-    made_again: &HashMap<Reg, Op>,
+    made_again: &HashMap<Reg, Vec<Op>>,
+    unused: &HashSet<Reg>,
     wide: &HashSet<Reg>,
 ) {
     for block in &mut function.blocks {
         let mut out = Vec::with_capacity(block.ops.len());
         for mut op in std::mem::take(&mut block.ops) {
             // The one definition of a value made at each use.
-            if op.defs_and_uses().0.iter().any(|register| made_again.contains_key(register)) {
+            if op.defs_and_uses().0.iter().any(|register| made_again.contains_key(register) || unused.contains(register)) {
                 continue;
             }
             // A copy of such a value is the definition, aimed at the copy's target.
@@ -462,10 +495,10 @@ fn rewrite(
                 && !made_again.contains_key(dst)
             {
                 match spilled.get(dst) {
-                    None => out.push(aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst))),
+                    None => out.extend(aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst))),
                     Some(slot) => {
                         let scratch = Reg::Gpr(Gpr(pool::GPR_SCRATCH[0]));
-                        out.push(aimed_at(def, scratch));
+                        out.extend(aimed_at(def, scratch));
                         out.push(spill_access(scratch, *slot, false, false));
                     }
                 }
@@ -540,7 +573,7 @@ fn rewrite(
                 out.push(spill_access(register, slot, true, quad));
             }
             for (register, key) in again {
-                out.push(aimed_at(&made_again[&key], register));
+                out.extend(aimed_at(&made_again[&key], register));
             }
             let is_noop = matches!(&op, Op::Copy { dst, src } if dst == src)
                 || matches!(&op, Op::I(Inst::VectorMov { rd, rn }) if rd == rn);
@@ -563,7 +596,7 @@ fn rewrite(
 /// plus `extra` (a callee-saved register's save and restore, or the store and
 /// loads of a slot). Uses and definition count by loop depth.
 fn cheaper_again(
-    candidates: &HashMap<Reg, (Op, u32)>,
+    candidates: &HashMap<Reg, (Vec<Op>, u32)>,
     register: &Reg,
     weight: &HashMap<Reg, f64>,
     uses: &Uses,
@@ -576,51 +609,79 @@ fn cheaper_again(
 }
 
 /// The registers that hold one constant: defined once, by an operation that
-/// reads no register, and the operation.
-fn rematerializable(function: &MFunc) -> HashMap<Reg, (Op, u32)> {
+/// reads no register (or only the register of such a constant, for the one
+/// operation that adds a symbol's page offset), and the operations that make
+/// it, in order, with their count.
+fn rematerializable(function: &MFunc) -> HashMap<Reg, (Vec<Op>, u32)> {
     let mut defined: HashMap<Reg, usize> = HashMap::new();
-    let mut made: HashMap<Reg, (Op, u32)> = HashMap::new();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        for register in op.defs_and_uses().0 {
+            *defined.entry(register).or_default() += 1;
+        }
+    }
+    let mut made: HashMap<Reg, (Vec<Op>, u32)> = HashMap::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         let (defs, uses) = op.defs_and_uses();
-        for register in &defs {
-            *defined.entry(*register).or_default() += 1;
-        }
         // The instructions it takes to make the value.
         let length = match op {
             Op::Imm { bits, value, dst } => Some(crate::expand_imm::mov_imm(*value, *bits, *dst).len() as u32),
             Op::FrameAddress { .. } => Some(1),
             Op::I(Inst::MoveWide { op, .. }) => (*op != Wide::Keep).then_some(1),
             Op::I(Inst::Adr { .. }) => Some(1),
+            Op::I(Inst::AddPageOffset { .. }) => Some(1),
             _ => None,
         };
-        if let Some(length) = length
-            && uses.is_empty()
-            && let [register] = defs.iter().copied().collect::<Vec<_>>()[..]
-            && register.is_virtual()
-        {
-            made.insert(register, (op.clone(), length));
+        let defs: Vec<Reg> = defs.iter().copied().collect();
+        let (Some(length), [register]) = (length, &defs[..]) else { continue };
+        let register = *register;
+        if !register.is_virtual() || defined[&register] != 1 {
+            continue;
+        }
+        match uses[..] {
+            [] if !matches!(op, Op::I(Inst::AddPageOffset { .. })) => {
+                made.insert(register, (vec![op.clone()], length));
+            }
+            // `add rd, page, :lo12:`: the page's own operations come first.
+            [page] if matches!(op, Op::I(Inst::AddPageOffset { .. })) => {
+                if let Some((chain, before)) = made.get(&page)
+                    && defined[&page] == 1
+                {
+                    let mut chain = chain.clone();
+                    chain.push(op.clone());
+                    let before = *before;
+                    made.insert(register, (chain, before + length));
+                }
+            }
+            _ => {}
         }
     }
-    made.retain(|register, _| defined[register] == 1);
     made
 }
 
-/// `op`, a constant's definition, defining `register` instead.
+/// The operations `chain` that make a constant, every register they define
+/// and read replaced by `register`: each reads what the one before wrote.
 fn aimed_at(
-    op: &Op,
+    chain: &[Op],
     register: Reg,
-) -> Op {
-    let mut made = op.clone();
-    made.visit(&mut |slot, role| {
-        if role.writes() {
-            match (slot, register) {
-                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
-                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
-                _ => unreachable!("a register keeps its class"),
-            }
-        }
-    });
-    made
+) -> Vec<Op> {
+    let made: HashSet<Reg> = chain.iter().flat_map(|op| op.defs_and_uses().0).collect();
+    chain
+        .iter()
+        .map(|op| {
+            let mut aimed = op.clone();
+            aimed.visit(&mut |slot, _| {
+                let key = slot.key();
+                if made.contains(&key) {
+                    match (slot, register) {
+                        (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
+                        (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
+                        _ => unreachable!("a register keeps its class"),
+                    }
+                }
+            });
+            aimed
+        })
+        .collect()
 }
 
 fn spilled_copy(
@@ -703,7 +764,7 @@ mod tests {
         let value = Reg::Fpr(Vreg(100));
         let spilled = HashMap::from([(value, 1)]);
         let mut function = function(vec![Op::Copy { dst: value, src: value }]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new());
+        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
         assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 

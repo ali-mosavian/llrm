@@ -4,7 +4,11 @@
 //! hoisting of loop-invariant definitions to the loop's preheader
 //! (`MachineLICM`), for the values selection makes at each use: constants,
 //! frame and global addresses. Only side-effect-free operations whose result is
-//! a virtual register defined once are touched.
+//! a virtual register defined once are touched. A loop hoists only as many
+//! values as the registers left over once what it already holds is counted
+//! (`MachineLICM`'s `CanCauseHighRegPressure`): a value hoisted past that is
+//! spilled for the whole loop, dearer than making it at each use. The most
+//! used go first.
 //!
 //! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
 //! over the arm64 selector's operations, standing in until the core machine
@@ -329,6 +333,103 @@ fn cse(function: &mut MFunc) {
     }
 }
 
+/// The loop's invariant pure definitions, taken out of its `blocks` in the
+/// order they can go (each after what it reads); with `only`, just those
+/// defining one of its registers.
+fn invariants(
+    function: &mut MFunc,
+    blocks: &[usize],
+    definitions: &HashMap<Reg, usize>,
+    mut inside_defs: HashSet<Reg>,
+    only: Option<&HashSet<Reg>>,
+) -> Vec<Op> {
+    let mut hoisted: Vec<Op> = Vec::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in blocks {
+            let ops = std::mem::take(&mut function.blocks[block].ops);
+            let mut kept = Vec::with_capacity(ops.len());
+            for op in ops {
+                let invariant = pure(&op)
+                    && defined(&op).is_some_and(|register| {
+                        definitions.get(&register) == Some(&1) && only.is_none_or(|chosen| chosen.contains(&register))
+                    })
+                    && op.defs_and_uses().1.iter().all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
+                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
+                if invariant {
+                    inside_defs.remove(&defined(&op).expect("a definition"));
+                    hoisted.push(op);
+                    changed = true;
+                } else {
+                    kept.push(op);
+                }
+            }
+            function.blocks[block].ops = kept;
+        }
+    }
+    hoisted
+}
+
+/// The registers among `candidates` (what `probe`, the loop without them,
+/// would have hoisted) worth a register for the whole loop: those the loop
+/// reads most, as many as the registers not already held by what the loop
+/// reads from outside, plus what they are made from.
+fn within_pressure(
+    probe: &MFunc,
+    blocks: &[usize],
+    candidates: &[Op],
+    definitions: &HashMap<Reg, usize>,
+) -> HashSet<Reg> {
+    use crate::regalloc::pool;
+    let made: HashMap<Reg, &Op> = candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
+    let (mut reads, mut outside, mut calls) = (HashMap::<Reg, usize>::new(), HashSet::<Reg>::new(), false);
+    let defined_inside: HashSet<Reg> =
+        blocks.iter().flat_map(|&block| &probe.blocks[block].ops).flat_map(|op| op.defs_and_uses().0).collect();
+    for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
+        calls |= matches!(op, Op::Call { .. });
+        for used in op.defs_and_uses().1 {
+            if made.contains_key(&used) {
+                *reads.entry(used).or_default() += 1;
+            } else if used.is_virtual() && (!defined_inside.contains(&used) || definitions.get(&used) > Some(&1)) {
+                // Read from outside, or carried round the loop (defined more than once): held throughout.
+                outside.insert(used);
+            }
+        }
+    }
+    // Across a call only the callee-saved registers keep a value.
+    let room = |gpr: bool| {
+        let (kept, rest) = if gpr {
+            (pool::GPR_CALLEE_SAVED.len(), pool::GPR_CALLER_SAVED.len())
+        } else {
+            (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
+        };
+        (if calls { kept } else { kept + rest }).saturating_sub(
+            outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count(),
+        )
+    };
+    let mut roots: Vec<(Reg, usize)> = reads.into_iter().collect();
+    roots.sort_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
+    let mut chosen: HashSet<Reg> = HashSet::new();
+    let (mut gprs, mut fprs) = (room(true), room(false));
+    for (root, _) in roots {
+        let gpr = matches!(root, Reg::Gpr(_));
+        let left = if gpr { &mut gprs } else { &mut fprs };
+        if *left == 0 {
+            continue;
+        }
+        *left -= 1;
+        // What it is made from comes along, and lives only until it is made.
+        let mut work = vec![root];
+        while let Some(register) = work.pop() {
+            if chosen.insert(register) {
+                work.extend(made[&register].defs_and_uses().1.into_iter().filter(|used| made.contains_key(used)));
+            }
+        }
+    }
+    chosen
+}
+
 /// Loop-invariant pure definitions move to the end of the loop's preheader.
 fn hoist(function: &mut MFunc) {
     let cfg = cfg(function);
@@ -370,35 +471,13 @@ fn hoist(function: &mut MFunc) {
                 inside_defs.extend(op.defs_and_uses().0);
             }
         }
-        let mut hoisted: Vec<Op> = Vec::new();
         let mut order: Vec<usize> = body.iter().copied().collect();
         order.sort_by_key(|block| cfg.order.iter().position(|one| one == block));
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &block in &order {
-                let ops = std::mem::take(&mut function.blocks[block].ops);
-                let mut kept = Vec::with_capacity(ops.len());
-                for op in ops {
-                    let invariant = pure(&op)
-                        && defined(&op).is_some_and(|register| definitions.get(&register) == Some(&1))
-                        && op
-                            .defs_and_uses()
-                            .1
-                            .iter()
-                            .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
-                        && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
-                    if invariant {
-                        inside_defs.remove(&defined(&op).expect("a definition"));
-                        hoisted.push(op);
-                        changed = true;
-                    } else {
-                        kept.push(op);
-                    }
-                }
-                function.blocks[block].ops = kept;
-            }
-        }
+        // What the loop would hoist, on a copy, and how much of it fits.
+        let mut probe = function.clone();
+        let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
+        let chosen = within_pressure(&probe, &order, &candidates, &definitions);
+        let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;
         }

@@ -494,3 +494,26 @@ define void @strong() {\n  ret void\n}\n";
     assert_eq!(binding("_hook"), llrm_object::Binding::Weak);
     assert_eq!(binding("_strong"), llrm_object::Binding::Public);
 }
+
+/// A global's address (`adrp` and `add`) used after a call was kept in a callee-saved register, and
+/// when those ran out stored to the frame and loaded back: `text_write` of the QB runtime had 81
+/// stack accesses where the pin's clang has none. Two operations make it, so it is made again at
+/// each use like any one-instruction constant.
+#[test]
+fn a_global_address_is_made_again_not_spilled() {
+    let asm = driver::assembly(include_str!("data/global_addresses_across_calls.ll"), Platform::Darwin, true)
+        .expect("lowers");
+    let spills = asm.lines().filter(|l| l.contains("[sp") && (l.contains("str x") || l.contains("ldr x"))).count();
+    assert_eq!(spills, 0, "{asm}");
+}
+
+/// Twenty global addresses a loop with a call stores through were all hoisted to its preheader, more
+/// than the callee-saved registers hold, and spilled for the whole loop: `text_write` of the QB
+/// runtime came to 403 instructions where the pin's clang makes 202. A loop hoists as many as fit.
+#[test]
+fn a_loop_does_not_hoist_more_addresses_than_it_has_registers_for() {
+    let asm = driver::assembly(include_str!("data/global_addresses_in_a_loop.ll"), Platform::Darwin, true)
+        .expect("lowers");
+    let spills = asm.lines().filter(|l| l.contains("[sp") && (l.contains("str x") || l.contains("ldr x"))).count();
+    assert_eq!(spills, 0, "{asm}");
+}
