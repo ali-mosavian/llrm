@@ -1198,18 +1198,18 @@ v:
 define i16 @f(i16 %x) {
 b0:
   %c = icmp eq i16 %x, 1
-  br i1 %c, label %t, label %b1
-
-b1:
-  store i16 3, ptr @g
-  br label %common.ret
+  br i1 %c, label %t, label %v
 
 common.ret:
-  %common.op = phi i16 [ 1, %t ], [ 3, %b1 ]
+  %common.op = phi i16 [ 1, %t ], [ 3, %v ]
   ret i16 %common.op
 
 t:
   store i16 1, ptr @g
+  br label %common.ret
+
+v:
+  store i16 3, ptr @g
   br label %common.ret
 }
 ",
@@ -1310,18 +1310,18 @@ v:
 define i16 @f(i16 %x) {
 b0:
   %c = icmp ne i16 %x, 3
-  br i1 %c, label %b1, label %t
-
-b1:
-  store i16 3, ptr @g
-  br label %common.ret
+  br i1 %c, label %v, label %t
 
 common.ret:
-  %common.op = phi i16 [ 1, %t ], [ 3, %b1 ]
+  %common.op = phi i16 [ 1, %t ], [ 3, %v ]
   ret i16 %common.op
 
 t:
   store i16 1, ptr @g
+  br label %common.ret
+
+v:
+  store i16 3, ptr @g
   br label %common.ret
 }
 ",

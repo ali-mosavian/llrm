@@ -1253,3 +1253,41 @@ define i32 @f(i32 %a, i32 %b) {
         done.body.insns().iter().filter_map(|one| one.line.map(|at| (at.line, at.column))).collect();
     assert!(places.contains(&(7, 5)) && places.contains(&(8, 12)), "{places:?}");
 }
+
+/// A runtime routine called under a convention its declaration does not state
+/// destroys what that convention names, not the contract's whole list: a QB
+/// `PUT32` held `rest` and `i` in ESI and EDI across `B$SMID` in the old
+/// selector and spilled both here (jpeg_single bq32 -Os, +4.5% instructions).
+#[test]
+fn a_runtime_call_destroys_what_the_convention_of_the_call_names() {
+    use llrm_lir::registers::RegId;
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare i32 @llrm.qb.B$X(i32)
+define cc 1000 i32 @f(i32 %a) {
+  %r = call cc 1002 i32 @llrm.qb.B$X(i32 %a)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: true,
+        frame_zeroed: false,
+        facts: None,
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m32::M32,
+        crate::backend::cpu::profile("486").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|one| one.call.is_some()).expect("a call");
+    assert!(!call.clobbers.contains(&RegId::ESI) && !call.clobbers.contains(&RegId::EDI), "{:?}", call.clobbers);
+}
