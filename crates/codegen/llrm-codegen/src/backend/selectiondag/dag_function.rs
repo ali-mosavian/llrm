@@ -792,7 +792,7 @@ fn selected_in(
             return refuse("an alloca that is not an instruction");
         };
         let instruction = function.instruction(def);
-        let llrm_mir::opcode::Opcode::Alloca { allocated, .. } = instruction.opcode else {
+        let llrm_mir::opcode::Opcode::Alloca { allocated, align: wanted, .. } = instruction.opcode else {
             return refuse("an alloca that is not an alloca");
         };
         // `FunctionLoweringInfo`: a constant count multiplies the type's size
@@ -815,6 +815,10 @@ fn selected_in(
         };
         let align =
             crate::backend::isel::natural_align(types, &layout, allocated).max(size & size.wrapping_neg()).clamp(1, 4);
+        // More than the frame keeps the stack aligned to: the frame realigns
+        // the stack pointer for it.
+        let wanted = wanted.map_or(0, |one| one as i64);
+        let align = if wanted > crate::backend::isel::OVER_ALIGNED { wanted } else { align };
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
@@ -826,9 +830,13 @@ fn selected_in(
         let object = &mut objects[*group as usize];
         *object = (object.0.max(*size), object.1.max(*align));
     }
+    let mut over_aligned: Vec<(i64, i64)> = Vec::new();
     for (index, (size, align)) in objects.into_iter().enumerate() {
         let made = Temporaries(&frame).create_stack_temporary(size as u32, align as u32);
         debug_assert_eq!(made, index as i32, "frame objects are numbered as the builder numbered them");
+        if align > crate::backend::isel::OVER_ALIGNED {
+            over_aligned.push((frame.locals.borrow()[index].0, align));
+        }
     }
     // `LowerFormalArguments`' register save area: 6 * 8 bytes of integer
     // registers and 8 * 16 of vector ones.
@@ -1273,6 +1281,7 @@ fn selected_in(
         depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
+        over_aligned,
         landing,
     })
 }
