@@ -946,11 +946,21 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
     // costs a 486 3 clocks): they lie a multiple of it below the registers,
     // and the gap is reserved with them.
-    let align = procedure.registers.align.max(procedure.registers.slot);
-    let gap = (align - pushed % align) % align;
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap) {
+    let slot = procedure.registers.slot;
+    let align = procedure.registers.align.max(slot);
+    // Where the frame register is omitted and that is settled without a size
+    // comparison (`frame_omitted`), its cell is not reserved: the return
+    // address and the registers are what the locals are aligned below. The
+    // 32-bit frames keep it (Watcom's layout, not the pin's).
+    let dropped = matches!(procedure.body.bits, 64) && {
+        let held = frame_held(&procedure);
+        (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
+    };
+    let above = if dropped { slot } else { 0 };
+    let gap = (align - (above + pushed) % align) % align;
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
-            body: lir::LirBody { saved_first: true, ..body },
+            body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
             reserve: procedure.reserve + gap,
             ..procedure
         },
@@ -1151,7 +1161,7 @@ fn parts(
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
     let locals = reserve != 0;
-    let held = |reserve: i64| if omit && locals { reserve + slot } else { reserve };
+    let held = |reserve: i64| if omit && locals && !procedure.body.slot_dropped { reserve + slot } else { reserve };
     // A call finds the stack a multiple of the target's alignment, as its
     // callee assumes (a double on its stack at an 8-aligned address): the frame
     // takes what keeps it so, the return address, the pushed registers, the
