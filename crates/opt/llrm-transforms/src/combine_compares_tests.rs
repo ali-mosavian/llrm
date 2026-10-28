@@ -583,6 +583,22 @@ fn a_division_overflow_check_is_a_multiply_with_overflow() {
     assert!(out.contains("store i32 %1, ptr %p") && !out.contains("= mul i32"), "{out}");
 }
 
+/// `foldICmpWithTruncSignExtendedVal`: a value that survives a sign-extending
+/// truncation is in the kept range (`opt`: `add i32 %x, 128` `u< 256`).
+#[test]
+fn a_value_compared_with_its_sign_extended_truncation_is_a_range_check() {
+    check(
+        "i32 %x",
+        "  %s = shl i32 %x, 24\n  %a = ashr i32 %s, 24\n  %r = icmp eq i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = add i32 %x, 128\n  %1 = icmp ult i32 %0, 256\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = shl i32 %x, 24\n  %a = ashr i32 %s, 24\n  %r = icmp ne i32 %x, %a\n  ret i1 %r\n",
+        "  %0 = add i32 %x, -128\n  %1 = icmp ult i32 %0, -256\n  ret i1 %1\n",
+    );
+}
+
 /// `foldICmpBinOp`: `(x & -P2) == INT_MIN` is `x s< INT_MIN + P2`, `!=` is
 /// `s>=` (`opt`: `icmp slt i16 %x, -32764`, `icmp sgt i16 %x, -32765`). Left
 /// alone, the masked compare reached the selector as an and plus a compare.
