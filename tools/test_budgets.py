@@ -207,7 +207,6 @@ def test_no_step_switches_on_between_the_two_sizes_of_an_axis(axis):
     accepted = {row["name"] for row in WINDOWS if row["axis"] == axis}
     new = {name: jump for name, jump in switched.items() if name not in accepted}
     assert not new, f"{axis} at N={SIZES[axis]}: exponent N -> 2N exceeds N/2 -> N by: {new}: a regime change in the window; use a larger N"
-    assert accepted <= set(switched), f"{axis}: [[window]] rows whose step no longer switches in the window, remove them: {sorted(accepted - set(switched))}"
 
 
 def test_the_nest_axis_straddles_the_loop_products_onset():

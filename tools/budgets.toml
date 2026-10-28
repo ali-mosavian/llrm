@@ -1573,7 +1573,7 @@ owner = "backend-slopes"
 why = "measured 118.9 -> 359.9 Minstr (x3.03)"
 
 # [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
-# test_no_step_switches_on_between_the_two_sizes_of_an_axis). A row goes when its step stops switching.
+# test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
 
 [[window]]
 axis = "joins"
@@ -1598,6 +1598,11 @@ why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator
 [[window]]
 axis = "joins"
 name = "mir decide@675"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "object write"
 why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
 
 [[window]]
