@@ -927,6 +927,7 @@ fn selected_in(
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
     let mut calls = IndexMap::default();
+    let mut pops = IndexMap::default();
     // the landing pad the runtime enters, which no edge reaches
     let mut landing: Option<i64> = None;
     let mut sinks: HashSet<i64> = HashSet::default();
@@ -975,6 +976,7 @@ fn selected_in(
             done.blocks[0].insns.insert(0, std::sync::Arc::new(arrival));
         }
         let from = emitted.len();
+        pops.extend(done.pops.iter().copied());
         calls.extend(done.calls.iter().map(|(at, callee)| {
             let name = match callee {
                 Callee::Global(symbol) => {
@@ -1254,7 +1256,7 @@ fn selected_in(
         inline_places,
         inline_symbols: IndexMap::default(),
         far,
-        pops: IndexMap::default(),
+        pops,
         depth: fixed_depth,
         extents: frame.locals.borrow().clone(),
         temporaries: frame.locals.borrow().len() - fixed_objects,
