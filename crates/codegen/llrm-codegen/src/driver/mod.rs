@@ -520,7 +520,8 @@ pub fn optimized(
                 |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
             )
     })?;
-    if options.arch.expands("fptoui.i64") {
+    // The DAG route expands it itself (`expandFP_TO_UINT`), after the combines.
+    if options.arch.expands("fptoui.i64") && options.isel != crate::backend::shadow::Selector::Dag {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
     timed("mir libm calls", || {
