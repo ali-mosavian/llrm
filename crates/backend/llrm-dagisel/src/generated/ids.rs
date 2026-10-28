@@ -734,6 +734,7 @@ pub mod x86 {
     pub const AND32mr: u16 = 855;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const ANDPSrm: u16 = 977;
     pub const AX: u16 = 3;
     pub const CDQ: u16 = 1202;
     pub const CL: u16 = 11;
@@ -805,6 +806,7 @@ pub mod x86 {
     pub const OR32mr: u16 = 2973;
     pub const OR8mi: u16 = 3045;
     pub const OR8mr: u16 = 3051;
+    pub const ORPSrm: u16 = 3079;
     pub const RAX: u16 = 51;
     pub const RDX: u16 = 56;
     pub const RIP: u16 = 58;
@@ -838,6 +840,7 @@ pub mod x86 {
     pub const XOR32mr: u16 = 22637;
     pub const XOR8mi: u16 = 22709;
     pub const XOR8mr: u16 = 22715;
+    pub const XORPSrm: u16 = 22744;
     pub const sub_16bit: u16 = 4;
     pub const sub_32bit: u16 = 6;
     pub const sub_8bit: u16 = 1;
@@ -863,6 +866,7 @@ pub mod x86 {
         (855, "AND32mr"),
         (927, "AND8mi"),
         (933, "AND8mr"),
+        (977, "ANDPSrm"),
         (1202, "CDQ"),
         (1396, "CQO"),
         (1506, "CWD"),
@@ -921,6 +925,7 @@ pub mod x86 {
         (2973, "OR32mr"),
         (3045, "OR8mi"),
         (3051, "OR8mr"),
+        (3079, "ORPSrm"),
         (4033, "SAHF"),
         (4165, "SBB16mi"),
         (4171, "SBB16mr"),
@@ -950,6 +955,7 @@ pub mod x86 {
         (22637, "XOR32mr"),
         (22709, "XOR8mi"),
         (22715, "XOR8mr"),
+        (22744, "XORPSrm"),
     ];
 }
 

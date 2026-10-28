@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_binop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_binop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:914f1fa737e3a7c5b2e281ebbcfc05952608c04a04e4084641afcb8065dfdf8f -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_binop.rs sha256:b150a77bebfb474077f2b40dc71dead801f077d93fa05a25c59154e36843acec -->
 
 # combine_icmp_binop
 
@@ -10,8 +10,8 @@ at d1106deb71cc).
 MIRROR: the order of the steps and each condition, up to the `Xor`/`Or`
 folds.
 
-OWED, in place as `// OWED:` comments: `foldICmpXNegX`, the equality forms
-of `foldICmpOrXX`, and every arm after `srem` (the shared second operand,
+OWED, in place as `// OWED:` comments: the equality forms of
+`foldICmpOrXX`, and every arm after `srem` (the shared second operand,
 `udiv`, `shl`, `lshr`, `and`...).
 
 DEVIATE 1: `ShareCommonDivisor` takes only its fast path (the offset is 1,
