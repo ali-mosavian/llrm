@@ -139,6 +139,25 @@ fn a_byte_cell_takes_inc_dec_neg_and_not() {
 }
 
 #[test]
+fn a_funnel_shift_takes_a_memory_cell() {
+    // shld $3,%ecx,-0x4(%rbp); shrd %cl,%ecx,-0x4(%rbp). The emitter took
+    // registers only, so the DAG selector's `shld` into a cell stopped
+    // `llrm-nib -m16 -Os` on the runtime ("Unprintable ... shld").
+    let funnel = |name, count| {
+        sem(
+            Operation::Funnel,
+            Some(name),
+            vec![frame(-4, 4)],
+            vec![frame(-4, 4), rg(RegId::ECX, 4), count],
+            None,
+            false,
+        )
+    };
+    assert_eq!(bytes(&funnel("shld", im(3, 1, None))), [0x0f, 0xa4, 0x4d, 0xfc, 0x03]);
+    assert_eq!(bytes(&funnel("shrd", rg(RegId::CL, 1))), [0x0f, 0xad, 0x4d, 0xfc]);
+}
+
+#[test]
 fn a_quadword_multiply_by_an_immediate_takes_imm32() {
     // imul $251,%rax,%rax: the immediate is 32 bits sign-extended, not 8 bytes
     // (unsig stopped the assembler on it).

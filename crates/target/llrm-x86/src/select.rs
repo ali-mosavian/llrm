@@ -161,6 +161,24 @@ fn create_mem_i32(
     Instruction::with2(code, memory, i32_of(value)?).map_err(|error| error.to_string())
 }
 
+fn create_mem_reg_reg(
+    code: Code,
+    memory: MemoryOperand,
+    one: RegId,
+    two: RegId,
+) -> Result<Instruction, String> {
+    Instruction::with3(code, memory, one.iced(), two.iced()).map_err(|error| error.to_string())
+}
+
+fn create_mem_reg_i32(
+    code: Code,
+    memory: MemoryOperand,
+    one: RegId,
+    value: i64,
+) -> Result<Instruction, String> {
+    Instruction::with3(code, memory, one.iced(), i32_of(value)?).map_err(|error| error.to_string())
+}
+
 fn create_reg_reg_reg(
     code: Code,
     one: RegId,
@@ -1673,6 +1691,27 @@ pub fn funnel(
     _assemble(&raised(create_reg_reg_i32(code, dest, other, count)), at, true)
 }
 
+/// `shld`/`shrd` on a memory cell: the cell's bits move, `other` fills them.
+pub fn funnel_mem(
+    name: &str,
+    cell: &ir::Mem,
+    other: RegId,
+    count: Option<i64>,
+    at: At,
+) -> Option<Emitted> {
+    let width = u32::try_from(width_of(other)?).ok().filter(|bytes| matches!(bytes, 2 | 4) && *bytes == cell.width)?;
+    if !["shld", "shrd"].contains(&name) {
+        return None;
+    }
+    let (built, relocated) = operand_of(cell, at.bits)?;
+    let (opcode, bits) = (name.to_uppercase(), width * 8);
+    let made = match count {
+        None => create_mem_reg_reg(code_of!(opcode, "_RM", bits, "_R", bits, "_CL")?, built, other, RegId::CL),
+        Some(count) => create_mem_reg_i32(code_of!(opcode, "_RM", bits, "_R", bits, "_IMM8")?, built, other, count),
+    };
+    _assemble(&raised(made), at, relocated)
+}
+
 /// A count in cx or ecx is one in cl: every shift and rotate reads only `count
 /// & 31`.
 fn _cl(count: Option<RegId>) -> bool {
@@ -2430,6 +2469,14 @@ pub fn emit_in(
             }
             if _cl(reg_of(&sources[2])) {
                 return funnel(name, into, other, None, at);
+            }
+        }
+        if let (Some(cell), Some(other)) = (mem_of(&dests[0]), reg_of(&sources[1])) {
+            if let Some(count) = imm_of(&sources[2]) {
+                return funnel_mem(name, cell, other, Some(count), at);
+            }
+            if _cl(reg_of(&sources[2])) {
+                return funnel_mem(name, cell, other, None, at);
             }
         }
         return None;
