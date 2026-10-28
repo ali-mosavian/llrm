@@ -18,8 +18,8 @@ LAYERS = [
     (
         "mc and target interface",
         [
-            "llrm-object", "llrm-debuginfo", "llrm-omf", "llrm-elf", "llrm-elf32", "llrm-elf64", "llrm-elf-arm64",
-            "llrm-coff", "llrm-coff32", "llrm-coff64", "llrm-macho", "llrm-target", "llrm-instr", "llrm-iselgen",
+            "llrm-object", "llrm-dwarf", "llrm-omf", "llrm-elf",
+            "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-target", "llrm-iselgen",
             "llrm-peepgen",
         ],
     ),
@@ -82,6 +82,13 @@ def test_no_new_upward_dependency_and_the_allow_list_only_shrinks():
     found = violations(workspace())
     assert not found - ALLOWED, f"new upward dependencies: {sorted(found - ALLOWED)}"
     assert not ALLOWED - found, f"no longer violations, remove from ALLOWED: {sorted(ALLOWED - found)}"
+
+
+def test_codegen_names_only_the_format_crates_that_are_not_a_targets():
+    """Codegen wrote `elf32`, `elf64`, `coff32`, `coff64` and `macho` by name; those are target tables now (llrm-x86, llrm-arm64), reached through ObjectTarget."""
+    codegen = next(p for p in workspace() if p["name"] == "llrm-codegen")
+    formats = {d["name"] for d in codegen["dependencies"] if d["kind"] is None and d["name"].startswith(("llrm-elf", "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-omf", "llrm-dwarf"))}
+    assert formats <= {"llrm-omf", "llrm-dwarf"}, sorted(formats)
 
 
 def test_the_root_mir_directory_is_not_tracked():

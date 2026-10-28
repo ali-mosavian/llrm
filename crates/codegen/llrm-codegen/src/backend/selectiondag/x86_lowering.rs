@@ -48,6 +48,8 @@ pub mod x86isd {
     use super::ISD;
 
     pub const ADC: ISD = ISD::Target(477);
+    pub const FSHL: ISD = ISD::Target(625);
+    pub const FSHR: ISD = ISD::Target(626);
     pub const SMUL: ISD = ISD::Target(744);
     pub const UMUL: ISD = ISD::Target(776);
     pub const ADD: ISD = ISD::Target(478);
@@ -59,8 +61,6 @@ pub mod x86isd {
     /// (`sbb r, r`), else `0`.
     pub const SETCC_CARRY: ISD = ISD::Target(740);
     pub const BSF: ISD = ISD::Target(495);
-    pub const FSHL: ISD = ISD::Target(625);
-    pub const FSHR: ISD = ISD::Target(626);
     pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);

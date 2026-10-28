@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dosbatch  # noqa: E402
+import run_tests  # noqa: E402
 
 
 def command(monkeypatch, frontend, target="dos16"):
@@ -17,8 +18,12 @@ def command(monkeypatch, frontend, target="dos16"):
     return dosbatch.c_compile(Path("a.c"), Path("a.obj"), target, "-O2", Path("inc"), ["-mabi=sysv"])
 
 
-def test_llrm_c_stays_the_default_and_takes_the_target_as_a_flag(monkeypatch):
+def test_llrm_cc_is_the_default_and_llrm_c_only_where_asked(monkeypatch):
+    """The default was llrm-c, which a build without the c-legacy feature lacks: every tests/run C program failed in the landing's behavioural stage."""
     words, env = command(monkeypatch, None)
+    assert Path(words[0]).name == "llrm-cc" and env
+    assert dosbatch.c_frontend() == "llrm-cc" and Path(run_tests.compile_command(run_tests.Program(source=Path("a.c"), flags=[], known=None), Path("a.obj"))[0]).name == "llrm-cc"
+    words, env = command(monkeypatch, "llrm-c")
     assert Path(words[0]).name == "llrm-c" and "-m16" in words and env == {}
 
 
@@ -71,7 +76,7 @@ def test_the_start_up_of_a_llrm_cc_c_program_enters_main_(monkeypatch):
     monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-cc")
     assert dosbatch.os_defines("x86-m16", "c") == ("A=1", "B=2", "LL_MAIN=main_")
     assert dosbatch.os_defines("x86-m16", "nib") == ("A=1", "B=2")
-    monkeypatch.delenv("LLRM_C_FRONTEND")
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     assert dosbatch.os_defines("x86-m16", "c") == ("A=1", "B=2")
 
 
@@ -112,6 +117,12 @@ def test_a_watcom_abi_program_links_the_start_up_that_calls_main_whichever_front
     """-mabi=watcom spells `main` as `main_` under llrm-c too: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed failed to link
     ('_main is an undefined reference') when only llrm-cc's runs asked for LL_MAIN=main_ (#5540)."""
     monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
-    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     assert dosbatch.os_defines("x86-m16", "c", "watcom") == ("A=1", "LL_MAIN=main_")
     assert dosbatch.os_defines("x86-m16", "c", None) == ("A=1",)
+
+
+def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
+    """llrm-nib names the hook by absolute path: the object's name began with "/", a directory that did not exist (jwasm A1106 in NibCutTests)."""
+    name = dosbatch.object_name(str(dosbatch.ROOT / "runtime/nib/x86-m16/init.asm"))
+    assert "/" not in name and name == dosbatch.object_name("runtime/nib/x86-m16/init.asm")

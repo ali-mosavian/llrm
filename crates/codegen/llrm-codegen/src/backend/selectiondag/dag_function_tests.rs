@@ -876,6 +876,117 @@ define void @f(i16 %n) {
     }
 }
 
+const SEGMENT_LOADED_IN_TWO_BLOCKS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+define cc 1000 void @f() addrspace(1) {
+b1:
+  %0 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  br label %b3
+b3:
+  %1 = load volatile i8, ptr addrspace(1) getelementptr (i8, ptr addrspace(1) addrspacecast (ptr addrspace(2) inttoptr (i16 64 to ptr addrspace(2)) to ptr addrspace(1)), i16 108)
+  %2 = icmp ne i8 %0, %1
+  br i1 %2, label %b4, label %b3
+b4:
+  ret void
+}
+";
+
+/// A segment constant put in ES in two blocks was one value defined twice
+/// ('value N is defined 2 times in a body that should be in SSA': QB's
+/// `t = PEEK(&H6C): DO: LOOP UNTIL PEEK(&H6C) <> t`, 59 tests of llrm-qb and
+/// llrm-nib under the DAG default).
+#[test]
+fn a_selector_put_in_es_in_two_blocks_is_two_values() {
+    let selected = select_with_contracts(SEGMENT_LOADED_IN_TWO_BLOCKS).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(crate::backend::verify::verify(&selected.body, true), Vec::<String>::new());
+}
+
+/// QB's runtime `gfxdev.c` `gd_fill_select`, under `LLRM_VERIFY`: the scheduler
+/// cloned the `and` whose flags the branch reads, and the clone defined the
+/// value the first one did ('value N is defined 2 times in a body that should
+/// be in SSA'); `link_check` refused every batch that touched `runtime/`.
+const FLAGS_PRODUCER_CLONED: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+@_boxes = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
+@_octets = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
+@_dots = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
+@_lines = internal constant <{ ptr addrspace(1), ptr addrspace(1), ptr addrspace(1), ptr addrspace(1) }> zeroinitializer
+@_kind = internal unnamed_addr global [2 x i8] zeroinitializer
+declare cc 1005 i16 @B$FSEL(i16, i16) addrspace(1)
+declare cc 1005 i16 @B$FLSEL(i16, i16) addrspace(1)
+!5 = !{!"Simple C/C++ TBAA"}
+!6 = !{!"omnipotent char", !5, i64 0}
+!7 = !{!6, !6, i64 0}
+!8 = !{!"int2", !6, i64 0}
+!9 = !{!8, !8, i64 0}
+define cc 1005 void @f(ptr noundef nocapture nofree writeonly initializes((0, 26)) %0, i16 noundef %1, i16 noundef %2) addrspace(1) "llrm-fp-eval"="x87-extended" {
+b1:
+  %3 = and i16 %1, 255
+  %4 = load i16, ptr @_kind, !tbaa !9
+  switch i16 %4, label %b2 [
+  ]
+b2:
+  %5 = phi i16 [ %3, %b1 ], [ %26, %b3 ], [ %28, %b4 ], [ %30, %b5 ]
+  %6 = and i16 %2, 3
+  %7 = shl nuw i16 %4, 2
+  %8 = getelementptr inbounds i8, ptr @_boxes, i16 %7
+  %9 = load ptr addrspace(1), ptr %8, !tbaa !7
+  %10 = shl nuw i16 %4, 3
+  %11 = getelementptr inbounds i8, ptr @_dots, i16 %10
+  %12 = icmp eq i16 %6, 0
+  %13 = select i1 %12, i16 4, i16 0
+  %14 = getelementptr inbounds nuw i8, ptr %11, i16 %13
+  %15 = load ptr addrspace(1), ptr %14, align 4, !tbaa !7
+  %16 = getelementptr inbounds nuw i8, ptr %0, i16 4
+  store ptr addrspace(1) %15, ptr %16, !tbaa !7
+  %17 = getelementptr inbounds i8, ptr @_lines, i16 %7
+  %18 = load ptr addrspace(1), ptr %17, !tbaa !7
+  %19 = getelementptr inbounds nuw i8, ptr %0, i16 8
+  %20 = getelementptr inbounds i8, ptr @_octets, i16 %7
+  %21 = load ptr addrspace(1), ptr %20, !tbaa !7
+  %22 = getelementptr inbounds nuw i8, ptr %0, i16 12
+  %23 = getelementptr inbounds nuw i8, ptr %0, i16 16
+  %24 = getelementptr inbounds nuw i8, ptr %0, i16 24
+  %25 = getelementptr inbounds nuw i8, ptr %0, i16 18
+  br i1 %12, label %b7, label %b6
+b3:
+  %26 = and i16 %1, 15
+  br label %b2
+b4:
+  %27 = and i16 %1, 3
+  %28 = mul nuw nsw i16 %27, 85
+  br label %b2
+b5:
+  %29 = trunc i16 %1 to i1
+  %30 = select i1 %29, i16 255, i16 0
+  br label %b2
+b6:
+  switch i16 %6, label %b13 [
+    i16 1, label %b7
+    i16 2, label %b14
+  ]
+b7:
+  %31 = phi i16 [ 0, %b2 ], [ %5, %b6 ], [ %38, %b14 ], [ 255, %b13 ]
+  %32 = getelementptr inbounds nuw i8, ptr %0, i16 20
+  store i16 %31, ptr %32, !tbaa !9
+  %33 = icmp eq i16 %6, 1
+  %34 = select i1 %33, i16 0, i16 %5
+  %35 = getelementptr inbounds nuw i8, ptr %0, i16 22
+  %36 = tail call cc 1005 addrspace(1) i16 @B$FSEL(i16 noundef %6, i16 noundef %5)
+  %37 = tail call cc 1005 addrspace(1) i16 @B$FLSEL(i16 noundef %6, i16 noundef %5)
+  ret void
+b13:
+  br label %b7
+b14:
+  %38 = xor i16 %5, 255
+  br label %b7
+}
+"#;
+
+#[test]
+fn a_cloned_flag_producer_defines_a_value_of_its_own() {
+    let selected = select_with_contracts(FLAGS_PRODUCER_CLONED).unwrap_or_else(|why| panic!("{why}"));
+    assert_eq!(crate::backend::verify::verify(&selected.body, true), Vec::<String>::new());
+}
+
 fn move_3840_at_m16(metadata: &str) -> crate::backend::isel::Selected {
     let module = llrm_mir::parse::module(&format!(
         "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"

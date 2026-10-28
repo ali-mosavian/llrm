@@ -13,7 +13,8 @@
 //! DEVIATE 2: `narrowMathIfNoOverflow` (in `TryToNarrowDeduceFlags`),
 //! `isFreeToInvert` (`~X - ~Y`, :2587),
 //! `tryFoldInstWithCtpopWithNot`, `foldSubOfMinMax` and everything from the
-//! select-of-sub fold (:2799) on are the next strip.
+//! select-of-sub fold (:2799) on are the next strip, but the `usub.sat`,
+//! `umin` and `umax` identities (:2978-3006).
 //!
 //! DEVIATE 3: constant expressions are skipped (`combine_addsub` DEVIATE 4).
 //!
@@ -565,6 +566,60 @@ fn fold_xor_of_sext_bool(
 }
 
 /// `InstCombinerImpl::visitSub` (:2413).
+/// The `usub.sat`/`umin`/`umax` identities of a difference (:2978-3006).
+fn fold_saturating_difference(
+    c: &mut Combiner,
+    inst: InstId,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let ty = c.type_of(op0);
+    // The operands the one-use call `v` of `base` takes where one of them is
+    // `with`: the other one.
+    let other_of = |c: &Combiner, v: Operand, base: &str, with: Operand| {
+        let q = query(c, Some(inst));
+        let (_, args) = pattern::intrinsic_call(&q, v, base).filter(|_| has_one_use(c, v))?;
+        let [a, b] = *args else { return None };
+        (a == with).then_some(b).or_else(|| (b == with).then_some(a))
+    };
+    // X - usub.sat(X, Y) => umin(X, Y)
+    let usub = {
+        let q = query(c, Some(inst));
+        pattern::intrinsic_call(&q, op1, "llvm.usub.sat")
+            .filter(|_| has_one_use(c, op1))
+            .and_then(
+                |(_, args)| match *args {
+                    [a, y] if a == op0 => Some(y),
+                    _ => None,
+                },
+            )
+    };
+    if let Some(y) = usub {
+        return Some(Visit::Replace(c.create_intrinsic(inst, "umin", ty, &[op0, y])));
+    }
+    // umax(X, Op1) - Op1 --> usub.sat(X, Op1)
+    if let Some(x) = other_of(c, op0, "llvm.umax", op1) {
+        return Some(Visit::Replace(c.create_intrinsic(inst, "usub.sat", ty, &[x, op1])));
+    }
+    // Op0 - umin(X, Op0) --> usub.sat(Op0, X)
+    if let Some(x) = other_of(c, op1, "llvm.umin", op0) {
+        return Some(Visit::Replace(c.create_intrinsic(inst, "usub.sat", ty, &[op0, x])));
+    }
+    // Op0 - umax(X, Op0) --> 0 - usub.sat(X, Op0)
+    if let Some(x) = other_of(c, op1, "llvm.umax", op0) {
+        let sat = c.create_intrinsic(inst, "usub.sat", ty, &[x, op0]);
+        let zero = c.int(ty, 0);
+        return Some(c.replace_with_binop(inst, BinaryOp::Sub, zero, sat, Flags::default()));
+    }
+    // umin(X, Op1) - Op1 --> 0 - usub.sat(Op1, X)
+    if let Some(x) = other_of(c, op0, "llvm.umin", op1) {
+        let sat = c.create_intrinsic(inst, "usub.sat", ty, &[op1, x]);
+        let zero = c.int(ty, 0);
+        return Some(c.replace_with_binop(inst, BinaryOp::Sub, zero, sat, Flags::default()));
+    }
+    None
+}
+
 pub fn visit_sub(
     c: &mut Combiner,
     inst: InstId,
@@ -609,13 +664,14 @@ pub fn visit_sub(
         return found;
     }
     // DEVIATE 2: isFreeToInvert (~X - ~Y); DEVIATE 1: vector_reduce_add.
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 6] = [
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 7] = [
         fold_constant_minuend,
         fold_constant_mask_minuend,
         fold_negated_remainder,
         fold_bitwise_difference,
         fold_and_difference,
         fold_xor_of_sext_bool,
+        fold_saturating_difference,
     ];
     steps.iter().find_map(|step| step(c, inst, op0, op1)).unwrap_or(Visit::None)
 }

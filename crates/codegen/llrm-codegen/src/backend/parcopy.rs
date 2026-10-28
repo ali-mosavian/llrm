@@ -921,7 +921,7 @@ mod tests {
         let got = scheduled(&body).unwrap();
 
         assert_eq!(verify::verify(&got, false), Vec::<String>::new());
-        let defined: BTreeSet<u32> = got.insns().iter().flat_map(|one| one.defines.clone()).collect();
+        let defined: BTreeSet<u32> = got.iter_insns().flat_map(|one| one.defines.clone()).collect();
         assert_eq!(defined, BTreeSet::from([11, 12]));
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
         );
         let got = super::expanded(&body);
         let names: Vec<String> =
-            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+            got.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["add"]);
         let add = &got.insns()[0];
         assert!(add.uses.is_empty() && add.undefs == [1], "uses {:?} undefs {:?}", add.uses, add.undefs);
