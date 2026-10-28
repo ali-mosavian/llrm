@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:3325dd2b1134d3aa8f91b0dae5aa94dbc7dba6ffdd15e65c18f6f04163c5c549 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:4c6407b4c8dff0d8f7d790edfcc0f9de55444d315e8ce5943f91cecd1d78c4b6 -->
 
 # machinesink
 
@@ -55,18 +55,14 @@ clocks, matmul -2.9% clocks and -5.3% code; objects -Os: x_mergesort m16
 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 identical). The rule had bought -85 B of QCport -Os on the old allocator.
 
-DEVIATE M5 (#2903): in a build for size no edge is broken, except where the
-instruction is in a loop (row M6, below); the pin breaks it at any size
-(`isWorthBreakingCriticalEdge`, MachineSink.cpp:1040-1105, has no size
-check). Without the rule m16 -Os grows 66 B in 22 objects (recgcd +5,
-recsum +5, switch +4, bintree +4), m32 79 B. The block
-costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
-834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
-+228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
-`xor` and a copy before its test, and a frame, where the pin sinks the
-constant (195 bytes against 190 with the edge broken). Exit, decided
-2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
-or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
+Row M5 (was DEVIATE M5 #2903, retired 2026-10-28): a build for size breaks
+a critical edge as the pin does (`isWorthBreakingCriticalEdge` has no size
+check). Measured (llrm-cc, bench and tests/run C programs, -Os, own
+binaries a pair): m16 179 programs +42 B (8 smaller, 12 larger by at most
+7, one by 24), every changed program within +9 B of main's figure; m32 182
+programs +82 B (18 larger by 4 to 12, one by 24, none smaller): each
+split edge costs a jump. QB `parity/branch` -Os bq32 kept the `shl`, `sub`
+and `add` of one arm above the test (47 instructions against 30).
 
 Row M6: an edge of a loop is broken in a build for size too (x_collatz -Os
 m32 313 -> 309 B, m16 340 -> 334, no object grows): the

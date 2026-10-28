@@ -107,7 +107,7 @@ def test_the_smoke_binaries_default_to_the_release_dir_when_all_three_are_there(
     try:
         ps.smoke_bins(env)
     except SystemExit as why:
-        assert "lacks llrm-c, llrm-qb, llrm-nib" in str(why)
+        assert "lacks llrm-cc, llrm-llc, llrm-qb, llrm-nib" in str(why)
     else:
         raise AssertionError("an empty release dir was accepted")
     for name in ps.BINARIES:
@@ -2012,3 +2012,19 @@ def test_format_tip_commits_a_generated_page_that_is_new(tmp_path):
     sh(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
     assert ps.format_tip(tmp_path) is True
     assert "docs/optimizations/passes/newpass.md" in sh(tmp_path, "ls-files"), "the new page is not in the tip"
+
+
+def test_the_tests_get_the_clang_of_the_trees_own_pin(tmp_path):
+    """#5789 bumped the pin's m16 sha in a batch while the runner's LLRM_CLANG_M16 stayed the old build: the dosbatch tests refused the batch ("not the pinned clang")."""
+    (tmp_path / "tree/toolchain/clang").mkdir(parents=True)
+    (tmp_path / "tree/toolchain/clang/pin").write_text("aaaa # upstream\nbbbb # m16 fork\n")
+    for sha in ("bbbb", "cccc"):
+        (tmp_path / "by" / sha / "bin").mkdir(parents=True)
+        (tmp_path / "by" / sha / "bin/clang").write_text("")
+    env = {"LLRM_CLANG_M16": "/old/clang"}
+    ps.with_pinned_clang(env, tmp_path / "tree", tmp_path / "by")
+    assert env["LLRM_CLANG_M16"] == str(tmp_path / "by/bbbb/bin/clang")
+    (tmp_path / "tree/toolchain/clang/pin").write_text("aaaa\ndddd\n")
+    env = {"LLRM_CLANG_M16": "/old/clang"}
+    ps.with_pinned_clang(env, tmp_path / "tree", tmp_path / "by")
+    assert env["LLRM_CLANG_M16"] == "/old/clang", "no build for the sha: the runner's value stays"
