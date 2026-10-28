@@ -1832,9 +1832,26 @@ def test_a_diff_that_touches_a_tool_runs_that_tools_python_tests_and_a_red_one_r
         stdout = "FAILED tools/test_other.py::test_x\n1 failed"
         stderr = ""
 
-    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done()) == ["FAILED tools/test_other.py::test_x", "1 failed"]
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done(), ensure=lambda: "") == ["FAILED tools/test_other.py::test_x", "1 failed"]
     assert "tools/test_other.py" in ran[0]
     assert ps.tool_test_failures(["docs/a.md"], tmp_path, run=lambda *a, **k: ran.append("never")) == [] and "never" not in ran
+
+
+def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(tmp_path):
+    """The 02:32 batch was refused ("stale binaries ... run cargo build --release --bins") by its own tool-tests stage: pytest ran before the build stage had refreshed the release binaries."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+    order = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: order.append("pytest") or Done(), ensure=lambda: order.append("ensure") or "") == []
+    assert order == ["ensure", "pytest"], order
+    order.clear()
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda *a, **k: order.append("pytest"), ensure=lambda: "binaries still older than the merged tree") == ["binaries still older than the merged tree"]
+    assert "pytest" not in order
     import inspect
 
     assert "tool_test_failures(" in inspect.getsource(ps.merge_batch)
