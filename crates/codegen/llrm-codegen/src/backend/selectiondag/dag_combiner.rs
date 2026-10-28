@@ -352,6 +352,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
+            // `visitFunnelShift`, its closing `SimplifyDemandedBits(N)`; the
+            // folds above it are not translated.
+            ISD::FShl | ISD::FShr => self.simplify_demanded(node),
             _ => None,
         }
     }
