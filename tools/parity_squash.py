@@ -1281,17 +1281,33 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
 
 def pre_merge_stale(files: list[str], build=None, run=None) -> list[str]:
     """The finding lines of tools/oracle_sweep.py with `LLRM_CHECK_STALE` alone (every sweep program, -O2, both machines) on the merged tree's release bins, when the batch changes
-    crate source; none, and nothing built or run, otherwise. The sweep ran at the gate only: 798dba289 landed and bintree, fpbench and jpeg_single failed it for ~2989 commits."""
+    crate source; none, and nothing built or run, otherwise (the build is the one behavioural made for this tree: cargo no-ops). The sweep ran at the gate only: 798dba289 landed and bintree, fpbench and jpeg_single failed it for ~2989 commits."""
     if not any(f.startswith("crates/") and f.endswith(".rs") and "_tests" not in f and "/tests/" not in f for f in files):
         print("stale: skipped (no crate source changed)")
         return []
     started = time.time()
     (build or _build_release)()
-    done = (run or _run_stale)()
+    try:
+        done = (run or _run_stale)()
+    except subprocess.TimeoutExpired:  # uncaught, it escaped release_pass and refused every member as a tool fault (#5696)
+        return ["the stale oracle ran past 900 s"]
     print(f"stale: {done.stdout.strip().splitlines()[0] if done.stdout.strip() else 'no report'}, {time.time() - started:.0f}s")
     if done.returncode == 0:
         return []
     return [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip() and not line.startswith("wall ")][:8] or [f"oracle_sweep exited {done.returncode} with no output"]
+
+
+def stale_culprits(group: list[str], files_of, on_base: set[str], merge_all, merge_alone, check=None) -> list[str]:
+    """The PRs of `group` that add a stale finding kind the base lacks: crate-touching PRs asked first, by halving, then each alone. A red base with nothing added names nobody."""
+    check = check or pre_merge_stale
+    added = lambda files: bool(stale_kinds(check(files)) - on_base)  # noqa: E731
+    crate_prs = [number for number in group if any(f.startswith("crates/") for f in files_of(number))]
+    return red_members_suspects_first(
+        group,
+        crate_prs,
+        lambda subset: merge_all(subset) and added(sorted({f for n in subset for f in files_of(n)})),
+        lambda number: merge_alone(number) and added(files_of(number)),
+    )
 
 
 def stale_kinds(lines: list[str]) -> set[str]:
@@ -2275,15 +2291,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             # a finding the base has too is no PR's: only the kinds a PR adds name it
             clean_checkout(BASE)
             on_base = stale_kinds(pre_merge_stale(["crates/_base.rs"]))
-            files_of = lambda number: head_files(infos[number]['headRefOid'])  # noqa: E731
-            added = lambda files: bool(stale_kinds(pre_merge_stale(files)) - on_base)  # noqa: E731
-            crate_prs = [number for number in group if any(f.startswith("crates/") for f in files_of(number))]
-            culprits = red_members_suspects_first(
-                group,
-                crate_prs,
-                lambda subset: merge_all(subset) and added(sorted({f for n in subset for f in files_of(n)})),
-                lambda number: merge_alone(number) and added(files_of(number)),
-            )
+            culprits = stale_culprits(group, lambda number: head_files(infos[number]['headRefOid']), on_base, merge_all, merge_alone)
             for number in culprits:
                 named[number] = "LLRM_CHECK_STALE fails with it"
                 print(f"STALE RED pre-merge: #{number}")

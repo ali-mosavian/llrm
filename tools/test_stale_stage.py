@@ -57,3 +57,41 @@ def test_a_finding_the_base_already_has_is_no_prs_to_blame():
     more = ["282 compiles / 2 new finding kinds / 0 expected / 0 expected entries paid (delete them)", "   9  exit 1: $QB$MAIN: a call with no callee", "      e.g. ['a.bas -m16']", "   3  exit 101: x added a memory operation: the frozen globals-aa no longer covers the module"]
     assert ps.stale_kinds(base) == {"exit 1: $QB$MAIN: a call with no callee"}
     assert ps.stale_kinds(more) - ps.stale_kinds(base) == {"exit 101: x added a memory operation: the frozen globals-aa no longer covers the module"}
+
+
+def test_a_timeout_of_the_sweep_is_a_finding_not_a_crash_of_the_batch():
+    """An uncaught TimeoutExpired escaped release_pass and refused every member as a tool fault (#5696)."""
+    import subprocess
+
+    def slow():
+        raise subprocess.TimeoutExpired("oracle_sweep", 900)
+
+    assert ps.pre_merge_stale(["crates/a/src/x.rs"], build=lambda: None, run=slow) == ["the stale oracle ran past 900 s"]
+
+
+GLOBALS = "   3  exit 101: x added a memory operation: the frozen globals-aa no longer covers the module"
+DOT = "   2  exit 1: $QB$MAIN: a call with no callee"
+
+
+def blamed(adds: dict[str, list[str]], base: set[str]):
+    """The PRs named for a batch of `adds` (PR -> finding lines it brings) over a base with the kinds `base`."""
+    files = {n: [f"crates/{n}/src/x.rs"] for n in adds}
+    by_file = {f"crates/{n}/src/x.rs": n for n in adds}
+    return ps.stale_culprits(
+        list(adds),
+        lambda n: files[n],
+        base,
+        merge_all=lambda subset: True,
+        merge_alone=lambda n: True,
+        check=lambda fs: [line for f in fs for line in adds[by_file[f]]],
+    )
+
+
+def test_only_the_pr_that_adds_a_kind_over_a_red_base_is_blamed():
+    """A red base fails every PR merged alone; blaming them all refused the whole batch for the base's own finding."""
+    on_base = ps.stale_kinds([DOT])
+    assert blamed({"1": [DOT], "2": [DOT, GLOBALS], "3": [DOT]}, on_base) == ["2"]
+
+
+def test_a_red_base_with_nothing_added_names_nobody():
+    assert blamed({"1": [DOT], "2": [DOT]}, ps.stale_kinds([DOT])) == []
