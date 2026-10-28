@@ -307,6 +307,14 @@ impl Selector<'_> {
             {
                 Ok(Addr::Register { base: *base, index: index.reg, extend: index.extend, shifted: index.shift != 0 })
             }
+            // An offset the access takes as it is: the sum of base and index in a register, the offset
+            // in the access. Accesses of one object at several offsets share the sum (clang's
+            // `add x8, x0, x1` once, then `[x8, #8]`, `[x8, #16]`).
+            (_, Some(_)) if address.offset != 0 && offset_in_access(address.offset, scale) => {
+                let base = self.pointer_register(&AddrExpr { index: None, offset: 0, ..address.clone() })?;
+                let sum = self.with_index(base, address)?;
+                Ok(Addr::Offset { base: sum, imm: address.offset })
+            }
             // A global, frame object or offset base with an index: the base in
             // a register, the index in the access.
             (_, Some(index)) if index.shift == 0 || i64::from(1u8 << index.shift) == scale => {
@@ -342,9 +350,7 @@ impl Selector<'_> {
         offset: i64,
         scale: i64,
     ) -> Selected<Addr> {
-        let scaled = offset >= 0 && offset % scale == 0 && offset / scale < 4096;
-        let unscaled = (-256..256).contains(&offset);
-        if scaled || unscaled {
+        if offset_in_access(offset, scale) {
             return Ok(Addr::Offset { base, imm: offset });
         }
         let register = self.add_constant(base, offset);
@@ -616,4 +622,14 @@ impl Selector<'_> {
         });
         Ok(AddrExpr::of(Base::Reg(sum)))
     }
+}
+
+/// Whether an access of `scale` bytes takes `offset` in its own encoding: scaled and unsigned (`ldr x, [x, #8]`)
+/// or unscaled and signed (`ldur`).
+fn offset_in_access(
+    offset: i64,
+    scale: i64,
+) -> bool {
+    let scaled = offset >= 0 && offset % scale == 0 && offset / scale < 4096;
+    scaled || (-256..256).contains(&offset)
 }

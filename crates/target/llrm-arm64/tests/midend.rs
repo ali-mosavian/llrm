@@ -517,3 +517,13 @@ fn a_loop_does_not_hoist_more_addresses_than_it_has_registers_for() {
     let spills = asm.lines().filter(|l| l.contains("[sp") && (l.contains("str x") || l.contains("ldr x"))).count();
     assert_eq!(spills, 0, "{asm}");
 }
+
+/// Stores at several offsets from `base + index` each added the offset to the base and used the
+/// register-register form (`add x9, x0, #8; strb w10, [x9, x1]`, three times), where clang adds base and
+/// index once and uses immediate offsets: `lh_alloc` of the QB runtime came to 362 instructions against 90.
+#[test]
+fn accesses_at_several_offsets_from_base_plus_index_share_the_sum() {
+    let asm = driver::assembly(include_str!("data/base_index_offsets.ll"), Platform::Darwin, true).expect("lowers");
+    let adds = asm.lines().filter(|l| l.trim_start().starts_with("add ")).count();
+    assert_eq!(adds, 1, "{asm}");
+}

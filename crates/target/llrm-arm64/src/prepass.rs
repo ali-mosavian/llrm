@@ -26,6 +26,11 @@ fn pure(op: &Op) -> bool {
     match op {
         Op::Imm { .. } | Op::FrameAddress { .. } => true,
         Op::Copy { .. } => false,
+        // A sum of two registers, as an address makes: equal sums of virtual registers are one value.
+        Op::I(Inst::AddSubShifted { op: AddSub { set_flags: false, .. }, .. } | Inst::AddSubExtended { op: AddSub { set_flags: false, .. }, .. }) => {
+            let (defs, uses) = op.defs_and_uses();
+            defs.iter().chain(&uses).all(|register| register.is_virtual())
+        }
         Op::I(inst) => {
             matches!(
                 inst,
