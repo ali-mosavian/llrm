@@ -17,11 +17,6 @@ class CompilerTests(unittest.TestCase):
         """libc.c was built by llrm-c while the programs' calling convention came from the other front end's rows: on parity it failed (E1034 memcpy "already defined")
         and the harness stopped before the first program."""
         seen = []
-        with mock.patch.object(torture.subprocess, "run", lambda command, **kw: seen.append((command, kw.get("env", {}))) or mock.Mock(returncode=0)):
-            torture.build_support("x86-m32", Path("/w/libc.obj"))
-        (command, env), = seen
-        self.assertEqual(Path(command[0]).name, "llrm-cc")
-        self.assertEqual(env["LLRM_CC_TARGET"], "x86_32-wat")
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(torture, "run_within_cpu", lambda command, seconds, env=None: seen.append((command, env)) or None):
             (Path(tmp) / "a.c").write_text("int main(void) { return 0; }\n")
             torture.build(Path(tmp) / "a.c", "O2", "x86-m32", Path(tmp), Path(tmp) / "libc.obj", "T0", [])
@@ -30,10 +25,12 @@ class CompilerTests(unittest.TestCase):
 
 
 class CauseTests(unittest.TestCase):
-    def test_a_front_end_error_is_counted_by_what_it_says_not_where_or_of_what(self):
-        text = "llrm-c: wccq failed on /x/y.c:\n/x/y.c(10): Warning! W131: No prototype found for function 'f'\n/x/y.c(12): Error! E1054: Missing operand\n"
-        self.assertEqual(torture.cause(text), "wccq: Missing operand")
-        self.assertEqual(torture.cause("llrm-c: foo_: place n45 has incomplete extent"), "foo_: place nN has incomplete extent")
+    def test_a_compile_error_is_counted_by_what_it_says_not_where_or_of_what(self):
+        """clang prints its warnings before the error that stops it: the first line was a warning, so 'loop-2d' and 20031211-2 were counted as warnings."""
+        text = "/x/y.c:5:1: warning: a function definition without a prototype is deprecated\n/x/y.c:12:3: error: use of undeclared identifier 'f'\n"
+        self.assertEqual(torture.cause(text), "error: use of undeclared identifier '_'")
+        self.assertEqual(torture.cause("llrm-llc: foo_: place n45 has incomplete extent"), "llrm-llc: foo_: place nN has incomplete extent")
+        self.assertEqual(torture.cause("/x/y.c:5:1: warning: w\nllrm-llc: loop-2d: line 61: expected a constant, found `add`"), "llrm-llc: loop-2d: line N: expected a constant, found `add`")
 
     def test_a_clang_error_is_the_cause_not_the_warning_before_it(self):
         """A warning on the first line was every finding's cause: 920411-1 and 930718-1 counted by their warnings under llrm-cc."""
@@ -42,16 +39,30 @@ class CauseTests(unittest.TestCase):
 
     def test_a_refusal_is_matched_on_the_cause_and_names_its_reason(self):
         rules = torture.expected()
-        self.assertIn("front end", torture.refusal("wccq: Expecting '_' but found '_'", rules))
+        self.assertIn("K&R", torture.refusal("error: function with no prototype cannot use the regcall calling convention", rules))
         self.assertIsNone(torture.refusal("_main: .X is neither defined nor imported", rules))
 
-
-    def test_the_front_ends_gnu_and_c99_limits_are_named_not_counted_as_findings(self):
-        """Five more wccq errors (15 builds) were listed as compile findings; each is syntax Open Watcom lacks."""
+    def test_the_gnu_limits_and_mir_subset_are_named_not_counted_as_findings(self):
         rules = torture.expected()
-        for cause in ("wccq: Cannot use typedef '_' as a variable", "wccq: Incomplete enum declaration", "wccq: Type cast must be a scalar type",
-                      "wccq: Assembler error: '_'", "wccq: Expression for '_' must be a '_' or '_'"):
+        for cause in ("error: function definition is not allowed here", "error: use of unknown builtin '_' [-Wimplicit-function-declaration]",
+                      "llrm-llc: N-N: line N: `blockaddress` is outside MIR's subset of LLVM", "fatal error: '_' file not found",
+                      "/x/y.c: asm: an operand that is not a memory place"):
             self.assertIsNotNone(torture.refusal(cause, rules), cause)
+
+    def test_a_compiler_fault_already_found_is_open_and_one_not_found_yet_is_not(self):
+        """A crash the corpus found is listed as `open`, not passed and not a gate failure; the same crash in another place is a new finding."""
+        rules = torture.open_findings()
+        self.assertIn("panics", torture.known("thread '_' (N) panicked at crates/opt/llrm-transforms/src/adce.rs:N:N:", rules))
+        self.assertIsNone(torture.known("llrm-llc: a cause nobody has seen", rules))
+        self.assertIn("20040409-1", [one.get("program") for one in rules])
+
+    def test_the_support_library_defines_no_builtin_and_leaves_the_runtimes_routines_to_it(self):
+        """libc.c defined `__builtin_memcpy` and the like for llrm-c, which clang refuses ('definition of builtin function'), and its own memcpy
+        for a runtime that has one ('redefinition of memcpy_', 411 link failures)."""
+        text = (Path(__file__).parent / "libc.c").read_text()
+        self.assertNotIn("__builtin_", text)
+        self.assertEqual(torture.runtime_defines("x86-m32"), ["-DRUNTIME_HAS_MEMCPY", "-DRUNTIME_HAS_MEMMOVE", "-DRUNTIME_HAS_MEMSET"])
+        self.assertEqual(torture.runtime_defines("x86-m16"), ["-DRUNTIME_HAS_MEMMOVE"])
 
 
 class OptionTests(unittest.TestCase):
@@ -103,6 +114,13 @@ class OptionTests(unittest.TestCase):
             out = Path(directory) / "gate.json"
             torture.write_out(mock.Mock(out=out), {(Path("a.c"), "O2"): ("compile", "why")})
             self.assertEqual(out.read_text().count("a@O2"), 1)
+
+
+class BracedOptionTests(unittest.TestCase):
+    def test_options_in_braces_are_read_too(self):
+        """930529-1 says `{ dg-options { "-fwrapv" } }`: the braces hid the quotes from the reader, the program was built without -fwrapv and its
+        `i <= INT_MAX + 3` loop never ended (a 15 s timeout at -O2 and -Os, listed as an open compiler fault)."""
+        self.assertEqual(torture.program_options('/* { dg-options { "-fwrapv" } } */\nint x;'), ["-fwrapv"])
 
 
 class SymbolTests(unittest.TestCase):
