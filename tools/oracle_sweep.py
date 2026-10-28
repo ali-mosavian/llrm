@@ -9,7 +9,7 @@ convention the target does not define, a literal that does not fit) is not a fai
 prints each distinct panic with its programs and exits 1 if there is one. Repeat it before a change to a pass or an analysis lands.
 
 A sweep that finds nothing proves nothing unless the oracles ran. Before the sweep each oracle is run alone on the largest programs
-and must cost the compile at least 0.05% more instructions (`perf stat`, user mode) than the same compile with a variable of the same length that no oracle reads; one that does not is named and
+and must have its hook reached (`LLRM_DEBUG=checks`) and cost the compile more instructions (`perf stat`, user mode) than the same compile with a variable of the same length that no oracle reads, at m16 and m32; one that does not is named and
 the sweep stops with exit 2 (`--allow-unexercised NAME` for one the target cannot reach, said aloud in the output).
 """
 
@@ -31,7 +31,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
-CHECKS = ("DATAFLOW", "FACTS", "CLOBBERED", "COALESCE", "REPLAY", "INTERN", "SKIPPED", "STALE")
+# COALESCE: its hook went with the old coalescer (902b535761). SKIPPED: no corpus program skips a pass in a fixed-point round (846 compiles at
+# -O1/-O3/-Os, -O2/-Omax on bench and examples, m16 and m32, reached its hook in none), so it never runs here.
+CHECKS = ("DATAFLOW", "FACTS", "CLOBBERED", "REPLAY", "INTERN", "STALE")
+PROBE_MACHINES = ("-m16", "-m32")  # DATAFLOW and CLOBBERED hooks are reached at m16 only
+NOTABLE = 0.0005  # the old bar, a fraction of the control's instructions: printed, no longer a verdict
 # What a front end says in words and exits 1/2 for: not an oracle's finding.
 REFUSED = re.compile(
     r"entry function '.*' does not exist|this target defines no|is not available: the block is|past DGROUP's|does not fit|"
@@ -61,30 +65,35 @@ def classify(returncode: int, stderr: str) -> str | None:
     return "exit %d: %s" % (returncode, lines[-1][:100] if lines else "no message")
 
 
-def instructions(binaries: Path, job: tuple[str, Path, str, str], env_extra: dict[str, str]) -> int | None:
-    """User-mode instructions of one compile with `env_extra` added, or None where `perf` cannot say."""
+def instructions(binaries: Path, job: tuple[str, Path, str, str], env_extra: dict[str, str]) -> tuple[int | None, dict[str, int]]:
+    """(user-mode instructions of one compile with `env_extra` added, or None where `perf` cannot say; the oracles its hooks reached)."""
     tool, source, level, machine = job
     out = Path(os.environ.get("TMPDIR", "/tmp")) / f"probe-{os.getpid()}-{abs(hash((job, tuple(env_extra))))}.o"
     command = ["perf", "stat", "-x,", "-e", "instructions:u", str(binaries / tool), str(source), level, machine, "-o", str(out)]
+    env = {**os.environ, "LLRM_DEBUG": ",".join(filter(None, [os.environ.get("LLRM_DEBUG"), "checks"])), **env_extra}
     try:
-        done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **env_extra})
+        done = subprocess.run(command, capture_output=True, text=True, env=env)
     except FileNotFoundError:
-        return None
+        return None, {}
     out.unlink(missing_ok=True)
+    reached = {name: int(sites) for name, sites in REACHED.findall(done.stderr)}
     for line in done.stderr.splitlines():
         if "instructions" in line and line.split(",")[0].isdigit():
-            return int(line.split(",")[0])
-    return None
+            return int(line.split(",")[0]), reached
+    return None, reached
 
 
-def exercised(binaries: Path, probes: list[tuple[str, Path, str, str]]) -> dict[str, tuple[int, int] | None]:
-    """For each oracle: (instructions with a variable of the same length that no oracle reads, with the oracle) over `probes`; None
-    where perf cannot say. The control carries the cost of the variable's presence, which a compiler ignoring the oracle also pays."""
-    found: dict[str, tuple[int, int] | None] = {}
+def exercised(binaries: Path, probes: list[tuple[str, Path, str, str]]) -> dict[str, tuple[int, int, int] | None]:
+    """For each oracle: (instructions with a variable of the same length that no oracle reads, with the oracle, call sites of its hook reached)
+    over `probes`; None where perf cannot say. The control carries the cost of the variable's presence, which a compiler ignoring the oracle also pays."""
+    found: dict[str, tuple[int, int, int] | None] = {}
     for name in CHECKS:
-        control = [instructions(binaries, job, {"LLRM_CHECK_" + "X" * len(name): "1"}) for job in probes]
+        control = [instructions(binaries, job, {"LLRM_CHECK_" + "X" * len(name): "1"})[0] for job in probes]
         with_it = [instructions(binaries, job, {f"LLRM_CHECK_{name}": "1"}) for job in probes]
-        found[name] = None if None in control or None in with_it else (sum(control), sum(with_it))
+        if None in control or any(count is None for count, _ in with_it):
+            found[name] = None
+        else:
+            found[name] = (sum(control), sum(count for count, _ in with_it), sum(reached.get(name, 0) for _, reached in with_it))
     return found
 
 
@@ -148,14 +157,17 @@ def main() -> int:
     if args.shard:
         index, count = (int(x) for x in args.shard.split("/"))
         found = [one for at, one in enumerate(found) if at % count == index - 1]
-    ran = {} if args.no_premise else exercised(args.bin, [(t, p, "-O2", "-m32") for t, p in biggest])
+    ran = {} if args.no_premise else exercised(args.bin, [(t, p, "-O2", m) for t, p in biggest for m in PROBE_MACHINES])
     unexercised = []
     for name, counts in ran.items():
         if counts is None:
             print(f"oracle {name}: not measurable (no perf, or a probe did not compile)")
         else:
-            print(f"oracle {name}: {counts[0]} -> {counts[1]} instructions on the {len(biggest)} largest programs")
-        if (counts is None or counts[1] - counts[0] < max(1000, counts[0] // 2000)) and name not in args.allow_unexercised:
+            gain = counts[1] - counts[0]
+            print(f"oracle {name}: {counts[0]} -> {counts[1]} instructions ({gain / counts[0]:+.4%}), {counts[2]} hook sites reached, on the {len(biggest)} largest programs at {' and '.join(PROBE_MACHINES)}")
+            if 0 < gain < counts[0] * NOTABLE:
+                print(f"  (under the old {NOTABLE:.2%} bar; a cheap oracle that ran is exercised)")
+        if (counts is None or counts[2] < 1 or counts[1] <= counts[0]) and name not in args.allow_unexercised:
             unexercised.append(name)
     if unexercised:
         print("never exercised: " + ", ".join(unexercised) + " (a sweep where an oracle did not run proves nothing about it)")
