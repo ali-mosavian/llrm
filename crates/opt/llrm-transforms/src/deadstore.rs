@@ -178,7 +178,11 @@ impl FunctionPass for DeadStoreElimination {
         // with it, and the graph follows them through its updater.
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let (frozen, before): (&Context, &Function) = (unit.context, unit.function);
-        let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape);
+        // The allocas whose address is exposed, once: without it `object_of`
+        // walked an alloca's uses at every access asked of it (matmul -O2:
+        // 27,548 walks, 1.9 M tree inserts, a third of the pass).
+        let exposed = analyses.get::<llrm_analysis::manager::ExposedFrames>(unit.context, unit.layout, unit.function);
+        let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape).with_exposed(&exposed);
         let shape = view.shape();
         // The manager's graph of this body, cloned: the removals update the
         // clone, so the held one stays as the body it describes.
