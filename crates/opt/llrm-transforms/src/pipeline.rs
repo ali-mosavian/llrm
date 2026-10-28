@@ -141,11 +141,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
-    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
-    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
-    trivialunswitch, window,
+    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
+    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    switchlower, tailcallelim, trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -923,6 +923,13 @@ pub(crate) fn llvm_order(
                 // them.
                 slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
                 sroa("sroa@776"),
+            ]);
+            // Not in the pin's `default<O1>` (a pipeline of its own); `pre` is
+            // off exactly at -O1 and -Og.
+            if applied.options.pre {
+                list.push(slot("mldst-motion@783", Box::new(mldstmotion::MergedLoadStoreMotion)));
+            }
+            list.extend([
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at
                 // -O1 and -Og); rows against clang's -O1 are pending, a loss
@@ -1239,6 +1246,11 @@ pub fn recorded(
             jump_tables: applied.options.jump_tables,
             size: applied.options.prefers_size(),
         });
+    }
+    // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
+    // body is final.
+    if applied.options.llvm_order && applied.options.optimize {
+        manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
     if applied.options.spare_loads {

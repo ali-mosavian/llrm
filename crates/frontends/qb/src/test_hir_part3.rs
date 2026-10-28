@@ -3618,6 +3618,35 @@ fn test_bsave_and_bload_have_a_stack_cleanup_contract() {
     }
 }
 
+/// FIELD was refused ("valid, but this compiler cannot generate code for it
+/// yet"): it is B$FLDP(channel), then B$FIEL(width, variable) per pair.
+#[test]
+fn test_field_is_a_preamble_and_one_call_per_variable() {
+    let text = listing_of(
+        "fieldcalls",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 8 AS n$, 8 AS m$\r\nLSET n$ = \"x\"\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    assert_eq!(main.matches("call far ptr B$FLDP").count(), 1, "{main}");
+    assert_eq!(main.matches("call far ptr B$FIEL").count(), 2, "{main}");
+    assert!(main.find("B$FLDP") < main.find("B$FIEL"), "{main}");
+}
+
+/// GET and PUT without a record variable were refused ("cannot generate code
+/// for it yet"): they transfer the FIELD buffer, B$GET1/B$PUT1 for the next
+/// record and B$GET2/B$PUT2 for a numbered one.
+#[test]
+fn test_get_and_put_without_a_variable_call_the_buffer_routines() {
+    let text = listing_of(
+        "getputbuffer",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 16 AS n$\r\nGET #1\r\nGET #1, 3\r\nLSET n$ = \"x\"\r\nPUT #1\r\nPUT #1, 4\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    for routine in ["B$GET1", "B$GET2", "B$PUT1", "B$PUT2"] {
+        assert_eq!(main.matches(&format!("call far ptr {routine}")).count(), 1, "{routine}: {main}");
+    }
+}
+
 /// `END n` and `SYSTEM n` (PDS 7.1, VBDOS) were refused ("END with a return
 /// code"). BC pushes the code as a word and calls `B$CENC` (measured in BC 7.1
 /// and VBDOS objects), which never returns.
@@ -3754,4 +3783,30 @@ fn test_a_common_variable_is_still_stored_before_a_chain() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCHN").expect("the call");
     assert!(main[..call].contains("mov word ptr X%, 4"), "x% is stored: {main}");
+}
+
+/// An object linked with BRUN45.LIB crashed at start ("no stack segment", entry
+/// at 0:0): BC without /O marks the header `bm` and names `$AC`, `$DAC` and
+/// `b$seg`, which make LINK pull in the loader of BRUN45.EXE. Ours named none.
+#[test]
+fn the_run_time_module_flag_marks_the_header_and_names_the_loader_externals() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "rtm.bas", b"PRINT \"hello\"\r\nEND\r\n");
+    let build = |run_time_module: bool| {
+        let frontend = qb_driver::Frontend { run_time_module, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+        let bytes = object_bytes(&program, "RTM.BAS").expect("emits");
+        let records = omf::parse(&bytes).expect("parses");
+        let externals = omf::externals(&records);
+        let marker =
+            bytes.windows(2).any(|pair| pair == b"bm") as u8 + bytes.windows(2).any(|pair| pair == b"bl") as u8 * 2;
+        (marker, externals)
+    };
+    let (marker, externals) = build(true);
+    assert_eq!(marker & 1, 1, "header marker bm");
+    for name in ["$AC", "$DAC", "b$seg"] {
+        assert!(externals.iter().any(|one| one == name), "{name} in {externals:?}");
+    }
+    let (_, plain) = build(false);
+    assert!(!plain.iter().any(|one| one == "$AC"), "{plain:?}");
 }

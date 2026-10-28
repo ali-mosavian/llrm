@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -O2 -march=i486 -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -O2 -march=i486 -S -o /dev/stdout
 // A float divided by a power of two is multiplied by its reciprocal, exact: `fdiv` is 73 clocks on a 486, `fmul` 16.
 // bench/fpbench divided twice per body by 16.0f, 124 clocks of 1.09 x gcc; neither gcc nor LLVM needs a flag for it.
 float sixteenth(float x) { return x / 16.0f; }

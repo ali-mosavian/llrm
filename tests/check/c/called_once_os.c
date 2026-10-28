@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -march=i486 -Os -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -march=i486 -Os -S -o /dev/stdout
 // A static called twice, ~12 operations, at -Os: the pin prices the first site 45 against its threshold of 50 and inlines it, then the second as
 // the last call (clang -Os -Rpass=inline). D11 (a callee that stays must not outgrow its call) is the 16-bit target's only (`inline_size_guard`), so m32 follows the pin.
 // CHECK-LABEL: _g proc
