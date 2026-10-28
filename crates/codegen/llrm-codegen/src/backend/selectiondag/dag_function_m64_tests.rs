@@ -880,3 +880,33 @@ entry:
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
+
+/// A tail call through a pointer at m64 was `CannotSelect(Target(6))`: the
+/// generated table checked the callee's type against `i32`, as the
+/// 32-bit mode's `ptr_rc_tailcall` (`getValueTypeForHwMode` gave the
+/// generator `[i32, i64]` for the two indices, where the pin's X86_64 mode
+/// has `i64` for both). Then `TCRETURNri64` had no emit rule.
+#[test]
+fn an_m64_sibling_call_through_a_pointer_jumps_through_a_register() {
+    use crate::model::ir::{Loc, Operation};
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+@fp = global ptr null
+define i64 @f() {
+entry:
+  %p = load ptr, ptr @fp
+  %r = tail call i64 %p()
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == Operation::Return && w.name.as_deref() == Some("jmp"))
+        .expect("a jmp that returns");
+    assert!(jump.indirect && matches!(jump.sources.as_slice(), [Loc::Held(_)]), "{jump:?}");
+    assert!(insns.iter().filter_map(|i| i.what.as_ref()).all(|w| w.op != Operation::Call), "no call remains");
+}

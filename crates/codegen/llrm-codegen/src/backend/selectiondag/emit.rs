@@ -2300,14 +2300,22 @@ impl Emitter<'_, '_> {
             // An indirect sibling call: the callee's address is pinned to one
             // of EAX, ECX, EDX (`GR32_TC`) the arguments do not take, as the
             // epilogue restores every other register before the jump.
-            "TCRETURNri" => {
+            "TCRETURNri" | "TCRETURNri64" => {
                 let Loc::Held(callee) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
                 };
                 use llrm_lir::registers::RegId;
                 let mut requires = std::mem::take(&mut self.arguments);
-                let free = [RegId::EAX, RegId::ECX, RegId::EDX]
-                    .into_iter()
+                // `GR64_TC` at 64 bits: the caller-saved registers but r10,
+                // which the static chain takes.
+                let candidates: &[RegId] = if name == "TCRETURNri64" {
+                    &[RegId::EAX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::R8D, RegId::R9D, RegId::R11D]
+                } else {
+                    &[RegId::EAX, RegId::ECX, RegId::EDX]
+                };
+                let free = candidates
+                    .iter()
+                    .copied()
                     .find(|one| {
                         self.ctx.caller_saved.contains(one) && requires.iter().all(|(_, taken)| taken.root() != *one)
                     })
