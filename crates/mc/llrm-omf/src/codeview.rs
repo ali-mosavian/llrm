@@ -281,7 +281,15 @@ pub fn lines(
     info: &Info,
 ) -> Result<Vec<Vec<(u32, usize)>>, Error> {
     let mut out = vec![Vec::new(); object.sections.len()];
+    let mut before: Option<(usize, u32)> = None;
     for one in &info.lines {
+        // LINNUM has no column: a row that only moves the column is the line's
+        // again.
+        let again = before == Some((one.section, one.line));
+        before = Some((one.section, one.line));
+        if again {
+            continue;
+        }
         if one.file != 0 {
             return refused(format!("line {} is in file {}: one file per module", one.line, one.file));
         }
@@ -357,6 +365,7 @@ mod tests {
             }],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            frames: Vec::new(),
             debug: Some(info),
         }
     }
@@ -401,6 +410,18 @@ mod tests {
     fn a_line_zero_row_is_left_out_of_linnum() {
         let mut made = object(Vec::new(), vec![int(), procedure()]);
         made.debug.as_mut().unwrap().lines.insert(1, Line { section: 0, offset: 2, file: 0, line: 0, column: 0 });
+        let records = omf::parse(&write::write_generic(&made).unwrap()).unwrap();
+        let lines: Vec<(u16, u16)> =
+            records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();
+        assert_eq!(lines, [(3, 0), (4, 4)]);
+    }
+
+    /// The model has a column per row; LINNUM has none, so a row of the line
+    /// before with another column wrote a second LINNUM entry for it.
+    #[test]
+    fn a_row_that_only_moves_the_column_is_left_out_of_linnum() {
+        let mut made = object(Vec::new(), vec![int(), procedure()]);
+        made.debug.as_mut().unwrap().lines.insert(1, Line { section: 0, offset: 2, file: 0, line: 3, column: 9 });
         let records = omf::parse(&write::write_generic(&made).unwrap()).unwrap();
         let lines: Vec<(u16, u16)> =
             records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();

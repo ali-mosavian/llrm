@@ -331,13 +331,15 @@ impl ScalarEvolution {
         cx: &Cx,
         v: Operand,
     ) -> Scev {
-        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevNodes);
         // A value that is not an instruction or argument has no entry in the
-        // map: it is made at once.
+        // map: it is made at once. It is not a node made: the climb of
+        // `isBasicBlockEntryGuardedByCond` asked for the same constant once
+        // per guard (92% of the count at `functions` N=128).
         if !matches!(v, Operand::Value(_)) {
             let mut ops = Vec::new();
             return self.get_operands_to_create(cx, v, &mut ops).expect("a constant has its SCEV at once");
         }
+        llrm_mir::counts::bump(llrm_mir::counts::Event::ScevNodes);
 
         // Worklist item with a Value and a bool indicating whether all
         // operands have been visited already.
