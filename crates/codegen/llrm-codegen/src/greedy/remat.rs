@@ -158,10 +158,15 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
             };
             let addr = cell.addr?;
             let (from, to) = (addr.disp, addr.disp + i64::from(cell.width));
-            (what.op == Operation::Move
-                && what.name.as_deref() == Some("mov")
+            // `fld` of a float or double argument: the x87 register is wider
+            // than the cell, so only the integer move compares widths.
+            let load = match (what.op, what.name.as_deref()) {
+                (Operation::Move, Some("mov")) => into.width == cell.width,
+                (Operation::FloatLoad, Some("fld")) => true,
+                _ => false,
+            };
+            (load
                 && incoming(cell)
-                && into.width == cell.width
                 && one.defines == [into.value]
                 && definitions.get(&into.value) == Some(&1)
                 && !written.iter().any(|(start, end)| *start < to && from < *end))
@@ -397,5 +402,26 @@ mod tests {
         };
         let taken = one_block(vec![move_of(0, word(1), argument(6), vec![1]), lea]);
         assert!(argument_loads(&taken).is_empty(), "an address taken: any call may write");
+    }
+
+    /// `fld dword [bp+6]` of an unwritten float argument is invariant as the
+    /// word move is: it was copied to a local at entry (`fstp [bp-10]`) and
+    /// reloaded there, a frame of 40 bytes for two float parameters (QCport
+    /// d_alias, triggers, plats, r_bsp: the pin reads `[bp+N]` in place).
+    #[test]
+    fn test_a_fld_of_an_unwritten_incoming_argument_is_invariant() {
+        let fld = {
+            let what = crate::model::ir::Semantics {
+                name: Some("fld".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 10 })],
+                sources: vec![Loc::Mem(Mem::new(Some(crate::model::ir::Addr::new(Space::Frame, 6)), 4))],
+                ..crate::model::ir::Semantics::new(Operation::FloatLoad)
+            };
+            Arc::new(Insn::new(0, None, Some(what), vec![1], vec![]))
+        };
+        let body = one_block(vec![fld, move_of(1, argument(6), word(3), vec![])]);
+        assert!(argument_loads(&body).is_empty(), "a written argument stays");
+        let body = one_block(vec![body.blocks[0].insns[0].clone()]);
+        assert_eq!(argument_loads(&body), BTreeSet::from([1]));
     }
 }
