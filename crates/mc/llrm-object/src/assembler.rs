@@ -77,6 +77,17 @@ pub fn layout<F: Fragment>(
     }
 }
 
+/// The padding of an `MCAlignFragment` at offset `at`: up to the multiple of
+/// `1 << log2`, none where it takes more than `max_skip` (0: no limit).
+pub fn align_padding(
+    at: i64,
+    log2: u8,
+    max_skip: u8,
+) -> usize {
+    let pad = (at as u64).wrapping_neg() as usize & ((1usize << log2) - 1);
+    if max_skip != 0 && pad > usize::from(max_skip) { 0 } else { pad }
+}
+
 /// `MCAssembler::relaxPrefAlign`: the alignment, as a power of two, a
 /// `.prefalign` of `preferred` settles on at `at` when the body ends at `end`.
 /// The body is what lies between the padding and its end, and the alignment
@@ -170,6 +181,16 @@ mod tests {
         assert_eq!(labels, vec![("mid".to_owned(), 7), ("far".to_owned(), 7 + 124 + 2)]);
         assert!(matches!(items[0], Test::Jump { long: true, .. }));
         assert!(matches!(items[1], Test::Jump { long: false, .. }));
+    }
+
+    /// An alignment pads to the multiple, and none at all where that is more
+    /// than the most it may skip.
+    #[test]
+    fn an_alignment_pads_up_unless_it_may_skip_less() {
+        assert_eq!(align_padding(5, 4, 0), 11);
+        assert_eq!(align_padding(16, 4, 0), 0);
+        assert_eq!(align_padding(5, 4, 10), 0);
+        assert_eq!(align_padding(5, 4, 11), 11);
     }
 
     #[test]

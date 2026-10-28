@@ -1114,13 +1114,11 @@ pub fn _size(
     at: i64,
     model: CodeModel,
 ) -> usize {
-    let pad = |log2: u8| (at as u64).wrapping_neg() as usize & ((1usize << log2) - 1);
     match item {
         Encoded::Align(masm::CodeAlign { log2, max_skip }) => {
-            let pad = pad(*log2);
-            if *max_skip != 0 && pad > usize::from(*max_skip) { 0 } else { pad }
+            llrm_object::assembler::align_padding(at, *log2, *max_skip)
         }
-        Encoded::Prefer { computed, .. } => pad(*computed),
+        Encoded::Prefer { computed, .. } => llrm_object::assembler::align_padding(at, *computed, 0),
         other => _length(other, model),
     }
 }
