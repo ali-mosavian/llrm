@@ -169,7 +169,8 @@ def test_training_llrm_llc_runs_the_corpus_through_llrm_cc_with_the_instrumented
     llc, driver = tmp_path / "llrm-llc", tmp_path / "llrm-cc"
     ok, failed = pgo.train(llc, [("a", ["-m32", "-mabi=sysv", "-O2", "-march=i486"], source, False), ("a", ["-m16", "-Os"], source, False)], driver=driver)
     assert (ok, failed) == (2, [])
-    (first, env32), (second, env16) = seen
+    # train() runs the jobs on a thread pool: the order of `seen` is the scheduler's, so pick each call by its target.
+    (first, env32), (second, env16) = sorted(seen, key=lambda call: call[1]["LLRM_CC_TARGET"], reverse=True)
     assert Path(first[0]) == driver and "-m32" not in first and "-c" in first and "-mabi=sysv" in first
     assert env32["LLRM_LLC"] == str(llc) and env32["LLRM_CC_TARGET"] == "x86_32-wat"
     assert env16["LLRM_CC_TARGET"] == "x86_16-wat" and "-m16" not in second
