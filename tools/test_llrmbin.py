@@ -162,11 +162,9 @@ def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime
     assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]
 
 
-def test_the_compiler_is_llrm_cc_where_it_is_built_else_llrm_c(tmp_path):
-    """C2: every tool names the C compiler through `compiler`, so deleting llrm-c moves them all at once."""
+def test_the_compiler_is_llrm_cc(tmp_path):
+    """Every tool names the C compiler through `compiler`; a directory that still holds an llrm-c is not read as having it."""
     (tmp_path / "llrm-c").write_text("")
-    assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-c"
-    (tmp_path / "llrm-cc").write_text("")
     assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-cc"
 
 
