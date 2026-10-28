@@ -575,11 +575,18 @@ impl Function {
         let phi = self.instructions[inst.0 as usize].opcode == Opcode::Phi;
         let old = std::mem::take(&mut self.instructions[inst.0 as usize].operands);
         let was: Box<[Operand]> = old.as_slice().into();
-        for (index, operand) in old.into_iter().enumerate() {
+        // The operands before the first that differs keep their uses, as
+        // `removeIncomingValue` moves only what follows the entry it removes.
+        let kept = if self.uses.fits(inst.0, operands.len()) {
+            old.iter().zip(&operands).take_while(|(before, after)| before == after).count()
+        } else {
+            0
+        };
+        for (index, operand) in old.into_iter().enumerate().skip(kept) {
             self.remove_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         self.uses.slots(inst.0, operands.len());
-        for (index, &operand) in operands.iter().enumerate() {
+        for (index, &operand) in operands.iter().enumerate().skip(kept) {
             self.add_use(operand, Use { user: inst, index: index as u32 }, phi);
         }
         self.instructions[inst.0 as usize].operands = operands;
