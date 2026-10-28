@@ -273,6 +273,7 @@ struct Emitter<'a, 'd> {
     /// The `fcom` operands of each float compare, by the `SAHF` that reads its
     /// status word: the `fcom` is pushed there, next to the flag reader.
     pending_fcom: HashMap<u32, (Held, Held)>,
+    first_at: HashMap<u32, i64>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
     /// The `fld1`/`fldz` already loaded for a constant, valid until the next
@@ -380,6 +381,10 @@ pub struct Emitted {
     /// The frame places each inline code site patches in, by site: (byte of
     /// the code, displacement, addend).
     pub inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
+    /// The LIR value each DAG value was made in.
+    pub values: HashMap<SDValue, u32>,
+    /// The address of the first instruction emitted for each `IROrder`.
+    pub first_at: HashMap<u32, i64>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -434,6 +439,7 @@ pub fn emit_in(
         machine_emitted: Default::default(),
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
+        first_at: HashMap::default(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::default();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -450,6 +456,14 @@ pub fn emit_in(
             let (first_block, order) =
                 (emitter.blocks.len().saturating_sub(1), dag.node(SDValue { node, res: 0 }).order);
             emitter.node(node)?;
+            if !emitter.first_at.contains_key(&order)
+                && let Some(first) =
+                    emitter.blocks.iter().skip(first_block).enumerate().find_map(|(index, block)| {
+                        block.insns.get(if index == 0 { before } else { 0 }).map(|one| one.at)
+                    })
+            {
+                emitter.first_at.insert(order, first);
+            }
             // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
             // instruction's line.
             if let Some(&Some(line)) = dag.lines.get(order as usize) {
@@ -515,6 +529,8 @@ pub fn emit_in(
         pops: emitter.pops,
         indirect_pops: emitter.indirect_pops,
         inline_places: emitter.inline_places,
+        values: emitter.values,
+        first_at: emitter.first_at,
     })
 }
 

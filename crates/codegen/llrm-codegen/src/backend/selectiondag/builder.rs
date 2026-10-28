@@ -298,6 +298,8 @@ pub struct BlockDag {
     /// The calls in tail position (`isInTailCallPosition`); step 3 makes them
     /// `TC_RETURN`s.
     pub tail_calls: Vec<InstId>,
+    /// The DAG value each IR value of the block was built as.
+    pub values: Vec<(ValueId, SDValue)>,
 }
 
 /// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
@@ -341,6 +343,7 @@ pub fn build_block(
     let root = builder.control_root();
     builder.dag.set_root(root);
     let switch_name = dag_name(&builder.dag, block);
+    let values: Vec<(ValueId, SDValue)> = builder.node_map.iter().map(|(id, one)| (id, *one)).collect();
     let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, tail_calls, .. } = builder;
     // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that
     // is final
@@ -380,11 +383,12 @@ pub fn build_block(
                 live_ins: Vec::new(),
                 extra: Vec::new(),
                 tail_calls: one.tail_calls,
+                values: Vec::new(),
             },
         ));
     }
     info.next_block = next;
-    Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls })
+    Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls, values })
 }
 
 fn dag_name(
@@ -1801,6 +1805,7 @@ impl Builder<'_> {
             self.dag.lines.resize(at + 1, None);
         }
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
+        self.dag.inst_order.push((inst, self.dag.cur_order));
         if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
