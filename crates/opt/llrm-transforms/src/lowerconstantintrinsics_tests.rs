@@ -49,8 +49,9 @@ b0:
     assert!(after.contains("ret i16 1"), "{after}");
 }
 
-/// `llvm.objectsize` stayed in the IR to the backend, which refused it (macOS's `_FORTIFY_SOURCE`
-/// headers leave it): an object of unknown size is all ones, or zero where the minimum is asked.
+/// `llvm.objectsize` stayed in the IR to the backend, which refused it (macOS's
+/// `_FORTIFY_SOURCE` headers leave it): an object of unknown size is all ones,
+/// or zero where the minimum is asked.
 #[test]
 fn objectsize_of_an_unknown_object_is_minus_one_or_zero() {
     let after = lowered(

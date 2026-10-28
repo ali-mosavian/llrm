@@ -37,7 +37,9 @@ fn writes_flags(op: &Op) -> bool {
     match op {
         Op::Call { .. } | Op::Return { .. } => true,
         Op::I(inst) => match inst {
-            Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. } => op.set_flags,
+            Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. } => {
+                op.set_flags
+            }
             Inst::LogicImm { op, .. } | Inst::LogicShifted { op, .. } => *op == Logic::Ands,
             Inst::FpCompare { .. } | Inst::CondCompare { .. } | Inst::Svc { .. } => true,
             _ => false,
@@ -50,25 +52,29 @@ pub fn run(function: &mut MFunc) {
     for block in &mut function.blocks {
         // The last comparison, as text, and the registers it read.
         let mut held: Option<(String, Vec<Reg>)> = None;
-        block.ops.retain(|op| {
-            let (defs, uses) = op.defs_and_uses();
-            if let Some((_, read)) = &held
-                && defs.iter().any(|def| read.contains(def))
-            {
-                held = None;
-            }
-            match op {
-                Op::I(inst) if is_compare(inst) => {
-                    let key = format!("{inst:?}");
-                    if held.as_ref().is_some_and(|(kept, _)| *kept == key) {
-                        return false;
+        block
+            .ops
+            .retain(
+                |op| {
+                    let (defs, uses) = op.defs_and_uses();
+                    if let Some((_, read)) = &held
+                        && defs.iter().any(|def| read.contains(def))
+                    {
+                        held = None;
                     }
-                    held = Some((key, uses));
-                }
-                _ if writes_flags(op) => held = None,
-                _ => {}
-            }
-            true
-        });
+                    match op {
+                        Op::I(inst) if is_compare(inst) => {
+                            let key = format!("{inst:?}");
+                            if held.as_ref().is_some_and(|(kept, _)| *kept == key) {
+                                return false;
+                            }
+                            held = Some((key, uses));
+                        }
+                        _ if writes_flags(op) => held = None,
+                        _ => {}
+                    }
+                    true
+                },
+            );
     }
 }

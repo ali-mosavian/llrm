@@ -105,7 +105,8 @@ pub fn program(
     Program::new(vec![module], Rc::new(Arm64Machine { platform }))
 }
 
-/// How far the mid-end goes: gcc's and clang's `-O` levels, as `llc` takes them.
+/// How far the mid-end goes: gcc's and clang's `-O` levels, as `llc` takes
+/// them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Level {
     O0,
@@ -142,7 +143,8 @@ impl Level {
     }
 }
 
-/// `true` is -O2 and `false` no mid-end, as the callers that predate levels pass it.
+/// `true` is -O2 and `false` no mid-end, as the callers that predate levels
+/// pass it.
 impl From<bool> for Level {
     fn from(optimize: bool) -> Self {
         if optimize { Self::O2 } else { Self::O0 }
@@ -163,7 +165,8 @@ pub fn optimized_at(
     let mut options = level.options();
     options.library = c_library();
     llrm_transforms::pipeline::applied(program, &Applied { dump, options, ..Applied::default() })?;
-    // The pin's PreISelIntrinsicLowering: the selector never sees the intrinsic.
+    // The pin's PreISelIntrinsicLowering: the selector never sees the
+    // intrinsic.
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)
 }
 

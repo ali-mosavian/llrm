@@ -45,10 +45,10 @@
 //! `inlinecost::decide`'s, the walk's ([`crate::walk`]).
 //!
 //! A static alloca of the callee goes to the caller's entry; one whose count
-//! is an argument folds to a constant in the copy, as `CloneAndPruneFunctionInto`
-//! simplifies it, and is static too. Any other (a variable count) stays where it
-//! is, and the copy is bracketed by `llvm.stacksave` and, before each return,
-//! `llvm.stackrestore`.
+//! is an argument folds to a constant in the copy, as
+//! `CloneAndPruneFunctionInto` simplifies it, and is static too. Any other (a
+//! variable count) stays where it is, and the copy is bracketed by
+//! `llvm.stacksave` and, before each return, `llvm.stackrestore`.
 //!
 //! A copy is allowed (`fits_with`) only where
 //!
@@ -870,8 +870,9 @@ struct Placed {
 /// and returns.
 struct Lifetimes {
     allocas: Vec<InstId>,
-    /// The address space of the copy's dynamic allocas, if it has any: the copy is
-    /// bracketed by `stacksave` and `stackrestore` so the caller's stack does not grow per call.
+    /// The address space of the copy's dynamic allocas, if it has any: the copy
+    /// is bracketed by `stacksave` and `stackrestore` so the caller's stack
+    /// does not grow per call.
     dynamic: Option<u32>,
     entry: llrm_mir::module::BlockId,
     returns: Vec<InstId>,
@@ -908,7 +909,8 @@ fn unmarked_allocas(
     let mut allocas = Vec::new();
     for ((block, inst), &copy) in originals.zip(&made.copies) {
         let Opcode::Alloca { allocated, address_space, .. } = body.instruction(inst).opcode else { continue };
-        // Only a static one: a dynamic alloca stays where it was copied, after its markers.
+        // Only a static one: a dynamic alloca stays where it was copied, after
+        // its markers.
         let static_copy = function.parent(copy) == function.entry() && is_static_alloca(context, function, copy);
         if Some(block) != entry || !static_copy || layout.alloc_size(&context.types, allocated) == 0 {
             continue;
@@ -928,7 +930,12 @@ fn unmarked_allocas(
             allocas.push(copy);
         }
     }
-    Lifetimes { allocas, dynamic: dynamic_alloca_space(function, &made.copies), entry: made.entry, returns: made.returns.clone() }
+    Lifetimes {
+        allocas,
+        dynamic: dynamic_alloca_space(function, &made.copies),
+        entry: made.entry,
+        returns: made.returns.clone(),
+    }
 }
 
 /// Whether the object at `pointer` may be read after the body returns: its
@@ -965,10 +972,10 @@ fn outlives_the_copy(
     false
 }
 
-/// `CloneAndPruneFunctionInto`: the copy of a body's entry is simplified as the arguments
-/// make constants of it, so an alloca of the entry whose count was the argument's (`int a[n]`)
-/// has a constant one and is static: it goes to the caller's entry, and the copy has no
-/// dynamic alloca to bracket.
+/// `CloneAndPruneFunctionInto`: the copy of a body's entry is simplified as the
+/// arguments make constants of it, so an alloca of the entry whose count was
+/// the argument's (`int a[n]`) has a constant one and is static: it goes to the
+/// caller's entry, and the copy has no dynamic alloca to bracket.
 fn fold_entry_allocas(
     context: &Context,
     function: &mut Function,
@@ -996,7 +1003,9 @@ fn fold_entry_allocas(
             function.replace_all_uses_with(result, folded);
         }
     }
-    let first = anchor.filter(|&one| function.parent(one).is_some()).or_else(|| function.entry().and_then(|entry| function.block(entry).first()));
+    let first = anchor
+        .filter(|&one| function.parent(one).is_some())
+        .or_else(|| function.entry().and_then(|entry| function.block(entry).first()));
     let Some(first) = first else { return };
     for &(copy, alloca) in &copies {
         if alloca && function.parent(copy) != function.entry() && is_static_alloca(context, function, copy) {
@@ -1014,25 +1023,29 @@ fn is_static_alloca(
     function.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
 }
 
-/// The address space of the first alloca among `copies` that is not static: not on the caller's
-/// entry or of a variable count.
+/// The address space of the first alloca among `copies` that is not static: not
+/// on the caller's entry or of a variable count.
 fn dynamic_alloca_space(
     function: &Function,
     copies: &[InstId],
 ) -> Option<u32> {
-    copies.iter().find_map(|&copy| match function.instruction(copy).opcode {
-        Opcode::Alloca { address_space, .. }
-            if function.parent(copy) != function.entry()
-                || !function.instruction(copy).operands.iter().all(|one| matches!(one, Operand::Constant(_))) =>
-        {
-            Some(address_space)
-        }
-        _ => None,
-    })
+    copies
+        .iter()
+        .find_map(
+            |&copy| match function.instruction(copy).opcode {
+                Opcode::Alloca { address_space, .. }
+                    if function.parent(copy) != function.entry()
+                        || !function.instruction(copy).operands.iter().all(|one| matches!(one, Operand::Constant(_))) =>
+                {
+                    Some(address_space)
+                }
+                _ => None,
+            },
+        )
 }
 
-/// `InlineFunction`'s stack save and restore: a copy with a dynamic alloca saves the stack
-/// pointer where it begins and restores it before each return.
+/// `InlineFunction`'s stack save and restore: a copy with a dynamic alloca
+/// saves the stack pointer where it begins and restores it before each return.
 fn bracket_dynamic_stack(
     context: &mut Context,
     function: &mut Function,

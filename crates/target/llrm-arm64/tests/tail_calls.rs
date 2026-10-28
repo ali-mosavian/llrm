@@ -8,14 +8,19 @@ fn body(name: &str) -> String {
     body_at(name, Level::O2)
 }
 
-fn body_at(name: &str, level: Level) -> String {
-    let asm = driver::assembly(include_str!("data/tail_calls.ll"), Platform::Darwin, level).expect("the functions lower");
+fn body_at(
+    name: &str,
+    level: Level,
+) -> String {
+    let asm =
+        driver::assembly(include_str!("data/tail_calls.ll"), Platform::Darwin, level).expect("the functions lower");
     let start = asm.find(&format!("_{name}:")).expect("the function is there");
     let rest = &asm[start..];
     rest[..rest[1..].find("\n_").map_or(rest.len(), |end| end + 1)].to_owned()
 }
 
-/// A `tail call` followed by `ret` was `bl` and `ret` in a frame of its own; clang branches (`b _callee`).
+/// A `tail call` followed by `ret` was `bl` and `ret` in a frame of its own;
+/// clang branches (`b _callee`).
 #[test]
 fn a_tail_call_is_a_branch() {
     let asm = body("forwards");
@@ -46,7 +51,8 @@ fn a_call_with_stack_arguments_stays_a_call() {
     assert!(asm.contains("bl _many"), "{asm}");
 }
 
-/// The frame is taken down before the branch, and the saved registers come back first.
+/// The frame is taken down before the branch, and the saved registers come back
+/// first.
 #[test]
 fn the_frame_is_restored_before_the_branch() {
     let asm = body("after_a_call");
@@ -55,8 +61,9 @@ fn the_frame_is_restored_before_the_branch() {
     assert!(!asm.contains("ret"), "{asm}");
 }
 
-/// The caller's own hidden result pointer, a `byval` argument and a convention that passes
-/// differently are the gate's refusals (`isEligibleForTailCallOptimization`): each stays `bl`.
+/// The caller's own hidden result pointer, a `byval` argument and a convention
+/// that passes differently are the gate's refusals
+/// (`isEligibleForTailCallOptimization`): each stays `bl`.
 #[test]
 fn sret_byval_and_another_convention_stay_calls() {
     for (function, callee) in [("sret_callee", "_fill"), ("byval_argument", "_shape"), ("other_convention", "_cold")] {

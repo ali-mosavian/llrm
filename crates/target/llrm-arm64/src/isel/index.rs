@@ -10,8 +10,8 @@
 
 use llrm_mir::{BinaryOp, CastOp, Instruction, Opcode, Operand};
 
-use super::Selector;
 use super::Selected;
+use super::Selector;
 use super::val::{AddrExpr, Index};
 use crate::mc::inst::Extend;
 
@@ -23,19 +23,28 @@ enum Fold {
 }
 
 impl Selector<'_> {
-    /// The scale of the one variable index of `gep`, if it has exactly one and the address built from it can
-    /// carry an index: a base that is not itself an indexed address, a power-of-two scale up to 16.
+    /// The scale of the one variable index of `gep`, if it has exactly one and
+    /// the address built from it can carry an index: a base that is not
+    /// itself an indexed address, a power-of-two scale up to 16.
     fn single_index_scale(
         &self,
         gep: &Instruction,
         source: llrm_mir::TypeId,
     ) -> Option<u64> {
-        let variable: Vec<_> =
-            gep.operands.iter().enumerate().skip(1).filter(|(_, operand)| matches!(operand, Operand::Value(_))).collect();
+        let variable: Vec<_> = gep
+            .operands
+            .iter()
+            .enumerate()
+            .skip(1)
+            .filter(|(_, operand)| matches!(operand, Operand::Value(_)))
+            .collect();
         let [_] = variable[..] else { return None };
         if let Operand::Value(base) = gep.operands[0]
             && super::value_def(self.function, base)
-                .is_some_and(|def| matches!(self.function.instruction(def).opcode, Opcode::GetElementPtr { .. }))
+                .is_some_and(|def| matches!(
+                    self.function.instruction(def).opcode,
+                    Opcode::GetElementPtr { .. }
+                ))
         {
             return None;
         }
@@ -77,8 +86,9 @@ impl Selector<'_> {
         }
     }
 
-    /// Whether `instruction` (a shift or extension) is read only as the variable index of a `getelementptr` of
-    /// its block that builds an indexed address from it.
+    /// Whether `instruction` (a shift or extension) is read only as the
+    /// variable index of a `getelementptr` of its block that builds an
+    /// indexed address from it.
     pub(super) fn folds_into_index(
         &self,
         instruction: &Instruction,
@@ -99,7 +109,8 @@ impl Selector<'_> {
             })
     }
 
-    /// Whether `operand` is an instruction left to the `getelementptr` that reads it.
+    /// Whether `operand` is an instruction left to the `getelementptr` that
+    /// reads it.
     pub(super) fn is_folded_index(
         &self,
         operand: Operand,
@@ -108,8 +119,8 @@ impl Selector<'_> {
         super::value_def(self.function, value).is_some_and(|def| self.indexed.contains(&def))
     }
 
-    /// The index `operand` makes in `address` if it is a folded instruction: its source register, extended or
-    /// shifted.
+    /// The index `operand` makes in `address` if it is a folded instruction:
+    /// its source register, extended or shifted.
     pub(super) fn folded_index(
         &mut self,
         operand: Operand,

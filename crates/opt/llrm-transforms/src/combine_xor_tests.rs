@@ -166,8 +166,9 @@ fn a_xor_constant_moves_out_of_the_inner_xor() {
     check(XY, "  %e = xor i32 %x, 77\n  %r = xor i32 %e, %y\n", &["xor i32 %x, %y", ", 77"], &[]);
 }
 
-/// `foldNot`: `not (cmp A, B)` is the inverse compare. Left as `xor (icmp eq (and x, 1), 0), true`, the
-/// `zext` of it never became `and x, 1`, and QB `rounded()` was 28 instructions against the pin's 14.
+/// `foldNot`: `not (cmp A, B)` is the inverse compare. Left as `xor (icmp eq
+/// (and x, 1), 0), true`, the `zext` of it never became `and x, 1`, and QB
+/// `rounded()` was 28 instructions against the pin's 14.
 #[test]
 fn a_not_of_a_one_use_compare_is_the_inverse_compare() {
     let mut module = parsed(
@@ -192,18 +193,8 @@ b0:
 /// `foldNot`'s DeMorgan arms: `~(~X & Y)` is `X | ~Y`, `~(~X | Y)` is `X & ~Y`.
 #[test]
 fn a_not_of_a_logic_op_over_a_not_is_demorgan() {
-    check(
-        XY,
-        "  %n = xor i32 %x, -1\n  %a = and i32 %n, %y\n  %r = xor i32 %a, -1\n",
-        &[" or i32 %x,"],
-        &[" and i32"],
-    );
-    check(
-        XY,
-        "  %n = xor i32 %x, -1\n  %a = or i32 %n, %y\n  %r = xor i32 %a, -1\n",
-        &[" and i32 %x,"],
-        &[" or i32"],
-    );
+    check(XY, "  %n = xor i32 %x, -1\n  %a = and i32 %n, %y\n  %r = xor i32 %a, -1\n", &[" or i32 %x,"], &[" and i32"]);
+    check(XY, "  %n = xor i32 %x, -1\n  %a = or i32 %n, %y\n  %r = xor i32 %a, -1\n", &[" and i32 %x,"], &[" or i32"]);
 }
 
 /// `~((-X) | Y)` is `(X - 1) & ~Y`.
@@ -217,8 +208,8 @@ fn a_not_of_a_negated_or_is_a_decrement_and_mask() {
     );
 }
 
-/// The shift arms: `~(~X >>s Y)` is `X >>s Y`; `~(X >>s 31)` is `sext (X > -1)`; `~(C >>s Y)` for
-/// a negative `C` is `~C >>u Y`.
+/// The shift arms: `~(~X >>s Y)` is `X >>s Y`; `~(X >>s 31)` is `sext (X >
+/// -1)`; `~(C >>s Y)` for a negative `C` is `~C >>u Y`.
 #[test]
 fn a_not_of_a_shift_inverts_the_shift_or_becomes_a_sign_test() {
     check(XY, "  %n = xor i32 %x, -1\n  %s = ashr i32 %n, %y\n  %r = xor i32 %s, -1\n", &["ashr i32 %x, %y"], &["xor"]);

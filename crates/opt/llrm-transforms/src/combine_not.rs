@@ -11,8 +11,8 @@
 //! DEVIATE 2: owed, each where it stood: the `bitcast` arms (a `not` of a
 //! `bitcast` of a compare, of a `sext` of a bool), `sinkNotIntoLogicalOp`,
 //! min/max and `is_fpclass` intrinsics, `foldNotXor`, `getFreelyInverted`, a
-//! `not` of a compare with several uses (`canFreelyInvertAllUsersOf`, now inline
-//! in `combine_compares`), and `fcmp`.
+//! `not` of a compare with several uses (`canFreelyInvertAllUsersOf`, now
+//! inline in `combine_compares`), and `fcmp`.
 //!
 //! # Example
 //! `~(X + 5)` is `-6 - X`:

@@ -7,7 +7,8 @@ fn asm() -> String {
     driver::assembly(include_str!("data/sign_loads.ll"), Platform::Darwin, true).expect("the functions lower")
 }
 
-/// `sext (load i32)` was `ldr w` then `sbfm x, x, #0, #31`; clang makes one `ldrsw` (and `ldrsh`, `ldrsb`).
+/// `sext (load i32)` was `ldr w` then `sbfm x, x, #0, #31`; clang makes one
+/// `ldrsw` (and `ldrsh`, `ldrsb`).
 #[test]
 fn a_load_that_is_only_sign_extended_is_a_sign_extending_load() {
     let asm = asm();
@@ -17,7 +18,8 @@ fn a_load_that_is_only_sign_extended_is_a_sign_extending_load() {
     assert!(!asm.contains("sbfm x0, x0"), "{asm}");
 }
 
-/// A load also read as the narrow value is still one load: the extending one serves both readers.
+/// A load also read as the narrow value is still one load: the extending one
+/// serves both readers.
 #[test]
 fn a_load_read_by_more_than_the_extension_is_left_alone() {
     let asm = asm();

@@ -21,7 +21,8 @@ fn commutes(op: BinaryOp) -> bool {
 }
 
 impl Selector<'_> {
-    /// The constant shift `value` is, if it could be a shifted operand: 32 or 64 bits, read once.
+    /// The constant shift `value` is, if it could be a shifted operand: 32 or
+    /// 64 bits, read once.
     fn shift_shaped(
         &self,
         operand: Operand,
@@ -47,9 +48,9 @@ impl Selector<'_> {
         ))
     }
 
-    /// The operand of `reader` that a shift can be folded into: the second, else (where the operation
-    /// commutes) the first; the other operand is a register value an immediate form or a multiply-add
-    /// does not take.
+    /// The operand of `reader` that a shift can be folded into: the second,
+    /// else (where the operation commutes) the first; the other operand is
+    /// a register value an immediate form or a multiply-add does not take.
     fn shifted_slot(
         &self,
         reader: &Instruction,

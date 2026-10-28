@@ -68,7 +68,8 @@ pub fn fold(mut blocks: Vec<Lowered>) -> Vec<Lowered> {
     if blocks.is_empty() {
         return blocks;
     }
-    // A branch to a block that only returns is the return (`TailDuplicator`'s return blocks).
+    // A branch to a block that only returns is the return (`TailDuplicator`'s
+    // return blocks).
     let returns: HashSet<String> = blocks
         .iter()
         .filter(|block| matches!(block.insts.as_slice(), [Inst::Ret { .. }]))

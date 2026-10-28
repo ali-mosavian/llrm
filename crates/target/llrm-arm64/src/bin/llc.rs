@@ -1,8 +1,11 @@
 //! `llrm-arm64-llc [-S] [--no-opt] [-o OUT] FILE.ll`: LLVM IR from clang's
 //! front end alone (`-O2 -Xclang -disable-llvm-passes -Xclang
-//! -disable-lifetime-markers`; `-debug-only=inline-cost`: each inlining decision and every callee instruction's cost on stderr, as LLVM's option of that name) through the mid-end and the arm64 backend to an
-//! object (`-S`: its instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
-//! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already optimized). The platform is the module's `target triple`.
+//! -disable-lifetime-markers`; `-debug-only=inline-cost`: each inlining
+//! decision and every callee instruction's cost on stderr, as LLVM's option of
+//! that name) through the mid-end and the arm64 backend to an object (`-S`: its
+//! instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
+//! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already
+//! optimized). The platform is the module's `target triple`.
 
 use llrm_arm64::driver;
 

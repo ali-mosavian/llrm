@@ -165,16 +165,12 @@ fn gep_cost(
         Some(bytes) => tti.is_legal_addressing_mode_for(bytes, base_global, offset as i64, !base_global, scale),
         None => tti.is_legal_addressing_mode(base_global, offset as i64, !base_global, scale),
     };
-    if folds && legal {
-        Cost::FREE
-    } else {
-        Cost::BASIC
-    }
+    if folds && legal { Cost::FREE } else { Cost::BASIC }
 }
 
-/// The bytes the load or store that is the only user of the GEP `inst` accesses, as the
-/// `AccessType` `getInstructionCost` gives `getGEPCost` ("only in the simple case where the GEP
-/// has one user"); none for any other user.
+/// The bytes the load or store that is the only user of the GEP `inst`
+/// accesses, as the `AccessType` `getInstructionCost` gives `getGEPCost` ("only
+/// in the simple case where the GEP has one user"); none for any other user.
 fn sole_access_bytes(
     context: &Context,
     layout: &DataLayout,

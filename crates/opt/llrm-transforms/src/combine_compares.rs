@@ -60,8 +60,8 @@ use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::{simplify_icmp_operands, simplify_instruction_in};
 use llrm_mir::valuetracking::context::is_implied_condition_cmp;
-use llrm_mir::valuetracking::pattern::{CmpPredicate, Side};
 use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
+use llrm_mir::valuetracking::pattern::{CmpPredicate, Side};
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
@@ -304,7 +304,8 @@ fn fold_select_icmp(
     // We only want to perform this transformation if it will not lead to
     // additional code: both sides fold (the icmp becomes a select that
     // usually simplifies), or this is the select's only user.
-    if !(on_true_cmp.is_some() && on_false_cmp.is_some()) && !(on_true_cmp.or(on_false_cmp).is_some() && has_one_use(c, select_operand))
+    if !(on_true_cmp.is_some() && on_false_cmp.is_some())
+        && !(on_true_cmp.or(on_false_cmp).is_some() && has_one_use(c, select_operand))
     {
         return None;
     }

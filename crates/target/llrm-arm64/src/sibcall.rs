@@ -47,7 +47,9 @@ pub fn run(function: &mut MFunc) {
         let last = block.ops.len() - 1;
         let Some(call) = block.ops[..last].iter().rposition(|op| !matches!(op, Op::Copy { .. })) else { continue };
         let Op::Call { callee, uses: arguments, defs, tail: true } = &block.ops[call] else { continue };
-        if uses.len() != defs.len() || uses.iter().zip(defs).any(|(u, def)| origin(&block.ops, call + 1, last, *u) != *def) {
+        if uses.len() != defs.len()
+            || uses.iter().zip(defs).any(|(u, def)| origin(&block.ops, call + 1, last, *u) != *def)
+        {
             continue;
         }
         let (callee, arguments) = (callee.clone(), arguments.clone());

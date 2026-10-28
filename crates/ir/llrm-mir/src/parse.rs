@@ -2134,8 +2134,9 @@ fn x86_fp80_to_f64(bits: u128) -> f64 {
 /// `(i64 size, ptr)`. Each one-argument declaration and call becomes the
 /// two-argument one with the size -1, unknown. Without it a marker is a call
 /// that may capture its object, and nothing about the object is promoted or
-/// forwarded (`wide_frame`: 824 bytes against the pin's 36). `parse::module` does not call it:
-/// `llrm-cc` upgrades the text (`lifetimes.rs`); a reader of the pin's IR as it is (`llrm-arm64-llc`) does.
+/// forwarded (`wide_frame`: 824 bytes against the pin's 36). `parse::module`
+/// does not call it: `llrm-cc` upgrades the text (`lifetimes.rs`); a reader of
+/// the pin's IR as it is (`llrm-arm64-llc`) does.
 pub fn upgrade_lifetimes(module: &mut Module) {
     let Module { context, globals, .. } = module;
     let mut upgraded: HashMap<GlobalId, (TypeId, TypeId)> = HashMap::default();
@@ -2154,7 +2155,8 @@ pub fn upgrade_lifetimes(module: &mut Module) {
         if !is_lifetime || !function.is_declaration() {
             continue;
         }
-        let new = context.types.intern(Type::Function { returns: void, parameters: vec![size, pointer], variadic: false });
+        let new =
+            context.types.intern(Type::Function { returns: void, parameters: vec![size, pointer], variadic: false });
         let old = std::mem::replace(function.as_mut(), Function::new(new, void));
         function.parameter_attrs = old.parameter_attrs.clone();
         function.parameter_attrs.insert(0, Vec::new());

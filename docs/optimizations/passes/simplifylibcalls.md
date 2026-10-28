@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifylibcalls.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifylibcalls.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:7f0cc85ff49fb330e267c13409a2d3434014556f9bbc9c3796a5228bc7476643 -->
+<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:9c151943dc85a3235d4021498adee86083576a2a6d6f245b7ba4e5219f48cae5 -->
 
 # simplifylibcalls
 
@@ -24,12 +24,12 @@ of `"%c"` `fputc`, of `"%s"` `fputs`; `fputs` of a constant string is
 0. All but the empty format and the empty `fwrite` need the result unused.
 
 ## Deviations
-- D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where the compile states them
-  in `Options::library`, as `strlen` is (loopidiom D11); the pin reads the
-  triple. Exit: `Target::library` naming them.
+- D1: `puts`, `putchar`, `fwrite`, `fputc` and `fputs` are formed only where
+  the compile states them in `Options::library`, as `strlen` is (loopidiom
+  D11); the pin reads the triple. Exit: `Target::library` naming them.
 - D2: the other arms (`sprintf`, `snprintf`, `str*`, `mem*`, math) are
-  untranslated, and so are `iprintf`/`__small_printf`, `optimizeErrorReporting`
-  and the argument annotations.
+  untranslated, and so are `iprintf`/`__small_printf`,
+  `optimizeErrorReporting` and the argument annotations.
 
 ## Keeps
 Blocks and edges are unchanged: dominators and loops are preserved.

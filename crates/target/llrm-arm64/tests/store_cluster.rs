@@ -10,8 +10,9 @@ fn body(name: &str) -> String {
     rest[..rest[1..].find("\n_").map_or(rest.len(), |end| end + 1)].to_owned()
 }
 
-/// Two stores with the second value computed between them were two `str`: the allocator reused the first
-/// value's register for the second. clang computes both, then `stp`.
+/// Two stores with the second value computed between them were two `str`: the
+/// allocator reused the first value's register for the second. clang computes
+/// both, then `stp`.
 #[test]
 fn stores_with_a_value_computed_between_them_pair() {
     assert!(body("g").contains("stp x9, x10, [x0]"), "{}", body("g"));

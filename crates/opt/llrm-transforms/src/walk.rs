@@ -419,11 +419,16 @@ impl ProgramPass for Walk {
                         // elimination makes a recursive body a loop), as
                         // CGSCC updates its call graph.
                         let now = calls_of(&module.context, module.global(id).function().expect("a procedure"));
-                        // A callee the splices or the simplification added, with a body: a parameter
-                        // that was a function became the copy's callee, or the call was devirtualized
-                        // (a table of functions made a switch of calls by `jumptableswitch`).
-                        // Or more calls of a callee with a body than before the splices: the copies
-                        // brought call sites that `InlineFunction` hands to the inliner's worklist.
+                        // A callee the splices or the simplification added,
+                        // with a body: a parameter that
+                        // was a function became the copy's callee, or the call
+                        // was devirtualized (a table of
+                        // functions made a switch of calls by
+                        // `jumptableswitch`).
+                        // Or more calls of a callee with a body than before the
+                        // splices: the copies
+                        // brought call sites that `InlineFunction` hands to the
+                        // inliner's worklist.
                         let exposed = now.iter().any(|(callee, count)| {
                             let before = was.iter().find(|(seen, _)| seen == callee).map_or(0, |&(_, count)| count);
                             (before == 0 || (spliced && *count > before && !recursive.contains(callee)))

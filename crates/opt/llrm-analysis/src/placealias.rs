@@ -30,7 +30,10 @@ use crate::aa::AliasResult;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Object<G> {
     /// A frame object; `fixed` ones (incoming arguments) sit at known places.
-    Frame { id: i64, fixed: bool },
+    Frame {
+        id: i64,
+        fixed: bool,
+    },
     Global(G),
     /// A constant pool entry.
     Pool,
@@ -68,8 +71,9 @@ pub fn alias_of<G: Eq>(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use AliasResult::{MayAlias, MustAlias, NoAlias, PartialAlias};
+
+    use super::*;
 
     const GLOBAL: Object<&str> = Object::Global("g");
 

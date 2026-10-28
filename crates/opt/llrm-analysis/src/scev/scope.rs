@@ -338,7 +338,8 @@ impl ScalarEvolution {
     /// `computeSCEVAtScope`.
     ///
     /// # DEVIATE 10
-    /// `ConstantEvolutionLoopExitValue` is not cached per phi; the result is memoized per value and scope.
+    /// `ConstantEvolutionLoopExitValue` is not cached per phi; the result is
+    /// memoized per value and scope.
     fn compute_scev_at_scope(
         &mut self,
         cx: &Cx,
@@ -494,28 +495,31 @@ impl ScalarEvolution {
                                 return Use::of(self.get_scev(cx, backedge_val));
                             }
                         }
-                        // Okay, we know how many times the containing loop executes. If this is a
-                        // constant evolving phi, get the final value at the specified iteration.
+                        // Okay, we know how many times the containing loop
+                        // executes. If this is a
+                        // constant evolving phi, get the final value at the
+                        // specified iteration.
                         if let Some(count) = self.as_constant(backedge_taken_count)
-                            && let Some(exit) = self.get_constant_evolution_loop_exit_value(
-                                cx,
-                                inst,
-                                count.zext_value(),
-                                &curr_loop,
-                            )
+                            && let Some(exit) =
+                                self.get_constant_evolution_loop_exit_value(cx, inst, count.zext_value(), &curr_loop)
                         {
                             return Use::of(self.get_scev(cx, Operand::Constant(exit)));
                         }
                     }
                 }
 
-                // Okay, this is an expression that we cannot symbolically evaluate into a SCEV. Check
-                // to see if it's possible to symbolically evaluate the arguments into constants, and
-                // if so, try to constant propagate the result.
+                // Okay, this is an expression that we cannot symbolically
+                // evaluate into a SCEV. Check to see if it's
+                // possible to symbolically evaluate the arguments into
+                // constants, and if so, try to constant
+                // propagate the result.
                 if cx.function.instruction(inst).opcode != Opcode::Phi
                     && self.is_value_scevable(cx, value)
                     && super::exit_value::can_constant_fold(cx, inst)
-                    && !matches!(cx.function.instruction(inst).opcode, Opcode::Load { volatile: true, .. })
+                    && !matches!(
+                        cx.function.instruction(inst).opcode,
+                        Opcode::Load { volatile: true, .. }
+                    )
                 {
                     let operands = cx.function.instruction(inst).operands.clone();
                     let mut folded: Vec<ConstantId> = Vec::with_capacity(operands.len());
@@ -532,7 +536,9 @@ impl ScalarEvolution {
                         folded.push(constant);
                     }
                     let env = constantfolding::Env { globals: cx.globals, layout: cx.layout };
-                    if let Some(c) = constantfolding::constant_fold_inst_operands_at(cx.context, env, cx.function, inst, &folded) {
+                    if let Some(c) =
+                        constantfolding::constant_fold_inst_operands_at(cx.context, env, cx.function, inst, &folded)
+                    {
                         return Use::of(self.get_scev(cx, Operand::Constant(c)));
                     }
                 }

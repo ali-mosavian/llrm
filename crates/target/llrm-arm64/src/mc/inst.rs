@@ -30,7 +30,8 @@ impl Width {
 use llrm_analysis::aa::AliasResult;
 use llrm_analysis::placealias::{Object, alias_of};
 
-/// The object an access is relative to, as far as telling two accesses apart: what `MachinePointerInfo` names.
+/// The object an access is relative to, as far as telling two accesses apart:
+/// what `MachinePointerInfo` names.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum MemObject {
     #[default]
@@ -41,7 +42,8 @@ pub enum MemObject {
     Slot(u32),
 }
 
-/// What a load or store reaches (`MachineMemOperand`): its object and the byte offset in it, where both are known.
+/// What a load or store reaches (`MachineMemOperand`): its object and the byte
+/// offset in it, where both are known.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct MemOperand {
     pub object: MemObject,
@@ -49,9 +51,11 @@ pub struct MemOperand {
 }
 
 impl MemOperand {
-    /// Whether an access of `bytes` here and one of `other_bytes` at `other` cannot touch the same byte
-    /// (`AliasAnalysis`' `NoAlias`, as `BaseIndexOffset::computeAliasing` reads it from the objects): two
-    /// different objects never overlap; one object's accesses do not when their ranges do not.
+    /// Whether an access of `bytes` here and one of `other_bytes` at `other`
+    /// cannot touch the same byte (`AliasAnalysis`' `NoAlias`, as
+    /// `BaseIndexOffset::computeAliasing` reads it from the objects): two
+    /// different objects never overlap; one object's accesses do not when their
+    /// ranges do not.
     pub fn disjoint(
         &self,
         bytes: i64,
@@ -66,8 +70,13 @@ impl MemOperand {
             }
         }
         let distance = (self.object == other.object).then(|| Some(other.offset? - self.offset?)).flatten();
-        alias_of(distance, object(self).as_ref(), u64::try_from(bytes).ok(), object(other).as_ref(), u64::try_from(other_bytes).ok())
-            == AliasResult::NoAlias
+        alias_of(
+            distance,
+            object(self).as_ref(),
+            u64::try_from(bytes).ok(),
+            object(other).as_ref(),
+            u64::try_from(other_bytes).ok(),
+        ) == AliasResult::NoAlias
     }
 }
 
@@ -570,7 +579,8 @@ pub enum Inst {
         page: bool,
         rd: Gpr,
         target: Target,
-        /// `adrp` of the target's GOT slot (`@GOTPAGE`): the load that follows reads it at `@GOTPAGEOFF`.
+        /// `adrp` of the target's GOT slot (`@GOTPAGE`): the load that follows
+        /// reads it at `@GOTPAGEOFF`.
         got: bool,
     },
     FpUnary {
@@ -579,7 +589,8 @@ pub enum Inst {
         rd: Vreg,
         rn: Vreg,
     },
-    /// `mov vd.16b, vn.16b` (`orr`): all 128 bits, where `FpUnary::Mov` copies 64.
+    /// `mov vd.16b, vn.16b` (`orr`): all 128 bits, where `FpUnary::Mov` copies
+    /// 64.
     VectorMov {
         rd: Vreg,
         rn: Vreg,
@@ -630,8 +641,9 @@ pub enum Inst {
         gpr: Gpr,
         fpr: Vreg,
     },
-    /// `scvtf`/`ucvtf` from an integer or `fcvtzs`/`fcvtzu` to one, with `fbits` fractional bits
-    /// (the value scaled by 2^fbits); `op` is `ToFp` or `ToIntZero`.
+    /// `scvtf`/`ucvtf` from an integer or `fcvtzs`/`fcvtzu` to one, with
+    /// `fbits` fractional bits (the value scaled by 2^fbits); `op` is
+    /// `ToFp` or `ToIntZero`.
     FpFixed {
         op: FpConvert,
         width: Width,
@@ -640,7 +652,8 @@ pub enum Inst {
         fpr: Vreg,
         fbits: u8,
     },
-    /// A 16-byte vector with every byte `fill`: `movi v.2d, #0`, `movi v.16b, #imm`, `dup v.16b, w`.
+    /// A 16-byte vector with every byte `fill`: `movi v.2d, #0`, `movi v.16b,
+    /// #imm`, `dup v.16b, w`.
     VectorFill {
         rd: Vreg,
         fill: Fill,
@@ -672,7 +685,8 @@ pub enum Inst {
         imm16: u16,
     },
     Nop,
-    /// `prfm <op>, [<base>]`: a hint that the line at `base` is wanted; `op` is the 5-bit prefetch operation.
+    /// `prfm <op>, [<base>]`: a hint that the line at `base` is wanted; `op` is
+    /// the 5-bit prefetch operation.
     Prefetch {
         op: u8,
         base: Gpr,

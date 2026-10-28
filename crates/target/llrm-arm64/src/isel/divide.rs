@@ -385,8 +385,10 @@ impl Selector<'_> {
                 rm: magic,
                 ra: Gpr::R31,
             });
-            // The high half of the product is read where it is used: added to the dividend as a shifted
-            // operand, or shifted down with the quotient's own shift (the low 32 bits are all that matter).
+            // The high half of the product is read where it is used: added to
+            // the dividend as a shifted operand, or shifted down
+            // with the quotient's own shift (the low 32 bits are all that
+            // matter).
             if adjusted == Some(false) {
                 self.inst(Inst::AddSubShifted {
                     op: AddSub { subtract: false, set_flags: false },

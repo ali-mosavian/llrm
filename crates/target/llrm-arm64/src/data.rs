@@ -5,7 +5,6 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{ConstantId, ConstantKind, GlobalKind, Linkage, Module, Type, TypeId};
-
 use llrm_object::Binding;
 
 use crate::machine::Platform;
@@ -33,7 +32,8 @@ pub struct Placed {
     pub init_functions: bool,
 }
 
-/// How an object exports a global of `linkage`: not at all, or as a definition another may replace.
+/// How an object exports a global of `linkage`: not at all, or as a definition
+/// another may replace.
 pub fn binding_of(linkage: Linkage) -> Binding {
     match linkage {
         Linkage::Internal | Linkage::Private => Binding::Local,

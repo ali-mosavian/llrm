@@ -10,8 +10,9 @@ fn body(name: &str) -> String {
     rest[..rest[1..].find("\n_").map_or(rest.len(), |end| end + 1)].to_owned()
 }
 
-/// `(double)w * 0.5`, `(long)(d * 16)` and `0.25 * (double)x` were a conversion and a multiply by a constant
-/// kept in a callee-saved float register; clang makes one `ucvtf d, w, #1`, `fcvtzs x, d, #4`, `scvtf d, x, #2`.
+/// `(double)w * 0.5`, `(long)(d * 16)` and `0.25 * (double)x` were a conversion
+/// and a multiply by a constant kept in a callee-saved float register; clang
+/// makes one `ucvtf d, w, #1`, `fcvtzs x, d, #4`, `scvtf d, x, #2`.
 #[test]
 fn a_power_of_two_scale_beside_a_conversion_is_fractional_bits() {
     assert!(body("half").contains("ucvtf d0, w0, #1"));
@@ -19,7 +20,8 @@ fn a_power_of_two_scale_beside_a_conversion_is_fractional_bits() {
     assert!(body("quarter").contains("scvtf d0, x0, #2"));
 }
 
-/// Not a power of two, more fractional bits than the integer has, a conversion read elsewhere: all stay a multiply.
+/// Not a power of two, more fractional bits than the integer has, a conversion
+/// read elsewhere: all stay a multiply.
 #[test]
 fn a_scale_that_is_no_fixed_point_stays_a_multiply() {
     for function in ["not_a_power_of_two", "too_many_bits", "converted_twice"] {

@@ -13,10 +13,12 @@ use crate::opcode::{Flags, Opcode};
 /// any other (`is_static` is false) stays where it is, and the caller brackets
 /// the copy with `stacksave`/`stackrestore` (`has_dynamic_alloca`).
 pub fn carries(body: &Function) -> bool {
-    body.walk().all(|(_, inst)| !matches!(
-        body.instruction(inst).opcode,
-        Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume
-    ))
+    body.walk().all(|(_, inst)| {
+        !matches!(
+            body.instruction(inst).opcode,
+            Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume
+        )
+    })
 }
 
 /// Whether the alloca `inst` of `body` is on its entry and of a constant size.
@@ -25,8 +27,7 @@ fn is_static(
     block: BlockId,
     inst: InstId,
 ) -> bool {
-    Some(block) == body.entry()
-        && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
+    Some(block) == body.entry() && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
 }
 
 /// The address space of the first alloca of `body` that is not static, if any.

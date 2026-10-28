@@ -50,7 +50,8 @@ impl Selector<'_> {
     ) -> Selected<()> {
         if op == BinaryOp::FMul {
             if self.mul_folds_into_conversion(instruction) {
-                // The float-to-integer conversion that reads it scales the value itself.
+                // The float-to-integer conversion that reads it scales the
+                // value itself.
                 let inst = super::value_def(self.function, instruction.result.expect("a multiply has a result"))
                     .expect("an instruction");
                 self.fused.insert(inst);

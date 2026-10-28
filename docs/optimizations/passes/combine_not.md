@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_not.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_not.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_not.rs sha256:8e3d842c6a7e43742b5f46906c8e74e772ef7cd5d60dda62024cfcdfd48a754d -->
+<!-- src: crates/opt/llrm-transforms/src/combine_not.rs sha256:560ae17f3902294574737e867145ac8e93a5594a0fff9c3b487886f4ddb5f727 -->
 
 # combine_not
 
@@ -16,8 +16,8 @@ DEVIATE 1: no vectors, and only integer constants are inverted.
 DEVIATE 2: owed, each where it stood: the `bitcast` arms (a `not` of a
 `bitcast` of a compare, of a `sext` of a bool), `sinkNotIntoLogicalOp`,
 min/max and `is_fpclass` intrinsics, `foldNotXor`, `getFreelyInverted`, a
-`not` of a compare with several uses (`canFreelyInvertAllUsersOf`, now inline
-in `combine_compares`), and `fcmp`.
+`not` of a compare with several uses (`canFreelyInvertAllUsersOf`, now
+inline in `combine_compares`), and `fcmp`.
 
 ## Example
 `~(X + 5)` is `-6 - X`:
