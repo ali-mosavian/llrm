@@ -253,15 +253,6 @@ why = "measured 18.9 -> 57.7 Minstr (x3.05)"
 [[debt]]
 kind = "steps"
 axis = "functions"
-name = "analysis summaries"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 13.8 -> 49.7 Minstr (x3.61)"
-
-[[debt]]
-kind = "steps"
-axis = "functions"
 name = "analysis declarations"
 ratio = 4.1
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -414,15 +405,6 @@ why = "measured 2.0 -> 5.3 Minstr (x2.64)"
 
 [[debt]]
 kind = "steps"
-axis = "callers"
-name = "analysis summaries"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.2 -> 9.7 Minstr (x3.07)"
-
-[[debt]]
-kind = "steps"
 axis = "chain"
 name = "mir combine@677"
 ratio = 4.3
@@ -505,38 +487,11 @@ why = "measured 3.9 -> 14.6 Minstr (x3.74)"
 [[debt]]
 kind = "steps"
 axis = "chain"
-name = "analysis summaries"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.4 -> 11.8 Minstr (x3.52)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
-name = "settled remember"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.6 -> 8.8 Minstr (x3.36)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
 name = "mir bdce@797"
 ratio = 4.1
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 2.2 -> 8.6 Minstr (x3.87)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
-name = "analysis exposed-frames"
-ratio = 4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 1.9 -> 7.3 Minstr (x3.78)"
 
 [[debt]]
 kind = "steps"
@@ -1630,24 +1585,6 @@ why = "measured 3.9 -> 14.6 Minstr (x3.74)"
 [[debt]]
 kind = "steps"
 axis = "chain-m16"
-name = "analysis summaries"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.4 -> 11.8 Minstr (x3.52)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
-name = "settled remember"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.6 -> 8.8 Minstr (x3.36)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
 name = "mir bdce@797"
 ratio = 4.1
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -1657,29 +1594,11 @@ why = "measured 2.2 -> 8.6 Minstr (x3.87)"
 [[debt]]
 kind = "steps"
 axis = "chain-m16"
-name = "analysis exposed-frames"
-ratio = 4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 1.9 -> 7.4 Minstr (x3.77)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
 name = "mir merge@818"
 ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 2.1 -> 6.3 Minstr (x2.98)"
-
-[[debt]]
-kind = "steps"
-axis = "callers-m16"
-name = "analysis summaries"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.2 -> 9.7 Minstr (x3.07)"
 
 [[debt]]
 kind = "steps"
