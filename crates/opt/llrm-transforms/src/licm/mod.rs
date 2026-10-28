@@ -8,8 +8,9 @@
 //! `llrm_analysis::mssa`.
 
 pub(crate) mod apply;
-mod calls;
+pub(crate) mod calls;
 pub mod hoist;
+mod pressure;
 pub(crate) mod promote;
 mod safety;
 mod sink;
@@ -273,8 +274,10 @@ pub fn decide(
         record_edits(unit, &mut decisions, header, &sunk, &hoisted, &reassociated);
         // Promoting one set of accesses may make the pointers for another set
         // loop invariant, so run this in a loop.
+        let mut room = None;
         loop {
-            let (candidates, promoted) = promotion_round(unit, &outer, &ctx, &mssa, &aa, &accesses, &exposed);
+            let (candidates, promoted) =
+                promotion_round(unit, &outer, &ctx, &mssa, &aa, &accesses, &exposed, &mut room);
             decisions.promotion_candidates += candidates;
             let more = !promoted.is_empty();
             for one in promoted {
@@ -406,9 +409,16 @@ pub fn run(
                 // change.
                 let held =
                     analyses.get::<llrm_analysis::manager::MemorySsa>($view.context, $view.layout, $view.function);
-                let (mssa, accesses) = match &*held {
-                    Ok(held) => (held.mssa.clone(), (*held.accesses).clone()),
-                    Err(_) => {
+                let made = match &*held {
+                    Ok(held) => held
+                        .accesses($view.context, $view.layout, $view.function, analyses)
+                        .ok()
+                        .map(|accesses| (held.mssa.clone(), (*accesses).clone())),
+                    Err(_) => None,
+                };
+                let (mssa, accesses) = match made {
+                    Some(made) => made,
+                    None => {
                         let (mssa, accesses) = llrm_analysis::mssa::shadow::translated(&memory);
                         decisions.rebuilds += 1;
                         decisions.rebuilt_instructions += $view.function.walk().count();
@@ -512,9 +522,10 @@ pub fn run(
                 .collect()
         };
         let mut last_store: IdMap<BlockId, llrm_analysis::mssa::AccessId> = IdMap::new();
+        let mut room = None;
         loop {
             let (candidates, promoted) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
-                promotion_round(view, &outer, &ctx, mssa, &aa, accesses, &exposed)
+                promotion_round(view, &outer, &ctx, mssa, &aa, accesses, &exposed, &mut room)
             });
             decisions.promotion_candidates += candidates;
             if promoted.is_empty() {
@@ -626,7 +637,7 @@ fn sink_and_hoist(
         ctx.loop_.body.iter().map(|&at| cfg::block(at)),
         mssa,
     );
-    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape)
         .allowing_speculation(ctx.allow_speculation);
     let sunk = if has_dedicated_exits(ctx) {
         sink::sink_region(unit, outer, ctx, mssa, aa, accesses, &mut flags, &safety)
@@ -652,6 +663,7 @@ fn promotion_round(
     aa: &AliasQuery,
     accesses: &Accesses,
     exposed: &promote::Exposed,
+    room: &mut Option<Option<usize>>,
 ) -> (usize, Vec<promote::Promotion>) {
     use llrm_analysis::cfg::Around;
     let Some(preheader) = ctx.loop_.preheader(unit.function).map(cfg::block) else { return (0, Vec::new()) };
@@ -667,12 +679,19 @@ fn promotion_round(
     if !has_dedicated_exits(ctx) || flags.too_many_memory_accesses() {
         return (0, Vec::new());
     }
-    let safety = LoopSafety::new(unit.context, unit.function, accesses, outer, ctx.loop_, ctx.shape)
+    let safety = LoopSafety::new(unit.context, unit.layout, unit.function, accesses, outer, ctx.loop_, ctx.shape)
         .allowing_speculation(ctx.allow_speculation);
     let exits = promote::unique_exit_blocks(ctx);
     let mut candidates = 0;
     let mut promoted = Vec::new();
-    for candidate in promote::collect_promotion_candidates(unit, ctx, mssa, aa, &safety) {
+    // Taken once for the loop: the rounds after a promotion see the same room.
+    let room = room.get_or_insert_with(|| pressure::Pressure::of(unit, outer, ctx).map(|held| held.room()));
+    let mut found_candidates = promote::collect_promotion_candidates(unit, ctx, mssa, aa, &safety);
+    if room.is_some() {
+        found_candidates
+            .sort_by_key(|candidate| std::cmp::Reverse(promote::accesses_of(unit, ctx, &candidate.pointers)));
+    }
+    for candidate in found_candidates {
         candidates += 1;
         if let Some(found) = promote::promote_loop_accesses_to_scalars(
             unit,
@@ -684,6 +703,16 @@ fn promotion_round(
             &candidate.pointers,
             candidate.has_reads_outside_set,
         ) {
+            if let Some(room) = room.as_mut()
+                && pressure::counts_type(unit, found.access_ty)
+            {
+                if !promote::frees_addresses(unit, ctx, &candidate.pointers) {
+                    if *room == 0 {
+                        continue;
+                    }
+                    *room -= 1;
+                }
+            }
             promote::take_out_of_loop(unit, ctx, preheader, &found);
             promoted.push(found);
         }

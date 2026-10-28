@@ -1,17 +1,22 @@
 //! tests/check: one file in, CHECK lines out, lit and FileCheck style.
 //!
-//! A file's `RUN:` line names a tool and its arguments, `%s` being the file
-//! (`not` first: it must fail). The tool's stdout and stderr are matched
-//! against the file's directives, in a comment (`;`, `'` or `//`):
+//! A file's `RUN:` line names a tool (`llrm-cc`: the C driver, in llrm-c's
+//! argument dialect) and its arguments, `%s` being the file (`not` first: it
+//! must fail). The tool's stdout and stderr are matched against the file's
+//! directives, in a comment (`;`, `'` or `//`):
 //!
 //!   CHECK: text            a later line contains it
 //!   CHECK-LABEL: text      the same, naming where a block starts
 //!   CHECK-NEXT: text       the line right after the last match contains it
 //!   CHECK-NOT: text        no line between the last match and the next one
 //! contains it
+//!   CHECK-MAX-N: text      at most N lines between them contain it (a ceiling
+//! a known gap is held to; CHECK-NOT is CHECK-MAX-0)
 //!
 //! `{{regex}}` inside a pattern is a regular expression; runs of blanks match
 //! each other.
+//!
+//! `RUN-PENDING:` is a RUN line not yet run: a gap llrm-cc has to close first.
 //!
 //! A `RUN:` line may name several configurations: each `{a | b | c}` in it is
 //! every alternative, and the product of its groups is run, each against the
@@ -23,6 +28,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use regex::Regex;
+
+mod common;
 
 #[derive(Debug, PartialEq)]
 enum Kind {
@@ -37,6 +44,8 @@ struct Directive {
     /// every run.
     only: Option<String>,
     kind: Kind,
+    /// For `Kind::Not`: how many lines of the span may contain the pattern.
+    most: usize,
     pattern: String,
     at: usize,
 }
@@ -47,19 +56,23 @@ fn comment(line: &str) -> Option<&str> {
 }
 
 fn directives(source: &str) -> Vec<Directive> {
-    let tagged = Regex::new(r"^CHECK(-LABEL|-NEXT|-NOT)?(?:\[([^\]]*)\])?:(.*)$").expect("a regex");
+    let tagged = Regex::new(r"^CHECK(-LABEL|-NEXT|-NOT|-MAX-[0-9]+)?(?:\[([^\]]*)\])?:(.*)$").expect("a regex");
     let mut found = Vec::new();
     for (at, line) in source.lines().enumerate() {
         let Some(text) = comment(line) else { continue };
         if let Some(parts) = tagged.captures(text) {
-            let kind = match parts.get(1).map(|one| one.as_str()) {
+            let tag = parts.get(1).map(|one| one.as_str());
+            let kind = match tag {
                 Some("-NEXT") => Kind::Next,
                 Some("-NOT") => Kind::Not,
+                Some(max) if max.starts_with("-MAX-") => Kind::Not,
                 _ => Kind::Check,
             };
+            let most = tag.and_then(|max| max.strip_prefix("-MAX-")).map_or(0, |n| n.parse().expect("a count"));
             found.push(Directive {
                 only: parts.get(2).map(|one| one.as_str().to_owned()),
                 kind,
+                most,
                 pattern: parts[3].trim().to_owned(),
                 at: at + 1,
             });
@@ -120,6 +133,18 @@ fn matcher(pattern: &str) -> Regex {
     Regex::new(&out).unwrap_or_else(|error| panic!("pattern {pattern:?}: {error}"))
 }
 
+/// A bar crossed: the pattern found more often than the directive allows.
+fn barred_message(
+    bar: &Directive,
+    hits: &[usize],
+    lines: &[&str],
+) -> String {
+    if bar.most == 0 {
+        return format!("line {}: CHECK-NOT {:?} found: {}", bar.at, bar.pattern, lines[hits[0]]);
+    }
+    format!("line {}: CHECK-MAX-{} {:?} found {} times: {}", bar.at, bar.most, bar.pattern, hits.len(), lines[hits[0]])
+}
+
 /// What fails, as a message, or Ok.
 fn filecheck(
     output: &str,
@@ -150,8 +175,9 @@ fn filecheck(
                 };
                 for bar in barred.drain(..) {
                     let re = matcher(&bar.pattern);
-                    if let Some(hit) = (cursor..at).find(|&line| re.is_match(lines[line])) {
-                        return Err(format!("line {}: CHECK-NOT {:?} found: {}", bar.at, bar.pattern, lines[hit]));
+                    let hits: Vec<usize> = (cursor..at).filter(|&line| re.is_match(lines[line])).collect();
+                    if hits.len() > bar.most {
+                        return Err(barred_message(bar, &hits, &lines));
                     }
                 }
                 last = Some(at);
@@ -161,8 +187,9 @@ fn filecheck(
     }
     for bar in barred {
         let re = matcher(&bar.pattern);
-        if let Some(hit) = (cursor..lines.len()).find(|&line| re.is_match(lines[line])) {
-            return Err(format!("line {}: CHECK-NOT {:?} found: {}", bar.at, bar.pattern, lines[hit]));
+        let hits: Vec<usize> = (cursor..lines.len()).filter(|&line| re.is_match(lines[line])).collect();
+        if hits.len() > bar.most {
+            return Err(barred_message(bar, &hits, &lines));
         }
     }
     Ok(())
@@ -203,10 +230,14 @@ fn test_every_file_under_tests_check_satisfies_its_check_lines() {
             }
             let arguments: Vec<String> =
                 words[1..].iter().map(|word| word.replace("%s", &path.display().to_string())).collect();
-            let done = Command::new(tool(words[0]))
-                .args(&arguments)
-                .output()
-                .unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
+            let done = if words[0] == "llrm-cc" {
+                // llrm-c's arguments, served by llrm-cc over the pinned clang
+                // (needs LLRM_OW, LLRM_CLANG_M16).
+                common::cc::llrm_c().args(&arguments).output()
+            } else {
+                Command::new(tool(words[0])).args(&arguments).output()
+            }
+            .unwrap_or_else(|error| panic!("{}: {}: {error}", path.display(), words[0]));
             let output = format!("{}{}", String::from_utf8_lossy(&done.stdout), String::from_utf8_lossy(&done.stderr));
             let name = path.strip_prefix(&root).unwrap().display();
             if done.status.success() == must_fail {
@@ -295,4 +326,13 @@ fn test_a_second_configuration_that_breaks_fails_the_file() {
     assert!(results[1].is_err(), "the second configuration's output has no rep movsd");
     let tagged = "// CHECK[-Os]: pop es\n";
     assert!(for_run(directives(tagged), &runs[0]).is_empty() && for_run(directives(tagged), &runs[1]).len() == 1);
+}
+
+/// A ceiling counts every hit of its span: N pass, N + 1 fail.
+#[test]
+fn test_check_max_holds_a_known_gap_to_its_ceiling() {
+    let source = "; CHECK: a\n; CHECK-MAX-2: x\n; CHECK: c";
+    assert!(check("a\nx\nx\nc\n", source).is_ok(), "two are allowed");
+    assert!(check("a\nx\nx\nx\nc\n", source).is_err(), "three are one too many");
+    assert!(check("a\nx\nx\nx\n", "; CHECK: a\n; CHECK-MAX-2: x").is_err(), "a trailing ceiling covers the rest");
 }

@@ -2,7 +2,7 @@
 
 TL;DR: our IR equals the pin's; both lower `x + zext(icmp)` to `cmp; setcc; movzx; add` on i486, where main (gcc) keeps the branch. A numbered DEVIATE, priced from `timings.times`, lowers it as a branch where the target has no cmov.
 
-target: i486-unknown-linux-gnu, cpu=i486, no sse (tools/pairs/pin.py), repro `~/scratch/cause/repro/merge.c` with the arrays made external (static ones are dead and the function vanishes).
+target: i486-unknown-linux-gnu, cpu=i486, no sse (tools/pairs/pin.py), repro `merge.c` with the arrays made external (static ones are dead and the function vanishes).
 
 ## Cause
 
@@ -27,7 +27,7 @@ The branch wins on both CPUs for this shape.
 
 ## The nhstutil leaf is another chain
 
-`static int is_tmp(const void *p){return p>=temps && p<temps+240;}` (repro `/tmp/nh2.c`; w-6's dumps `~/scratch/cause/nh-main.s` against `nh-fix.s`): both the pin's llc and ours emit `cmp; setae cl; cmp; setb al; and cl,al; movzx` (no `zext`-add), where main branches (`cmp; jae; ...; xor eax,eax / mov al,1`). The IR is an `and i1` of two compares used as a value: a different pattern with the same cost shape. With a variable bound our own output already branches (6 instructions, `jb` over a `setb`): the chain appears when the bounds are link-time constants.
+`static int is_tmp(const void *p){return p>=temps && p<temps+240;}` (repro `nh2.c`; w-6's dumps `nh-main.s` against `nh-fix.s`): both the pin's llc and ours emit `cmp; setae cl; cmp; setb al; and cl,al; movzx` (no `zext`-add), where main branches (`cmp; jae; ...; xor eax,eax / mov al,1`). The IR is an `and i1` of two compares used as a value: a different pattern with the same cost shape. With a variable bound our own output already branches (6 instructions, `jb` over a `setb`): the chain appears when the bounds are link-time constants.
 
 Price (i486 / P5): two `setcc` 4+4 / 1+1, `and` 1, `movzx` 3 / 3, two `cmp` 2 = 14 / 8; the branched form `cmp; jb; cmp; setb` is 1 + 3 + 1 + 4 = 9 on a taken branch, 6 not taken (i486), 5 / 3 on P5.
 

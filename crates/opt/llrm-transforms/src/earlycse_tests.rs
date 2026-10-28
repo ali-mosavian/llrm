@@ -7,7 +7,7 @@ use super::EarlyCse;
 use crate::testing::{managed, parsed};
 
 fn run(body: &str) -> String {
-    managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse)
+    managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse::default())
 }
 
 /// A commuted add was a second add, which `gvn` found much later.
@@ -290,7 +290,7 @@ fn mssa_misses_over(passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>) -> (u6
 fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
     let (hits, misses) = mssa_misses_over(vec![
         Box::new(AsksMssa { forgets: false }),
-        Box::new(EarlyCse),
+        Box::new(EarlyCse::default()),
         Box::new(AsksMssa { forgets: false }),
     ]);
     assert_eq!(misses, 1, "MemorySSA was computed again after EarlyCSE updated it");
@@ -303,4 +303,82 @@ fn test_the_memory_graph_is_computed_again_after_a_pass_that_keeps_nothing() {
     let (_, misses) =
         mssa_misses_over(vec![Box::new(AsksMssa { forgets: true }), Box::new(AsksMssa { forgets: false })]);
     assert_eq!(misses, 2, "a pass that named nothing kept MemorySSA");
+}
+
+/// EarlyFPM's EarlyCSE has no MemorySSA (`EarlyCSEPass()`,
+/// PassBuilderPipelines.cpp#L1180; `UseMemorySSA` false, EarlyCSE.cpp#L1815):
+/// it asks for no graph. Built anyway, d_faces -O2 built MemorySSA 11 times
+/// more than the pin's one per function (22.7 M of 42.3 M in EarlyCSE).
+#[test]
+fn test_early_cse_without_memory_ssa_builds_no_graph() {
+    let (hits, misses) = mssa_misses_over(vec![Box::new(EarlyCse { memory_ssa: false })]);
+    assert_eq!((hits, misses), (0, 0), "MemorySSA was asked for");
+    let (hits, misses) = mssa_misses_over(vec![Box::new(EarlyCse::default())]);
+    assert!(hits + misses > 0, "premise: with MemorySSA it asks for the graph");
+}
+
+/// Without MemorySSA a load past a write is a new load (`isSameMemGeneration`
+/// is false unless the generations are equal, EarlyCSE.cpp#L1074); with it a
+/// store to a cell that cannot alias the loaded one is not in the way.
+#[test]
+fn test_without_memory_ssa_a_load_past_a_store_to_another_cell_is_not_the_first() {
+    let body = "define i32 @f(ptr noalias %p, ptr noalias %q) {
+b0:
+  %a = load i32, ptr %p
+  store i32 7, ptr %q
+  %b = load i32, ptr %p
+  %r = add i32 %a, %b
+  ret i32 %r
+}
+";
+    let with = managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse::default());
+    let without = managed(&mut parsed(&format!("{DOS}{body}")), EarlyCse { memory_ssa: false });
+    assert_eq!(with.matches("load").count(), 1, "premise: with MemorySSA the second load goes:\n{with}");
+    assert_eq!(without.matches("load").count(), 2, "{without}");
+}
+
+/// A load of a constant table is the one before a call that may write
+/// anything (`pointsToConstantMemory`, `opt` agrees). QCport's
+/// `config.c` kept the second `load [_fields + i + 4]` after a `strncpy`
+/// when EarlyCSE read unannotated accesses: +34 B over three modules.
+#[test]
+fn test_a_load_of_a_constant_table_survives_a_call() {
+    let after = run("@fields = internal constant [4 x i16] [i16 1, i16 2, i16 3, i16 4]
+
+declare ptr @strncpy_(ptr, ptr, i16)
+
+define i16 @f(ptr noundef %base, ptr noundef %src, i16 %i) {
+b0:
+  %p = getelementptr inbounds i16, ptr @fields, i16 %i
+  %a = load i16, ptr %p
+  %d = getelementptr inbounds i8, ptr %base, i16 %a
+  %c = call ptr @strncpy_(ptr %d, ptr %src, i16 63)
+  %b = load i16, ptr %p
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+");
+    assert_eq!(after.matches("load i16").count(), 1, "{after}");
+}
+
+/// EarlyCSE cloned the whole context to give MemorySSA a view the walk's
+/// interned constants did not reach (`Context::int` interns through `&self`, so
+/// the copy bought nothing): 0.7 M Ir over 22 runs of d_faces, plus its drop.
+#[test]
+fn test_a_run_clones_no_context() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::ContextClones);
+    let after = run("define i32 @f(i1 %c, i32 %x) {
+b0:
+  br i1 %c, label %a, label %b
+a:
+  %p = add i32 %x, 1
+  ret i32 %p
+b:
+  %q = add i32 %x, 1
+  ret i32 %q
+}
+");
+    assert!(after.contains("define i32 @f"), "{after}");
+    assert_eq!(get(Event::ContextClones), before, "earlycse cloned the context");
 }

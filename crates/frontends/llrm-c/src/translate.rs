@@ -6,12 +6,12 @@
 //! arithmetic, `inbounds` on pointer arithmetic. The last two hold for
 //! objects of at most PTRDIFF_MAX bytes, as clang assumes of every object.
 
-use llrm_core::hir::facts::{Builder as Facts, Subject};
-use llrm_core::hir::model::{
+use llrm_codegen::hir::facts::{Builder as Facts, Subject};
+use llrm_codegen::hir::model::{
     self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup,
     Storage, TerminatorKind, TypeKind,
 };
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::support::hash::IndexMap;
 use llrm_mir::facts::Fact;
 use llrm_mir::types::FloatKind;
 use llrm_support::hash::{HashMap, HashSet};
@@ -199,7 +199,7 @@ pub fn program(
     // A call keeps what its target's C convention does not clobber; the
     // compiler's constants go in CONST.
     let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
-    let preserved = llrm_core::abi::runtime::preserves(&contract);
+    let preserved = llrm_codegen::abi::runtime::preserves(&contract);
     Ok(h::Program {
         zeroed_locals: false,
         promises,
@@ -278,7 +278,7 @@ struct Object {
 }
 
 fn number(text: &str) -> R<i64> {
-    text.trim().parse().map_err(|_| Unsupported(format!("not a number: {text}")))
+    hir::parse_int(text).ok_or_else(|| Unsupported(format!("not a number: {text}")))
 }
 
 /// Each data segment's labelled objects, as the stream lays them down.
@@ -771,7 +771,9 @@ struct Body<'a, 't> {
     labels: HashMap<String, usize>,
     slots: HashMap<String, i64>,
     globals: HashMap<i64, i64>,
-    done: HashMap<i64, Got>,
+    /// What each tree node evaluated to, by handle (a dense row: the handles
+    /// are a function's node numbers).
+    done: Vec<Option<Got>>,
     selects: IndexMap<String, (Vec<(i64, String)>, Option<String>)>,
     calls: Vec<h::CallAbi>,
     instructions: i64,
@@ -960,7 +962,7 @@ fn in_their_slots(
     if !interrupt && !variadic {
         return Ok(());
     }
-    let exposed = llrm_core::hir::escape::exposed_frame(function);
+    let exposed = llrm_codegen::hir::escape::exposed_frame(function);
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     // A struct parameter whose address is taken lives in its words' slots,
@@ -1166,7 +1168,7 @@ impl<'a, 't> Body<'a, 't> {
             labels: HashMap::default(),
             slots: HashMap::default(),
             globals: HashMap::default(),
-            done: HashMap::default(),
+            done: Vec::new(),
             selects: IndexMap::default(),
             stated_instructions: Vec::new(),
             stated_operands: Vec::new(),
@@ -1262,6 +1264,12 @@ impl<'a, 't> Body<'a, 't> {
             facts.state(Subject::Operand { function: id, instruction, operand }, fact);
         }
         for (value, fact) in stated {
+            // An interrupt handler's parameters are the registers it saved,
+            // read from its frame slots: its lowered signature has no parameter
+            // to state a fact of.
+            if function.abi.as_ref().is_some_and(|abi| abi.distance == CallDistance::Interrupt) {
+                continue;
+            }
             let index = function.parameters.iter().position(|&one| one == value).expect("a parameter") as i64;
             facts.state(Subject::Param { function: id, index }, fact);
         }
@@ -1413,22 +1421,23 @@ impl<'a, 't> Body<'a, 't> {
     /// The scaled products no instruction reads: an index that counts elements
     /// leaves its multiply behind.
     fn drop_unread_scales(&mut self) {
+        // Only a scale's result can be dead here, so only those are noted.
         fn read(
             operand: &Operand,
+            scales: &HashMap<i64, (i64, i64)>,
             into: &mut HashSet<i64>,
         ) {
+            let mut note = |value: i64| {
+                if scales.contains_key(&value) {
+                    into.insert(value);
+                }
+            };
             match operand {
-                Operand::ValueRef(one) => {
-                    into.insert(one.value);
-                }
-                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, into)),
-                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, into)),
-                Operand::IndirectPlace(one) => {
-                    into.insert(one.base);
-                }
-                Operand::DescriptorPlace(one) => {
-                    into.insert(one.base);
-                }
+                Operand::ValueRef(one) => note(one.value),
+                Operand::ArrayElement(one) => one.indices.iter().for_each(|index| read(index, scales, into)),
+                Operand::ProjectedPlace(one) => one.indices.iter().for_each(|index| read(index, scales, into)),
+                Operand::IndirectPlace(one) => note(one.base),
+                Operand::DescriptorPlace(one) => note(one.base),
                 Operand::Constant(_) | Operand::PlaceRef(_) => {}
             }
         }
@@ -1439,7 +1448,7 @@ impl<'a, 't> Body<'a, 't> {
         for block in &self.blocks {
             let operands = block.instructions.iter().flat_map(|one| &one.operands);
             let ending = block.terminator.iter().flat_map(|one| &one.operands);
-            operands.chain(ending).for_each(|operand| read(operand, &mut used));
+            operands.chain(ending).for_each(|operand| read(operand, &self.scales, &mut used));
         }
         let scales = &self.scales;
         let dead = |one: &h::Instruction| {
@@ -1543,7 +1552,9 @@ impl<'a, 't> Body<'a, 't> {
 
     fn block(&mut self) -> usize {
         let id = self.blocks.len() as i64 + 1;
-        self.blocks.push(Open { id, instructions: Vec::new(), terminator: None });
+        // Room for a typical block: growing by doubling copied the large
+        // `Instruction`s 674 times (0.75 M Ir).
+        self.blocks.push(Open { id, instructions: Vec::with_capacity(16), terminator: None });
         self.blocks.len() - 1
     }
 
@@ -1880,7 +1891,7 @@ impl<'a, 't> Body<'a, 't> {
                     .bits(value)
                     .ok_or_else(|| Unsupported(format!("{}: a switch on a non-integer", self.name())))?
                     .max(16);
-                let is_signed = signed(&self.unit.canonical_type(&from));
+                let is_signed = signed(self.unit.canonical_type_ref(&from));
                 let wide = self.types.int(bits / 8, is_signed);
                 let value = self.resized(value, is_signed, wide);
                 let default = self.label(&other);
@@ -2015,7 +2026,7 @@ impl<'a, 't> Body<'a, 't> {
         let a = self.value_as(left, type_)?;
         let b = self.value_as(right, type_)?;
         let truth = self.types.of(Shape::Bool, None);
-        if is_float(&self.unit.canonical_type(type_)) {
+        if is_float(self.unit.canonical_type_ref(type_)) {
             let op = match cg_op.as_str() {
                 "O_EQ" => Op::Eq,
                 "O_NE" => Op::Ne,
@@ -2040,7 +2051,7 @@ impl<'a, 't> Body<'a, 't> {
             }
             _ => (a, b),
         };
-        let is_signed = signed(&self.unit.canonical_type(type_));
+        let is_signed = signed(self.unit.canonical_type_ref(type_));
         let op = match (cg_op.as_str(), is_signed) {
             ("O_EQ", _) => Op::Eq,
             ("O_NE", _) => Op::Ne,
@@ -2059,30 +2070,52 @@ impl<'a, 't> Body<'a, 't> {
 
     // ---- expressions ----
 
+    fn done_of(
+        &self,
+        key: i64,
+    ) -> Option<Got> {
+        usize::try_from(key).ok().and_then(|at| self.done.get(at).copied().flatten())
+    }
+
+    fn remember(
+        &mut self,
+        key: i64,
+        got: Got,
+    ) {
+        let at = usize::try_from(key).expect("a node handle is not negative");
+        if self.done.len() <= at {
+            self.done.resize(at + 1, None);
+        }
+        self.done[at] = Some(got);
+    }
+
     fn eval(
         &mut self,
         node: &str,
     ) -> R<Got> {
         let key = hir::handle(node);
-        if let Some(&done) = self.done.get(&key) {
+        if let Some(done) = self.done_of(key) {
             return Ok(done);
         }
         let got = self.expression(node)?;
-        self.done.insert(key, got);
+        self.remember(key, got);
         Ok(got)
     }
 
+    /// The type name of a tree node, borrowed from the unit (a `String` was
+    /// copied for each of the 2,971 asks, 0.21 M Ir).
     fn type_of_node(
         &self,
         node: &str,
-    ) -> String {
-        let tree = &self.unit.nodes[&hir::handle(node)];
+    ) -> &'a str {
+        let unit: &'a hir::Unit = self.unit;
+        let tree = &unit.nodes[&hir::handle(node)];
         match tree.call.as_str() {
-            "CGCall" => self.unit.calls[&hir::handle(&tree.args[0])].type_.clone(),
+            "CGCall" => unit.calls[&hir::handle(&tree.args[0])].type_.as_str(),
             "CGEval" | "CGVolatile" | "CGAttr" => self.type_of_node(&tree.args[0]),
             "CGFact" => self.type_of_node(&tree.args[1]),
-            "CGFlow" | "CGCompare" => "TY_BOOLEAN".to_owned(),
-            _ => tree.args.last().cloned().unwrap_or_default(),
+            "CGFlow" | "CGCompare" => "TY_BOOLEAN",
+            _ => tree.args.last().map_or("", String::as_str),
         }
     }
 
@@ -2429,7 +2462,7 @@ impl<'a, 't> Body<'a, 't> {
                     start: number(start)?,
                     width: number(width)?,
                     unit: self.ty(type_)?,
-                    signed: signed(&self.unit.canonical_type(type_)),
+                    signed: signed(self.unit.canonical_type_ref(type_)),
                 }
             }
             _ => return self.refuse(format!("{} {}", tree.call, tree.args.join(" "))),
@@ -2791,7 +2824,7 @@ impl<'a, 't> Body<'a, 't> {
         if self.same(self.type_of(value), ty) {
             return Ok(value);
         }
-        let source_signed = signed(&self.unit.canonical_type(from));
+        let source_signed = signed(self.unit.canonical_type_ref(from));
         Ok(match (self.shape(value), self.types.shape(ty)) {
             (Shape::Int(..) | Shape::Bool, Shape::Int(..)) => self.resized(value, source_signed, ty),
             (Shape::Int(..) | Shape::Bool, Shape::Float(_)) => {
@@ -2861,7 +2894,7 @@ impl<'a, 't> Body<'a, 't> {
         value: i64,
         type_: &str,
     ) -> R<i64> {
-        let floats = is_float(&self.unit.canonical_type(type_));
+        let floats = is_float(self.unit.canonical_type_ref(type_));
         let ty = self.type_of(value);
         Ok(match (cg_op, floats) {
             ("O_UMINUS", true) => self.op(Op::Fneg, ty, vec![value_ref(value)]),
@@ -2893,7 +2926,7 @@ impl<'a, 't> Body<'a, 't> {
         type_: &str,
         bits: i64,
     ) -> bool {
-        !self.unit.wrapv && signed(&self.unit.canonical_type(type_)) && bits >= 16
+        !self.unit.wrapv && signed(self.unit.canonical_type_ref(type_)) && bits >= 16
     }
 
     /// The index of a pointer add scaled to bytes, `index * size`: the
@@ -2909,7 +2942,7 @@ impl<'a, 't> Body<'a, 't> {
     ) -> R<()> {
         let tree = self.unit.nodes[&hir::handle(node)].clone();
         let [op, left, right, type_] = &tree.args[..] else { return Ok(()) };
-        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(&self.unit.canonical_type(type_)) {
+        if tree.call != "CGBinary" || op != "O_TIMES" || is_float(self.unit.canonical_type_ref(type_)) {
             return Ok(());
         }
         let constant = |this: &Self, node: &String| this.unit.nodes[&hir::handle(node)].call == "CGInteger";
@@ -2918,7 +2951,7 @@ impl<'a, 't> Body<'a, 't> {
             (true, false) => (right, left),
             _ => return Ok(()),
         };
-        let unsigned = !signed(&self.unit.canonical_type(&self.type_of_node(index)));
+        let unsigned = !signed(self.unit.canonical_type_ref(&self.type_of_node(index)));
         let (a, b) = (self.value_as(index, type_)?, self.value_as(size, type_)?);
         let ty = self.ty(type_)?;
         let result = self.value(ty);
@@ -2930,7 +2963,7 @@ impl<'a, 't> Body<'a, 't> {
         if let Some(bytes) = self.whole_constant(size) {
             self.scales.insert(result, (if index == left { a } else { b }, bytes));
         }
-        self.done.insert(hir::handle(node), Got::Value(result));
+        self.remember(hir::handle(node), Got::Value(result));
         Ok(())
     }
 
@@ -3060,7 +3093,7 @@ impl<'a, 't> Body<'a, 't> {
         if self.bits(by).is_none() {
             return self.refuse(format!("a pointer moved by a {from}"));
         }
-        let signed = signed(&self.unit.canonical_type(from));
+        let signed = signed(self.unit.canonical_type_ref(from));
         let operands = match scale {
             Some((index, size)) => {
                 let index = self.resized(index, signed, word);
@@ -3089,7 +3122,7 @@ impl<'a, 't> Body<'a, 't> {
         type_: &str,
     ) -> R<i64> {
         let ty = self.ty(type_)?;
-        if is_float(&self.unit.canonical_type(type_)) {
+        if is_float(self.unit.canonical_type_ref(type_)) {
             let op = match cg_op {
                 "O_PLUS" => Op::Fadd,
                 "O_MINUS" => Op::Fsub,
@@ -3100,7 +3133,7 @@ impl<'a, 't> Body<'a, 't> {
             return Ok(self.op(op, ty, vec![value_ref(a), value_ref(b)]));
         }
         let Some(bits) = self.bits(a) else { return self.refuse(format!("{cg_op} of {type_}")) };
-        let is_signed = signed(&self.unit.canonical_type(type_));
+        let is_signed = signed(self.unit.canonical_type_ref(type_));
         let (op, nowrap) = match cg_op {
             "O_PLUS" => (Op::Add, self.wraps(type_, bits)),
             "O_MINUS" => (Op::Sub, self.wraps(type_, bits)),
@@ -3668,8 +3701,8 @@ impl<'a, 't> Body<'a, 't> {
         if let (Got::Function(_), [(node, type_)]) = (target, call.parms.as_slice())
             && symbol.name == "fabs"
             && symbol.imported()
-            && is_float(&unit.canonical_type(type_))
-            && is_float(&unit.canonical_type(&call.type_))
+            && is_float(unit.canonical_type_ref(type_))
+            && is_float(unit.canonical_type_ref(&call.type_))
         {
             let value = self.value_as(node, type_)?;
             return Ok(Got::Returned(Some(self.unary("O_FABS", value, type_)?)));
@@ -3907,7 +3940,7 @@ mod tests {
             &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
         )
         .unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
     }
@@ -4045,7 +4078,7 @@ mod tests {
     }
 
     /// `fixture`'s HIR program.
-    fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
+    fn program_of(fixture: &str) -> llrm_codegen::hir::model::Program {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
         super::program(
@@ -4086,7 +4119,7 @@ mod tests {
                     &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
                 )
                 .ok()?;
-                llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
+                llrm_codegen::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();
         assert!(invalid.is_empty(), "{invalid:#?}");
@@ -4099,29 +4132,30 @@ mod tests {
         let mut program = program_of("bytes.cgs");
         let machine = llrm_x86_m16::machine::BUILT_IN.clone();
         let options = llrm_driver::m16_options(machine);
-        assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
+        assert!(llrm_codegen::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module
             .types
             .iter()
-            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .find(|one| one.kind == llrm_codegen::hir::model::TypeKind::Integer && one.width == 1)
             .map(|one| one.id)
             .expect("a byte type");
         let stored =
             module.functions.iter_mut().flat_map(|one| &mut one.blocks).flat_map(|one| &mut one.instructions).find(
                 |one| {
-                    one.op == llrm_core::hir::model::Op::Store
+                    one.op == llrm_codegen::hir::model::Op::Store
                         && matches!(
                             &one.operands[0],
-                            llrm_core::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
+                            llrm_codegen::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
                         )
                 },
             );
-        let Some(llrm_core::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0]) else {
+        let Some(llrm_codegen::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0])
+        else {
             panic!("premise: a store through a pointer")
         };
         place.r#type = byte;
-        let why = llrm_core::driver::emitted(&program, &options).err().unwrap_or_default();
+        let why = llrm_codegen::driver::emitted(&program, &options).err().unwrap_or_default();
         assert!(why.contains("store value type does not match its place"), "{why}");
     }
 
@@ -4130,12 +4164,12 @@ mod tests {
     #[test]
     fn test_a_stated_pointee_still_bounds_an_indirect_place() {
         let mut program = program_of("bytes.cgs");
-        assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
+        assert!(llrm_codegen::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module
             .types
             .iter()
-            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .find(|one| one.kind == llrm_codegen::hir::model::TypeKind::Integer && one.width == 1)
             .map(|one| one.id)
             .expect("a byte type");
         let wider = |ty: i64| module.types.iter().find(|one| one.id == ty).is_some_and(|one| one.width > 1);
@@ -4146,7 +4180,7 @@ mod tests {
             .flat_map(|one| &one.instructions)
             .flat_map(|one| &one.operands)
             .find_map(|operand| match operand {
-                llrm_core::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
+                llrm_codegen::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
                 _ => None,
             })
             .expect("premise: a place wider than a byte, read through a pointer");
@@ -4166,7 +4200,7 @@ mod tests {
                 value.r#type = narrowed;
             }
         }
-        let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+        let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("exceeds its pointee"), "{why:?}");
     }
 
@@ -4175,7 +4209,11 @@ mod tests {
     #[test]
     fn test_an_indirect_calls_order_is_over_its_arguments() {
         let mut program = program_of("codeptrs.cgs");
-        assert!(llrm_core::hir::verify::verify(&program).is_ok(), "{:?}", llrm_core::hir::verify::verify(&program));
+        assert!(
+            llrm_codegen::hir::verify::verify(&program).is_ok(),
+            "{:?}",
+            llrm_codegen::hir::verify::verify(&program)
+        );
         let function = program.modules[0]
             .functions
             .iter_mut()
@@ -4183,7 +4221,7 @@ mod tests {
             .unwrap();
         let site = function.calls.iter_mut().find(|site| !site.order.is_empty()).unwrap();
         site.order.iter_mut().for_each(|one| *one += 1);
-        let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+        let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("invalid argument order"), "{why:?}");
     }
 
@@ -4278,7 +4316,7 @@ mod tests {
         };
         let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
         let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
+        let emitted = llrm_codegen::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
     }
@@ -4316,7 +4354,7 @@ mod tests {
             let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
             let program =
                 super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
-            let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+            let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
             assert_eq!(emitted.refused, Vec::<(String, String)>::new());
             defined(&emitted.module, "_f")
         };
@@ -4449,11 +4487,22 @@ mod tests {
         assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
         let module = raised("longdouble.cgs");
         let printed = llrm_mir::print::module(&module);
-        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80", "sitofp i16"] {
+        // An integer constant converts at once (x86_fp80 constants fold
+        // exactly); the integer conversion is the next test's.
+        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80"] {
             assert!(printed.contains(conversion), "{conversion}: {printed}");
         }
         let main = defined(&module, "_main");
-        assert!(main.contains("sitofp") && main.contains("x86_fp80"), "{main}");
+        assert!(main.contains("fmul x86_fp80") && main.contains("4.000000e+00"), "{main}");
+    }
+
+    /// A short that is no constant converts to a long double by `sitofp`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_short_converts_to_a_long_double_by_sitofp() {
+        let text = raised_c("long double __cdecl f(short s) { return s; }\n", false);
+        assert!(text.contains("sitofp i16") && text.contains("x86_fp80"), "{text}");
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.

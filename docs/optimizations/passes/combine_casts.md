@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_casts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_casts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_casts.rs sha256:bf331e32b083a4530cf8d93274ef2e34ebfb9bbb20ee050d82f006af08eb992c -->
+<!-- src: crates/opt/llrm-transforms/src/combine_casts.rs sha256:a359e532fa6fef350cba4c5c8c133ec1c6e49201a26da600b53dc91a31706273 -->
 
 # combine_casts
 
@@ -27,9 +27,6 @@ DEVIATE 1: MIR has no vectors and no `vscale`: `foldVecTruncToExtElt`,
 
 DEVIATE 2 (temporary): `FoldOpIntoSelect`, the select step of
 `commonCastTransforms`, is left out until the select family lands it.
-
-DEVIATE 3 (temporary): `SimplifyDemandedInstructionBits` is not
-translated.
 
 DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
 `usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are

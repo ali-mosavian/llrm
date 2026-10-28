@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/storecombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/storecombine.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/storecombine.rs sha256:31025aba5fa7b4f647e27f88d28d357176058db610f3b23effd0bb889a163a27 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/storecombine.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/storecombine.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/storecombine.rs sha256:249ba8089a72a0a0c094a954ebcbbc2caa1d209a4c38e8fe5b010774b5f13e42 -->
 
 # storecombine
 

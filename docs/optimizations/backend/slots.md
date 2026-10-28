@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/slots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/slots.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/slots.rs sha256:750463fae910a6ca045b77cfda8f954349311b857bca35e8e1338bf2b73618d3 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/slots.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/slots.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/slots.rs sha256:f6f8eec7262ddadad15879804d68aee935b5ba2be6bb45b0b9d923eece3c2a24 -->
 
 # slots
 
@@ -36,7 +36,7 @@ of its own. Its effect shows in the spill slots of the `spiller` and
 `ssaspill` examples.
 
 ## Used by
-- [`crate::backend::spiller`](spiller.md), which shares spill slots by the live range of
+- `crate::backend::spiller`, which shares spill slots by the live range of
   each spilled value and prefers the slot of a related value, and
   `slots_colored`, which does so once over the allocation kept.
 - [`crate::backend::isel`](isel.md), which shares the slots of block locals by their

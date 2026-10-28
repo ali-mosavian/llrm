@@ -411,9 +411,13 @@ pub fn direct_calls(module: &Module) -> DirectCalls {
             let instruction = function.instruction(inst);
             let Some(callee) = memory::callee(&module.context, function, inst) else { continue };
             match &instruction.opcode {
-                Opcode::Call(_)
+                // DeadArgumentElimination.cpp `surveyFunction`: a call whose
+                // function type is not the callee's own is a use that keeps
+                // the signature.
+                Opcode::Call(info)
                     if instruction.operands.len()
-                        == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1 =>
+                        == module.global(callee).function().map_or(0, |one| one.parameters().len()) + 1
+                        && module.global(callee).function().is_some_and(|one| one.ty == info.function_type) =>
                 {
                     found.sites.entry(callee).or_default().push((caller, inst));
                 }

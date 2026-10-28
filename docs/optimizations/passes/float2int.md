@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/float2int.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/float2int.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/float2int.rs sha256:fff477118ed0881f075b609254913ef0cbc78fbd86742794f180339e5f8c0a6a -->
+<!-- src: crates/opt/llrm-transforms/src/float2int.rs sha256:f0db5e781c56d3040b68dd73a5343bebee8ed9e10129d0b77f0fb5947c1a7a87 -->
 
 # float2int
 

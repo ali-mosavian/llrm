@@ -34,8 +34,7 @@ def compile_c(target: str, include: Path, platform: Path, obj: Path) -> None:
             str(qbruntime.RUNTIME),
             "-I",
             str(platform),
-            "-I",
-            str(qbruntime.RUNTIME / "dos"),
+            *qbruntime.device_includes(platform),
             "-o",
             str(obj),
         ]

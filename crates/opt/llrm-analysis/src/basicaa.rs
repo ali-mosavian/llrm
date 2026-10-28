@@ -44,6 +44,8 @@ thread_local! {
     /// batch classifies each object once.
     pub static DECOMPOSITIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub static CLASSIFICATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Fact sets built to read an argument's attributes.
+    pub static ARGUMENT_FACTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `MaxLookupSearchDepth`.
@@ -110,6 +112,55 @@ pub(crate) fn is_identified_function_local(
     BasicAA::new(unit).is_identified_local(operand)
 }
 
+/// `CallBase::getMemoryEffects`: the site's attributes met with the direct
+/// callee's.
+pub(crate) fn call_memory_effects(
+    unit: &Unit,
+    call: llrm_mir::module::InstId,
+) -> MemoryEffects {
+    let function = unit.function;
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
+        return MemoryEffects::unknown();
+    };
+    let site = MemoryEffects::of_attrs(&info.attrs);
+    let callee = llrm_mir::memory::callee(unit.context, function, call)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(|one| one.function());
+    callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+}
+
+/// `isIdentifiedObject`: an identified local, or a global variable.
+pub(crate) fn is_identified_object(
+    unit: &Unit,
+    operand: Operand,
+) -> bool {
+    let basic = BasicAA::new(unit);
+    basic.is_identified_local(operand) || basic.global_variable(operand)
+}
+
+/// `getUnderlyingObject`: through geps and casts.
+pub(crate) fn underlying_object(
+    unit: &Unit,
+    operand: Operand,
+) -> Operand {
+    BasicAA::new(unit).underlying(operand)
+}
+
+/// `MergeAliasResults`.
+fn merge_alias_results(
+    one: AliasResult,
+    other: AliasResult,
+) -> AliasResult {
+    use AliasResult::{MayAlias, MustAlias, NoAlias, PartialAlias};
+    match (one, other) {
+        (NoAlias, NoAlias) => NoAlias,
+        (MustAlias, MustAlias) => MustAlias,
+        (PartialAlias { .. }, PartialAlias { .. }) => one,
+        (PartialAlias { .. }, MustAlias) | (MustAlias, PartialAlias { .. }) => PartialAlias { offset: None },
+        _ => MayAlias,
+    }
+}
+
 pub struct BasicAA<'a> {
     unit: &'a Unit<'a>,
 }
@@ -168,6 +219,16 @@ impl<'a> BasicAA<'a> {
         !self.forged()
     }
 
+    /// [`Self::transparent`] for a pass that strips casts as the pin's
+    /// `stripPointerCasts` does: the selector of an object cast back to a far
+    /// pointer is not the pointer it came from.
+    pub fn passes_through(
+        &self,
+        one: &llrm_mir::module::Instruction,
+    ) -> bool {
+        self.transparent(one)
+    }
+
     /// Whether the module forges pointers into the data segment; without the
     /// module's facts it may.
     fn forged(&self) -> bool {
@@ -179,7 +240,12 @@ impl<'a> BasicAA<'a> {
         &self,
         mut operand: Operand,
     ) -> Operand {
-        while let Some(one) = self.defining(operand) {
+        loop {
+            if let Some(source) = self.constant_cast_source(operand) {
+                operand = source;
+                continue;
+            }
+            let Some(one) = self.defining(operand) else { break };
             match one.opcode {
                 Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) if self.transparent(one) => {
                     operand = one.operands[0]
@@ -190,7 +256,8 @@ impl<'a> BasicAA<'a> {
         operand
     }
 
-    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant expression.
+    /// `isa<GEPOperator>`: a `getelementptr` instruction or constant
+    /// expression.
     fn is_gep_operator(
         &self,
         operand: Operand,
@@ -206,11 +273,32 @@ impl<'a> BasicAA<'a> {
     ) -> Option<Operand> {
         match operand {
             Operand::Constant(id) => match &self.unit.context.get(id).kind {
-                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => Some(Operand::Constant(operands[0])),
+                ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => {
+                    Some(Operand::Constant(operands[0]))
+                }
                 _ => None,
             },
             _ => None,
         }
+    }
+
+    /// The operand a `bitcast` or `addrspacecast` constant expression casts,
+    /// where a pointer passes through it unchanged (as for the instruction,
+    /// [`Self::transparent`]): a selector's own space is not.
+    fn constant_cast_source(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        let Operand::Constant(id) = operand else { return None };
+        let ConstantKind::Expr(ConstantExpr::Cast { op: op @ (CastOp::BitCast | CastOp::AddrSpaceCast), value }) =
+            &self.unit.context.get(id).kind
+        else {
+            return None;
+        };
+        let source = Operand::Constant(*value);
+        let selector = *op == CastOp::AddrSpaceCast
+            && self.unit.space(source).is_some_and(|space| self.unit.layout.has_unstable_representation(space));
+        (!selector).then_some(source)
     }
 
     /// `getUnderlyingObject`: through geps and casts, `MAX_LOOKUP` steps.
@@ -219,7 +307,7 @@ impl<'a> BasicAA<'a> {
         mut operand: Operand,
     ) -> Operand {
         for _ in 0..MAX_LOOKUP {
-            if let Some(base) = self.constant_gep_base(operand) {
+            if let Some(base) = self.constant_gep_base(operand).or_else(|| self.constant_cast_source(operand)) {
                 operand = base;
                 continue;
             }
@@ -257,9 +345,12 @@ impl<'a> BasicAA<'a> {
         DECOMPOSITIONS.with(|count| count.set(count.get() + 1));
         let mut found = Decomposed { base: operand, offset: 0, vars: Vec::new(), inbounds: true, nuw: true };
         for _ in 0..MAX_LOOKUP {
-            // A `getelementptr` constant expression is a GEPOperator as well: DecomposeGEPExpression reads it as it reads the instruction.
+            // A `getelementptr` constant expression is a GEPOperator as well:
+            // DecomposeGEPExpression reads it as it reads the instruction.
             if let Operand::Constant(id) = operand {
-                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) = &self.unit.context.get(id).kind {
+                if let ConstantKind::Expr(ConstantExpr::GetElementPtr { source, inbounds, nuw, operands, .. }) =
+                    &self.unit.context.get(id).kind
+                {
                     found.inbounds &= *inbounds;
                     found.nuw &= *nuw;
                     let indices: Vec<Option<i128>> = operands[1..]
@@ -269,13 +360,19 @@ impl<'a> BasicAA<'a> {
                             self.unit.int_constant(index).map(|bits| self.signed(index, bits))
                         })
                         .collect();
-                    let (constant, variable) = self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
+                    let (constant, variable) =
+                        self.unit.layout.collect_offset(&self.unit.context.types, *source, &indices);
                     debug_assert!(variable.is_empty(), "a constant expression's indices are constants");
                     found.offset += constant;
                     operand = Operand::Constant(operands[0]);
                     found.base = operand;
                     continue;
                 }
+            }
+            if let Some(source) = self.constant_cast_source(operand) {
+                operand = source;
+                found.base = operand;
+                continue;
             }
             let Some(one) = self.defining(operand) else { break };
             match &one.opcode {
@@ -409,7 +506,7 @@ impl<'a> BasicAA<'a> {
         operand: Operand,
     ) -> bool {
         self.argument_attrs(operand).is_some_and(|attrs| {
-            llrm_mir::facts::Facts::of(attrs).no_alias()
+            llrm_mir::facts::Fact::NoAlias.stated_by(attrs)
                 || attrs.iter().any(|one| match one {
                     llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) => {
                         name == "byval"
@@ -433,6 +530,18 @@ impl<'a> BasicAA<'a> {
         pointer: Operand,
     ) -> bool {
         self.unit.space(pointer).is_some_and(|space| self.unit.spaces().is_fixed(space))
+    }
+
+    /// Whether `size` bytes at the constant address `pointer` lie wholly in
+    /// memory the target states no program data occupies (video, ROM).
+    fn in_foreign_memory(
+        &self,
+        pointer: Operand,
+        size: LocationSize,
+    ) -> bool {
+        let (Some(program), Some(width)) = (self.unit.program, size.value()) else { return false };
+        crate::memory::flat_constant(self.unit, pointer)
+            .is_some_and(|at| program.target.foreign_span((0, 0), (at, at), width as i64).is_some())
     }
 
     /// A global variable or an alloca outside the fixed-address space.
@@ -613,15 +722,19 @@ impl<'a> BasicAA<'a> {
             return AliasResult::NoAlias;
         }
         let (v1, v2) = (self.strip(a.ptr), self.strip(b.ptr));
-        if v1 == v2 {
+        // Looking through phis, values of two iterations may be compared: the
+        // same value is the same only outside a cycle
+        // (`isValueEqualInPotentialCycles`).
+        if self.equal_in_potential_cycles(v1, v2, aaqi) {
             return AliasResult::MustAlias;
         }
         let (o1, o2) = (self.underlying(v1), self.underlying(v2));
         if o1 != o2 {
             // A fixed-address pointer is no global or frame object (not LLVM's:
             // it has no such space, #2555).
-            if (self.in_fixed_space(v1) && self.program_object(o2))
-                || (self.in_fixed_space(v2) && self.program_object(o1))
+            // The same of a constant address the target states is foreign.
+            if ((self.in_fixed_space(v1) || self.in_foreign_memory(v1, a.size)) && self.program_object(o2))
+                || ((self.in_fixed_space(v2) || self.in_foreign_memory(v2, b.size)) && self.program_object(o1))
             {
                 return AliasResult::NoAlias;
             }
@@ -663,12 +776,12 @@ impl<'a> BasicAA<'a> {
             (a.size, b.size)
         };
         let (l1, l2) = (MemoryLocation { ptr: v1, size: s1, ..*a }, MemoryLocation { ptr: v2, size: s2, ..*b });
-        if let Some(found) = aaqi.cached(&l1, &l2) {
-            return found;
-        }
+        let mark = match aaqi.enter(&l1, &l2) {
+            crate::aa::Entered::Known(found) => return found,
+            crate::aa::Entered::Fresh(mark) => mark,
+        };
         let result = self.alias_recursive(&l1, &l2, o1, o2, aaqi);
-        aaqi.remember(&l1, &l2, result);
-        result
+        aaqi.exit(mark, result)
     }
 
     fn alias_recursive(
@@ -691,7 +804,33 @@ impl<'a> BasicAA<'a> {
                 return result;
             }
         }
-        // (aliasPHI, aliasSelect: not yet.)
+        // `aliasPHI` of V1, else of V2; then `aliasSelect` the same way.
+        let defines =
+            |operand: Operand, wanted: fn(&Opcode) -> bool| self.defining(operand).filter(|one| wanted(&one.opcode));
+        let is_phi: fn(&Opcode) -> bool = |opcode| matches!(opcode, Opcode::Phi);
+        let is_select: fn(&Opcode) -> bool = |opcode| matches!(opcode, Opcode::Select);
+        if let Some(one) = defines(a.ptr, is_phi) {
+            let result = self.alias_phi(one, a.ptr, a.size, b.ptr, b.size, aaqi);
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        } else if let Some(one) = defines(b.ptr, is_phi) {
+            let result = self.alias_phi(one, b.ptr, b.size, a.ptr, a.size, aaqi).swap();
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        }
+        if let Some(one) = defines(a.ptr, is_select) {
+            let result = self.alias_select(one, a.size, b.ptr, b.size, aaqi);
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        } else if let Some(one) = defines(b.ptr, is_select) {
+            let result = self.alias_select(one, b.size, a.ptr, a.size, aaqi).swap();
+            if result != AliasResult::MayAlias {
+                return result;
+            }
+        }
         // Both inside one object, one access covering all of it.
         if o1 == o2
             && a.size.is_precise()
@@ -702,6 +841,157 @@ impl<'a> BasicAA<'a> {
             return AliasResult::PartialAlias { offset: None };
         }
         AliasResult::MayAlias
+    }
+
+    /// `isValueEqualInPotentialCycles`: DEVIATE AP2: across iterations an
+    /// instruction outside the entry block is never taken to be the same
+    /// value in both (the pin asks `isNotInCycle`).
+    fn equal_in_potential_cycles(
+        &self,
+        one: Operand,
+        other: Operand,
+        aaqi: &AAQueryInfo,
+    ) -> bool {
+        if one != other {
+            return false;
+        }
+        if !aaqi.may_be_cross_iteration {
+            return true;
+        }
+        match self.unit.defining(one) {
+            None => true,
+            Some((inst, _)) => self.unit.function.parent(inst) == self.unit.function.entry(),
+        }
+    }
+
+    /// `aliasSelect`: DEVIATE AP1: the arms are asked of BasicAA alone, where
+    /// the pin asks the whole stack (`AAQI.AAR`).
+    fn alias_select(
+        &self,
+        select: &llrm_mir::module::Instruction,
+        size: LocationSize,
+        other: Operand,
+        other_size: LocationSize,
+        aaqi: &mut AAQueryInfo,
+    ) -> AliasResult {
+        let at = |ptr: Operand, size: LocationSize| MemoryLocation::new(ptr, size);
+        let (condition, on_true, on_false) = (select.operands[0], select.operands[1], select.operands[2]);
+        // Selects with the same condition: the values on corresponding arms.
+        if let Some(second) = self.defining(other)
+            && matches!(second.opcode, Opcode::Select)
+            && self.equal_in_potential_cycles(condition, second.operands[0], aaqi)
+        {
+            let alias = self.alias_check(&at(on_true, size), &at(second.operands[1], other_size), aaqi);
+            if alias == AliasResult::MayAlias {
+                return AliasResult::MayAlias;
+            }
+            let this = self.alias_check(&at(on_false, size), &at(second.operands[2], other_size), aaqi);
+            return merge_alias_results(this, alias);
+        }
+        // Both arms NoAlias or MustAlias the other: that.
+        let alias = self.alias_check(&at(on_true, size), &at(other, other_size), aaqi);
+        if alias == AliasResult::MayAlias {
+            return AliasResult::MayAlias;
+        }
+        let this = self.alias_check(&at(on_false, size), &at(other, other_size), aaqi);
+        merge_alias_results(this, alias)
+    }
+
+    /// `aliasPHI`. DEVIATE AP1 as for `alias_select`.
+    fn alias_phi(
+        &self,
+        phi: &llrm_mir::module::Instruction,
+        phi_operand: Operand,
+        mut size: LocationSize,
+        other: Operand,
+        other_size: LocationSize,
+        aaqi: &mut AAQueryInfo,
+    ) -> AliasResult {
+        let at = |ptr: Operand, size: LocationSize| MemoryLocation::new(ptr, size);
+        let incoming: Vec<(Operand, Operand)> = phi.operands.chunks(2).map(|pair| (pair[0], pair[1])).collect();
+        if incoming.is_empty() {
+            return AliasResult::NoAlias;
+        }
+        // Phis of one block: the values on corresponding edges, unless across
+        // iterations (another entry may be taken in another iteration).
+        if let Some((second_inst, second)) = self.unit.defining(other)
+            && matches!(second.opcode, Opcode::Phi)
+            && let Some((first_inst, _)) = self.unit.defining(phi_operand)
+            && self.unit.function.parent(second_inst) == self.unit.function.parent(first_inst)
+            && !aaqi.may_be_cross_iteration
+        {
+            let mut result: Option<AliasResult> = None;
+            for &(value, block) in &incoming {
+                let Some(partner) = second.operands.chunks(2).find(|pair| pair[1] == block).map(|pair| pair[0]) else {
+                    return AliasResult::MayAlias;
+                };
+                let this = self.alias_check(&at(value, size), &at(partner, other_size), aaqi);
+                let merged = result.map_or(this, |so_far| merge_alias_results(so_far, this));
+                result = Some(merged);
+                if merged == AliasResult::MayAlias {
+                    break;
+                }
+            }
+            return result.unwrap_or(AliasResult::MayAlias);
+        }
+        // A phi operand that recurses to the phi leaves the other operands'
+        // underlying objects to decide.
+        let mut sources: Vec<Operand> = Vec::new();
+        let mut is_recursive = false;
+        let mut one_phi: Option<Operand> = None;
+        for &(value, _) in &incoming {
+            // The phi itself as an incoming value is skipped.
+            if value == phi_operand {
+                continue;
+            }
+            if self.defining(value).is_some_and(|one| matches!(one.opcode, Opcode::Phi)) {
+                if one_phi.is_some_and(|seen| seen != value) {
+                    // More than one phi input: conservative.
+                    return AliasResult::MayAlias;
+                }
+                one_phi = Some(value);
+            }
+            if self.underlying(value) == phi_operand {
+                is_recursive = true;
+                continue;
+            }
+            if !sources.contains(&value) {
+                sources.push(value);
+            }
+        }
+        if one_phi.is_some() && sources.len() > 1 {
+            // Only the trivial lcssa and recursive phi cases.
+            return AliasResult::MayAlias;
+        }
+        if sources.is_empty() {
+            return AliasResult::MayAlias;
+        }
+        // A recursive phi moves across iterations.
+        if is_recursive {
+            size = LocationSize::BeforeOrAfterPointer;
+        }
+        // The queries below may compare values of two loop iterations.
+        let was = std::mem::replace(&mut aaqi.may_be_cross_iteration, true);
+        let result = (|| {
+            let mut alias = self.alias_check(&at(sources[0], size), &at(other, other_size), aaqi);
+            if alias == AliasResult::MayAlias {
+                return AliasResult::MayAlias;
+            }
+            // A recursive phi proves nothing but NoAlias.
+            if is_recursive && alias != AliasResult::NoAlias {
+                return AliasResult::MayAlias;
+            }
+            for &source in &sources[1..] {
+                let this = self.alias_check(&at(source, size), &at(other, other_size), aaqi);
+                alias = merge_alias_results(this, alias);
+                if alias == AliasResult::MayAlias {
+                    break;
+                }
+            }
+            alias
+        })();
+        aaqi.may_be_cross_iteration = was;
+        result
     }
 
     /// `aliasGEP`, without the range reasoning over variable indices.
@@ -849,6 +1139,14 @@ impl BasicAA<'_> {
         call: llrm_mir::module::InstId,
         loc: &MemoryLocation,
         aaqi: &mut AAQueryInfo,
+        mut others: Option<
+            &mut dyn FnMut(
+                &MemoryLocation,
+                &MemoryLocation,
+                &mut AAQueryInfo,
+                Option<llrm_mir::module::InstId>,
+            ) -> AliasResult,
+        >,
     ) -> ModRefInfo {
         use crate::aa::IRMemLocation::{ArgMem, ErrnoMem, InaccessibleMem, Other};
         let op = self.unit.function.instruction(call);
@@ -914,7 +1212,14 @@ impl BasicAA<'_> {
                 }
                 let at = at as u32;
                 let Some(place) = MemoryLocation::get_for_argument(self.unit, call, at) else { continue };
-                if self.alias_check(&place, loc, aaqi) != AliasResult::NoAlias {
+                let mut verdict = AliasResult::MayAlias;
+                if let Some(others) = others.as_mut() {
+                    verdict = others(&place, loc, aaqi, Some(call));
+                }
+                if verdict == AliasResult::MayAlias {
+                    verdict = self.alias_check(&place, loc, aaqi);
+                }
+                if verdict != AliasResult::NoAlias {
                     narrowed = narrowed.union(arg.intersect(self.get_arg_mod_ref_info(call, at)));
                 }
                 if narrowed == arg {
@@ -1039,12 +1344,24 @@ impl AAResults for BasicAA<'_> {
         let callee = llrm_mir::memory::callee(self.unit.context, function, call)
             .and_then(|one| self.unit.globals.get(one.0 as usize))
             .and_then(|one| one.function());
+        // The facts of the site's attributes and of the callee's parameter,
+        // made once (each `Facts::of` allocates; most arguments state
+        // none).
+        let facts_of = |attrs: Option<&Vec<llrm_mir::opcode::Attribute>>| {
+            attrs
+                .filter(|attrs| !attrs.is_empty())
+                .map(
+                    |attrs| {
+                        #[cfg(test)]
+                        ARGUMENT_FACTS.with(|made| made.set(made.get() + 1));
+                        llrm_mir::facts::Facts::of(attrs)
+                    },
+                )
+        };
+        let site = facts_of(info.argument_attrs.get(arg as usize));
+        let parameter = facts_of(callee.and_then(|one| one.parameter_attrs.get(arg as usize)));
         let stated = |fact: fn(&llrm_mir::facts::Facts) -> bool| {
-            let site =
-                info.argument_attrs.get(arg as usize).is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)));
-            site || callee
-                .and_then(|one| one.parameter_attrs.get(arg as usize))
-                .is_some_and(|attrs| fact(&llrm_mir::facts::Facts::of(attrs)))
+            site.as_ref().is_some_and(|one| fact(one)) || parameter.as_ref().is_some_and(|one| fact(one))
         };
         if stated(llrm_mir::facts::Facts::read_none) {
             ModRefInfo::NoModRef
@@ -1071,15 +1388,7 @@ impl AAResults for BasicAA<'_> {
         call: llrm_mir::module::InstId,
         _: &mut AAQueryInfo,
     ) -> MemoryEffects {
-        let function = self.unit.function;
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(call).opcode else {
-            return MemoryEffects::unknown();
-        };
-        let site = MemoryEffects::of_attrs(&info.attrs);
-        let callee = llrm_mir::memory::callee(self.unit.context, function, call)
-            .and_then(|one| self.unit.globals.get(one.0 as usize))
-            .and_then(|one| one.function());
-        callee.map_or(site, |one| site.intersect(MemoryEffects::of_attrs(&one.attrs)))
+        call_memory_effects(self.unit, call)
     }
 
     /// A call against a location is `getModRefInfo(Call, Loc)`; every other
@@ -1094,7 +1403,7 @@ impl AAResults for BasicAA<'_> {
         // nothing for the rest.
         match self.unit.function.instruction(inst).opcode {
             Opcode::Call(_) | Opcode::Invoke(_) => match loc {
-                Some(loc) => self.call_mod_ref(inst, loc, aaqi),
+                Some(loc) => self.call_mod_ref(inst, loc, aaqi, None),
                 None => ModRefInfo::ModRef,
             },
             // A load that cannot alias the location neither reads nor writes
@@ -1125,13 +1434,145 @@ impl AAResults for BasicAA<'_> {
         }
     }
 
+    fn get_mod_ref_info_with(
+        &mut self,
+        inst: llrm_mir::module::InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+        others: &mut dyn FnMut(
+            &MemoryLocation,
+            &MemoryLocation,
+            &mut AAQueryInfo,
+            Option<llrm_mir::module::InstId>,
+        ) -> AliasResult,
+    ) -> ModRefInfo {
+        match (&self.unit.function.instruction(inst).opcode, loc) {
+            (Opcode::Call(_) | Opcode::Invoke(_), Some(loc)) => self.call_mod_ref(inst, loc, aaqi, Some(others)),
+            _ => self.get_mod_ref_info(inst, loc, aaqi),
+        }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L271
+    /// `AAResults::getModRefInfo(Call1, Call2)` from the effects and argument
+    /// attributes of the two calls. DEVIATE AA-D1: LLVM's reads the aggregate's
+    /// answers; here they are BasicAA's own, which the aggregate meets with
+    /// the others'. Exit: this moves into `AggregateAA`. Owner w-5, review
+    /// 2026-11-19.
     fn get_mod_ref_info_call(
         &mut self,
-        _: llrm_mir::module::InstId,
-        _: llrm_mir::module::InstId,
-        _: &mut AAQueryInfo,
+        call1: llrm_mir::module::InstId,
+        call2: llrm_mir::module::InstId,
+        aaqi: &mut AAQueryInfo,
     ) -> ModRefInfo {
-        ModRefInfo::ModRef
+        use crate::aa::IRMemLocation::{ArgMem, InaccessibleMem};
+        let is_call = |inst| matches!(
+            self.unit.function.instruction(inst).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_)
+        );
+        if !is_call(call1) || !is_call(call2) {
+            return ModRefInfo::ModRef;
+        }
+        let mut result = ModRefInfo::ModRef;
+        // If either call is readnone, they do not interact.
+        let call1_b = self.get_memory_effects(call1, aaqi);
+        if call1_b.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        let call2_b = self.get_memory_effects(call2, aaqi);
+        if call2_b.does_not_access_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        // If they both only read from memory, there is no dependence.
+        if call1_b.only_reads_memory() && call2_b.only_reads_memory() {
+            return ModRefInfo::NoModRef;
+        }
+        // If Call1 only reads memory, the only dependence on Call2 can be
+        // from Call1 reading memory written by Call2.
+        if call1_b.only_reads_memory() {
+            result = result.intersect(ModRefInfo::Ref);
+        } else if !call1_b.overall().is_ref_set() {
+            result = result.intersect(ModRefInfo::Mod);
+        }
+        let argument_count = |call: llrm_mir::module::InstId, this: &Self| {
+            this.unit.function.instruction(call).operands.len().saturating_sub(1)
+        };
+
+        // If Call2 only accesses memory through arguments, accumulate the
+        // mod/ref information from Call1's references to the memory
+        // referenced by Call2's arguments.
+        if call2_b.only_accesses_arg_memory() {
+            if call2_b.mod_ref(ArgMem).is_no_mod_ref() {
+                return ModRefInfo::NoModRef;
+            }
+            let mut r = ModRefInfo::NoModRef;
+            for at in 0..argument_count(call2, self) {
+                if self.unit.space(self.unit.function.instruction(call2).operands[at]).is_none() {
+                    continue;
+                }
+                let at = at as u32;
+                let Some(place) = MemoryLocation::get_for_argument(self.unit, call2, at) else { continue };
+                // What Call2 might do to its argument; Call1's dependence on
+                // that location is the inverse.
+                let arg_mod_ref_c2 = self.get_arg_mod_ref_info(call2, at);
+                let mut arg_mask = ModRefInfo::NoModRef;
+                if arg_mod_ref_c2.is_mod_set() {
+                    arg_mask = ModRefInfo::ModRef;
+                } else if arg_mod_ref_c2.is_ref_set() {
+                    arg_mask = ModRefInfo::Mod;
+                }
+                arg_mask = arg_mask.intersect(self.call_mod_ref(call1, &place, aaqi, None));
+                r = r.union(arg_mask).intersect(result);
+                if r == result {
+                    break;
+                }
+            }
+            return r;
+        }
+
+        // If Call1 only accesses memory through arguments, check if Call2
+        // references any of the memory referenced by Call1's arguments.
+        if call1_b.only_accesses_arg_memory() {
+            if call1_b.mod_ref(ArgMem).is_no_mod_ref() {
+                return ModRefInfo::NoModRef;
+            }
+            let mut r = ModRefInfo::NoModRef;
+            for at in 0..argument_count(call1, self) {
+                if self.unit.space(self.unit.function.instruction(call1).operands[at]).is_none() {
+                    continue;
+                }
+                let at = at as u32;
+                let Some(place) = MemoryLocation::get_for_argument(self.unit, call1, at) else { continue };
+                // If Call1 might Mod its argument, Call2's Mod or Ref matters;
+                // if it might Ref, only a Mod by Call2.
+                let arg_mod_ref_c1 = self.get_arg_mod_ref_info(call1, at);
+                let mod_ref_c2 = self.call_mod_ref(call2, &place, aaqi, None);
+                if (arg_mod_ref_c1.is_mod_set() && (mod_ref_c2.is_mod_set() || mod_ref_c2.is_ref_set()))
+                    || (arg_mod_ref_c1.is_ref_set() && mod_ref_c2.is_mod_set())
+                {
+                    r = r.union(arg_mod_ref_c1).intersect(result);
+                }
+                if r == result {
+                    break;
+                }
+            }
+            return r;
+        }
+
+        // If only inaccessible memory has a set ModRefInfo, relate the same
+        // locations.
+        let only_inaccessible = |effects: crate::aa::MemoryEffects| {
+            [ArgMem, crate::aa::IRMemLocation::ErrnoMem, crate::aa::IRMemLocation::Other]
+                .into_iter()
+                .all(|at| effects.mod_ref(at).is_no_mod_ref())
+        };
+        if only_inaccessible(call1_b) && only_inaccessible(call2_b) {
+            let (use_mr, def_mr) = (call1_b.mod_ref(InaccessibleMem), call2_b.mod_ref(InaccessibleMem));
+            if use_mr.is_no_mod_ref() || def_mr.is_no_mod_ref() || (def_mr == ModRefInfo::Ref && def_mr == use_mr) {
+                return ModRefInfo::NoModRef;
+            }
+            return use_mr;
+        }
+        result
     }
 
     fn call_captures_before(
@@ -1148,7 +1589,7 @@ impl AAResults for BasicAA<'_> {
 mod tests {
     use super::*;
     use crate::aa::IRMemLocation;
-    use crate::testing::{layout, parsed, value};
+    use crate::testing::{function, layout, parsed, value};
 
     const M32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n";
 
@@ -1351,6 +1792,22 @@ mod tests {
         assert_eq!(arg("readonly", "readnone"), ModRefInfo::NoModRef);
     }
 
+    /// Every argument query built the fact sets of the site's and the callee's
+    /// attributes up to six times (`Facts::of` allocates each; 0.95 M Ir over
+    /// d_faces' 2630 queries), where most arguments state none.
+    #[test]
+    fn an_argument_without_attributes_builds_no_facts() {
+        let made = || ARGUMENT_FACTS.with(std::cell::Cell::get);
+        let before = made();
+        let body = "declare void @g(ptr)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
+        call_effects(body);
+        assert_eq!(made(), before, "facts built for an argument that states none");
+        let body =
+            "declare void @g(ptr readonly)\ndefine void @f(ptr %p) {\nentry:\n  call void @g(ptr %p)\n  ret void\n}\n";
+        call_effects(body);
+        assert_eq!(made(), before + 1, "one set for the callee's parameter, none for the site's");
+    }
+
     /// Distinct allocas are distinct objects.
     #[test]
     fn two_allocas_are_no_alias_and_one_pointer_is_must_alias() {
@@ -1411,6 +1868,47 @@ mod tests {
             .expect("a call");
         let location = MemoryLocation::new(Operand::Value(value(function, "a")), LocationSize::Precise(4));
         BasicAA::new(&unit).get_mod_ref_info(call, Some(&location), &mut AAQueryInfo::default())
+    }
+
+    /// What the first call does to the memory of the second, in the body of
+    /// `@f`, with BasicAA alone (`getModRefInfo(Call1, Call2)`).
+    fn pair_on(body: &str) -> ModRefInfo {
+        let module = parsed(&format!("{M32}{body}"));
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let calls: Vec<_> = function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)))
+            .collect();
+        BasicAA::new(&unit).get_mod_ref_info_call(calls[0], calls[1], &mut AAQueryInfo::default())
+    }
+
+    /// Two calls, as the pinned `opt -passes=aa-eval -aa-pipeline=basic-aa
+    /// -print-all-alias-modref-info` answers them (`AAResults::getModRefInfo(
+    /// Call1, Call2)`). BasicAA said ModRef for every pair, so a client asking
+    /// two read-only calls, or a `memory(none)` call and any other, saw a
+    /// dependence LLVM does not.
+    #[test]
+    fn two_calls_are_related_by_their_effects_as_the_pin_relates_them() {
+        let decls = "declare void @r1() memory(read)\ndeclare void @r2() memory(read)\ndeclare void @n() memory(none)\ndeclare void @any()\ndeclare void @w(ptr) memory(argmem: write)\ndeclare void @ir() memory(inaccessiblemem: read)\ndeclare void @irw() memory(inaccessiblemem: readwrite)\n";
+        let f = |calls: &str| {
+            format!("{decls}define void @f() {{\n  %a = alloca i32\n  %b = alloca i32\n{calls}  ret void\n}}\n")
+        };
+        // Both read: no dependence.
+        assert_eq!(pair_on(&f("  call void @r1()\n  call void @r2()\n")), ModRefInfo::NoModRef);
+        // readnone against anything.
+        assert_eq!(pair_on(&f("  call void @n()\n  call void @any()\n")), ModRefInfo::NoModRef);
+        // Argument memory only: apart slots, then the same slot.
+        assert_eq!(pair_on(&f("  call void @w(ptr %a)\n  call void @w(ptr %b)\n")), ModRefInfo::NoModRef);
+        assert_eq!(pair_on(&f("  call void @w(ptr %a)\n  call void @w(ptr %a)\n")), ModRefInfo::Mod);
+        // Inaccessible memory only: the read against the write and back.
+        assert_eq!(pair_on(&f("  call void @ir()\n  call void @irw()\n")), ModRefInfo::Ref);
+        assert_eq!(pair_on(&f("  call void @irw()\n  call void @ir()\n")), ModRefInfo::ModRef);
+        // bench_floats against report in floats-O2: an unknown callee may touch
+        // inaccessible memory.
+        assert_eq!(pair_on(&f("  call void @irw()\n  call void @any()\n")), ModRefInfo::ModRef);
     }
 
     /// A call touches a local slot nobody holds a pointer to only if the slot
@@ -1557,6 +2055,74 @@ b0:
         assert_eq!(answer, AliasResult::MayAlias);
     }
 
+    /// lru.c: `addrspacecast (@c)` is a constant expression, not an
+    /// instruction, and the cast was no base to look through: offset 8 of the
+    /// far alias was may-alias with the near offset 12 (and not must-alias
+    /// with the near offset 8), so a pointer stored at +8 was loaded again.
+    #[test]
+    fn a_far_cast_constant_of_a_global_is_the_global_at_its_offset() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@c = internal global [48 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %far = getelementptr i8, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) addrspacecast (ptr @c to ptr addrspace(1)), i16 8), i16 0
+  %same = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 8), i16 0
+  %next = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 12), i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(4));
+        let alias =
+            |a: &str, b: &str| BasicAA::new(&unit).alias(&location(a), &location(b), &mut AAQueryInfo::default(), None);
+        assert_eq!(alias("far", "same"), AliasResult::MustAlias);
+        assert_eq!(alias("far", "next"), AliasResult::NoAlias);
+    }
+
+    /// `stripPointerCastsForAliasAnalysis` strips a zero-index `getelementptr`
+    /// (instruction or constant expression), a single-arm phi and a far cast
+    /// constant: each pointer is the object it came from.
+    #[test]
+    fn pointers_the_pin_strips_are_must_alias_with_their_source() {
+        let module = parsed(
+            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-ni:2\"
+
+@c = internal global [48 x i8] zeroinitializer
+
+define i16 @f(i16 %n) {
+b0:
+  %p = getelementptr i8, ptr @c, i16 %n
+  %zero = getelementptr i8, ptr %p, i16 0
+  %zeroc = getelementptr i8, ptr getelementptr inbounds nuw (i8, ptr @c, i16 0), i16 0
+  br label %b1
+b1:
+  %one = phi ptr [ %p, %b0 ]
+  %far = getelementptr i8, ptr addrspace(1) addrspacecast (ptr @c to ptr addrspace(1)), i16 0
+  %base = getelementptr i8, ptr @c, i16 0
+  ret i16 0
+}
+",
+        );
+        let layout = layout(&module);
+        let function = crate::testing::function(&module, "f");
+        let unit = Unit::of(&module, &layout, function);
+        let location =
+            |name: &str| MemoryLocation::new(Operand::Value(value(function, name)), LocationSize::Precise(4));
+        let alias =
+            |a: &str, b: &str| BasicAA::new(&unit).alias(&location(a), &location(b), &mut AAQueryInfo::default(), None);
+        assert_eq!(alias("zero", "p"), AliasResult::MustAlias);
+        assert_eq!(alias("one", "p"), AliasResult::MustAlias);
+        assert_eq!(alias("zeroc", "base"), AliasResult::MustAlias);
+        assert_eq!(alias("far", "base"), AliasResult::MustAlias);
+    }
+
     /// bintree.bas: an array element's far pointer is a segment word loaded
     /// from its descriptor, made a pointer by `inttoptr`. The pin takes it
     /// for a pointer that cannot be a local whose address never escaped; the
@@ -1593,5 +2159,136 @@ b0:
         };
         assert_eq!(answer(false), AliasResult::NoAlias);
         assert_eq!(answer(true), AliasResult::MayAlias);
+    }
+
+    /// `aliasPHI` and `aliasSelect`: a phi of loaded pointers and a select of
+    /// locals against locals and arguments, the pairs the pin answers.
+    const JOINS: &str = "define i16 @f(ptr %p, ptr %r, i1 %c, ptr %a1, ptr %a2) {
+    b0:
+      %s = alloca i16
+      %t = alloca i16
+      store i16 1, ptr %s
+      %q1 = load ptr, ptr %p
+      %q2 = load ptr, ptr %r
+      br i1 %c, label %b1, label %b2
+
+    b1:
+      br label %b3
+
+    b2:
+      br label %b3
+
+    b3:
+      %q = phi ptr [ %q1, %b1 ], [ %q2, %b2 ]
+      %sel = select i1 %c, ptr %s, ptr %t
+      %sel2 = select i1 %c, ptr %a1, ptr %a2
+      %sel3 = select i1 %c, ptr %s, ptr %a1
+      ret i16 1
+    }
+    ";
+
+    #[test]
+    fn a_phi_and_a_select_are_apart_from_locals_as_the_pin_has_them() {
+        let module = parsed(JOINS);
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(2));
+        let mut aa = BasicAA::new(&unit);
+        let mut ask = |one: &str, other: &str| aa.alias(&at(one), &at(other), &mut AAQueryInfo::default(), None);
+        use AliasResult::{MayAlias, NoAlias};
+        // The pin's answers.
+        for (one, other, want) in [
+            ("q", "s", NoAlias),
+            ("q", "sel", NoAlias),
+            ("s", "sel2", NoAlias),
+            ("sel", "sel2", NoAlias),
+            ("sel3", "t", NoAlias),
+            ("sel2", "t", NoAlias),
+            ("s", "sel", MayAlias),
+            ("sel", "t", MayAlias),
+            ("q", "sel2", MayAlias),
+            ("q", "sel3", MayAlias),
+            ("sel", "sel3", MayAlias),
+        ] {
+            assert_eq!(ask(one, other), want, "%{one} against %{other}");
+            assert_eq!(ask(other, one), want, "%{other} against %{one}");
+        }
+    }
+
+    /// Two pointers that step through the loop that holds them (each a phi
+    /// with itself as an incoming value, through a `getelementptr`) ask each
+    /// other: the pair is assumed apart while it is asked, and the answer is
+    /// kept or dropped by what the sources prove. It recursed without end
+    /// where the pair was not remembered until its answer was known.
+    #[test]
+    fn two_pointers_stepping_through_a_loop_are_apart_by_their_sources() {
+        let module = parsed(
+            "define void @f(ptr noalias %d, ptr noalias %s, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ %d, %b0 ], [ %p1, %b1 ]
+  %q = phi ptr [ %s, %b0 ], [ %q1, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p1 = getelementptr i8, ptr %p, i16 1
+  %q1 = getelementptr i8, ptr %q, i16 1
+  %i1 = add i16 %i, 1
+  %c = icmp ult i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}
+",
+        );
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(1));
+        let mut aa = BasicAA::new(&unit);
+        let mut crossing = AAQueryInfo::default();
+        crossing.may_be_cross_iteration = true;
+        for (one, other) in [("p", "q"), ("p", "q1"), ("p1", "q")] {
+            assert_eq!(aa.alias(&at(one), &at(other), &mut AAQueryInfo::default(), None), AliasResult::NoAlias);
+            assert_eq!(aa.alias(&at(one), &at(other), &mut crossing, None), AliasResult::NoAlias);
+        }
+    }
+
+    /// A value is the same value as itself only outside a cycle when two
+    /// iterations may be compared (`isValueEqualInPotentialCycles`): a phi of
+    /// a loop against itself is `MustAlias` within an iteration, `MayAlias`
+    /// across them; the argument that has no loop in it stays `MustAlias`.
+    #[test]
+    fn a_value_in_a_loop_is_not_its_own_must_alias_across_iterations() {
+        let module = parsed(
+            "define void @f(ptr %a, i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %p = phi ptr [ %a, %b0 ], [ %p1, %b1 ]
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %p1 = getelementptr i8, ptr %p, i16 %n
+  %i1 = add i16 %i, 1
+  %c = icmp ult i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret void
+}
+",
+        );
+        let layout = layout(&module);
+        let f = function(&module, "f");
+        let unit = Unit::of(&module, &layout, f);
+        let at = |name: &str| MemoryLocation::new(Operand::Value(value(f, name)), LocationSize::Precise(1));
+        let mut aa = BasicAA::new(&unit);
+        let mut crossing = AAQueryInfo::default();
+        crossing.may_be_cross_iteration = true;
+        assert_eq!(aa.alias(&at("p"), &at("p"), &mut AAQueryInfo::default(), None), AliasResult::MustAlias);
+        assert_eq!(aa.alias(&at("p"), &at("p"), &mut crossing, None), AliasResult::MayAlias);
+        assert_eq!(aa.alias(&at("a"), &at("a"), &mut crossing, None), AliasResult::MustAlias);
     }
 }

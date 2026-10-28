@@ -55,6 +55,52 @@ impl ScalarEvolution {
         }
     }
 
+    /// `getPredicatedExitCount(L, ExitingBlock, Predicates, Kind)`.
+    pub fn get_predicated_exit_count(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        exiting_block: BlockId,
+        predicates: &mut Vec<super::wrap_predicate::Predicate>,
+        kind: ExitCountKind,
+    ) -> Scev {
+        let info = self.get_predicated_backedge_taken_info(cx, l);
+        info.exit_count_with(self, exiting_block, Some(predicates), kind)
+    }
+
+    /// `getPredicatedBackedgeTakenCount(L, Preds)`.
+    pub fn get_predicated_backedge_taken_count(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        preds: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> Scev {
+        let info = self.get_predicated_backedge_taken_info(cx, l);
+        self.info_exact_with(cx, l, &info, Some(preds))
+    }
+
+    /// `getPredicatedSymbolicMaxBackedgeTakenCount(L, Preds)`.
+    pub fn get_predicated_symbolic_max_backedge_taken_count(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        preds: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> Scev {
+        let info = self.get_predicated_backedge_taken_info(cx, l);
+        self.info_symbolic_max_with(cx, &info, preds)
+    }
+
+    /// `getPredicatedConstantMaxBackedgeTakenCount(L, Preds)`.
+    pub fn get_predicated_constant_max_backedge_taken_count(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        preds: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> Scev {
+        let info = self.get_predicated_backedge_taken_info(cx, l);
+        info.constant_max_with(self, preds)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ScalarEvolution.h#L1145
     /// `hasLoopInvariantBackedgeTakenCount`.
     pub fn has_loop_invariant_backedge_taken_count(
@@ -177,13 +223,25 @@ impl ScalarEvolution {
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8419
-    /// `getSmallConstantMaxTripCount(L)` (the predicates are DEVIATE 1).
+    /// `getSmallConstantMaxTripCount(L)` with no predicates.
     pub fn get_small_constant_max_trip_count(
         &mut self,
         cx: &Cx,
         l: BlockId,
     ) -> u32 {
         let max_exit_count = self.get_backedge_taken_count(cx, l, ExitCountKind::ConstantMaximum);
+        self.constant_trip_count(max_exit_count)
+    }
+
+    /// `getSmallConstantMaxTripCount(L, &Predicates)`: the count under the
+    /// predicates appended to `predicates`.
+    pub fn get_small_constant_max_trip_count_with_predicates(
+        &mut self,
+        cx: &Cx,
+        l: BlockId,
+        predicates: &mut Vec<super::wrap_predicate::Predicate>,
+    ) -> u32 {
+        let max_exit_count = self.get_predicated_constant_max_backedge_taken_count(cx, l, predicates);
         self.constant_trip_count(max_exit_count)
     }
 

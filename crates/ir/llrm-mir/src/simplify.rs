@@ -266,6 +266,23 @@ impl Query<'_> {
         self.binary(operand).filter(|&(op, ..)| op == wanted).map(|(_, a, b, flags)| (a, b, flags))
     }
 
+    /// `m_PtrToInt(m_Value(X))`: an instruction or a constant expression.
+    fn ptr_to_int_source(
+        &self,
+        operand: Operand,
+    ) -> Option<Operand> {
+        if let Some((CastOp::PtrToInt, source, _)) = self.cast(operand) {
+            return Some(source);
+        }
+        let Operand::Constant(id) = operand else { return None };
+        match &self.context.get(id).kind {
+            ConstantKind::Expr(crate::context::ConstantExpr::Cast { op: CastOp::PtrToInt, value }) => {
+                Some(Operand::Constant(*value))
+            }
+            _ => None,
+        }
+    }
+
     /// `m_Cast`: the opcode and source.
     fn cast(
         &self,
@@ -1736,6 +1753,15 @@ fn simplify_sub(
     {
         return Some(w);
     }
+    // ptrtoint(X) - ptrtoint(Y) -> the difference of their constant offsets,
+    // from one base.
+    if let Some(x) = q.ptr_to_int_source(op0)
+        && let Some(y) = q.ptr_to_int_source(op1)
+        && let Some(difference) = compute_pointer_difference(q, x, y)
+    {
+        let ty = q.ty(op0);
+        return Some(q.int(ty, difference));
+    }
     // trunc(X) - trunc(Y) -> trunc(X - Y) if everything simplifies.
     if max_recurse > 0
         && let Some((CastOp::Trunc, x, _)) = q.cast(op0)
@@ -1766,6 +1792,33 @@ fn simplify_sub(
         return Some(x);
     }
     None
+}
+
+/// `computePointerDifference`
+/// ([InstructionSimplify.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp)):
+/// `LHS - RHS` in the pointers' index width, when both are constant offsets
+/// (`gep`s with constant indices, bitcasts) from one base; the difference
+/// sign-extended, which the caller's `int` cuts to the integer
+/// (`getIntegerCast`). DEVIATE: a pointer whose offset carries into its
+/// selector (a huge one) has no such difference.
+fn compute_pointer_difference(
+    q: &Query,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<u128> {
+    let space = |operand: Operand| match q.context.types.get(q.ty(operand)) {
+        crate::types::Type::Pointer(space) => Some(*space),
+        _ => None,
+    };
+    let (lhs_space, rhs_space) = (space(lhs)?, space(rhs)?);
+    if lhs_space != rhs_space || q.layout.has_unstable_representation(lhs_space) {
+        return None;
+    }
+    let width = q.layout.pointer(lhs_space).index_bits;
+    let tracking = q.tracking();
+    let (lhs_base, lhs_offset) = nonzero::strip_and_accumulate_constant_offsets(&tracking, lhs, width, true);
+    let (rhs_base, rhs_offset) = nonzero::strip_and_accumulate_constant_offsets(&tracking, rhs, width, true);
+    (lhs_base == rhs_base).then(|| signed(lhs_offset.wrapping_sub(rhs_offset) & mask(width), width) as u128)
 }
 
 /// `simplifyMulInst`
@@ -3286,10 +3339,19 @@ fn min_max_call(
         (false, true) => "llvm.umax",
         (false, false) => "llvm.umin",
     };
+    #[cfg(test)]
+    MIN_MAX_ASKS.with(|asks| asks.set(asks.get() + 1));
     let tracking = q.tracking();
     let (_, args) = pattern::intrinsic_call(&tracking, v, base)?;
     let [a, b] = *args else { return None };
     Some((a, b))
+}
+
+// The intrinsic-name lookups `min_max_call` made, for the test that an
+// icmp of two non-calls makes none.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MIN_MAX_ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// `extractEquivalentCondition`
@@ -3330,6 +3392,14 @@ fn simplify_icmp_with_min_max(
     mut rhs: Operand,
     max_recurse: u32,
 ) -> Option<Operand> {
+    // Every matcher below is a call of an intrinsic: with neither side a call
+    // none matches, nothing swaps, and the answer is none.
+    let is_call = |v: Operand| {
+        q.definition(v).is_some_and(|inst| matches!(q.function.instruction(inst).opcode, Opcode::Call { .. }))
+    };
+    if !is_call(lhs) && !is_call(rhs) {
+        return None;
+    }
     let i1 = q.context.types.int(1);
     for signed_kind in [true, false] {
         // "A == max/min(A,B)" iff "A eq_p B"; `max_pred` is the predicate of

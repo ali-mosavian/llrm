@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/constrain.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/constrain.rs sha256:e7740c2e8d40e4e838b5ee3a0e83939e8a353793f8ba6806b8f2d37e7e9bb779 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/constrain.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/constrain.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/constrain.rs sha256:1d80b8bd4dd488065023fc7fa6ee979fac112d95136fefec7c531a6e11b3eab4 -->
 
 # constrain
 
@@ -81,7 +81,7 @@ After (`RegAlloc`):
 ```
 
 From `ISEL_DUMP=1 llrm-nib -O2 -fno-inline-functions
--fno-inline-functions-called-once -fno-ipa-cp-clone -fno-ipa-vrp
+-fno-inline-functions-called-once -fno-ipa-cp-clone
 -march=i386` of the program under `calleefacts`.
 
 ## Used by

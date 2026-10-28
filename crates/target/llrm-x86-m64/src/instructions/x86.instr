@@ -26,3 +26,85 @@ cqo       extend     r/r                64         cdq          s0=ax,d0=dx     
 # Every x86-64 has the conditional move (P6 and later): the second source replaces the first, which is tied to the
 # destination, when the condition holds.
 cmov{cc}  select     r/^0,rm            16,32,64   cmov         -                       -       -       cc/-            Cmov{cc}_r{w}_rm{w}
+
+# The quadword forms of the family's integer instructions (X86InstrArithmetic.td, X86InstrCompiler.td): the
+# same shapes at 64 bits.
+mov    move    rm/rmi    64    mov_rr    -    self,same    -    -/-    Mov_rm{w}_r{w}
+movzx    extend    r/rm    64    movzx    -    -    -    -/-    Movzx_r{w}_rm8
+movsx    extend    r/rm    64    movzx    -    -    -    -/-    Movsx_r{w}_rm8
+lea    addr    r/a    64    lea    -    -ds,-ss,narrow    -    -/-    Lea_r{w}_m
+xchg    xchg    r,rm/^1,^0    64    xchg_rr    -    -    -    -/-    Xchg_rm{w}_r{w}
+add    binary    rm/^0,rmi    64    alu_rr    -    same    -    -/OF,SF,ZF,AF,CF,PF    Add_rm{w}_r{w}
+adc    binary    rm/^0,rmi    64    alu_rr    -    same    -    CF/OF,SF,ZF,AF,CF,PF    Adc_rm{w}_r{w}
+sub    binary    rm/^0,rmi    64    alu_rr    -    idiom,same    -    -/OF,SF,ZF,AF,CF,PF    Sub_rm{w}_r{w}
+sbb    binary    rm/^0,rmi    64    alu_rr    -    idiom,same    -    CF/OF,SF,ZF,AF,CF,PF    Sbb_rm{w}_r{w}
+and    binary    rm/^0,rmi    64    alu_rr    -    same    -    -/OF,SF,ZF,AF,CF,PF    And_rm{w}_r{w}
+or    binary    rm/^0,rmi    64    alu_rr    -    same    -    -/OF,SF,ZF,AF,CF,PF    Or_rm{w}_r{w}
+xor    binary    rm/^0,rmi    64    alu_rr    -    idiom,same    -    -/OF,SF,ZF,AF,CF,PF    Xor_rm{w}_r{w}
+shl    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Shl_rm{w}_CL
+sal    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Sal_rm{w}_CL
+shr    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Shr_rm{w}_CL
+sar    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Sar_rm{w}_CL
+rol    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    -/OF,CF    Rol_rm{w}_CL
+ror    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    -/OF,CF    Ror_rm{w}_CL
+rcl    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    CF/OF,CF    Rcl_rm{w}_CL
+rcr    binary    rm/^0,ri    64    shift_ri    s1=cx    -    count    CF/OF,CF    Rcr_rm{w}_CL
+shld    funnel    rm/^0,r,ri    64    shift_ri    s2=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Shld_rm{w}_r{w}_CL
+shrd    funnel    rm/^0,r,ri    64    shift_ri    s2=cx    -    count    -/OF,SF,ZF,AF,CF,PF    Shrd_rm{w}_r{w}_CL
+neg    unary    rm/^0    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,CF,PF    Neg_rm{w}
+not    unary    rm/^0    64    alu_rr    -    -    -    -/-    Not_rm{w}
+inc    unary    rm/^0    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,PF    Inc_rm{w}
+dec    unary    rm/^0    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,PF    Dec_rm{w}
+imul    mul    r/^0,rmi    64    imul_r32    -    -    -    -/OF,SF,ZF,AF,CF,PF    Imul_r{w}_rm{w}
+imul    mul    r/rm,i    64    imul_r32    -    -    -    -/OF,SF,ZF,AF,CF,PF    Imul_r{w}_rm{w}_imm{w}
+imul    mul    r,r/r,rm    64    mul_r16    d0=ax,d1=dx,s0=ax    -    -    -/OF,SF,ZF,AF,CF,PF    Imul_rm{w}
+mul    mul    r,r/r,rm    64    mul_r16    d0=ax,d1=dx,s0=ax    -    -    -/OF,SF,ZF,AF,CF,PF    Mul_rm{w}
+idiv    div    r,r/r,r,rm    64    idiv_r32    d0=ax,d1=dx,s0=dx,s1=ax    -dx@8    -dx@8    -/OF,SF,ZF,AF,CF,PF    Idiv_rm{w}
+div    div    r,r/r,r,rm    64    div_r16    d0=ax,d1=dx,s0=dx,s1=ax    -dx@8    -dx@8    -/OF,SF,ZF,AF,CF,PF    Div_rm{w}
+cmp    cmp    -/rm,rmi    64    alu_rr    -    same    -    -/OF,SF,ZF,AF,CF,PF    Cmp_rm{w}_r{w}
+test    cmp    -/rm,ri    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,CF,PF    Test_rm{w}_r{w}
+bt    cmp    -/r,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_r{w}
+bt    cmp    -/r,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_imm8
+btc    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btc_rm{w}_r{w}
+push    push    -/rmi    64    push_r    -    sp,ss    sp    -/-    Push_r{w}
+pop    pop    rm/-    64    pop_r    -    sp,ss    sp    -/-    Pop_r{w}
+# movsxd: the sign extension of a dword into a quadword.
+movsxd    extend     r/rm               64         movzx        -                       -       -       -/-             Movsxd_r64_rm32
+
+# Scalar SSE (X86InstrSSE.td); the double move is `movsd_x`, `movsd` being the string copy above: xmm registers are kind `x`; the width is the scalar's, 128 for the whole register.
+addss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Addss_xmm_xmmm32
+addsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Addsd_xmm_xmmm64
+subss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Subss_xmm_xmmm32
+subsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Subsd_xmm_xmmm64
+mulss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Mulss_xmm_xmmm32
+mulsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Mulsd_xmm_xmmm64
+divss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Divss_xmm_xmmm32
+divsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Divsd_xmm_xmmm64
+minss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Minss_xmm_xmmm32
+minsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Minsd_xmm_xmmm64
+maxss	binary	x/^0,xm	32	sse_arith	-	-	-	-/-	Maxss_xmm_xmmm32
+maxsd	binary	x/^0,xm	64	sse_arith	-	-	-	-/-	Maxsd_xmm_xmmm64
+sqrtss	unary	x/xm	32	sse_sqrt	-	-	-	-/-	Sqrtss_xmm_xmmm32
+movss	move	x/xm	32	sse_move	-	self,same	-	-/-	Movss_xmm_xmmm32
+movss	move	m/x	32	sse_move	-	-	-	-/-	Movss_xmmm32_xmm
+ucomiss	cmp	-/x,xm	32	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomiss_xmm_xmmm32
+sqrtsd	unary	x/xm	64	sse_sqrt	-	-	-	-/-	Sqrtsd_xmm_xmmm64
+movsd_x	move	x/xm	64	sse_move	-	self,same	-	-/-	Movsd_xmm_xmmm64
+movsd_x	move	m/x	64	sse_move	-	-	-	-/-	Movsd_xmmm64_xmm
+ucomisd	cmp	-/x,xm	64	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomisd_xmm_xmmm64
+xorps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Xorps_xmm_xmmm128
+andps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andps_xmm_xmmm128
+andnps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andnps_xmm_xmmm128
+orps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Orps_xmm_xmmm128
+movaps	move	x/xm	128	sse_move	-	self,same	-	-/-	Movaps_xmm_xmmm128
+movaps	move	m/x	128	sse_move	-	-	-	-/-	Movaps_xmmm128_xmm
+cvtss2sd	extend	x/xm	32	sse_move	-	-	-	-/-	Cvtss2sd_xmm_xmmm32
+cvtsd2ss	extend	x/xm	64	sse_move	-	-	-	-/-	Cvtsd2ss_xmm_xmmm64
+cvtsi2ss	extend	x/rm	32	sse_move	-	-	-	-/-	Cvtsi2ss_xmm_rm32
+cvttss2si	extend	r/xm	32	sse_move	-	-	-	-/-	Cvttss2si_r32_xmmm32
+cvtsi2ss	extend	x/rm	64	sse_move	-	-	-	-/-	Cvtsi2ss_xmm_rm64
+cvttss2si	extend	r/xm	32	sse_move	-	-	-	-/-	Cvttss2si_r64_xmmm32
+cvtsi2sd	extend	x/rm	32	sse_move	-	-	-	-/-	Cvtsi2sd_xmm_rm32
+cvttsd2si	extend	r/xm	64	sse_move	-	-	-	-/-	Cvttsd2si_r32_xmmm64
+cvtsi2sd	extend	x/rm	64	sse_move	-	-	-	-/-	Cvtsi2sd_xmm_rm64
+cvttsd2si	extend	r/xm	64	sse_move	-	-	-	-/-	Cvttsd2si_r64_xmmm64

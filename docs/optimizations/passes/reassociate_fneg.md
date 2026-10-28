@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/reassociate_fneg.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/reassociate_fneg.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/reassociate_fneg.rs sha256:74e386716f11d76850a9fece0cec43b296f066181dfe2ec0ba42c47243a84ee0 -->
+<!-- src: crates/opt/llrm-transforms/src/reassociate_fneg.rs sha256:78b428364bb52ffde3e35126913168410c34fbd2a46d451f523369b9f772ffda -->
 
 # reassociate_fneg
 
