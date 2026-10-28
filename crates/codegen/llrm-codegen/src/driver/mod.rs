@@ -510,11 +510,7 @@ pub fn optimized(
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
-<<<<<<< HEAD
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso))?;
-=======
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso))?;
->>>>>>> origin/feat/parity
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program

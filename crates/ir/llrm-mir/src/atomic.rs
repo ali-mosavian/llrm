@@ -14,11 +14,7 @@
 //! the driver's `optimized`, around the pipeline.
 
 use crate::module::{GlobalKind, InstId, Linkage, Module, Operand};
-<<<<<<< HEAD
-use crate::opcode::{AtomicInfo, AtomicKind, AtomicOrdering, CallInfo, Flags, Opcode, RMW_OPS, Tail};
-=======
 use crate::opcode::{AtomicInfo, AtomicKind, AtomicOrdering, CallInfo, Flags, Opcode, RMW_OPS, RmwOp, Tail};
->>>>>>> origin/feat/parity
 use crate::types::{Type, TypeId};
 
 const PREFIX: &str = "llrm.atomic.";
@@ -145,47 +141,30 @@ pub fn hidden(module: &mut Module) -> Result<(), String> {
 /// Every call `hidden` made an instruction of the target. A load, or a store
 /// short of `seq_cst`, of at most `native` bits is a volatile plain access
 /// where `tso` (x86: every access is acquire and release already) or the
-<<<<<<< HEAD
-/// ordering is `monotonic` or `unordered`; what the target has no instruction
-/// for is refused, never made a plain access.
-=======
 /// ordering is `monotonic` or `unordered`; a fence short of `seq_cst` is
 /// nothing there. Where the target `locked` selects `xchg` itself, an exchange
 /// and a `seq_cst` store stay calls it takes. What the target has no
 /// instruction for is refused, never made a plain access.
->>>>>>> origin/feat/parity
 pub fn lowered(
     module: &mut Module,
     native: u32,
     tso: bool,
-<<<<<<< HEAD
-) -> Result<(), String> {
-    let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
-=======
     locked: bool,
 ) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
     let mut kept = vec![false; module.globals.len()];
     let mut called: Vec<usize> = Vec::new();
->>>>>>> origin/feat/parity
     for (at, global) in module.globals.iter().enumerate() {
         let GlobalKind::Function(function) = &global.kind else { continue };
         for (_, inst) in function.walk() {
             let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
             if let Some(info) = module.globals[callee.0 as usize].name.as_deref().and_then(decode) {
                 found.push((at, inst, info));
-<<<<<<< HEAD
-            }
-        }
-    }
-    for (at, inst, info) in found {
-=======
                 called.push(callee.0 as usize);
             }
         }
     }
     for ((at, inst, info), callee) in found.into_iter().zip(called) {
->>>>>>> origin/feat/parity
         let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
         let instruction = function.instruction(inst).clone();
         let accessed = match info.kind {
@@ -202,8 +181,6 @@ pub fn lowered(
                 bits.unwrap_or(0)
             ));
         }
-<<<<<<< HEAD
-=======
         let exchange = matches!(info.kind, AtomicKind::Rmw(RmwOp::Xchg))
             || (info.kind == AtomicKind::Store && info.ordering == AtomicOrdering::SeqCst);
         if locked && exchange {
@@ -214,7 +191,6 @@ pub fn lowered(
             function.erase(inst).map_err(|why| why.to_string())?;
             continue;
         }
->>>>>>> origin/feat/parity
         let ordered = info.ordering > AtomicOrdering::Monotonic;
         if ordered && !tso && matches!(info.kind, AtomicKind::Load | AtomicKind::Store) {
             return Err(format!("`{spelled}` is not lowered for this target: it has no acquire or release access yet"));
@@ -236,17 +212,12 @@ pub fn lowered(
     }
     // Their declarations have no caller left, and the assembler has no symbol
     // for one.
-<<<<<<< HEAD
-    let gone: Vec<bool> =
-        module.globals.iter().map(|global| global.name.as_deref().is_some_and(|name| decode(name).is_some())).collect();
-=======
     let gone: Vec<bool> = module
         .globals
         .iter()
         .enumerate()
         .map(|(n, global)| !kept[n] && global.name.as_deref().is_some_and(|name| decode(name).is_some()))
         .collect();
->>>>>>> origin/feat/parity
     module.retain_globals(&|id| !gone[id.0 as usize]);
     Ok(())
 }

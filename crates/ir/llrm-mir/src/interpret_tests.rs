@@ -578,8 +578,6 @@ entry:
     // old 7, then 12 -> 40 on the hit: 7000 + 400 + 1.
     assert_eq!(result(text), int(7401, 32));
 }
-<<<<<<< HEAD
-=======
 
 /// `llvm.umul.fix`, `llvm.{s,u}mul.fix.sat` and `llvm.{s,u}shl.sat` were
 /// unknown names to the parser; each answer is derived by hand at 16 bits.
@@ -620,4 +618,3 @@ define i16 @f() {{
     assert_eq!(shift("ushl.sat", -1, 1), int(0xffff, 16));
     assert_eq!(shift("ushl.sat", 3, 2), int(12, 16));
 }
->>>>>>> origin/feat/parity

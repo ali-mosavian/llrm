@@ -113,6 +113,7 @@ fn atomics_are_kept_and_selected_as_the_pin_does() {
     assert!(function("_fetch_and").iter().any(|line| line.starts_with("ldclrl")), "{asm}");
     assert_eq!(count("_compare_exchange", "casal"), 1, "{asm}");
     assert_eq!(function("_fences").iter().filter(|line| line.starts_with("dmb")).count(), 2, "{asm}");
+}
 
 /// `@llvm.global_ctors` was refused (`appending`), and then would have been
 /// a data symbol nobody calls: each constructor is a pointer in the loader's
