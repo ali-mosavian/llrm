@@ -320,11 +320,13 @@ impl ModuleAnalysis for Summaries {
             _ => None,
         };
         let log = (analyses.log_epoch(), analyses.edit_log().len());
+        let resets = analyses.resets();
         let made = match (then, before) {
             (Some(then), Some(mut before)) => {
                 // Only bodies edited since the last run moved, where what a
                 // summary is of besides its body is as then.
                 let alone = then.epoch == log.0
+                    && then.resets == resets
                     && then.globals == module.globals.len()
                     && then.tracked == *tracked
                     && then.inputs.is_the_last_but_declarations(&inputs);
@@ -348,7 +350,7 @@ impl ModuleAnalysis for Summaries {
         let tracked = tracked.clone();
         let globals = module.globals.len();
         *analyses.memo::<Option<SummariesMade>>() =
-            Some(SummariesMade { inputs, tracked, globals, epoch: log.0, logged: log.1 });
+            Some(SummariesMade { inputs, tracked, globals, epoch: log.0, logged: log.1, resets });
         Ok(Rc::new(made))
     }
 
@@ -375,6 +377,9 @@ struct SummariesMade {
     globals: usize,
     epoch: u64,
     logged: usize,
+    /// `ModuleAnalyses::resets` then: a pass since that said anything may have
+    /// changed left the declarations to be compared, not read from the log.
+    resets: u64,
 }
 
 /// The results `Summaries::run` read.

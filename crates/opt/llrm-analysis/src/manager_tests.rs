@@ -1437,31 +1437,26 @@ fn a_declaration_change_summarizes_only_that_function_again() {
         text.push_str(&format!("define i16 @f{at}(i16 %x) {{\nentry:\n  ret i16 %x\n}}\n\n"));
     }
     let mut module = parsed(&text);
-    let mut passes = PassManager::default();
-    passes.require_cached::<GlobalsAA>();
-    passes.require_cached::<super::GlobalsModRefAnalysis>();
-    passes.require::<Summaries>();
-    for at in 0..N {
-        // Pass `at` changes the declaration of `@f{at}` alone.
-        let mut seen = 0;
-        passes.add(step(
-            move |unit, _| {
-                if seen == at {
-                    unit.function.attrs.extend(llrm_mir::facts::Fact::NoUnwind.attribute());
-                }
-                seen += 1;
-            },
-            PreservedAnalyses::none(),
-        ));
-    }
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<Summaries>(&module);
+    // The facts held are those the last run read, as where a pass keeps them.
+    let kept =
+        PreservedAnalyses::none().preserve_module::<GlobalsAA>().preserve_module::<super::GlobalsModRefAnalysis>();
     let before = (crate::attrsummary::functions_summarized(), crate::attrsummary::brought_up_to_date());
-    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    // Each function in turn gets an attribute, as a pass over the module does,
+    // and the summaries are asked for after each.
+    for at in 0..N {
+        let id = module.named(&format!("f{at}")).unwrap();
+        module.function_mut(&format!("f{at}")).unwrap().1.attrs.extend(llrm_mir::facts::Fact::NoUnwind.attribute());
+        analyses.body_edited(id, &kept);
+        analyses.get::<Summaries>(&module);
+    }
     let made = crate::attrsummary::functions_summarized() - before.0;
     let quick = crate::attrsummary::brought_up_to_date() - before.1;
-    assert!(made <= 3 * N, "{made} summaries worked out for {N} functions each changed once");
+    assert!(made <= N, "{made} summaries worked out for {N} functions each changed once");
     // Not compared function by function, which is N per run: the edit log says
     // which.
-    assert!(quick >= N - 1, "{quick} of {N} runs brought up to date from the log of edits");
+    assert_eq!(quick, N, "{quick} of {N} runs brought up to date from the log of edits");
 }
 
 /// A summary kept while its declaration stands must not outlive a change in
@@ -1525,4 +1520,24 @@ fn a_function_added_since_the_last_run_is_summarized() {
     analyses.body_edited(a, &kept);
     let found = analyses.get::<Summaries>(&module);
     assert!(Result::as_ref(&*found).unwrap().contains_key("b"), "the function added has no summary");
+}
+
+/// A module pass that changed a callee's attributes says so by `invalidate`,
+/// not by the log of edits: a summary kept from the log alone is stale (the
+/// callee still unknown_write after `memory(none)`).
+#[test]
+fn a_module_pass_that_changes_an_attribute_gives_summaries_that_say_so() {
+    let text = |attrs: &str| format!("define internal void @h() {attrs} {{\nentry:\n  ret void\n}}\n");
+    let mut module = parsed(&text(""));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let writes_anything = |analyses: &mut ModuleAnalyses, module: &Module| {
+        Result::as_ref(&*analyses.get::<Summaries>(module)).unwrap()["h"].unknown_write
+    };
+    assert!(writes_anything(&mut analyses, &module));
+    module = parsed(&text("memory(none)"));
+    // The facts held are those the last run read, as where the pass keeps them.
+    analyses.invalidate(
+        &PreservedAnalyses::none().preserve_module::<GlobalsAA>().preserve_module::<super::GlobalsModRefAnalysis>(),
+    );
+    assert!(!writes_anything(&mut analyses, &module), "@h is still said to write anything after memory(none)");
 }

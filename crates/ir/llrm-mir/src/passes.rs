@@ -2179,6 +2179,9 @@ pub struct ModuleAnalyses {
     /// analyses made over it, not to ones carried from before.
     log_epoch: u64,
     declarations_open: bool,
+    /// How often `invalidate` has said anything may have changed: a result that
+    /// trusts the log of edits for what moved must be of the same count.
+    resets: u64,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
@@ -2224,6 +2227,7 @@ impl ModuleAnalyses {
             edit_log: Vec::new(),
             log_epoch: NEXT_LOG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             declarations_open: true,
+            resets: 0,
             metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
@@ -2401,6 +2405,7 @@ impl ModuleAnalyses {
         preserved: &PreservedAnalyses,
     ) {
         self.declarations_open = true;
+        self.resets += 1;
         self.metadata_open = true;
         self.invalidate_bodies(preserved);
     }
@@ -2491,6 +2496,11 @@ impl ModuleAnalyses {
     /// The bodies reported edited so far, oldest first.
     pub fn edit_log(&self) -> &[GlobalId] {
         &self.edit_log
+    }
+
+    /// How often a pass has said anything may have changed (`invalidate`).
+    pub fn resets(&self) -> u64 {
+        self.resets
     }
 
     /// Which `edit_log` this is, for an analysis that keeps a position in it: a
