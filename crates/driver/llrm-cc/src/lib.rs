@@ -105,9 +105,27 @@ fn pin() -> &'static str {
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
 
+/// `text` with each `{datalayout:NAME}` replaced by the `datalayout` of
+/// crates/target/llrm-NAME's description.
+fn expanded(text: &str) -> Result<String, String> {
+    let mut out = text.to_owned();
+    while let Some(start) = out.find("{datalayout:") {
+        let end = start + out[start..].find('}').ok_or("targets.toml: unclosed {datalayout:")?;
+        let name = &out[start + "{datalayout:".len()..end];
+        let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+        let description = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+        let table: toml::Table = description.parse().map_err(|error| format!("{path}: {error}"))?;
+        let layout = table.get("datalayout").and_then(toml::Value::as_str).ok_or(format!("{path}: no datalayout"))?;
+        out.replace_range(start..=end, layout);
+    }
+    Ok(out)
+}
+
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
+        target.datalayout = expanded(&target.datalayout)?;
+        target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
         }
