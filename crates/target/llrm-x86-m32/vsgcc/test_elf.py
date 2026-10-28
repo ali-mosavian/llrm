@@ -16,7 +16,7 @@ STUB = Path(__file__).parent / "stub.s"
 
 
 def sh(*argv):
-    done = subprocess.run([str(a) for a in argv], capture_output=True, text=True)
+    done = subprocess.run([str(a) for a in argv], capture_output=True, text=True, env=harness.cc_env())
     assert done.returncode == 0, f"{argv}: {done.stderr}"
     return done.stdout
 
@@ -37,7 +37,7 @@ def link(work, name, *objects):
 
 
 def llrm_object(work, source, out, *flags):
-    sh(LLRM, "-m32", "-march=i486", "-fno-inline-functions", "-fobject-format=elf", *flags, "-o", out, source)
+    sh(LLRM, *harness.llrmbin.c_args(32), "-fno-inline-functions", "-fobject-format=elf", *flags, "-c", "-o", out, source)
     return out
 
 
