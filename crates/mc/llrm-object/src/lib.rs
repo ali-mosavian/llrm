@@ -110,6 +110,9 @@ pub struct Fix {
 impl Fix {
     pub const S_ABS: u8 = 0;
     pub const S_GOT: u8 = 1;
+    /// COFF: the target's address relative to the image base
+    /// (`VK_COFF_IMGREL32`).
+    pub const S_IMGREL: u8 = 2;
     pub const SECTION_INDEX: Fix = Fix::plain(FixupKind::SECREL_2);
 
     /// An absolute fixup of `kind`.
@@ -144,6 +147,11 @@ impl Fix {
         from: usize,
     ) -> Fix {
         Fix::relative(Fix::abs(width).kind, from)
+    }
+
+    /// COFF: the target's address minus the image base, `width` bytes.
+    pub const fn image_relative(width: usize) -> Fix {
+        Fix { spec: Fix::S_IMGREL, ..Fix::abs(width) }
     }
 
     /// COFF: the target's offset within its section, `width` bytes.
