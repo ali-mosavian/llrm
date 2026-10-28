@@ -466,7 +466,12 @@ impl Tree<'_> {
         }
         for block in blocks {
             let mut inner = Die::new(TAG_LEXICAL_BLOCK);
-            self.code(&mut inner, &block.ranges)?;
+            // A segmented target cannot list ranges (one segment per DIE): a
+            // block in pieces is written over its first byte to its last.
+            match block.hull() {
+                Some(hull) if self.address == 2 && block.ranges.len() > 1 => self.code(&mut inner, &[hull])?,
+                _ => self.code(&mut inner, &block.ranges)?,
+            }
             self.scope(&mut inner, &block.variables, &block.blocks)?;
             let at = self.push(inner);
             die.children.push(at);
