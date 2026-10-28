@@ -864,7 +864,7 @@ pub(super) fn width_of(
         // An integer between the legal widths (`i24`, a three-byte struct
         // coerced) is promoted to the next one.
         (TypeClass::Other, Type::Int(bits))
-            if (1..64).contains(bits) && (*bits <= 32 || layout.largest_legal_integer() >= 64) =>
+            if *bits > 0 && bits.next_power_of_two() <= layout.largest_legal_integer() =>
         {
             Ok(bits.next_power_of_two().max(8) / 8)
         }
