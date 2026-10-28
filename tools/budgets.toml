@@ -97,15 +97,6 @@ why = "measured 47.8 -> 133.3 Minstr (x2.79)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "lir twoaddr"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 14.0 -> 43.5 Minstr (x3.11)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "mir lcssa"
 ratio = 4.3
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
@@ -129,15 +120,6 @@ ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 39.9 -> 102.1 Minstr (x2.56)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc base"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 60.7 -> 190.5 Minstr (x3.14)"
 
 [[debt]]
 kind = "steps"
@@ -171,15 +153,6 @@ why = "measured 17272 -> 51992 (x3.01)"
 
 [[debt]]
 kind = "events"
-axis = "branches"
-name = "lir_rename_asks"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 11386 -> 30207 (x2.65)"
-
-[[debt]]
-kind = "events"
 axis = "nest"
 name = "lvi_icmp_patterns"
 ratio = 3.45
@@ -191,10 +164,10 @@ why = "measured 5530 -> 17937 (x3.24)"
 kind = "events"
 axis = "cases"
 name = "lvi_icmp_patterns"
-ratio = 2.75
+ratio = 3.68
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 104097 -> 269522 (x2.59)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 39226 -> 137384 (x3.50); 3N-pred block, MAX_PROCESSED_PER_VALUE=500 with pin-faithful solveBlockValueNonLocal restart"
 
 [[debt]]
 kind = "events"
@@ -258,15 +231,6 @@ ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 66.2 -> 178.3 Minstr (x2.69)"
-
-[[debt]]
-kind = "steps"
-axis = "functions"
-name = "analysis call-registers"
-ratio = 4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 43.1 -> 163.2 Minstr (x3.79)"
 
 [[debt]]
 kind = "steps"
@@ -829,15 +793,6 @@ why = "measured 2.7 -> 9.4 Minstr (x3.48)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "mir instsimplify"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.3 -> 6.7 Minstr (x2.96)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "mir canonfreeze"
 ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -946,15 +901,6 @@ why = "measured 53.4 -> 189.6 Minstr (x3.55)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir combine@677"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 54.6 -> 148.0 Minstr (x2.71)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "mir cvp@810"
 ratio = 3.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -1009,15 +955,6 @@ why = "measured 19.0 -> 68.9 Minstr (x3.63)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir jumpthreading@668"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 19.4 -> 64.4 Minstr (x3.32)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "regalloc base"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -1036,20 +973,11 @@ why = "measured 22.4 -> 57.6 Minstr (x2.57)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "lir earlytaildup"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 13.9 -> 41.4 Minstr (x2.99)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "mir jumpthreading@809"
-ratio = 3.1
+ratio = 3.49
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 14.1 -> 40.6 Minstr (x2.88)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 29.8 -> 99.1 Minstr (x3.32); unprofiled, follow-up by w2"
 
 [[debt]]
 kind = "steps"
@@ -1059,15 +987,6 @@ ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 15.1 -> 37.6 Minstr (x2.49)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir combine@768"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 14.9 -> 37.1 Minstr (x2.49)"
 
 [[debt]]
 kind = "steps"
@@ -1082,10 +1001,10 @@ why = "measured 14.8 -> 37.1 Minstr (x2.50)"
 kind = "steps"
 axis = "cases"
 name = "mir sroa@1179"
-ratio = 2.5
+ratio = 2.89
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 15.7 -> 37.0 Minstr (x2.35)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 7.3 -> 20.1 Minstr (x2.75); unprofiled, follow-up by w2"
 
 [[debt]]
 kind = "steps"
@@ -1099,29 +1018,11 @@ why = "measured 14.7 -> 36.8 Minstr (x2.50)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir combine@801"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 14.7 -> 36.8 Minstr (x2.50)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "mir decide@766"
 ratio = 3.4
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 10.9 -> 34.6 Minstr (x3.18)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir constraint-elimination@699"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 12.6 -> 33.5 Minstr (x2.66)"
 
 [[debt]]
 kind = "steps"
@@ -1144,24 +1045,6 @@ why = "measured 8.3 -> 26.7 Minstr (x3.20)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir sccp@792"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 9.6 -> 24.6 Minstr (x2.55)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir mldst-motion@783"
-ratio = 4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 6.4 -> 24.5 Minstr (x3.79)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "lir split returns"
 ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -1172,37 +1055,28 @@ why = "measured 9.1 -> 23.9 Minstr (x2.64)"
 kind = "steps"
 axis = "cases"
 name = "mir decide@675"
-ratio = 3.2
+ratio = 3.55
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.3 -> 15.7 Minstr (x2.96)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 3.7 -> 12.5 Minstr (x3.38); unprofiled, follow-up by w2"
 
 [[debt]]
 kind = "steps"
 axis = "cases"
 name = "mir decide@690"
-ratio = 3.2
+ratio = 3.55
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.3 -> 15.7 Minstr (x2.97)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "analysis dominators"
-ratio = 2.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 5.7 -> 13.5 Minstr (x2.37)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 3.7 -> 12.5 Minstr (x3.38); unprofiled, follow-up by w2"
 
 [[debt]]
 kind = "steps"
 axis = "cases"
 name = "mir decide@1178"
-ratio = 2.7
+ratio = 2.89
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 4.6 -> 11.8 Minstr (x2.56)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 8.6 -> 23.7 Minstr (x2.75); unprofiled, follow-up by w2"
 
 [[debt]]
 kind = "steps"
@@ -1217,10 +1091,10 @@ why = "measured 4.8 -> 11.5 Minstr (x2.38)"
 kind = "steps"
 axis = "cases"
 name = "mir loop-simplifycfg@716"
-ratio = 3.3
+ratio = 3.56
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.3 -> 7.0 Minstr (x3.13)"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 1.8 -> 6.2 Minstr (x3.39); unprofiled, follow-up by w2"
 
 [[debt]]
 kind = "steps"
@@ -1896,3 +1770,57 @@ why = "DEBT, not a window move: 97096c07c2 (the DAG selector default on 16- and 
 axis = "equal"
 name = "lir coalesce"
 why = "DEBT, not a window move: 97096c07c2 (the DAG selector default on 16- and 32-bit x86, bisected 2026-10-28) made it superlinear. equal, Minstr at N=1024/2048/4096: 8.7/10.9/64.9 (x6 at 2N) against 13.2/16.5/23.0 under the old selector. Plan: fix with lir twoaddr, then delete this row."
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "mir walk"
+ratio = 2.42
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); unprofiled, follow-up by w2"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir peephole"
+ratio = 2.46
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 16.4 -> 38.2 Minstr (x2.34); unprofiled, follow-up by w2"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir jumps"
+ratio = 2.42
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30); unprofiled, follow-up by w2"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir adce@815"
+ratio = 2.49
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 2.1 -> 5.1 Minstr (x2.37); unprofiled, follow-up by w2"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir jumps"
+ratio = 2.66
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53); unprofiled, follow-up by w2"
+
+[[debt]]
+kind = "steps"
+axis = "fanout"
+name = "mir dse@820"
+ratio = 2.74
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); unprofiled, follow-up by w2"
+
