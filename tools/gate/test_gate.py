@@ -1441,3 +1441,35 @@ def test_a_tracked_symlink_out_of_the_tree_or_a_build_dir_is_named(tmp_path, cap
     git("add", "-A")
     assert gate.products_main(tmp_path) == 1
     assert "tracked build dir target/x" in capsys.readouterr().out
+
+
+def fake_clang(path: Path, sha: str) -> None:
+    path.parent.mkdir(parents=True)
+    path.write_text(f"#!/bin/sh\necho 'clang version 24.0.0git (https://github.com/llvm/llvm-project.git {sha})'\n")
+    path.chmod(0o755)
+
+
+def test_the_gate_names_the_toolchain_the_llrm_cc_tests_need_from_the_runners_scratch(tmp_path):
+    """No workflow set LLRM_OW, LLRM_PIN_CLANG or LLRM_CLANG_M16, so every common::cc::llrm_c() test failed at once ('the target needs
+    LLRM_OW'): the gate went red by construction on feat/parity. The m16 clang is the build whose version names a sha of toolchain/clang/pin."""
+    scratch = tmp_path / "scratch"
+    (scratch / "ow-src").mkdir(parents=True)
+    fake_clang(scratch / "llvm-build/bin/clang", "d1106deb71cc")
+    fake_clang(scratch / "llvm-build-m16b/bin/clang", "10d559317155")
+    fake_clang(scratch / "llvm-build-m16c/bin/clang", "0f533437b640")
+    pin = tmp_path / "pin"
+    pin.write_text("d1106deb71cc81016406a1917d0508d2df296266\n10d559317155690274be72682c63f71eff088040 # m16\n")
+    env = gate.toolchain_env({"HOME": str(tmp_path)}, pin)
+    assert env == {
+        "LLRM_OW": str(scratch / "ow-src"),
+        "LLRM_PIN_CLANG": str(scratch / "llvm-build/bin/clang"),
+        "LLRM_CLANG_M16": str(scratch / "llvm-build-m16b/bin/clang"),
+    }
+    pin.write_text("d1106deb71cc81016406a1917d0508d2df296266\n0f533437b640c6870f71c56795f9f7033d140199 # m16\n")
+    assert gate.toolchain_env({"HOME": str(tmp_path)}, pin)["LLRM_CLANG_M16"] == str(scratch / "llvm-build-m16c/bin/clang")
+
+
+def test_a_variable_the_caller_set_is_never_replaced_and_a_missing_toolchain_names_nothing(tmp_path):
+    pin = tmp_path / "pin"
+    pin.write_text("d1106deb71cc81016406a1917d0508d2df296266\n")
+    assert gate.toolchain_env({"HOME": str(tmp_path), "LLRM_OW": "/mine"}, pin) == {}

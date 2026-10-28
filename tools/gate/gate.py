@@ -840,13 +840,33 @@ def group_plan(p: Plan, group: str) -> Plan:
     return Plan(p.tier, p.reason, [s for s in p.steps if (s == "build" and builds) or s in members], p.packages, p.languages, p.files)
 
 
+def toolchain_env(environ: dict | None = None, pin: Path | None = None) -> dict[str, str]:
+    """The clang toolchain the llrm-cc tests need, where the caller named none of it: the runner's ~/scratch holds Open Watcom's tree (LLRM_OW), the
+    pinned clang (LLRM_PIN_CLANG) and the i8086 fork builds, of which LLRM_CLANG_M16 is the one whose version names a sha of toolchain/clang/pin
+    (the m16 builds differ by that sha: llrm-cc refuses any other). Nothing found, nothing named: the tests then say what is missing."""
+    environ = os.environ if environ is None else environ
+    scratch = Path(environ.get("HOME", "~")).expanduser() / "scratch"
+    shas = [line.split()[0] for line in (pin or ROOT / "toolchain/clang/pin").read_text().splitlines() if line.split()]
+
+    def names_a_pinned_sha(clang: Path) -> bool:
+        said = subprocess.run([str(clang), "--version"], capture_output=True, text=True).stdout
+        return any(sha[:12] in said for sha in shas[1:])
+
+    found = {
+        "LLRM_OW": scratch / "ow-src",
+        "LLRM_PIN_CLANG": scratch / "llvm-build/bin/clang",
+        "LLRM_CLANG_M16": next((one for one in sorted(scratch.glob("llvm-build-m16*/bin/clang")) if names_a_pinned_sha(one)), None),
+    }
+    return {name: str(path) for name, path in found.items() if path and path.exists() and not environ.get(name)}
+
+
 def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
     group, shard = shard_of(group)
     target = os.environ.get("CARGO_TARGET_DIR")
     if not target:
         sys.exit("gate: CARGO_TARGET_DIR is not set")
     # The run test compares the tree before and after; a tool writing a .pyc into it meanwhile is not a leak.
-    env = {**os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
+    env = {**toolchain_env(), **os.environ, **STEP_ENV, "PYTHONDONTWRITEBYTECODE": "1", "LLRM_BIN": os.environ.get("LLRM_BIN", f"{target}/release")}
     if shard:
         env[SHARDED[group][1]] = shard
     logs = Path(target) / "gate-logs"
