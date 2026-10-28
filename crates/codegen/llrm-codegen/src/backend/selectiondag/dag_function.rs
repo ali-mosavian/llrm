@@ -461,6 +461,17 @@ impl super::emit::Conventions for CallConventions<'_> {
                 self.general,
             ));
         }
+        // at m16 a routine also destroys what its contract says: runtime.toml names SI and DI for the routines whose assembly does not state them kept
+        // (B$DDIM), and a value held in SI across one was wrong code. At m32 the whole list over-spilled (jpeg_single +4.5%): the convention's is used.
+        let real_mode = llrm_lir::registers::Regs(self.arch.registers()).width_of(self.arch.stack_pointer()) == Some(2);
+        if let (true, Some(contracts), Some(Callee::Global(id))) = (real_mode, self.contracts, callee) {
+            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
+            if name.starts_with(crate::hir::mir::RUNTIME)
+                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
+            {
+                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
+            }
+        }
         Some(out)
     }
 }
