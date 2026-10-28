@@ -2569,6 +2569,20 @@ pub fn emit_in(
             return arith(name, into, outof, at);
         }
         if let (Some(into), Some(value)) = (reg_of(dest), imm_of(source)) {
+            if let Some(code) = ["btc", "bts", "btr"].iter().position(|bit| name == *bit) {
+                let width = width_of(into)?;
+                let bit = u32::try_from(value).ok().filter(|bit| *bit < 256)?;
+                let code = match code {
+                    0 => code_of!("BTC_RM", width * 8, "_IMM8")?,
+                    1 => code_of!("BTS_RM", width * 8, "_IMM8")?,
+                    _ => code_of!("BTR_RM", width * 8, "_IMM8")?,
+                };
+                return _assemble(
+                    &raised(Instruction::with2(code, into.iced(), bit).map_err(|error| error.to_string())),
+                    at,
+                    true,
+                );
+            }
             return arith_imm(name, into, value, at, relocated);
         }
         if let (Some(into), Some(cell)) = (reg_of(dest), mem_of(source)) {
