@@ -113,8 +113,6 @@ impl Fix {
     /// COFF: the target's address relative to the image base
     /// (`VK_COFF_IMGREL32`).
     pub const S_IMGREL: u8 = 2;
-    pub const SEGMENT_BASE: Fix = Fix::plain(FixupKind::SEGMENT_BASE);
-    pub const FAR_POINTER: Fix = Fix::plain(FixupKind::FAR_POINTER);
     pub const SECTION_INDEX: Fix = Fix::plain(FixupKind::SECREL_2);
 
     /// An absolute fixup of `kind`.
