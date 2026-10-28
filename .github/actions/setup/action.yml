@@ -39,6 +39,32 @@ runs:
         path: ~/.cache/llrm
         key: llrm-forks-${{ runner.os }}-${{ hashFiles('toolchain/jwbuild.sh', 'toolchain/dosrunbuild.sh', 'toolchain/cache.sh', 'toolchain/owshim/ow-commit', 'toolchain/wdump.sh', 'toolchain/gcctorture.sh') }}
         restore-keys: llrm-forks-
+    - name: Which clang trees the pin names
+      id: clang
+      shell: bash
+      run: |
+        for kind in pin m16; do
+          dir=$(sh toolchain/clangbuild.sh --print $kind)
+          echo "$kind=$dir" >> "$GITHUB_OUTPUT"
+          echo "${kind}_name=$(basename "$dir")" >> "$GITHUB_OUTPUT"
+        done
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.clang.outputs.pin }}
+        key: llrm-${{ steps.clang.outputs.pin_name }}
+    - uses: actions/cache/restore@v4
+      with:
+        path: ${{ steps.clang.outputs.m16 }}
+        key: llrm-${{ steps.clang.outputs.m16_name }}
+    - name: The clang trees (built by the toolchain workflow)
+      shell: bash
+      run: |
+        # Built by .github/workflows/toolchain.yml, never here. A tree that is missing leaves its variable unset, and the llrm-cc tests
+        # fail on it: red, not skipped. The pin tree must report the pin's sha (tools/pin_clang.py).
+        pin="${{ steps.clang.outputs.pin }}/bin/clang"
+        m16="${{ steps.clang.outputs.m16 }}/bin/clang"
+        if [ -x "$pin" ] && LLRM_PIN_CLANG="$pin" python3 tools/pin_clang.py >/dev/null; then echo "LLRM_PIN_CLANG=$pin" >> "$GITHUB_ENV"; else echo "::warning::no pinned clang tree (run the toolchain workflow)"; fi
+        if [ -x "$m16" ]; then echo "LLRM_CLANG_M16=$m16" >> "$GITHUB_ENV"; else echo "::warning::no m16 clang tree (run the toolchain workflow)"; fi
     - name: Drop trees whose pin is gone
       shell: bash
       run: |
