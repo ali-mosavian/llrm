@@ -1092,7 +1092,9 @@ fn a_far_16_bit_functions_cells_are_found_from_its_longer_frame_address() {
         .unwrap();
     let said = Command::new(wdump).args(["-q", "-d", "-Dx"]).arg(dir.join("known.exe")).output().unwrap();
     let text = String::from_utf8_lossy(&said.stdout).into_owned();
-    for wanted in ["Loc expr: fbreg -8", "Loc expr: fbreg -10", "Loc expr: fbreg -14"] {
+    // first, second, sum: 2-byte cells at bp-2, bp-4, bp-6, the canonical frame
+    // address 6 above bp (llrm-c laid `sum` at -14).
+    for wanted in ["Loc expr: fbreg -8", "Loc expr: fbreg -10", "Loc expr: fbreg -12"] {
         assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
     }
 }
