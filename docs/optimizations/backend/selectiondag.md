@@ -99,6 +99,13 @@ DEVIATE SD102: an `invoke` has no `EH_LABEL`s around its call and a
 `landingpad` builds nothing: the QB personality's pad is entered by the
 runtime (`ehprepare`), with no unwind tables. Exit: none. Owner sdag-a.
 
+DEVIATE SD103: at optsize (`hasOptSize`) `shouldKeepJumpConditionsTogether`
+answers false: two compares stay two branches. The pin merges them under
+`x86-br-merging-base-cost`, which costs a `setcc` pair and a logic op in
+scarce byte registers. QCport -Os m16 dag -0.34%, bench sieve/bas -10.7% clocks.
+Exit: the merging cost prices the `setcc` pair, or DELETE. Owner w6.
+Review 2026-11-13.
+
 ## See also
 LLVM's `SelectionDAG::getNode`
 ([SelectionDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L8442)),
