@@ -438,8 +438,10 @@ pub fn assembled_by(
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
+        // A 16-byte one is a bitwise SSE instruction's memory operand, which
+        // must be aligned.
         if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: 8 }));
+            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
@@ -970,6 +972,7 @@ fn staged(
         segments: target.segments,
         runtime: abi.runtime_contracts(),
         frame_zeroed: zeroed,
+        facts: Some(target.facts),
     });
     let dag = match target.selector {
         Selector::Old => None,

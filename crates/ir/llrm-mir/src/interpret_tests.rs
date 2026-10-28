@@ -129,6 +129,31 @@ fn overflow_intrinsics_wrap_and_say_so() {
     assert_eq!(pair("umul", 256, 256), wrapped(0, 1));
 }
 
+/// `llvm.{s,u}{add,sub}.sat` stopped the parser at the unknown name; each
+/// answer is derived by hand.
+#[test]
+fn saturating_intrinsics_clamp_to_the_range() {
+    let sat = |intrinsic: &str, a: i16, b: i16| {
+        result(&format!(
+            "declare i16 @llvm.{intrinsic}.sat.i16(i16, i16)
+define i16 @f() {{
+  %r = call i16 @llvm.{intrinsic}.sat.i16(i16 {a}, i16 {b})
+  ret i16 %r
+}}
+"
+        ))
+    };
+    assert_eq!(sat("sadd", 32767, 1), int(0x7fff, 16));
+    assert_eq!(sat("sadd", -32768, -1), int(0x8000, 16));
+    assert_eq!(sat("sadd", 5, -7), int(0xfffe, 16));
+    assert_eq!(sat("ssub", -32768, 1), int(0x8000, 16));
+    assert_eq!(sat("ssub", 32767, -1), int(0x7fff, 16));
+    assert_eq!(sat("uadd", -1, 1), int(0xffff, 16));
+    assert_eq!(sat("uadd", 3, 4), int(7, 16));
+    assert_eq!(sat("usub", 3, 4), int(0, 16));
+    assert_eq!(sat("usub", 4, 3), int(1, 16));
+}
+
 #[test]
 fn min_max_intrinsics_compare_as_their_names_say() {
     let chosen = |intrinsic: &str, a: i16, b: i16| {

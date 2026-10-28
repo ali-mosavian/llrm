@@ -11,6 +11,7 @@ stopping comes from the launch's events.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import sys
@@ -106,7 +107,7 @@ _RUNTIME_LOCK = threading.Lock()
 def with_isel(command: list[str]) -> list[str]:
     """`command` with `--isel=$LLRM_ISEL` after `llrm-c`, `llrm-qb` or `llrm-nib`, when the variable is set: the same programs through the other instruction selector."""
     mode = os.environ.get("LLRM_ISEL")
-    if mode and Path(command[0]).name in ("llrm-c", "llrm-qb", "llrm-nib"):
+    if mode and Path(command[0]).name in ("llrm-c", "llrm-cc", "llrm-qb", "llrm-nib"):
         return [command[0], f"--isel={mode}", *command[1:]]
     return command
 
@@ -128,8 +129,8 @@ def isel_proof(report: Path, mode: str) -> tuple[int, int]:
     return dag, old
 
 
-def _host(command: list[str]) -> None:
-    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True)
+def _host(command: list[str], env: dict[str, str] | None = None) -> None:
+    done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")
 
@@ -169,6 +170,20 @@ def target_bits(target: str) -> int:
     return target_modes()[target]
 
 
+WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
+
+
+def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str]) -> tuple[list[str], dict[str, str]]:
+    """(command, environment) that builds the C `source` for `target`: llrm-c, or llrm-cc over clang where LLRM_C_FRONTEND=llrm-cc names it (the
+    target is then a row of its table, not a flag)."""
+    if os.environ.get("LLRM_C_FRONTEND") == "llrm-cc":
+        if target_bits(target) not in WATCOM_ROWS:
+            raise BuildError(f"llrm-cc has no row for {target}")
+        row = {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+        return [str(BIN / "llrm-cc"), level, "-c", *abi, str(source), "-o", str(obj)], row  # the row's -isystem has llrm_os.h; `include` is llrm-c's
+    return [str(BIN / "llrm-c"), str(source), "-I", str(include), m_flag(target), *abi, level, "-o", str(obj)], {}
+
+
 def m_flag(target: str) -> str:
     """The flag that names `target` to the compilers."""
     return f"-m{target_modes()[target]}"
@@ -189,6 +204,12 @@ def target_link(target: str) -> dict:
 
 
 _ASSEMBLED: set[tuple[Path, tuple[str, ...]]] = set()
+
+
+def runtime_path(made: Path, name: str, defines: tuple[str, ...]) -> Path:
+    """Where the object of runtime file `name` goes in `made`: one path per set of defines, as builds that differ in them run at once."""
+    one = object_name(name)
+    return made / (one if not defines else f"{hashlib.md5(' '.join(defines).encode()).hexdigest()[:8]}-{one}")
 
 
 def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path:
@@ -243,7 +264,7 @@ def link_target(target: str, obj: Path, exe: Path, work: Path, listing: Path | N
     made.mkdir(exist_ok=True)
 
     def objects(names: list[str]) -> list[Path]:
-        return [runtime_object(name, made / object_name(name), defines) for name in names]
+        return [runtime_object(name, runtime_path(made, name, defines), defines) for name in names]
 
     first, last, final = objects(runtime[0] if runtime else link["first"]), objects(runtime[1] if runtime else link["last"]), objects(link["final"])
     mapping = ["option", f"map={listing}"] if listing else []
@@ -275,9 +296,11 @@ def os_layer(target: str, field: str, language: str) -> str:
     return said
 
 
-def os_defines(target: str, language: str) -> tuple[str, ...]:
+def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str, ...]:
     """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
-    return tuple(os_layer(target, "defines", language).split())
+    defines = tuple(os_layer(target, "defines", language).split())
+    # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
+    return (*defines, "LL_MAIN=main_") if language == "c" and abi not in ("sysv", "cdecl", "ia16") and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else defines
 
 
 def os_start(target: str, language: str) -> list[str]:

@@ -443,7 +443,7 @@ pub(super) fn _truncating(
     body: &LirBody,
     frame: Option<&mut Frame>,
 ) -> Result<LirBody, Raised> {
-    if !body.insns().iter().any(|one| _needs(one) == Some(Mode::Chop)) {
+    if !body.iter_insns().any(|one| _needs(one) == Some(Mode::Chop)) {
         return Ok(body.clone());
     }
     let Some(frame) = frame else {
