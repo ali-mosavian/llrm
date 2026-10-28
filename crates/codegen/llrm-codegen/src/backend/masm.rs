@@ -584,6 +584,9 @@ pub enum Item {
     /// A `.cfi_*` directive (`MCCFIInstruction`), where LLVM's lands: no
     /// code of its own.
     Cfi(llrm_object::assembler::Cfi),
+    /// A `.seh_*` directive (Win64): no code of its own, stamped with the
+    /// offset after the instruction before it.
+    Seh(llrm_object::Seh),
 }
 
 /// `-g`: a place in the code a debugger is told of.
@@ -1491,10 +1494,8 @@ fn built(
         && sequences.entry.iter().all(|one| one.name.as_deref() != Some("enter"));
     let bp = reg(FRAME);
     // The DWARF numbers the directives name, from the target's table.
-    let dwarf = |register: RegId| {
-        let name = format!("{register:?}").to_lowercase();
-        llrm_x86::mc::unwind::register(&name).map(|number| number as u16)
-    };
+    let dwarf =
+        |register: RegId| regs.name(register).and_then(llrm_x86::mc::unwind::register).map(|number| number as u16);
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
     let mut cfi =
         numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
@@ -1926,7 +1927,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items.iter_mut() {
         match item {
-            Item::Align(_) | Item::Cfi(_) => {}
+            Item::Align(_) | Item::Cfi(_) | Item::Seh(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -2298,7 +2299,7 @@ pub fn _procedure_of(
         match item {
             Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
-            Item::Mark(_) | Item::Cfi(_) => {}
+            Item::Mark(_) | Item::Cfi(_) | Item::Seh(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }
