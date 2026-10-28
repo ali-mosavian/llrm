@@ -602,6 +602,12 @@ fn the_rp3_row_calls_the_library_by_its_c_names() {
 /// convention"), 18 torture builds (20000412-3).
 #[test]
 fn a_knr_function_compiles_at_the_wat_rows() {
+
+/// Open Watcom's front end predefines the CPU macro (`__386__` flat, `__I86__`
+/// real mode) that code written for it tests: bench/textfill took its
+/// 16-bit branch at x86_32-wat, and the torture limits.h gave `int` 32767.
+#[test]
+fn the_wat_rows_predefine_the_watcom_cpu_macro() {
     if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
         eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
         return;
@@ -617,6 +623,14 @@ fn a_knr_function_compiles_at_the_wat_rows() {
         let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
             .env("LLRM_CC_TARGET", row)
             .args(["-O2", "-w", "-std=gnu89", "-S", "-o"])
+
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-cpu-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (row, want, other) in [("x86_32-wat", "__386__", "__I86__"), ("x86_16-wat", "__I86__", "__386__")] {
+        std::fs::write(dir.join("m.c"), format!("#ifndef {want}\n#error {want} is not defined\n#endif\n#ifdef {other}\n#error {other} is defined\n#endif\nint v;\n")).unwrap();
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", row)
+            .args(["-O2", "-w", "-S", "-o"])
             .arg(dir.join("m.s"))
             .arg(dir.join("m.c"))
             .output()
