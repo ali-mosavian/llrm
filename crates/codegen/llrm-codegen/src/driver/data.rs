@@ -231,14 +231,14 @@ pub fn zero_to_bss(
     for (at, global) in module.globals.iter().enumerate() {
         let GlobalKind::Variable(variable) = &global.kind else { continue };
         let id = GlobalId(at as u32);
-        if variable.initializer.is_none()
-            || variable.constant
-            || global.address_space != data_space
-            || !stored_zero(module, id, &built.names)
-        {
+        if variable.initializer.is_none() || variable.constant || global.address_space != data_space {
             continue;
         }
+        // A variable nothing emitted has no label, and no data to move.
         let Some(label) = built.names.get(&(Space::Segment, at as i64)).cloned() else { continue };
+        if !stored_zero(module, id, &built.names) {
+            continue;
+        }
         let items = &mut built.data[0].1;
         let Some(first) = items.iter().position(|one| matches!(one, masm::Datum::Label(l) if l.name == label)) else {
             continue;
@@ -406,6 +406,32 @@ mod tests {
         // QB runtime input.c: a 19-byte table raised to 16 made its segment
         // paragraph aligned, +32 B of DGROUP; dgroup_nearly_full ran out.
         assert_eq!(aligned(flat, true), [Some(4), None, None, Some(2)], "64K segments: no raise to 16");
+    }
+
+    /// A zero-initialized variable the object has no label for (gcc torture
+    /// `pr78791`, i64 divrem) panicked in `datums`: "no entry found for key".
+    #[test]
+    fn test_a_zero_variable_with_no_label_is_left_alone_by_zero_to_bss() {
+        let module = llrm_mir::parse::module("target datalayout = \"e-i32:32\"\n@z = global i32 0\n").unwrap();
+        let mut built = masm::Module {
+            registers: crate::backend::registerinfo::test_regs(),
+            code: String::new(),
+            names: IndexMap::default(),
+            externs: Vec::new(),
+            publics: Vec::new(),
+            data: vec![("_DATA".into(), Vec::new())],
+            procedures: Vec::new(),
+            private: Default::default(),
+            far_bss: Default::default(),
+            code_segments: Default::default(),
+            padding: Default::default(),
+            object: llrm_target::Target::object(&llrm_x86_m16::M16),
+            requests: Default::default(),
+            stack: 0,
+            debug: None,
+        };
+        zero_to_bss(&mut built, &module, 0, false);
+        assert_eq!(built.data.len(), 1, "no _BSS for a variable with no label");
     }
 
     fn size(part: &[Datum]) -> usize {
