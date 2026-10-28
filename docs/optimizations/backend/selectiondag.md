@@ -102,7 +102,7 @@ runtime (`ehprepare`), with no unwind tables. Exit: none. Owner sdag-a.
 DEVIATE SD103: at optsize (`hasOptSize`) `shouldKeepJumpConditionsTogether`
 answers false: two compares stay two branches. The pin merges them under
 `x86-br-merging-base-cost`, which costs a `setcc` pair and a logic op in
-scarce byte registers. QCport -Os m16 dag -0.33%, bench sieve -17% clocks.
+scarce byte registers. QCport -Os m16 dag -0.34%, bench sieve/bas -10.7% clocks.
 Exit: the merging cost prices the `setcc` pair, or DELETE. Owner w6.
 Review 2026-11-13.
 
