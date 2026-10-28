@@ -4,6 +4,7 @@
 pub mod backend;
 pub mod coff32;
 pub mod coff64;
+pub mod compact_unwind;
 pub mod elf32;
 pub mod elf64;
 pub mod fixup;

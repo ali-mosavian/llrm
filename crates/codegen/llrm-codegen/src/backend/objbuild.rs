@@ -540,8 +540,9 @@ pub fn written_in(
         if let Some(dir) = llrm_target::object::all_writers_dir() {
             for other in Format::ALL {
                 let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
-                if let Ok(written) = written {
-                    llrm_target::object::record_writer(&dir, other, &written);
+                match written {
+                    Ok(written) => llrm_target::object::record_writer(&dir, other, &written),
+                    Err(why) => llrm_target::object::record_refusal(&dir, other, &format!("{why:?}")),
                 }
             }
         }
