@@ -152,8 +152,9 @@ mod tests {
                     row(53, 8, &saved),
                 ],
                 cfi: Vec::new(),
+                seh: Vec::new(),
             },
-            Frame { section: 0, offset: 0x38, length: 4, rows: Vec::new(), cfi: Vec::new() },
+            Frame { section: 0, offset: 0x38, length: 4, rows: Vec::new(), cfi: Vec::new(), seh: Vec::new() },
         ]
     }
 
@@ -204,7 +205,7 @@ mod tests {
             row(0x2D, 16, &saved),
             row(0x2E, 8, &saved),
         ];
-        let frames = vec![Frame { section: 0, offset: 0, length: 0x33, rows, cfi: Vec::new() }];
+        let frames = vec![Frame { section: 0, offset: 0, length: 0x33, rows, cfi: Vec::new(), seh: Vec::new() }];
         let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
         assert_eq!(written.sections.last().unwrap().image, PIN);
     }

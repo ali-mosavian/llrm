@@ -323,6 +323,22 @@ pub struct Frame {
     /// The directives that declared the rows, in order (`.cfi_*`), for the
     /// formats that encode them instead of the rows (Mach-O's compact unwind).
     pub cfi: Vec<assembler::Cfi>,
+    /// The prologue as `.seh_*` directives state it (Win64), each with the
+    /// offset after its instruction, for the formats that encode them.
+    pub seh: Vec<(usize, Seh)>,
+}
+
+/// One Win64 prologue directive (LLVM's `.seh_pushreg`, `.seh_stackalloc`,
+/// `.seh_setframe`, `.seh_savereg`, `.seh_savexmm`). Registers are hardware
+/// numbers (`xmm` by its own number).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Seh {
+    PushReg(u8),
+    StackAlloc(u64),
+    /// The frame register, `offset` bytes above `rsp`.
+    SetFrame(u8, u64),
+    SaveReg(u8, u64),
+    SaveXmm(u8, u64),
 }
 
 /// What a target says of the object files it writes, so the code that holds an
