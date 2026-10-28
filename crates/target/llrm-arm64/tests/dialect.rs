@@ -1,6 +1,6 @@
 //! `src/instructions/dialect.toml` is read by the shared instruction reader.
 
-use llrm_instr::Dialect;
+use llrm_target::instr::Dialect;
 
 #[test]
 fn the_arm64_dialect_parses_with_its_registers_conditions_and_flags() {
@@ -15,7 +15,8 @@ fn the_arm64_dialect_parses_with_its_registers_conditions_and_flags() {
 #[test]
 fn the_arm64_forms_read_and_cover_the_selection_gaps() {
     let dialect = Dialect::parse(include_str!("../src/instructions/dialect.toml")).expect("the dialect reads");
-    let forms = llrm_instr::parse(include_str!("../src/instructions/arm64.instr"), &dialect).expect("the forms read");
+    let forms =
+        llrm_target::instr::parse(include_str!("../src/instructions/arm64.instr"), &dialect).expect("the forms read");
     let has = |name: &str| forms.iter().any(|form| form.name == name);
     // Every pattern the gap list names has a form to select.
     for name in

@@ -163,7 +163,7 @@ fn _integer_stores(
                     ),
             )
     };
-    if !body.insns().iter().any(converts) {
+    if !body.iter_insns().any(converts) {
         return Ok(body.clone());
     }
     let mut integer_readers: HashSet<u32> = body.pins.keys().copied().collect();
@@ -180,7 +180,7 @@ fn _integer_stores(
         }
     }
     let unknown_readers =
-        body.insns().iter().any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier));
+        body.iter_insns().any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier));
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -449,7 +449,7 @@ pub fn prepared(
     basic_semantics: bool,
 ) -> Result<LirBody, Raised> {
     if _floating_values(body).is_empty()
-        && !body.insns().iter().any(|one| {
+        && !body.iter_insns().any(|one| {
             one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::FloatLoad | Operation::FloatStore))
         })
     {
@@ -485,7 +485,7 @@ fn _compares_clobber(
                     && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10)),
             )
     };
-    if !body.insns().iter().any(|one| compares(one)) {
+    if !body.iter_insns().any(|one| compares(one)) {
         return body.clone();
     }
     let blocks = body
@@ -526,7 +526,7 @@ fn _sequenced(body: &LirBody) -> LirBody {
             _ => None,
         }
     };
-    if !body.insns().iter().any(|one| float_copy(one).is_some()) {
+    if !body.iter_insns().any(|one| float_copy(one).is_some()) {
         return body.clone();
     }
     let mut fresh = body.next_value();
