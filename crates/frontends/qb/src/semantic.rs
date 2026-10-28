@@ -8980,7 +8980,11 @@ impl Compiler {
     ) -> Result<Operand, SemanticError> {
         let Some(check) = intrinsics::argument_check(routine) else { return Ok(operand) };
         if std::env::var_os("QB_POC_CHK").is_some() && check.range != intrinsics::Range::AbsAbove {
-            let name = match routine { "fln" => "B$CHKLOG", "fexp" => "B$CHKEXP", _ => "B$CHKEX2" };
+            let name = match routine {
+                "fln" => "B$CHKLOG",
+                "fexp" => "B$CHKEXP",
+                _ => "B$CHKEX2",
+            };
             let result = self.value(type_id);
             self.emit_runtime_call(name, vec![result], vec![operand]);
             return Ok(Operand::Value(result));
