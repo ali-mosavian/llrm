@@ -1311,6 +1311,7 @@ define i16 @f(i16 %x) {
         .filter(|w| matches!(w.name.as_deref(), Some("sar" | "shr")))
         .count();
     assert_eq!(shifts, 2, "{:?}", done.body.insns());
+}
 
 /// The pin's `(i16 0)` is the low part of a `MOV32r0`: `xor edi, edi` at m32,
 /// 2 bytes. Narrowed to a word (`xor di, di`, 66-prefixed) it grew 1 B per
