@@ -74,6 +74,10 @@ pub enum ISD {
     UMin,
     UMax,
     Abs,
+    /// `ASSERT_ZEXT` / `ASSERT_SEXT`: the value's bits above the type in
+    /// operand 1 are zero / copies of its sign bit. Selection drops them.
+    AssertZext,
+    AssertSext,
     /// `ABS_MIN_POISON`: `abs` whose minimum value is poison.
     AbsMinPoison,
     PtrAdd,
@@ -157,6 +161,8 @@ pub enum ISD {
 
     Load,
     Store,
+    /// `ATOMIC_SWAP`: `(chain, ptr, value)` to the old value and a chain.
+    AtomicSwap,
     CallSeqStart,
     CallSeqEnd,
     DynamicStackAlloc,
@@ -238,6 +244,8 @@ impl ISD {
             UMin => "umin",
             UMax => "umax",
             Abs => "abs",
+            AssertZext => "assertzext",
+            AssertSext => "assertsext",
             AbsMinPoison => "abs_min_poison",
             PtrAdd => "ptradd",
             And => "and",
@@ -316,6 +324,7 @@ impl ISD {
             BrInd => "brind",
             Load => "load",
             Store => "store",
+            AtomicSwap => "atomic_swap",
             CallSeqStart => "callseq_start",
             CallSeqEnd => "callseq_end",
             DynamicStackAlloc => "dynamic_stackalloc",

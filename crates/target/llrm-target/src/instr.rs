@@ -253,7 +253,7 @@ fn implicit(
     text.split(',')
         .map(|entry| {
             let root = entry.trim_start_matches('-').split('@').next().unwrap_or("").trim_end_matches('*');
-            if ["rep", "idiom", "count", "self", "narrow", "same"].contains(&entry) {
+            if ["rep", "idiom", "count", "self", "narrow", "same", "cond"].contains(&entry) {
                 return Ok(entry.to_owned());
             }
             let width = entry.split_once('@').map(|(_, width)| width);

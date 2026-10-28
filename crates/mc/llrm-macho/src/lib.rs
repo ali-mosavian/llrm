@@ -107,6 +107,9 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
         Role::Debug(_) => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
+        Role::Unwind => {
+            return Err(unsupported(format!("{}: Mach-O unwind is __compact_unwind and __eh_frame", section.name)));
+        }
     })
 }
 

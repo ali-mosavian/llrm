@@ -227,6 +227,9 @@ pub struct SelectionDAG {
     /// Per node, the nodes that have read one of its results (may hold
     /// stale or repeated entries; `users` filters them).
     uses: Vec<Vec<u32>>,
+    /// Whether a node's use list was pushed out of order: a sorted one is
+    /// walked in place without checking it again for each query.
+    uses_unsorted: Vec<bool>,
     cse: Cse,
     /// Nodes `delete_dead` removed: they stay in the arena but no longer
     /// count as users.
@@ -240,6 +243,16 @@ pub struct SelectionDAG {
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
     pub lines: Vec<Option<crate::model::lir::SrcLoc>>,
+    /// The IR instruction each `IROrder` was made for, in order: what a
+    /// debug record's `before` names.
+    pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,
+
+    /// The (low, high) halves type legalization expanded each integer value
+    /// into (`ExpandedIntegers`): where a debug record's value went.
+    pub expanded_integers: std::collections::HashMap<SDValue, (SDValue, SDValue)>,
+    /// Each value `replace_all_uses_with` replaced, by what replaced it: where
+    /// a debug record's value went (`transferDbgValues`).
+    forwarded: std::collections::HashMap<SDValue, SDValue>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,
@@ -324,11 +337,15 @@ impl SelectionDAG {
         let mut dag = SelectionDAG {
             nodes: Vec::new(),
             uses: Vec::new(),
+            uses_unsorted: Vec::new(),
             cse: Cse::default(),
             deleted: Vec::new(),
             dead_work: Vec::new(),
             cur_order: 0,
             lines: Vec::new(),
+            inst_order: Vec::new(),
+            expanded_integers: Default::default(),
+            forwarded: Default::default(),
             replacements: Vec::new(),
             config,
             entry: zero,
@@ -382,6 +399,31 @@ impl SelectionDAG {
             .sum()
     }
 
+    /// `use_count(node)` or `cap`, whichever is less: it stops reading the
+    /// use list there (`hasNUsesOrMore`/`hasOneUse` walk two entries, not all).
+    pub fn use_count_up_to(
+        &self,
+        node: u32,
+        cap: usize,
+    ) -> usize {
+        let mut seen = 0;
+        for user in self.live_users(node) {
+            seen += self.nodes[user as usize].ops.iter().filter(|op| op.node == node).count();
+            if seen >= cap {
+                return cap;
+            }
+        }
+        seen
+    }
+
+    /// `SDNode::hasOneUse`.
+    pub fn has_one_use(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.use_count_up_to(node, 2) == 1
+    }
+
     /// The live nodes that read any result of `node`, in creation order, once
     /// each; the use list is usually sorted already and is then walked in
     /// place.
@@ -390,9 +432,11 @@ impl SelectionDAG {
         node: u32,
     ) -> LiveUsers<'_> {
         let list = self.uses.get(node as usize).map_or(&[][..], Vec::as_slice);
-        let inner = if list.windows(2).all(|pair| pair[0] <= pair[1]) {
+        let inner = if !self.uses_unsorted.get(node as usize).copied().unwrap_or(false) {
             UserList::Sorted(list.iter())
         } else {
+            #[cfg(test)]
+            USERS_SORTED.with(|n| n.set(n.get() + list.len()));
             let mut sorted = list.to_vec();
             sorted.sort_unstable();
             sorted.dedup();
@@ -523,8 +567,20 @@ impl SelectionDAG {
     ) {
         for at in 0..self.nodes[user as usize].ops.len() {
             let operand = self.nodes[user as usize].ops[at].node as usize;
-            self.uses[operand].push(user);
+            self.push_use(operand, user);
         }
+    }
+
+    fn push_use(
+        &mut self,
+        node: usize,
+        user: u32,
+    ) {
+        let list = &mut self.uses[node];
+        if list.last().is_some_and(|&last| last > user) {
+            self.uses_unsorted[node] = true;
+        }
+        list.push(user);
     }
 
     /// The hash `node` is filed under; none for a node with glue.
@@ -641,6 +697,22 @@ impl SelectionDAG {
         std::mem::take(&mut self.replacements)
     }
 
+    /// `value` as the nodes built from it left it: followed through every
+    /// replacement.
+    pub fn resolve(
+        &self,
+        mut value: SDValue,
+    ) -> SDValue {
+        // The chain has no cycle: a value is replaced by a later one.
+        for _ in 0..self.forwarded.len() + 1 {
+            match self.forwarded.get(&value) {
+                Some(&next) if next != value => value = next,
+                _ => break,
+            }
+        }
+        value
+    }
+
     /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
     /// user that then equals an existing node is replaced by it in turn
     /// (`AddModifiedNodeToCSEMaps`); the arena only grows, so replaced nodes
@@ -656,6 +728,7 @@ impl SelectionDAG {
         }
         let mut work = vec![(from, to)];
         while let Some((from, to)) = work.pop() {
+            self.forwarded.insert(from, to);
             if self.root == from {
                 self.root = to;
             }
@@ -666,7 +739,7 @@ impl SelectionDAG {
                         *op = to;
                     }
                 }
-                self.uses[to.node as usize].push(user);
+                self.push_use(to.node as usize, user);
                 let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
@@ -864,6 +937,7 @@ impl SelectionDAG {
             data,
         });
         self.uses.push(Vec::new());
+        self.uses_unsorted.push(false);
         self.note_uses(index);
         if shareable {
             self.cse_link(cse_hash(opcode, values, ops, &data), index);
@@ -1074,6 +1148,27 @@ impl SelectionDAG {
             self.volatile_accesses.insert(store.node);
         }
         store
+    }
+
+    /// `getAtomic` of `ATOMIC_SWAP`: the old value at `ptr` and a chain,
+    /// `value` stored.
+    pub fn get_atomic_swap(
+        &mut self,
+        chain: SDValue,
+        ptr: SDValue,
+        value: SDValue,
+        info: MemInfo,
+    ) -> SDValue {
+        let vt = self.value_type(value);
+        let swap = self.intern(
+            ISD::AtomicSwap,
+            &[vt, EVT::OTHER],
+            &[chain, ptr, value],
+            SDNodeFlags::default(),
+            NodeData::Mem(info),
+        );
+        self.volatile_accesses.insert(swap.node);
+        swap
     }
 
     /// `getMemBasePlusOffset`: `add ptr, offset` (`PTRADD` only where the
@@ -1475,6 +1570,19 @@ struct LiveUsers<'a> {
     last: Option<u32>,
 }
 
+// The users `LiveUsers` gave out, for a test that a one-use check reads two.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USERS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+// The use-list entries copied and sorted for a query, for a test that a list
+// pushed in order is not.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USERS_SORTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Iterator for LiveUsers<'_> {
     type Item = u32;
 
@@ -1489,6 +1597,8 @@ impl Iterator for LiveUsers<'_> {
             }
             self.last = Some(user);
             if !self.dag.is_deleted(user) && self.dag.nodes[user as usize].ops.iter().any(|op| op.node == self.node) {
+                #[cfg(test)]
+                USERS_READ.with(|n| n.set(n.get() + 1));
                 return Some(user);
             }
         }

@@ -32,6 +32,9 @@ pub enum Role {
     /// Pointers to the functions the loader calls before `main`, in order
     /// (`llvm.global_ctors`): `__mod_init_func`, `.init_array`.
     InitFunctions,
+    /// The unwind information of the functions (`.eh_frame`), which only the
+    /// format's unwind writer makes.
+    Unwind,
 }
 
 /// What a fixup patches (LLVM's `MCFixupKind`): an open number. The generic
@@ -304,6 +307,19 @@ pub struct Object {
     /// that names it. Indices into `sections`.
     pub omf_comdat: Vec<usize>,
     pub debug: Option<debug::Info>,
+    /// How to find each function's caller (`.eh_frame`'s source), whether or
+    /// not `-g` is on. Empty where the format has none or nothing declared it.
+    pub frames: Vec<Frame>,
+}
+
+/// A function's unwind rows: its code's place and how the canonical frame
+/// address and the saved registers change along it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Frame {
+    pub section: usize,
+    pub offset: usize,
+    pub length: usize,
+    pub rows: Vec<debug::FrameRow>,
 }
 
 /// What a target says of the object files it writes, so the code that holds an

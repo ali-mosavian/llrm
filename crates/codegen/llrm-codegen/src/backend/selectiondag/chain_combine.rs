@@ -30,8 +30,9 @@ use super::dag::{NodeData, Rauw, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
 
-/// `GatherAllAliasesMaxDepth`.
-const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 6;
+/// `GatherAllAliasesMaxDepth`: 18, `TargetLoweringBase`; x86 does not set its
+/// own.
+const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 18;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// The bytes a load or store moves, and its memory info.
@@ -198,7 +199,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         while self.dag.opcode(self.dag.operand(last, 0)) == ISD::Store {
             let chain = self.dag.operand(last, 0);
             // More than one use: the memory operations cannot be reordered.
-            if self.dag.use_count(chain.node) != 1 {
+            if !self.dag.has_one_use(chain.node) {
                 break;
             }
             let (_, length, chain_info) = self.access(chain)?;

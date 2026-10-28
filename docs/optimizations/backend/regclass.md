@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regclass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regclass.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regclass.rs sha256:d2834c4c20011865dde03d47f96127762f546831d418c466f1026b66284592de -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regclass.rs sha256:1df13b62f94150e7d5269048c9b0d79a840a66e0af283432e909dbb554b37967 -->
 
 # regclass
 
@@ -92,7 +92,7 @@ from `ssaspill` to `coalesce`.
 ## Provides
 One answer to "which registers may this value be in", owned here (#441).
 Read by `crate::backend::ssaspill`, [`crate::backend::allocate`](allocate.md),
-[`crate::backend::coalesce`](coalesce.md), [`crate::backend::constrain`](constrain.md),
+`crate::coalescer::pass`, [`crate::backend::constrain`](constrain.md),
 and `target.rs`.
 
 ## Needs

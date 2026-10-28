@@ -35,7 +35,7 @@
 2 crates/codegen/llrm-codegen/src/backend/isel/wide.rs
 1 crates/codegen/llrm-codegen/src/backend/leaopt.rs
 6 crates/codegen/llrm-codegen/src/backend/machinecp.rs
-16 crates/codegen/llrm-codegen/src/backend/masm.rs
+15 crates/codegen/llrm-codegen/src/backend/masm.rs
 21 crates/codegen/llrm-codegen/src/backend/mirprint.rs
 6 crates/codegen/llrm-codegen/src/backend/peep/guards.rs
 4 crates/codegen/llrm-codegen/src/backend/peep/make.rs
@@ -54,7 +54,7 @@
 60 crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/opcodes.rs
 1 crates/codegen/llrm-codegen/src/backend/selectiondag/schedule.rs
-4 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
+2 crates/codegen/llrm-codegen/src/backend/selectiondag/x86_lowering.rs
 1 crates/codegen/llrm-codegen/src/backend/slots.rs
 2 crates/codegen/llrm-codegen/src/backend/storecombine.rs
 1 crates/codegen/llrm-codegen/src/backend/upperzero.rs
@@ -91,7 +91,6 @@
 2 crates/support/llrm-support/src/pyrepr.rs
 1 crates/support/llrm-support/src/pyset.rs
 7 tools/analysis/runtime_writes.py
-2 tools/targets/arm64_fuzz.py
 1 tools/bench/flatcount.py
 3 tools/bench/maps.py
 2 tools/debug-matrix.py
@@ -109,7 +108,8 @@
 9 tools/loops/oracle.py
 9 tools/loops/quality.py
 1 tools/loops/run.py
-4 tools/targets/msp430.py
 1 tools/pairs/bench_pin.py
 1 tools/pairs/pinclocks.sh
 1 tools/pairs/pindiff.py
+2 tools/targets/arm64_fuzz.py
+4 tools/targets/msp430.py

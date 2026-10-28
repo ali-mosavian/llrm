@@ -1693,8 +1693,8 @@ b1:
             "shr ecx, 22",
             "xor ebx, ebx",
             "add ecx, eax",
-            "adc edx, ebx",
-            "shrd ecx, edx, 10",
+            "adc ebx, edx",
+            "shrd ecx, ebx, 10",
             "shld edx, ecx, 16",
             "mov ax, cx",
             "pop bp",
@@ -7074,4 +7074,30 @@ fn test_an_opcode_is_searched_for_once() {
     assembled(&text);
     let scans = crate::backend::isel::OPCODE_SCANS.with(std::cell::Cell::get);
     assert!(scans < 40, "{scans}");
+}
+
+/// QCport viewfx `bob > 4.0f`: the constant was pushed, the pair swapped and
+/// popped (`fld K; fxch; fcom; fstp st(1)`, 8 bytes) where `fcom dword ptr
+/// [K]` compares it in place. A float load only a compare reads is that
+/// compare's memory operand, as the arithmetic's is.
+#[test]
+fn test_a_float_load_only_a_compare_reads_is_its_memory_operand() {
+    let text = "define float @g(float %x) addrspace(1) {
+entry:
+  %c = fcmp ogt float %x, 4.0
+  br i1 %c, label %hi, label %mid
+hi:
+  ret float 4.0
+mid:
+  %d = fcmp olt float %x, -7.0
+  br i1 %d, label %lo, label %out
+lo:
+  ret float -7.0
+out:
+  ret float %x
+}
+";
+    let listing = listing_on("486", text, "g");
+    assert!(listing.iter().any(|line| line.starts_with("fcom dword ptr")), "{listing:?}");
+    assert!(!listing.iter().any(|line| line.starts_with("fxch")), "{listing:?}");
 }
