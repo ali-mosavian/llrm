@@ -872,7 +872,13 @@ fn a_floor_intrinsic_is_a_call_of_floor() {
                 define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("call ") && line.contains("floor")), "{listing}");
+    // the DAG default, as the pin does, jumps to the libcall at a return
+    assert!(
+        listing
+            .lines()
+            .any(|line| ["call ", "jmp "].iter().any(|op| line.trim().starts_with(op)) && line.contains("floor")),
+        "{listing}"
+    );
 }
 
 /// `__builtin_prefetch` is `llvm.prefetch`; the 386/486 have no instruction for
@@ -1089,7 +1095,9 @@ fn m16_library_calls_are_the_watcom_register_convention() {
     for name in ["atan2_", "strlen_", "printf_", "getch_", "ceil_"] {
         assert!(listing.contains(&format!("call {name}")), "{name}: {listing}");
     }
-    assert!(listing.contains("call _mine@3"), "{listing}");
+    // `mine` is in return position: the DAG default jumps to it, as the pin
+    // does
+    assert!(listing.contains("call _mine@3") || listing.contains("jmp _mine@3"), "{listing}");
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,
