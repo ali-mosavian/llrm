@@ -439,7 +439,21 @@ pub fn emit_in(
     for unit in units {
         for &node in unit.nodes.iter().rev() {
             let before = emitter.blocks.last().map_or(0, |block| block.insns.len());
+            let (first_block, order) =
+                (emitter.blocks.len().saturating_sub(1), dag.node(SDValue { node, res: 0 }).order);
             emitter.node(node)?;
+            // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
+            // instruction's line.
+            if let Some(&line) = dag.lines.get(order as usize).filter(|line| **line != 0) {
+                for (at, block) in emitter.blocks.iter_mut().enumerate().skip(first_block) {
+                    let from = if at == first_block { before } else { 0 };
+                    for one in &mut block.insns[from..] {
+                        if one.line.is_none() {
+                            *one = Arc::new(Insn { line: Some(line), ..(**one).clone() });
+                        }
+                    }
+                }
+            }
             if dag.invariant_loads.contains(&node) {
                 emitter.mark_invariant_loads(before);
             }

@@ -51,6 +51,10 @@ impl Builder<'_> {
                 let product = self.dag.get_node_flags(ISD::FMul, dest, &[first, second], flags);
                 self.dag.get_node_flags(ISD::FAdd, dest, &[product, third], flags)
             }
+            Intrinsic::CopySign => {
+                let second = self.get_value(instruction.operands[1])?;
+                self.dag.get_node(ISD::FCopySign, dest, &[first, second])
+            }
             Intrinsic::Fixed { divide: false } => {
                 let second = self.get_value(instruction.operands[1])?;
                 let scale = self.get_value(instruction.operands[2])?;

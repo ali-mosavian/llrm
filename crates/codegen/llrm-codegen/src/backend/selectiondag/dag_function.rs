@@ -288,8 +288,10 @@ fn modelled(
         return Err("QB runtime routine that returns to an inline table");
     }
     // The callee pops all it was pushed (16/32-bit routines), or the caller
-    // pops it and the routine cleans nothing (SysV, where QB calls are C).
-    if contract.cleanup != Some(plan.popped) || (plan.popped != pushed && plan.popped != 0) {
+    // pops it and the routine cleans nothing (SysV, where QB calls are C). As
+    // the old selector reads it: the caller removes `caller_cleanup` bytes and
+    // the callee the rest, whatever its 16-bit table block declares.
+    if pushed - contract.caller_cleanup != plan.popped || (plan.popped != pushed && plan.popped != 0) {
         return Err("QB runtime routine whose stack cleanup the convention does not model");
     }
     Ok(if contract.flags_result { RuntimeAnswer::Flags } else { RuntimeAnswer::Registers })

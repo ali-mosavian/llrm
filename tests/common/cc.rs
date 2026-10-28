@@ -8,7 +8,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 
 /// A `Command` for `llrm-cc`, built as `llrm-c`'s was: the target is chosen
@@ -100,18 +100,30 @@ impl LlrmC {
 
     fn command(&mut self) -> Command {
         let wide = self.arguments.iter().any(|one| one == "-m32");
-        // llrm-c only ever wrote an object, to any `-o`; llrm-cc links unless
-        // told `-c` (or `-S`, `-E`).
-        let object = !self.arguments.iter().any(|one| one == "-c" || one == "-S" || one == "-E");
+        // llrm-c chose by the output's extension: `-o x.obj` compiled, `-o
+        // x.asm` wrote the listing; llrm-cc links unless told `-c` or
+        // `-S`.
+        let stops = self.arguments.iter().any(|one| one == "-c" || one == "-S" || one == "-E");
+        let output = self.arguments.iter().position(|one| one == "-o").and_then(|at| self.arguments.get(at + 1));
+        let extension =
+            output.and_then(|path| Path::new(path).extension()).map(|one| one.to_string_lossy().to_ascii_lowercase());
+        let stop = match extension.as_deref() {
+            _ if stops => None,
+            Some("obj" | "o") => Some("-c"),
+            Some("asm" | "s") => Some("-S"),
+            _ => None,
+        };
         let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
         command
             .env("LLRM_CC_TARGET", if wide { "x86_32-wat" } else { "x86_16-wat" })
-            .args(object.then_some("-c"))
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
-            .envs(self.environment.iter().map(|(key, value)| (key, value)));
+            .args(stop);
+        // In the order they were asked, as `Command` does: a removal beside a
+        // later `env` of the same key must not win over it.
         for key in &self.removed {
             command.env_remove(key);
         }
+        command.envs(self.environment.iter().map(|(key, value)| (key, value)));
         if let Some(directory) = &self.directory {
             command.current_dir(directory);
         }
