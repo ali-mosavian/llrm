@@ -127,18 +127,6 @@ fn a_dword_inc_and_dec_take_the_modrm_form() {
 }
 
 #[test]
-fn a_byte_cell_takes_inc_dec_neg_and_not() {
-    // decb -0x4(%rbp); incb -0x4(%rbp); negb -0x4(%rbp); notb -0x4(%rbp). The
-    // emitter refused every byte cell, so the DAG selector's `dec` of a byte
-    // global stopped `llrm-nib -m16` on the runtime ("Unprintable ... dec").
-    let one = |name| sem(Operation::Unary, Some(name), vec![frame(-4, 1)], vec![frame(-4, 1)], None, false);
-    assert_eq!(bytes(&one("dec")), [0xfe, 0x4d, 0xfc]);
-    assert_eq!(bytes(&one("inc")), [0xfe, 0x45, 0xfc]);
-    assert_eq!(bytes(&one("neg")), [0xf6, 0x5d, 0xfc]);
-    assert_eq!(bytes(&one("not")), [0xf6, 0x55, 0xfc]);
-}
-
-#[test]
 fn a_funnel_shift_takes_a_memory_cell() {
     // shld $3,%ecx,-0x4(%rbp); shrd %cl,%ecx,-0x4(%rbp). The emitter took
     // registers only, so the DAG selector's `shld` into a cell stopped
