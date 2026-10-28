@@ -223,7 +223,7 @@ impl Selector<'_> {
         let value = match op {
             BinaryOp::Add | BinaryOp::Sub => self.add_sub(op == BinaryOp::Sub, bits, lhs, rhs)?,
             BinaryOp::And | BinaryOp::Or | BinaryOp::Xor => self.logic(op, bits, lhs, rhs)?,
-            BinaryOp::Mul => self.multiply(bits, lhs, rhs)?,
+            BinaryOp::Mul => self.multiply(bits, lhs, rhs, result)?,
             BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => self.shift(op, bits, lhs, rhs)?,
             BinaryOp::UDiv | BinaryOp::SDiv => {
                 let signed = op == BinaryOp::SDiv;
@@ -454,6 +454,7 @@ impl Selector<'_> {
         bits: u32,
         lhs: Src,
         rhs: Src,
+        result: Option<llrm_mir::ValueId>,
     ) -> Selected<G> {
         let width = width_of(bits);
         let (lhs, rhs) = match (&lhs, &rhs) {
@@ -469,42 +470,133 @@ impl Selector<'_> {
                 self.shift_left_immediate(width, rd, a.reg, shift);
                 return Ok(G { reg: rd, bits, known });
             }
-            // `x * (2^k + 1)` and `x * (2^k - 1)` by one shifted add or
-            // subtract.
-            let a_shift = |plus: u64| plus.is_power_of_two().then(|| plus.trailing_zeros());
-            if let Some(k) = a_shift(value.wrapping_sub(1)) {
-                let a = self.gpr_of(lhs)?;
-                self.inst(Inst::AddSubShifted {
-                    op: AddSub { subtract: false, set_flags: false },
-                    width,
-                    rd,
-                    rn: a.reg,
-                    rm: a.reg,
-                    shift: Shift::Lsl,
-                    amount: k as u8,
-                });
-                return Ok(G { reg: rd, bits, known });
-            }
-            if let Some(k) = a_shift(value.wrapping_add(1) & mask(bits)) {
-                let a = self.gpr_of(lhs)?;
-                // rd = (a << k) - a
-                let shifted = self.mf.gpr();
-                self.shift_left_immediate(width, shifted, a.reg, k);
-                self.inst(Inst::AddSubShifted {
-                    op: AddSub { subtract: true, set_flags: false },
-                    width,
-                    rd,
-                    rn: shifted,
-                    rm: a.reg,
-                    shift: Shift::Lsl,
-                    amount: 0,
-                });
+            let a = self.gpr_of(lhs.clone())?;
+            let signed = llrm_mir::context::signed(value as u128, bits);
+            if !self.left_for_an_add(result, signed) && self.multiply_by_constant(bits, width, rd, a.reg, signed) {
                 return Ok(G { reg: rd, bits, known });
             }
         }
         let (a, b) = (self.gpr_of(lhs)?, self.gpr_of(rhs)?);
         self.inst(Inst::ThreeSource { op: Mul3::Madd, width, rd, rn: a.reg, rm: b.reg, ra: Gpr::R31 });
         Ok(G { reg: rd, bits, known })
+    }
+
+    /// A product with a shift left in it (`c` even) that one `add` or `sub`
+    /// reads is left a multiply: `performMulCombine` keeps it for the
+    /// `madd` or `msub` the add may fold into.
+    ///
+    /// DEVIATE: the pin spares a user that is only a memory address; an
+    /// integer `add` here is never one.
+    fn left_for_an_add(
+        &self,
+        result: Option<llrm_mir::ValueId>,
+        c: i128,
+    ) -> bool {
+        if c == 0 || c.trailing_zeros() == 0 {
+            return false;
+        }
+        let Some(result) = result.filter(|&result| self.use_count(result) == 1) else { return false };
+        self.function
+            .users(result)
+            .into_iter()
+            .next()
+            .is_some_and(
+                |user| matches!(
+                    self.function.instruction(user.user).opcode,
+                    llrm_mir::Opcode::Binary(BinaryOp::Add | BinaryOp::Sub)
+                ),
+            )
+    }
+
+    /// `performMulCombine`'s shift-and-add forms of `a * c`, as the pin
+    /// emits them: `(2^n + 1) * 2^m`, `2^n - 1`, `(2^n - 1) * 2^m` and the
+    /// negatives of those; false where `c` is none of them.
+    ///
+    /// DEVIATE: the `hasALULSLFast` forms (`(2^m + 1) * (2^n + 1)` and the
+    /// like, apple cores) are not made. Exit: the subtarget's features in the
+    /// selector.
+    fn multiply_by_constant(
+        &mut self,
+        bits: u32,
+        width: Width,
+        rd: Gpr,
+        a: Gpr,
+        c: i128,
+    ) -> bool {
+        if c == 0 {
+            return false;
+        }
+        let trailing = c.trailing_zeros();
+        let shifted = c >> trailing;
+        let log2 = |one: i128| (one > 0 && (one & (one - 1)) == 0).then(|| one.trailing_zeros());
+        let add_shifted = |this: &mut Self, rd: Gpr, rn: Gpr, rm: Gpr, subtract: bool, amount: u32| {
+            this.inst(Inst::AddSubShifted {
+                op: AddSub { subtract, set_flags: false },
+                width,
+                rd,
+                rn,
+                rm,
+                shift: Shift::Lsl,
+                amount: amount as u8,
+            });
+        };
+        let fits = |amount: u32| amount < bits;
+        if c > 0 {
+            if let Some(n) = log2(shifted - 1).filter(|&n| fits(n) && fits(trailing)) {
+                // (x + (x << n)) << m
+                let sum = if trailing == 0 { rd } else { self.mf.gpr() };
+                add_shifted(self, sum, a, a, false, n);
+                if trailing != 0 {
+                    self.shift_left_immediate(width, rd, sum, trailing);
+                }
+                return true;
+            }
+            if let Some(n) = log2(c + 1).filter(|&n| fits(n)) {
+                let high = self.mf.gpr();
+                self.shift_left_immediate(width, high, a, n);
+                add_shifted(self, rd, high, a, true, 0);
+                return true;
+            }
+            if let Some(n) = log2(shifted + 1).map(|n| n + trailing).filter(|&n| fits(n)) {
+                // (x << n) - (x << m)
+                let high = self.mf.gpr();
+                self.shift_left_immediate(width, high, a, n);
+                if trailing == 0 {
+                    add_shifted(self, rd, high, a, true, 0);
+                } else {
+                    let low = self.mf.gpr();
+                    self.shift_left_immediate(width, low, a, trailing);
+                    add_shifted(self, rd, high, low, true, 0);
+                }
+                return true;
+            }
+            return false;
+        }
+        if let Some(n) = log2(1 - c).filter(|&n| fits(n)) {
+            // x - (x << n)
+            add_shifted(self, rd, a, a, true, n);
+            return true;
+        }
+        if let Some(n) = log2(-c - 1).filter(|&n| fits(n)) {
+            // -((x << n) + x)
+            let sum = self.mf.gpr();
+            add_shifted(self, sum, a, a, false, n);
+            add_shifted(self, rd, Gpr::R31, sum, true, 0);
+            return true;
+        }
+        if let Some(n) = log2(1 - shifted).map(|n| n + trailing).filter(|&n| fits(n)) {
+            // (x << m) - (x << n)
+            let low = if trailing == 0 {
+                a
+            } else {
+                let low = self.mf.gpr();
+                self.shift_left_immediate(width, low, a, trailing);
+                low
+            };
+            add_shifted(self, rd, low, a, true, n);
+            return true;
+        }
+        false
     }
 
     /// `rd = rn << shift` (`lsl` is `ubfm`).
