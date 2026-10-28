@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_logic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_logic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:9a20750114fa4d4b6dcdbe524135dab37c5c31e29c55f4c06b28cef90778b0b0 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:9e6a0ae523eed44a63f77a2cdb268b1808f84f66ecd2b8aece2141f6225f1914 -->
 
 # combine_icmp_logic
 
@@ -49,7 +49,8 @@ yet: `foldAndOrOfICmpEqConstantAndICmp`, `foldAndOrOfICmpsWithConstEq`,
 `foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`,
 `foldUnsignedUnderflowCheck`, `foldAndOrOfICmpsWithPow2AndWithZero`, the
 `trunc`/`and` fold and the `isnormal` fold; `simplifyRangeCheck` and
-`foldAndOrOfICmpsUsingRanges` are in `combine_icmp_ranges`; also `foldLogicOfFCmps` and `foldEqOfParts`.
+`foldAndOrOfICmpsUsingRanges` are in `combine_icmp_ranges`; also
+`foldLogicOfFCmps` and `foldEqOfParts`.
 
 ## Used by
 `visit_and` and `visit_or` (the bitwise forms).

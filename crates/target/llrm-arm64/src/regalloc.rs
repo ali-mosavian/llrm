@@ -8,6 +8,8 @@
 //! rematerializes it: `TargetInstrInfo::isReMaterializable`). So is a chain of
 //! such values, each read by the next and by nothing else that could change
 //! it: the `adrp` and the `add` of a global's address are made again together.
+//! A reload of a slot into the scratch register that still holds it (stored or
+//! loaded since, nothing written to it, no call between) is dropped.
 //!
 //! A 128-bit value (one a `q` access names) is spilled and copied whole
 //! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not keep.
@@ -482,6 +484,7 @@ fn rewrite(
     unused: &HashSet<Reg>,
     wide: &HashSet<Reg>,
 ) {
+    let spill_slots: HashSet<u32> = spilled.values().copied().collect();
     for block in &mut function.blocks {
         let mut out = Vec::with_capacity(block.ops.len());
         for mut op in std::mem::take(&mut block.ops) {
@@ -586,8 +589,51 @@ fn rewrite(
                 out.push(spill_access(register, slot, false, quad));
             }
         }
-        block.ops = out;
+        block.ops = forward_spills(out, &spill_slots);
     }
+}
+
+/// Drops the reload of a spill slot into a register that still holds what was stored to it or loaded from
+/// it since: `str x15, [slot]` then `ldr x15, [slot]` with nothing writing `x15` between. Only the
+/// allocator's own slots, which nothing else writes; a call forgets everything.
+fn forward_spills(
+    ops: Vec<Op>,
+    spill_slots: &HashSet<u32>,
+) -> Vec<Op> {
+    let spill = |op: &Op| -> Option<(Reg, u32, u8, bool)> {
+        let (Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset: 0 }, .. })
+        | Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset: 0 }, .. })) = op
+        else {
+            return None;
+        };
+        let (register, bytes) = match mem {
+            Memory::Int { reg, bytes, .. } => (Reg::Gpr(*reg), *bytes),
+            Memory::Fp { reg, bytes } => (Reg::Fpr(*reg), *bytes),
+        };
+        (spill_slots.contains(slot)).then(|| (register, *slot, bytes, matches!(op, Op::I(Inst::Load { .. }))))
+    };
+    let mut held: HashMap<Reg, (u32, u8)> = HashMap::new();
+    let mut out = Vec::with_capacity(ops.len());
+    for op in ops {
+        if matches!(op, Op::Call { .. }) {
+            held.clear();
+        } else if let Some((register, slot, bytes, is_load)) = spill(&op) {
+            if is_load {
+                if held.get(&register) == Some(&(slot, bytes)) {
+                    continue;
+                }
+            } else {
+                held.retain(|_, (held_slot, _)| *held_slot != slot);
+            }
+            held.insert(register, (slot, bytes));
+        } else {
+            for register in op.defs_and_uses().0 {
+                held.remove(&register);
+            }
+        }
+        out.push(op);
+    }
+    out
 }
 
 /// Whether making `register` (a candidate) at each use costs less than
@@ -755,6 +801,49 @@ mod tests {
             .flat_map(|block| &block.ops)
             .filter(|op| matches!(op, Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, .. }, .. } | Inst::Store { mem: Memory::Fp { bytes: 8, .. }, .. })))
             .count()
+    }
+
+    fn add(
+        rd: u32,
+        rn: u32,
+    ) -> Op {
+        Op::I(Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: Gpr(rd),
+            rn: Gpr(rn),
+            imm12: 1,
+            shift12: false,
+        })
+    }
+
+    fn spill_loads(function: &MFunc) -> usize {
+        function.blocks[0]
+            .ops
+            .iter()
+            .filter(|op| matches!(op, Op::I(Inst::Load { addr: Addr::Slot { slot: 1, .. }, .. })))
+            .count()
+    }
+
+    /// A spilled value used by the next operation was stored from `x15` and reloaded into `x15` at
+    /// once (`fin_number`, `str x15, [sp, #40]; ldr x15, [sp, #40]`, twice): the register still held it.
+    #[test]
+    fn a_spilled_value_used_at_once_is_not_reloaded() {
+        let value = Reg::Gpr(Gpr(100));
+        let spilled = HashMap::from([(value, 1)]);
+        let mut function = function(vec![add(100, 0), add(1, 100)]);
+        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(spill_loads(&function), 0, "{:?}", function.blocks[0].ops);
+    }
+
+    /// The register is gone after a call, or once something else is written to it: the reload stays.
+    #[test]
+    fn a_spilled_value_is_reloaded_after_a_call() {
+        let value = Reg::Gpr(Gpr(100));
+        let spilled = HashMap::from([(value, 1)]);
+        let mut function = function(vec![add(100, 0), call(), add(1, 100)]);
+        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        assert_eq!(spill_loads(&function), 1, "{:?}", function.blocks[0].ops);
     }
 
     /// A coalesced phi copy of a spilled double to itself was `ldr d29, [slot]`
