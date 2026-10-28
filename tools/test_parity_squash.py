@@ -1810,6 +1810,24 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+def test_a_scanner_refusal_names_the_prs_and_files_behind_it():
+    """sqb-5378 refused on target_facts with three files and no PR; the owners were found by hand (the file list was the only clue)."""
+    failing = {"integration target_facts::shared_code_holds_no_copy_of_a_target_fact: read the target's description instead of copying it: [crates/codegen/llrm-codegen/src/backend/funnel.rs: 1 copies of a target fact, none allowed; crates/codegen/llrm-codegen/src/backend/latecleanup.rs: 3 copies; tools/other.py: 1]"}
+    members = lambda: {"5424": ["crates/codegen/llrm-codegen/src/backend/funnel.rs"], "5428": ["crates/codegen/llrm-codegen/src/backend/latecleanup.rs", "x.rs"], "5409": ["unrelated.rs"]}
+    got = ps.offender_detail(failing, members)
+    assert got == " [offending files: #5424 crates/codegen/llrm-codegen/src/backend/funnel.rs; #5428 crates/codegen/llrm-codegen/src/backend/latecleanup.rs; no PR of the batch: tools/other.py]", got
+    assert ps.offender_detail({"lib x::t: failed"}, members) == ""
+
+
+def test_a_link_refusal_names_the_prs_touching_the_directory_of_the_file_that_panicked():
+    """sqb-5413's link refusal said `panicked at greedy/spliteditor.rs:125` and no PR; it was #5486's change in the same directory, found by w13's bisect."""
+    unlinked = ["qb arena_type: llrm-c: thread 'main' (2594298) panicked at crates/codegen/llrm-codegen/src/greedy/spliteditor.rs:125:9:"]
+    members = lambda: {"5443": ["crates/codegen/llrm-codegen/src/greedy/spiller.rs"], "5486": ["crates/codegen/llrm-codegen/src/greedy/spill.rs"], "5409": ["crates/x/src/other.rs"]}
+    got = ps.offender_detail(unlinked, members, near=True)
+    assert got == " [offending files: crates/codegen/llrm-codegen/src/greedy/spliteditor.rs: same directory touched by #5443 #5486]", got
+    assert "no PR of the batch" in ps.offender_detail(unlinked, lambda: {"5409": ["crates/x/src/other.rs"]}, near=True)
+
+
 def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
     """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
     (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
