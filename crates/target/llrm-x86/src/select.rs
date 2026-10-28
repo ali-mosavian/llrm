@@ -337,8 +337,12 @@ fn memory_operand(
     // A 16-bit effective address is the sum modulo 64 KB, so a
     // register-relative displacement past a signed word is the same address
     // as its wrap, which is what the two-byte field holds.
-    let displ =
-        if displ_size == 2 && (base != RegId::None || index != RegId::None) { i64::from(displ as i16) } else { displ };
+    // Without a register the word is an absolute offset, held unsigned.
+    let displ = match (displ_size, base != RegId::None || index != RegId::None) {
+        (2, true) => i64::from(displ as i16),
+        (2, false) => i64::from(displ as u16),
+        _ => displ,
+    };
     // iced spells a 32-bit displacement of a 64-bit address as size 8.
     let displ_size = if displ_size == 4 && (base.is_gpr64() || index.is_gpr64()) { 8 } else { displ_size };
     MemoryOperand::new(base.iced(), index.iced(), scale as u32, displ, displ_size, false, overriding(base, seg).iced())

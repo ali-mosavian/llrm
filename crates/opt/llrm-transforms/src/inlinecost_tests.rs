@@ -506,6 +506,20 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::MinSize).1, 5);
 }
 
+/// An `optsize` caller still raises an `inlinehint` callee to the hint
+/// threshold (`OptSizeHintThreshold` = `HintThreshold`, InlineCost.cpp:3394;
+/// opt: threshold 487 hinted, 75 not). `Threshold::for_size` once stated 1.
+#[test]
+fn test_an_inline_hint_still_raises_the_budget_at_an_optsize_caller() {
+    let text = |attrs: &str| {
+        format!(
+            "{GLOBAL}define internal i32 @callee(i32 %x) {attrs} {{\nb0:\n  %a = load i32, ptr @g\n  ret i32 %a\n}}\n\ndefine i32 @f(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n"
+        )
+    };
+    assert_eq!(priced(&text(""), 0, false, CallerSize::OptSize).1, 75);
+    assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::OptSize).1, 487);
+}
+
 /// intrinsics_errors_qb45.bas m32 -O1: the module handler registers the error
 /// handler of the frame that runs it (`onerror(true)`); inlined into a
 /// procedure's pad, the registration belonged to a frame that returns, and the
