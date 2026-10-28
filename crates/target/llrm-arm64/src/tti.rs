@@ -30,7 +30,8 @@
 //!   one`/`ueq` are not seen.
 //! - DEVIATE 6: no instruction context (T4): an extension absorbed by a
 //!   widening user, `isExtFree`, a `fneg` beside an `fmul`, an `icmp` of an
-//!   `and` with zero, an extending load, are not seen free.
+//!   `and` with zero are not seen free; an extending load is, by
+//!   `cast_of_load_cost`.
 //! - DEVIATE 7: the unrolling preferences that read the loop (nesting depth,
 //!   exit blocks, Apple's runtime heuristics, the multi-exit search loops) are
 //!   not reached through the trait.
@@ -282,6 +283,34 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// A `sext`/`zext` of a load is the extending load (`ldrsb`, `ldrh`, ...)
+    /// when the loaded type is a byte, half or word and both types are one
+    /// register (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1297).
+    fn cast_of_load_cost(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        self.ext_load_free(op, dst, src).then_some(Cost::FREE)
+    }
+
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+    ) -> bool {
+        matches!(op, CastKind::SExt | CastKind::ZExt)
+            && matches!(src, Ty::Int(8 | 16 | 32))
+            && matches!(dst, Ty::Int(bits) if bits > bits_of(src))
+            && matches!(
+                (legalize(src), legalize(dst)),
+                (Some(a), Some(b)) if a.count == b.count
+            )
+    }
+
     fn is_type_legal(
         &self,
         ty: Ty,
@@ -304,8 +333,10 @@ impl Tti for AArch64 {
             Some(Some(cost)) => Cost::of(*cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            // A scalar intrinsic with no case of its own (`stacksave`) is "turned into a library call":
-            // BasicTTIImplBase::getTypeBasedIntrinsicInstrCost's `SingleCallCost`.
+            // A scalar intrinsic with no case of its own (`stacksave`) is
+            // "turned into a library call":
+            // BasicTTIImplBase::getTypeBasedIntrinsicInstrCost's
+            // `SingleCallCost`.
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
             None => Cost::of(if kind == CostKind::CodeSize { 1 } else { 10 }),
         }

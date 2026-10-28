@@ -179,3 +179,17 @@ fn a_range_end_that_may_be_negative_is_left_alone() {
         combined("i32 %x, i32 %n", "  %a = icmp sge i32 %x, 0\n  %b = icmp slt i32 %x, %n\n  %r = and i1 %a, %b\n");
     assert_eq!(out.matches("icmp").count(), 2, "{out}");
 }
+
+/// `c == 37 || c == 38 || c == 33 || c == 35` (t3.c's `suffix` test) left
+/// the last two compares apart behind the range: `(A | B) | C` was never
+/// regrouped, so `c == 33 || c == 35` stayed two compares and SimplifyCFG
+/// found no switch to make.
+#[test]
+fn an_or_chain_of_equalities_regroups_to_fold_the_last_pair() {
+    let out = combined(
+        "i8 %c",
+        "  %a = icmp eq i8 %c, 37\n  %b = icmp eq i8 %c, 38\n  %o1 = or i1 %a, %b\n  %d = icmp eq i8 %c, 33\n  %o2 = or i1 %o1, %d\n  %e = icmp eq i8 %c, 35\n  %r = or i1 %o2, %e\n",
+    );
+    assert!(out.contains("and i8 %c, -3") && out.contains("icmp ult i8 %"), "{out}");
+    assert_eq!(out.matches("icmp").count(), 2, "{out}");
+}

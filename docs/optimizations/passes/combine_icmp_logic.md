@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_logic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_logic.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:9e6a0ae523eed44a63f77a2cdb268b1808f84f66ecd2b8aece2141f6225f1914 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_logic.rs sha256:88191bbee51a1f28039f03b79c428fa2321bba3a0c7b8a77715958ea1e67bbdc -->
 
 # combine_icmp_logic
 
@@ -51,6 +51,9 @@ yet: `foldAndOrOfICmpEqConstantAndICmp`, `foldAndOrOfICmpsWithConstEq`,
 `trunc`/`and` fold and the `isnormal` fold; `simplifyRangeCheck` and
 `foldAndOrOfICmpsUsingRanges` are in `combine_icmp_ranges`; also
 `foldLogicOfFCmps` and `foldEqOfParts`.
+
+`reassociateBooleanAndOr` is here: `visit_and` and `visit_or` call it after
+the fold of the pair.
 
 ## Used by
 `visit_and` and `visit_or` (the bitwise forms).

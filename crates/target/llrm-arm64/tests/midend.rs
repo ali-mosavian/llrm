@@ -85,8 +85,9 @@ fn the_page_and_the_offset_of_a_global_plus_offset_agree() {
     assert!(adrp.contains("6896"), "{asm}");
 }
 
-/// `llrm-arm64-llc` had no `-Os`: clang's `-Os` IR (`optsize` functions) went through the -O2
-/// pipeline, so `tests/llc/list.c` came out 452 bytes where the pin's `clang -Os` makes 120.
+/// `llrm-arm64-llc` had no `-Os`: clang's `-Os` IR (`optsize` functions) went
+/// through the -O2 pipeline, so `tests/llc/list.c` came out 452 bytes where the
+/// pin's `clang -Os` makes 120.
 #[test]
 fn the_size_level_makes_smaller_code_than_the_speed_level() {
     let text = include_str!("data/list_optsize.ll");
@@ -95,19 +96,25 @@ fn the_size_level_makes_smaller_code_than_the_speed_level() {
     assert!(driver::Level::parse("s") == Ok(driver::Level::Os) && driver::Level::parse("q").is_err());
 }
 
-/// Every i32 argument was moved with a literal `orr w, wzr, w` the register allocator could not see
-/// through, so `f(int a, int b)` spent two instructions copying its arguments (`tests/llc/call.c`:
-/// 32 bytes where the pin's `clang -O2` makes 20).
+/// Every i32 argument was moved with a literal `orr w, wzr, w` the register
+/// allocator could not see through, so `f(int a, int b)` spent two instructions
+/// copying its arguments (`tests/llc/call.c`: 32 bytes where the pin's `clang
+/// -O2` makes 20).
 #[test]
 fn an_i32_argument_is_used_in_the_register_it_arrives_in() {
     let text = "define i32 @f(i32 %a, i32 %b) {\n  %x = mul i32 %a, %a\n  %y = mul i32 %b, %b\n  %r = add i32 %x, %y\n  ret i32 %r\n}\n";
-    let asm = driver::assembly(&format!("target datalayout = \"{}\"\n{text}", Platform::Darwin.datalayout()), Platform::Darwin, true)
-        .expect("lowers");
+    let asm = driver::assembly(
+        &format!("target datalayout = \"{}\"\n{text}", Platform::Darwin.datalayout()),
+        Platform::Darwin,
+        true,
+    )
+    .expect("lowers");
     assert!(!asm.contains("orr"), "an argument was copied:\n{asm}");
 }
 
-/// `a*b + c` and `c - a*b` were a `mul` and an `add`/`sub`, one instruction more than the `madd`/`msub`
-/// the pin's `clang -O2` makes; of two added products, one is fused and the other stays a `mul`.
+/// `a*b + c` and `c - a*b` were a `mul` and an `add`/`sub`, one instruction
+/// more than the `madd`/`msub` the pin's `clang -O2` makes; of two added
+/// products, one is fused and the other stays a `mul`.
 #[test]
 fn a_product_added_or_subtracted_is_one_multiply_accumulate() {
     let asm = |body: &str, bits: u32| {
@@ -128,26 +135,26 @@ fn a_product_added_or_subtracted_is_one_multiply_accumulate() {
         // The product on the left of a subtract is not an `msub`.
         let neg = asm(&format!("  %m = mul i{bits} %a, %b\n  %r = sub i{bits} %m, %c\n"), bits);
         assert_eq!(mnemonics(&neg), ["madd", "sub", "ret"], "{neg}");
-        let two = asm(
-            &format!("  %m = mul i{bits} %a, %b\n  %n = mul i{bits} %c, %c\n  %r = add i{bits} %m, %n\n"),
-            bits,
-        );
+        let two =
+            asm(&format!("  %m = mul i{bits} %a, %b\n  %n = mul i{bits} %c, %c\n  %r = add i{bits} %m, %n\n"), bits);
         assert_eq!(mnemonics(&two), ["madd", "madd", "ret"], "{two}");
     }
 }
 
-/// A GEP stored through was priced for an 8-byte access, so a `float` store at a scale of 4 cost an
-/// instruction of address arithmetic LLVM does not count, the fill loop of `tests/llc/fsum.c` came to
-/// 162 against a limit of 150 and stayed a loop: 452 bytes where the pin folds `main` to two constants.
+/// A GEP stored through was priced for an 8-byte access, so a `float` store at
+/// a scale of 4 cost an instruction of address arithmetic LLVM does not count,
+/// the fill loop of `tests/llc/fsum.c` came to 162 against a limit of 150 and
+/// stayed a loop: 452 bytes where the pin folds `main` to two constants.
 #[test]
 fn a_float_array_fill_loop_is_unrolled_and_folded() {
     let asm = driver::assembly(include_str!("data/fill_two_arrays.ll"), Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("fmul") && !asm.contains("b."), "the fill loop was left:\n{asm}");
 }
 
-/// `extractvalue (insertvalue (insertvalue poison, c0, 0), c1, 1), 0` was never simplified, so a
-/// struct returned in two registers and read at once kept its `insertvalue`/`extractvalue` chain
-/// and its packing shifts: `tests/llc/structs.c` came to twice the pin's size.
+/// `extractvalue (insertvalue (insertvalue poison, c0, 0), c1, 1), 0` was never
+/// simplified, so a struct returned in two registers and read at once kept its
+/// `insertvalue`/`extractvalue` chain and its packing shifts:
+/// `tests/llc/structs.c` came to twice the pin's size.
 #[test]
 fn a_member_read_from_an_aggregate_built_of_constants_is_the_constant() {
     let mut program =
@@ -157,9 +164,10 @@ fn a_member_read_from_an_aggregate_built_of_constants_is_the_constant() {
     assert!(!after.contains("insertvalue") && !after.contains("extractvalue"), "{after}");
 }
 
-/// A function passed to an inlined helper became the copy's callee without the walk looking again,
-/// so `apply(plus, 6, 7)` left `bl plus` in `main` where the pin folds it to a constant
-/// (`tests/darwin/manyargs.ll`: 296 bytes against 156).
+/// A function passed to an inlined helper became the copy's callee without the
+/// walk looking again, so `apply(plus, 6, 7)` left `bl plus` in `main` where
+/// the pin folds it to a constant (`tests/darwin/manyargs.ll`: 296 bytes
+/// against 156).
 #[test]
 fn a_call_the_inlining_of_a_helper_makes_direct_is_inlined_too() {
     let asm = driver::assembly(include_str!("data/apply_function_pointer.ll"), Platform::Darwin, true).expect("lowers");
@@ -167,8 +175,9 @@ fn a_call_the_inlining_of_a_helper_makes_direct_is_inlined_too() {
     assert_eq!(calls.len(), 1, "only printf is called: {calls:?}");
 }
 
-/// `llvm.fmuladd` of constants were never folded, so `tests/darwin/floats.ll` kept a chain
-/// of `fmadd` on `fmov` constants where the pin prints the results.
+/// `llvm.fmuladd` of constants were never folded, so `tests/darwin/floats.ll`
+/// kept a chain of `fmadd` on `fmov` constants where the pin prints the
+/// results.
 #[test]
 fn a_fused_multiply_add_of_constants_is_a_constant() {
     let text = format!(
@@ -181,10 +190,11 @@ fn a_fused_multiply_add_of_constants_is_a_constant() {
     assert!(!asm.contains("fmadd") && asm.contains("#7.0") && asm.contains("#9.0"), "{asm}");
 }
 
-/// A loop of constant-array reads and divisions feeding one hash was left as a loop: the exit value
-/// of its latch value was never computed by running the loop on constants (`getSCEVAtScope`'s fold
-/// of an instruction whose operands are constant at scope), so `tests/darwin/division.ll` came to
-/// 10640 bytes where the pin's is 284 (its hash loops stayed, unrolled).
+/// A loop of constant-array reads and divisions feeding one hash was left as a
+/// loop: the exit value of its latch value was never computed by running the
+/// loop on constants (`getSCEVAtScope`'s fold of an instruction whose operands
+/// are constant at scope), so `tests/darwin/division.ll` came to 10640 bytes
+/// where the pin's is 284 (its hash loops stayed, unrolled).
 #[test]
 fn a_hash_loop_over_constants_is_computed_at_compile_time() {
     let asm = driver::assembly(include_str!("darwin/division.ll"), Platform::Darwin, true).expect("lowers");
@@ -192,9 +202,10 @@ fn a_hash_loop_over_constants_is_computed_at_compile_time() {
     assert!(lines < 300, "{lines} lines where the pin's is under 100:\n{asm}");
 }
 
-/// A function with a variable-length array was never inlined (`dynamic alloca` refused, the
-/// copy's stack could not be given back), so a VLA helper called with constants stayed a call:
-/// `tests/darwin/vla.ll` came to 488 bytes where the pin's is 204.
+/// A function with a variable-length array was never inlined (`dynamic alloca`
+/// refused, the copy's stack could not be given back), so a VLA helper called
+/// with constants stayed a call: `tests/darwin/vla.ll` came to 488 bytes where
+/// the pin's is 204.
 #[test]
 fn a_function_with_a_variable_length_array_is_inlined_with_the_stack_given_back() {
     let mut program =
@@ -205,17 +216,18 @@ fn a_function_with_a_variable_length_array_is_inlined_with_the_stack_given_back(
     assert!(after.contains("stacksave") && after.contains("stackrestore"), "the stack is bracketed:\n{after}");
 }
 
-/// The same with constants: the array's count is the argument, so the copy's alloca is static and
-/// no loop or call is left.
+/// The same with constants: the array's count is the argument, so the copy's
+/// alloca is static and no loop or call is left.
 #[test]
 fn a_variable_length_array_of_a_constant_size_is_a_frame_slot() {
     let asm = driver::assembly(include_str!("darwin/vla.ll"), Platform::Darwin, true).expect("lowers");
     assert!(!asm.contains("_vla"), "vla was left a function:\n{asm}");
 }
 
-/// The frame was made at entry and the return block shared, so a path that never calls paid for
-/// the frame too: `if (x == 0) return 1; return g(x) + 1;` pushed `x29`/`x30` before testing `x`
-/// where the pin tests first (shrink wrapping).
+/// The frame was made at entry and the return block shared, so a path that
+/// never calls paid for the frame too: `if (x == 0) return 1; return g(x) + 1;`
+/// pushed `x29`/`x30` before testing `x` where the pin tests first (shrink
+/// wrapping).
 #[test]
 fn a_path_that_needs_no_frame_returns_before_the_frame_is_made() {
     let asm = driver::assembly(include_str!("data/early_return.ll"), Platform::Darwin, true).expect("lowers");
@@ -224,9 +236,9 @@ fn a_path_that_needs_no_frame_returns_before_the_frame_is_made() {
     assert!(lines[..first_branch].iter().all(|l| !l.starts_with("sub sp") && !l.starts_with("stp")), "{asm}");
 }
 
-/// `printf("hi\n")`, `printf("%c", x)` and `printf("\n")` with the result unused stayed calls of
-/// `printf` where the pin calls `puts` and `putchar` (`LibCallSimplifier`), each a variadic call
-/// with its stack argument setup.
+/// `printf("hi\n")`, `printf("%c", x)` and `printf("\n")` with the result
+/// unused stayed calls of `printf` where the pin calls `puts` and `putchar`
+/// (`LibCallSimplifier`), each a variadic call with its stack argument setup.
 #[test]
 fn an_unused_printf_of_a_constant_format_is_puts_or_putchar() {
     let asm = driver::assembly(include_str!("data/printf_puts.ll"), Platform::Darwin, true).expect("lowers");
@@ -235,7 +247,8 @@ fn an_unused_printf_of_a_constant_format_is_puts_or_putchar() {
     assert_eq!(asm.matches("_putchar").count(), 2, "{asm}");
 }
 
-/// A `printf` whose result is read is not `puts` (the count differs), and an empty format is no call.
+/// A `printf` whose result is read is not `puts` (the count differs), and an
+/// empty format is no call.
 #[test]
 fn a_printf_whose_result_is_read_stays_and_an_empty_format_goes() {
     let text = include_str!("data/printf_puts.ll").replace(
@@ -247,9 +260,10 @@ fn a_printf_whose_result_is_read_stays_and_an_empty_format_goes() {
     assert_eq!(asm.matches("_printf").count(), 1, "{asm}");
 }
 
-/// A frame of only saved registers took `sub sp` and a separate `stp`, and `add sp` after the
-/// last `ldp`, where the pin pre-indexes the first store and post-indexes the last load: two
-/// instructions more in every such function (`fib`: 116 against 109).
+/// A frame of only saved registers took `sub sp` and a separate `stp`, and `add
+/// sp` after the last `ldp`, where the pin pre-indexes the first store and
+/// post-indexes the last load: two instructions more in every such function
+/// (`fib`: 116 against 109).
 #[test]
 fn a_frame_of_saved_registers_moves_the_stack_pointer_in_the_pair_access() {
     let asm = driver::assembly(include_str!("darwin/fib.ll"), Platform::Darwin, true).expect("lowers");
@@ -258,9 +272,10 @@ fn a_frame_of_saved_registers_moves_the_stack_pointer_in_the_pair_access() {
     assert!(!fib.contains("sub sp") && !fib.contains("add sp"), "{fib}");
 }
 
-/// `return g(x + 1)` marked `tail` was `bl _g` between a frame made and taken down, where the pin
-/// jumps (`b _g`) and needs no frame (`recchop`: 85 instructions against 73). A call marked `notail`,
-/// or whose result is changed before the return, stays a call.
+/// `return g(x + 1)` marked `tail` was `bl _g` between a frame made and taken
+/// down, where the pin jumps (`b _g`) and needs no frame (`recchop`: 85
+/// instructions against 73). A call marked `notail`, or whose result is changed
+/// before the return, stays a call.
 #[test]
 fn a_tail_call_whose_result_is_returned_is_a_jump() {
     let asm = driver::assembly(include_str!("data/tail_call.ll"), Platform::Darwin, true).expect("lowers");
@@ -275,17 +290,19 @@ fn a_tail_call_whose_result_is_returned_is_a_jump() {
     assert!(of("_changed").contains("bl _g"), "{asm}");
 }
 
-/// `paths(n, n)` copied `n` to `x1` and then `x1` back to `x0` (`x0 <- v` came first and ended
-/// `n`'s stay in `x0`), where the pin has the one `mov x1, x0` (`rectwo`).
+/// `paths(n, n)` copied `n` to `x1` and then `x1` back to `x0` (`x0 <- v` came
+/// first and ended `n`'s stay in `x0`), where the pin has the one `mov x1, x0`
+/// (`rectwo`).
 #[test]
 fn an_argument_passed_twice_stays_in_the_register_it_came_in() {
     let asm = driver::assembly(include_str!("data/same_argument_twice.ll"), Platform::Darwin, true).expect("lowers");
     assert_eq!(asm.lines().filter(|l| l.trim().starts_with("orr")).count(), 1, "{asm}");
 }
 
-/// `fprintf(F, "hi")`, `fprintf(F, "%c", x)`, `fprintf(F, "%s", s)`, `fputs("hi", F)` and
-/// `fwrite(s, 1, 1, F)` with the result unused stayed `fprintf`, `fputs` and `fwrite` calls the
-/// pin forms as `fwrite`, `fputc` and `fputs`; `fprintf(F, "%d", x)` is not one of them.
+/// `fprintf(F, "hi")`, `fprintf(F, "%c", x)`, `fprintf(F, "%s", s)`,
+/// `fputs("hi", F)` and `fwrite(s, 1, 1, F)` with the result unused stayed
+/// `fprintf`, `fputs` and `fwrite` calls the pin forms as `fwrite`, `fputc` and
+/// `fputs`; `fprintf(F, "%d", x)` is not one of them.
 #[test]
 fn an_unused_fprintf_fputs_or_fwrite_is_the_cheaper_routine() {
     let asm = driver::assembly(include_str!("data/fprintf_fwrite.ll"), Platform::Darwin, true).expect("lowers");
@@ -295,17 +312,19 @@ fn an_unused_fprintf_fputs_or_fwrite_is_the_cheaper_routine() {
     assert_eq!(asm.matches("_fputs").count(), 1, "{asm}");
 }
 
-/// `return fn(x + 1)` through a pointer was `blr` between a frame made and taken down; the pin
-/// jumps (`br`), its target held where the epilogue leaves it.
+/// `return fn(x + 1)` through a pointer was `blr` between a frame made and
+/// taken down; the pin jumps (`br`), its target held where the epilogue leaves
+/// it.
 #[test]
 fn a_tail_call_through_a_pointer_is_a_register_jump() {
     let asm = driver::assembly(include_str!("data/tail_indirect.ll"), Platform::Darwin, true).expect("lowers");
     assert!(asm.contains("br x") && !asm.contains("blr") && !asm.contains("stp"), "{asm}");
 }
 
-/// `x / y` and `x % y` in different blocks each divided: two `sdiv` where the pin hoists the
-/// division and takes the remainder as `x - (x / y) * y` (`div_constants`: 2228 instructions
-/// against 1424, -147 with the pass). Waits for DivRemPairs (#5085).
+/// `x / y` and `x % y` in different blocks each divided: two `sdiv` where the
+/// pin hoists the division and takes the remainder as `x - (x / y) * y`
+/// (`div_constants`: 2228 instructions against 1424, -147 with the pass). Waits
+/// for DivRemPairs (#5085).
 #[test]
 #[ignore = "needs DivRemPairs (#5085)"]
 fn a_division_and_a_remainder_of_the_same_operands_share_one_divide() {
@@ -318,8 +337,8 @@ fn a_division_and_a_remainder_of_the_same_operands_share_one_divide() {
 /// fill_nest and loop_fusion produced no object.
 #[test]
 fn a_memset_pattern_becomes_a_store_loop() {
-    let asm = driver::assembly(include_str!("data/memset_pattern.ll"), Platform::Darwin, true)
-        .expect("the intrinsic lowers");
+    let asm =
+        driver::assembly(include_str!("data/memset_pattern.ll"), Platform::Darwin, true).expect("the intrinsic lowers");
     assert!(asm.contains("strh"), "{asm}");
 }
 
@@ -467,22 +486,28 @@ define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null
     assert!(!names.contains(&"__pthread_join"), "{names:?}");
 }
 
-/// macOS's `_FORTIFY_SOURCE` headers leave `llvm.objectsize` in the IR, and it was refused as an
-/// intrinsic with no lowering (`os.c`, `block.c` and `video.c` of the QB runtime). An object of unknown
-/// size is all ones, or zero where the minimum is asked.
+/// macOS's `_FORTIFY_SOURCE` headers leave `llvm.objectsize` in the IR, and it
+/// was refused as an intrinsic with no lowering (`os.c`, `block.c` and
+/// `video.c` of the QB runtime). An object of unknown size is all ones, or zero
+/// where the minimum is asked.
 #[test]
 fn objectsize_of_an_unknown_object_is_minus_one_or_zero() {
     let asm = driver::assembly(include_str!("data/objectsize.ll"), Platform::Darwin, true).expect("lowers");
     let body = |name: &str| -> String {
         let start = asm.lines().position(|line| line == format!("{name}:")).expect(name) + 1;
-        asm.lines().skip(start).take_while(|line| line.starts_with('\t') || line.starts_with(".L")).collect::<Vec<_>>().join("\n")
+        asm.lines()
+            .skip(start)
+            .take_while(|line| line.starts_with('\t') || line.starts_with(".L"))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
     assert!(body("_maximum").contains("#-1") || body("_maximum").contains("movn"), "{asm}");
     assert!(body("_minimum").contains("#0") || body("_minimum").contains("xzr"), "{asm}");
 }
 
-/// A `weak` or `linkonce_odr` definition was exported as a strong one: the QB runtime's weak no-op
-/// hooks (`__attribute__((weak))`) were "duplicate symbols" against the real ones at link time.
+/// A `weak` or `linkonce_odr` definition was exported as a strong one: the QB
+/// runtime's weak no-op hooks (`__attribute__((weak))`) were "duplicate
+/// symbols" against the real ones at link time.
 #[test]
 fn a_weak_definition_is_exported_weak() {
     let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
@@ -495,10 +520,11 @@ define void @strong() {\n  ret void\n}\n";
     assert_eq!(binding("_strong"), llrm_object::Binding::Public);
 }
 
-/// A global's address (`adrp` and `add`) used after a call was kept in a callee-saved register, and
-/// when those ran out stored to the frame and loaded back: `text_write` of the QB runtime had 81
-/// stack accesses where the pin's clang has none. Two operations make it, so it is made again at
-/// each use like any one-instruction constant.
+/// A global's address (`adrp` and `add`) used after a call was kept in a
+/// callee-saved register, and when those ran out stored to the frame and loaded
+/// back: `text_write` of the QB runtime had 81 stack accesses where the pin's
+/// clang has none. Two operations make it, so it is made again at each use like
+/// any one-instruction constant.
 #[test]
 fn a_global_address_is_made_again_not_spilled() {
     let asm = driver::assembly(include_str!("data/global_addresses_across_calls.ll"), Platform::Darwin, true)
@@ -507,20 +533,22 @@ fn a_global_address_is_made_again_not_spilled() {
     assert_eq!(spills, 0, "{asm}");
 }
 
-/// Twenty global addresses a loop with a call stores through were all hoisted to its preheader, more
-/// than the callee-saved registers hold, and spilled for the whole loop: `text_write` of the QB
-/// runtime came to 403 instructions where the pin's clang makes 202. A loop hoists as many as fit.
+/// Twenty global addresses a loop with a call stores through were all hoisted
+/// to its preheader, more than the callee-saved registers hold, and spilled for
+/// the whole loop: `text_write` of the QB runtime came to 403 instructions
+/// where the pin's clang makes 202. A loop hoists as many as fit.
 #[test]
 fn a_loop_does_not_hoist_more_addresses_than_it_has_registers_for() {
-    let asm = driver::assembly(include_str!("data/global_addresses_in_a_loop.ll"), Platform::Darwin, true)
-        .expect("lowers");
+    let asm =
+        driver::assembly(include_str!("data/global_addresses_in_a_loop.ll"), Platform::Darwin, true).expect("lowers");
     let spills = asm.lines().filter(|l| l.contains("[sp") && (l.contains("str x") || l.contains("ldr x"))).count();
     assert_eq!(spills, 0, "{asm}");
 }
 
-/// Stores at several offsets from `base + index` each added the offset to the base and used the
-/// register-register form (`add x9, x0, #8; strb w10, [x9, x1]`, three times), where clang adds base and
-/// index once and uses immediate offsets: `lh_alloc` of the QB runtime came to 362 instructions against 90.
+/// Stores at several offsets from `base + index` each added the offset to the
+/// base and used the register-register form (`add x9, x0, #8; strb w10, [x9,
+/// x1]`, three times), where clang adds base and index once and uses immediate
+/// offsets: `lh_alloc` of the QB runtime came to 362 instructions against 90.
 #[test]
 fn accesses_at_several_offsets_from_base_plus_index_share_the_sum() {
     let asm = driver::assembly(include_str!("data/base_index_offsets.ll"), Platform::Darwin, true).expect("lowers");
@@ -528,9 +556,9 @@ fn accesses_at_several_offsets_from_base_plus_index_share_the_sum() {
     assert_eq!(adds, 1, "{asm}");
 }
 
-/// A compare read by two selects and a branch was made a value (`cset`) and each reader tested it
-/// again (`ands w9, #1`): `lh_alloc` of the QB runtime. The pin compares once and the selects and the
-/// branch read the flags.
+/// A compare read by two selects and a branch was made a value (`cset`) and
+/// each reader tested it again (`ands w9, #1`): `lh_alloc` of the QB runtime.
+/// The pin compares once and the selects and the branch read the flags.
 #[test]
 fn a_compare_read_by_selects_and_a_branch_is_made_once_and_not_materialized() {
     let asm = driver::assembly(include_str!("data/select_pair_and_branch.ll"), Platform::Darwin, true).expect("lowers");
@@ -538,16 +566,23 @@ fn a_compare_read_by_selects_and_a_branch_is_made_once_and_not_materialized() {
     assert_eq!(asm.matches("subs xzr, x20, #32").count(), 1, "{asm}");
 }
 
-/// Inline-cost decisions were only visible through two undocumented environment variables; the pin's
-/// clang has no `-debug-only=inline-cost`, so a cost mismatch (`lh_alloc`, 311 vs 90 instructions)
-/// could not be read off. The option prints the decision and each callee instruction's cost.
+/// Inline-cost decisions were only visible through two undocumented environment
+/// variables; the pin's clang has no `-debug-only=inline-cost`, so a cost
+/// mismatch (`lh_alloc`, 311 vs 90 instructions) could not be read off. The
+/// option prints the decision and each callee instruction's cost.
 #[test]
 fn debug_only_inline_cost_prints_the_decision_and_the_instruction_costs() {
     let llc = std::path::Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
     let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/inline_small_callee.ll");
     let run = |extra: &[&str]| {
         let out = std::env::temp_dir().join(format!("inline_cost_{}.s", extra.len()));
-        let said = std::process::Command::new(llc).args(extra).args(["-S", "-o"]).arg(&out).arg(ir).output().expect("llc runs");
+        let said = std::process::Command::new(llc)
+            .args(extra)
+            .args(["-S", "-o"])
+            .arg(&out)
+            .arg(ir)
+            .output()
+            .expect("llc runs");
         assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
         String::from_utf8_lossy(&said.stderr).into_owned()
     };
@@ -583,4 +618,18 @@ fn isel_dump_prints_the_operations_after_each_machine_phase() {
         assert!(phases.contains(&phase), "{phase} missing from {phases:?}");
     }
     assert!(run(false).is_empty());
+}
+
+/// `c == '%' || c == '&' || c == '!' || c == '#'` stayed four compares joined
+/// by `or` and a `select` of `p + 1` (4 instructions over clang): the early
+/// SimplifyCFG did not merge the compare blocks, as it priced the `sext` of
+/// each byte load as an instruction, and InstCombine never regrouped the
+/// equalities, so no switch was made.
+#[test]
+fn an_or_chain_of_byte_equalities_is_one_switch_not_joined_compares() {
+    let mut program =
+        driver::program(include_str!("data/or_chain_of_equalities.ll"), Platform::Darwin).expect("the module reads");
+    driver::optimized(&mut program).expect("the pipeline runs");
+    let after = llrm_mir::print::module(&program.modules[0]);
+    assert!(!after.contains(" or i1 ") && !after.contains(" select "), "{after}");
 }

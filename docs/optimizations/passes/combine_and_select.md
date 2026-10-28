@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_and_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_and_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_and_select.rs sha256:2d577dc6bb5628ac8529f2683bb0e1709f4c5dc4bc57b00288b18f0d42efb565 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_and_select.rs sha256:4c3a5f4a0078478458a288907e12b66259765ef0c3da910d91af464dea76b864 -->
 
 # combine_and_select
 
@@ -17,8 +17,7 @@ new `select` (no `simplifySelect`), as `replace_with_new` builds it.
 DEVIATE 1: no floating-point folds (`fabs` of a bitcast) and no vectors.
 
 DEVIATE 2: `narrowMaskedBinOp`, `foldAndOrOfSelectUsingImpliedCond`,
-`matchDeMorgansLaws`, `foldBooleanAndOr`, `reassociateBooleanAndOr`,
-`foldCastedBitwiseLogic`, `foldBinopOfSextBoolToSelect` and the tail from
+`matchDeMorgansLaws`, `foldCastedBitwiseLogic`, `foldBinopOfSextBoolToSelect` and the tail from
 `sinkNotIntoOtherHandOfLogicalOp` on are the next strip.
 
 DEVIATE 3: `getFreelyInverted` (the not of a value that is not a one-use
