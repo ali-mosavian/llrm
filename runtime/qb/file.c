@@ -96,6 +96,7 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     fdb->mode = mode;
     fdb->record_length = record_length;
     fdb->column = 0;
+    fdb->past = 0;
     if (mode == MD_APPEND)
         llrm_os_seek(handle, 0, ORIGIN_END);
 }
@@ -463,6 +464,7 @@ void B_GET3(short channel, qb_data_ptr record, short length)
     got = llrm_os_read(fdb->handle, data, bytes);
     if (got < 0)
         qb_error(os_error(got));
+    fdb->past = (unsigned long)got < bytes;
 }
 
 void B_PUT3(short channel, qb_data_ptr record, short length)
@@ -561,7 +563,10 @@ void B_PUT2(short channel, long record)
 /* B$SSEK: SEEK #channel, position. */
 void B_SSEK(short channel, long position)
 {
-    position_at(open_fdb(channel), position);
+    Fdb *fdb = open_fdb(channel);
+
+    position_at(fdb, position);
+    fdb->past = 0;
 }
 
 /* B$FINP: INPUT$(count [, #channel]) (QB rt/inputf.asm): `count` characters from the keyboard (channel 0), not echoed, waiting
@@ -581,6 +586,7 @@ SD *B_FINP(short count, short channel)
         fdb = open_fdb(channel);
         if (fdb->mode == MD_OUTPUT || fdb->mode == MD_APPEND)
             qb_error(BE_PASTEND);
+        fdb->past = 0;
     }
     made = str_tmp(count, &text);
     for (at = 0; at < count; at++) {
@@ -589,8 +595,10 @@ SD *B_FINP(short count, short channel)
 
             if (c < 0) {
                 /* a binary file's short read is the characters there were (QB rt/inputf.asm) */
-                if (fdb->mode == MD_BINARY)
+                if (fdb->mode == MD_BINARY) {
+                    fdb->past = 1;
                     return str_tmp_copy(made, 0, at);
+                }
                 qb_error(BE_PASTEND);
             }
             text[at] = (char)c;
@@ -635,6 +643,9 @@ int B_FEOF(short channel)
             used--;
         return next < 0 || next == END_OF_TEXT ? -1 : 0;
     }
+    /* BINARY: true once a read came up short, as BC does (BCOM45, measured), not at the last byte. */
+    if (fdb->mode == MD_BINARY)
+        return fdb->past ? -1 : 0;
     return B_FLOF(channel) <= llrm_os_seek(fdb->handle, 0, 1) ? -1 : 0;
 }
 
