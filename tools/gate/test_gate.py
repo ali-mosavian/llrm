@@ -151,16 +151,16 @@ def test_a_filter_that_matches_no_test_is_incomplete_not_a_pass():
 
 
 def test_a_step_that_runs_the_binaries_builds_them_first_even_when_no_rust_changed():
-    """A change to tools/qcport-run.py planned `pytest qcport` with no build: qcport ran against missing or stale binaries."""
-    for path in ("tools/qcport-run.py", "tools/torture/torture.py"):
+    """A change to tools/qcport-run-cc.py planned `pytest qcport` with no build: qcport ran against missing or stale binaries."""
+    for path in ("tools/qcport-run-cc.py", "tools/torture/torture.py"):
         p = gate.plan([path])
         assert p.steps[0] == "build", (path, p.steps)
     assert "build" not in gate.plan(["tools/targets/msp430.py"]).steps
 
 
 def test_the_qcport_step_has_no_wall_clock_limit_of_its_own():
-    """`timeout 400` around qcport-run killed a run that was still drawing at load: qcport-run stops a stall and caps a hang itself."""
-    p = gate.plan(["tools/qcport-run.py"])
+    """`timeout 400` around qcport-run-cc killed a run that was still drawing at load: qcport-run-cc stops a stall and caps a hang itself."""
+    p = gate.plan(["tools/qcport-run-cc.py"])
     assert "timeout" not in gate.commands(p, gate.load(), gate.packages())["qcport"]
 
 
@@ -1286,7 +1286,7 @@ def test_the_qcport_step_does_not_skip_itself_where_the_variables_are_set_and_fa
     """CI's run of the reference group said `qcport SKIPPED` and passed: the step looked for ~/scratch/qcport-env.sh, which only the
     development host has, and exited 77 without running QCport."""
     command = gate.commands(gate.plan(["crates/driver/llrm-cc/src/lib.rs"]), gate.load(), gate.packages())["qcport"]
-    command = command.replace("uv run -q --project tools python tools/qcport-run.py", 'echo ran "$JWLINK"')
+    command = command.replace("uv run -q --project tools python tools/qcport-run-cc.py", 'echo ran "$JWLINK"')
     base = {"HOME": str(tmp_path), "PATH": "/usr/bin:/bin", "LLRM_BIN": "/t/release"}
     both = subprocess.run(["bash", "-c", command], capture_output=True, text=True, env={**base, "QCPORT": "a", "QCPORT_INC": "b", "QCPORT_BORLAND": "c"})
     assert (both.returncode, both.stdout.strip()) == (0, "ran /t/release/jwlink"), both  # the linker the build made: a runner has none on PATH
