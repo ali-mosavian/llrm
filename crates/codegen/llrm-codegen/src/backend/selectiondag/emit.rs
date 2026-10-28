@@ -263,6 +263,7 @@ struct Emitter<'a, 'd> {
     /// (call address, callee symbol) of each direct call.
     calls: Vec<(i64, Callee)>,
     pops: Vec<(i64, i64)>,
+    indirect_pops: Vec<(i64, i64)>,
     inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
     /// The call whose result registers have not been named yet: (block, insn).
     last_call: Option<(usize, usize)>,
@@ -374,6 +375,8 @@ pub struct Emitted {
     pub calls: Vec<(i64, Callee)>,
     /// (address, bytes) of each call whose callee pops arguments it was pushed.
     pub pops: Vec<(i64, i64)>,
+    /// The same for every indirect call, none included.
+    pub indirect_pops: Vec<(i64, i64)>,
     /// The frame places each inline code site patches in, by site: (byte of
     /// the code, displacement, addend).
     pub inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
@@ -413,6 +416,7 @@ pub fn emit_in(
         returns: Vec::new(),
         calls: Vec::new(),
         pops: Vec::new(),
+        indirect_pops: Vec::new(),
         inline_places: Vec::new(),
         last_call: None,
         flags_now: None,
@@ -509,6 +513,7 @@ pub fn emit_in(
         classes: emitter.classes,
         calls: emitter.calls,
         pops: emitter.pops,
+        indirect_pops: emitter.indirect_pops,
         inline_places: emitter.inline_places,
     })
 }
@@ -2226,10 +2231,20 @@ impl Emitter<'_, '_> {
                 let popped = if name.starts_with("ADJCALLSTACKUP") { self.constant(node.ops[1])? } else { 0 };
                 // What the call just before this took back is what the code
                 // that reads the frame back (`cfi.rs`) must not count.
-                if popped != 0
-                    && let Some(&(at, _)) = self.calls.last()
+                if name.starts_with("ADJCALLSTACKUP")
+                    && let Some((block, index)) = self.last_call
                 {
-                    self.pops.push((at, popped));
+                    let call = &self.blocks[block].insns[index];
+                    if popped != 0 {
+                        self.pops.push((call.at, popped));
+                    }
+                    // An indirect call's bytes are said apart: the frame
+                    // readers refuse one that does not say,
+                    // even for none (`LowerCallFrame` says
+                    // it only where a frame was set up).
+                    if call.what.as_ref().is_some_and(|what| what.indirect) {
+                        self.indirect_pops.push((call.at, popped));
+                    }
                 }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
