@@ -6,7 +6,7 @@ Owner: cycles-queue-quiet-host (w-6). 2026-10-22. Rows by 2026-11-09.
 
 Our `Walk` is already the pin's order: callees first, each body inlined into and then run through the Simplify list (pipeline.rs `Walk`, `rerun`). `_sift` is rotated and simplified before it is inlined (x_heapsort -O2 `walk/01`: jumpthreading@668, rotate@728, jumpthreading@809, loopsimplify@823). No walk rewrite.
 
-What `_sift` lacks against the pin's (pin `-print-after-all`, ~/scratch/cause/hs-pall.txt):
+What `_sift` lacks against the pin's (the pin's `-print-after-all` log of `hs`):
 - `icmp sle (or disjoint x, 1), n` to `icmp slt x, n` (InstCombine `foldICmpBinOp`): PR `fix/or-disjoint-compare`, w-6.
 - GVN load PRE across the critical edge (`.pre`) and the `smax` after it: w-5.
 
