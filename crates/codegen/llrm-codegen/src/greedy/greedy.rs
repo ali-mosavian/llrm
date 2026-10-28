@@ -22,8 +22,8 @@
 //!           + evict  a round  (S2)                 recoloring
 //! ```
 //!
-//! DEVIATE (until S2, named, no number): `trySplitAroundHintReg` and
-//! `tryHintsRecoloring` are not translated, so a
+//! DEVIATE (until S2, named, no number): `trySplitAroundHintReg` is not
+//! translated (LLVM skips it at `-Os`), so a
 //! range that cannot get a register goes from `RS_Split` straight to spill;
 //! this target's register costs are all zero (`RegCosts`), so the cost-per-use
 //! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
@@ -500,6 +500,8 @@ pub struct RAGreedy<'a> {
     /// `CSRCost`: what the first use of a callee-saved register costs,
     /// relative to the entry block's frequency (`initializeCSRCost`).
     csr_cost: BlockFrequency,
+    /// `SetOfBrokenHints`, in the order they were recorded.
+    broken: Vec<u32>,
 }
 
 impl<'a> RAGreedy<'a> {
@@ -523,6 +525,7 @@ impl<'a> RAGreedy<'a> {
             stats: Stats::default(),
             split: None,
             csr_cost: BlockFrequency(0),
+            broken: Vec::new(),
         }
     }
 
@@ -761,6 +764,107 @@ impl<'a> RAGreedy<'a> {
                 self.stats.new_queued += 1;
             }
         }
+        self.try_hints_recoloring();
+    }
+
+    /// `SetOfBrokenHints.insert`.
+    fn record_broken_hint(
+        &mut self,
+        virt: u32,
+    ) {
+        if !self.broken.contains(&virt) {
+            self.broken.push(virt);
+        }
+    }
+
+    /// `collectHintInfo` (RegAllocGreedy.cpp#L2471): for each copy that names
+    /// `reg`, the frequency of its block, the register at its other end and
+    /// the physical register that end holds now.
+    ///
+    /// DEVIATE (no number): a pinned value counts as the physical register it
+    /// is fixed to, and has no sub-registers to match.
+    fn collect_hint_info(
+        &self,
+        reg: u32,
+    ) -> Vec<(f32, u32, RegId)> {
+        let mut out = Vec::new();
+        for operand in self.lis.operands(reg) {
+            let instr = self.lis.instr(operand.instr);
+            let Some((dest, source)) = self.env.copy_of(instr) else { continue };
+            let other = if operand.is_def { source } else { dest };
+            if other == reg {
+                continue;
+            }
+            let phys = self.env.pinned(other).or_else(|| self.matrix.vrm.get_phys(other));
+            if let Some(phys) = phys {
+                let block = self.lis.indexes.get_mbb_from_index(&self.lis.indexes.get_instruction_index(operand.instr));
+                out.push((self.env.block_freq_relative_to_entry(block), other, phys));
+            }
+        }
+        out
+    }
+
+    /// `getBrokenHintFreq` (RegAllocGreedy.cpp#L2516).
+    fn broken_hint_freq(
+        list: &[(f32, u32, RegId)],
+        phys: RegId,
+    ) -> f32 {
+        list.iter().filter(|(_, _, held)| *held != phys).map(|(freq, _, _)| freq).sum()
+    }
+
+    /// `tryHintRecoloring` (RegAllocGreedy.cpp#L2534): give the live ranges
+    /// copy-related with `virt` the register it holds, where that costs no
+    /// more broken copies, and carry on from each one moved.
+    fn try_hint_recoloring(
+        &mut self,
+        virt: u32,
+    ) {
+        let phys = self.matrix.vrm.get_phys(virt).expect("an assigned register");
+        let mut visited: HashSet<u32> = HashSet::default();
+        visited.insert(virt);
+        let mut candidates = vec![virt];
+        while let Some(reg) = candidates.pop() {
+            // This may be a skipped register.
+            let Some(current) = self.matrix.vrm.get_phys(reg) else { continue };
+            let li = self.lis.interval_rc(reg);
+            // The new colour must be in the class and free for this range.
+            if current != phys {
+                let order = self.env.allocation_order(self.class_reg(reg));
+                if !order.contains(&phys) || self.matrix.check_interference(&li, phys) != InterferenceKind::Free {
+                    continue;
+                }
+            }
+            let info = self.collect_hint_info(reg);
+            // Recoloring must not raise the cost of the broken copies. Equal
+            // is taken: it may expose more recoloring.
+            if current != phys {
+                if Self::broken_hint_freq(&info, current) < Self::broken_hint_freq(&info, phys) {
+                    continue;
+                }
+                self.matrix.unassign(&li);
+                self.matrix.assign(&li, phys);
+            }
+            // Carry on to the copy-related live ranges; a physical register
+            // cannot be recolored.
+            for (_, other, _) in info {
+                if !self.pinned.contains(&other) && !self.fixed.contains(&other) && visited.insert(other) {
+                    candidates.push(other);
+                }
+            }
+        }
+    }
+
+    /// `tryHintsRecoloring` (RegAllocGreedy.cpp#L2643): broken hints may be
+    /// repaired when an evicted range freed a register.
+    fn try_hints_recoloring(&mut self) {
+        for virt in std::mem::take(&mut self.broken) {
+            // The range may be gone, or evicted since.
+            if !self.lis.has_interval(virt) || !self.matrix.vrm.has_phys(virt) {
+                continue;
+            }
+            self.matrix.invalidate_virt_regs();
+            self.try_hint_recoloring(virt);
+        }
     }
 
     // ---- direct assignment, eviction ---------------------------------------
@@ -804,9 +908,15 @@ impl<'a> RAGreedy<'a> {
         // If we missed a simple hint, try to cheaply evict interference from
         // the preferred register.
         if let Some(Hint::Phys(hint)) = self.simple_hint(virt.reg()) {
-            if order.is_hint(hint) && self.can_evict_hint_interference(virt, hint, fixed) {
-                self.evict_interference(virt, hint, new_vregs);
-                return Some(hint);
+            if order.is_hint(hint) {
+                if self.can_evict_hint_interference(virt, hint, fixed) {
+                    self.evict_interference(virt, hint, new_vregs);
+                    return Some(hint);
+                }
+                // DEVIATE (until S2): `trySplitAroundHintReg` is not
+                // translated. Record the missed hint, we may be able to
+                // recover at the end if the surrounding allocation changed.
+                self.record_broken_hint(virt.reg());
             }
         }
         // Most registers have 0 additional cost (RegCosts): nothing cheaper to
@@ -1162,6 +1272,16 @@ impl<'a> RAGreedy<'a> {
         // split.
         if stage != LiveRangeStage::Split {
             if let Some(phys) = self.try_evict(virt, &order, new_vregs, fixed) {
+                // If VirtReg has a hint and that hint is broken record this
+                // virtual register as a recoloring candidate for broken hint.
+                // Since we evicted a variable in its neighborhood it is likely
+                // we can at least partially recolor some of the copy-related
+                // live-ranges.
+                match self.simple_hint(virt.reg()) {
+                    Some(Hint::Virt(_)) => self.record_broken_hint(virt.reg()),
+                    Some(Hint::Phys(hint)) if hint != phys => self.record_broken_hint(virt.reg()),
+                    _ => {}
+                }
                 return Select::Reg(phys);
             }
         }

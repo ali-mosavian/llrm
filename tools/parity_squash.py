@@ -1207,13 +1207,32 @@ def head_files(head: str, base: str = BASE, cwd: Path = ROOT) -> list[str]:
     return git("diff", "--name-only", f"{base}...{head}", cwd=cwd).split()
 
 
-def behavioural_culprits(group: list[str], files_of, alone_red) -> list[str]:
-    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else each backend PR merged alone and asked."""
+def halve_red(members: list[str], red_with) -> list[str]:
+    """The members that are red on their own, found by halving: `red_with(subset)` merges the subset and asks. A 48-PR batch costs about 2 log2(48) runs per culprit, not 48."""
+    if not members or not red_with(members):
+        return []
+    if len(members) == 1:
+        return members
+    mid = len(members) // 2
+    return halve_red(members[:mid], red_with) + halve_red(members[mid:], red_with)
+
+
+def red_members(members: list[str], red_with, alone_red) -> list[str]:
+    """The red `members` by halving, else (an interaction: no half is red) each one merged alone and asked."""
+    found = halve_red(members, red_with) if red_with else []
+    return found or [number for number in members if alone_red(number)]
+
+
+def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -> list[str]:
+    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else the backend PRs found by halving (`red_with`),
+    else (an interaction: no half is red) each backend PR merged alone and asked."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import behavioural  # noqa: PLC0415
 
     backend = [number for number in group if behavioural.touches(files_of(number))]
-    return backend if len(backend) <= 1 else [number for number in backend if alone_red(number)]
+    if len(backend) <= 1:
+        return backend
+    return red_members(backend, red_with, alone_red)
 
 
 def _link_programs() -> list[str]:
@@ -2002,6 +2021,17 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return False
         return True
 
+    def merge_all(numbers: list[str]) -> bool:
+        """The PRs `numbers` merged together onto a clean head in the batch's checkout."""
+        stage(f"halve {len(numbers)}: {' '.join('#' + n for n in numbers)}")
+        clean_checkout(BASE)
+        for number in numbers:
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                return False
+        return True
+
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
@@ -2014,7 +2044,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
         if wrong:
             files_of = lambda number: head_files(infos[number]['headRefOid'])  # noqa: E731
-            culprits = behavioural_culprits(group, files_of, lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))))
+            culprits = behavioural_culprits(
+                group,
+                files_of,
+                lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))),
+                lambda subset: merge_all(subset) and bool(pre_merge_behavioural(sorted({f for n in subset for f in files_of(n)}))),
+            )
             for number in culprits:
                 named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
                 print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
@@ -2028,7 +2063,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if not probe:
                 return []
             targets = sorted({name.split("::", 1)[0] for name in probe})
-            return [number for number in group if merge_alone(number) and probe & parity_smoke_module().integration_failures(targets)]
+            red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            return red_members(group, red_with, lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets)))
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
