@@ -1,7 +1,10 @@
 """`c_compile` names the C compiler a run builds its programs with: llrm-c, or llrm-cc where LLRM_C_FRONTEND says so."""
 
+import os
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dosbatch  # noqa: E402
@@ -149,3 +152,16 @@ def test_a_qb_program_links_the_start_up_that_calls_underscore_main(monkeypatch)
     monkeypatch.setattr(dosbatch, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: type("R", (), {"stdout": "A=1"})())}))
     assert dosbatch.os_defines("x86-m32", "c") == ("A=1", "LL_MAIN=main_")
     assert dosbatch.os_defines("x86-m32", "qb") == ("A=1",)
+
+
+def test_the_real_mode_start_up_finds_qb_start_by_the_name_start_asm_calls(tmp_path):
+    """The m16 fork clang ignores `__cdecl`: rtinit.c defined `_qb_start@3`, start.asm asks for `_qb_start`, and every real-mode QB program failed
+    to link (jwlink E2028: _qb_start is an undefined reference)."""
+    import qbruntime
+
+    if not (os.environ.get("LLRM_CLANG_M16") and os.environ.get("LLRM_OW")):
+        pytest.skip("needs LLRM_CLANG_M16 and LLRM_OW")
+    obj = tmp_path / "rtinit.obj"
+    qbruntime._compile_c(dosbatch.ROOT / "runtime/qb/rtinit.c", obj, dosbatch.c_include(dosbatch.REAL_MODE, tmp_path))
+    names = obj.read_bytes()
+    assert b"\x09_qb_start" in names and b"_qb_start@3" not in names
