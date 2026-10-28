@@ -712,6 +712,14 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     cause = ps.causes_of(failed)
     assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
 
+
+def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
+    """llrm-codegen had no ranking, so a codegen PR ran its whole lib: 168 G of 60 G, #5325's batch refused four times."""
+    ranking = ps.selection().get("units", {})
+    for crate in ("llrm-codegen", "llrm-mir", "llrm-cc"):
+        assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
+
+
 def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
     """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
     if shutil.which("perf") is None:

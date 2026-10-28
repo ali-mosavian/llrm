@@ -40,9 +40,13 @@ pub fn select_fp_logic<D: AddrDag>(
         _ => x86::XORPSrm,
     };
     let (value, mask) = (dag.operand(node, 0), dag.operand(node, 1));
-    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode })
-        .select_addr(mask)
-    else {
+    let Some(a) = (Matcher {
+        dag,
+        pointer_type: hooks.options.pointer_type(),
+        mode: hooks.options.address_mode,
+        size: hooks.options.opt_for_size,
+    })
+    .select_addr(mask) else {
         return false;
     };
     let new = dag.machine_node(opcode, &[vt], &[value, a.base, a.scale, a.index, a.disp, a.segment]);

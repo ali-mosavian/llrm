@@ -1141,6 +1141,34 @@ fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
     assert!(!built.debug.expect("debug info").procedures.is_empty());
 }
 
+/// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
+/// writes as subfields; the writer refused the unit ("a location list holds
+/// only registers and frame cells") and no object came out.
+#[test]
+fn a_variable_in_two_registers_is_written_to_coff_as_subfields() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg_pieces.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) =
+        crate::llc::compiled(&flags(&["-m32", "-O2", "-g", "-fobject-format=coff"]), &text, "dbgpieces").unwrap();
+    llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "dbgpieces.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+    )
+    .unwrap();
+}
+
 /// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
 /// not the `.ll` file: the debugger could not find the text.
 #[test]
@@ -1161,6 +1189,48 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let source = built.debug.expect("debug info").source;
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
+}
+
+/// An array of `long double` at m32 was laid out 10 bytes apart (the store
+/// size) while the code indexed it 12 apart (the alloc size): `table[1]` read
+/// the middle of the first two elements, and long_double_layout.c printed
+/// -2147483645 for 15.
+#[test]
+fn an_array_of_long_doubles_is_laid_out_at_the_alloc_size() {
+    let text = format!(
+        "{REGCALL_DATALAYOUT}@t = global [2 x x86_fp80] [x86_fp80 0xK3FFF8000000000000000, x86_fp80 0xK40008000000000000000], align 4\n\
+         define i32 @main() {{\n  %v = load x86_fp80, ptr getelementptr inbounds (i8, ptr @t, i32 12), align 4\n  %i = fptosi x86_fp80 %v to i32\n  ret i32 %i\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32"]), &text, "t").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let data: usize = listing
+        .lines()
+        .filter(|line| line.starts_with("db "))
+        .map(|line| line.trim_start_matches("db ").split(',').count())
+        .sum();
+    assert_eq!(data, 24, "{listing}");
+}
+
+const SMALL_STRUCT_BY_VALUE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n\
+    target triple = \"i386-unknown-unknown-code16\"\n\
+    %struct.T = type { i8 }\n\
+    declare i16 @wc_small(ptr byval(%struct.T) align 2, i16) addrspace(1)\n\
+    define i16 @f() addrspace(1) {\n  %t = alloca %struct.T, align 1\n  store i8 5, ptr %t, align 1\n  \
+    %r = call addrspace(1) i16 @wc_small(ptr byval(%struct.T) align 2 %t, i16 6)\n  ret i16 %r\n}\n\
+    define i16 @g(ptr byval(%struct.T) align 2 %t, i16 %a) addrspace(1) {\n  %x = load i8, ptr %t, align 1\n  \
+    %w = zext i8 %x to i16\n  %r = add i16 %w, %a\n  ret i16 %r\n}\n";
+
+/// clang passes `struct { char x; }` `byval`, in memory; Open Watcom's register
+/// convention takes it in AL with the next argument in DX. The call pushed it
+/// and the callee read memory, so wc16_mixed.c's `wc_small(t, 6)` was 50, not
+/// 56, against Watcom's own object.
+#[test]
+fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
+    let (built, _) = crate::llc::compiled(&flags(&["-mabi=watcom", "-m16"]), SMALL_STRUCT_BY_VALUE, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov al, 5") && listing.contains("mov dx, 6"), "{listing}");
+    assert!(!listing.contains("sub sp") && !listing.contains("push 6") && !listing.contains("pushw 6"), "{listing}");
+    assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
 }
 
 /// `-fno-inline=sum5` named the function as the source does, but the module
