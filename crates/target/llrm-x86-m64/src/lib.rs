@@ -122,6 +122,10 @@ impl llrm_target::Target for M64 {
         &REGISTER_INFO
     }
 
+    fn selects_by_dag(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "x86-m64"
     }
@@ -187,6 +191,10 @@ impl llrm_target::Target for M64 {
 
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
+    }
+
+    fn callee_pops(&self) -> bool {
+        CALLING.conventions.iter().any(|one| one.cleanup == llrm_target::calling::Cleanup::Callee)
     }
 
     fn frame_optional(&self) -> bool {

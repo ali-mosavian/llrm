@@ -2221,6 +2221,9 @@ pub struct ModuleAnalyses {
     /// Results dropped, reused when computed again the same, so that an
     /// outer proxy holding them stays the same.
     dropped: HashMap<TypeId, Rc<dyn Any>>,
+    /// The results `take_dropped` handed over, for `why` to tell a result
+    /// brought up to date from one made from nothing.
+    taken: HashSet<TypeId>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
     /// The bodies reported edited since the declarations were last checked
@@ -2236,6 +2239,9 @@ pub struct ModuleAnalyses {
     /// analyses made over it, not to ones carried from before.
     log_epoch: u64,
     declarations_open: bool,
+    /// How often `invalidate` has said anything may have changed: a result that
+    /// trusts the log of edits for what moved must be of the same count.
+    resets: u64,
     metadata_open: bool,
     /// What an analysis keeps for its next run, by its type: the working of an
     /// update that reuses the last.
@@ -2274,12 +2280,14 @@ impl ModuleAnalyses {
             stateless: Vec::new(),
             results: HashMap::default(),
             dropped: HashMap::default(),
+            taken: HashSet::default(),
             outer: None,
             functions: HashMap::default(),
             edited: BTreeSet::new(),
             edit_log: Vec::new(),
             log_epoch: NEXT_LOG_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             declarations_open: true,
+            resets: 0,
             metadata_open: true,
             memos: HashMap::default(),
             scratch: false,
@@ -2373,6 +2381,15 @@ impl ModuleAnalyses {
         }
     }
 
+    /// The result of `M` a pass dropped, handed over to the run that brings it
+    /// up to date: not kept, so that it is the only holder where nothing else
+    /// holds it. A run that does not take it leaves it to be compared.
+    pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        let one = self.dropped.remove(&TypeId::of::<M>())?;
+        self.taken.insert(TypeId::of::<M>());
+        Some(one.downcast::<M::Result>().expect("keyed by its type"))
+    }
+
     /// Whether `M` is made only at its points (`PassManager::require_cached`).
     pub fn is_stateless<M: ModuleAnalysis>(&self) -> bool {
         self.stateless.iter().any(|one| one.id == TypeId::of::<M>())
@@ -2431,10 +2448,12 @@ impl ModuleAnalyses {
                         "diff"
                     }
                 }
+                None if self.taken.contains(&kind.id) => "diff",
                 None => "first",
             };
             record("mod", kind.name, class);
         }
+        self.taken.remove(&kind.id);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
@@ -2442,6 +2461,19 @@ impl ModuleAnalyses {
 
     /// Drops what `preserved` does not keep.
     pub fn invalidate(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.declarations_open = true;
+        self.resets += 1;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
+    /// `invalidate` for a pass that changed the declarations of the bodies it
+    /// reported to `changed` and of no other global: what trusts the log of
+    /// edits for what moved may go on trusting it.
+    pub fn invalidate_logged(
         &mut self,
         preserved: &PreservedAnalyses,
     ) {
@@ -2536,6 +2568,11 @@ impl ModuleAnalyses {
     /// The bodies reported edited so far, oldest first.
     pub fn edit_log(&self) -> &[GlobalId] {
         &self.edit_log
+    }
+
+    /// How often a pass has said anything may have changed (`invalidate`).
+    pub fn resets(&self) -> u64 {
+        self.resets
     }
 
     /// Which `edit_log` this is, for an analysis that keeps a position in it: a

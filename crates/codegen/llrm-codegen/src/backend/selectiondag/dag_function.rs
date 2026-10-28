@@ -398,6 +398,20 @@ impl super::emit::Conventions for CallConventions<'_> {
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            // A call of a function the module defines disturbs what its
+            // convention says, not the contract's whole clobber list: a caller
+            // saves for its own caller only that (`isel.rs`, `disturbs`).
+            _ if matches!(callee, Some(Callee::Global(_))) && self.written(callee).is_none() => {
+                let regs = llrm_lir::registers::Regs(self.arch.registers());
+                self.convention_of(callee).map_or_else(Default::default, |found| {
+                    found
+                        .clobbered
+                        .iter()
+                        .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+                        .map(|name| regs.root(self.arch.register_named(name)))
+                        .collect()
+                })
+            }
             _ => clobbers.clone(),
         }
     }
@@ -447,8 +461,13 @@ impl super::emit::Conventions for CallConventions<'_> {
                 self.general,
             ));
         }
-        // a runtime routine also destroys what its contract says
-        if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
+        // at m16 a routine also destroys what its contract says: runtime.toml
+        // names SI and DI for the routines whose assembly does not state them
+        // kept (B$DDIM), and a value held in SI across one was wrong
+        // code. At m32 the whole list over-spilled (jpeg_single +4.5%): the
+        // convention's is used.
+        let real_mode = llrm_lir::registers::Regs(self.arch.registers()).width_of(self.arch.stack_pointer()) == Some(2);
+        if let (true, Some(contracts), Some(Callee::Global(id))) = (real_mode, self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
             if name.starts_with(crate::hir::mir::RUNTIME)
                 && let Ok(contract) = contracts.abi.contract(&name, false, 0)
@@ -697,6 +716,7 @@ fn selected_in(
         32 | 64 => false,
         _ => return refuse("only m16, m32 and m64 are built so far"),
     };
+    // x86-64 has `cmov` (`canUseCMOV`); the 486 and P5 targets have none
     let m64 = bitness == 64;
     let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
@@ -716,7 +736,7 @@ fn selected_in(
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
-        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), ..Features::default() }, MVT::I64)
+        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -926,6 +946,11 @@ fn selected_in(
         names: &tables.names,
     };
     let mut emitted: Vec<EmitBlock> = Vec::new();
+    // What the debug records name: the LIR value of each IR value, and the
+    // address each IR instruction's code starts at.
+    let mut noted_values: llrm_mir::dense::IdMap<ValueId, u32> = Default::default();
+    let mut noted_wides: llrm_mir::dense::IdMap<ValueId, (Held, Held)> = Default::default();
+    let mut noted_ats: llrm_mir::dense::IdMap<llrm_mir::module::InstId, i64> = Default::default();
     let mut calls = IndexMap::default();
     let mut pops = IndexMap::default();
     let mut call_pops = IndexMap::default();
@@ -938,6 +963,7 @@ fn selected_in(
     // The LIR blocks each MIR block became, and the phi inputs each exports.
     let mut made: HashMap<u32, std::ops::Range<usize>> = HashMap::default();
     let mut exports: Vec<(BlockId, Vec<(ValueId, u32)>)> = Vec::new();
+    let sse2 = arch.scalar_sse();
     for (block, parent, mut built) in work {
         if !built.live_ins.is_empty() && block != function.layout()[0] {
             return refuse("register arguments outside the entry block");
@@ -946,7 +972,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: arch.scalar_sse(), min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2, min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },
@@ -1004,6 +1030,27 @@ fn selected_in(
             (*at, name)
         }));
         inline_places.extend(done.inline_places.iter().cloned());
+        let mut next_at = None;
+        for &(inst, order) in built.dag.inst_order.iter().rev() {
+            next_at = done.first_at.get(&order).copied().or(next_at);
+            if let Some(at) = next_at {
+                noted_ats.insert(inst, at);
+            }
+        }
+        for &(id, value) in &built.values {
+            if let Some(&made) = done.values.get(&built.dag.resolve(value)) {
+                noted_values.get_or_insert_with(id, || made);
+            }
+            // A value type legalization expanded is its two halves.
+            if let Some(&(low, high)) = built.dag.expanded_integers.get(&value)
+                && let (Some(&low_made), Some(&high_made)) =
+                    (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
+            {
+                let width = built.dag.value_type(low).size_in_bits() / 8;
+                noted_wides
+                    .get_or_insert_with(id, || (Held { value: low_made, width }, Held { value: high_made, width }));
+            }
+        }
         emitted.extend(done.blocks);
         if block == parent && is_pad(function, block) {
             let Some(contracts) = contracts.filter(|contracts| contracts.runtime) else {
@@ -1212,6 +1259,15 @@ fn selected_in(
             };
         }
     }
+    // The values a debug record names, in the register the value was made in
+    // or the one that carries it out of its block.
+    for (id, &vreg) in info.value_regs.iter() {
+        if let Some(&made) = state.vregs.get(&vreg) {
+            noted_values.get_or_insert_with(id, || made);
+        }
+    }
+    let mut body =
+        crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
     set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):

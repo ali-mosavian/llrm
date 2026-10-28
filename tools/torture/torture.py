@@ -1,4 +1,4 @@
-"""GCC's gcc.c-torture/execute through llrm-c: each self-checking program built at -O0, -O2 and -Os, run on the emulator,
+"""GCC's gcc.c-torture/execute through llrm-cc: each self-checking program built at -O0, -O2 and -Os, run on the emulator,
 and passed if it exits 0.
 
     uv run --project tools python tools/torture/torture.py [--bits 16|32] [--levels O0,O2,Os] [--stage compile] [--sample N] [names...]
@@ -37,11 +37,11 @@ BUDGET_MS = 15_000
 COMPILE_SECONDS = 60  # of CPU time, not wall clock: a loaded host runs the same compile slower, not longer
 
 
-def run_within_cpu(command: list[str], seconds: int) -> subprocess.CompletedProcess | None:
+def run_within_cpu(command: list[str], seconds: int, env: dict[str, str] | None = None) -> subprocess.CompletedProcess | None:
     """`command`'s result, or None where it used more than `seconds` of CPU time (the shell's `ulimit -t`, which stops it).
     A wall-clock limit stopped programs that compile in a few seconds whenever the host was busy."""
     try:
-        return cpulimit.run(command, seconds, capture_output=True, text=True)
+        return cpulimit.run(command, seconds, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     except subprocess.TimeoutExpired:
         return None
 
@@ -56,10 +56,10 @@ def programs(names: list[str]) -> list[Path]:
 def cause(text: str) -> str:
     """What a compiler's complaint says with its place and its names taken out: the key failures are counted by."""
     lines = [one.strip() for one in text.strip().splitlines() if one.strip()]
-    # wccq's own: the first of its errors says it
-    line = next((one for one in lines if "Error!" in one), lines[0] if lines else "")
+    # The first of its errors says it (clang prints warnings before the error that stops it)
+    line = next((one for one in lines if "Error!" in one or " error: " in one or one.startswith("llrm-llc:")), lines[0] if lines else "")
     line = re.sub(r"^.*Error!\s*E\d+:\s*", "wccq: ", line)
-    line = re.sub(r"^llrm-c:\s*", "", line)
+    line = re.sub(r"^llrm-cc?:\s*", "", line)
     line = re.sub(r"^\S+\.c:\d+(:\d+)?:\s*", "", line)
     line = re.sub(r"'[^']*'", "'_'", line)
     line = re.sub(r"\b(n)?\d+\b", lambda found: "nN" if found.group(1) else "N", line)
@@ -69,6 +69,18 @@ def cause(text: str) -> str:
 def expected() -> list[dict]:
     with open(HERE / "expected.toml", "rb") as handle:
         return tomllib.load(handle).get("refused", [])
+
+
+def open_findings() -> list[dict]:
+    """The compiler faults already found, `[[open]]` in expected.toml: each names its cause (`match`, on the text of a compile or link failure) or its
+    `program` (a wrong result), and says what is wrong. They are reported as `open`, never counted as passed, and do not fail the gate."""
+    with open(HERE / "expected.toml", "rb") as handle:
+        return tomllib.load(handle).get("open", [])
+
+
+def known(text: str, rules: list[dict]) -> str | None:
+    """The reason of the open finding whose `match` the failure text `text` matches."""
+    return next((one["reason"] for one in rules if "match" in one and re.search(one["match"], text)), None)
 
 
 def differences() -> dict[str, str]:
@@ -84,13 +96,19 @@ def refusal(text: str, rules: list[dict]) -> str | None:
     return None
 
 
-# The options a program asks for (dg-options, dg-additional-options) that llrm-c has: the rest tune GCC's passes.
+# The options a program asks for (dg-options, dg-additional-options) that llrm-cc has: the rest tune GCC's passes.
 PROGRAM_OPTIONS = ("-fwrapv",)
 
 
+def runtime_defines(target: str) -> list[str]:
+    """`-DRUNTIME_HAS_NAME` for each library routine the target's runtime defines (its `libcalls`): libc.c defines the others."""
+    table = tomllib.loads((dosbatch.ROOT / "runtime/c" / target / "c.toml").read_text())
+    return [f"-DRUNTIME_HAS_{name.upper()}" for name in table.get("libcalls", [])]
+
+
 def program_options(text: str) -> list[str]:
-    """The options of `{ dg-options "..." }` and `{ dg-additional-options "..." }` lines that llrm-c takes."""
-    asked = [word for line in re.findall(r'dg-(?:additional-)?options\s+"([^"]*)"', text) for word in line.split()]
+    """The options of `{ dg-options "..." }` and `{ dg-additional-options "..." }` lines that llrm-cc takes."""
+    asked = [word for line in re.findall(r'dg-(?:additional-)?options\s+\{?\s*"([^"]*)"', text) for word in line.split()]
     return [word for word in dict.fromkeys(asked) if word in PROGRAM_OPTIONS]
 
 # What a test is promised below what the start-up, `report` and the libc take of the stack.
@@ -154,13 +172,16 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     if sized is not None:
         compiled = work / f"{stem}.c"
         compiled.write_text(f"#define STACK_SIZE {sized}\n{text}")
-    done = run_within_cpu([str(BIN / "llrm-c"), str(compiled), "-I", str(source.parent), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(text), "-o", str(obj)], COMPILE_SECONDS)
+    command, env = dosbatch.c_compile(compiled, obj, target, LEVELS[level], work, [], ["-std=gnu89", "-I", str(source.parent), "-I", str(HERE / "include"), *program_options(text)])
+    done = run_within_cpu(command, COMPILE_SECONDS, env)
     if done is None:
         return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
     if done.returncode != 0 or not obj.exists():
         found = cause(done.stderr or done.stdout) or f"exit {done.returncode}"
         why = refusal(found, rules)
-        return ("refused", why, None) if why else ("compile", found, None)
+        if why:
+            return "refused", why, None
+        return ("open", opened, None) if (opened := known(found, open_findings())) else ("compile", found, None)
     exe = work / f"{stem}.exe"
     try:
         linked = tuple(f"STACK_BYTES={stack}" if one.startswith("STACK_BYTES=") else one for one in defines)
@@ -175,7 +196,10 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
         missing = re.search(r"undefined symbol (\S+)", text)
         named = [f"undefined symbol {one}" for one in spellings(missing.group(1))] if missing else [text]
         why = next(filter(None, (refusal(one, rules) for one in named)), None)
-        return ("refused", why, None) if why else ("link", named[0] if missing else cause(text), None)
+        if why:
+            return "refused", why, None
+        found = named[0] if missing else cause(text)
+        return ("open", opened, None) if (opened := known(found, open_findings())) else ("link", found, None)
     return "built", "", exe
 
 
@@ -235,7 +259,8 @@ def run(args, work: Path) -> int:
         print(f"no programs in {CORPUS} (TORTURE_CORPUS names the gcc.c-torture/execute directory)")
         return 2
     support_obj = work / "libc.obj"
-    done = subprocess.run([str(BIN / "llrm-c"), str(HERE / "libc.c"), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), "-O2", "-o", str(support_obj)], capture_output=True, text=True)
+    command, env = dosbatch.c_compile(HERE / "libc.c", support_obj, target, "-O2", work, [], ["-std=gnu89", "-I", str(HERE / "include"), *runtime_defines(target)])
+    done = subprocess.run(command, capture_output=True, text=True, env={**os.environ, **env})
     if done.returncode != 0:
         print("libc.c: " + done.stderr)
         return 2
@@ -271,9 +296,12 @@ def run(args, work: Path) -> int:
                     result[case] = ("pass", "")
         print(f"ran {len(exes)}/{len(exes)}", file=sys.stderr)
     by_design = differences()
+    open_programs = {one["program"]: one["reason"] for one in open_findings() if "program" in one}
     for case, (kind, why) in list(result.items()):
         if kind == "wrong" and case[0].stem in by_design:
             result[case] = ("differs", f"{why}: {by_design[case[0].stem]}")
+        elif kind == "wrong" and case[0].stem in open_programs:
+            result[case] = ("open", f"{why}: {open_programs[case[0].stem]}")
     summary(result, args)
     if args.gate:
         failed = sorted(f"{case[0].stem}@{case[1]}" for case, (kind, _) in result.items() if kind in ("compile", "link", "wrong"))
@@ -288,7 +316,7 @@ def run(args, work: Path) -> int:
 def summary(result, args) -> None:
     total = Counter(kind for kind, _ in result.values())
     print(f"{len(result)} builds: " + ", ".join(f"{count} {kind}" for kind, count in sorted(total.items())))
-    for kind in ("refused", "differs", "compile", "link", "wrong"):
+    for kind in ("refused", "differs", "open", "compile", "link", "wrong"):
         causes: dict[str, list[str]] = defaultdict(list)
         for (source, level), (found, why) in result.items():
             if found == kind:

@@ -285,6 +285,7 @@ pub fn analysed(function: &Function) -> Escapes {
 
 thread_local! {
     static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WHOLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -296,6 +297,21 @@ pub fn whole_runs() -> usize {
 
 /// How many times this thread has asked `exposes` of one alloca, for a test
 /// that a function's answers are found once.
+pub fn reads() -> usize {
+    READS.with(std::cell::Cell::get)
+}
+
+/// Counts the operands `ExposedFrames::update` read from the edits it was
+/// given.
+pub fn count_reads(n: usize) {
+    READS.with(|reads| reads.set(reads.get() + n));
+}
+
+/// Whether `function` has an alloca, which every answer here is about.
+pub fn has_alloca(function: &Function) -> bool {
+    function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
+}
+
 pub fn scans() -> usize {
     SCANS.with(std::cell::Cell::get)
 }
@@ -308,6 +324,11 @@ pub fn exposed_allocas(
     function: &Function,
     marker: impl Fn(InstId, usize) -> bool,
 ) -> BTreeSet<ValueId> {
+    // Nothing to answer for a function with no alloca; the scan below walks
+    // every operand of every instruction.
+    if !has_alloca(function) {
+        return BTreeSet::new();
+    }
     WHOLE.with(|runs| runs.set(runs.get() + 1));
     let mut exposing = vec![false; function.value_count()];
     // The values a value moves into, reversed: who feeds each.
@@ -642,6 +663,32 @@ out:
             assert_eq!(result.origins[&value(f, "copied")], root, "{sink}");
             assert_eq!(result.exposed, root, "{sink}");
         }
+    }
+
+    /// `exposed_allocas` walked every operand of every instruction, asking
+    /// `marker` of each, in a function with no alloca: an empty answer for
+    /// O(function) per GVN run (`analysis exposed-frames` 0.44 G of chain512's
+    /// 34.9 G).
+    #[test]
+    fn a_function_with_no_alloca_is_answered_without_a_scan() {
+        let module = parsed(
+            "declare void @sink(ptr)
+define void @f(ptr %p, i16 %x) {
+entry:
+  call void @sink(ptr %p)
+  %a = add i16 %x, 1
+  store i16 %a, ptr %p
+  ret void
+}
+",
+        );
+        let asked = std::cell::Cell::new(0);
+        let found = exposed_allocas(function(&module, "f"), |_, _| {
+            asked.set(asked.get() + 1);
+            false
+        });
+        assert!(found.is_empty());
+        assert_eq!(asked.get(), 0, "operands asked about with no alloca to answer for");
     }
 
     #[test]

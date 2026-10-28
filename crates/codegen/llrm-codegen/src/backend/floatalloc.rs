@@ -47,7 +47,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use crate::analysis::loops;
-use crate::backend::allocate::Live;
 use crate::backend::classes::RegisterClasses;
 #[cfg(test)]
 use crate::backend::constpool::Pool;
@@ -56,6 +55,7 @@ use crate::backend::cpu::ProfileOrName;
 use crate::backend::floatregions::Raised;
 use crate::backend::floatregions::Unlowered;
 use crate::backend::frame::Frame;
+use crate::backend::liverows::Live;
 use crate::backend::select;
 use crate::backend::spillplacement;
 use crate::model::ir::{Held, Imm, Loc, Mem, Operation, Semantics};

@@ -14,7 +14,7 @@ KERNEL = Path(__file__).parent / "kernels" / "x_life" / "x_life.c"
 WITHOUT_THE_PASS = 727  # parity 065b78779a, the same build line
 
 
-@pytest.mark.skipif(not harness.LLRM.exists(), reason="needs a built llrm-c")
+@pytest.mark.skipif(not harness.LLRM.exists(), reason="needs a built llrm-cc")
 def test_x_lifes_compare_in_a_dominated_block_is_widened_and_the_object_shrinks(tmp_path):
     source = tmp_path / "x_life.c"
     source.write_text(wrap.wrapped("x_life", KERNEL.read_text()))
@@ -22,9 +22,10 @@ def test_x_lifes_compare_in_a_dominated_block_is_widened_and_the_object_shrinks(
     for level in ("-O2", "-O3"):
         obj = tmp_path / f"x_life{level}.obj"
         done = subprocess.run(
-            [str(harness.LLRM), "-m32", "-mabi=sysv", "-march=i486", level, "-o", str(obj), str(source)],
+            [str(harness.LLRM), *harness.llrmbin.c_args(32), "-mabi=sysv", level, "-c", "-o", str(obj), str(source)],
             capture_output=True,
             text=True,
+            env=harness.cc_env(),
         )
         assert done.returncode == 0, done.stderr
         sizes[level] = obj.stat().st_size

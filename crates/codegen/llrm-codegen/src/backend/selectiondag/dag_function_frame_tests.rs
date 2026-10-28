@@ -477,20 +477,27 @@ fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
 }
 
 /// A `memmove` a pass proved forward is `rep movsb`, one proved backward is
-/// `std; rep movsb; cld` from the last byte, where the runtime has no
+/// `std; rep movsd; cld` from the last dword, where the runtime has no
 /// `memmove` (`copyw.nib`'s scroll up and down at m32); one proved neither way
-/// is still refused.
+/// is still refused. The backward copy went a byte at a time at m32: scroll
+/// bq32 -Os ran 91270 instructions beside the old selector's 55165.
 #[test]
 fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
     let backward = select_m32(&memmove_ir(", !llrm.backward !0")).unwrap_or_else(|why| panic!("{why}"));
-    assert!(
-        backward.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC]),
-        "{:?}",
-        backward.inline
-    );
+    assert!(backward.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0xA5, 0xFC]), "{:?}", backward.inline);
     let refused = select_m32(&memmove_ir("")).err().expect("no direction proved");
     assert!(refused.contains("memmove"), "{refused}");
+}
+
+/// A backward `memmove` of a size that is no multiple of four goes a byte at a
+/// time at m32: a flat target names no register to carry a dword copy's tail.
+#[test]
+fn a_backward_memmove_at_m32_of_an_odd_size_moves_bytes() {
+    let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
+    let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
+    let bytes = [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC];
+    assert!(backward.inline.values().any(|code| code[..] == bytes), "{:?}", backward.inline);
 }
 
 const SCALED_INDEX_AT_M16: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
@@ -1281,4 +1288,69 @@ fn a_far_string_move_leaves_no_dword_join_once_dead_code_is_gone() {
     assert!(joins(&done.body) > 0, "the premise: selection builds the joined dword");
     let cleaned = crate::backend::deadmi::eliminated(&done.body);
     assert_eq!(joins(&cleaned), 0, "the unread join is gone");
+}
+
+/// The register file was parsed for each block (`Target::scalar_sse` asked per
+/// `select_block`): 226 M of the 490 M instructions of `dag isel` on joins128,
+/// 147 k instructions for each of 1,542 blocks.
+#[test]
+fn the_register_file_is_not_parsed_per_block() {
+    let parses = |blocks: usize| {
+        let mut ir = String::from(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %x) {\nentry:\n  br label %b0\n",
+        );
+        for at in 0..blocks {
+            let next = if at + 1 < blocks { format!("b{}", at + 1) } else { "end".to_owned() };
+            ir.push_str(&format!("b{at}:\n  %v{at} = add i32 %x, {at}\n  br label %{next}\n"));
+        }
+        ir.push_str("end:\n  ret i32 %x\n}\n");
+        let before = llrm_target::registers::parsed();
+        select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
+        llrm_target::registers::parsed() - before
+    };
+    // the first compile reads what the target caches once
+    parses(3);
+    assert_eq!(parses(30), parses(90));
+}
+
+/// A word divided by two is `x + (x >>u 15)` shifted once: the pin folds
+/// `srl (sra x, y), 15` to `srl x, 15`. The DAG kept both shifts and widened
+/// each (`movsx; sar 15; movzx; shr 15`), 2 more instructions in the bit
+/// reversal of stft_fixed bq32 -Os.
+#[test]
+fn a_word_halved_signed_shifts_the_sign_down_once() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i16 @f(i16 %x) {
+  %r = sdiv i16 %x, 2
+  ret i16 %r
+}
+";
+    let done = select_m32(ir).unwrap_or_else(|why| panic!("{why}"));
+    let shifts = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .filter(|w| matches!(w.name.as_deref(), Some("sar" | "shr")))
+        .count();
+    assert_eq!(shifts, 2, "{:?}", done.body.insns());
+}
+
+/// The pin's `(i16 0)` is the low part of a `MOV32r0`: `xor edi, edi` at m32,
+/// 2 bytes. Narrowed to a word (`xor di, di`, 66-prefixed) it grew 1 B per
+/// zero (QB `frames` -Os bq32).
+#[test]
+fn a_zero_word_at_m32_is_a_dword_xor() {
+    use crate::model::ir::Loc;
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i16 @f() {
+  ret i16 0
+}
+";
+    let done = select_m32(ir).unwrap_or_else(|why| panic!("{why}"));
+    let zero = done.body.insns().iter().filter_map(|one| one.what.clone()).find(|what| {
+        what.name.as_deref() == Some("mov") && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.value == 0)
+    });
+    let zero = zero.expect("a zero");
+    assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
 }

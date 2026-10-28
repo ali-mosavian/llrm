@@ -289,3 +289,10 @@ owner = "w-4"
 [[flag]]
 flag = "jumpthreading"
 owner = "w-5"
+
+# Last, so a program's own cause wins: every QB program grew 17 B for the call BC ends `$QB$MAIN` with (BC's object for `PRINT 1`
+# externs only B$PEI2 and B$CENP; main omitted the cleanup). Ruled correct growth by the coordinator, 2026-10-28.
+[[program]]
+match = "qb/*"
+cause = "correctness-driven: `call B$CENP` ends $QB$MAIN as BC's does (+17 B per program against main, i.e. parity with BC)"
+owner = "w-9"

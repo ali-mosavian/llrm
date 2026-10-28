@@ -978,7 +978,7 @@ pub fn stamped(
 /// the counts.
 fn shadow_globalsmodref(
     module: &Module,
-    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+    known: &llrm_support::hash::IndexMap<String, std::rc::Rc<llrm_analysis::alias::Summary>>,
 ) {
     use llrm_analysis::memory::{Key, MemoryKind};
     let found = llrm_analysis::globalsmodref::compute(module);
@@ -1026,7 +1026,7 @@ fn shadow_globalsmodref(
 /// alone. `tighter` is an attribute that states less than the summary found.
 fn shadow_attributes(
     module: &Module,
-    known: &llrm_support::hash::IndexMap<String, llrm_analysis::alias::Summary>,
+    known: &llrm_support::hash::IndexMap<String, std::rc::Rc<llrm_analysis::alias::Summary>>,
 ) {
     use llrm_analysis::aa::{IRMemLocation, MemoryEffects};
     use llrm_analysis::memory::MemoryKind;

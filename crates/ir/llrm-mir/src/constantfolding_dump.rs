@@ -105,5 +105,13 @@ fn show(
         ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
             format!("{t} {} ({})", spelling(&CAST, *op), show(context, globals, *value))
         }
+        ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs }) => {
+            format!(
+                "{t} {} ({}, {})",
+                spelling(&crate::opcode::BINARY, *op),
+                show(context, globals, *lhs),
+                show(context, globals, *rhs)
+            )
+        }
     }
 }

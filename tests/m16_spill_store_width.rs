@@ -1,6 +1,6 @@
 //! A spill store is the width of its slot.
 
-use std::process::Command;
+mod common;
 
 const SOURCE: &str = r#"extern int input_read(char *buffer, int count);
 static unsigned char nxt[80 * 32], classof[256], hit[80];
@@ -38,7 +38,7 @@ long scan(long *checksum)
 fn test_a_stored_cell_does_not_cover_the_next_cell() {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), SOURCE).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-O2", "--isel=dag", "-S", "-o", "-"])
         .output()
