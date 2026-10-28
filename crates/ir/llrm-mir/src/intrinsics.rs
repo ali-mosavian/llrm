@@ -108,6 +108,10 @@ pub enum Intrinsic {
     /// removes (LowerConstantIntrinsics.cpp); no code runs it. Only the
     /// integer overload is known here.
     IsConstant,
+    /// `llvm.objectsize`: the bytes from a pointer to the end of its object,
+    /// or the unknown answer (all ones, zero where the minimum is asked),
+    /// which `lower-constant-intrinsics` decides and removes; no code runs it.
+    ObjectSize,
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
@@ -493,7 +497,7 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 71] = [
+const TABLE: [Spec; 72] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -610,6 +614,14 @@ const TABLE: [Spec; 71] = [
         overloads: &[Kind::Int],
         returns: Slot::Int(1),
         parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.objectsize",
+        intrinsic: Intrinsic::ObjectSize,
+        overloads: &[Kind::Int, Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1), Slot::Int(1), Slot::Int(1), Slot::Int(1)],
         own: None,
     },
     Spec {

@@ -466,3 +466,17 @@ define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null
     assert!(names.contains(&"_pthread_join"), "{names:?}");
     assert!(!names.contains(&"__pthread_join"), "{names:?}");
 }
+
+/// macOS's `_FORTIFY_SOURCE` headers leave `llvm.objectsize` in the IR, and it was refused as an
+/// intrinsic with no lowering (`os.c`, `block.c` and `video.c` of the QB runtime). An object of unknown
+/// size is all ones, or zero where the minimum is asked.
+#[test]
+fn objectsize_of_an_unknown_object_is_minus_one_or_zero() {
+    let asm = driver::assembly(include_str!("data/objectsize.ll"), Platform::Darwin, true).expect("lowers");
+    let body = |name: &str| -> String {
+        let start = asm.lines().position(|line| line == format!("{name}:")).expect(name) + 1;
+        asm.lines().skip(start).take_while(|line| line.starts_with('\t') || line.starts_with(".L")).collect::<Vec<_>>().join("\n")
+    };
+    assert!(body("_maximum").contains("#-1") || body("_maximum").contains("movn"), "{asm}");
+    assert!(body("_minimum").contains("#0") || body("_minimum").contains("xzr"), "{asm}");
+}
