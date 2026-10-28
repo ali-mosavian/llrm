@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
 
-use crate::backend::allocate::Error;
+use crate::backend::allocresult::Error;
 use crate::backend::classes::RegisterClasses;
 use crate::backend::frame::Frame;
 use crate::model::ir::{self, Held, Imm, Loc, Mem, Operation, Reg, Semantics};
