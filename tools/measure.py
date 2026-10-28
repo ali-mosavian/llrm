@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What llrm-c costs to compile and how that cost grows, compared with the same measurement of the commit this one branches from.
+"""What llrm-cc costs to compile (clang's front end and llrm-llc, the driver's whole process tree) and how that cost grows, compared with the same measurement of the commit this one branches from.
 
     tools/measure.py check              measure this tree's compiler, compare with the merge-base's; exit 1 on a rise past tolerance
     tools/measure.py record SHA [BIN]   measure the compiler in BIN (default: this tree's) and store it as SHA's
@@ -104,10 +104,10 @@ sys.path.insert(0, str(HERE / "gate"))
 import gate  # noqa: E402
 
 DIST_BUILD = gate.DIST_BUILD
-# What a measurement needs is llrm-c (the compile cost is its own); the other seven binaries would each be a fat-LTO link.
+# What a measurement needs is llrm-cc and the llrm-llc it runs (the compile cost is theirs); the other binaries would each be a fat-LTO link.
 # The profile the bench's base is built in: its tools are all of the binaries (llrm-qb, llrm-nib ...), which the dist build above does not make.
 BENCH_BASE_PROFILE = "release"
-MEASURE_BUILDS = {"dist": "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-c", "release": gate.MEASURE_BUILD}
+MEASURE_BUILDS = {"dist": "env -u RUSTFLAGS cargo build --profile dist -q --bin llrm-cc --bin llrm-llc", "release": gate.MEASURE_BUILD}
 
 _spec = importlib.util.spec_from_file_location("compile_cost", HERE / "compile-cost.py")
 compile_cost = importlib.util.module_from_spec(_spec)
@@ -171,7 +171,7 @@ def method() -> str:
 
 def measured_dir(env: dict | None = None) -> Path:
     """The directory of the compiler under measurement: LLRM_BIN, else the target's `PROFILE` directory. A binary of another profile is refused: a
-    release llrm-c measured against a dist base reads every shape wrong by the difference of their inlining (8% of the compile)."""
+    release llrm-cc measured against a dist base reads every shape wrong by the difference of their inlining (8% of the compile)."""
     env = os.environ if env is None else env
     found = Path(env["LLRM_BIN"]) if env.get("LLRM_BIN") else llrmbin.target_dir(env) / PROFILE
     if not found.name.startswith(PROFILE):
@@ -180,10 +180,10 @@ def measured_dir(env: dict | None = None) -> Path:
 
 
 def ensure_dist(env: dict | None = None) -> Path:
-    """target/dist with an llrm-c at least as new as the sources, built if not: what a local gate run measures (CI downloads it)."""
+    """target/dist with an llrm-cc at least as new as the sources, built if not: what a local gate run measures (CI downloads it)."""
     env = os.environ if env is None else env
     found = llrmbin.target_dir(env) / "dist"
-    if not (found / "llrm-c").is_file() or llrmbin.stale_binaries(found):
+    if not (found / "llrm-cc").is_file() or llrmbin.stale_binaries(found):
         require_space(found)
         subprocess.run(["bash", "-c", MEASURE_BUILDS["dist"]], cwd=ROOT, env={k: v for k, v in env.items() if k != "LLRM_BIN"}, check=True)
     return found
@@ -211,7 +211,7 @@ def use_dist() -> None:
 
 def measure_all(jobs: int) -> dict:
     """This process's compiler (LLRM_BIN, else the tree's target): compile cost, and the cost at N/2, N and 2N of each axis and step."""
-    compiler = measured_dir() / "llrm-c"
+    compiler = measured_dir() / "llrm-cc"
     passes = scaling_gate.measure_passes(jobs)
     return {
         "method": method(),
@@ -308,7 +308,7 @@ def snapshot(release: Path, sha: str, kind: str = "") -> Path:
 def built(sha: str, profile: str | None = None) -> Path:
     """`sha` built in a tree and target directory of its own (reused, so each build is an increment) while holding the build lock, and
     its binaries as a snapshot that no later build changes: the lock covers the build, not what is measured with it. `profile` is the
-    measurement's (dist: llrm-c alone); the bench's base needs every tool of the release build."""
+    measurement's (dist: llrm-cc and llrm-llc alone); the bench's base needs every tool of the release build."""
     profile = profile or PROFILE
     if prebuilt := profile == "dist" and os.environ.get("LLRM_MEASURE_BASE_BIN"):  # CI builds the base in a job of its own, beside the head's
         return Path(prebuilt)
@@ -328,11 +328,11 @@ def built(sha: str, profile: str | None = None) -> Path:
         return snapshot(BUILD / "target" / profile, sha, profile)
 
 
-SYSTEM_BUILD = f"env -u RUSTFLAGS cargo build {'--profile dist' if PROFILE == 'dist' else '--release'} -q --bin llrm-c --features system-alloc"
+SYSTEM_BUILD = f"env -u RUSTFLAGS cargo build {'--profile dist' if PROFILE == 'dist' else '--release'} -q --bin llrm-cc --bin llrm-llc --features system-alloc"
 
 
 def built_system(sha: str) -> Path | None:
-    """`sha`'s llrm-c with the system allocator in a target of its own (reused), a snapshot of its release directory (as `built`'s); None
+    """`sha`'s llrm-cc with the system allocator in a target of its own (reused), a snapshot of its release directory (as `built`'s); None
     where `sha` has no `system-alloc` feature (a base from before it)."""
     with locked("build"):
         BUILD.mkdir(parents=True, exist_ok=True)
@@ -705,7 +705,7 @@ def main() -> int:
     parser.add_argument("--base", default=os.environ.get("LLRM_MEASURE_REF", "origin/main"), help="check: the branch the merge-base is taken with")
     parser.add_argument("--jobs", type=int, default=gate.default_jobs(os.environ))
     args = parser.parse_args()
-    if args.command == "dist":  # the directory the measured llrm-c is in, built if need be
+    if args.command == "dist":  # the directory the measured llrm-cc is in, built if need be
         print(ensure_dist())
         return 0
     if args.command == "check":
