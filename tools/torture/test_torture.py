@@ -74,6 +74,14 @@ class OptionTests(unittest.TestCase):
         self.assertEqual(torture.program_options('/* { dg-additional-options "-std=gnu89" } */\nint x;'), ["-std=gnu89"])
 
 
+    def test_every_program_is_built_as_gnu89(self):
+        """20020819-1 and 960218-1 (implicit int) and 20000412-3 (an undeclared function) were compile findings: clang 24 refuses them
+        unless told the suite's dialect (24 of 32 m32 gate faults)."""
+        self.assertIn("-std=gnu89", torture.DIALECT)
+        self.assertIn("-Wno-implicit-int", torture.DIALECT)
+        self.assertIn("-Wno-implicit-function-declaration", torture.DIALECT)
+
+
 class SymbolTests(unittest.TestCase):
     def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
         """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and

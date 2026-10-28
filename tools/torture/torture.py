@@ -87,6 +87,9 @@ def refusal(text: str, rules: list[dict]) -> str | None:
 # The options a program asks for (dg-options, dg-additional-options) that llrm-c has: the rest tune GCC's passes.
 PROGRAM_OPTIONS = ("-fwrapv", "-std=gnu89")
 
+# GCC's torture suite is gnu89: implicit int, K&R definitions and undeclared functions, which clang 24 refuses by default.
+DIALECT = ("-std=gnu89", "-Wno-implicit-int", "-Wno-implicit-function-declaration")
+
 
 def program_options(text: str) -> list[str]:
     """The options of `{ dg-options "..." }` and `{ dg-additional-options "..." }` lines that llrm-c takes."""
@@ -154,7 +157,7 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     if sized is not None:
         compiled = work / f"{stem}.c"
         compiled.write_text(f"#define STACK_SIZE {sized}\n{text}")
-    command, row = dosbatch.c_compile(compiled, obj, target, LEVELS[level], Path(), [], ["-I", str(source.parent), "-I", str(HERE / "include"), *program_options(text)])
+    command, row = dosbatch.c_compile(compiled, obj, target, LEVELS[level], Path(), [], ["-I", str(source.parent), "-I", str(HERE / "include"), *DIALECT, *program_options(text)])
     done = run_within_cpu(command, COMPILE_SECONDS, row)
     if done is None:
         return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
