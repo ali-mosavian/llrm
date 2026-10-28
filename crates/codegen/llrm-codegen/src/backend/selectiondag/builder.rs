@@ -1405,11 +1405,17 @@ impl Builder<'_> {
             let mut pieces = Vec::new();
             for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
                 let leaf_vt = self.type_of(leaf)?;
-                let reg = self.sized_register(reg, leaf_vt);
-                let copy = self.dag.get_copy_from_phys_reg(chain, reg, leaf_vt, glue);
+                // `getCopyFromParts`: a leaf narrower than its register is
+                // read in the register's type and truncated
+                let wide = match self.parts_in(leaf_vt, 1) {
+                    Ok((wide, 1)) if leaf_vt.is_integer() && leaf_vt.size_in_bits() < wide.size_in_bits() => wide,
+                    _ => leaf_vt,
+                };
+                let reg = self.sized_register(reg, wide);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, wide, glue);
                 chain = SDValue { node: copy.node, res: 1 };
                 glue = SDValue { node: copy.node, res: 2 };
-                pieces.push(copy);
+                pieces.push(if wide == leaf_vt { copy } else { self.dag.get_node(ISD::Truncate, leaf_vt, &[copy]) });
             }
             self.dag.set_root(chain);
             return Ok(Some(self.merge(&pieces)));
@@ -1488,6 +1494,15 @@ impl Builder<'_> {
                 return Err(Refused("an aggregate result that is not one register a member"));
             }
             for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                // `getCopyToParts`: a leaf narrower than its register is
+                // any-extended to the register's type (`{ i64, i48 }`)
+                let narrow = self.dag.value_type(piece);
+                let piece = match self.parts_in(narrow, 1) {
+                    Ok((wide, 1)) if narrow.is_integer() && narrow.size_in_bits() < wide.size_in_bits() => {
+                        self.dag.get_node(ISD::AnyExtend, wide, &[piece])
+                    }
+                    _ => piece,
+                };
                 let piece_vt = self.dag.value_type(piece);
                 let reg = self.sized_register(reg, piece_vt);
                 let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);

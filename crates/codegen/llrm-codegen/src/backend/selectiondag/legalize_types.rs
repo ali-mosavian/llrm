@@ -552,6 +552,42 @@ impl<'a> TypeLegalizer<'a> {
                 let NodeData::Mem(info) = self.dag.node(value).data else {
                     unreachable!("a load has a memory operand")
                 };
+                if let Some((round, extra)) = odd_memory(info.mem_vt) {
+                    // `PromoteIntRes_LOAD` of memory that is not a power of
+                    // two wide (`{ i64, i48 }`) is `ExpandLoad`: the low part
+                    // zero-extended, the rest above it.
+                    let low = self
+                        .dag
+                        .get_ext_load(
+                            super::actions::LoadExt::ZExtLoad,
+                            to,
+                            chain,
+                            ptr,
+                            super::dag::MemInfo { mem_vt: round, ..info },
+                        );
+                    let high_ptr = self.address_plus(ptr, u128::from(round.size_in_bits() / 8));
+                    let high_ptr_load = self.dag.get_ext_load(
+                        super::actions::LoadExt::ZExtLoad,
+                        to,
+                        chain,
+                        high_ptr,
+                        super::dag::MemInfo { mem_vt: extra, align: info.align.min(round.size_in_bits() / 8), ..info },
+                    );
+                    let by = self.dag.get_constant(u128::from(round.size_in_bits()), EVT::I8);
+                    let high = self.dag.get_node(ISD::Shl, to, &[high_ptr_load, by]);
+                    let chains = self
+                        .dag
+                        .get_token_factor(
+                            &[
+                                SDValue { node: low.node, res: 1 },
+                                SDValue { node: high_ptr_load.node, res: 1 },
+                            ],
+                        );
+                    self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
+                    let joined = self.dag.get_node(ISD::Or, to, &[low, high]);
+                    self.set_promoted_integer(value, joined);
+                    return Ok(());
+                }
                 let loaded = self.dag.get_load(to, chain, ptr, info);
                 self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: loaded.node, res: 1 });
                 loaded
@@ -643,6 +679,34 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
                 let inner = self.dag.get_value_type_node(self.dag.value_type(src));
                 self.dag.get_node(ISD::SignExtendInReg, vt, &[wide, inner])
+            }
+            ISD::Store
+                if at == 1
+                    && matches!(
+                        self.dag.node(node).data,
+                        NodeData::Mem(info) if odd_memory(info.mem_vt).is_some()
+                    ) =>
+            {
+                // `PromoteIntOp_STORE` of memory that is not a power of two
+                // wide (`{ i64, i48 }`): the truncating store the pin expands
+                // to a store of the low part and one of the rest above it.
+                let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("a store has a memory operand")
+                };
+                let (round, extra) = odd_memory(info.mem_vt).unwrap_or((info.mem_vt, info.mem_vt));
+                let promoted = self.promoted_integer(self.dag.operand(node, 1));
+                let wide = self.dag.value_type(promoted);
+                let low = self.dag.get_node(ISD::Truncate, round, &[promoted]);
+                let by = self.dag.get_constant(u128::from(round.size_in_bits()), EVT::I8);
+                let upper = self.dag.get_node(ISD::Srl, wide, &[promoted, by]);
+                let upper = self.dag.get_node(ISD::Truncate, extra, &[upper]);
+                let high_ptr = self.address_plus(ptr, u128::from(round.size_in_bits() / 8));
+                let low_store = self.dag.get_store(chain, low, ptr, super::dag::MemInfo { mem_vt: round, ..info });
+                let high_info =
+                    super::dag::MemInfo { mem_vt: extra, align: info.align.min(round.size_in_bits() / 8), ..info };
+                let high_store = self.dag.get_store(chain, upper, high_ptr, high_info);
+                self.dag.get_token_factor(&[low_store, high_store])
             }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
@@ -2268,4 +2332,16 @@ impl<'a> TypeLegalizer<'a> {
         }
         true
     }
+}
+
+/// A memory type that is not a power of two wide, as the power of two below it
+/// and what is left (`i48`: `i32` and `i16`); none if the rest is no type.
+fn odd_memory(mem: EVT) -> Option<(EVT, EVT)> {
+    let bits = mem.size_in_bits();
+    if bits < 16 || bits.is_power_of_two() {
+        return None;
+    }
+    let round = bits.next_power_of_two() / 2;
+    let extra = bits - round;
+    (extra.is_power_of_two() && extra >= 8).then(|| (EVT::integer(round), EVT::integer(extra)))
 }
