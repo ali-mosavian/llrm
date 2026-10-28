@@ -27,6 +27,19 @@ fn mask(bits: u32) -> u64 {
     if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 }
 }
 
+/// What a comparison reads once its operands are in registers.
+pub(super) struct CompareOperands {
+    pub(super) predicate: IntPredicate,
+    width: Width,
+    left: Gpr,
+    right: CompareRight,
+}
+
+enum CompareRight {
+    Constant { constant: u64, signed_constant: i64, bits: u32 },
+    Register(Gpr),
+}
+
 pub(super) fn condition_of(predicate: IntPredicate) -> Cond {
     match predicate {
         IntPredicate::Eq => Cond::Eq,
@@ -185,7 +198,9 @@ impl Selector<'_> {
         }
         if matches!(op, BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr) && self.folds_into_reader(instruction) {
             // The reader shifts its operand itself.
-            self.fused.insert(super::value_def(self.function, result.expect("a shift has a result")).expect("an instruction"));
+            self.fused.insert(
+                super::value_def(self.function, result.expect("a shift has a result")).expect("an instruction"),
+            );
             return Ok(());
         }
         if let Some(done) = self.shifted_operand(op, bits, instruction)? {
@@ -279,10 +294,11 @@ impl Selector<'_> {
         Ok(G { reg: rd, bits, known })
     }
 
-    /// Whether the product `value` is read only by an `add` or `sub` of its own block that can
-    /// take it as the multiply of a `madd` or `msub`: 32 or 64 bits, neither factor a constant
-    /// (a constant factor is a shift or an add), the other addend not a constant, and, for a
-    /// `sub`, the product subtracted.
+    /// Whether the product `value` is read only by an `add` or `sub` of its own
+    /// block that can take it as the multiply of a `madd` or `msub`: 32 or
+    /// 64 bits, neither factor a constant (a constant factor is a shift or
+    /// an add), the other addend not a constant, and, for a `sub`, the
+    /// product subtracted.
     pub(super) fn accumulated(
         &self,
         value: llrm_mir::ValueId,
@@ -301,10 +317,9 @@ impl Selector<'_> {
         let reader = self.function.instruction(user.user);
         let [first, second] = reader.operands[..] else { return false };
         let other = match reader.opcode {
-            // Of two products added, the second is the one accumulated onto the first.
-            llrm_mir::Opcode::Binary(BinaryOp::Add)
-                if first == Operand::Value(value) && !self.is_product(second) =>
-            {
+            // Of two products added, the second is the one accumulated onto the
+            // first.
+            llrm_mir::Opcode::Binary(BinaryOp::Add) if first == Operand::Value(value) && !self.is_product(second) => {
                 second
             }
             llrm_mir::Opcode::Binary(BinaryOp::Add | BinaryOp::Sub) if second == Operand::Value(value) => first,
@@ -318,19 +333,20 @@ impl Selector<'_> {
         operand: Operand,
     ) -> bool {
         let Operand::Value(value) = operand else { return false };
-        super::value_def(self.function, value).is_some_and(|def| {
-            self.function.instruction(def).opcode == llrm_mir::Opcode::Binary(BinaryOp::Mul)
-        })
+        super::value_def(self.function, value)
+            .is_some_and(|def| self.function.instruction(def).opcode == llrm_mir::Opcode::Binary(BinaryOp::Mul))
     }
 
-    /// `madd` or `msub` for an `add` or `sub` of a product left for it by [`Self::accumulated`].
+    /// `madd` or `msub` for an `add` or `sub` of a product left for it by
+    /// [`Self::accumulated`].
     fn multiply_accumulate(
         &mut self,
         subtract: bool,
         bits: u32,
         instruction: &Instruction,
     ) -> Selected<Option<G>> {
-        // A product, or the extension of a 32-bit one (`widemul`): its factors, and whether it widens.
+        // A product, or the extension of a 32-bit one (`widemul`): its factors,
+        // and whether it widens.
         let product = |operand: Operand| match operand {
             Operand::Value(value) => super::value_def(self.function, value)
                 .filter(|def| self.fused.contains(def))
@@ -586,13 +602,15 @@ impl Selector<'_> {
         let result = instruction.result;
         let to = instruction.ty;
         if matches!(op, CastOp::FPToSI | CastOp::FPToUI) {
-            // Its operand may be a multiply left to it (`fixedpoint`), with no value.
+            // Its operand may be a multiply left to it (`fixedpoint`), with no
+            // value.
             return self.float_cast(op, instruction);
         }
         if let Some(product) = self.widened_product(instruction) {
             let inst = super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
             if self.accumulated(result.expect("checked")) {
-                // `smaddl` or `smsubl` reads the product where the add or subtract is.
+                // `smaddl` or `smsubl` reads the product where the add or
+                // subtract is.
                 self.fused.insert(inst);
                 return Ok(());
             }
@@ -613,8 +631,10 @@ impl Selector<'_> {
                 self.define(result, Src::Val(Val::Int(G { reg: g.reg, bits, known })))
             }
             CastOp::ZExt | CastOp::SExt if self.folds_into_index(instruction) => {
-                // The `getelementptr` that reads it extends the index in its addressing mode.
-                let inst = super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
+                // The `getelementptr` that reads it extends the index in its
+                // addressing mode.
+                let inst =
+                    super::value_def(self.function, result.expect("a cast has a result")).expect("an instruction");
                 self.fused.insert(inst);
                 self.indexed.insert(inst);
                 Ok(())
@@ -684,9 +704,10 @@ impl Selector<'_> {
         self.define(Some(result), Src::Val(Val::Int(G { reg: rd, bits: 1, known: Known::Zero })))
     }
 
-    /// Whether the comparison `value` is read only by branches and selects of its own block, each as
-    /// the condition, so it is selected at each of them (`flagcse` drops the repeats the flags
-    /// already hold, as the pin's one `cmp` for the selects and the branch of one test). A float
+    /// Whether the comparison `value` is read only by branches and selects of
+    /// its own block, each as the condition, so it is selected at each of
+    /// them (`flagcse` drops the repeats the flags already hold, as the
+    /// pin's one `cmp` for the selects and the branch of one test). A float
     /// comparison needing two conditions is a value.
     pub(super) fn fusable(
         &self,
@@ -730,6 +751,20 @@ impl Selector<'_> {
             self.test_bits(&and)?;
             return Ok(condition_of(predicate));
         }
+        let operands = self.compare_operands(predicate, a, b)?;
+        self.set_flags_of(&operands);
+        Ok(condition_of(operands.predicate))
+    }
+
+    /// The registers and constant a comparison of `a` with `b` reads, extended
+    /// as the predicate needs (a constant on the left is swapped to the
+    /// right, with the predicate).
+    pub(super) fn compare_operands(
+        &mut self,
+        predicate: IntPredicate,
+        a: Operand,
+        b: Operand,
+    ) -> Selected<CompareOperands> {
         let (mut left, mut right, mut predicate) = (self.src(a)?, self.src(b)?, predicate);
         if matches!(left, Src::Int { .. }) && !matches!(right, Src::Int { .. }) {
             std::mem::swap(&mut left, &mut right);
@@ -749,54 +784,96 @@ impl Selector<'_> {
         let width = width_of(bits);
         let l = self.gpr_of(left)?;
         let l = self.extended(G { bits, ..l }, want);
-        if let Src::Int { value, .. } = right {
-            // `x cmp c` as `subs` of the constant, or `adds` of its negation.
-            // The constant is extended as the register is, so the
-            // flags agree.
+        let right = if let Src::Int { value, .. } = right {
+            // The constant is extended as the register is, so the flags agree.
             let constant = if signed { llrm_mir::context::signed(value, bits) as i64 as u64 } else { value as u64 };
             let constant = constant & mask(width.bits());
             let signed_constant = if width == Width::W { i64::from(constant as u32 as i32) } else { constant as i64 };
-            let (add, magnitude) = if signed_constant < 0 && bits > 1 {
-                (true, signed_constant.unsigned_abs())
-            } else {
-                (false, constant)
-            };
-            if let Some((imm12, shift12)) = add_sub_immediate(magnitude) {
-                self.inst(Inst::AddSubImm {
-                    op: AddSub { subtract: !add, set_flags: true },
-                    width,
-                    rd: Gpr::R31,
-                    rn: l.reg,
-                    imm12,
-                    shift12,
-                });
-                return Ok(condition_of(predicate));
+            CompareRight::Constant { constant, signed_constant, bits }
+        } else {
+            let r = self.gpr_of(right)?;
+            CompareRight::Register(self.extended(G { bits, ..r }, want).reg)
+        };
+        Ok(CompareOperands { predicate, width, left: l.reg, right })
+    }
+
+    /// `x cmp c` as `subs` of the constant, or `adds` of its negation; else
+    /// `subs` of a register.
+    pub(super) fn set_flags_of(
+        &mut self,
+        operands: &CompareOperands,
+    ) {
+        let CompareOperands { width, left, .. } = *operands;
+        match operands.right {
+            CompareRight::Constant { constant, signed_constant, bits } => {
+                let (add, magnitude) = if signed_constant < 0 && bits > 1 {
+                    (true, signed_constant.unsigned_abs())
+                } else {
+                    (false, constant)
+                };
+                if let Some((imm12, shift12)) = add_sub_immediate(magnitude) {
+                    self.inst(Inst::AddSubImm {
+                        op: AddSub { subtract: !add, set_flags: true },
+                        width,
+                        rd: Gpr::R31,
+                        rn: left,
+                        imm12,
+                        shift12,
+                    });
+                    return;
+                }
+                let reg = self.mf.gpr();
+                self.load_immediate(reg, bits, constant);
+                self.subs_register(width, left, reg);
             }
-            let reg = self.mf.gpr();
-            self.load_immediate(reg, bits, constant);
-            self.inst(Inst::AddSubShifted {
-                op: AddSub { subtract: true, set_flags: true },
-                width,
-                rd: Gpr::R31,
-                rn: l.reg,
-                rm: reg,
-                shift: Shift::Lsl,
-                amount: 0,
-            });
-            return Ok(condition_of(predicate));
+            CompareRight::Register(right) => self.subs_register(width, left, right),
         }
-        let r = self.gpr_of(right)?;
-        let r = self.extended(G { bits, ..r }, want);
+    }
+
+    fn subs_register(
+        &mut self,
+        width: Width,
+        left: Gpr,
+        right: Gpr,
+    ) {
         self.inst(Inst::AddSubShifted {
             op: AddSub { subtract: true, set_flags: true },
             width,
             rd: Gpr::R31,
-            rn: l.reg,
-            rm: r.reg,
+            rn: left,
+            rm: right,
             shift: Shift::Lsl,
             amount: 0,
         });
-        Ok(condition_of(predicate))
+    }
+
+    /// `ccmp`/`ccmn`: where `cond` holds, the flags of the comparison; else
+    /// `nzcv`.
+    pub(super) fn set_flags_if(
+        &mut self,
+        operands: &CompareOperands,
+        nzcv: u8,
+        cond: Cond,
+    ) {
+        let CompareOperands { width, left, .. } = *operands;
+        let (negate, second) = match operands.right {
+            CompareRight::Constant { constant, signed_constant, bits } => {
+                let (negate, magnitude) = if signed_constant < 0 && bits > 1 {
+                    (true, signed_constant.unsigned_abs())
+                } else {
+                    (false, constant)
+                };
+                if magnitude <= 31 {
+                    (negate, CcOperand::Imm5(magnitude as u8))
+                } else {
+                    let reg = self.mf.gpr();
+                    self.load_immediate(reg, bits, constant);
+                    (false, CcOperand::Reg(reg))
+                }
+            }
+            CompareRight::Register(right) => (false, CcOperand::Reg(right)),
+        };
+        self.inst(Inst::CondCompare { negate, width, rn: left, rm_or_imm: second, nzcv, cond });
     }
 
     fn is_zero(
@@ -899,7 +976,7 @@ impl Selector<'_> {
         operand: Operand,
     ) -> Selected<Cond> {
         if let Operand::Value(value) = operand
-            && (self.fusable(value) || self.chains.contains(value))
+            && (self.fusable(value) || self.chains.contains(value) || self.conjunctions.contains(value))
             && let Some(inst) = super::value_def(self.function, value)
         {
             let compare = self.function.instruction(inst).clone();
@@ -912,6 +989,11 @@ impl Selector<'_> {
                 }
                 _ => {}
             }
+        }
+        if let Operand::Value(value) = operand
+            && self.is_conjunction_root(value)
+        {
+            return self.conjunction(value);
         }
         let g = self.operand_g(operand)?;
         // `tst w, #1`

@@ -204,7 +204,7 @@ impl Selector<'_> {
     ) -> Selected<Test> {
         use llrm_mir::IntPredicate;
         if let Operand::Value(value) = operand
-            && (self.fusable(value) || self.chains.contains(value))
+            && (self.fusable(value) || self.chains.contains(value) || self.conjunctions.contains(value))
             && let Some(inst) = super::value_def(self.function, value)
             && let Opcode::ICmp(predicate) = self.function.instruction(inst).opcode
         {
@@ -385,9 +385,12 @@ impl Selector<'_> {
             Operand::Value(condition) => self.chains.roots.get(&condition).cloned(),
             _ => None,
         };
-        let leaves = chain.as_ref().map_or_else(|| vec![instruction.operands[0]], |chain| {
-            chain.leaves.iter().map(|&leaf| Operand::Value(leaf)).collect()
-        });
+        let leaves = chain
+            .as_ref()
+            .map_or_else(
+                || vec![instruction.operands[0]],
+                |chain| chain.leaves.iter().map(|&leaf| Operand::Value(leaf)).collect(),
+            );
         let true_label = self.edge(from, on_true, leaves.len() + 1)?;
         let false_label = self.edge(from, on_false, leaves.len() + 1)?;
         let jump = |test: &Test, label: &str| {

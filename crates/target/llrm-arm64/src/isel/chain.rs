@@ -4,8 +4,9 @@
 //!
 //! The comparisons and the `or`/`and`s joining them are selected where the
 //! branch is. `select a, b, false` and `select a, true, b`, LLVM's logical
-//! `and` and `or` (`m_LogicalAnd`, `m_LogicalOr`), join like the instructions. A mix of `or` and `and` is not a chain: it needs a block per
-//! subtree, and stays a value.
+//! `and` and `or` (`m_LogicalAnd`, `m_LogicalOr`), join like the instructions.
+//! A mix of `or` and `and` is not a chain: it needs a block per subtree, and
+//! stays a value.
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::{BinaryOp, InstId, Opcode, Operand, ValueId};
@@ -61,8 +62,8 @@ impl Selector<'_> {
         self.chains = chains;
     }
 
-    /// Whether `value` is a one-use `or`/`and` of i1 read by `reader` in its own
-    /// block, over comparisons and chains of the same operator.
+    /// Whether `value` is a one-use `or`/`and` of i1 read by `reader` in its
+    /// own block, over comparisons and chains of the same operator.
     fn chain_of(
         &self,
         value: ValueId,
@@ -91,7 +92,7 @@ impl Selector<'_> {
     /// What `inst` joins and how: an `or`/`and`, or a `select` whose false arm
     /// is `false` (`and` of its condition and true arm) or whose true arm is
     /// `true` (`or` of its condition and false arm).
-    fn joined(
+    pub(super) fn joined(
         &self,
         inst: InstId,
     ) -> Option<(BinaryOp, [Operand; 2])> {
