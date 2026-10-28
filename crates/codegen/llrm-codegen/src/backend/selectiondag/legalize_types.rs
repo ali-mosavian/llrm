@@ -2377,7 +2377,7 @@ impl<'a> TypeLegalizer<'a> {
 /// and what is left (`i48`: `i32` and `i16`); none if the rest is no type.
 fn odd_memory(mem: EVT) -> Option<(EVT, EVT)> {
     let bits = mem.size_in_bits();
-    if bits < 16 || bits.is_power_of_two() {
+    if bits.is_power_of_two() {
         return None;
     }
     let round = bits.next_power_of_two() / 2;
