@@ -10,8 +10,11 @@
 /* The modes of OPEN, as the frontend passes them (inc/devdef.inc MD_*). */
 enum FileMode { MD_INPUT = 1, MD_OUTPUT = 2, MD_RANDOM = 4, MD_APPEND = 8, MD_BINARY = 32 };
 
+/* Fdb.flags (inc/files.inc). */
+enum { FL_FIELD = 0x08 };
+
 typedef struct Fdb {
-    SD fielded;   /* the FIELD back-pointer string, if any */
+    SD fielded;   /* the FIELD back-pointer string: the address of each fielded SD, a word each */
     short handle; /* the OS's */
     byte mode;    /* an enum FileMode */
     byte flags;
@@ -19,6 +22,9 @@ typedef struct Fdb {
     byte column;
     unsigned record_length; /* RANDOM's record, INPUT's and OUTPUT's buffer */
 } Fdb;
+
+/* A RANDOM file's record buffer, which FIELD maps its strings onto: it follows the Fdb. */
+#define FDB_BUFFER(fdb) ((char *)((Fdb *)(fdb) + 1))
 
 /* B$OPEN, B$CLOS, B$GETn, B$PUTn, B$FLOF, B$FLOC, B$FEOF */
 void B_OPEN(SD *name, short channel, short record_length, unsigned short mode);
@@ -42,5 +48,7 @@ int B_FREF(void);
 void B_GET4(short channel, long record, qb_data_ptr data, short length);
 void B_PUT4(short channel, long record, qb_data_ptr data, short length);
 void B_SSEK(short channel, long position);
+void B_FLDP(short channel);
+void B_FIEL(short width, SD *variable);
 
 #endif
