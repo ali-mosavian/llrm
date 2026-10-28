@@ -1006,7 +1006,7 @@ fn staged(
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
         // selector for the rest -- to bisect a wrong result to a function
-        // DEVIATE SD247: the DAG has no atomic nodes yet; a function calling a
+        // DEVIATE SD253: the DAG has no atomic nodes yet; a function calling a
         // hidden atomic (`llrm_mir::atomic::hidden`) is selected by the old
         // selector.
         Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
