@@ -71,6 +71,10 @@ pub struct GvnPass<'a> {
     layout: &'a DataLayout,
     function: &'a mut Function,
     outer: &'a Outer,
+    /// The manager's `ExposedFrames`, taken at entry: removals only shrink
+    /// exposure and GVN makes no allocas. Without it `object_of` walks an
+    /// alloca's uses at every access asked of it.
+    exposed: Option<&'a std::collections::BTreeSet<llrm_mir::module::ValueId>>,
     dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
@@ -109,6 +113,20 @@ pub fn run_impl_cfg(
     pre: bool,
     dominators: Option<&DomTree>,
 ) -> (bool, bool) {
+    run_impl_exposed(context, layout, function, outer, pre, dominators, None)
+}
+
+/// `run_impl_cfg` with the function's exposed frames when the caller holds
+/// them.
+pub fn run_impl_exposed(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    pre: bool,
+    dominators: Option<&DomTree>,
+    exposed: Option<&std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
     let mut tables = tables;
     tables.0.translating = pre;
@@ -118,6 +136,7 @@ pub fn run_impl_cfg(
         layout,
         function,
         outer,
+        exposed,
         dt,
         vn: tables.0,
         leader_table: tables.1,
@@ -133,6 +152,14 @@ pub fn run_impl_cfg(
     let computed = pass.run_impl();
     TABLES.with(|pool| pool.set(Some((std::mem::take(&mut pass.vn), std::mem::take(&mut pass.leader_table)))));
     (pass.function.changes_since(mark).map_or(computed, |changes| !changes.is_empty()), pass.cfg_changed)
+}
+
+/// `unit` told the frames the pass holds as exposed, when it holds them.
+pub(super) fn exposing<'b>(
+    unit: llrm_analysis::memory::Unit<'b>,
+    exposed: Option<&'b std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+) -> llrm_analysis::memory::Unit<'b> {
+    exposed.map_or(unit, |set| unit.with_exposed(set))
 }
 
 impl GvnPass<'_> {
@@ -262,7 +289,10 @@ impl GvnPass<'_> {
             self.vn.verify_removed(Operand::Value(result));
         }
         // `MD->removeInstruction(I)`, while it is still in its block.
-        let unit = llrm_analysis::memory::Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        let unit = exposing(
+            llrm_analysis::memory::Unit::within(&*self.context, self.layout, &*self.function, self.outer),
+            self.exposed,
+        );
         self.md.remove_instruction(&unit, inst);
         self.function.erase(inst).expect("an instruction nothing uses");
     }

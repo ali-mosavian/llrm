@@ -1810,6 +1810,35 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+
+def test_a_conflict_detail_names_the_owner_and_the_conflicting_file(tmp_path):
+    """#5456 and #5462 were refused at squash for merge conflicts: the line said neither who owns them nor where (dag_function_tests.rs); the coordinator ran git merge-tree by hand."""
+
+    def git(*args):
+        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "tests.rs").write_text("one\n")
+    git("add", "."), git("commit", "-qm", "base")
+    git("checkout", "-q", "-b", "pr")
+    (tmp_path / "tests.rs").write_text("pr\n")
+    git("commit", "-qam", "pr")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    (tmp_path / "tests.rs").write_text("landed\n")
+    git("commit", "-qam", "landed")
+    assert ps.conflict_detail(head, "TL;DR\n\nOwner: w10\nRows: none", "main", tmp_path) == " [owner w10; conflicts in: tests.rs]"
+    assert ps.conflict_detail(head, "", "main", tmp_path).startswith(" [owner unknown;")
+
+
+def test_a_squash_refused_for_merge_conflicts_prints_the_owner_and_files(capsys, monkeypatch):
+    monkeypatch.setattr(ps, "conflict_detail", lambda head, body, *rest: " [owner w10; conflicts in: dag_function_tests.rs]")
+    info = {"mergeable": "MERGEABLE", "headRefOid": "a" * 40, "title": "t", "headRefName": "b", "body": "Owner: w10"}
+    refuse = lambda command, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: Pull Request has merge conflicts (mergePullRequest)\n")  # noqa: E731
+    assert ps.squash("5462", info, "body", run=refuse) is False
+    assert "has merge conflicts (mergePullRequest) [owner w10; conflicts in: dag_function_tests.rs]" in capsys.readouterr().out
+
+
 def test_a_scanner_refusal_names_the_prs_and_files_behind_it():
     """sqb-5378 refused on target_facts with three files and no PR; the owners were found by hand (the file list was the only clue)."""
     failing = {"integration target_facts::shared_code_holds_no_copy_of_a_target_fact: read the target's description instead of copying it: [crates/codegen/llrm-codegen/src/backend/funnel.rs: 1 copies of a target fact, none allowed; crates/codegen/llrm-codegen/src/backend/latecleanup.rs: 3 copies; tools/other.py: 1]"}
@@ -1932,5 +1961,21 @@ def test_a_red_naming_a_file_asks_the_prs_touching_it_before_the_rest():
     alone = lambda number: asked.append(number) or number == "5"  # noqa: E731
     assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["5"]
     assert asked[0] == "3", asked
-    assert ps.named_files("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
-    assert ps.named_files("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file
+    assert ps.files_named_in("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
+    assert ps.files_named_in("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file
+
+
+def test_no_function_assigns_a_local_that_shadows_a_module_function_it_calls():
+    """merge_batch's build branch assigned `named_files = ...` while its integration branch called the module's named_files(): UnboundLocalError crashed the 07:39 pass (#5703)."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ps))
+    module_functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    clashes = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef):
+            stores = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+            calls = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            clashes += [f"{fn.name}: {name}" for name in sorted(stores & calls & module_functions)]
+    assert clashes == [], clashes

@@ -359,9 +359,9 @@ const ROWS: &[Row] = &[
         "Remove dead machine instructions",
         1,
         Executed,
-        "dead-code elimination in MIR; machinedce.rs after allocation",
+        "deadmi.rs after selection (registry deadmi@1); machinedce.rs after allocation",
         "-disable-machine-dce",
-        "before register allocation MIR already removed the dead. Pin: changed code in 61 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-dce -O2: +11 instr, +50 B, 14 IRs differ; -disable-machine-dce -Os: +19 instr, +131 B, 14 IRs differ",
+        "MIR removes the dead values; this one removes what selection leaves unread. Pin: changed code in 61 (-O2) and 61 (-Os) of 77 IRs; -disable-machine-dce -O2: +11 instr, +50 B, 14 IRs differ; -disable-machine-dce -Os: +19 instr, +131 B, 14 IRs differ",
     ),
     row(
         "Early If-Conversion",

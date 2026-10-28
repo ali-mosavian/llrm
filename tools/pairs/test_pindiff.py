@@ -250,6 +250,39 @@ def test_rowdelta_reads_back_what_pindiff_wrote_and_lists_only_moved_rows():
     assert rowdelta.deltas(before, after) == ["a: ins 134->124 (pin 100), nopad 462->379 (pin 296)"]
 
 
+def _row(name, ins, pin_ins):
+    return {"name": name, "ins": ins, "pin_ins": pin_ins, "bytes": 100, "pin_bytes": 100, "free": 90, "pin_free": 90, "old_bytes": None, "old_free": None}
+
+
+def test_the_dynamic_columns_rank_by_clocks_and_flag_what_runs_slower_or_differs():
+    """tile was 79 instructions below the pin and ran 94.7% more instructions (static counts flattered it): a row that is smaller and slower is flagged
+    CLK>pin and listed before one that is larger and faster; an output that differs is flagged whatever the clocks."""
+    pindiff = load("pindiff")
+    dyn = {
+        "tile": {"ins": 4210, "pin_ins": 2162, "clk": 8321, "pin_clk": 4277, "same": True},
+        "big": {"ins": 900, "pin_ins": 800, "clk": 1000, "pin_clk": 1500, "same": True},
+        "odd": {"ins": 10, "pin_ins": 10, "clk": 90, "pin_clk": 100, "same": False},
+    }
+    lines = pindiff.table([_row("big", 200, 100), _row("tile", 100, 179), _row("odd", 10, 10)], False, dyn)
+    names = [line.split()[0] for line in lines[1:-1]]
+    assert names == ["tile", "odd", "big"], lines
+    assert "CLK>pin" in lines[1] and "OUTPUT-DIFFERS" not in lines[1]
+    assert "OUTPUT-DIFFERS" in lines[2] and "CLK>pin" not in lines[2]
+    assert "clk" in lines[0]
+
+
+def test_the_dynamic_run_compiles_ours_at_the_level_asked_not_os_as_o2():
+    """--dyn built ours at -O2 for Os: x_reverse -Os ran 19.7% slower than the pin (a `movzx` byte load the size gate removes), a gap its static columns
+    (compiled at -Os) did not have."""
+    dyn = load("dyn")
+    from pathlib import Path
+
+    assert "-Os" in dyn.ours_command("llc", "Os", "i486", Path("a.ll"), Path("a.o"))
+    assert "-O2" not in dyn.ours_command("llc", "Os", "i486", Path("a.ll"), Path("a.o"))
+    assert "-O3" in dyn.ours_command("llc", "O3", "i486", Path("a.ll"), Path("a.o"))
+    assert "-march=i486" in dyn.ours_command("llc", "O3", "i486", Path("a.ll"), Path("a.o"))
+
+
 def test_m32_clang_flags_do_not_default_every_function_to_regcall(monkeypatch):
     """targets.toml gave m32 `-fdefault-calling-conv=regcall` for llrm-cc; pindiff ran ours with sysv, so all 71 m32 programs stopped at
     `llrm-llc: @___regcall3__f: calling convention 92` and the table was empty."""

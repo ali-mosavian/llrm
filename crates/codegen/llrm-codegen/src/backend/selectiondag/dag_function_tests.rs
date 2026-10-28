@@ -1056,6 +1056,29 @@ define void @f() {
     assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
 }
 
+/// `(sext a * sext b) >> 32` kept the double-word multiply's cross products
+/// (20 instructions); both operands are `SEXTLOAD i32`, so the pin has one
+/// `imul`.
+#[test]
+fn the_high_word_of_a_signed_widening_multiply_is_one_imul() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(i32 %a, i32 %b) {
+  %x = sext i32 %a to i64
+  %y = sext i32 %b to i64
+  %m = mul i64 %x, %y
+  %s = lshr i64 %m, 32
+  %r = trunc i64 %s to i32
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(seen.len() <= 4 && seen.iter().any(|n| n.starts_with("imul")), "{seen:?}");
+}
+
 /// m16 `a * 10` on `long long` (f_mul_c) multiplied the high word with `imul
 /// ecx, ecx, 5`; the pin's hidden `lea` takes the 386's 32-bit form there
 /// (SD3 keeps scaled indexes out of 16-bit addressing, not out of an `lea`).

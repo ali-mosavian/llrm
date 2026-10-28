@@ -61,6 +61,24 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
 
 # The same compiler against Borland C++ 3.1's headers and library, as its programs are written: LLRM_BORLAND_INC is the
 # lower-case mirror tools/lowercase-includes.sh makes of its INCLUDE, LLRM_BORLAND_LIB its LIB.
+
+# x86_16-dos with the register convention llrm-c had at m16 (regparm3, `name@3`): the all-llrm configuration. x86_16-dos stays cdecl for
+# programs linked with Borland objects.
+[x86_16-dos-rp3]
+triple = "i386-unknown-unknown-code16"
+datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
+clang_env = "LLRM_CLANG_M16"
+clang = ["-ffp-contract=off", 
+  "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
+  "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
+]
+llc = ["-mabi=regparm3"]
+object = "omf"
+link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "--entry", "main_", "x86-m16", "{output}", "{objects}"]
+run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
+
+# The same compiler against Borland C++ 3.1's headers and library, as its programs are written: LLRM_BORLAND_INC is the
+# lower-case mirror tools/lowercase-includes.sh makes of its INCLUDE, LLRM_BORLAND_LIB its LIB.
 [x86_16-bcc]
 triple = "i386-unknown-unknown-code16"
 datalayout = "{datalayout:x86-m16}-ni:2:3"

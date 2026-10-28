@@ -140,7 +140,9 @@ def work_dir(profile_dir: Path) -> Path:
 
 def cargo(root: Path, target: Path, flags: str, binary: str = "llrm-c") -> subprocess.CompletedProcess:
     env = {**os.environ, "CARGO_TARGET_DIR": str(target), "RUSTFLAGS": flags}
-    return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", binary], cwd=root, env=env, capture_output=True, text=True)
+    # llrm-c is built only with its feature (wccq: the toolchain it compiles with): without, "requires the features: c-legacy".
+    features = ["--features", "wccq"] if binary == "llrm-c" else []
+    return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", binary, *features], cwd=root, env=env, capture_output=True, text=True)
 
 
 def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-c") -> None:

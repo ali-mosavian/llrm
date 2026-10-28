@@ -1562,6 +1562,12 @@ fn lower_int_to_fp(
     if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !src_vt.is_integer() {
         return None;
     }
+    // The combiner leaves a custom `UINT_TO_FP` alone, so `LowerUINT_TO_FP`
+    // makes it signed itself when the sign bit is known clear: an `i16`
+    // promoted by zero extension is one `fild` of a dword.
+    if !signed && combine_uint_to_fp(dag, node).is_some() {
+        return Some(dag.get_node(ISD::SIntToFp, dst, &[src]));
+    }
     let pointer = dag.config().pointer;
     if sse2 && matches!(dst, EVT::Simple(MVT::F32 | MVT::F64)) {
         let in_reg = |bits| src_vt.size_in_bits() == bits;

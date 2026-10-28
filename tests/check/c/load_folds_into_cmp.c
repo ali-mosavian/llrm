@@ -2,7 +2,7 @@
 // Both compares of `a[mid]` read one load, so the load stayed a `mov` and the second `cmp` stayed
 // too: the pin's MachineCSE shares the flags across the sole-predecessor edge and its PeepholeOptimizer
 // folds the single-use load into the one `cmp` (coalesce_hot_copies: 11 instructions a trip, pin 9).
-static int a[512];
+int a[512];
 long f(int key)
 {
     int lo = 0, hi = 511, mid;

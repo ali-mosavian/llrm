@@ -313,12 +313,27 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     }
 
 
-def table(rows: list[dict], old: bool) -> list[str]:
+def table(rows: list[dict], old: bool, dyn: dict | None = None) -> list[str]:
     head = f"{'program':16} {'ins':>5} {'pin':>5} {'d':>5} | {'bytes':>6} {'pin':>6} {'d':>5} | {'nopad':>6} {'pin':>6} {'d':>5}" + (f" | {'old':>6} {'d':>5}" if old else "") + "  flag"
+    if dyn is not None:
+        head = head.replace("  flag", f" | {'clk':>9} {'pin':>9} {'d%':>6}  flag")
     lines = [head]
     flagged = 0
-    for row in sorted(rows, key=lambda one: one["name"]):
+
+    def worst(one: dict) -> tuple:
+        # With --dyn the rows that run slower than the pin come first, the slowest first.
+        figures = (dyn or {}).get(one["name"])
+        lost = figures["clk"] / figures["pin_clk"] if isinstance(figures, dict) and figures["pin_clk"] else 0
+        return (-lost, one["name"]) if dyn is not None else (one["name"],)
+
+    for row in sorted(rows, key=worst):
         flags = []
+        figures = (dyn or {}).get(row["name"])
+        if isinstance(figures, dict):
+            if not figures["same"]:
+                flags.append("OUTPUT-DIFFERS")
+            if figures["clk"] > figures["pin_clk"]:
+                flags.append("CLK>pin")
         compared = not row.get("nolib")
         if compared and row["ins"] > row["pin_ins"]:
             flags.append("INS>pin")
@@ -330,6 +345,11 @@ def table(rows: list[dict], old: bool) -> list[str]:
         text = f"{row['name']:16} {row['ins']:5} {row['pin_ins']:5} {row['ins'] - row['pin_ins']:+5} | {row['bytes'] or -1:6} {row['pin_bytes']:6} {(row['bytes'] or 0) - row['pin_bytes']:+5} | {row['free'] or -1:6} {row['pin_free']:6} {(row['free'] or 0) - row['pin_free']:+5}"
         if old:
             text += f" | {row['old_free'] or -1:6} {((row['free'] or 0) - row['old_free']) if row['old_free'] else 0:+5}"
+        if dyn is not None:
+            if isinstance(figures, dict):
+                text += f" | {figures['clk']:9} {figures['pin_clk']:9} {100 * (figures['clk'] - figures['pin_clk']) / max(figures['pin_clk'], 1):+6.1f}"
+            else:
+                text += f" | {'-':>9} {'-':>9} {'-':>6}"
         lines.append(text + "  " + " ".join(flags) + (f" +libgcc[{','.join(m.removesuffix('.o').strip('_') for m in row['lib'])}]" if row.get("lib") else "") + (" no pin comparison (no 16-bit libgcc)" if row.get("nolib") else ""))
     lines.append(
         f"programs {len(rows)} flagged {flagged} | ins {sum(r['ins'] for r in rows)} vs {sum(r['pin_ins'] for r in rows)}"
@@ -366,6 +386,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--old", action="store_true")
     parser.add_argument("--ref", default="origin/feat/parity", help="the branch the llc should be built on")
     parser.add_argument("--max-behind", type=int, default=20, help="commits behind --ref before the header warns")
+    parser.add_argument("--dyn", action="store_true", help="m32 only: also run each kernel in the vsgcc harness (dyn.py) and rank flagged rows by dynamic clocks")
     parser.add_argument("--reopt", action="store_true", help="clang's -O IR re-run through the pin's opt, then both llcs (not the default: see front_end_flags)")
     args = parser.parse_args(argv)
     work = Path(args.work)
@@ -389,7 +410,17 @@ def main(argv: list[str]) -> int:
     for source, result in zip(sources, results):
         if isinstance(result, str):
             print(f"# no figures for {source.stem}: {result}")
-    print("\n".join(table(rows, args.old)))
+    dyn = None
+    if args.dyn:
+        if args.machine != "m32":
+            parser.error("--dyn is m32 only")
+        import dyn as dynmod
+
+        dyn = dynmod.measure([row["name"] for row in rows], args.level, MACHINES["m32"]["march"], args.llc, work / "dyn", one)
+        for name, result in dyn.items():
+            if isinstance(result, str):
+                print(f"# no dynamic figures for {name}: {result}")
+    print("\n".join(table(rows, args.old, dyn)))
     return 0 if rows else 1
 
 
