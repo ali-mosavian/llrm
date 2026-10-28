@@ -1424,3 +1424,48 @@ fn summaries_stand_while_only_bodies_change() {
     let made = crate::attrsummary::summaries_made() - before;
     assert!(made <= 1, "the summaries of the module were made {made} times for edits to bodies alone");
 }
+
+/// The edits of a join's phi, one arm taken out each time (simplifycfg
+/// removing predecessors), pushed every value the phi read for each edit:
+/// 235 K values over 11 K changes at cases 256, walked back from by
+/// `exposed_renewed` (`analysis exposed-frames` x3.8 per doubling, 7 -> 27
+/// Minstr). A value is walked back from once however many edits read it.
+#[test]
+fn test_an_arm_taken_out_of_a_wide_phi_at_a_time_is_walked_back_from_once_in_all() {
+    let arms = 40;
+    let mut text = format!(
+        "{DOS}declare void @use(ptr)\n\ndefine void @f(i16 %x) {{\nb:\n  %a = alloca i16\n  switch i16 %x, label %p0 [\n"
+    );
+    for k in 1..arms {
+        text += &format!("    i16 {k}, label %p{k}\n");
+    }
+    text += "  ]\n";
+    for k in 0..arms {
+        text += &format!("p{k}:\n  br label %j\n");
+    }
+    text += "j:\n  %m = phi ptr ";
+    text += &(0..arms).map(|k| format!("[ %a, %p{k} ]")).collect::<Vec<_>>().join(", ");
+    text += "\n  call void @use(ptr %m)\n  ret void\n}\n";
+    let mut module = parsed(&text);
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<super::ExposedFrames>(context, &layout, f);
+    let phi = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| f.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+        .expect("the join's phi");
+    let before = crate::frameescape::renewed_from();
+    for taken in 1..arms {
+        let mut operands = f.instruction(phi).operands.to_vec();
+        operands.truncate(operands.len() - 2);
+        f.set_operands(phi, operands.into());
+        analyses.invalidate(f, &PreservedAnalyses::none());
+        analyses.get::<super::ExposedFrames>(context, &layout, f);
+        assert!(taken < arms);
+    }
+    let walked = crate::frameescape::renewed_from() - before;
+    assert!(walked <= 4 * arms, "{walked} values walked back from for {arms} edits");
+}

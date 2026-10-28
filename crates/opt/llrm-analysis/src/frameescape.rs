@@ -373,6 +373,16 @@ pub fn exposed_allocas(
     allocas.into_iter().filter(|one| exposing[one.0 as usize]).collect()
 }
 
+thread_local! {
+    static RENEWED_FROM: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many values [`exposed_renewed`] has been given to walk back from on
+/// this thread.
+pub fn renewed_from() -> usize {
+    RENEWED_FROM.with(std::cell::Cell::get)
+}
+
 /// `exposed_allocas` of a function as it stands, from `previous`, what it was
 /// before edits that touched instructions reading `touched`: an alloca's
 /// answer changes only where an instruction that reads one of the values its
@@ -386,6 +396,7 @@ pub fn exposed_renewed(
     marker: impl Fn(InstId, usize) -> bool,
 ) -> Vec<ValueId> {
     use llrm_mir::module::ValueDef;
+    RENEWED_FROM.with(|from| from.set(from.get() + touched.len()));
     let mut affected = llrm_mir::dense::IdSet::<ValueId>::new();
     let mut seen = llrm_mir::dense::IdSet::<ValueId>::new();
     let mut pending = touched.to_vec();

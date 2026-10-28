@@ -773,10 +773,24 @@ impl Analysis for ExposedFrames {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
-        let mut touched = Vec::<ValueId>::new();
+        // Reading the operands the edits dropped costs a read each, and a phi
+        // edited once for each of its arms dropped all of them each time: past
+        // the size of the body the scan of all of it is the cheaper (cases 256:
+        // 235 K reads, 23 Minstr, for a scan of 0.15).
+        let dropped: usize = changes
+            .iter()
+            .map(|change| match change {
+                Change::Operands { was, .. } => was.len(),
+                _ => 0,
+            })
+            .sum();
+        if dropped > function.value_count() {
+            return None;
+        }
+        let mut reached = llrm_mir::dense::IdSet::<ValueId>::new();
         let mut read = |operand: &Operand| {
             if let Operand::Value(value) = operand {
-                touched.push(*value);
+                reached.insert(*value);
             }
         };
         for change in changes {
@@ -805,6 +819,9 @@ impl Analysis for ExposedFrames {
                 Change::Substituted { .. } => {}
             }
         }
+        // A value is looked at once however many edits read it (a join's phi
+        // edited once for each arm read all of its arms each time).
+        let touched: Vec<ValueId> = reached.iter().collect();
         let unit = Unit::within(context, layout, function, analyses.outer());
         Some(
             crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst, at| {
