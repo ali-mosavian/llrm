@@ -131,6 +131,28 @@ impl Options {
         Self::new(machine, std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16())
     }
 
+    /// The debug format asked for, and what its writer needs said, on
+    /// `assembled`'s debug information.
+    pub fn describe_debug(
+        &self,
+        assembled: &mut masm::Module,
+    ) {
+        if let Some(debug) = assembled.debug.as_mut() {
+            debug.format = self.debug_format;
+            debug.cfa = self.cfa_locations();
+            debug.ranges = self.location_ranges();
+            // Only DWARF 5 has a place for a file's MD5; LLVM leaves it out of
+            // older ones.
+            if matches!(
+                debug.format,
+                llrm_object::debug::Format::Dwarf { version } if version < 5
+            ) && let Some((_, md5)) = debug.source.as_mut()
+            {
+                *md5 = None;
+            }
+        }
+    }
+
     /// Whether the debug writer this object format and `-g` flavor pick says
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
@@ -278,11 +300,7 @@ pub fn compiled(
                 assembled.externs.push((name.clone(), "near".to_owned()));
             }
         }
-        if let Some(debug) = assembled.debug.as_mut() {
-            debug.format = options.debug_format;
-            debug.cfa = options.cfa_locations();
-            debug.ranges = options.location_ranges();
-        }
+        options.describe_debug(&mut assembled);
         timed("data layout", || {
             placed.lay_out(
                 &mut assembled,
@@ -356,6 +374,7 @@ pub fn compiled_module(
         )
     })?;
     let mut assembled = assembled;
+    options.describe_debug(&mut assembled);
     data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
     stage_files(options, "", &assembled)?;
     Ok(assembled)

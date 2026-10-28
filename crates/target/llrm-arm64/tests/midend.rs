@@ -85,6 +85,36 @@ fn the_page_and_the_offset_of_a_global_plus_offset_agree() {
     assert!(adrp.contains("6896"), "{asm}");
 }
 
+/// Atomics were refused in the parser, and then no pass may treat one as a
+/// plain access. Selected as the pin selects them (`apple-m1`: LSE and RCPC):
+/// `ldar`/`ldapr`, `stlr`, one LSE instruction, `casal`, `dmb`.
+#[test]
+fn atomics_are_kept_and_selected_as_the_pin_does() {
+    let asm = driver::assembly(include_str!("data/atomics.ll"), Platform::Darwin, true).expect("lowers");
+    let function = |name: &str| -> Vec<String> {
+        let start = asm.lines().position(|line| line == format!("{name}:")).expect(name) + 1;
+        asm.lines()
+            .skip(start)
+            .take_while(|line| line.starts_with('\t') || line.starts_with(".L"))
+            .filter(|line| line.starts_with('\t'))
+            .map(|line| line.trim().to_owned())
+            .collect()
+    };
+    let count = |name: &str, mnemonic: &str| function(name).iter().filter(|line| line.starts_with(mnemonic)).count();
+    // Two atomic loads are two instructions; an unused one is not removed.
+    assert_eq!(count("_twice_seq_cst", "ldar"), 2, "{asm}");
+    assert_eq!(count("_unused_load", "ldar"), 1, "{asm}");
+    assert_eq!(count("_publish", "stlr"), 1, "{asm}");
+    assert_eq!(count("_acquire", "ldapr"), 1, "{asm}");
+    assert_eq!(count("_fetch_add", "ldaddal"), 1, "{asm}");
+    assert_eq!(count("_exchange", "swpab"), 1, "{asm}");
+    assert!(function("_fetch_sub").iter().any(|line| line.starts_with("ldadd w")), "{asm}");
+    assert!(function("_fetch_sub").iter().any(|line| line.starts_with("neg") || line.starts_with("sub")), "{asm}");
+    assert!(function("_fetch_and").iter().any(|line| line.starts_with("ldclrl")), "{asm}");
+    assert_eq!(count("_compare_exchange", "casal"), 1, "{asm}");
+    assert_eq!(function("_fences").iter().filter(|line| line.starts_with("dmb")).count(), 2, "{asm}");
+}
+
 /// `@llvm.global_ctors` was refused (`appending`), and then would have been
 /// a data symbol nobody calls: each constructor is a pointer in the loader's
 /// init section, lowest priority first, and an entry without a function is
@@ -120,4 +150,27 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
     let at = file.windows(16).position(|w| w.starts_with(b"__mod_init_func\0")).expect("the section name");
     let flags = u32::from_le_bytes(file[at + 64..at + 68].try_into().unwrap());
     assert_eq!(flags, 9, "S_MOD_INIT_FUNC_POINTERS");
+}
+
+/// A `{ T, i1 }` carried round a back edge in a phi (a cmpxchg retry loop has
+/// one) was refused with "a phi with no register": an aggregate phi is copied
+/// member by member.
+#[test]
+fn an_aggregate_phi_lowers() {
+    let asm = driver::assembly(include_str!("data/agg_phi.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.matches("bl _step").count() >= 2, "{asm}");
+}
+
+/// A name clang writes `"\01_pthread_join"` is the symbol as given; the Mach-O
+/// underscore was added again, and `ld` looked for `__pthread_join`.
+#[test]
+fn a_verbatim_name_gets_no_underscore() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+target triple = \"arm64-apple-macosx27.2.0\"\n\
+declare i32 @\"\\01_pthread_join\"(ptr, ptr)\n\
+define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null)\n  ret i32 %r\n}\n";
+    let object = driver::object(text, Platform::Darwin, "verbatim.o", true).expect("lowers");
+    let names: Vec<&str> = object.symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+    assert!(names.contains(&"_pthread_join"), "{names:?}");
+    assert!(!names.contains(&"__pthread_join"), "{names:?}");
 }

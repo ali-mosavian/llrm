@@ -12,7 +12,10 @@ __attribute__((noinline)) int middle(void)
     return leaf(1, 2, 3, 4, 5, 6) + leaf(2, 3, 4, 5, 6, 7);
 }
 
+/* The store after the call keeps `main` a frame: `return middle();` is a tail call at -O2. */
 int main(void)
 {
-    return middle();
+    int result = middle();
+    sink = result;
+    return result;
 }
