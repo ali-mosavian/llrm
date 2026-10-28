@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -103,6 +103,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
             "--bc-codeview" => frontend.bc_codeview = true,
+            "--run-time-module" => frontend.run_time_module = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--arm64" => {

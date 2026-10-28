@@ -434,3 +434,32 @@ fn a_place_is_worked_out_once_for_each_instruction() {
     let made = super::locations() - before;
     assert!(made <= 52, "{made} places worked out for 52 instructions");
 }
+
+/// `n` locals, each stored twice (the first store is dead) and read once.
+fn locals(n: usize) -> String {
+    let mut text = String::from("define i32 @f() {\nb0:\n");
+    for k in 0..n {
+        text += &format!("  %p{k} = alloca i32\n  store i32 1, ptr %p{k}\n  store i32 2, ptr %p{k}\n");
+    }
+    text += "  %s0 = add i32 0, 0\n";
+    for k in 0..n {
+        text += &format!("  %v{k} = load i32, ptr %p{k}\n  %s{} = add i32 %s{k}, %v{k}\n", k + 1);
+    }
+    text + &format!("  ret i32 %s{n}\n}}\n")
+}
+
+/// `object_of` walked an alloca's uses at every access asked of it, since the
+/// pass did not hand it the exposed frames: matmul -O2 made 27,548 walks and
+/// 1.9 M tree inserts in a third of the pass. The walks are the frames', not
+/// the accesses'.
+#[test]
+fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
+    let scans = |n: usize| {
+        let mut module = parsed(&locals(n));
+        let before = llrm_analysis::frameescape::scans();
+        managed(&mut module, DeadStoreElimination);
+        llrm_analysis::frameescape::scans() - before
+    };
+    let (small, large) = (scans(8), scans(64));
+    assert!(large <= 64 + 8 && small <= 8 + 8, "8 locals: {small} walks, 64 locals: {large}");
+}

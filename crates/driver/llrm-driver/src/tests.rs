@@ -428,6 +428,39 @@ fn a_double_result_travels_in_xmm0() {
     assert!(listing.lines().any(|line| line.trim().ends_with("xmm0, xmm1")), "the result is copied to xmm0\n{listing}");
 }
 
+/// A `double` returned by a call and passed straight to the return went
+/// `rax` -> `xmm0` (`mov rax, xmm0; mov xmm0, rax`): the copies around a value
+/// pinned in `xmm0` are plain moves, which named no class, so the value between
+/// them took a general register and the object writer refused it.
+#[test]
+fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare double @g(double)\n\
+                define double @f(double %a) {\n  %r = call double @g(double %a)\n  ret double %r\n}\n";
+    let (built, _) =
+        crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fno-optimize-sibling-calls"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
+}
+
+/// `fcmp` of two doubles at m64 selected the x87 compare (`fcom`), which the
+/// emitter drops: `fcmp olt` was a lone `seta al` on whatever flags were live.
+/// The CPU has CMOV, so the table's `UCOMISD` pattern selects it.
+#[test]
+fn a_double_compare_is_ucomisd() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(double %a, double %b) {\n  %r = fcmp olt double %a, %b\n  ret i1 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("ucomisd")), "{listing}");
+    assert!(
+        !listing.lines().any(|line| line.trim().starts_with("fcom") || line.trim().starts_with("fucom")),
+        "{listing}"
+    );
+}
+
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
 /// one `cmov` on the compare's condition, or on `test` for a plain `i1`.
 #[test]
@@ -1025,6 +1058,27 @@ fn a_static_function_is_entered_by_a_near_call() {
     assert!(listing.contains("call far ptr _taken@3"), "{listing}");
 }
 
+/// COFF spells `f` as `_f`: the debug info imported before the rename named a
+/// symbol that no longer existed, no function was described, and the writer
+/// refused "the line table's lines are in no function".
+#[test]
+fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-g", "-fobject-format=coff"]), &text, "dbgfix").unwrap();
+    assert!(!built.debug.expect("debug info").procedures.is_empty());
+}
+
 /// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
 /// not the `.ll` file: the debugger could not find the text.
 #[test]
@@ -1045,4 +1099,20 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     let source = built.debug.expect("debug info").source;
     let md5 = source.as_ref().and_then(|(_, md5)| md5.as_ref()).map(|bytes| bytes.len());
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
+}
+
+/// A 64-bit function whose frame is one slot (the alignment of its call)
+/// adjusted the stack with `sub rsp, 8` / `add rsp, 8`, six bytes where the pin
+/// has `push rax` / `pop rcx`.
+#[test]
+fn a_one_slot_frame_at_m64_is_push_and_pop() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @g()\n\
+                define i32 @f() {\n  call void @g()\n  ret i32 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(lines.contains(&"push rax") && lines.contains(&"pop rcx"), "{listing}");
+    assert!(!lines.iter().any(|line| line.starts_with("sub rsp") || line.starts_with("add rsp")), "{listing}");
 }
