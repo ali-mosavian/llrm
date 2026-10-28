@@ -212,6 +212,7 @@ impl FunctionPass for CgpAddr {
                 &*lowering,
                 analyses.outer().target().spaces(),
                 unit.function,
+                false,
             ),
             None => false,
         };
@@ -255,6 +256,7 @@ impl FunctionPass for CgpAddr {
                     &*lowering,
                     analyses.outer().target().spaces(),
                     unit.function,
+                    true,
                 ),
                 None => false,
             };
