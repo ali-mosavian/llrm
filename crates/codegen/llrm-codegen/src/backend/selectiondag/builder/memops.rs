@@ -96,10 +96,13 @@ impl Builder<'_> {
                 self.dag.set_root(node);
                 Ok(())
             }
-            Intrinsic::Compare { .. } | Intrinsic::FMulAdd | Intrinsic::Fixed { .. } => {
-                self.visit_math(instruction, intrinsic)
-            }
+            Intrinsic::Compare { .. }
+            | Intrinsic::FMulAdd
+            | Intrinsic::Fixed { .. }
+            | Intrinsic::FixedMul { .. }
+            | Intrinsic::ShiftSat { .. } => self.visit_math(instruction, intrinsic),
             Intrinsic::WithOverflow { .. }
+            | Intrinsic::Saturating { .. }
             | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap
@@ -720,7 +723,11 @@ impl Builder<'_> {
                     // (alignment under 4): dwords, as the old selector copies;
                     // x86 takes them unaligned
                     (None, Intrinsic::MemCpy, Some(bytes))
-                        if !self.runtime_has("memcpy") && !self.is_far(dst) && !self.is_far(other) =>
+                        if !self.runtime_has("memcpy")
+                            // the tail of a far copy is made from the far
+                            // pointers moved on, which the string tail at size
+                            // is not
+                            && (opt_size || bytes % 4 == 0 || !(self.is_far(dst) || self.is_far(other))) =>
                     {
                         self.rep_movs(root, dst, other, bytes, 4, dst_align, src_align)?
                     }
@@ -827,6 +834,9 @@ impl Builder<'_> {
         }
         let dword = self.dag.get_value_type_node(EVT::I32);
         let rep = self.dag.get_node_multi(x86isd::REP_MOVS, &[EVT::OTHER, EVT::GLUE], &[chain, dword, glue]);
+        if self.constant_size(count).is_some_and(|bytes| bytes % 4 == 0) {
+            return SDValue { node: rep.node, res: 0 };
+        }
         let three = self.dag.get_constant(3, pointer);
         let bytes = self.dag.get_node(ISD::And, pointer, &[count, three]);
         let copy = self

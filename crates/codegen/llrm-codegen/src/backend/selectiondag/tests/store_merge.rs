@@ -202,3 +202,48 @@ fn copies_of_a_volatile_or_shared_load_or_with_a_gap_stay() {
     assert_eq!(copied(&[0, 2], EVT::I16, false, true, false).len(), 2);
     assert_eq!(copied(&[0, 4], EVT::I16, false, false, false).len(), 2);
 }
+
+/// The argument stores of a call sequence copy two words of a struct as two
+/// word loads and two word stores; they are not pushes when the area is
+/// addressed through a register, and a merged copy is a dword load and store
+/// (`_pl_grenade_explode`, `-m16 -Os`: eleven word moves through `bx`;
+/// weapons.c grew 76 bytes over the pin's dword copies).
+#[test]
+fn word_copies_into_a_call_sequence_are_one_dword_copy() {
+    let tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+    let mut dag = dag();
+    let entry = dag.entry_node();
+    let loads: Vec<SDValue> = [0i64, 2]
+        .into_iter()
+        .map(|offset| {
+            let from = dag.get_global_address(EVT::I16, 1, offset);
+            dag.get_load(EVT::I16, entry, from, info(EVT::I16, false))
+        })
+        .collect();
+    let start = dag.get_callseq_start(entry, 4);
+    let chain = SDValue { node: start.node, res: 0 };
+    let stores: Vec<SDValue> = [0i64, 2]
+        .into_iter()
+        .zip(&loads)
+        .map(|(offset, &load)| {
+            let to = dag.get_global_address(EVT::I16, 0, offset);
+            dag.get_store(chain, load, to, info(EVT::I16, false))
+        })
+        .collect();
+    let root = dag.get_token_factor(&stores);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+    let mut seen = vec![dag.get_root()];
+    let mut widths = Vec::new();
+    while let Some(node) = seen.pop() {
+        match dag.opcode(node) {
+            ISD::TokenFactor => seen.extend((0..dag.node(node).ops.len()).map(|i| dag.operand(node, i))),
+            ISD::Store => {
+                let NodeData::Mem(info) = dag.node(node).data else { panic!("mem") };
+                widths.push(info.mem_vt);
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(widths, vec![EVT::I32]);
+}

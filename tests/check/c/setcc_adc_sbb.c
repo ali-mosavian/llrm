@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m16 -march=i386 -Os --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m16 -march=i386 -Os --isel=dag -S -o /dev/stdout
 // A value plus or minus a compare was `cmp; setcc; movzx; add|sub`, and `a == 0 ? -1 : 0` was `test; sete; movzx; neg`; the pin's
 // combineAddOrSubToADCOrSBB makes them `cmp; adc|sbb` (ACTIONS3D, crc.c). `1 + (a == 0)` was `mov r, 1; cmp; adc r, 0`;
 // combineADC makes it `ADC(0, 1)`: `xor r, r; cmp; adc r, 1`.

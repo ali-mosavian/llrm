@@ -69,6 +69,9 @@ pub struct Frontend {
     pub error_lines: bool,
     /// `-g` in BC's CodeView layout, not standard CodeView 4: `--bc-codeview`.
     pub bc_codeview: bool,
+    /// Built for the run-time module BRUN45, as BC without /O:
+    /// `--run-time-module`.
+    pub run_time_module: bool,
     /// The most bytes the target's data segment holds: its description's, set
     /// by the CLI that bound the target.
     pub segment_bytes: Option<usize>,
@@ -103,6 +106,7 @@ impl Frontend {
             runtime_frames: false,
             error_lines: false,
             bc_codeview: false,
+            run_time_module: false,
             segment_bytes: None,
             near_bytes: 0,
             far_bytes: 0,
@@ -147,6 +151,7 @@ fn _options(
             near_bytes: frontend.near_bytes,
             far_bytes: frontend.far_bytes,
             bc_codeview: frontend.bc_codeview,
+            run_time_module: frontend.run_time_module,
         },
         debug: frontend.debug,
         syntax: false,
@@ -213,6 +218,31 @@ pub fn decoded(
             && llrm_codegen::abi::runtime::named_only(&object_.name, family)
         {
             object_.addressed = false;
+        }
+    }
+    // CLEAR zeroes the data segment the program's variables live in, and CHAIN
+    // hands its COMMON segment to the next program: the optimiser must not
+    // take what they reach for private.
+    let calls = |routine: &str| {
+        program
+            .modules
+            .iter()
+            .flat_map(|module| &module.functions)
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| instruction.callee.as_deref() == Some(routine))
+    };
+    // Under the run-time module a chained-to program's COMMON arrives from the
+    // program before it.
+    let (clears, chains) = (calls("B$SCLR"), calls("B$SCHN"));
+    for object_ in program.modules.iter_mut().flat_map(|module| &mut module.data) {
+        let common = object_.segment.as_deref() == Some("COMMON");
+        if object_.linkage == model::DataLinkage::Internal
+            && !object_.readonly
+            && object_.address == model::AddressKind::Near
+            && (clears || ((chains || program.run_time_module) && common))
+        {
+            object_.exposed = true;
         }
     }
     // The runtime enters a module at its body, through the module header.

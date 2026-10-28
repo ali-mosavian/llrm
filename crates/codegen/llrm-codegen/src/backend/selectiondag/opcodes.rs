@@ -24,9 +24,9 @@
 //! The emitter (D1b), which builds LIR `Semantics` from the form.
 //!
 //! # See also
-//! `llrm_instr::Form`; the pin's `X86GenInstrInfo.inc` for the names.
+//! `llrm_target::instr::Form`; the pin's `X86GenInstrInfo.inc` for the names.
 
-use llrm_instr::Form;
+use llrm_target::instr::Form;
 
 /// Why an opcode has no single form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -262,6 +262,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 /// `MOVSX32rm16`) the size after the letters, the source's. `None` if the
 /// name has no width.
 pub fn memory_bytes(name: &str) -> Option<u32> {
+    // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
+    let name = name.strip_suffix("_NOREX").unwrap_or(name);
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the
@@ -336,6 +338,6 @@ fn admits(
     }
     let (dests, sources) = letters.split_at(form.dests.len());
     // `r` also names an xmm register in the pin's names (`ADDSDrr`).
-    let allows = |l: char, o: &llrm_instr::Operand| o.allows(l) || l == 'r' && o.allows('x');
+    let allows = |l: char, o: &llrm_target::instr::Operand| o.allows(l) || l == 'r' && o.allows('x');
     dests.iter().zip(&form.dests).all(|(&l, d)| allows(l, d)) && sources.iter().zip(&untied).all(|(&l, s)| allows(l, s))
 }
