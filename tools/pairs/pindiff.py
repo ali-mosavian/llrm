@@ -43,8 +43,8 @@ def abi_flags(cfg: dict, ir: str) -> list[str]:
 
 # the comparison's fixed choices: llrm-cc's target, the -march of ours, and the convention the pin's llc has by default
 MACHINES = {
-    "m16": {"cc": "x86_16-wat", "march": "i386", "abi": "cdecl", "bits": "16"},
-    "m32": {"cc": "x86_32-wat", "march": "i486", "abi": "sysv", "bits": "32"},
+    "m16": {"cc": "x86_16-wat", "march": "i386", "abi": "cdecl", "bits": "16", "libgcc": False},
+    "m32": {"cc": "x86_32-wat", "march": "i486", "abi": "sysv", "bits": "32", "libgcc": True},
 }
 NOT_INSTRUCTIONS = {"align", "db", "dw", "dd", "public", "extern", "proc", "endp", "label", "end", "assume"}
 
@@ -157,13 +157,13 @@ def nm_undefined(obj: Path) -> set[str]:
     return set(subprocess.run(["nm", "-u", str(obj)], capture_output=True, text=True).stdout.split()[1::2])
 
 
-def libgcc_cost(obj: Path, bits: int, work: Path) -> tuple[int, int, int, list[str]]:
+def libgcc_cost(obj: Path, bits: int, work: Path, has_libgcc: bool) -> tuple[int, int, int, list[str]]:
     """Instructions, bytes and nop-free bytes of the libgcc members the pin's object calls (the i64 divide family): ours embeds those
     helpers (SD231/232), the pin's object only calls them, so a row that compared the two measured the link, not the compiler.
     None are counted at m16: there is no 16-bit libgcc, so the pin's calls stay unresolved there."""
     found = subprocess.run(["gcc", "-m32", "-print-libgcc-file-name"], capture_output=True, text=True).stdout.strip()
-    if bits != 32 or not found or not Path(found).exists():
-        return 0, 0, 0, sorted(s for s in nm_undefined(obj) if s in I64_DIVIDE) if bits != 32 else []
+    if not has_libgcc or not found or not Path(found).exists():
+        return 0, 0, 0, sorted(s for s in nm_undefined(obj) if s in I64_DIVIDE) if not has_libgcc else []
     archive, defined = Path(found), archive_members(Path(found))
     extracted: dict[str, Path] = {}
 
@@ -297,13 +297,13 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
 
     ours_bytes = bytes_of("dag")
     old_bytes = bytes_of("old") if old else None
-    lib_ins, lib_bytes, lib_free, lib_names = libgcc_cost(pin_obj, int(cfg["bits"]), work)
+    lib_ins, lib_bytes, lib_free, lib_names = libgcc_cost(pin_obj, int(cfg["bits"]), work, cfg["libgcc"])
     return {
         "name": stem,
         "ins": instructions(asm.read_text()),
         "pin_ins": instructions(pin_asm.read_text()) + lib_ins,
-        "lib": lib_names if int(cfg["bits"]) == 32 else [],
-        "nolib": lib_names if int(cfg["bits"]) != 32 else [],
+        "lib": lib_names if cfg["libgcc"] else [],
+        "nolib": lib_names if not cfg["libgcc"] else [],
         "bytes": ours_bytes and ours_bytes[0],
         "free": ours_bytes and ours_bytes[1],
         "pin_bytes": pin_text_size(pin_obj) + lib_bytes,
