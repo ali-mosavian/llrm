@@ -453,7 +453,7 @@ def smoke_bins(env: dict | None = None) -> str:
 
 def bins_command(directory: Path) -> list[str]:
     """The cargo build that refreshes every binary `directory` holds: `--bins` skips llrm-c (required-features = c-legacy), so a leftover llrm-c stayed older than the sources for good and the 03:12 pass was refused for it."""
-    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "c-legacy"] if (directory / "llrm-c").is_file() else [])]
+    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "wccq"] if (directory / "llrm-c").is_file() else [])]
 
 
 def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
