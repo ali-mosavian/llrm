@@ -500,26 +500,6 @@ fn a_backward_memmove_at_m32_moves_the_tail_bytes_after_the_dwords() {
     assert!(backward.inline.values().any(|bytes| bytes[..] == tail), "{:?}", backward.inline);
 }
 
-/// A call of a BASIC function disturbs nothing for its caller to save (the
-/// convention has no `calling.toml` entry; its routines keep what they do not
-/// write). Every register the allocator may lose across it was disturbed, so a
-/// recursive `FIB` pushed and popped ebx, ecx, edx, esi and edi it never wrote:
-/// frames bq32 -Os ran 5495811 instructions beside the old selector's 3845263.
-#[test]
-fn a_call_of_a_basic_function_disturbs_no_register() {
-    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-declare cc 1000 i32 @g(i32)
-define cc 1000 i32 @f(i32 %a) {
-  %r = call cc 1000 i32 @g(i32 %a)
-  ret i32 %r
-}
-";
-    let done = select_m32(ir).unwrap_or_else(|why| panic!("{why}"));
-    let calls: Vec<_> = done.body.insns().iter().filter_map(|one| one.call.clone()).collect();
-    assert!(!calls.is_empty());
-    assert!(calls.iter().all(|call| call.disturbs.is_empty()), "{:?}", calls[0].disturbs);
-}
-
 const SCALED_INDEX_AT_M16: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare cc 1006 void @\"_far_get@3\"(ptr, ptr addrspace(1))
 declare cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1))

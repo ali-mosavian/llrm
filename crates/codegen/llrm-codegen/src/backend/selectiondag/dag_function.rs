@@ -395,38 +395,11 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
         clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
-        arguments: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
-        let contract = self.contract(callee);
-        if contract.as_ref().is_some_and(|contract| contract.control == llrm_qbruntime::Control::Never) {
-            return Default::default();
+        match self.contract(callee) {
+            Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            _ => clobbers.clone(),
         }
-        // The old selector's `disturbs`: what the callee's `calling.toml` entry
-        // names and the registers the arguments went in, and nothing for a
-        // convention with no entry (BASIC's: its routines keep what they do
-        // not write, so a caller saves nothing for them). `clobbers` is the
-        // allocator's bound, not something the callee writes: a recursive
-        // `FIB` saved ebx, ecx, edx, esi and edi it never wrote.
-        if matches!(callee, Some(Callee::Global(_))) && self.written(callee).is_none() {
-            let Some(found) = self.convention_of(callee) else { return Default::default() };
-            let regs = llrm_lir::registers::Regs(self.arch.registers());
-            let mut out: std::collections::BTreeSet<_> = found
-                .clobbered
-                .iter()
-                .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
-                .map(|name| regs.root(self.arch.register_named(name)))
-                .collect();
-            out.extend(arguments.iter().copied());
-            if let (Some(contract), Some(contracts)) = (&contract, self.contracts) {
-                out.extend(crate::backend::callregs::unnamed_selectors_clobbered(
-                    contract,
-                    contracts.segments,
-                    self.general,
-                ));
-            }
-            return out;
-        }
-        clobbers.clone()
     }
 
     fn clobbers(
