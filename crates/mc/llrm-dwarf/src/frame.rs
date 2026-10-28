@@ -51,8 +51,8 @@ fn number(
 
 /// The instructions that take the state `from` to `to`: its frame address, then
 /// each register's rule.
-fn changes(
-    info: &Info,
+pub(crate) fn changes(
+    number: &dyn Fn(&str) -> Result<u64, Unsupported>,
     buf: &mut Buf,
     from: &FrameRow,
     to: &FrameRow,
@@ -64,16 +64,16 @@ fn changes(
             buf.uleb(to.cfa_offset as u64);
         } else if from.cfa_offset == to.cfa_offset {
             buf.u8(DW_CFA_DEF_CFA_REGISTER);
-            buf.uleb(number(info, &to.cfa_register)?);
+            buf.uleb(number(&to.cfa_register)?);
         } else {
             buf.u8(DW_CFA_DEF_CFA);
-            buf.uleb(number(info, &to.cfa_register)?);
+            buf.uleb(number(&to.cfa_register)?);
             buf.uleb(to.cfa_offset as u64);
         }
     }
     for (register, at) in &to.saved {
         if !from.saved.iter().any(|(one, was)| one == register && was == at) {
-            let register = number(info, register)?;
+            let register = number(register)?;
             if register >= 0x40 {
                 return refused(format!("register {register} is past the short form of DW_CFA_offset"));
             }
@@ -83,7 +83,7 @@ fn changes(
     }
     for (register, _) in &from.saved {
         if !to.saved.iter().any(|(one, _)| one == register) {
-            let register = number(info, register)?;
+            let register = number(register)?;
             if register >= 0x40 {
                 return refused(format!("register {register} is past the short form of DW_CFA_restore"));
             }
@@ -93,7 +93,7 @@ fn changes(
     Ok(())
 }
 
-fn advance(
+pub(crate) fn advance(
     buf: &mut Buf,
     delta: usize,
 ) {
@@ -181,7 +181,7 @@ pub fn section(
             if row.offset > 0 || state != row {
                 advance(&mut buf, row.offset - state.offset.min(row.offset));
             }
-            changes(info, &mut buf, state, row, data_alignment(address))?;
+            changes(&|name| number(info, name), &mut buf, state, row, data_alignment(address))?;
             state = row;
         }
         while buf.at() % address != 0 {
