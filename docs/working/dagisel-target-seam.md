@@ -22,6 +22,10 @@ A small trait in `llrm-target`/codegen (`DagTarget`: pin ids of target nodes, re
 - So S2 = the trait + per-target action table (`TargetLowering` rows from the record) + target `LowerCall/FormalArguments/Return` over `Convention::place` + emitter form map. Not new multi-block/call/switch machinery, if the builder's call path is target-free; verify with an m68k probe at S2 start. Size guess: 4 edited files (~300 changed lines) + trait (~200) + m68k lowering (~1.5k, mine, new file).
 - Root `.td` may live in the target crate (6502: `crates/target/llrm-6502/*.td`, include dir = pin's `llvm/include`); `own_ids.txt` lives in the target crate, read by regen and by the lowering (one source).
 
+## Probe for M3 (2026-10-28)
+- The DAG vocabulary (`MVT`, `ISD`, `TargetLoweringInfo`, `TargetLowering` action tables) lives in `llrm-x86/src/dag`, re-exported by codegen's `selectiondag.rs`. It is generic in shape (`TargetLowering::empty(types)`, `set_operation_action`, ...) with x86 constructors beside it. A non-x86 target must depend on `llrm-x86` for it until it moves to a neutral crate (layout item for S2).
+- `legalize_dag::Hooks::lower_operation` and `CombineHooks` are pub traits: the m68k lowering can be a new module in llrm-m68k with no edit to the sdag files; only the binding in `selected_in` needs S2.
+
 ## Order
 S1a generator + regen for M68k alone (new files, no x86 file touched) → S1b x86 through the record, byte-identical → S2 trait. m68k work (lowering, hooks) proceeds on S1a.
 
