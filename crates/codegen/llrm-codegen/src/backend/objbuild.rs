@@ -1222,7 +1222,11 @@ pub fn object_of(
         .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
         .transpose()
         .map_err(Unencodable)?;
-    let frames = if model == CodeModel::Flat64 { declared_frames(&segments, symbols, sizes) } else { Vec::new() };
+    let frames = if model == CodeModel::Segmented16 {
+        Vec::new()
+    } else {
+        declared_frames(model.bits(), &segments, symbols, sizes)
+    };
     let mut sections = Vec::new();
     for segment in segments {
         let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
@@ -1264,13 +1268,15 @@ pub fn object_of(
 /// The frames the procedures declared (`Item::Cfi`): one row where the frame
 /// address or a save changes, as the state after the directives at that offset.
 fn declared_frames(
+    bits: u32,
     segments: &[Segment],
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
 ) -> Vec<llrm_object::Frame> {
     use llrm_object::assembler::Cfi;
     use llrm_object::debug::FrameRow;
-    let name = |number: u16| llrm_x86::mc::unwind::register_name(u64::from(number)).unwrap_or("rip").to_owned();
+    let name = |number: u16| llrm_x86::mc::unwind::register_name(bits, u64::from(number)).unwrap_or("rip").to_owned();
+    let (stack, slot) = if bits == 32 { ("esp", 4) } else { ("rsp", 8) };
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
         for (symbol, &(home, start)) in symbols {
@@ -1279,7 +1285,7 @@ fn declared_frames(
             if !segment.declared.iter().any(within) {
                 continue;
             }
-            let entry = FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() };
+            let entry = FrameRow { offset: 0, cfa_register: stack.into(), cfa_offset: slot, saved: Vec::new() };
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
             for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
