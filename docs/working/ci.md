@@ -19,6 +19,8 @@ The `ci` job's line for a pull request is `GATE <tier> CANDIDATE PASS at <head12
 - `<head12>` is the pull request's head now;
 - `<main12>` is main now, or every commit since touches only `[inert]` paths (`tiers.toml`: docs, Markdown, editors, `.github`).
 
+A pull request run reads its workflow from the PR's merge ref (`refs/pull/N/merge`), which GitHub does not remake when main moves or a label is added: a ref made before a change to `ci.yml` keeps the old triggers, and the label starts nothing (#2340 after #2358). Before it labels, the loop runs `tools/ci/merge_ref_fresh.py N`; on exit 1 it merges main into the PR's branch (the candidate is the head with main merged anyway), which remakes the ref, and checks again.
+
 The loop cancels a candidate run in flight when main moves by a non-inert commit, so the runner does not spend 55 minutes on a stale main. `tools/ci/test_candidate_ok.py` holds the cases: not a candidate line, another head, moved main, docs-only move.
 
 **No gate runs anywhere else.** Sessions and loops do not run `gate.py`, a full premerge check, the ratchets, `identical.py`, rows, bench or the oracles on tinytim or any host of theirs; those run only in this gate. Before a merge to `feat/parity` a loop builds once per batch and runs the unit tests and a few fast run tests of the touched crates, 10 s of CPU in all (`tools/parity_smoke.py`).
