@@ -1,6 +1,8 @@
 //! What the assembler asks of a target (LLVM's `MCAsmBackend`).
 
-use crate::{FixupKind, FixupKindInfo};
+use std::collections::HashMap;
+
+use crate::{FixupKind, FixupKindInfo, Unsupported};
 
 pub trait AsmBackend {
     /// What `kind` says of the field it patches.
@@ -16,6 +18,63 @@ pub trait AsmBackend {
         out: &mut Vec<u8>,
         count: usize,
     ) -> bool;
+}
+
+/// A piece of a section as the assembler lays it out (`MCFragment`): a label,
+/// fixed bytes, padding that depends on where it lands, or a jump that grows.
+pub trait Fragment {
+    /// What the layout knows besides the fragments (the code model).
+    type Context;
+
+    /// The name this fragment defines at its offset, if it does.
+    fn label(&self) -> Option<&str>;
+
+    /// Its bytes where it lies at offset `at`.
+    fn size(
+        &self,
+        at: i64,
+        context: &Self::Context,
+    ) -> usize;
+
+    /// Lets it grow once the offsets of the fragments are known
+    /// (`MCAssembler::relaxFragment`); whether it changed.
+    fn relax(
+        &mut self,
+        at: i64,
+        labels: &HashMap<String, i64>,
+        context: &Self::Context,
+    ) -> Result<bool, Unsupported>;
+}
+
+/// The offset of every label, in the order the fragments define them.
+pub type Labels = Vec<(String, i64)>;
+
+/// `MCAssembler::layout`: sizes every fragment, relaxes those that can grow,
+/// and again until none does. Growth only moves targets further away, so it
+/// ends, at the smallest layout.
+pub fn layout<F: Fragment>(
+    items: &mut [F],
+    context: &F::Context,
+) -> Result<Labels, Unsupported> {
+    loop {
+        let (mut labels, mut named, mut at) = (Labels::new(), HashMap::new(), 0i64);
+        let mut starts = Vec::with_capacity(items.len());
+        for item in items.iter() {
+            if let Some(name) = item.label() {
+                labels.push((name.to_owned(), at));
+                named.insert(name.to_owned(), at);
+            }
+            starts.push(at);
+            at += item.size(at, context) as i64;
+        }
+        let mut changed = false;
+        for (item, &at) in items.iter_mut().zip(&starts) {
+            changed |= item.relax(at, &named, context)?;
+        }
+        if !changed {
+            return Ok(labels);
+        }
+    }
 }
 
 /// `MCAssembler::relaxPrefAlign`: the alignment, as a power of two, a
@@ -40,6 +99,85 @@ mod tests {
 
     /// A 3-byte body at offset 1 with a 16-byte preference pads to 4 (the
     /// body's power of two), never to 16.
+    /// Made-up fragments, no target: a label, fixed bytes, a jump of 2 bytes
+    /// that grows to 5 when its label is more than 127 bytes off.
+    enum Test {
+        Label(&'static str),
+        Bytes(usize),
+        Jump { to: &'static str, long: bool },
+    }
+
+    impl Fragment for Test {
+        type Context = ();
+
+        fn label(&self) -> Option<&str> {
+            match self {
+                Test::Label(name) => Some(name),
+                _ => None,
+            }
+        }
+
+        fn size(
+            &self,
+            _: i64,
+            _: &(),
+        ) -> usize {
+            match self {
+                Test::Label(_) => 0,
+                Test::Bytes(count) => *count,
+                Test::Jump { long, .. } => {
+                    if *long {
+                        5
+                    } else {
+                        2
+                    }
+                }
+            }
+        }
+
+        fn relax(
+            &mut self,
+            at: i64,
+            labels: &HashMap<String, i64>,
+            _: &(),
+        ) -> Result<bool, Unsupported> {
+            let Test::Jump { to, long } = self else { return Ok(false) };
+            let Some(target) = labels.get(*to) else { return Err(Unsupported(format!("{to} is nowhere"))) };
+            if *long || (-128..=127).contains(&(target - (at + 2))) {
+                return Ok(false);
+            }
+            *long = true;
+            Ok(true)
+        }
+    }
+
+    /// Lengthening one jump moved a label past the reach of another: the layout
+    /// has to go round again, and stops at the smallest layout.
+    #[test]
+    fn a_layout_goes_round_until_no_jump_grows() {
+        let mut items = vec![
+            Test::Jump { to: "far", long: false },
+            Test::Jump { to: "mid", long: false },
+            Test::Label("mid"),
+            Test::Bytes(124),
+            Test::Jump { to: "mid", long: false },
+            Test::Label("far"),
+            Test::Bytes(1),
+        ];
+        let labels = layout(&mut items, &()).unwrap();
+        // The first jump reaches `far` only at 2+2+124+2 = 130 > 127: long (5).
+        // The second then lies at 5 and its label at 7, still short.
+        assert_eq!(labels, vec![("mid".to_owned(), 7), ("far".to_owned(), 7 + 124 + 2)]);
+        assert!(matches!(items[0], Test::Jump { long: true, .. }));
+        assert!(matches!(items[1], Test::Jump { long: false, .. }));
+    }
+
+    #[test]
+    fn a_jump_to_nowhere_is_refused() {
+        let mut items = vec![Test::Jump { to: "gone", long: false }];
+        assert!(layout(&mut items, &()).unwrap_err().0.contains("nowhere"));
+    }
+
     #[test]
     fn a_prefalign_grows_to_the_body_and_no_further() {
         assert_eq!(relax_pref_align(1, 0, 4, 1 + 3), 2);

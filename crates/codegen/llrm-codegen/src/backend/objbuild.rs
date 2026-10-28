@@ -950,44 +950,60 @@ pub fn _relaxed(
     items: &mut [Encoded],
     model: CodeModel,
 ) -> Result<IndexMap<String, i64>, Unencodable> {
-    loop {
-        let (mut labels, mut at) = (IndexMap::default(), 0i64);
-        let mut starts = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            if let Encoded::Label(masm::Label { name }) | Encoded::End(name) = item {
-                labels.insert(name.clone(), at);
-            }
-            starts.push(at);
-            at += _size(item, at, model) as i64;
+    let labels = llrm_object::assembler::layout(items, &model).map_err(|error| Unencodable(error.0))?;
+    let mut named = IndexMap::default();
+    for (name, at) in labels {
+        named.insert(name, at);
+    }
+    Ok(named)
+}
+
+impl llrm_object::assembler::Fragment for Encoded {
+    type Context = CodeModel;
+
+    fn label(&self) -> Option<&str> {
+        match self {
+            Encoded::Label(masm::Label { name }) | Encoded::End(name) => Some(name),
+            _ => None,
         }
-        let mut changed = false;
-        for (index, item) in items.iter_mut().enumerate() {
-            let at = starts[index];
-            match item {
-                Encoded::Jump(item) if !item.long => {
-                    let Some(target) = labels.get(&item.label) else {
-                        return Err(Unencodable(format!("a jump to {}, which is nowhere", item.label)));
-                    };
-                    if !short_reaches(target - (at + SHORT_JUMP)) {
-                        item.long = true;
-                        changed = true;
-                    }
+    }
+
+    fn size(
+        &self,
+        at: i64,
+        model: &CodeModel,
+    ) -> usize {
+        _size(self, at, *model)
+    }
+
+    fn relax(
+        &mut self,
+        at: i64,
+        labels: &std::collections::HashMap<String, i64>,
+        _: &CodeModel,
+    ) -> Result<bool, llrm_object::Unsupported> {
+        match self {
+            Encoded::Jump(item) if !item.long => {
+                let Some(target) = labels.get(&item.label) else {
+                    return Err(llrm_object::Unsupported(format!("a jump to {}, which is nowhere", item.label)));
+                };
+                if short_reaches(target - (at + SHORT_JUMP)) {
+                    return Ok(false);
                 }
-                // `relaxPrefAlign`: the body is what lies between the padding
-                // and its end, and the alignment only grows.
-                Encoded::Prefer { preferred, computed, end } => {
-                    let wanted =
-                        llrm_object::assembler::relax_pref_align(at, *computed, *preferred, labels[end.as_str()]);
-                    if wanted != *computed {
-                        *computed = wanted;
-                        changed = true;
-                    }
-                }
-                _ => {}
+                item.long = true;
+                Ok(true)
             }
-        }
-        if !changed {
-            return Ok(labels);
+            // `relaxPrefAlign`: the body is what lies between the padding and
+            // its end, and the alignment only grows.
+            Encoded::Prefer { preferred, computed, end } => {
+                let wanted = llrm_object::assembler::relax_pref_align(at, *computed, *preferred, labels[end.as_str()]);
+                if wanted == *computed {
+                    return Ok(false);
+                }
+                *computed = wanted;
+                Ok(true)
+            }
+            _ => Ok(false),
         }
     }
 }
