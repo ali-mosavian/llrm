@@ -1170,6 +1170,10 @@ pub struct LirBody {
     /// The values (by number) that arrive in a cell above the frame, with the
     /// cell's displacement and size: arguments the caller pushed.
     pub arguments_in_cells: Arc<Vec<(u32, i64, u32)>>,
+    /// The argument bytes the callee of each indirect call pops, by the call's
+    /// address (`callframe`'s `call_frame_destroy N, M`): the stack depth after
+    /// it, which `masm` cannot read from a call it does not name.
+    pub call_pops: Arc<IndexMap<i64, i64>>,
     /// The facts worked out of this body and the bodies made from it
     /// (`analysis::facts`).
     pub facts: crate::analysis::facts::Kept,
@@ -1347,6 +1351,7 @@ impl LirBody {
             frame_saved: None,
             notes: Arc::default(),
             arguments_in_cells: Arc::default(),
+            call_pops: Arc::default(),
             facts: Default::default(),
         }
     }
@@ -1415,6 +1420,7 @@ impl LirBody {
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
             arguments_in_cells: Arc::clone(&self.arguments_in_cells),
+            call_pops: Arc::clone(&self.call_pops),
             facts: self.facts.clone(),
         }
     }

@@ -24,7 +24,6 @@
 //!
 //! ```text
 //!  live intervals     value -> segments of instruction slots, + spill weight
-//!  LiveUnion          register root -> intervals placed in it   (no overlap)
 //!  Masks              points that destroy a register without naming it:
 //!                     calls (clobbers), 16-bit callees (clobbers_high:
 //!                     the upper half only), points that need DS (the
@@ -38,7 +37,7 @@
 //! scan of all of them).
 //!
 //! A value may use a register when no value placed there overlaps its
-//! interval (`LiveUnion::busy`) and no mask point lies inside it
+//! interval (`LiveIntervalUnion`) and no mask point lies inside it
 //! (`_clobbered`). Registers are compared by root, so `AX` and `EAX` are one
 //! register; a mask on the upper half matters only to values wider than a
 //! word. The weight is the references to the value, weighted by block
@@ -118,12 +117,8 @@
 //! the queue. The loop stops when the queue is empty (`BUDGET` visits at
 //! most, 200000).
 //!
-//! The last chance before a value is spilled is recoloring (`Coloring`,
-//! LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
-//! It is not tried where more values are live at one point of the value than
-//! there are registers for them (`crowded`): no moving about places it. It
-//! finds each group member's segments once and asks a point by search;
-//! `LLRM_CHECK_CROWDED` compares it with the scan of every segment.
+//! The last chance before a value is spilled is recoloring
+//! (`greedy::greedy`'s `try_last_chance_recoloring`).
 //!
 //! Last, `_recolored_hints` moves a value into a copy partner's register when
 //! that register is free over its whole interval and joins more copies than
@@ -213,7 +208,7 @@
 //! that other phases read.
 //!
 //! # Needs
-//! [`crate::backend::liveunion`], [`crate::backend::live`],
+//! [`crate::backend::live`],
 //! [`crate::backend::regclass`], [`crate::backend::constrain`],
 //! [`crate::backend::splitkit`], [`crate::backend::spillplacement`],
 //! [`crate::backend::spiller`], [`crate::backend::datagroup`] and
@@ -225,7 +220,6 @@
 //! - The phase list: [`crate::backend`].
 
 use std::cell::RefCell;
-use std::cmp::Reverse;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::rc::Rc;
@@ -238,8 +232,6 @@ use crate::analysis::intervals::{self as ranges, Indexes, Interval, key};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::live::LiveRanges;
-use crate::backend::liveunion::LiveUnion;
-use crate::backend::liveunion::Placed;
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Semantics, Space};
@@ -2140,407 +2132,6 @@ pub fn _clobbered_reference(
     false
 }
 
-/// A register nothing live at the same time is using, and no call kills.
-fn _free(
-    one: &Interval,
-    order: &[RegId],
-    union: &LiveUnion,
-    live: &LiveRanges,
-    masks: &Masks,
-    width: u32,
-) -> Option<RegId> {
-    for register in order {
-        if _clobbered(one, *register, masks, width) {
-            continue;
-        }
-        if !union.busy(&_whole(*register), one, live) {
-            return Some(*register);
-        }
-    }
-    None
-}
-
-/// The last resort for a value that cannot be spilled: the register of its
-/// class whose holders it overlaps cost least to evict, and those holders.
-/// A holder that cannot be spilled either (`hard`) rules its register out; a
-/// protected holder may be evicted, and a trial that loses it is dropped;
-/// when every register is ruled out, one point of the body asks for more
-/// registers than the machine has.
-fn _forced(
-    one: &Interval,
-    order: &[RegId],
-    union: &LiveUnion,
-    live: &LiveRanges,
-    masks: &Masks,
-    hard: &dyn Fn(u32) -> bool,
-    width: u32,
-) -> Option<(RegId, Vec<u32>)> {
-    let mut best: Option<(f64, RegId, Vec<u32>)> = None;
-    for register in order {
-        if _clobbered(one, *register, masks, width) {
-            continue;
-        }
-        let victims: Vec<u32> = union.meeting(&_whole(*register), one, live);
-        if victims.iter().any(|other| hard(*other)) {
-            continue;
-        }
-        let bill: f64 = victims.iter().map(|other| live.weight(*other)).sum();
-        if best.as_ref().is_none_or(|found| bill < found.0) {
-            best = Some((bill, *register, victims));
-        }
-    }
-    best.map(|(_bill, register, victims)| (register, victims))
-}
-
-/// Blocks the pins were not worked out of again after a rewrite, on this
-/// thread.
-pub fn required_skipped() -> usize {
-    REQUIRED_SKIPPED.with(std::cell::Cell::get)
-}
-
-thread_local! {
-    static LAST_RESORTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// How many times this thread's allocations had to evict by force: a value
-/// that cannot be spilled found no register by any other means.
-pub fn last_resorts() -> usize {
-    LAST_RESORTS.with(std::cell::Cell::get)
-}
-
-/// What last-chance recoloring may change: LLVM's `LiveRegMatrix` and
-/// `VirtRegMap`.
-pub struct Coloring<'a> {
-    pub union: &'a mut LiveUnion,
-    pub r#where: &'a mut Placed,
-    pub live: &'a LiveRanges,
-    pub index: &'a Indexes,
-    pub masks: &'a Masks,
-    /// Each value's registers, in the order it tries them.
-    pub order: &'a dyn Fn(u32) -> Vec<RegId>,
-    pub width: &'a dyn Fn(u32) -> u32,
-    /// Values whose register is not the allocator's to change.
-    pub fenced: &'a BTreeSet<u32>,
-    /// Recoloring attempts left, bounding the search as a whole.
-    pub budget: usize,
-    /// Each moved value and the register it held: LLVM's `RecolorStack`.
-    pub stack: Vec<(u32, RegId)>,
-}
-
-impl Coloring<'_> {
-    /// LLVM's `lcr-max-depth` and `lcr-max-interf`.
-    pub const DEPTH: usize = 5;
-    pub const INTERFERENCES: usize = 8;
-    /// Registers tried per recoloring session. (A session is not made at all
-    /// where `crowded`: more of the values live at a point of the value than
-    /// there are registers for them.) A search that fails tries every
-    /// register at every level, so it grows with the class (x_ll_arith: 7
-    /// registers instead of 6 took 8 of 25 sessions to the old 2000, 3x the
-    /// time). Of 19.6k sessions on QCport and the 66 programs, 178 succeed
-    /// and 176 of those within 256 tries.
-    pub const BUDGET: usize = 256;
-
-    fn take(
-        &mut self,
-        value: u32,
-        register: RegId,
-    ) {
-        self.r#where.insert(value, register);
-        self.union.add(_whole(register), value, self.live);
-    }
-
-    fn release(
-        &mut self,
-        value: u32,
-    ) {
-        if let Some(register) = self.r#where.remove(&value) {
-            self.union.remove(_whole(register), value, self.live);
-        }
-    }
-
-    /// Whether more values are live at one point of `value` than there are
-    /// registers for them: the values placed in a register `value` could take
-    /// that are live at a point of `value`, with `value`, need a register each
-    /// out of the registers each could end in (its order, less those a point
-    /// in it destroys), and moving them about changes neither. When the ones
-    /// whose registers all lie among a set outnumber the set, no recoloring
-    /// places `value`, and `recolor` would fail whatever it tried (Hall's
-    /// condition, the necessary half).
-    fn crowded(
-        &self,
-        value: u32,
-    ) -> bool {
-        let mine = &self.live[&value];
-        let mut group: Vec<u32> = vec![value];
-        for register in (self.order)(value) {
-            for other in self.union.meeting(&_whole(register), mine, self.live) {
-                if !group.contains(&other) {
-                    group.push(other);
-                }
-            }
-        }
-        // The registers each could end in: its own order less those a point
-        // inside it destroys, as a bit of the registers there are.
-        let mut registers: Vec<RegId> = Vec::new();
-        let mut allowed: Vec<u64> = Vec::with_capacity(group.len());
-        for one in &group {
-            let mut bits = 0u64;
-            for register in (self.order)(*one) {
-                if _clobbered(&self.live[one], register, self.masks, (self.width)(*one)) {
-                    continue;
-                }
-                let whole = _whole(register);
-                let at = match registers.iter().position(|held| *held == whole) {
-                    Some(at) => at,
-                    None => {
-                        registers.push(whole);
-                        registers.len() - 1
-                    }
-                };
-                if at >= 64 {
-                    return false;
-                }
-                bits |= 1 << at;
-            }
-            allowed.push(bits);
-        }
-        // Segments are sorted and disjoint: a point is in one by search.
-        let covers = |segments: &[ranges::Segment], point: i64| {
-            let at = segments.partition_point(|segment| segment.end <= point);
-            segments.get(at).is_some_and(|segment| segment.start <= point)
-        };
-        // Each member's segments found once, not by hash for each point asked.
-        let lives: Vec<&[ranges::Segment]> = group.iter().map(|one| &self.live[one].segments[..]).collect();
-        // At each point one of them starts within `value`: those live there
-        // need a register each, and the ones whose registers all lie among
-        // some set of them, no more than the set has.
-        let mut seen: BTreeSet<i64> = BTreeSet::new();
-        for segments in &lives {
-            for segment in *segments {
-                let point = segment.start;
-                if !covers(&mine.segments, point) || !seen.insert(point) {
-                    continue;
-                }
-                let here: Vec<u64> = lives
-                    .iter()
-                    .zip(&allowed)
-                    .filter(|(segments, _)| covers(segments, point))
-                    .map(|(_, bits)| *bits)
-                    .collect();
-                // Equal sets ask the same: once each.
-                let mut sets = here.clone();
-                sets.sort_unstable();
-                sets.dedup();
-                for set in &sets {
-                    let within = here.iter().filter(|bits| **bits & !*set == 0).count();
-                    if within > set.count_ones() as usize {
-                        return true;
-                    }
-                }
-                let every = here.iter().fold(0u64, |all, bits| all | bits);
-                if here.len() > every.count_ones() as usize {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// `crowded` as it was asked of every point and member by scan: what
-    /// `LLRM_CHECK_CROWDED` compares it with.
-    fn crowded_reference(
-        &self,
-        value: u32,
-    ) -> bool {
-        let mine = &self.live[&value];
-        let mut group: Vec<u32> = vec![value];
-        for register in (self.order)(value) {
-            for other in self.union.meeting(&_whole(register), mine, self.live) {
-                if !group.contains(&other) {
-                    group.push(other);
-                }
-            }
-        }
-        // The registers each could end in: its own order less those a point
-        // inside it destroys, as a bit of the registers there are.
-        let mut registers: Vec<RegId> = Vec::new();
-        let mut allowed: Vec<u64> = Vec::with_capacity(group.len());
-        for one in &group {
-            let mut bits = 0u64;
-            for register in (self.order)(*one) {
-                if _clobbered(&self.live[one], register, self.masks, (self.width)(*one)) {
-                    continue;
-                }
-                let whole = _whole(register);
-                let at = match registers.iter().position(|held| *held == whole) {
-                    Some(at) => at,
-                    None => {
-                        registers.push(whole);
-                        registers.len() - 1
-                    }
-                };
-                if at >= 64 {
-                    return false;
-                }
-                bits |= 1 << at;
-            }
-            allowed.push(bits);
-        }
-        let live_at = |one: u32, point: i64| {
-            self.live[&one].segments.iter().any(|segment| segment.start <= point && point < segment.end)
-        };
-        // At each point one of them starts within `value`: those live there
-        // need a register each, and the ones whose registers all lie among
-        // some set of them, no more than the set has.
-        let mut seen: Vec<i64> = Vec::new();
-        for one in &group {
-            for segment in &self.live[one].segments {
-                let point = segment.start;
-                if seen.contains(&point)
-                    || !mine.segments.iter().any(|inside| inside.start <= point && point < inside.end)
-                {
-                    continue;
-                }
-                seen.push(point);
-                let here: Vec<u64> = group
-                    .iter()
-                    .zip(&allowed)
-                    .filter(|(other, _)| live_at(**other, point))
-                    .map(|(_, bits)| *bits)
-                    .collect();
-                for set in &here {
-                    let within = here.iter().filter(|bits| **bits & !*set == 0).count();
-                    if within > set.count_ones() as usize {
-                        return true;
-                    }
-                }
-                let every = here.iter().fold(0u64, |all, bits| all | bits);
-                if here.len() > every.count_ones() as usize {
-                    return true;
-                }
-            }
-        }
-        false
-    }
-
-    /// `RAGreedy::tryLastChanceRecoloring`: a register for `value` whose
-    /// holders all move elsewhere, recursively. `recolored` are the values
-    /// placed in this session, never moved again. On success `value` is
-    /// placed; on failure nothing has changed.
-    pub fn recolor(
-        &mut self,
-        value: u32,
-        depth: usize,
-        recolored: &mut BTreeSet<u32>,
-    ) -> bool {
-        if depth >= Self::DEPTH {
-            return false;
-        }
-        if depth == 0 && llrm_support::env_flag!("LLRM_CHECK_CROWDED") {
-            assert_eq!(
-                self.crowded(value),
-                self.crowded_reference(value),
-                "value#{value}: crowded by search differs from by scan"
-            );
-        }
-        if depth == 0 && self.crowded(value) {
-            if llrm_support::env_flag!("LLRM_CHECK_RECOLOR") {
-                let mut again = Coloring {
-                    union: &mut *self.union,
-                    r#where: &mut *self.r#where,
-                    live: self.live,
-                    index: self.index,
-                    masks: self.masks,
-                    order: self.order,
-                    width: self.width,
-                    fenced: self.fenced,
-                    budget: Self::BUDGET,
-                    stack: Vec::new(),
-                };
-                assert!(
-                    !again.search(value, 0, &mut BTreeSet::new()),
-                    "value#{value}: crowded, and recolored all the same"
-                );
-            }
-            return false;
-        }
-        self.search(value, depth, recolored)
-    }
-
-    fn search(
-        &mut self,
-        value: u32,
-        depth: usize,
-        recolored: &mut BTreeSet<u32>,
-    ) -> bool {
-        if depth >= Self::DEPTH {
-            return false;
-        }
-        let mine = &self.live[&value];
-        let width = (self.width)(value);
-        recolored.insert(value);
-        for register in (self.order)(value) {
-            if self.budget == 0 {
-                break;
-            }
-            self.budget -= 1;
-            if _clobbered(mine, register, self.masks, width) {
-                continue;
-            }
-            let mut holders: Vec<u32> = self.union.meeting(&_whole(register), mine, self.live);
-            if holders.len() >= Self::INTERFERENCES
-                || holders.iter().any(|other| self.fenced.contains(other) || recolored.contains(other))
-            {
-                continue;
-            }
-            // Largest first, as the allocator's queue orders them.
-            holders.sort_by_cached_key(|other| Reverse(self.live[other].size(self.index)));
-            let entry = self.stack.len();
-            let session = recolored.clone();
-            for other in &holders {
-                self.stack.push((*other, self.r#where[other]));
-                self.release(*other);
-            }
-            self.take(value, register);
-            let all = holders
-                .iter()
-                .all(
-                    |other| match _free(
-                        &self.live[other],
-                        &(self.order)(*other),
-                        self.union,
-                        self.live,
-                        self.masks,
-                        (self.width)(*other),
-                    ) {
-                        Some(found) => {
-                            self.take(*other, found);
-                            recolored.insert(*other);
-                            true
-                        }
-                        None => self.recolor(*other, depth + 1, recolored),
-                    },
-                );
-            if all {
-                return true;
-            }
-            // Undo every move this attempt made, deeper ones included.
-            self.release(value);
-            let moved: Vec<(u32, RegId)> = self.stack.drain(entry..).collect();
-            for (other, _) in &moved {
-                self.release(*other);
-            }
-            for (other, register) in moved {
-                self.take(other, register);
-            }
-            *recolored = session;
-            recolored.insert(value);
-        }
-        recolored.remove(&value);
-        false
-    }
-}
-
 /// Assign, then rewrite. LLVM's two halves, in one phase.
 pub struct RegAlloc {
     pub pinned: IndexMap<u32, RegId>,
@@ -2687,7 +2278,6 @@ impl RegAlloc {
         let base = llrm_support::debug::span("regalloc base");
         let mut pins = prefer.clone();
         pins.extend(required);
-        let before = last_resorts();
         // Each spill gets a slot of its own; they are shared once, over the
         // allocation (`crate::backend::slots::slots_colored`).
         frame.borrow_mut().defer_colours = true;
@@ -2705,14 +2295,7 @@ impl RegAlloc {
         frame.borrow_mut().defer_colours = false;
         let (got, out, spilled) = allocated?;
         drop(base);
-        llrm_support::debug!(
-            "regalloc",
-            "{}: {} insns, {} spilled, {} forced",
-            body.name,
-            out.insns().len(),
-            spilled.len(),
-            last_resorts() - before
-        );
+        llrm_support::debug!("regalloc", "{}: {} insns, {} spilled", body.name, out.insns().len(), spilled.len());
         let colored = llrm_support::debug::timed("spill slots shared", || {
             crate::backend::slots::slots_colored(&out, &mut frame.borrow_mut())
         });
@@ -3558,78 +3141,6 @@ mod tests {
         );
     }
 
-    /// Eviction only weighs the holders' spill costs, so a value whose register
-    /// was held by something that could move, if a third value moved first,
-    /// spilled (deedlines: 3600 weighted frame operands).
-    #[test]
-    fn test_a_register_whose_holder_moves_through_a_chain_is_taken_not_spilled() {
-        let span = |value: u32, end: i64| {
-            (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end }]) })
-        };
-        let live: IndexMap<u32, Interval> = IndexMap::from_iter([span(1, 10), span(2, 4), span(3, 10)]);
-        let choices = |value: u32| match value {
-            1 => vec![RegId::AX, RegId::BX],
-            2 => vec![RegId::BX, RegId::CX],
-            _ => vec![RegId::AX],
-        };
-        let mut union = LiveUnion::of([(_whole(RegId::AX), vec![1]), (_whole(RegId::BX), vec![2])], &live);
-        let mut placed: Placed = Placed::from(&IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
-        let mut coloring = Coloring {
-            union: &mut union,
-            r#where: &mut placed,
-            live: &LiveRanges::stated(live.clone()),
-            index: &Indexes::plain(),
-            masks: &Masks::default(),
-            order: &choices,
-            width: &|_| 2,
-            fenced: &BTreeSet::new(),
-            budget: Coloring::BUDGET,
-            stack: Vec::new(),
-        };
-        assert!(coloring.recolor(3, 0, &mut BTreeSet::new()));
-        assert_eq!(placed.get(&3), Some(&RegId::AX));
-        assert_eq!(placed.get(&1), Some(&RegId::BX));
-        assert_eq!(placed.get(&2), Some(&RegId::CX));
-    }
-
-    /// A failing recolor tries every register at every level: with a class one
-    /// register larger it took 2000 tries, three times the compile time of
-    /// x_ll_arith, for a search that nearly never succeeds (3 of 366 sessions
-    /// on the 66 programs).
-    #[test]
-    fn test_a_recolor_that_fails_over_a_full_class_stays_within_its_budget() {
-        let registers = [RegId::EAX, RegId::EBX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::EBP];
-        let live: IndexMap<u32, Interval> = (0..=registers.len() as u32)
-            .map(|value| (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end: 10 }]) }))
-            .collect();
-        let choices = |_: u32| registers.to_vec();
-        let mut union = LiveUnion::of(
-            registers.iter().enumerate().map(|(at, register)| (_whole(*register), vec![at as u32 + 1])),
-            &live,
-        );
-        let mut placed: Placed = Placed::from(
-            &registers
-                .iter()
-                .enumerate()
-                .map(|(at, register)| (at as u32 + 1, *register))
-                .collect::<IndexMap<u32, RegId>>(),
-        );
-        let mut coloring = Coloring {
-            union: &mut union,
-            r#where: &mut placed,
-            live: &LiveRanges::stated(live.clone()),
-            index: &Indexes::plain(),
-            masks: &Masks::default(),
-            order: &choices,
-            width: &|_| 4,
-            fenced: &BTreeSet::new(),
-            budget: Coloring::BUDGET,
-            stack: Vec::new(),
-        };
-        assert!(!coloring.recolor(0, 0, &mut BTreeSet::new()));
-        assert!(Coloring::BUDGET - coloring.budget <= 256, "{} tries", Coloring::BUDGET - coloring.budget);
-    }
-
     /// A phi's argument is read at the end of the predecessor it names: a value
     /// only a phi reads was live nowhere, and a next-use analysis saw it dead.
     #[test]
@@ -3650,39 +3161,6 @@ mod tests {
         assert!(live_out[&0].contains(&1), "the argument leaves its predecessor: {live_out:?}");
         assert!(!live_in[&0x10].contains(&1) && !live_in[&0x10].contains(&2));
     }
-
-    /// A failed recoloring must leave every holder where it was.
-    #[test]
-    fn test_a_recoloring_that_fails_restores_every_holder() {
-        let span = |value: u32, end: i64| {
-            (value, Interval { weight: 1.0, ..Interval::new(value, vec![Segment { start: 0, end }]) })
-        };
-        let live: IndexMap<u32, Interval> = IndexMap::from_iter([span(1, 10), span(2, 4), span(3, 10)]);
-        let choices = |value: u32| match value {
-            1 => vec![RegId::AX, RegId::BX],
-            2 => vec![RegId::BX],
-            _ => vec![RegId::AX],
-        };
-        let mut union = LiveUnion::of([(_whole(RegId::AX), vec![1]), (_whole(RegId::BX), vec![2])], &live);
-        let mut placed: Placed = Placed::from(&IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
-        let mut coloring = Coloring {
-            union: &mut union,
-            r#where: &mut placed,
-            live: &LiveRanges::stated(live.clone()),
-            index: &Indexes::plain(),
-            masks: &Masks::default(),
-            order: &choices,
-            width: &|_| 2,
-            fenced: &BTreeSet::new(),
-            budget: Coloring::BUDGET,
-            stack: Vec::new(),
-        };
-        assert!(!coloring.recolor(3, 0, &mut BTreeSet::new()));
-        assert_eq!(placed.ordered(), IndexMap::from_iter([(1, RegId::AX), (2, RegId::BX)]));
-        assert_eq!(union.holders(&_whole(RegId::AX)), vec![1]);
-        assert_eq!(union.holders(&_whole(RegId::BX)), vec![2]);
-    }
-
     // ----------------------------------------- tests/test_allocation_hints.py
 
     fn call_copy() -> LirBody {
@@ -3771,7 +3249,12 @@ mod tests {
             }
             let got = allocated(&body, Some(&pinned)).expect("allocates");
             assert!(got.spilled.is_empty(), "{barrier}");
-            assert_ne!(got.r#where[&1], RegId::EDI, "{barrier}");
+            // A value that overlaps the pinned copy of itself may share its
+            // register: the overlap starts at the copy
+            // (`LiveRange::overlaps(Other, CP, Indexes)`), both hold one value.
+            if barrier != "overlap" {
+                assert_ne!(got.r#where[&1], RegId::EDI, "{barrier}");
+            }
             assert_eq!(got.r#where[&2], RegId::EDI, "{barrier}");
         }
     }

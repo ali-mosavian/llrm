@@ -66,7 +66,8 @@ use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
 
 /// Operations that read their destination.
-pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
+pub const _TIED: [Operation; 5] =
+    [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select, Operation::Exchange];
 
 /// `lea`: which tied instructions become a `lea` before allocation (DEVIATE
 /// TA-4, twoaddress.rs).

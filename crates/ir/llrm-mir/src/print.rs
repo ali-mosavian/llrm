@@ -10,7 +10,9 @@ use crate::module::{
     BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId, MetadataOperand,
     Module, Operand, Special, UnnamedAddr, ValueId,
 };
-use crate::opcode::{Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, Tail, spelling};
+use crate::opcode::{
+    AtomicKind, Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, RMW_OPS, Tail, spelling,
+};
 use crate::types::{FloatKind, Type, TypeId, struct_text};
 
 pub fn module(module: &Module) -> String {
@@ -535,8 +537,15 @@ impl Printer<'_> {
         if let Some(personality) = function.personality {
             words.push(format!("personality {}", self.typed_constant(personality)));
         }
-        for (kind, node) in &function.metadata {
-            words.push(format!("!{kind} !{}", node.0));
+        if declaration {
+            // Clang's spelling: the attachments follow `declare`.
+            for (at, (kind, node)) in function.metadata.iter().enumerate() {
+                words.insert(1 + at, format!("!{kind} !{}", node.0));
+            }
+        } else {
+            for (kind, node) in &function.metadata {
+                words.push(format!("!{kind} !{}", node.0));
+            }
         }
         let mut out = words.join(" ");
         if declaration {
@@ -713,6 +722,33 @@ impl Printer<'_> {
             Opcode::Store { align, volatile } => {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
                 format!("store {}{}, {}{align}", if *volatile { "volatile " } else { "" }, typed(0), typed(1))
+            }
+            Opcode::Atomic(info) => {
+                let align = info.align.map(|one| format!(", align {one}")).unwrap_or_default();
+                let volatile = if info.volatile { "volatile " } else { "" };
+                let scope = if info.single_thread { " syncscope(\"singlethread\")" } else { "" };
+                let order = info.ordering.spelling();
+                match info.kind {
+                    AtomicKind::Load => {
+                        format!("load atomic {volatile}{}, {}{scope} {order}{align}", self.ty(inst.ty), typed(0))
+                    }
+                    AtomicKind::Store => {
+                        format!("store atomic {volatile}{}, {}{scope} {order}{align}", typed(0), typed(1))
+                    }
+                    AtomicKind::Rmw(op) => {
+                        let name = RMW_OPS.iter().find(|(one, _)| *one == op).map_or("xchg", |(_, name)| name);
+                        format!("atomicrmw {volatile}{name} {}, {}{scope} {order}{align}", typed(0), typed(1))
+                    }
+                    AtomicKind::CmpXchg { failure, weak } => format!(
+                        "cmpxchg {}{volatile}{}, {}, {}{scope} {order} {}{align}",
+                        if weak { "weak " } else { "" },
+                        typed(0),
+                        typed(1),
+                        typed(2),
+                        failure.spelling()
+                    ),
+                    AtomicKind::Fence => format!("fence{scope} {order}"),
+                }
             }
             Opcode::GetElementPtr { source } => {
                 let rest: Vec<String> = (0..ops.len()).map(typed).collect();

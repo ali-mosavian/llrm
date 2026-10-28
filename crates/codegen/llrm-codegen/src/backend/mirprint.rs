@@ -115,7 +115,7 @@ fn cell(
     match addr.map(|a| a.space) {
         Some(Space::Frame) if mem.base.is_none() => {
             let disp = addr.map_or(0, |a| a.disp) + mem.offset;
-            if disp < 0 {
+            if disp < 0 || addr.and_then(|a| a.slot_home()).is_some() {
                 let home = addr.and_then(|a| a.slot_home()).unwrap_or(disp);
                 let found =
                     LOCALS.with(|l| l.borrow().iter().position(|(h, ..)| *h == home).map(|k| (k, l.borrow()[k].1)));
@@ -621,7 +621,7 @@ pub fn mir(
             continue;
         };
         let disp = a.disp + m.offset;
-        if disp >= 0 {
+        if disp >= 0 && a.slot_home().is_none() {
             continue;
         }
         let home = a.slot_home().unwrap_or(disp);
@@ -1015,6 +1015,23 @@ mod tests {
         let body = LirBody::new("arr", 0, blocks, IndexMap::default(), IndexMap::default());
         let text = mir(&body, &IndexMap::default()).expect("an indexed local prints");
         assert!(text.contains("MOV32rm %stack.0, 4, %2, 0, $noreg"), "{text}");
+    }
+
+    /// A slot-tagged frame cell at displacement 0 printed as
+    /// `%fixed-stack.-2` ("expected a subregister index after '.'") on
+    /// matmul -O3 at m32: a cell of a slot is a stack object whatever its
+    /// displacement.
+    #[test]
+    fn test_a_slot_tagged_cell_at_a_small_displacement_is_a_stack_object() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, 0).in_slot(-256)), 4);
+        let store = insn("mov", Operation::Move, vec![Loc::Mem(cell)], vec![held(1)]);
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![store, ret]))];
+        let body = LirBody::new("slot", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("a slot cell prints");
+        assert!(text.contains("MOV32mr %stack.0, 1, $noreg, 0, $noreg"), "{text}");
+        assert!(!text.contains("fixed-stack.-"), "{text}");
     }
 
     /// A byte written into a register nothing defined before left the pin's
