@@ -174,13 +174,13 @@ def target_bits(target: str) -> int:
 WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 
 
-def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str], extra: list[str] = ()) -> tuple[list[str], dict[str, str]]:
+def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str], extra: list[str] = (), row: str | None = None) -> tuple[list[str], dict[str, str]]:
     """(command, environment) that builds the C `source` for `target`: llrm-c, or llrm-cc over clang where LLRM_C_FRONTEND=llrm-cc names it (the
     target is then a row of its table, not a flag)."""
     if c_frontend() == "llrm-cc":
         if target_bits(target) not in WATCOM_ROWS:
             raise BuildError(f"llrm-cc has no row for {target}")
-        row = {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
+        row = {"LLRM_CC_TARGET": row or WATCOM_ROWS[target_bits(target)]}
         return [str(BIN / "llrm-cc"), level, "-c", *abi, *extra, str(source), "-o", str(obj)], row  # the row's -isystem has llrm_os.h; `include` is llrm-c's
     return [str(BIN / "llrm-c"), str(source), "-I", str(include), m_flag(target), *abi, level, *extra, "-o", str(obj)], {}
 

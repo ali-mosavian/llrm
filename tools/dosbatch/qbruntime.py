@@ -398,10 +398,14 @@ def platform_sources() -> list[Path]:
     return platform_sources_of(platform_directory())
 
 
+# The runtime's C is called by compiled BASIC and calls the runtime's assembly, both with the stack: the Watcom row's register calls handed `B$INT21` a garbage Regs pointer.
+RUNTIME_ROW = "x86_16-dos"
+
+
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
     # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
     flags = ["-mbss-begin", "-I", str(include), "-I", str(RUNTIME), "-I", str(platform_directory()), *device_includes()]
-    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", include, [], flags))
+    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", include, [], flags, row=RUNTIME_ROW))
 
 
 def remove_existing_archive(work: Path) -> None:
