@@ -1050,7 +1050,22 @@ pub fn visit_mul(
     {
         return c.replace_with_binop(inst, BinaryOp::Mul, args[0], args[0], Flags::default());
     }
-    // DEVIATE 3: abs(X) * abs(Y) -> abs(X * Y)
+    // abs(X) * abs(Y) -> abs(X * Y)
+    if flags.contains(Flags::NSW) && has_one_use(c, op0) && has_one_use(c, op1) {
+        let abs_of = |c: &Combiner, v: Operand| {
+            let q = query(c, None);
+            let (_, call) = pattern::intrinsic(&q, v, IntrinsicId::Abs)?;
+            let args = pattern::call_arguments(call);
+            pattern::one(&q, args[1]).then_some(args[0])
+        };
+        if let (Some(x), Some(y)) = (abs_of(c, op0), abs_of(c, op1)) {
+            let product = c.create_binop(inst, BinaryOp::Mul, x, y, wrap(false, true));
+            let ty = c.type_of(product);
+            let i1 = c.context.types.int(1);
+            let poison = c.int(i1, 1);
+            return Visit::Replace(c.create_intrinsic(inst, "abs", ty, &[product, poison]));
+        }
+    }
 
     // -X * C --> X * -C
     let neg0 = pattern::neg(&query(c, Some(inst)), op0);
@@ -1116,7 +1131,27 @@ pub fn visit_mul(
     if let Some(r) = fold_mul_to_select(c, inst) {
         return r;
     }
-    // DEVIATE 3: ((ashr X, 31) | 1) * X --> abs(X)
+    // ((ashr X, 31) | 1) * X --> abs(X)
+    // X * ((ashr X, 31) | 1) --> abs(X)
+    let sign_or_one = |c: &Combiner, v: Operand| {
+        let q = query(c, None);
+        let bits = width(c, v);
+        let (l, r, _) = binop(&q, v, BinaryOp::Or)?;
+        [(l, r), (r, l)].into_iter().find_map(|(shifted, one)| {
+            if !pattern::one(&q, one) {
+                return None;
+            }
+            let (x, amount, _) = binop(&q, shifted, BinaryOp::AShr)?;
+            pattern::apint(&q, amount).is_some_and(|(value, _)| value == (bits - 1) as u128).then_some(x)
+        })
+    };
+    let abs_of = [(op0, op1), (op1, op0)].into_iter().find_map(|(or, x)| (sign_or_one(c, or) == Some(x)).then_some(x));
+    if let Some(x) = abs_of {
+        let i1 = c.context.types.int(1);
+        let poison = c.int(i1, u128::from(has_nsw));
+        let ty = c.type_of(x);
+        return Visit::Replace(c.create_intrinsic(inst, "abs", ty, &[x, poison]));
+    }
     if let Some(narrowed) = c.narrow_math_if_no_overflow(inst) {
         return narrowed;
     }
@@ -1880,7 +1915,15 @@ pub fn visit_udiv(
         let shr = c.create_binop(inst, BinaryOp::LShr, op0, log2, exact_if(exact));
         return Visit::Replace(shr);
     }
-    // DEVIATE 3: Op0 udiv Op1 -> Op0 lshr cttz(Op1), if Op1 is a power of 2.
+    // Op0 udiv Op1 -> Op0 lshr cttz(Op1), if Op1 is a power of 2. This will
+    // increase instruction count but it's okay since bitwise operations are
+    // substantially faster than division.
+    if is_power_of_two_at(c, inst, op1, true) {
+        let i1 = c.context.types.int(1);
+        let poison_on_zero = c.int(i1, 1);
+        let cttz = c.create_intrinsic(inst, "cttz", ty, &[op1, poison_on_zero]);
+        return Visit::Replace(c.create_binop(inst, BinaryOp::LShr, op0, cttz, exact_if(exact)));
+    }
     Visit::None
 }
 
