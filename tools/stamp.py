@@ -1,4 +1,4 @@
-"""The commit a binary was built from: `llrm-c --version` prints `llrm-c SHA` or `llrm-c SHA+dirty`.
+"""The commit a binary was built from: `llrm-llc --version` prints `llrm-llc SHA` or `llrm-llc SHA+dirty`.
 
 A measurement names the sha it means to measure (`--expect-sha SHA`, or LLRM_EXPECT_SHA) and this refuses a binary
 built from another tree (a shared worktree moved during the build gave a number for the wrong commit) and one built
