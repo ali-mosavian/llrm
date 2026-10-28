@@ -295,8 +295,8 @@ def c_frontend() -> str:
 
 
 def os_layer(target: str, field: str, language: str) -> str:
-    """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
-    said = subprocess.run([str(BIN / (c_frontend() if language == "c" else _COMPILERS[language])), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`); "qb" is C's, as the QB runtime is C."""
+    said = subprocess.run([str(BIN / (c_frontend() if language in ("c", "qb") else _COMPILERS[language])), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
     if field == "directory" and "/runtime/" in said:
         # The compiler names the runtime of the tree it was built in; a target shared by two worktrees holds the other's (a gate of main
         # read the tip's path: 14 collection errors). The tools read this tree's.

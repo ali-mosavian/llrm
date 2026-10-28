@@ -180,14 +180,28 @@ byte cn_width(void)
     return cn_driver()->width();
 }
 
+/* A NUL prints nothing, on the screen or redirected (BCOM45, measured: "a" + CHR$(0) + "b" prints ab). */
 void cn_putc(char c)
 {
-    cn_driver()->write(&c, 1);
+    if (c)
+        cn_driver()->write(&c, 1);
 }
 
 void cn_write(const char *s, unsigned n)
 {
-    cn_driver()->write(s, n);
+    const char *start = s;
+
+    while (n) {
+        if (*s == 0) {
+            if (s != start)
+                cn_driver()->write(start, s - start);
+            start = s + 1;
+        }
+        s++;
+        n--;
+    }
+    if (s != start)
+        cn_driver()->write(start, s - start);
 }
 
 void cn_crlf(void)
