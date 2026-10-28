@@ -370,6 +370,15 @@ pub fn contribution(
     one: &crate::model::lir::Insn,
     items: &mut Vec<Item>,
 ) {
+    // A value an instruction takes from or leaves in an xmm register is held
+    // in one: LLVM gives the vreg copied from a physical register that
+    // register's class. Its only reads may be copies, which name no class.
+    for (held, register) in one.requires.iter().chain(&one.delivers) {
+        if regs.in_class(*register, llrm_lir::registers::class::XMM) {
+            let defining = one.delivers.iter().any(|(other, _)| other.value == held.value);
+            items.push(Item::Restrict { value: held.value, kind: Kind::Xmm, role: Role::Xmm, defining });
+        }
+    }
     let Some(what) = &one.what else {
         return;
     };
@@ -641,6 +650,7 @@ impl Scan {
             |value: u32| self.counts.get(&value).is_some_and(|c| c.numeric > 0),
         );
         _through_webs(body, &selecting, &numeric, &selectors, selector_bytes(segments), false, &mut out);
+        _through_xmm_copies(body, registers, &mut out);
         out
     }
 }
@@ -799,7 +809,60 @@ fn collected(
             &mut out,
         )
     });
+    _through_xmm_copies(body, registers, &mut out);
     out
+}
+
+/// A plain `mov` of one value to another is one register class
+/// (`COPY` between vregs of one class): a value only copied to or from an
+/// xmm-confined one is held in an xmm register too. The allocator's copies
+/// around a value pinned in `xmm0` (a `double` call result passed on to the
+/// return) are such moves, and took a general register for it. A `movd` or
+/// `movq` between classes has its own name.
+fn _through_xmm_copies(
+    body: &LirBody,
+    registers: &RegisterClasses,
+    out: &mut Classes,
+) {
+    if registers.xmm_set.is_empty() {
+        return;
+    }
+    let mut web: IndexMap<u32, u32> = IndexMap::default();
+    fn find(
+        web: &mut IndexMap<u32, u32>,
+        value: u32,
+    ) -> u32 {
+        let up = *web.entry(value).or_insert(value);
+        if up == value {
+            return value;
+        }
+        let top = find(web, up);
+        web.insert(value, top);
+        top
+    }
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        if let (Operation::Move, Some("mov"), [Loc::Held(into)], [Loc::Held(from)], None) =
+            (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice(), one.group)
+        {
+            if into.value != from.value {
+                let (a, b) = (find(&mut web, into.value), find(&mut web, from.value));
+                web.insert(a, b);
+            }
+        }
+    }
+    let mut members: IndexMap<u32, Vec<u32>> = IndexMap::default();
+    for value in web.keys().copied().collect::<Vec<_>>() {
+        let top = find(&mut web, value);
+        members.entry(top).or_default().push(value);
+    }
+    for list in members.values() {
+        if list.iter().any(|value| out.get(value).is_some_and(|class| *class == registers.xmm_set)) {
+            for value in list {
+                out.entry(*value).or_insert_with(|| registers.xmm_set.clone());
+            }
+        }
+    }
 }
 
 /// A phi's result and arguments, and the two sides of a phi edge's copy, are

@@ -534,7 +534,7 @@ fn written_basic_inner(
         &every,
         &mut symbols,
         &mut Default::default(),
-        format,
+        objbuild::asm_info(format).pref_align,
         |procedure, number| _basic_listing(procedure, number),
     )
     .map_err(|error| error.to_string())?;
@@ -596,7 +596,7 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
         .map_err(|error| error.to_string())?;
-    if format != llrm_target::object::Format::Omf {
+    if objbuild::asm_info(format).hosted {
         // A host's linker and C spell the runtime's `B$PESD` as `B_PESD`.
         let mut object = object;
         for symbol in &mut object.symbols {
@@ -618,7 +618,7 @@ fn written_basic_inner(
             );
         return objbuild::serialized(&object, format).map_err(|error| error.to_string());
     }
-    let emitted = llrm_omf::write::write(&object).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object, &llrm_x86::mc::omf::X86Omf).map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
     if module.object.bitness != 16 {

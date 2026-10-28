@@ -482,6 +482,70 @@ fn a_doubling_and_a_masked_value_are_compared_by_sign_and_zero() {
     );
 }
 
+/// `foldICmpAndXX`: `x & y` against `x` is an equality, or an unsigned compare
+/// when the signs are known (`opt`: `icmp ne i32 %a, %x`, `icmp slt i32 %x,
+/// 0`).
+#[test]
+fn an_and_compared_with_its_operand_is_an_equality_or_a_sign_test() {
+    check(
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
+        "  %a = and i32 %x, %y\n  %0 = icmp ne i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y",
+        "  %a = and i32 %y, %x\n  %r = icmp ule i32 %x, %a\n  ret i1 %r\n",
+        "  %a = and i32 %y, %x\n  %0 = icmp eq i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = or i32 %y0, -2147483648\n  %a = and i32 %x, %y\n  %r = icmp slt i32 %a, %x\n  ret i1 %r\n",
+        "  %y = or i32 %y0, -2147483648\n  %a = and i32 %x, %y\n  %0 = icmp ne i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = and i32 %y0, 2147483647\n  %a = and i32 %x, %y\n  %r = icmp sgt i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x0, i32 %y",
+        "  %x = or i32 %x0, -2147483648\n  %a = and i32 %x, %y\n  %r = icmp sle i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %y, 0\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpXNegX`: a value against its negation (`opt`: `icmp sgt i32 %x, 0`,
+/// `icmp slt i32 %x, 0`); without `nsw` only an equality folds, to the value
+/// without its sign bit.
+#[test]
+fn a_value_compared_with_its_negation_is_compared_with_zero() {
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp eq i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp eq i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp slt i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp ult i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp ule i32 %x, %n\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub i32 0, %x\n  %r = icmp ne i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = and i32 %x, 2147483647\n  %1 = icmp ne i32 %0, 0\n  ret i1 %1\n",
+    );
+}
+
 /// `foldICmpBinOp`: `(x & -P2) == INT_MIN` is `x s< INT_MIN + P2`, `!=` is
 /// `s>=` (`opt`: `icmp slt i16 %x, -32764`, `icmp sgt i16 %x, -32765`). Left
 /// alone, the masked compare reached the selector as an and plus a compare.

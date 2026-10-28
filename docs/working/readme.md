@@ -12,6 +12,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [presize-plan](presize-plan.md) | Vectors that grow by doubling to a size known up front: sites, growth Ir, capacities (2026-10-24) |
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [alias-stack-plan](alias-stack-plan.md) | Alias stack: module-by-module route to the pin's BasicAA/TBAA/CaptureTracking structure, Ir budget per stage |
+| [module-ipo-plan](module-ipo-plan.md) | Module walk and IPO against the pin: what `_sift` lacks in `-print-after-all`, rows by 2026-11-09 |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
@@ -65,6 +66,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
+| [pin-comparison-checklist](pin-comparison-checklist.md) | Five lines every pin comparison states (input stage, target header, optsize, convention, pre-RA difference), and the internal-function convention as a DEVIATE |
 | [above-main-rows](above-main-rows.md) | Rows above main |
 | [accesses-basicaa-plan](accesses-basicaa-plan.md) | MemorySSA Accesses: BasicAA per query (exit of DEVIATE AN1) |
 | [backend-rows-plan](backend-rows-plan.md) | Backend rows to translate: 82, 34/83, 90, 84, 42 — w-3, plan note 2026-10-22 |
