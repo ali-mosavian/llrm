@@ -442,12 +442,15 @@ pub(crate) fn loop_form_blocks(
 
 /// Each loop's blocks, asked one at a time (`Around`, `successors_of`,
 /// `predecessors_of`): a whole-body graph and predecessor map per ask cost
-/// 88 K Ir a function in d_faces -O2, 2.9 M over 33 asks.
+/// 88 K Ir a function in d_faces -O2, 2.9 M over 33 asks. A block's successors
+/// are read once for all the loops that hold it, and an exit once for each
+/// loop (`Around::exits` read them again for every nested loop: 1.5 M Ir).
 fn loop_form_blocks_of(
     all_loops: Vec<llrm_analysis::graph::loops::Loop>,
     function: &Function,
 ) -> BTreeSet<i64> {
     use llrm_analysis::cfg::{Around, predecessors_of, successors_of};
+    let mut successors: llrm_support::hash::IndexMap<i64, llrm_analysis::cfg::Successors> = Default::default();
     let mut loop_edges = BTreeSet::new();
     for loop_ in all_loops {
         if let Some(parent) = loop_.preheader(function) {
@@ -459,13 +462,20 @@ fn loop_form_blocks_of(
             loop_edges.insert(latch);
         }
         // A successor of the body whose predecessors are all in it.
-        for (_, exit) in loop_.exits(function) {
-            let after = successors_of(function, exit);
-            if predecessors_of(function, exit).iter().all(|at| loop_.body.contains(at))
-                && after.len() == 1
-                && !loop_.body.contains(&after[0])
-            {
-                loop_edges.insert(exit);
+        let mut seen = BTreeSet::new();
+        for &from in &loop_.body {
+            let after_from = successors.entry(from).or_insert_with(|| successors_of(function, from)).clone();
+            for exit in after_from {
+                if loop_.body.contains(&exit) || !seen.insert(exit) {
+                    continue;
+                }
+                let after = successors.entry(exit).or_insert_with(|| successors_of(function, exit));
+                if after.len() == 1
+                    && !loop_.body.contains(&after[0])
+                    && predecessors_of(function, exit).iter().all(|at| loop_.body.contains(at))
+                {
+                    loop_edges.insert(exit);
+                }
             }
         }
     }

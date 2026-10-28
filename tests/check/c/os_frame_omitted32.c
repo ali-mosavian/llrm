@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -march=i486 -Os --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -march=i486 -Os --isel=dag -S -o /dev/stdout
 // At -Os masm kept `push ebp; mov ebp, esp` for a function whose frame register hasFP had freed, because the esp form was longer in
 // bytes (BASIC's rule). The pin omits it whatever the bytes: QCport weapons.c -Os kept 17 `leave` where the pin has none.
 // CHECK-LABEL: _probe proc
