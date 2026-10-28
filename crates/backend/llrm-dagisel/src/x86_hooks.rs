@@ -364,15 +364,14 @@ fn find_non_imm_use<D: AddrDag>(
     if dag.is_only_user_of(immediate_use, def) {
         return false;
     }
-    let mut visited = vec![immediate_use];
+    let mut visited = crate::dag::Visited::of(immediate_use);
     let mut worklist = Vec::new();
-    let seed = |node: u32, visited: &mut Vec<u32>, worklist: &mut Vec<u32>| {
+    let seed = |node: u32, visited: &mut crate::dag::Visited, worklist: &mut Vec<u32>| {
         for i in 0..dag.num_operands(node) {
             let op = dag.operand(node, i);
-            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || visited.contains(&op.node) {
+            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || !visited.insert(op.node) {
                 continue;
             }
-            visited.push(op.node);
             worklist.push(op.node);
         }
     };
