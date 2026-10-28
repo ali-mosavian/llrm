@@ -117,3 +117,11 @@ def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
     """llrm-nib names the hook by absolute path: the object's name began with "/", a directory that did not exist (jwasm A1106 in NibCutTests)."""
     name = dosbatch.object_name(str(dosbatch.ROOT / "runtime/nib/x86-m16/init.asm"))
     assert "/" not in name and name == dosbatch.object_name("runtime/nib/x86-m16/init.asm")
+
+
+def test_a_qb_program_links_the_start_up_that_calls_underscore_main(monkeypatch):
+    """The QB link took C's defines, so under llrm-cc its start-up asked for `main_`, which no QB program defines (jwlink E2028: main_ is an undefined reference)."""
+    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
+    monkeypatch.setattr(dosbatch, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: type("R", (), {"stdout": "A=1"})())}))
+    assert dosbatch.os_defines("x86-m32", "c") == ("A=1", "LL_MAIN=main_")
+    assert dosbatch.os_defines("x86-m32", "qb") == ("A=1",)
