@@ -14,7 +14,6 @@ largest move of a function between BASE and its repeat, whose objects are the sa
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -111,10 +110,8 @@ def md5(path: Path) -> str:
 
 
 def main() -> int:
-    spec = importlib.util.spec_from_file_location("qcport_run", HERE / "qcport-run.py")
-    qr = importlib.util.module_from_spec(spec)
-    sys.modules["qcport_run"] = qr
-    spec.loader.exec_module(qr)
+    sys.path.insert(0, str(HERE))
+    import qcport_run as qr  # noqa: PLC0415
     import dosbatch
 
     module, base, *named = sys.argv[1:]
