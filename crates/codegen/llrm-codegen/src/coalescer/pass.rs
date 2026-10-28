@@ -178,7 +178,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use crate::backend::{allocate, select};
+    use crate::backend::{allocresult, select};
     use crate::model::ir::{Held, Imm, Loc, Operation, Semantics};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -255,10 +255,10 @@ mod tests {
     fn allocated(
         _body: &LirBody,
         pins: &IndexMap<u32, RegId>,
-    ) -> allocate::Assignment {
+    ) -> allocresult::Assignment {
         let mut values = pins.clone();
         values.insert(3, RegId::ES);
-        allocate::Assignment {
+        allocresult::Assignment {
             r#where: values,
             spilled: Default::default(),
             cost: 0.0,

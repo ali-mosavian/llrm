@@ -1166,6 +1166,7 @@ impl Builder<'_> {
         let mut values = Vec::new();
         for argument in arguments {
             let value = self.get_value(*argument)?;
+            let value = self.pass_float_bits(*argument, value);
             self.parts(self.dag.value_type(value))?;
             values.push(value);
         }
@@ -1283,6 +1284,30 @@ impl Builder<'_> {
 
     /// `LowerCall` for arguments already evaluated: the sequence from
     /// `callseq_start` to the result read back; the result, if any.
+    /// DEVIATE SD256: at optsize an `f32` argument that is only a memory value
+    /// (its load has no other user) is passed as the dword it is. The pin
+    /// loads it onto the x87 stack and stores it to the argument slot (`fld;
+    /// fstp`); the integer load folds (`visit_bitcast`) and the store becomes
+    /// `push dword ptr [m]`.
+    fn pass_float_bits(
+        &mut self,
+        argument: Operand,
+        value: SDValue,
+    ) -> SDValue {
+        let sole = matches!(
+            argument,
+            Operand::Value(result) if self.function.users(result).into_iter().count() == 1
+        );
+        if sole
+            && self.has_opt_size()
+            && self.dag.value_type(value) == EVT::Simple(MVT::F32)
+            && self.dag.opcode(value) == ISD::Load
+        {
+            return self.dag.get_node(ISD::BitCast, EVT::Simple(MVT::I32), &[value]);
+        }
+        value
+    }
+
     pub(super) fn lower_call(
         &mut self,
         callee_node: SDValue,
@@ -1468,6 +1493,15 @@ impl Builder<'_> {
             // `LowerCallResult` over the leaves `ComputeValueVTs` gives: one
             // return register each
             let leaves = self.leaves(result_type)?;
+            // A struct of one float is answered as the float is: in st(0), or
+            // in the vector register the convention names.
+            if let ([(leaf, _)], true) = (leaves.as_slice(), plan.returns.is_empty()) {
+                let leaf_vt = self.type_of(*leaf)?;
+                if leaf_vt.is_floating_point() {
+                    let piece = self.float_call_result(leaf_vt, plan.float_result, chain, glue);
+                    return Ok(Some(self.merge(&[piece])));
+                }
+            }
             if plan.returns.len() != leaves.len() {
                 return Err(Refused("an aggregate result that is not one register a member"));
             }
@@ -1497,22 +1531,8 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
-        if let (true, Some(xmm)) = (vt.is_floating_point(), plan.float_result) {
-            // X86's `LowerCallResult` with SSE: a `float` or `double` is read
-            // from the vector register the convention names
-            let copy = self.dag.get_copy_from_phys_reg(chain, xmm, vt, glue);
-            self.dag.set_root(SDValue { node: copy.node, res: 1 });
-            return Ok(Some(SDValue { node: copy.node, res: 0 }));
-        }
         if vt.is_floating_point() {
-            // X86's `LowerCallResult`: the value is popped from st(0), which
-            // the allocator knows as `FP0`
-            let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
-            let pop = self
-                .dag
-                .get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
-            self.dag.set_root(SDValue { node: pop.node, res: 1 });
-            return Ok(Some(pop));
+            return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
         if plan.returns.len() != parts {
@@ -1545,6 +1565,28 @@ impl Builder<'_> {
 
     /// `visitRet` and X86's `LowerReturn`: the value copied to the return
     /// register, then `RET_GLUE chain, popped, register, glue`.
+    /// X86's `LowerCallResult` for a float: read from the vector register the
+    /// convention names, else popped from st(0), which the allocator knows as
+    /// `FP0`.
+    fn float_call_result(
+        &mut self,
+        vt: EVT,
+        xmm: Option<RegId>,
+        chain: SDValue,
+        glue: SDValue,
+    ) -> SDValue {
+        if let Some(xmm) = xmm {
+            let copy = self.dag.get_copy_from_phys_reg(chain, xmm, vt, glue);
+            self.dag.set_root(SDValue { node: copy.node, res: 1 });
+            return SDValue { node: copy.node, res: 0 };
+        }
+        let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
+        let pop =
+            self.dag.get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
+        self.dag.set_root(SDValue { node: pop.node, res: 1 });
+        pop
+    }
+
     fn visit_ret(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1560,24 +1602,45 @@ impl Builder<'_> {
         if let (true, Some(&operand)) = (aggregate, instruction.operands.first()) {
             // `LowerReturn` over the leaves: one return register each
             let parts = self.value_parts(operand)?;
-            if parts.len() != self.convention.returns.len() {
-                return Err(Refused("an aggregate result that is not one register a member"));
-            }
-            for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
-                // `getCopyToParts`: a member between the legal widths (`i48`)
-                // is any-extended to the register type
-                let piece = match self.register_type(self.dag.value_type(piece)) {
-                    Ok(reg_vt) if reg_vt != self.dag.value_type(piece) && self.dag.value_type(piece).is_integer() => {
-                        self.dag.get_node(ISD::AnyExtend, reg_vt, &[piece])
-                    }
-                    _ => piece,
-                };
-                let piece_vt = self.dag.value_type(piece);
-                let reg = self.sized_register(reg, piece_vt);
-                let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
-                chain = SDValue { node: copy.node, res: 0 };
-                glue = Some(SDValue { node: copy.node, res: 1 });
-                ops.push(self.dag.get_phys_register(piece_vt, reg));
+            // A struct of one float leaves as the float does: in st(0), or in
+            // the vector register the convention names.
+            let float_leaf = match (parts.as_slice(), self.convention.returns.is_empty()) {
+                ([leaf], true) if self.dag.value_type(*leaf).is_floating_point() => Some(*leaf),
+                _ => None,
+            };
+            if let Some(leaf) = float_leaf {
+                let vt = self.dag.value_type(leaf);
+                if let Some(xmm) = self.convention.float_result {
+                    let copy = self.dag.get_copy_to_phys_reg(chain, xmm, leaf, glue);
+                    chain = SDValue { node: copy.node, res: 0 };
+                    glue = Some(SDValue { node: copy.node, res: 1 });
+                    ops.push(self.dag.get_phys_register(vt, xmm));
+                } else {
+                    ops.push(leaf);
+                }
+            } else {
+                if parts.len() != self.convention.returns.len() {
+                    return Err(Refused("an aggregate result that is not one register a member"));
+                }
+                for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
+                    // `getCopyToParts`: a member between the legal widths
+                    // (`i48`) is any-extended to the
+                    // register type
+                    let piece = match self.register_type(self.dag.value_type(piece)) {
+                        Ok(reg_vt)
+                            if reg_vt != self.dag.value_type(piece) && self.dag.value_type(piece).is_integer() =>
+                        {
+                            self.dag.get_node(ISD::AnyExtend, reg_vt, &[piece])
+                        }
+                        _ => piece,
+                    };
+                    let piece_vt = self.dag.value_type(piece);
+                    let reg = self.sized_register(reg, piece_vt);
+                    let copy = self.dag.get_copy_to_phys_reg(chain, reg, piece, glue);
+                    chain = SDValue { node: copy.node, res: 0 };
+                    glue = Some(SDValue { node: copy.node, res: 1 });
+                    ops.push(self.dag.get_phys_register(piece_vt, reg));
+                }
             }
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
