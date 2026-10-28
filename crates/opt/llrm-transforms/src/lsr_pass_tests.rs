@@ -944,3 +944,21 @@ fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
     let built = crate::ivusers::BUILDS.with(|made| made.get());
     assert_eq!(built, 2, "{}", printed(&module));
 }
+
+/// The values LSR has analysed over `loops` loops it rewrites.
+fn lsr_scevs_made(loops: usize) -> usize {
+    let before = llrm_analysis::scev::create::scevs_created();
+    let (changed, after) = reduced_on(FLAT, &walks(loops), "i486", &[&[5]]);
+    assert!(changed, "{after}");
+    llrm_analysis::scev::create::scevs_created() - before
+}
+
+/// LSR forgot the expressions of every value an edit touched, which LLVM's
+/// never does (it has no `forget` call: only a deleted or replaced value is
+/// told to ScalarEvolution), and analysed them again for the next look: 30
+/// values a loop against 20 (branches1024: `mir lsr` 640 -> 320 Minstr).
+#[test]
+fn the_expressions_of_a_value_an_edit_touched_are_kept_through_lsr() {
+    let loops = 16;
+    assert!(lsr_scevs_made(loops) <= loops * 21, "{} values made", lsr_scevs_made(loops));
+}

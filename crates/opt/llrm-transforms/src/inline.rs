@@ -170,6 +170,8 @@ pub struct Threshold {
     /// Where code size outranks speed: a call also removes its arguments'
     /// pushes and cleanup.
     pub single: bool,
+    /// The caller is `minsize` (-Oz): a call is held to `OptMinSizeThreshold`.
+    pub min_size: bool,
     /// The last call of a function nothing else reaches inlines at any size:
     /// its body moves, nothing is copied: LLVM's last-call-to-static bonus
     /// and GCC's `-finline-functions-called-once`, which
@@ -189,7 +191,7 @@ pub struct Threshold {
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, last: true, cp_clone: false, recursive: false }
+        Self { limit, single: false, min_size: false, last: true, cp_clone: false, recursive: false }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -201,6 +203,24 @@ impl Threshold {
     /// call is held to `OptSizeThreshold` (inlinecost.rs, D8).
     pub fn for_size(self) -> Self {
         Self { single: true, ..self }
+    }
+
+    /// What the pin's inliner calls the caller: `hasMinSize`, `optsize` or
+    /// neither.
+    pub fn caller_size(self) -> crate::inlinecost::CallerSize {
+        use crate::inlinecost::CallerSize;
+        if self.min_size {
+            CallerSize::MinSize
+        } else if self.single {
+            CallerSize::OptSize
+        } else {
+            CallerSize::Speed
+        }
+    }
+
+    /// The same where the caller is `minsize` (-Oz).
+    pub fn for_min_size(self) -> Self {
+        Self { single: true, min_size: true, ..self }
     }
 }
 
