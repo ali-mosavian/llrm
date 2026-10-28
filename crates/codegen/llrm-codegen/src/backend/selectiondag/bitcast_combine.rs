@@ -20,7 +20,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         node: SDValue,
     ) -> Option<SDValue> {
         let (vt, load) = (self.dag.value_type(node), self.dag.operand(node, 0));
-        if self.dag.opcode(load) != ISD::Load || load.res != 0 || self.dag.use_count(load.node) != 1 {
+        if self.dag.opcode(load) != ISD::Load || load.res != 0 || !self.dag.has_one_use(load.node) {
             return None;
         }
         let NodeData::Mem(info) = self.dag.node(load).data.clone() else { return None };

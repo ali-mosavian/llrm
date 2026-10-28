@@ -65,7 +65,7 @@ fn truncating_stores(
     let mut folded = Vec::new();
     for node in dag.node_ids().collect::<Vec<_>>() {
         let value = SDValue { node, res: 0 };
-        if dag.opcode(value) != ISD::FpRound || dag.node(value).ops.len() != 2 || dag.use_count(node) != 1 {
+        if dag.opcode(value) != ISD::FpRound || dag.node(value).ops.len() != 2 || !dag.has_one_use(node) {
             continue;
         }
         let source = dag.operand(value, 0);

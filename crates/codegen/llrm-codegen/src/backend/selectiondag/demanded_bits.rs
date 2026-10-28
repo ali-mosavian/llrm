@@ -191,7 +191,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return Ok(KnownBits::constant(bits, width));
         }
         let mut demanded = demanded_in & all;
-        if !assume_single_use && self.dag.use_count(op.node) != 1 {
+        if !assume_single_use && !self.dag.has_one_use(op.node) {
             if depth >= MAX_DEPTH {
                 return Ok(unknown);
             }

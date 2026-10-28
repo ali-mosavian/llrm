@@ -27,7 +27,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let src = self.dag.operand(node, 0);
         // bswap (srl x, c) --> shl (bswap x), c (and the other way), c a byte
         // multiple.
-        if matches!(self.dag.opcode(src), ISD::Shl | ISD::Srl) && self.dag.use_count(src.node) == 1 {
+        if matches!(self.dag.opcode(src), ISD::Shl | ISD::Srl) && self.dag.has_one_use(src.node) {
             if let Some(by) = self.dag.constant(self.dag.operand(src, 1)) {
                 if by < u128::from(width) && by % 8 == 0 {
                     let swapped = self.dag.get_node(ISD::BSwap, vt, &[self.dag.operand(src, 0)]);

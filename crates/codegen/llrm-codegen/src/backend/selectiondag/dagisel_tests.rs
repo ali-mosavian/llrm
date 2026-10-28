@@ -560,3 +560,23 @@ fn a_user_of_a_replacement_is_walked_through_not_pruned() {
     adapter.has_predecessor_helper(late.node, &mut visited, &mut vec![user], 0);
     assert!(visited.len() > 0, "the user of a replacement was pruned");
 }
+
+/// The combiner asked `use_count(n) == 1` of a value read 4096 times (the
+/// shared `a*7+b` of `equal`), reading the whole use list for every combine
+/// that looked at it: 1.9 G of dag isel at 4096, x3 per doubling. A one-use
+/// check reads two users, as `hasOneUse` does.
+#[test]
+fn a_one_use_check_of_a_widely_read_value_reads_two_users() {
+    use super::dag::USERS_READ;
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let shared = input(&mut dag, 40);
+    for i in 1..=1000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        dag.get_node(ISD::Add, EVT::I32, &[shared, k]);
+    }
+    USERS_READ.with(|n| n.set(0));
+    assert!(!dag.has_one_use(shared.node));
+    assert!(USERS_READ.with(std::cell::Cell::get) <= 2, "{} users read", USERS_READ.with(std::cell::Cell::get));
+    assert_eq!(dag.use_count_up_to(shared.node, 3), 3);
+    assert_eq!(dag.use_count(shared.node), 1000);
+}

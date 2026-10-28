@@ -70,7 +70,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             ISD::Load | ISD::Store
         );
         if let Some(c1) = self.dag.constant(self.dag.operand(n0, 1)).map(|value| signed(value, vt)) {
-            if self.dag.use_count(n0.node) == 1 {
+            if self.dag.has_one_use(n0.node) {
                 return false;
             }
             for user in self.dag.users(node) {
@@ -98,7 +98,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(n0);
         let (n00, n01) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
         // `isReassocProfitable`: the default, `N0->hasOneUse()`.
-        let profitable = self.dag.use_count(n0.node) == 1;
+        let profitable = self.dag.has_one_use(n0.node);
         if self.plain_constant(n01) {
             if self.plain_constant(n1) {
                 // `(op (op x, c1), c2)` is `(op x, (op c1, c2))`.

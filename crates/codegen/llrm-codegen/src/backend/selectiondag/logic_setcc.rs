@@ -191,7 +191,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.dag.opcode(n0) != ISD::And || self.dag.opcode(n1) != ISD::And {
             return None;
         }
-        if self.dag.use_count(n0.node) != 1 && self.dag.use_count(n1.node) != 1 {
+        if !self.dag.has_one_use(n0.node) && !self.dag.has_one_use(n1.node) {
             return None;
         }
         let vt = self.dag.value_type(node);
@@ -257,7 +257,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let c1 = c1?;
         // `(or (and x, c0), c1)` with `c0` and `c1` sharing a bit is
         // `(and (or x, c1), c0 | c1)`.
-        if self.dag.opcode(n0) == ISD::And && self.dag.use_count(n0.node) == 1 {
+        if self.dag.opcode(n0) == ISD::And && self.dag.has_one_use(n0.node) {
             let (x, mask) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             if let Some(c0) = self.dag.constant(mask) {
                 if c0 & c1 != 0 {

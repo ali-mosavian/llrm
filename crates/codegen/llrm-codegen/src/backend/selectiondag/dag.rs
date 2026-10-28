@@ -382,6 +382,31 @@ impl SelectionDAG {
             .sum()
     }
 
+    /// `use_count(node)` or `cap`, whichever is less: it stops reading the
+    /// use list there (`hasNUsesOrMore`/`hasOneUse` walk two entries, not all).
+    pub fn use_count_up_to(
+        &self,
+        node: u32,
+        cap: usize,
+    ) -> usize {
+        let mut seen = 0;
+        for user in self.live_users(node) {
+            seen += self.nodes[user as usize].ops.iter().filter(|op| op.node == node).count();
+            if seen >= cap {
+                return cap;
+            }
+        }
+        seen
+    }
+
+    /// `SDNode::hasOneUse`.
+    pub fn has_one_use(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.use_count_up_to(node, 2) == 1
+    }
+
     /// The live nodes that read any result of `node`, in creation order, once
     /// each; the use list is usually sorted already and is then walked in
     /// place.
@@ -1475,6 +1500,12 @@ struct LiveUsers<'a> {
     last: Option<u32>,
 }
 
+// The users `LiveUsers` gave out, for a test that a one-use check reads two.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static USERS_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 impl Iterator for LiveUsers<'_> {
     type Item = u32;
 
@@ -1489,6 +1520,8 @@ impl Iterator for LiveUsers<'_> {
             }
             self.last = Some(user);
             if !self.dag.is_deleted(user) && self.dag.nodes[user as usize].ops.iter().any(|op| op.node == self.node) {
+                #[cfg(test)]
+                USERS_READ.with(|n| n.set(n.get() + 1));
                 return Some(user);
             }
         }

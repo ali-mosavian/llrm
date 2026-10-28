@@ -1094,7 +1094,7 @@ fn combine_add(
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
-        if dag.opcode(difference) != ISD::Sub || dag.use_count(difference.node) != 1 || dag.constant(z).is_some() {
+        if dag.opcode(difference) != ISD::Sub || !dag.has_one_use(difference.node) || dag.constant(z).is_some() {
             return None;
         }
         let (shift, y) = (dag.operand(difference, 0), dag.operand(difference, 1));
@@ -1221,11 +1221,11 @@ fn combine_sub_setcc(
     let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
     let vt = dag.value_type(node);
     let constant = dag.constant(op0).filter(|c| *c != 0)?;
-    if dag.opcode(op1) != ISD::ZeroExtend || dag.use_count(op1.node) != 1 {
+    if dag.opcode(op1) != ISD::ZeroExtend || !dag.has_one_use(op1.node) {
         return None;
     }
     let setcc = dag.operand(op1, 0);
-    if dag.opcode(setcc) != x86isd::SETCC || dag.use_count(setcc.node) != 1 {
+    if dag.opcode(setcc) != x86isd::SETCC || !dag.has_one_use(setcc.node) {
         return None;
     }
     let code = dag.constant(dag.operand(setcc, 0))?;
