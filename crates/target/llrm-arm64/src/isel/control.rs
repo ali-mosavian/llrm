@@ -242,7 +242,9 @@ impl Selector<'_> {
                     }
                     IntPredicate::Eq | IntPredicate::Ne => {
                         let g = self.operand_g(left)?;
-                        let g = self.extended(g, super::val::Known::Zero);
+                        // `cbz w` reads the low 32 bits: only a narrower value
+                        // has garbage above.
+                        let g = if bits < 32 { self.extended(g, super::val::Known::Zero) } else { g };
                         return Ok(Test::Zero {
                             reg: g.reg,
                             width: super::val::width_of(bits),
