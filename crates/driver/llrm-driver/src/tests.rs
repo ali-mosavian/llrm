@@ -268,6 +268,20 @@ fn a_quadword_shift_by_64_minus_n_is_not_masked_to_31_at_m64() {
     assert!(!listing.contains("and cl, 31"), "{listing}");
 }
 
+/// `(x << n) | (x >> (64 - n))` is one `rol r, cl` in the pin; `MatchRotate`
+/// took constant amounts only, so it stayed shl/neg/shr/or (8 instructions
+/// against 4 at -m64).
+#[test]
+fn a_rotate_by_a_variable_amount_is_one_rotate_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rol rax, cl"), "{listing}");
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
