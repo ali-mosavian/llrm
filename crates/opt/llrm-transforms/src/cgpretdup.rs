@@ -29,6 +29,35 @@
 //! from the call's marker; no bitcast of a pointer is looked through (MIR's
 //! pointers are opaque), and there are no fake uses or pseudo probes.
 //!
+//! # Example
+//! Before:
+//!
+//! ```mir
+//! b1:
+//!   tail call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 8, i1 false)
+//!   br label %ret
+//!
+//! b0:
+//!   br i1 %c, label %ret, label %b1
+//!
+//! ret:
+//!   ret void
+//! ```
+//!
+//! After:
+//!
+//! ```mir
+//! b1:
+//!   tail call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 8, i1 false)
+//!   ret void
+//!
+//! b0:
+//!   br i1 %c, label %ret, label %b1
+//!
+//! ret:
+//!   ret void
+//! ```
+//!
 //! # Runs
 //! In `cgpaddr`'s run, after the empty blocks go.
 

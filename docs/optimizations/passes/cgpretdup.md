@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpretdup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpretdup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpretdup.rs sha256:19d8580dc577eb37d89d4b6ce9811ef7bdb2549ae86151d33856572e94fc7b46 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpretdup.rs sha256:2f5e27733d04a06e1e7e021508bd4ac7a5e7ec32da833517871a128f40c309c4 -->
 
 # cgpretdup
 
@@ -33,6 +33,35 @@ one (`x_mergesort` `msort`, -Os m32 +9 B).
 DEVIATE RD1: `mayBeEmittedAsTailCall` is `CI->isTailCall()` (x86's), read
 from the call's marker; no bitcast of a pointer is looked through (MIR's
 pointers are opaque), and there are no fake uses or pseudo probes.
+
+## Example
+Before:
+
+```mir
+b1:
+  tail call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 8, i1 false)
+  br label %ret
+
+b0:
+  br i1 %c, label %ret, label %b1
+
+ret:
+  ret void
+```
+
+After:
+
+```mir
+b1:
+  tail call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %s, i16 8, i1 false)
+  ret void
+
+b0:
+  br i1 %c, label %ret, label %b1
+
+ret:
+  ret void
+```
 
 ## Runs
 In `cgpaddr`'s run, after the empty blocks go.
