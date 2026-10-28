@@ -127,6 +127,18 @@ fn a_dword_inc_and_dec_take_the_modrm_form() {
 }
 
 #[test]
+fn a_byte_cell_takes_inc_dec_neg_and_not() {
+    // decb -0x4(%rbp); incb -0x4(%rbp); negb -0x4(%rbp); notb -0x4(%rbp). The
+    // emitter refused every byte cell, so the DAG selector's `dec` of a byte
+    // global stopped `llrm-nib -m16` on the runtime ("Unprintable ... dec").
+    let one = |name| sem(Operation::Unary, Some(name), vec![frame(-4, 1)], vec![frame(-4, 1)], None, false);
+    assert_eq!(bytes(&one("dec")), [0xfe, 0x4d, 0xfc]);
+    assert_eq!(bytes(&one("inc")), [0xfe, 0x45, 0xfc]);
+    assert_eq!(bytes(&one("neg")), [0xf6, 0x5d, 0xfc]);
+    assert_eq!(bytes(&one("not")), [0xf6, 0x55, 0xfc]);
+}
+
+#[test]
 fn a_quadword_multiply_by_an_immediate_takes_imm32() {
     // imul $251,%rax,%rax: the immediate is 32 bits sign-extended, not 8 bytes
     // (unsig stopped the assembler on it).
