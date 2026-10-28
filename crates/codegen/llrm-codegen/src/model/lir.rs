@@ -121,6 +121,11 @@ pub struct Insn {
     /// in `uses`, no live range starts at them, and the allocator gives them
     /// any register of their class.
     pub undefs: Vec<u32>,
+    /// It defines a narrower part of a value than the value is read at, and the
+    /// value is not live before it: the rest of the register is undefined (the
+    /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
+    /// lanes are `undef`).
+    pub undef_super: bool,
     pub clobbers: BTreeSet<RegId>,
     pub clobbers_high: BTreeSet<RegId>,
     pub spread: Vec<(i64, i64)>,
@@ -526,6 +531,7 @@ impl Insn {
             defines,
             uses,
             undefs: Vec::new(),
+            undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
             spread: Vec::new(),

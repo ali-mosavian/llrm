@@ -188,6 +188,7 @@ pub mod selectors {
 pub mod booleans;
 pub mod callframe;
 pub mod cmpsub;
+pub mod deadmi;
 pub mod earlytaildup;
 pub mod edges;
 pub mod fixupbw;
@@ -230,7 +231,6 @@ pub mod mirprint;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
-pub mod neighbours;
 pub mod objbuild;
 pub mod optimizephis;
 pub mod overlap;

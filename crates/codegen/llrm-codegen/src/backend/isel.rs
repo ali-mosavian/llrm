@@ -6108,7 +6108,7 @@ impl Selector<'_, '_, '_> {
                     // The sequence pushes above its operand: the stack's top
                     // slots are not free for a value live across it.
                     let scratch = llrm_x86::select::x87_scratch(name);
-                    one.clobbers.extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                    one.clobbers.extend(self.regs().rfp_registers().iter().rev().take(scratch).copied());
                     out.push(Arc::new(one));
                     Ok(())
                 }

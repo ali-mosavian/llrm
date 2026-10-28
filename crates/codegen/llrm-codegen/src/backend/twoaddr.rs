@@ -59,7 +59,6 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::backend::coalesce;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
@@ -374,7 +373,7 @@ fn _reused(body: &LirBody) -> LirBody {
             let swap = |value: u32| if value == into.value { first.value } else { value };
             for place in at..=last {
                 index(&mut reads, &mut writes, place, &insns[place], false);
-                insns[place] = coalesce::_renamed(&insns[place], &swap);
+                insns[place] = insns[place].renamed(&swap);
                 index(&mut reads, &mut writes, place, &insns[place], true);
             }
             changed = true;

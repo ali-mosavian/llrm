@@ -119,13 +119,19 @@ fn sunk(
     changed
 }
 
-/// `SinkCast` for each cast the pin sinks; whether any was.
+/// `SinkCast` for each cast the pin sinks; whether any was. With `far_only`,
+/// only the segment made a far pointer: the run after the addresses are sunk
+/// (DEVIATE SD220) has no business remaking a cast the pin's `SinkCast` left
+/// where it was, such as a dword read as a far pointer, whose selector then
+/// is loaded into a register again on every trip of a loop (PLASMA,
+/// farcast.c `fill`).
 pub fn casts_sunk(
     context: &Context,
     layout: &llrm_mir::datalayout::DataLayout,
     lowering: &dyn Lowering,
     spaces: Spaces,
     function: &mut Function,
+    far_only: bool,
 ) -> bool {
     let casts: Vec<InstId> = function
         .walk()
@@ -165,7 +171,7 @@ pub fn casts_sunk(
         let far = kind == CastOp::AddrSpaceCast
             && space_of(source).is_some_and(|from| spaces.segment == Some(from))
             && space_of(one.ty).is_some_and(|to| to == spaces.far || spaces.huge == Some(to));
-        if (noop || expands || far) && sunk(function, cast) {
+        if (far || (!far_only && (noop || expands))) && sunk(function, cast) {
             changed = true;
         }
     }

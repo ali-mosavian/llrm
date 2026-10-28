@@ -15,7 +15,7 @@
 //!
 //! OWED, each at its place as a `// OWED:` comment: the other opcodes of
 //! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
-//! `foldICmpMulConstant`, `foldICmpShlConstant`, `foldICmpShrConstant`,
+//! `foldICmpShlConstant`, `foldICmpShrConstant`,
 //! `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
 //! `foldICmpSubConstant`),
 //! `foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
@@ -122,7 +122,7 @@ pub fn fold_icmp_inst_with_constant(
     op1: Operand,
 ) -> Option<Visit> {
     let (value, width) = query(c, None).int_constant(op1)?;
-    // foldICmpBinOpWithConstant, the `and` and `add` cases.
+    // foldICmpBinOpWithConstant, the `and`, `mul` and `add` cases.
     // OWED: the other opcodes, foldICmpBinOpEqualityWithConstant and the
     // truth-table fold; the select, intrinsic and extractvalue arms, and the
     // rest of the trunc arm.
@@ -139,6 +139,13 @@ pub fn fold_icmp_inst_with_constant(
     };
     if let Some(operands) = and {
         return fold_icmp_and_constant(c, inst, pred, op0, operands, value, width);
+    }
+    let mul = {
+        let q = query(c, None);
+        pattern::binary(&q, op0, BinaryOp::Mul).map(|(_, mul, x, y)| (mul.flags, x, y))
+    };
+    if let Some((flags, x, y)) = mul {
+        return fold_icmp_mul_constant(c, inst, pred, flags, (x, y), value, width);
     }
     let (flags, x, y) = {
         let q = query(c, None);
@@ -175,6 +182,142 @@ fn fold_icmp_trunc_constant(
     };
     let bound = c.int(src, wide);
     Some(new_icmp(c, inst, pred, x, bound))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2231
+/// `foldICmpMulConstant`: `icmp (mul X, Y), C`.
+#[allow(clippy::too_many_arguments)]
+fn fold_icmp_mul_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    flags: Flags,
+    (x, y): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let ty = c.type_of(x);
+    let m = mask(width);
+    let (nuw, nsw) = (flags.contains(Flags::NUW), flags.contains(Flags::NSW));
+    let signed_pred = is_signed(pred);
+    let strict = |p: IntPredicate| crate::constraintelim::strict_predicate(p);
+
+    // A square against a constant is a compare of roots.
+    if x == y && !signed_pred {
+        let root = isqrt(value);
+        let is_square = value == root * root;
+        if is_equality(pred) && (nuw || (nsw && value == 0)) {
+            if !is_square {
+                let bool_ty = c.context.types.int(1);
+                let constant = c.int(bool_ty, u128::from(pred == IntPredicate::Ne));
+                return Some(Visit::Replace(constant));
+            }
+            let bound = c.int(ty, root);
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+        if nuw {
+            if is_square {
+                let bound = c.int(ty, root);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+            let lt_or_le = matches!(pred, IntPredicate::Ult | IntPredicate::Ule);
+            let bound = c.int(ty, if lt_or_le { root + 1 } else { root });
+            return Some(new_icmp(c, inst, strict(pred), x, bound));
+        }
+    }
+
+    let (mul_c, _) = query(c, None).int_constant(y)?;
+    let mut pred = pred;
+
+    // (X * +MulC) < 0 --> X < 0; (X * -MulC) < 0 --> X > 0
+    if nsw && is_sign_test(&mut pred, value, width) {
+        if is_negative(mul_c, width) {
+            pred = pred.swapped();
+        }
+        let zero = c.int(ty, 0);
+        return Some(new_icmp(c, inst, pred, x, zero));
+    }
+    if mul_c == 0 {
+        return None;
+    }
+
+    if is_equality(pred) {
+        let (sc, smul) = (llrm_mir::context::signed(value, width), llrm_mir::context::signed(mul_c, width));
+        // (mul nsw X, MulC) eq/ne C --> X eq/ne C /s MulC
+        if nsw && !(sc == llrm_mir::context::signed(1u128 << (width - 1), width) && smul == -1) && sc % smul == 0 {
+            let bound = c.int(ty, (sc / smul) as u128 & m);
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+        // (mul nuw X, MulC) eq/ne C --> X eq/ne C /u MulC; (mul X, OddC) eq/ne
+        // N * C --> X eq/ne N
+        if value % mul_c == 0 && (mul_c & 1 == 1 || nuw) {
+            let bound = c.int(ty, value / mul_c);
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+    }
+
+    // (X * MulC) < C --> X < (C / MulC), given the matching no-overflow flag.
+    let bound = if nsw && signed_pred {
+        let (sc, smul) = (llrm_mir::context::signed(value, width), llrm_mir::context::signed(mul_c, width));
+        // MININT / -1 --> overflow.
+        if sc == llrm_mir::context::signed(1u128 << (width - 1), width) && smul == -1 {
+            return None;
+        }
+        if smul < 0 {
+            pred = pred.swapped();
+        }
+        // RoundingSDiv: UP (ceiling) for slt/sge, DOWN (floor) for sle/sgt.
+        let (truncated, rest) = (sc / smul, sc % smul);
+        let differs = (rest < 0) != (smul < 0);
+        let chosen = if matches!(pred, IntPredicate::Slt | IntPredicate::Sge) {
+            truncated + i128::from(rest != 0 && !differs)
+        } else {
+            truncated - i128::from(rest != 0 && differs)
+        };
+        chosen as u128 & m
+    } else if nuw && !signed_pred && !is_equality(pred) {
+        let (quotient, rest) = (value / mul_c, value % mul_c);
+        if matches!(pred, IntPredicate::Ult | IntPredicate::Uge) { quotient + u128::from(rest != 0) } else { quotient }
+    } else {
+        return None;
+    };
+    let bound = c.int(ty, bound);
+    Some(new_icmp(c, inst, pred, x, bound))
+}
+
+/// `isSignTest`: the compare is a signed one against zero, moving `pred` to
+/// the form `X < 0` / `X > -1` takes.
+fn is_sign_test(
+    pred: &mut IntPredicate,
+    value: u128,
+    width: u32,
+) -> bool {
+    if !is_signed(*pred) {
+        return false;
+    }
+    if value == 0 {
+        return true;
+    }
+    if value == 1 {
+        if *pred == IntPredicate::Slt {
+            *pred = IntPredicate::Sle;
+            return true;
+        }
+    } else if value == mask(width) && *pred == IntPredicate::Sgt {
+        *pred = IntPredicate::Sge;
+        return true;
+    }
+    false
+}
+
+/// `APInt::sqrtFloor`.
+fn isqrt(value: u128) -> u128 {
+    let (mut low, mut high) = (0u128, 1u128 << 64);
+    while low < high {
+        let mid = low + (high - low).div_ceil(2);
+        if mid.checked_mul(mid).is_some_and(|square| square <= value) { low = mid } else { high = mid - 1 }
+    }
+    low
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3231

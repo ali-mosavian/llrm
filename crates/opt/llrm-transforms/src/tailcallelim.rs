@@ -1385,7 +1385,7 @@ fn identity(
 /// ([BasicBlockUtils.cpp:1532](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1532)):
 /// the return `ret` of `block` copied to the end of `pred`, whose unconditional
 /// branch to `block` is erased.
-fn fold_return_into_uncond_branch(
+pub(crate) fn fold_return_into_uncond_branch(
     function: &mut Function,
     ret: InstId,
     block: BlockId,

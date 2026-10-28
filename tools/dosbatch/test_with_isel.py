@@ -35,6 +35,7 @@ def test_a_c_program_itself_is_compiled_by_the_selected_selector(monkeypatch, tm
     """Only the `link:` helpers went through LLRM_ISEL: a run with LLRM_ISEL=dag passed 445 of 449 programs on the old selector."""
     import run_tests  # noqa: E402
 
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     monkeypatch.setenv("LLRM_ISEL", "dag")
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
@@ -48,6 +49,7 @@ def test_real_mode_c_keeps_the_old_selector(monkeypatch, tmp_path):
     """The DAG path selects 32-bit code only: under LLRM_ISEL=dag every real-mode program failed to build and the launch lost jobs."""
     import run_tests  # noqa: E402
 
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     monkeypatch.setenv("LLRM_ISEL", "dag")
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
