@@ -53,7 +53,7 @@ def test_a_slice_runs_only_its_programs_and_never_calls_an_expected_entry_paid(t
         path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: programs)
     seen = []
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: seen.append(job[1].name) or (job, None, {}))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: seen.append(job[1].name) or (job, None, {}))
     expected = tmp_path / "e.toml"
     expected.write_text('[[expected]]\nmatch = "x"\nfix = "#1"\nowner = "o"\n')
     import sys
@@ -68,7 +68,7 @@ def test_a_new_finding_kind_turns_the_sweep_red_and_the_first_line_says_so(tmp_p
     path = tmp_path / "p.nib"
     path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, "dataflow: a new kind of panic", {}))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: (job, "dataflow: a new kind of panic", {}))
     import sys
 
     monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--no-reach", "--levels=-O2", "--machines=-m32"])
@@ -83,13 +83,13 @@ def test_an_oracle_whose_hook_was_never_reached_stops_the_sweep_naming_it(tmp_pa
     path.write_text("x")
     monkeypatch.setattr(oracle_sweep, "programs", lambda: [("llrm-nib", path)])
     everything = {name: 3 for name in oracle_sweep.CHECKS}
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, None, {k: v for k, v in everything.items() if k != "REPLAY"}))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: (job, None, {k: v for k, v in everything.items() if k != "REPLAY"}))
     import sys
 
     monkeypatch.setattr(sys, "argv", ["oracle_sweep.py", "--bin", str(tmp_path), "--no-premise", "--levels=-O2", "--machines=-m32"])
     assert oracle_sweep.main() == 2
     assert "never reached: REPLAY" in capsys.readouterr().out
-    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries: (job, None, everything))
+    monkeypatch.setattr(oracle_sweep, "compile_one", lambda job, binaries, checks=None: (job, None, everything))
     assert oracle_sweep.main() == 0
 
 
