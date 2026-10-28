@@ -103,6 +103,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         // The double-width shifts are lowered before selection; no pattern
         // names them.
         ShlParts | SraParts | SrlParts => u16::MAX,
+        // dropped before matching (`remove_assertions`)
+        AssertZext | AssertSext => u16::MAX,
         FShl => pin::FSHL,
         FShr => pin::FSHR,
         BSwap => pin::BSWAP,
