@@ -129,6 +129,19 @@ fn mabi_goes_to_the_backend_after_the_tables_own() {
     assert_eq!(args[last], "-mabi=regparm3");
 }
 
+#[test]
+fn the_opt_level_reaches_the_arm64_backend() {
+    // With `llc_level = false` on the arm64-macos row -O0..-Os never reached
+    // llrm-arm64-llc: a size or speed measured through llrm-cc at any level
+    // was the backend's default.
+    let table = targets(TARGETS).unwrap();
+    for (flag, level) in [("-O0", "-O0"), ("-O1", "-O1"), ("-Os", "-Os")] {
+        let one = built(&format!("{flag} -c x.c"));
+        let args = llc_args(&table["arm64-macos"], &one, Path::new("x.ll"), Path::new("x.o"));
+        assert_eq!(args.first().map(String::as_str), Some(level), "{args:?}");
+    }
+}
+
 /// The Watcom front end's tests pass the backend's switches (`-march`,
 /// `-fno-inline-functions-called-once`, `-mcode-segment=`) with the source;
 /// clang took them all and the backend saw none, so a program built with them

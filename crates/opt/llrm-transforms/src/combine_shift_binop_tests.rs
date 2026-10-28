@@ -131,7 +131,7 @@ fn test_the_fold_gives_a_flags_result_call_no_user_but_compares() {
         for constant in ["-1", "0", "1"] {
             for tail in consumers {
                 let text = format!(
-                    "declare i16 @llrm.qb.B$SCMP(ptr, ptr)
+                    "declare i16 @llrm.qb.B$SCMP(ptr, ptr) flagsresult
 define i16 @f(ptr %a, ptr %b) {{
 b0:
   %s = call i16 @llrm.qb.B$SCMP(ptr %a, ptr %b)

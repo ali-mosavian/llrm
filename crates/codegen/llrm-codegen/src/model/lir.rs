@@ -1196,6 +1196,10 @@ pub struct LirBody {
     /// would have held is not reserved, the locals lie directly below the
     /// pushed registers.
     pub slot_dropped: bool,
+    /// The locals wanting more than the stack's alignment, as (displacement
+    /// below BP, alignment): the frame realigns the stack pointer for them
+    /// and they lie that far below the aligned top, not below BP.
+    pub over_aligned: Vec<(i64, i64)>,
     /// What each return takes back is instructions of the body, made while the
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
@@ -1387,6 +1391,7 @@ impl LirBody {
             cfa_variables: false,
             saved_first: false,
             slot_dropped: false,
+            over_aligned: Vec::new(),
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
@@ -1457,6 +1462,7 @@ impl LirBody {
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
             slot_dropped: self.slot_dropped,
+            over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),

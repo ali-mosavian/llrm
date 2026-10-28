@@ -698,7 +698,20 @@ pub(crate) fn llvm_order(
             }),
         )
     };
-    let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
+    // `visitCallInst`'s `LibCallSimplifier` runs with every InstCombine, so it
+    // is a part of the slot.
+    let combine = |name| {
+        slot(
+            name,
+            Box::new(Together {
+                name,
+                parts: vec![
+                    Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }),
+                    Box::new(crate::simplifylibcalls::SimplifyLibCalls::with_routines(applied.options.library.clone())),
+                ],
+            }),
+        )
+    };
     let dead = |name| slot(name, Box::new(dead::Dead));
     // SROA runs mem2reg on what it splits: one slot, nothing between
     // (SROA.cpp `promoteAllocas`).
@@ -794,6 +807,9 @@ pub(crate) fn llvm_order(
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            // SLPVectorizerPass (l.1455): the compares of adjacent bytes
+            // against constants, on a target with vector registers.
+            slot("slp@1455", Box::new(crate::slpcompares::SlpCompares)),
             combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
@@ -1156,6 +1172,9 @@ pub fn recorded(
     // none of its stores, as LLVM's GlobalOpt and gcc's ipa find a variable
     // only written; the dead-code pass then finds nothing names it.
     manager.add_module(globalopt::WriteOnly);
+    // What only fed those stores (their loads, arithmetic) is dead with them;
+    // LLVM's GlobalOpt runs before the late function passes that sweep it.
+    manager.add(dead::Dead);
     // A loop whose only effect was those stores is dead now: LLVM's second
     // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
     // GlobalOpt.

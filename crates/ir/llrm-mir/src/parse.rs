@@ -2129,6 +2129,77 @@ fn x86_fp80_to_f64(bits: u128) -> f64 {
     if negative { -magnitude } else { magnitude }
 }
 
+/// LLVM's auto-upgrade, the other way: `llvm.lifetime.start` and `.end` lost
+/// their size argument (they cover the whole object), and llrm's passes read
+/// `(i64 size, ptr)`. Each one-argument declaration and call becomes the
+/// two-argument one with the size -1, unknown. Without it a marker is a call
+/// that may capture its object, and nothing about the object is promoted or
+/// forwarded (`wide_frame`: 824 bytes against the pin's 36). `parse::module`
+/// does not call it: `llrm-cc` upgrades the text (`lifetimes.rs`); a reader of
+/// the pin's IR as it is (`llrm-arm64-llc`) does.
+pub fn upgrade_lifetimes(module: &mut Module) {
+    let Module { context, globals, .. } = module;
+    let mut upgraded: HashMap<GlobalId, (TypeId, TypeId)> = HashMap::default();
+    let size = context.types.int(64);
+    let void = context.types.void();
+    for (at, global) in globals.iter_mut().enumerate() {
+        let is_lifetime = matches!(
+            global.intrinsic(),
+            Some(intrinsics::Intrinsic::LifetimeStart | intrinsics::Intrinsic::LifetimeEnd)
+        );
+        let GlobalKind::Function(function) = &mut global.kind else { continue };
+        let Type::Function { parameters, variadic: false, .. } = context.types.get(function.ty).clone() else {
+            continue;
+        };
+        let [pointer] = parameters[..] else { continue };
+        if !is_lifetime || !function.is_declaration() {
+            continue;
+        }
+        let new =
+            context.types.intern(Type::Function { returns: void, parameters: vec![size, pointer], variadic: false });
+        let old = std::mem::replace(function.as_mut(), Function::new(new, void));
+        function.parameter_attrs = old.parameter_attrs.clone();
+        function.parameter_attrs.insert(0, Vec::new());
+        function.return_attrs = old.return_attrs.clone();
+        function.attrs = old.attrs.clone();
+        function.calling_convention = old.calling_convention;
+        let pointer_parameter = old.value(old.parameters()[0]).clone();
+        let size_parameter = ValueData { ty: size, name: None, def: ValueDef::Argument(0) };
+        let pointer_parameter = ValueData { name: None, def: ValueDef::Argument(1), ..pointer_parameter };
+        for data in [size_parameter, pointer_parameter] {
+            function.parameters.push(ValueId(function.values.len() as u32));
+            function.values.push(data);
+            function.uses.push_value();
+        }
+        upgraded.insert(GlobalId(at as u32), (new, pointer));
+    }
+    if upgraded.is_empty() {
+        return;
+    }
+    let unknown = Operand::Constant(context.int(size, -1));
+    for global in globals.iter_mut() {
+        let GlobalKind::Function(function) = &mut global.kind else { continue };
+        let calls: Vec<_> = function
+            .walk()
+            .filter_map(|(_, inst)| {
+                let callee = crate::memory::callee(context, function, inst)?;
+                let &(new, _) = upgraded.get(&callee)?;
+                matches!(function.instruction(inst).operands.len(), 2).then_some((inst, new))
+            })
+            .collect();
+        for (inst, new) in calls {
+            let Opcode::Call(info) = function.instruction(inst).opcode.clone() else { continue };
+            let mut info = info;
+            info.function_type = new;
+            info.argument_attrs.insert(0, Vec::new());
+            let operands = &function.instruction(inst).operands;
+            let rewritten = vec![unknown, operands[0], operands[1]];
+            function.set_opcode(inst, Opcode::Call(info));
+            function.set_operands(inst, rewritten);
+        }
+    }
+}
+
 /// The binary operators LLVM still has as constant expressions.
 fn constant_binary(word: &str) -> bool {
     matches!(

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:5cfcebf49514935c3a368fa4ae2d2c7d97a481c820b8415d0e240eee49380813 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:de9588ffd78aa688dd0f9fdaf78b0836c26d3518828967c51fe0044dd04a691a -->
 
 # combine_loadstore
 
@@ -49,10 +49,11 @@ DEVIATE 5: what ends the scan of 6 is a load, a store, a call, an invoke or
 a resume: MIR has no other instruction that reads memory, writes it or
 throws.
 
-DEVIATE 6: an alloca only copied from constant memory
-(`isOnlyCopiedFromConstantMemory`, `PointerReplacer`) is not translated
-here; `visitAllocSite` is, with DEVIATE 7 on `alloc_site_removable`. MIR's
-scalar alloca has no count operand, so a count of 1 is dropping the operand.
+DEVIATE 6 is on `replace_alloca_copied_from_constant`
+(`isOnlyCopiedFromConstantMemory`; `PointerReplacer` is not needed, there
+is one address space); `visitAllocSite` has DEVIATE 7 on
+`alloc_site_removable`. MIR's scalar alloca has no count operand, so a
+count of 1 is dropping the operand.
 
 `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
 instructions before it in its block stored (`FindAvailableLoadedValue`) is

@@ -10,7 +10,10 @@ llrm-lir = { workspace = true }
 llrm-object = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-transforms = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-support = { workspace = true }
+llrm-env = { workspace = true }
+llrm-analysis = { workspace = true }
 llrm-macho = { workspace = true }
 llrm-dwarf = { workspace = true }
 llrm-elf = { workspace = true }

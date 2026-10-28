@@ -332,12 +332,16 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         }
         Inst::BranchReg { link, rn } => (if *link { 0xD63F_0000 } else { 0xD61F_0000 }) | reg(*rn)? << 5,
         Inst::Ret { rn } => 0xD65F_0000 | reg(*rn)? << 5,
-        Inst::Load { mem, addr } => load_store(mem, addr, true, &mut fixup)?,
-        Inst::Store { mem, addr } => load_store(mem, addr, false, &mut fixup)?,
+        Inst::Load { mem, addr, .. } => load_store(mem, addr, true, &mut fixup)?,
+        Inst::Store { mem, addr, .. } => load_store(mem, addr, false, &mut fixup)?,
         Inst::LoadPair { first, second, addr } => pair(first, second, addr, true)?,
         Inst::StorePair { first, second, addr } => pair(first, second, addr, false)?,
-        Inst::Adr { page, rd, target } => {
-            let kind = if *page { FixupKind::Page21 } else { FixupKind::Adr21 };
+        Inst::Adr { page, rd, target, got } => {
+            let kind = match (page, got) {
+                (true, true) => FixupKind::GotPage21,
+                (true, false) => FixupKind::Page21,
+                (false, _) => FixupKind::Adr21,
+            };
             let scale = if *page { 12 } else { 0 };
             let value = immediate_field(target, kind, 21, scale, &mut fixup)?;
             u32::from(*page) << 31 | (value & 3) << 29 | 0b10000 << 24 | (value >> 2) << 5 | reg(*rd)?
@@ -358,6 +362,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             0x1E20_4000 | size.field() << 22 | opcode << 15 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorMov { rd, rn } => 0x4EA0_1C00 | vreg(*rn)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?,
         Inst::FpBinary { op, size, rd, rn, rm } => {
             let opcode = match op {
                 FpBinary::Mul => 0b0000,
@@ -398,6 +403,11 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorFill { rd, fill } => match fill {
+            Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
+            Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
+            Fill::Gpr(source) => 0x4E01_0C00 | reg(*source)? << 5 | vreg(*rd)?,
+        },
         Inst::FpMoveImm { size, rd, imm8 } => 0x1E20_1000 | size.field() << 22 | u32::from(*imm8) << 13 | vreg(*rd)?,
         Inst::FpToFp { to, from, rd, rn } => {
             // `fcvt`: the source size is `type`, the destination's code `opc`.
@@ -419,6 +429,26 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             let (source, destination) = if to_fp { (reg(*gpr)?, vreg(*fpr)?) } else { (vreg(*fpr)?, reg(*gpr)?) };
             0x1E20_0000 | width.sf() << 31 | size.field() << 22 | rmode << 19 | opcode << 16 | source << 5 | destination
+        }
+        Inst::FpFixed { op, width, size, gpr, fpr, fbits } => {
+            let (rmode, opcode, to_fp) = match op {
+                FpConvert::ToFp { signed } => (0b00, if *signed { 0b010 } else { 0b011 }, true),
+                FpConvert::ToIntZero { signed } => (0b11, if *signed { 0b000 } else { 0b001 }, false),
+                FpConvert::Bits { .. } => return error("a fixed-point move of bits"),
+            };
+            if *fbits == 0 || u32::from(*fbits) > width.bits() {
+                return error(format!("{fbits} fractional bits in a {}-bit register", width.bits()));
+            }
+            let (source, destination) = if to_fp { (reg(*gpr)?, vreg(*fpr)?) } else { (vreg(*fpr)?, reg(*gpr)?) };
+            let scale = 64 - u32::from(*fbits);
+            0x1E00_0000
+                | width.sf() << 31
+                | size.field() << 22
+                | rmode << 19
+                | opcode << 16
+                | scale << 10
+                | source << 5
+                | destination
         }
         Inst::Svc { imm16 } => 0xD400_0001 | u32::from(*imm16) << 5,
         Inst::Atomic { op, size, acquire, release, rs, rt, rn } => {
@@ -453,6 +483,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         },
         Inst::Brk { imm16 } => 0xD420_0000 | u32::from(*imm16) << 5,
         Inst::Nop => 0xD503_201F,
+        Inst::Prefetch { op, base } => 0xF980_0000 | reg(*base)? << 5 | u32::from(*op),
     };
     Ok(Encoded { word, fixup })
 }
@@ -519,8 +550,9 @@ fn immediate_field(
 ) -> Result<u32, Error> {
     match target {
         Target::Offset(bytes) => {
-            let value = if kind == FixupKind::Page21 { bytes >> 12 } else { *bytes };
-            pc_field("a branch offset", value, bits, if kind == FixupKind::Page21 { 0 } else { scale })
+            let paged = matches!(kind, FixupKind::Page21 | FixupKind::GotPage21);
+            let value = if paged { bytes >> 12 } else { *bytes };
+            pc_field("a branch offset", value, bits, if paged { 0 } else { scale })
         }
         symbolic => {
             *fixup = Some(fixup_for(kind, symbolic)?);

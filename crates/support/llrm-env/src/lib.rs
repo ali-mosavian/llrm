@@ -26,9 +26,22 @@ pub fn is_on(value: &OsStr) -> bool {
     !(value.is_empty() || value == "0" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("off"))
 }
 
+static PRESET: std::sync::Mutex<Vec<&'static str>> = std::sync::Mutex::new(Vec::new());
+
+/// Turns the switch `name` on as if the process had started with it, for a
+/// command-line option that stands for one. Only before the first ask: the
+/// snapshot is taken once.
+pub fn preset(name: &'static str) {
+    PRESET.lock().unwrap().push(name);
+}
+
 fn vars() -> &'static [(OsString, OsString)] {
     static VARS: std::sync::OnceLock<Vec<(OsString, OsString)>> = std::sync::OnceLock::new();
-    VARS.get_or_init(|| std::env::vars_os().collect())
+    VARS.get_or_init(|| {
+        let mut all: Vec<_> = std::env::vars_os().collect();
+        all.extend(PRESET.lock().unwrap().iter().map(|name| (OsString::from(name), OsString::from("1"))));
+        all
+    })
 }
 
 /// The value of `name`, from a snapshot of the environment taken at the first

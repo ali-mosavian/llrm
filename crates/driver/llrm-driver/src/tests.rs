@@ -1688,6 +1688,87 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
 }
 
+/// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
+/// (`clang -target i386-unknown-linux-gnu -O2` on this function, with and
+/// without `-fno-omit-frame-pointer`): the last of CSR_32 (`esi, edi, ebx,
+/// ebp`) first. llrm pushed `esi, edi, ebp` here, the order of its own list
+/// (`ebx, esi, edi, ebp`). The allocator takes no `ebx` for this function, so
+/// the three it pushes are those of the pin's order.
+#[test]
+fn m32_callee_saved_registers_are_pushed_in_the_pins_order() {
+    let text = "\
+         target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+         target triple = \"i386-unknown-linux-gnu\"\n\
+         declare i32 @g(i32)\n\
+         define i32 @six(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f) {\n\
+           %s1 = call i32 @g(i32 %a)\n\
+           %s2 = call i32 @g(i32 %b)\n\
+           %s3 = call i32 @g(i32 %c)\n\
+           %s4 = call i32 @g(i32 %d)\n\
+           %s5 = call i32 @g(i32 %e)\n\
+           %s6 = call i32 @g(i32 %f)\n\
+           %p1 = call i32 @g(i32 %s1)\n\
+           %p2 = call i32 @g(i32 %s2)\n\
+           %p3 = call i32 @g(i32 %s3)\n\
+           %p4 = call i32 @g(i32 %s4)\n\
+           %p5 = call i32 @g(i32 %s5)\n\
+           %p6 = call i32 @g(i32 %s6)\n\
+           %t0 = add i32 %s1, %p1\n\
+           %x2 = add i32 %s2, %p2\n\
+           %t1 = add i32 %t0, %x2\n\
+           %x3 = add i32 %s3, %p3\n\
+           %t2 = add i32 %t1, %x3\n\
+           %x4 = add i32 %s4, %p4\n\
+           %t3 = add i32 %t2, %x4\n\
+           %x5 = add i32 %s5, %p5\n\
+           %t4 = add i32 %t3, %x5\n\
+           %x6 = add i32 %s6, %p6\n\
+           %t5 = add i32 %t4, %x6\n\
+           ret i32 %t5\n\
+         }\n\
+         ";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "six").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pushed: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| matches!(*line, "push ebp" | "push ebx" | "push edi" | "push esi"))
+        .collect();
+    assert_eq!(pushed, ["push ebp", "push edi", "push esi"], "{listing}");
+}
+
+const ALIGNED_IR: &str = "declare i32 @use(ptr)\n\
+    define i32 @aligned(i32 %n) {\n  %v = alloca [4 x i32], align 64\n  store i32 %n, ptr %v\n  \
+    %r = call i32 @use(ptr %v)\n  ret i32 %r\n}\n";
+
+/// A 32-bit local wanting 64 bytes of alignment lay wherever the stack was. The
+/// frame is the pin's `push ebp; mov ebp, esp; and esp, -64; sub esp, N` (the
+/// pin's `clang -target i386-unknown-linux-gnu` on the same function), the
+/// stack taken back from the frame register.
+#[test]
+fn m32_over_aligned_local_realigns_the_stack_pointer() {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n{ALIGNED_IR}"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O1"]), &text, "aligned").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let at = lines.iter().position(|line| *line == "and esp, -64").unwrap_or_else(|| panic!("{listing}"));
+    assert_eq!(lines[at - 1], "mov ebp, esp", "{listing}");
+    assert!(lines.contains(&"mov esp, ebp"), "{listing}");
+}
+
+/// There is no pin alignment at 16 bits: an over-aligned local is refused with
+/// its reason, not compiled off its alignment.
+#[test]
+fn m16_over_aligned_local_is_refused() {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n{ALIGNED_IR}"
+    );
+    let error = crate::llc::compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
+    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+}
+
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
 /// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
 /// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset

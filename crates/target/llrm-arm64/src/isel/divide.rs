@@ -356,6 +356,16 @@ impl Selector<'_> {
         let magic = self.mf.gpr();
         self.load_immediate(magic, w, magics.magic as u64);
         let mut q = self.mf.gpr();
+        // Add or subtract the dividend where the signs of divisor and magic
+        // differ.
+        let adjusted = if !negative_divisor && magic_negative {
+            Some(false)
+        } else if negative_divisor && !magic_negative && magics.magic != 0 {
+            Some(true)
+        } else {
+            None
+        };
+        let (mut adjust_done, mut shift_done) = (false, false);
         if w == 64 {
             self.inst(Inst::ThreeSource {
                 op: Mul3::Smulh,
@@ -375,25 +385,32 @@ impl Selector<'_> {
                 rm: magic,
                 ra: Gpr::R31,
             });
-            self.inst(Inst::BitfieldMove {
-                op: Bitfield::Ubfm,
-                width: Width::X,
-                rd: q,
-                rn: product,
-                immr: 32,
-                imms: 63,
-            });
+            // The high half of the product is read where it is used: added to
+            // the dividend as a shifted operand, or shifted down
+            // with the quotient's own shift (the low 32 bits are all that
+            // matter).
+            if adjusted == Some(false) {
+                self.inst(Inst::AddSubShifted {
+                    op: AddSub { subtract: false, set_flags: false },
+                    width: Width::X,
+                    rd: q,
+                    rn: x.reg,
+                    rm: product,
+                    shift: Shift::Lsr,
+                    amount: 32,
+                });
+                adjust_done = true;
+            } else {
+                let (op, immr) = if adjusted.is_none() && magics.shift > 0 {
+                    shift_done = true;
+                    (Bitfield::Sbfm, 32 + magics.shift as u8)
+                } else {
+                    (Bitfield::Ubfm, 32)
+                };
+                self.inst(Inst::BitfieldMove { op, width: Width::X, rd: q, rn: product, immr, imms: 63 });
+            }
         }
-        // Add or subtract the dividend where the signs of divisor and magic
-        // differ.
-        let adjusted = if !negative_divisor && magic_negative {
-            Some(false)
-        } else if negative_divisor && !magic_negative && magics.magic != 0 {
-            Some(true)
-        } else {
-            None
-        };
-        if let Some(subtract) = adjusted {
+        if let Some(subtract) = adjusted.filter(|_| !adjust_done) {
             let sum = self.mf.gpr();
             self.inst(Inst::AddSubShifted {
                 op: AddSub { subtract, set_flags: false },
@@ -406,7 +423,7 @@ impl Selector<'_> {
             });
             q = sum;
         }
-        if magics.shift > 0 {
+        if magics.shift > 0 && !shift_done {
             let shifted = self.mf.gpr();
             self.inst(Inst::BitfieldMove {
                 op: Bitfield::Sbfm,
