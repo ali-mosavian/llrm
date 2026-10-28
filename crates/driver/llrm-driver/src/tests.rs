@@ -1811,6 +1811,21 @@ fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
     );
 }
 
+/// An `i32` call argument goes in the dword register, as the pin's
+/// `CCPromoteToType` leaves it (only a byte or a word is promoted): the DAG
+/// extended it to the convention's quadword register, `mov rdi, rbx` (3 bytes)
+/// for `mov edi, ebx`.
+#[test]
+fn an_i32_call_argument_is_passed_in_the_dword_register_at_m64() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a) {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @h(i32 %x)\n  %z = add i32 %y, %x\n  ret i32 %z\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("mov edi, ") && !listing.contains("mov rdi, r"), "{listing}");
+}
+
 /// `fptoui double to i64` on a target with no conditional move
 /// (`double_to_uint64.c` at i486 -Os) was two branches before the DAG: the high
 /// word was `mov edx, -2147483648 / xor eax, eax` in the arms and the threshold

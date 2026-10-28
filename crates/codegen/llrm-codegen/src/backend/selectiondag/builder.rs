@@ -1417,11 +1417,19 @@ impl Builder<'_> {
                             copies.push((byte, piece));
                             continue;
                         }
-                        let piece = if vt.is_integer() && vt.size_in_bits() < width {
+                        // A byte or word is promoted to `i32`, a dword goes
+                        // in the dword register (`EDI`, not `RDI`)
+                        let promoted = width.min(vt.size_in_bits().max(32));
+                        let piece = if vt.is_integer() && vt.size_in_bits() < promoted {
                             let code = extends.get(at).copied().unwrap_or(ISD::AnyExtend);
-                            self.dag.get_node(code, EVT::integer(width), &[piece])
+                            self.dag.get_node(code, EVT::integer(promoted), &[piece])
                         } else {
                             piece
+                        };
+                        let reg = if vt.is_integer() && promoted < width {
+                            self.arch.registers().view(self.arch.registers().root(reg), promoted).unwrap_or(reg)
+                        } else {
+                            reg
                         };
                         copies.push((reg, piece));
                     }
