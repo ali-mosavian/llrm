@@ -16,7 +16,7 @@ use super::isd::ISD;
 use super::known_bits::known_bits;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
-    fn has_operation(
+    fn has_rotate_operation(
         &self,
         op: ISD,
         vt: super::mvt::EVT,
@@ -53,7 +53,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         // rot i16 X, 8 --> bswap X
-        if self.dag.constant(n1) == Some(8) && bits == 16 && self.has_operation(ISD::BSwap, vt) {
+        if self.dag.constant(n1) == Some(8) && bits == 16 && self.has_rotate_operation(ISD::BSwap, vt) {
             return Some(self.dag.get_node(ISD::BSwap, vt, &[n0]));
         }
         // fold (rot* (rot* x, c2), c1) -> (rot* x, ((c1 % bitsize) +- (c2 %
