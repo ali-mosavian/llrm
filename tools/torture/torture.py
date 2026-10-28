@@ -285,7 +285,8 @@ def run_native(exe: Path) -> tuple[str, str]:
 
 
 def run(args, work: Path) -> int:
-    if args.bits == 64:
+    # A target whose objects are ELF (not OMF) has no DOS to run in: its programs run on the host.
+    if dosbatch.linkrecipe.recipe(dosbatch.linkrecipe.named(args.bits))["default"] != "omf":
         return run_64(args, work)
     target = dosbatch.linkrecipe.named(args.bits)
     rules = expected()
