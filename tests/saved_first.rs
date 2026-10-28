@@ -38,7 +38,8 @@ fn instructions(text: &str) -> Vec<String> {
 fn test_callee_saved_registers_are_pushed_before_the_locals_are_reserved() {
     let text = listing(SOURCE, &["-O2", "-m32", "-mabi=sysv", "-march=i486", "--isel=dag"]);
     let lines = instructions(&text);
-    // The pin omits the frame pointer at -O2 (frame-pointer=none), so ebp is a saved register here.
+    // The pin omits the frame pointer at -O2 (frame-pointer=none), so ebp is a
+    // saved register here.
     let first = lines.iter().position(|line| line.starts_with("push ")).expect("saved registers");
     let sub = lines.iter().position(|line| line.starts_with("sub esp,")).expect("locals");
     assert!(lines[first..sub].iter().all(|line| line.starts_with("push ")), "{lines:?}");
@@ -66,8 +67,9 @@ int h(int n, int *p, int (*fp)(double *, int))
 }
 "#;
     let text = listing(source, &["-O2", "-m32", "-mabi=sysv", "-march=i486"]);
-    // No frame register at -O2 (as the pin): the array is at [esp+K], and the entry's 4 (return address),
-    // the pushes and the locals leave esp a multiple of 8.
+    // No frame register at -O2 (as the pin): the array is at [esp+K], and the
+    // entry's 4 (return address), the pushes and the locals leave esp a
+    // multiple of 8.
     let lines = instructions(&text);
     let pushes = lines.iter().take_while(|line| line.starts_with("push ")).count() as i64;
     let sub: i64 = lines.iter().find_map(|line| line.strip_prefix("sub esp, ")).expect("locals").parse().unwrap();
