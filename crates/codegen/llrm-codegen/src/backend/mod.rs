@@ -345,6 +345,7 @@ pub mod timing;
 pub mod twoaddr;
 pub mod upperzero;
 pub mod verify;
+pub mod widths;
 
 #[cfg(test)]
 mod pricing_tests;

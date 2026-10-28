@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documented, 0 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 136 documented, 0 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -141,3 +141,4 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 135 documen
 | valuefacts | What the middle end proves of an integer value, for the instruction selector to read: the bounds of an index or a dividend. | Once per function selected, in `isel::selected_with`. | [valuefacts](valuefacts.md) |
 | valuetrack | Where each `-g` variable's value is over the emitted code. | On the emitted code of a procedure, from `debuginfo`, when `-g` places | [valuetrack](valuetrack.md) |
 | verify | Checks that a lowered body is well formed, between machine phases. | After instruction selection and after every machine phase when `LLRM_VERIFY` | [verify](verify.md) |
+| widths | How wide each value is where an instruction names it. | The greedy allocator's inputs (`greedy::shadow`), which size each value's | [widths](widths.md) |
