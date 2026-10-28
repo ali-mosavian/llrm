@@ -40,11 +40,12 @@
 //! DEVIATE 2: of `foldAndOrOfICmps` only the compare-code merge, the sign-bit
 //! pair, `(ne A, 0) | (ne B, 0)` and `(ne A, -1) | (ne B, -1)` are here. Not
 //! yet: `foldAndOrOfICmpEqConstantAndICmp`, `foldAndOrOfICmpsWithConstEq`,
-//! `foldIsPowerOf2OrZero`, `simplifyRangeCheck`, `foldSignedTruncationCheck`,
+//! `foldIsPowerOf2OrZero`, `foldSignedTruncationCheck`,
 //! `foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`,
 //! `foldUnsignedUnderflowCheck`, `foldAndOrOfICmpsWithPow2AndWithZero`, the
-//! `trunc`/`and` fold, the `isnormal` fold and `foldAndOrOfICmpsUsingRanges`;
-//! also `foldLogicOfFCmps` and `foldEqOfParts`.
+//! `trunc`/`and` fold and the `isnormal` fold; `simplifyRangeCheck` and
+//! `foldAndOrOfICmpsUsingRanges` are in `combine_icmp_ranges`; also
+//! `foldLogicOfFCmps` and `foldEqOfParts`.
 //!
 //! # Used by
 //! `visit_and` and `visit_or` (the bitwise forms).
@@ -59,6 +60,7 @@ use llrm_mir::valuetracking::power2::is_known_to_be_a_power_of_two;
 use llrm_mir::valuetracking::{Query, pattern};
 
 use crate::combine::Combiner;
+use crate::combine_icmp_ranges::{fold_and_or_of_icmps_using_ranges, simplify_range_check};
 use crate::combine_shared::{binop, drop_poison_generating_flags, has_one_use, query};
 
 const A_MASK_ALL_ONES: u32 = 1;
@@ -672,6 +674,20 @@ fn fold_and_or_of_icmps(
         return Some(c.create_icmp(inst, pred_lhs, new_and, all_ones));
     }
 
+    // (icmp slt x, 0) | (icmp sgt x, n) --> icmp ugt x, n
+    // (icmp sge x, 0) & (icmp slt x, n) --> icmp ult x, n
+    // Not for the select form: one of the two directions is poison-safe, the
+    // other needs a freeze.
+    if !is_logical {
+        let (l, r) = ((lhs0, lhs1), (rhs0, rhs1));
+        if let Some(found) = simplify_range_check(c, inst, pred_lhs, l.0, l.1, pred_r, r.0, r.1, !is_and) {
+            return Some(found);
+        }
+        if let Some(found) = simplify_range_check(c, inst, pred_r, r.0, r.1, pred_lhs, l.0, l.1, !is_and) {
+            return Some(found);
+        }
+    }
+
     // This only handles icmp of constants: (icmp1 A, C1) | (icmp2 B, C2).
     let (lhs_c, rhs_c) = (lhs_c?, rhs_c?);
     // Naive tests of whether two values share a sign, and the inverted form:
@@ -715,7 +731,16 @@ fn fold_and_or_of_icmps(
             });
         }
     }
-    None
+    fold_and_or_of_icmps_using_ranges(
+        c,
+        inst,
+        pred_lhs,
+        (lhs0, lhs1),
+        pred_r,
+        (rhs0, rhs1),
+        (lhs_one_use, rhs_one_use),
+        is_and,
+    )
 }
 
 /// `foldBooleanAndOr`: the value `lhs &/| rhs` (of `i1`s) folds to, if any.
