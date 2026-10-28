@@ -254,6 +254,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD247 | sdag-b | `LowerFunnelShift`: the `isSHLDSlow` expansion of an `i16` funnel shift is not translated (no target of ours sets it) | `selectiondag/x86_lowering.rs` |
 | SD249 | sdag-b | `reduceLoadWidth` of a constant `srl`/`sra`/`and` of a load only; no `freeze` look-through, no `shl` opening; every x86 narrow access is taken as legal (`isLegalNarrowLdSt`). Exit: none while x86 loads stay unaligned-legal | `selectiondag/reduce_load_width.rs` |
 | SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
+| SD247 | sdag-b | w12: a function calling a hidden atomic (`llrm.atomic.*`) is selected by the old selector; the DAG has no atomic nodes, and its call path left the callee unnamed (assemble.rs panic, tests/check/mir/atomic_xchg.ll after the flip) | `assemble.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
