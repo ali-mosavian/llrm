@@ -124,6 +124,8 @@ pub mod div_const;
 pub mod dump;
 pub mod emit;
 pub mod expand_divrem_const;
+pub mod expand_fixed;
+pub mod expand_funnel;
 pub mod expand_sat;
 pub mod fold;
 pub mod fp_combine;
@@ -136,6 +138,7 @@ pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
 pub mod logic_setcc;
+mod match_rotate;
 pub mod opcodes;
 mod reassociate;
 pub mod reduce_load_width;
@@ -205,6 +208,8 @@ mod freeze_tests;
 mod gaps_tests;
 #[cfg(test)]
 mod invoke_tests;
+#[cfg(test)]
+mod match_rotate_tests;
 #[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]

@@ -451,6 +451,11 @@ def smoke_bins(env: dict | None = None) -> str:
     raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
 
 
+def bins_command(directory: Path) -> list[str]:
+    """The cargo build that refreshes every binary `directory` holds: `--bins` skips llrm-c (required-features = c-legacy), so a leftover llrm-c stayed older than the sources for good and the 03:12 pass was refused for it."""
+    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "c-legacy"] if (directory / "llrm-c").is_file() else [])]
+
+
 def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     """"" when the binaries the smoke will use are newer than the tree's sources; else rebuild them (`buildslot cargo build --release --bins`, CARGO_TARGET_DIR from
     the environment) and check again, and say which are still stale. The merge rewrites files after the binaries were built: llrmbin.stale_binaries then flagged them,
@@ -463,7 +468,7 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
-    built = (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True, errors="replace")))()
+    built = (build or (lambda: subprocess.run(slotted(bins_command(directory)), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True, errors="replace")))()
     still = llrmbin.stale_binaries(directory, cwd)
     if not still:
         return ""
@@ -1067,11 +1072,13 @@ def tool_tests_for(files: list[str], root: Path = ROOT) -> list[str]:
     return sorted(tests)
 
 
-def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run) -> list[str]:
+def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, ensure=None) -> list[str]:
     """The last lines of a failing pytest over `tool_tests_for(files)`; none when they pass or no tool changed. test_assemble sat red on parity for hours behind a landing that ran Rust tests only."""
     tests = tool_tests_for(files, root)
     if not tests:
         return []
+    if why := (ensure or ensure_bins)():  # the tools resolve the release binaries and refuse stale ones: the 02:32 batch died on "stale binaries" here, before the build stage ran
+        return [why]
     stage("tool-tests")
     done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
     return [] if done.returncode == 0 else (done.stdout + done.stderr).strip().splitlines()[-6:]

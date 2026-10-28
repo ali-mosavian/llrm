@@ -259,6 +259,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD105 | sdag-a | `visitFunnelShift` ports the constant-amount folds and the funnel of consecutive loads; the identity fold, variable-amount range folds and rotate fold are not ported | `selectiondag/combine_funnel.rs` |
+| SD103 | sdag-a | `ExpandIntRes_MULFIX` takes its pieces from `forceExpandMultiply`, never `expandMUL_LOHI` | `selectiondag/legalize_types.rs` |
+| SD104 | sdag-a | an unsigned `ExpandIntRes_MULFIXSAT` scale above a half shifts `HH`, where the pin shifts `HL` (upstream fixed it) | `selectiondag/legalize_types.rs` |
 | SD107 | sdag-a | `lowerFaddFsub` never forms a horizontal add (SSE3 `haddps` is not described); scalar `FADD`/`FSUB` stay as they are | `selectiondag/x86_lowering.rs` |
 | SD108 | sdag-a | `FAND`/`FOR`/`FXOR` of a scalar float against its pool mask select `andps`/`orps`/`xorps` directly (no `SCALAR_TO_VECTOR` node); `double` takes the `ps` rows `x86.instr` has | `crates/backend/llrm-dagisel/src/x86_fplogic.rs` |
 | SD106 | sdag-a | `expandDIVREMByConstant` ports the unsigned forms; the sign-extended `MUL` shortcut of `expandMUL_LOHI` and the UDIVREM-decomposition of a missing UREM libcall are not ported | `selectiondag/expand_divrem_const.rs` |
@@ -270,6 +272,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |
 | SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/target/llrm-x86/src/dag/actions.rs` |
 | SD308 | sdag-c | the second half of a split access through a far pointer moves the offset word only (no carry into the selector); a huge pointer crossing a segment would wrap | `selectiondag/legalize_types.rs` |
+| SD321 | sdag-c | `MatchRotate` matches constant shift amounts only: no `extractShiftForRotate`, disguised rotate, variable amounts (`MatchRotatePosNeg`/`MatchFunnelPosNeg`) or truncated rotate | `selectiondag/match_rotate.rs` |
 | SD252 | sdag-b | `visitIMINMAX` has no FP-to-saturate folds, no `reassociateReduction`, no `vscale` fold and no flip to the opposite signedness (no min/max is legal on this target) | `selectiondag/iminmax_combine.rs` |
 | SD234 | sdag-b | an x87 `fld1`/`fldz` is loaded once for its readers in a block until the next call or barrier (the pin: one `LD_F1`, `fadd st(1),st`); the old rule loaded it per reader | `selectiondag/emit.rs` |
 | SD235 | sdag-b | a same-type `fpround` read only by a store of its type in the block is not rounded through a stack temp: the pin folds `store (fp_round x)` into a truncating store (`visitSTORE`) | `selectiondag/builder.rs` |
