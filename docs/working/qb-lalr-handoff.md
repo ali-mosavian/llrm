@@ -7,7 +7,7 @@ parity tip at the time of the rebase). Same content as `origin/spike/lalr-nib-qb
 ## Done
 
 - `qbfront::parse` = `front::ast::parse` + `front::check::check`, for QBasic, QB 4.5, PDS 7.1, VBDOS and
-  QuickrBASIC. Real BC.EXE under the dosrun DOSBox-X fork is the oracle (`crates/frontends/lalrspike`:
+  QuickrBASIC. Real BC.EXE under the dosrun DOSBox-X fork is the oracle (`crates/frontends/qb/lalrspike`:
   `programs.py`, `more.py`, `bc_programs.json` = 12,898 programs; `bcq.sh`/`verdict`/`checkfiles` tools).
 - Readable diagnostics: `ParseError { span, code, message, help, expected, subject }`, wording in
   `front/messages.txt`, `explain.rs`; `driver::render` prints file:line:col, the source line with a caret, help.
@@ -34,7 +34,7 @@ parity tip at the time of the rebase). Same content as `origin/spike/lalr-nib-qb
 3. Speed: borrow lines in `logical_lines`, avoid per-identifier uppercase Strings, merge the `next_lists`,
    `without_volatile` and `kinds` token passes into one; remove `front/lexer.rs` and the `logos` dependency
    if the word DFA stays in `scan.rs`.
-4. The readme (`crates/frontends/lalrspike/readme.md`) should mention the Quickr port and the removal of the
+4. The readme (`crates/frontends/qb/lalrspike/readme.md`) should mention the Quickr port and the removal of the
    old parser.
 
 ## Red tests (also red on plain `origin/feat/parity`, checked in a clean worktree)

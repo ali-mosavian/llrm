@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/fixupbw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/fixupbw.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/fixupbw.rs sha256:c67303ef508b76510f6f5c87a32a1e9b2f1d3543a04723728f06ef08e111d892 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fixupbw.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fixupbw.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/fixupbw.rs sha256:38e33892b20f321ccc84d677ccc7645369ec58b1434799a2568689645322ce75 -->
 
 # fixupbw
 
@@ -31,8 +31,10 @@ for size (`OptForSize`, L455).
 
 The second half of `getSuperRegDestIfDead` (an implicit-def of the super
 register on a `MOV8rm`, `MOV16rm`, `MOV8rr` or `MOV16rr` whose upper bits
-were undefined, where the pin's liveness has no sub-register lanes) is N/A:
-`dead_after` is per lane, so a dead upper half is already dead.
+were undefined) is `Insn::undef_super`, which `rewriter::rewrite` sets on a
+narrow definition of a value that is read wider and not live before it: a
+32-bit user of the loaded word reads the upper lanes, which `dead_after`
+counts as live though nothing ever defined them.
 
 DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 prefix, so the pin's claim that the size is the same is false there; the

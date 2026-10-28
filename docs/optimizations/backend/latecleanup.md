@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/latecleanup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/latecleanup.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/latecleanup.rs sha256:a4a4410201c06a61b80f1ded5c4328d7e7e50a09d7fe75e54fe4f1a91fa73dd0 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/latecleanup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/latecleanup.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/latecleanup.rs sha256:ae4b15e2e2178b0c53b562f03505c34bb526e0a389590d87502dc4de715dd459 -->
 
 # latecleanup
 
@@ -31,6 +31,14 @@ The unit tests `a_load_the_register_already_holds_goes` and
 ## Runs
 After `prologue`, before `peephole`: where rematerialization and the
 allocator's splitting have left the same constant loaded again.
+
+## Segment registers
+DEVIATE LC2 (real mode): the pin has no segment registers to load. A load of
+a segment constant (`mov es, DGROUP`) into `ES`, `FS` or `GS` is a candidate
+too, and the entries of the segment registers are taken to a fixed point
+over the whole graph, so a load a loop's back edge repeats goes as well
+(scroll.c: a `pushw DGROUP; pop es` before every string move). Owner w12.
+Exit: none, the pin has no far loads.
 
 ## Limits
 DEVIATE LC1: the pin also takes a load-address instruction using the frame

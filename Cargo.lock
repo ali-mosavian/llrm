@@ -198,7 +198,8 @@ dependencies = [
  "llrm-analysis",
  "llrm-bcdriver",
  "llrm-c",
- "llrm-core",
+ "llrm-cc",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
  "llrm-nib",
@@ -238,8 +239,8 @@ dependencies = [
 name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
- "llrm-elf-arm64",
- "llrm-instr",
+ "llrm-dwarf",
+ "llrm-elf",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",
@@ -256,14 +257,30 @@ name = "llrm-bcdriver"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-bcobj",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
  "llrm-omf",
  "llrm-transforms",
- "llrm-x86-bc",
- "llrm-x86-bcmachine",
  "llrm-x86-m16",
+]
+
+[[package]]
+name = "llrm-bcobj"
+version = "0.1.0"
+dependencies = [
+ "iced-x86",
+ "llrm-analysis",
+ "llrm-hir",
+ "llrm-lir",
+ "llrm-mir",
+ "llrm-omf",
+ "llrm-qbruntime",
+ "llrm-support",
+ "llrm-target",
+ "llrm-x86-m16",
+ "toml",
 ]
 
 [[package]]
@@ -272,7 +289,8 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
- "llrm-core",
+ "llrm-c",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-mir",
  "llrm-object",
@@ -294,51 +312,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-coff"
+name = "llrm-cc"
 version = "0.1.0"
 dependencies = [
- "llrm-object",
- "llrm-support",
+ "llrm-driver",
+ "llrm-mir",
+ "llrm-target",
+ "llrm-x86-m16",
+ "serde",
+ "toml",
 ]
 
 [[package]]
-name = "llrm-coff32"
-version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
-name = "llrm-coff64"
-version = "0.1.0"
-dependencies = [
- "llrm-coff",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
-name = "llrm-core"
+name = "llrm-codegen"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-analysis",
- "llrm-coff",
- "llrm-coff32",
- "llrm-coff64",
- "llrm-core",
+ "llrm-codegen",
  "llrm-dagisel",
  "llrm-dwarf",
- "llrm-elf32",
- "llrm-elf64",
  "llrm-hir",
- "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
- "llrm-macho",
  "llrm-mir",
  "llrm-object",
  "llrm-omf",
@@ -348,7 +345,6 @@ dependencies = [
  "llrm-target",
  "llrm-transforms",
  "llrm-x86",
- "llrm-x86-bcmachine",
  "llrm-x86-m16",
  "llrm-x86-m32",
  "llrm-x86-m64",
@@ -361,6 +357,22 @@ dependencies = [
  "sha2",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "llrm-codeview"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+ "llrm-support",
+]
+
+[[package]]
+name = "llrm-coff"
+version = "0.1.0"
+dependencies = [
+ "llrm-object",
+ "llrm-support",
 ]
 
 [[package]]
@@ -381,9 +393,10 @@ name = "llrm-driver"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-lir",
  "llrm-mir",
+ "llrm-object",
  "llrm-target",
  "llrm-x86",
  "llrm-x86-m16",
@@ -398,11 +411,10 @@ dependencies = [
 name = "llrm-dwarf"
 version = "0.1.0"
 dependencies = [
- "llrm-elf32",
- "llrm-elf64",
  "llrm-macho",
  "llrm-object",
  "llrm-support",
+ "llrm-x86",
  "tempfile",
 ]
 
@@ -410,34 +422,7 @@ dependencies = [
 name = "llrm-elf"
 version = "0.1.0"
 dependencies = [
- "llrm-dwarf",
  "llrm-object",
-]
-
-[[package]]
-name = "llrm-elf-arm64"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
- "tempfile",
-]
-
-[[package]]
-name = "llrm-elf32"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
-]
-
-[[package]]
-name = "llrm-elf64"
-version = "0.1.0"
-dependencies = [
- "llrm-elf",
- "llrm-object",
- "tempfile",
 ]
 
 [[package]]
@@ -455,21 +440,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "llrm-instr"
-version = "0.1.0"
-dependencies = [
- "llrm-lir",
- "toml",
-]
-
-[[package]]
 name = "llrm-iselgen"
 version = "0.1.0"
 dependencies = [
- "llrm-instr",
  "llrm-lir",
  "llrm-peepgen",
  "llrm-support",
+ "llrm-target",
  "tempfile",
 ]
 
@@ -486,8 +463,9 @@ dependencies = [
 name = "llrm-macho"
 version = "0.1.0"
 dependencies = [
- "llrm-dwarf",
+ "llrm-arm64",
  "llrm-object",
+ "llrm-x86",
  "tempfile",
 ]
 
@@ -505,10 +483,9 @@ dependencies = [
  "iced-x86",
  "indexmap",
  "llrm-analysis",
- "llrm-core",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-hir",
- "llrm-instr",
  "llrm-mir",
  "llrm-object",
  "llrm-target",
@@ -545,9 +522,9 @@ name = "llrm-peepgen"
 version = "0.1.0"
 dependencies = [
  "indexmap",
- "llrm-instr",
  "llrm-lir",
  "llrm-support",
+ "llrm-target",
  "serde",
  "toml",
 ]
@@ -558,13 +535,15 @@ version = "0.1.0"
 dependencies = [
  "indexmap",
  "llrm-analysis",
- "llrm-core",
+ "llrm-arm64",
+ "llrm-codegen",
  "llrm-driver",
  "llrm-hir",
  "llrm-mir",
  "llrm-object",
  "llrm-qbruntime",
  "llrm-support",
+ "llrm-target",
  "llrm-transforms",
  "llrm-x86-m16",
  "logos",
@@ -618,7 +597,6 @@ name = "llrm-target"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-instr",
  "llrm-lir",
  "llrm-mir",
  "toml",
@@ -645,42 +623,18 @@ name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-instr",
+ "llrm-codeview",
+ "llrm-coff",
+ "llrm-dwarf",
+ "llrm-elf",
  "llrm-lir",
+ "llrm-macho",
  "llrm-mir",
- "llrm-support",
- "llrm-target",
- "toml",
-]
-
-[[package]]
-name = "llrm-x86-bc"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "llrm-analysis",
- "llrm-hir",
- "llrm-lir",
- "llrm-mir",
+ "llrm-object",
  "llrm-omf",
- "llrm-qbruntime",
  "llrm-support",
  "llrm-target",
- "llrm-x86-bcmachine",
- "llrm-x86-m16",
-]
-
-[[package]]
-name = "llrm-x86-bcmachine"
-version = "0.1.0"
-dependencies = [
- "iced-x86",
- "llrm-lir",
- "llrm-omf",
- "llrm-qbruntime",
- "llrm-support",
- "llrm-target",
- "llrm-x86-m16",
+ "tempfile",
  "toml",
 ]
 
@@ -690,7 +644,6 @@ version = "0.1.0"
 dependencies = [
  "iced-x86",
  "indexmap",
- "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
@@ -710,7 +663,7 @@ name = "llrm-x86-m16-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]
@@ -720,7 +673,6 @@ name = "llrm-x86-m32"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
@@ -734,7 +686,7 @@ name = "llrm-x86-m32-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]
@@ -744,7 +696,6 @@ name = "llrm-x86-m64"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-instr",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-mir",
@@ -758,7 +709,7 @@ name = "llrm-x86-m64-select"
 version = "0.1.0"
 dependencies = [
  "iced-x86",
- "llrm-core",
+ "llrm-codegen",
  "llrm-iselgen",
  "llrm-x86",
 ]

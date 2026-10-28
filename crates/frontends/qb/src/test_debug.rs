@@ -2,7 +2,7 @@
 
 use std::rc::Rc;
 
-use llrm_core::objectfile::{cvinfo, omf};
+use llrm_codegen::objectfile::{cvinfo, omf};
 
 use super::compile as qb_compile;
 use super::driver as qb_driver;
@@ -29,7 +29,7 @@ fn object(
         ..qb_driver::Frontend::new(dialect, runtime)
     };
     let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"));
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
     omf::parse(&bytes).expect("parses")
 }
@@ -117,9 +117,9 @@ fn a_local_is_where_its_code_keeps_it() {
         let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
         // Not optimised: `k` is in its cell (promoted to a register it is left
         // out of CodeView 4, which names a cell).
-        let codegen = llrm_core::driver::Options {
+        let codegen = llrm_codegen::driver::Options {
             pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
-            ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+            ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
         };
         let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
@@ -164,9 +164,9 @@ fn g_writes_standard_codeview_4_by_default() {
     let path = written(&directory, "std.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
-    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    let shape = llrm_codegen::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
     assert!(shape.iter().any(|one| one.starts_with("PROC SQUARE ") || one.starts_with("PROC Square ")), "{shape:#?}");
     assert!(shape.iter().any(|one| one.starts_with("PARAM ") && one.contains(".n:")), "{shape:#?}");
 }
@@ -183,12 +183,12 @@ fn a_string_variable_is_a_struct_of_its_length_and_characters() {
     let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
     // Not optimised: the variable is in its cell.
-    let codegen = llrm_core::driver::Options {
+    let codegen = llrm_codegen::driver::Options {
         pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
-        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
     };
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
-    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    let shape = llrm_codegen::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
     assert!(shape.iter().any(|one| one.starts_with("LOCAL T.S$:") && one.contains("struct STRING")), "{shape:#?}");
 }
 
@@ -202,12 +202,12 @@ fn a_variable_of_a_type_codeview_cannot_say_is_left_out_not_a_refused_compile() 
     let path = written(&directory, "far.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
-    let codegen = llrm_core::driver::Options {
+    let codegen = llrm_codegen::driver::Options {
         pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
-        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
     };
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
-    let shape = llrm_core::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
+    let shape = llrm_codegen::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
     assert!(shape.iter().any(|one| one.starts_with("PROC t ")), "{shape:#?}");
     assert!(!shape.iter().any(|one| one.contains(".S$")), "{shape:#?}");
 }
@@ -224,10 +224,10 @@ fn array_object(debug_format: llrm_object::debug::Format) -> (Vec<Rc<omf::Record
     let path = written(&directory, "arr.bas", array_source().as_bytes());
     let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("qb45", "qb45") };
     let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
-    let codegen = llrm_core::driver::Options {
+    let codegen = llrm_codegen::driver::Options {
         pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
         debug_format,
-        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
     };
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
     (omf::parse(&bytes).expect("parses"), directory)
@@ -236,7 +236,7 @@ fn array_object(debug_format: llrm_object::debug::Format) -> (Vec<Rc<omf::Record
 #[test]
 fn codeview_says_a_basic_array_as_its_descriptor_struct() {
     let (records, _directory) = array_object(llrm_object::debug::Format::Default);
-    let shape = llrm_core::objectfile::cv4info::shape(&records);
+    let shape = llrm_codegen::objectfile::cv4info::shape(&records);
     assert!(shape.iter().any(|one| one.starts_with("LOCAL T.GRID") && one.contains("struct ARRAY")), "{shape:#?}");
     assert!(shape.iter().any(|one| one.contains("TOTAL")), "{shape:#?}");
 }

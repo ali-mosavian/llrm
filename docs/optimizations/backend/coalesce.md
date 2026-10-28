@@ -1,11 +1,10 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/coalesce.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/coalesce.rs sha256:9b88dbf4a372a8abe321815ad3dae9cdadc03adf7f87dfd5150e044e3a72c8a1 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/coalesce.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/coalesce.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/coalesce.rs sha256:53276776fdb8e856c1b8000d34bc6f101fc98f88ce8b3b62be34ede03a9bdc6c -->
 
 # coalesce
 
 Removes a copy whose two values can share a register: the phase that runs
-LLVM's `RegisterCoalescer` (`crate::coalescer`), and the interference
-graph `twoaddr` and the spiller read.
+LLVM's `RegisterCoalescer` (`crate::coalescer`).
 
 ## How it works
 After `phielim` and `twoaddr` the body is full of `mov v2, v1` between
@@ -27,13 +26,6 @@ and leaves colouring to the allocator, which splits where it must; the old
 pass here (Briggs and George over an interference graph, with a call-clobber
 check) is gone, objects unchanged on the corpora the day it went. A body
 with phis is not coalesced.
-
-What stays in this file is the interference graph: `_interference` (built by
-walking each block backwards: values live at the same point are adjacent,
-the two ends of a copy not by that copy, and the sources of a parallel copy
-before any of its destinations is written) and `_interference_among`, read
-by `twoaddr.rs` and by the spiller's sibling pricing; `_merged` and
-`_copy`.
 
 ## Example
 A multiply by 5: `v3` joins `v4`, so `v3 := mov v4` goes and the add updates

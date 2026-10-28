@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_sub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_sub.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_sub.rs sha256:96a5791aad38be66b1d89062cb43b3390037b0e1a499c90530c0bd049117a6d7 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_sub.rs sha256:a73becc4e8d9c038c91078f31b06b2e86646a2ff4b72f9858046aa7dc9516a5e -->
 
 # combine_sub
 
@@ -18,7 +18,8 @@ DEVIATE 1: no vectors: `foldVectorBinop` and the `vector_reduce_add` fold
 DEVIATE 2: `narrowMathIfNoOverflow` (in `TryToNarrowDeduceFlags`),
 `isFreeToInvert` (`~X - ~Y`, :2587),
 `tryFoldInstWithCtpopWithNot`, `foldSubOfMinMax` and everything from the
-select-of-sub fold (:2799) on are the next strip.
+select-of-sub fold (:2799) on are the next strip, but the `usub.sat`,
+`umin` and `umax` identities (:2978-3006).
 
 DEVIATE 3: constant expressions are skipped (`combine_addsub` DEVIATE 4).
 

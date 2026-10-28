@@ -1,16 +1,16 @@
 # Optimizations
 
-How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the backend in `crates/backend/llrm-core`, and one reference per pass family. For contributors.
+How the compiler turns MIR into x86 code: the SSA optimizer in `crates/opt`, the backend in `crates/codegen/llrm-codegen`, and one reference per pass family. For contributors.
 
 ## Reference
 
-The reference for every pass, analysis and backend phase is the `//!` header at the top of its source file: what it does, how, where it runs, what it needs and keeps. `python3 tools/docsbuild/build.py --sync` writes one page per header, with an index for each directory: [passes](passes/readme.md), [analyses](analyses/readme.md) and [backend phases](backend/readme.md). The tests fail when a page is stale, or when a file of a required directory has no header.
+The reference for every pass, analysis and backend phase is the `//!` header at the top of its source file: what it does, how, where it runs, what it needs and keeps. `python3 tools/docs/docsbuild/build.py --sync` writes one page per header, with an index for each directory: [passes](passes/readme.md), [analyses](analyses/readme.md) and [backend phases](backend/readme.md). The tests fail when a page is stale, or when a file of a required directory has no header.
 
 | Source | Holds |
 |---|---|
 | [`crates/opt/llrm-transforms/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-transforms/src) | The MIR passes and the pipeline that orders them |
 | [`crates/opt/llrm-analysis/src`](https://github.com/ali-mosavian/llrm/tree/main/crates/opt/llrm-analysis/src) | The analyses and the pass manager |
-| [`crates/backend/llrm-core/src/backend`](https://github.com/ali-mosavian/llrm/tree/main/crates/backend/llrm-core/src/backend) | Lowering for selection, instruction selection and the machine phases |
+| [`crates/codegen/llrm-codegen/src/backend`](https://github.com/ali-mosavian/llrm/tree/main/crates/codegen/llrm-codegen/src/backend) | Lowering for selection, instruction selection and the machine phases |
 
 ## Pass index, in pipeline order
 
@@ -31,7 +31,7 @@ Levels and flags: [levels](../reference/levels.md).
 
 ## Reference pages
 
-Each pass, analysis and backend phase has one page, generated from the `//!` header of its source file: [passes](passes/readme.md), [analyses](analyses/readme.md), [backend phases](backend/readme.md). Edit the header, then run `python3 tools/docsbuild/build.py --sync` and commit what it writes.
+Each pass, analysis and backend phase has one page, generated from the `//!` header of its source file: [passes](passes/readme.md), [analyses](analyses/readme.md), [backend phases](backend/readme.md). Edit the header, then run `python3 tools/docs/docsbuild/build.py --sync` and commit what it writes.
 
 ## Notes
 

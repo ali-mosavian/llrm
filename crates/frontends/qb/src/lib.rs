@@ -17,10 +17,11 @@ pub use dialect::Dialect;
 pub use error::LexError;
 pub use error::ParseError;
 pub use front::parse;
-pub use llrm_core::abi::qb as abi;
+pub use llrm_codegen::abi::qb as abi;
 pub use semantic::SemanticError;
 pub use semantic::compile;
 pub use syntax::Module;
+pub mod arm64;
 pub mod cli;
 pub mod compile;
 pub mod driver;
@@ -64,5 +65,7 @@ mod test_runtime_model;
 
 #[cfg(test)]
 mod callconv_tests;
+#[cfg(test)]
+mod test_lines;
 #[cfg(test)]
 mod test_pipeline;

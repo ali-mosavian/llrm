@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use llrm_core::hir::codec;
+use llrm_codegen::hir::codec;
 
 use super::compile;
 use super::driver::{Frontend, parsed};
@@ -52,19 +52,19 @@ pub fn dumped(
     source: &Path,
     output: &Path,
     frontend: &Frontend,
-    codegen: &llrm_core::driver::Options,
+    codegen: &llrm_codegen::driver::Options,
 ) -> Result<PathBuf, String> {
     std::fs::create_dir_all(output).map_err(|error| error.to_string())?;
     let program = parsed(source, frontend, None).map_err(|error| error.0)?;
     write(&output.join("00-input.bas"), &_source_text(source)?)?;
-    let mut observe = |program: &llrm_core::hir::model::Program| -> Result<(), String> {
+    let mut observe = |program: &llrm_codegen::hir::model::Program| -> Result<(), String> {
         write(&output.join("01-hir.json"), &codec::encode(program, None).map_err(|error| error.0)?)
     };
     // The MIR after each pass, where the Nib front end writes it: the dump
     // belongs to the shared pipeline.
     let stages = output.join("mir");
     std::fs::create_dir_all(&stages).map_err(|error| error.to_string())?;
-    let codegen = llrm_core::driver::Options { dump: Some(stages), ..codegen.clone() };
+    let codegen = llrm_codegen::driver::Options { dump: Some(stages), ..codegen.clone() };
     compile::object_bytes(&program, source, Some(&mut observe), &codegen).map_err(|error| error.to_string())?;
     Ok(output.to_path_buf())
 }

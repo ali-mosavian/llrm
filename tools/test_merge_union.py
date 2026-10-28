@@ -1,4 +1,4 @@
-"""Two PRs that append a test to the same `*_tests.rs` once merged with a conflict; `merge=union` merged them and dropped a closing `}` (#4570: llrm-core did not
+"""Two PRs that append a test to the same `*_tests.rs` once merged with a conflict; `merge=union` merged them and dropped a closing `}` (#4570: llrm-codegen did not
 compile, no conflict reported). The repo's `.gitattributes` names `tests-append`, whose driver keeps each appended block whole."""
 
 import os
@@ -134,3 +134,62 @@ def test_a_branch_whose_tree_still_says_union_merges_whole_with_the_clone_set_up
     merged = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "merge", "--no-edit", "-q", "second"], cwd=repo, capture_output=True, text=True, env=env)
     assert merged.returncode == 0, merged.stdout + merged.stderr
     assert parses((repo / TESTS).read_text(), tmp_path)
+
+
+PARSER = "crates/frontends/qb/tests/parser.rs"
+
+
+def parser_prs(tmp_path: Path, attributes: str) -> Path:
+    """The shape of the 12 QB PRs: one side also edits a line high in the file, both append a test at the end."""
+    repo = tmp_path / "repo"
+    (repo / PARSER).parent.mkdir(parents=True)
+    git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / PARSER).write_text("// header\n\n" + BASE)
+    (repo / ".gitattributes").write_text(attributes)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "checkout", "-qb", "second")
+    path = repo / PARSER
+    path.write_text(path.read_text() + "\n" + TEST.format(name="from_second"))
+    git(repo, "commit", "-qam", "second")
+    git(repo, "checkout", "-q", "main")
+    path.write_text(path.read_text().replace("// header", "// header, edited") + "\n" + TEST.format(name="from_main"))
+    git(repo, "commit", "-qam", "main")
+    return repo
+
+
+def test_the_repo_attributes_merge_two_qb_pr_appends_to_parser_rs_clean(tmp_path):
+    """12 QB PRs conflicted at the end of parser.rs because only `*_tests.rs` and `tests.rs` had the driver."""
+    repo = parser_prs(tmp_path, (ROOT / ".gitattributes").read_text())
+    assert git(repo, "merge", "--no-edit", "-q", "second", check=False).returncode == 0
+    text = (repo / PARSER).read_text()
+    assert "// header, edited" in text and "fn from_main" in text and "fn from_second" in text and parses(text, tmp_path)
+
+
+def test_without_the_parser_rs_line_the_same_appends_conflict(tmp_path):
+    lines = [line for line in (ROOT / ".gitattributes").read_text().splitlines() if "parser.rs" not in line]
+    repo = parser_prs(tmp_path, "\n".join(lines) + "\n")
+    assert git(repo, "merge", "--no-edit", "-q", "second", check=False).returncode != 0
+
+
+def test_two_prs_adding_the_same_test_do_not_define_it_twice(tmp_path):
+    """4678 and 4680 both added `a_frame_cell_with_a_wide_index_is_not_encodable_before_the_frame_is_named` to select64_tests.rs; joined, the batch failed 'defined multiple times'."""
+    repo = tmp_path / "repo"
+    (repo / TESTS).parent.mkdir(parents=True)
+    git(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / TESTS).write_text(BASE)
+    (repo / ".gitattributes").write_text("*_tests.rs merge=tests-append\n")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-qm", "base")
+    git(repo, "checkout", "-qb", "second")
+    for name, extra in (("shared", "    // second\n"), ):
+        path = repo / TESTS
+        path.write_text(path.read_text() + "\n" + TEST.format(name=name).replace("{\n", "{\n" + extra, 1))
+        git(repo, "commit", "-qam", "second")
+    git(repo, "checkout", "-q", "main")
+    path = repo / TESTS
+    path.write_text(path.read_text() + "\n" + TEST.format(name="shared").replace("{\n", "{\n    // main\n", 1) + "\n" + TEST.format(name="only_main"))
+    git(repo, "commit", "-qam", "main")
+    merged = git(repo, "merge", "--no-edit", "-q", "second", check=False)
+    text = (repo / TESTS).read_text()
+    assert merged.returncode != 0 or text.count("fn shared(") == 1

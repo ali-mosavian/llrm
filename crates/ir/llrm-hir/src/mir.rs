@@ -472,6 +472,8 @@ struct Tables<'h> {
     conventions: HashMap<String, u32>,
     /// The runtime routines that raise no error.
     nounwind: &'h [String],
+    /// `B$REAL` places the PC's low memory whatever the pointer's width.
+    hosted: bool,
     /// Each source line's `!dbg` node, `!{i32 line}`.
     lines: HashMap<i64, MetadataId>,
     /// The metadata the language's facts give an instruction's result, by
@@ -686,6 +688,7 @@ fn emit_module<'h>(
         tags: Tags::new(&mut module),
         classes: HashMap::default(),
         nounwind,
+        hosted: promises.hosted,
         lines: HashMap::default(),
         fact_nodes: HashMap::default(),
         accesses: HashMap::default(),
@@ -877,9 +880,7 @@ fn emit_module<'h>(
     let statements = hir.statements();
     let rows = statements.clone().unwrap_or_default();
     // A RESUME marker the body falls into raises; the handlers' markers do not.
-    let raises = |callee: &str| {
-        handling::resumes(callee) || (!handling::owns(callee) && !nounwind.iter().any(|one| one == callee))
-    };
+    let raises = |callee: &str| handling::raises(callee, nounwind);
     let outlined = match module_handler(&mut module, &tables.spaces, &functions, runtime, &rows, &raises) {
         Ok(outlined) => outlined,
         Err((name, why)) => {
@@ -893,7 +894,9 @@ fn emit_module<'h>(
         let handled = match (function.error_handler.is_some() || tables.module_handler.is_some(), &statements) {
             (false, _) => Ok(None),
             (true, Ok(rows)) => {
-                let lines: Vec<i64> = handling::numbered(rows, function.id).iter().map(|one| one.line).collect();
+                let numbered = handling::numbered(rows, function.id);
+                let lines: Vec<i64> =
+                    handling::sites(function, &numbered, nounwind).iter().map(|&site| numbered[site].line).collect();
                 onerror::handled(&mut module, tables.spaces.far, global, &lines, function.error_handler_local).map(Some)
             }
             (true, Err(why)) => Err(why.clone()),
@@ -1132,6 +1135,7 @@ fn declare_data(
     let bytes = module.context.types.intern(Type::Array { element: byte, count: object.bytes.len() as u64 });
     let linkage = match (ty, object.linkage) {
         (None, _) | (Some(_), model::DataLinkage::External | model::DataLinkage::Exported) => Linkage::External,
+        (Some(_), model::DataLinkage::Internal) if object.exposed => Linkage::External,
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
         (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };
@@ -1873,6 +1877,21 @@ fn declare_outside(
                 slot.insert(module.reference(global));
             }
         }
+        if instruction.op == Op::Concat
+            && tables.spaces.segment_space().is_err()
+            && !tables.callees.contains_key(REAL_ADDRESS)
+            && let Ok(to) =
+                value_type(&mut module.context.types, &tables.spaces, tables.types[&values[&instruction.results[0]]])
+            && let Type::Pointer(space) = *module.context.types.get(to)
+            && let pointer_bits = tables.layout.pointer(space).bits
+            && tables.hosted
+        {
+            let wide = module.context.types.int(pointer_bits);
+            let ty = function_type(&mut module.context.types, to, vec![wide]);
+            let global = module.add_function(REAL_ADDRESS, ty, Linkage::External)?;
+            let reference = module.reference(global);
+            tables.callees.insert(REAL_ADDRESS.to_owned(), reference);
+        }
         if instruction.op == Op::Assume {
             let types = &mut module.context.types;
             let (void, i1) = (types.void(), types.int(1));
@@ -2056,6 +2075,7 @@ pub(crate) fn intrinsic(
     let float = match types.get(from) {
         Type::Float(FloatKind::Float) => "f32",
         Type::Float(FloatKind::Double) => "f64",
+        Type::Float(FloatKind::X86Fp80) => "f80",
         _ => return None,
     };
     let function = match op {
@@ -2157,6 +2177,9 @@ pub const RETURNS_TWICE: &str = "returns_twice";
 
 /// What the language promises holds, LLVM's intrinsic.
 const ASSUME: &str = "llvm.assume";
+/// The runtime routine that places a byte of the PC's low memory on a 64-bit
+/// host.
+const REAL_ADDRESS: &str = "B$REAL";
 
 /// Where a variadic function's variadic arguments start, stored in a list.
 const VA_START: &str = "llvm.va_start.p0";
@@ -2479,6 +2502,7 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             false => function.parameters.iter().enumerate().map(|(at, &one)| (one, b.parameter(at))).collect(),
         };
         let destination = result_destination(tables, function).map(|at| b.parameter(at));
+        b.function.reserve_instructions(function.blocks.iter().map(|one| one.instructions.len() + 1).sum());
         Ok(Self {
             b,
             tables,
@@ -3533,14 +3557,25 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 let Type::Pointer(space) = *self.b.context.types.get(ty) else {
                     return Err("a concat that is no pointer".to_owned());
                 };
-                let bits = self.tables.layout.pointer(space).bits;
-                let wide = self.b.context.types.int(bits);
+                let pointer_bits = self.tables.layout.pointer(space).bits;
+                let wide = self.b.context.types.int(pointer_bits);
                 let selector = self.convert(selector, false, wide)?;
-                let four = self.b.int(bits, 4);
+                let four = self.b.int(pointer_bits, 4);
                 let paragraph = self.b.binary(BinaryOp::Shl, selector, four, Flags::default(), "");
                 let offset = self.convert(offset, false, wide)?;
                 let address = self.b.binary(BinaryOp::Add, paragraph, offset, Flags::default(), "");
-                let result = self.b.cast(CastOp::IntToPtr, address, ty, "");
+                // A host has no memory at the PC's low addresses: the
+                // runtime gives the place of the byte `address` in its image
+                // of them.
+                let result = if self.tables.hosted {
+                    let callee = Value::Constant(
+                        *self.tables.callees.get(REAL_ADDRESS).ok_or_else(|| format!("@{REAL_ADDRESS} undeclared"))?,
+                    );
+                    let function = function_type(&mut self.b.context.types, ty, vec![wide]);
+                    self.b.call(function, callee, &[address], "").expect("an address")
+                } else {
+                    self.b.cast(CastOp::IntToPtr, address, ty, "")
+                };
                 self.define(instruction, result);
             }
             Op::Concat => {
@@ -3565,6 +3600,21 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                     _ => return Err(format!("{op} by a variable fraction")),
                 };
                 let ty = self.b.type_of(a);
+                if op == Op::FixedDiv && self.b.context.types.int_bits(ty) == Some(32) {
+                    // A fixed-point `/` truncates toward zero (the language
+                    // spec) and `llvm.sdiv.fix` rounds down: the divide the
+                    // spec states, `(a << fraction) / b` in 64 bits, is
+                    // truncating by itself, where `sdiv.fix` took a floor
+                    // and a correction (115 bytes a divide at m16 -Os).
+                    let wide = self.b.context.types.int(64);
+                    let shift = self.b.int(64, fraction);
+                    let (a, b) = (self.b.cast(CastOp::SExt, a, wide, ""), self.b.cast(CastOp::SExt, b, wide, ""));
+                    let scaled = self.b.binary(BinaryOp::Shl, a, shift, Flags::default(), "");
+                    let quotient = self.b.binary(BinaryOp::SDiv, scaled, b, Flags::default(), "");
+                    let result = self.b.cast(CastOp::Trunc, quotient, ty, "");
+                    self.define(instruction, result);
+                    return Ok(());
+                }
                 let (name, parameters) =
                     fixed(&mut self.b.context.types, op, ty).ok_or("fixed point of a non-integer")?;
                 let callee =

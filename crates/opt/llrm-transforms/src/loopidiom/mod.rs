@@ -10,8 +10,7 @@
 //! ScalarEvolution does.
 //!
 //! # Deviations
-//! - D9 (temporary, [#2313](https://github.com/ali-mosavian/llrm/issues/2313)):
-//!   no CRC loops (`HashRecognize`, `optimizeCRCLoop*`).
+//! - D9a: CRC loops are the table strategy only; see [`crc`].
 //! - D10: see [`process`].
 //! Absent in MIR, so skipped (facts, not choices):
 //! - Atomics: a store or load is simple and unordered unless `volatile`, so
@@ -52,6 +51,17 @@ pub struct Options {
     pub use_lir_code_size_heurs: bool,
     /// `loop-idiom-force-memset-pattern-intrinsic`.
     pub force_memset_pattern_intrinsic: bool,
+    /// `loop-idiom-crc-strategy`.
+    pub crc_strategy: CrcStrategy,
+}
+
+/// `CRCStrategyKind`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CrcStrategy {
+    Disable,
+    Auto,
+    Table,
+    Clmul,
 }
 
 impl Default for Options {
@@ -63,6 +73,7 @@ impl Default for Options {
             disable_hash_recognize: false,
             use_lir_code_size_heurs: true,
             force_memset_pattern_intrinsic: false,
+            crc_strategy: CrcStrategy::Auto,
         }
     }
 }
@@ -95,7 +106,14 @@ pub struct LoopIdiomRecognize {
     library: Library,
     /// The routines the compile states the program links (`strlen`).
     pub routines: Vec<llrm_mir::libfunc::Routine>,
+    /// The compile is -Os or -Oz: the pipeline's stand-in for the `optsize`
+    /// attribute clang puts on every function there. Read by the CRC table
+    /// only; the stores keep their own reading of the attribute.
+    pub for_size: bool,
     apply_code_size_heuristics: bool,
+    /// The function being run has `"no-builtins"`: the pin's TLI then states
+    /// every library function unavailable (`libcall`).
+    no_builtins: bool,
     has_memset: bool,
     has_memset_pattern: bool,
     has_memcpy: bool,
@@ -154,6 +172,16 @@ pub fn get_mem_set_pattern_value(
 }
 
 impl LoopIdiomRecognize {
+    /// The pin's per-function `TargetLibraryInfo::has`: a library function
+    /// the target states (`stated`) is unavailable in a function with
+    /// `"no-builtins"`. Every idiom that forms a libcall asks here.
+    pub(crate) fn libcall(
+        &self,
+        stated: bool,
+    ) -> bool {
+        stated && !self.no_builtins
+    }
+
     pub fn new(
         options: Options,
         library: Library,
@@ -162,7 +190,9 @@ impl LoopIdiomRecognize {
             options,
             library,
             routines: Vec::new(),
+            for_size: false,
             apply_code_size_heuristics: false,
+            no_builtins: false,
             has_memset: library.memset,
             has_memset_pattern: library.memset_pattern16,
             has_memcpy: library.memcpy,
@@ -494,10 +524,14 @@ fn push(
 }
 
 pub mod build;
+pub mod crc;
 pub mod driver;
+pub mod hashrecognize;
 pub mod pass;
 pub mod process;
 pub mod strlen;
 
+#[cfg(test)]
+mod crc_tests;
 #[cfg(test)]
 mod tests;

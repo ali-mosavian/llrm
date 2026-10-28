@@ -158,6 +158,7 @@ use llrm_mir::footprint::Footprint;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_support::hash::HashMap;
 
 use crate::edges;
 
@@ -354,6 +355,64 @@ fn place_carefully(
     function.move_block_after(new, *after).expect("placed blocks");
 }
 
+thread_local! {
+    static PARENT_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The blocks looked at to find the loops' parents on this thread: a test
+/// bounds it by the size of the function.
+pub fn parent_probes() -> usize {
+    PARENT_PROBES.with(std::cell::Cell::get)
+}
+
+/// The headers in the order `simplifyLoop` works through them: the top-level
+/// loops in `LoopInfo`'s order (reverse program order, program order being
+/// the header's place in reverse postorder), and in each nest its loops from
+/// the back of a breadth-first list, so the deepest and latest first.
+fn visit_order(
+    function: &Function,
+    loops: &[loops::Loop],
+) -> Vec<i64> {
+    let Some(entry) = function.entry() else { return Vec::new() };
+    let program: Vec<i64> = loops::reverse_postorder(&cfg::graph(function), cfg::id(entry));
+    let places: HashMap<i64, usize> = program.iter().enumerate().map(|(at, &block)| (block, at)).collect();
+    let place = |header: i64| places.get(&header).copied().unwrap_or(usize::MAX);
+    // A loop's parent is the smallest other loop holding its header: the
+    // loops from the largest down each claim their blocks, so the owner of a
+    // header when its loop comes up is its parent.
+    let mut by_size: Vec<&loops::Loop> = loops.iter().collect();
+    by_size.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
+    let mut owner: HashMap<i64, i64> = Default::default();
+    let mut parents: HashMap<i64, Option<i64>> = Default::default();
+    for loop_ in by_size {
+        parents.insert(loop_.header, owner.get(&loop_.header).copied());
+        for &block in &loop_.body {
+            PARENT_PROBES.with(|one| one.set(one.get() + 1));
+            owner.insert(block, loop_.header);
+        }
+    }
+    let mut children: std::collections::BTreeMap<Option<i64>, Vec<i64>> = Default::default();
+    for loop_ in loops {
+        children.entry(parents[&loop_.header]).or_default().push(loop_.header);
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_by_key(|&header| place(header));
+    }
+    let mut order = Vec::new();
+    let tops = children.get(&None).cloned().unwrap_or_default();
+    for &top in tops.iter().rev() {
+        let mut worklist = vec![top];
+        let mut at = 0;
+        while at < worklist.len() {
+            let own = children.get(&Some(worklist[at])).cloned().unwrap_or_default();
+            worklist.extend(own);
+            at += 1;
+        }
+        order.extend(worklist.into_iter().rev());
+    }
+    order
+}
+
 /// Whether any loop changed.
 pub fn simplified(function: &mut Function) -> bool {
     let shape = cfg::Shape::of(function);
@@ -369,12 +428,12 @@ fn _simplified(
     // nothing is grouped whether the body is irreducible or not.
     if function.entry().is_none()
         || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_))
-        || !shape.dominance.irreducible(function).is_empty()
+        || shape.dominance.is_irreducible(function)
     {
         return false;
     }
     let mut changed = false;
-    let headers = shape.loops.iter().map(|loop_| loop_.header).collect::<Vec<_>>();
+    let headers = visit_order(function, &shape.loops);
     for header in headers {
         let original = shape.loops.iter().find(|loop_| loop_.header == header).expect("StopIteration").clone();
         // A loop that is already in the form has nothing to group.

@@ -1,5 +1,6 @@
 //! Tests of the QB frontend, the stage dump and the command line. The cases
-//! that need no frontend are in `crates/backend/llrm-core/src/hir/test_hir.rs`.
+//! that need no frontend are in
+//! `crates/codegen/llrm-codegen/src/hir/test_hir.rs`.
 //!
 //! Sources are compiled by qbfront, linked in, exactly as the driver does.
 
@@ -7,9 +8,9 @@
 
 use std::path::{Path, PathBuf};
 
-use llrm_core::backend::masm;
-use llrm_core::hir::model::Program;
-use llrm_core::objectfile::omf;
+use llrm_codegen::backend::masm;
+use llrm_codegen::hir::model::Program;
+use llrm_codegen::objectfile::omf;
 
 use super::compile::{self as qb_compile, CompileError};
 use super::driver as qb_driver;
@@ -56,8 +57,8 @@ pub(super) fn fixture(name: &str) -> PathBuf {
     root().join("crates/frontends/qb/fixtures").join(name)
 }
 
-fn codegen() -> llrm_core::driver::Options {
-    llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+fn codegen() -> llrm_codegen::driver::Options {
+    llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
 }
 
 /// `qb_compile.assembled(program)`.
@@ -87,8 +88,8 @@ pub(super) fn listing_calls_kept(program: &Program) -> String {
 
 /// The module's MIR as the front end emits it, as text.
 pub(super) fn emitted_mir(program: &Program) -> String {
-    let options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
-    let (mir, _) = llrm_core::driver::emitted(program, &options).expect("emits");
+    let options = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
+    let (mir, _) = llrm_codegen::driver::emitted(program, &options).expect("emits");
     llrm_mir::print::module(&mir.modules[0])
 }
 
@@ -102,10 +103,10 @@ pub(super) fn optimized_mir_inlining(
     program: &Program,
     inline: llrm_transforms::inline::Threshold,
 ) -> String {
-    let mut options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let mut options = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     options.pipeline.inline = inline;
-    let (mut mir, _) = llrm_core::driver::emitted(program, &options).expect("emits");
-    llrm_core::driver::optimized(&mut mir, &options).expect("optimizes");
+    let (mut mir, _) = llrm_codegen::driver::emitted(program, &options).expect("emits");
+    llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");
     llrm_mir::print::module(&mir.modules[0])
 }
 

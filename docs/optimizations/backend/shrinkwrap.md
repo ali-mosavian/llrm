@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/shrinkwrap.rs sha256:dbb07dba7fb3c8f752c922bd12136f3b51c338f84fdc7b0941b092b37ae1e904 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:3014d7772f33bc2aa20bfd16ad320a3eabafc0e6ce9eeaae0d0ed2f4c64ea053 -->
 
 # shrinkwrap
 
@@ -16,7 +16,9 @@ which blocks use the frame or a kept register and lays the result out for
 `masm`.
 
 A path that never reaches Save pays nothing: no push, no frame, a bare
-`ret`. There is one epilogue, so no return is copied to give a path its own.
+`ret`. A path that falls into a return the early paths share takes its
+registers back at its own end, before the jump or where it falls in
+(`tryToSplitRestore`'s split block, without the block).
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -39,8 +41,10 @@ flowchart TB
 
 A wrap is refused where the placement cannot be used as it is:
 
-- The Restore does not end in a return (the epilogue would sit before a
-  jump).
+- The Restore does not end in a return and does not leave by one jump (the
+  epilogue would sit before a branch that reads the flags).
+- The Restore is split, and a block that takes it back does not jump to it
+  or fall into it with no branch of its own to it.
 - Some block the Save reaches is also reached around it, for the frame and
   wherever the stack pointer addresses the frame cells, so a block would be
   entered at two stack depths.
@@ -93,8 +97,18 @@ Registers are not wrapped in an interrupt handler or a runtime entry frame.
 There is no level switch beyond that.
 
 DEVIATE 1: LLVM's `postShrinkWrapping` splits the restore block so that the
-paths that need nothing skip it; masm makes no new block, so a placement
-that asks for the split is refused (`saverestore`'s DEVIATE 2).
+paths that need nothing skip it; masm makes no new block. The epilogue goes
+at the end of each block that was to get the split block: before its jump to
+the restore, or where it falls into it. A block that reaches the restore any
+other way refuses the placement (`saverestore`'s DEVIATE 2).
+
+DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
+epilogue on an edge, or that does not end in a return, is refused; the
+registers stay saved at the entry. The pin wraps those and duplicates the
+`ret` into each early exit, which costs a byte per exit, and the branch that
+skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
+smaller). Exit: the placement is made as the pin does once jumps are sized
+after the epilogue is placed.
 
 ## See also
 LLVM's

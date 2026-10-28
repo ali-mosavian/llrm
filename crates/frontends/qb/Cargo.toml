@@ -4,19 +4,16 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 description = "The QuickBASIC-family source frontend"
-default-run = "qbfront"
 
 [lib]
 name = "llrm_qb"
 
-[[bin]]
-name = "qbfront"
-path = "src/bin/qbfront.rs"
-
 [dependencies]
 llrm-support = { workspace = true }
-llrm-core = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-driver = { workspace = true }
+llrm-target = { workspace = true }
+llrm-arm64 = { workspace = true }
 llrm-hir = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-mir = { workspace = true }
@@ -37,4 +34,4 @@ llrm-x86-m16 = { workspace = true }
 llrm-object = { workspace = true }
 regex = { workspace = true }
 llrm-analysis = { workspace = true }
-llrm-core = { workspace = true, features = ["testing"] }
+llrm-codegen = { workspace = true, features = ["testing"] }

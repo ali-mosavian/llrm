@@ -126,6 +126,11 @@ impl RegId {
     pub fn is_st(self) -> bool {
         self.iced().is_st()
     }
+
+    #[inline]
+    pub fn is_xmm(self) -> bool {
+        self.iced().is_xmm()
+    }
 }
 
 impl From<Register> for RegId {
@@ -254,6 +259,8 @@ pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 /// and all of them.
 pub struct Cache {
     integers: [std::sync::OnceLock<Vec<RegId>>; 4],
+    xmm_bytes: std::sync::OnceLock<u32>,
+    rfp: std::sync::OnceLock<Vec<RegId>>,
 }
 
 impl Cache {
@@ -265,6 +272,8 @@ impl Cache {
                 std::sync::OnceLock::new(),
                 std::sync::OnceLock::new(),
             ],
+            xmm_bytes: std::sync::OnceLock::new(),
+            rfp: std::sync::OnceLock::new(),
         }
     }
 }
@@ -284,6 +293,9 @@ pub struct Info {
     pub loads: &'static [(RegId, &'static str)],
     /// The registers a pass may borrow for a moment, most preferred first.
     pub scratch: &'static [RegId],
+    /// The 8-bit registers in allocation order, the high bytes among them
+    /// (the GR8 class); empty where the target has none.
+    pub bytes: &'static [RegId],
     /// The segment register each address space of a pair kind means, where the
     /// target has segments: what an access without a prefix reads, the stack's,
     /// the code's, and the one a far pointer's selector is loaded into.
@@ -543,6 +555,18 @@ impl Info {
             )
     }
 
+    /// The registers of the RFP class (FP0..FP6, the x87 registers greedy
+    /// allocates), by iced's number: the order they are allocated in.
+    pub fn rfp_registers(&self) -> &[RegId] {
+        self.cache.rfp.get_or_init(|| {
+            let mut found: Vec<RegId> =
+                self.entries().filter(|(_, one)| one.classes & class::RFP != 0).map(|(register, _)| register).collect();
+            found.sort_by_key(|one| one.index());
+            found.dedup();
+            found
+        })
+    }
+
     /// Every integer register (the 8, 16 and 32-bit views), wide ones first,
     /// each width by iced's number: the order the allocator's tables have
     /// always been walked in.
@@ -560,9 +584,25 @@ impl Info {
         self.view(self.root(register), bytes as u32 * 8).unwrap_or(register)
     }
 
+    /// The 8-bit allocation order (`@bytes`), empty where the target has none.
+    pub fn byte_order(&self) -> &'static [RegId] {
+        self.bytes
+    }
+
     /// The segment registers, by iced's number.
     pub fn segments(&self) -> impl Iterator<Item = RegId> + '_ {
         self.entries().filter(|(_, one)| one.classes & class::SEGMENT != 0).map(|(id, _)| id)
+    }
+
+    /// The bytes of the target's SSE registers, 0 where it has none: a value
+    /// that wide is held in one.
+    pub fn xmm_bytes(&self) -> u32 {
+        *self
+            .cache
+            .xmm_bytes
+            .get_or_init(
+                || self.entries().find(|(_, one)| one.classes & class::XMM != 0).map_or(0, |(_, one)| one.bits / 8),
+            )
     }
 
     /// How wide this register is, or None where the target does not say: a
@@ -579,7 +619,7 @@ impl Info {
         &self,
         register: RegId,
     ) -> bool {
-        self.integer(register) || self.is_segment(register)
+        self.integer(register) || self.is_segment(register) || self.in_class(register, class::XMM)
     }
 
     /// The entries in iced's number order, with their registers.

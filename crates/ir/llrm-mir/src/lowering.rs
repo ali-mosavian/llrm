@@ -87,6 +87,18 @@ pub trait Lowering {
         false
     }
 
+    /// `TargetTransformInfo::hasDivRemOp(iN, IsSigned)`: whether the target
+    /// has one divide that makes the quotient and the remainder
+    /// (`isOperationLegal(SDIVREM/UDIVREM)`). The base class has none.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        signed: bool,
+    ) -> bool {
+        let _ = (bits, signed);
+        false
+    }
+
     /// `enableExtLdPromotion` (TargetLowering.h#L977): whether CodeGenPrepare
     /// may promote the operands of an extension towards the load that feeds
     /// them. The base class says no.
@@ -185,6 +197,16 @@ pub trait Lowering {
     /// yes (X86ISelLowering.cpp L3805).
     fn prefer_zero_compare_branch(&self) -> bool {
         false
+    }
+
+    /// `getPreferredSwitchConditionType`, in bits: the width a switch on an
+    /// integer of `bits` is widened to (`optimizeSwitchType`). The base class
+    /// keeps the type.
+    fn preferred_switch_condition_bits(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        bits
     }
 
     /// `isMultiStoresCheaperThanBitsMerge(EVT, EVT)` (TargetLowering.h):

@@ -1,7 +1,7 @@
 # Crates
 
 Every crate in the workspace, by pipeline stage, and which depends on which. For contributors finding where code
-lives; [source layout](../architecture/source-layout.md) says what sits inside `llrm-core`.
+lives; [source layout](../architecture/source-layout.md) says what sits inside `llrm-codegen`.
 
 ## Layering
 
@@ -22,7 +22,7 @@ flowchart LR
   hir["<b>HIR</b>"]:::mid
   mir["<b>MIR</b>"]:::mid
   opt["<b>optimizer</b><br/><small>llrm-transforms</small>"]:::opt
-  be["<b>backend</b><br/><small>llrm-core</small>"]:::out
+  be["<b>backend</b><br/><small>llrm-codegen</small>"]:::out
   obj["<b>object</b><br/><small>llrm-omf, ...</small>"]:::data
   src --> fe
   fe --> hir
@@ -60,11 +60,10 @@ flowchart TB
     x86["<b>llrm-x86</b>"]:::mid
   end
   subgraph g_bcg["BC ROUTE"]
-    bc["<b>llrm-x86-bc</b>"]:::data
-    bcm["<b>llrm-x86-bcmachine</b>"]:::data
+    bc["<b>llrm-bcobj</b>"]:::data
     qbrt["<b>llrm-qbruntime</b>"]:::data
   end
-  core["<b>llrm-core</b>"]:::out
+  core["<b>llrm-codegen</b>"]:::out
   qb --> drv
   c --> drv
   nib --> drv
@@ -76,8 +75,7 @@ flowchart TB
   m16 --> x86
   m32 --> x86
   bc --> m16
-  bc --> bcm
-  bcm --> qbrt
+  bc --> qbrt
   style g_fe fill:#2563eb12,stroke:#2563eb,stroke-width:1.6px,stroke-dasharray:7 5,color:#2563eb
   style g_tg fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
   style g_bcg fill:#7c3aed12,stroke:#7c3aed,stroke-width:1.6px,stroke-dasharray:7 5,color:#7c3aed
@@ -93,7 +91,7 @@ flowchart TB
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
-  core["<b>llrm-core</b>"]:::out
+  core["<b>llrm-codegen</b>"]:::out
   tr["<b>llrm-transforms</b>"]:::opt
   an["<b>llrm-analysis</b>"]:::opt
   mir["<b>llrm-mir</b>"]:::mid
@@ -101,12 +99,11 @@ flowchart TB
   tgt["<b>llrm-target</b>"]:::mid
   lir["<b>llrm-lir</b>"]:::mid
   x86["<b>llrm-x86</b>"]:::mid
-  bcm["<b>llrm-x86-bcmachine</b>"]:::data
+  bcm["<b>llrm-bcobj</b>"]:::data
   qbrt["<b>llrm-qbruntime</b>"]:::data
   sup["<b>llrm-support</b>"]:::mid
   core --> tr
   core --> x86
-  core --> bcm
   tr --> an
   an --> mir
   an --> sup
@@ -119,7 +116,7 @@ flowchart TB
   lir --> sup
 ```
 
-*llrm-core and the representations*
+*llrm-codegen and the representations*
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -128,7 +125,7 @@ flowchart TB
   classDef out fill:#16a34a,stroke:#166534,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   classDef data fill:#7c3aed,stroke:#5b21b6,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
   linkStyle default stroke:#64748b,stroke-width:2.2px
-  core["<b>llrm-core</b>"]:::out
+  core["<b>llrm-codegen</b>"]:::out
   lir["<b>llrm-lir</b>"]:::mid
   omf["<b>llrm-omf</b>"]:::data
   dwarf["<b>llrm-dwarf</b>"]:::mid
@@ -160,9 +157,9 @@ flowchart TB
 
 *Object writers*
 
-`llrm-core` names no `llrm-x86-m*` crate among its dependencies (`tests/core_depends_on_no_target.rs`). A target
+`llrm-codegen` names no `llrm-x86-m*` crate among its dependencies (`tests/core_depends_on_no_target.rs`). A target
 reaches it only through `llrm-driver`, which is why `llrm-x86-m16-select` and `llrm-x86-m32-select`, written against
-`llrm-core`, are separate crates beside their targets.
+`llrm-codegen`, are separate crates beside their targets.
 
 ## Foundations
 
@@ -196,7 +193,7 @@ reaches it only through `llrm-driver`, which is why `llrm-x86-m16-select` and `l
 | `llrm-x86` | What every x86 target shares: the instruction forms |
 | `llrm-x86-m16` | The 16-bit x86 target: instruction costs and the machine description |
 | `llrm-x86-m32` | The flat 32-bit x86 target: its descriptions and its platform |
-| `llrm-x86-m16-select`, `llrm-x86-m32-select` | Each target's instruction selector, peephole rules and effect rows, generated from its definition directory and written against `llrm-core` |
+| `llrm-x86-m16-select`, `llrm-x86-m32-select` | Each target's instruction selector, peephole rules and effect rows, generated from its definition directory and written against `llrm-codegen` |
 | `llrm-iselgen` | Build-time generator: instruction-selection patterns to a decision automaton and an emitter per pattern |
 | `llrm-peepgen` | Build-time generator: peephole rules and the instruction table to a decision-automaton matcher |
 
@@ -206,7 +203,7 @@ See [targets](../machine/targets.md) for adding one.
 
 | Crate | Purpose |
 |---|---|
-| `llrm-core` | The compile driver, HIR to MIR emission, instruction selection, the machine phases (allocation, peephole, scheduling, jump layout), object writing and the HIR interpreter |
+| `llrm-codegen` | The compile driver, HIR to MIR emission, instruction selection, the machine phases (allocation, peephole, scheduling, jump layout), object writing and the HIR interpreter |
 | `llrm-driver` | The one place that names targets: `-m16` and `-m32` pick one |
 
 ## Object formats
@@ -237,13 +234,12 @@ See [the object model](../formats/object-model.md).
 
 | Crate | Purpose |
 |---|---|
-| `llrm-x86-bcmachine` | The machine layer for BC objects: x86 decode into machine IR, blocks, extents, stack facts and per-site runtime contracts |
-| `llrm-x86-bc` | The BC object frontend: machine code raised onto MIR |
+| `llrm-bcobj` | The BC object frontend: x86 decode into machine IR, blocks, extents, stack facts, per-site runtime contracts, and the lift of a BC object onto MIR |
 | `llrm-bcdriver` | `llrm-omf`'s driver: BC objects raised, optimized, selected and written afresh |
 
 See [BC objects](../frontends/bc.md).
 
 ## The workspace root
 
-`llrm` (`src/bin`) holds the eight programs and depends on `llrm-core`, `llrm-mir`, `llrm-bcdriver`, `llrm-nib`,
+`llrm` (`src/bin`) holds the eight programs and depends on `llrm-codegen`, `llrm-mir`, `llrm-bcdriver`, `llrm-nib`,
 `llrm-qb` and `llrm-c`.

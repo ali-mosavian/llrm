@@ -32,13 +32,13 @@ def test_a_range_of_merges_that_touch_no_tier_path_runs_nothing(monkeypatch):
 
 
 def test_the_paths_are_code_of_the_allocator_coalescer_liveness_selector_peephole_and_frame():
-    assert b.touches(["crates/backend/llrm-core/src/backend/coalesce.rs"])
-    assert b.touches(["crates/backend/llrm-core/src/liveness/liverangecalc.rs", "docs/x.md"])
+    assert b.touches(["crates/codegen/llrm-codegen/src/backend/coalesce.rs"])
+    assert b.touches(["crates/codegen/llrm-codegen/src/liveness/liverangecalc.rs", "docs/x.md"])
     assert b.touches(["crates/target/llrm-x86/src/isel/peephole.peep"]), "a peephole rule changes the code"
     # #4146 changed these and no earlier path rule named either: the tier skipped it
-    assert b.touches(["crates/backend/llrm-core/src/backend/machinesched.rs", "crates/backend/llrm-core/src/flow.rs"])
-    assert not b.touches(["docs/working/regalloc-plan.md", "crates/backend/llrm-core/src/backend/coalesce_tests.rs", "tools/parity_squash.py"])
-    assert not b.touches(["crates/backend/llrm-core/src/backend/selectiondag/emit.rs"]), "the DAG path is not the default compile"
+    assert b.touches(["crates/codegen/llrm-codegen/src/backend/machinesched.rs", "crates/codegen/llrm-codegen/src/flow.rs"])
+    assert not b.touches(["docs/working/regalloc-plan.md", "crates/codegen/llrm-codegen/src/backend/coalesce_tests.rs", "tools/parity_squash.py"])
+    assert not b.touches(["crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs"]), "the DAG path is not the default compile"
 
 
 def test_the_red_programs_are_read_from_run_tests_output():
@@ -51,19 +51,59 @@ def test_a_batch_with_4146s_files_is_refused_and_a_docs_batch_builds_nothing():
     import parity_squash as ps
 
     built = []
-    red = ps.pre_merge_behavioural(["crates/backend/llrm-core/src/backend/machinesched.rs", "crates/backend/llrm-core/src/flow.rs"], build=lambda: built.append(1), run=lambda: RED)
+    red = ps.pre_merge_behavioural(["crates/codegen/llrm-codegen/src/backend/machinesched.rs", "crates/codegen/llrm-codegen/src/flow.rs"], build=lambda: built.append(1), run=lambda: RED)
     assert red == ["regparm3_matrix_22", "regparm3_matrix_31", "regparm3_matrix_4"] and built
     built.clear()
-    assert ps.pre_merge_behavioural(["docs/working/x.md", "crates/backend/llrm-core/src/backend/selectiondag/emit.rs"], build=lambda: built.append(1), run=lambda: RED) == [] and not built
+    assert ps.pre_merge_behavioural(["docs/working/x.md", "crates/codegen/llrm-codegen/src/backend/selectiondag/emit.rs"], build=lambda: built.append(1), run=lambda: RED) == [] and not built
 
 
 def test_the_offender_is_the_one_backend_pr_or_the_one_that_is_red_alone():
     import parity_squash as ps
 
-    files = {"4146": ["crates/backend/llrm-core/src/backend/machinesched.rs"], "4170": ["docs/a.md"], "4171": ["crates/backend/llrm-core/src/backend/coalesce.rs"]}
+    files = {"4146": ["crates/codegen/llrm-codegen/src/backend/machinesched.rs"], "4170": ["docs/a.md"], "4171": ["crates/codegen/llrm-codegen/src/backend/coalesce.rs"]}
     probed = []
     assert ps.behavioural_culprits(["4146", "4170"], files.__getitem__, lambda n: probed.append(n) or True) == ["4146"] and not probed, "one backend PR: it is the offender, no build"
     assert ps.behavioural_culprits(["4146", "4170", "4171"], files.__getitem__, lambda n: n == "4146") == ["4146"], "two backend PRs: each merged alone and asked"
+
+
+def test_a_red_among_many_backend_prs_is_found_by_halving_not_one_by_one():
+    """The 23:53 batch tested its backend members alone at ~2 min each; a 48-PR batch would take 48 runs. Halving finds the one red member in about 2 log2(n)."""
+    import parity_squash as ps
+
+    members = [str(n) for n in range(5000, 5048)]
+    files = {n: ["crates/codegen/llrm-codegen/src/backend/machinesched.rs"] for n in members}
+    asked = []
+    alone = []
+
+    def red_with(subset):
+        asked.append(len(subset))
+        return "5031" in subset
+
+    assert ps.behavioural_culprits(members, files.__getitem__, lambda n: alone.append(n) or False, red_with) == ["5031"]
+    assert len(asked) <= 2 * 6 + 1 and not alone, "about 2 log2(48) runs, no alone runs"
+
+
+def test_halving_that_finds_no_red_half_falls_back_to_alone():
+    import parity_squash as ps
+
+    files = {"1": ["crates/codegen/llrm-codegen/src/backend/a.rs"], "2": ["crates/codegen/llrm-codegen/src/backend/b.rs"]}
+    assert ps.behavioural_culprits(["1", "2"], files.__getitem__, lambda n: n == "2", lambda subset: False) == ["2"], "an interaction: no subset is red, each is asked alone"
+
+
+def test_a_red_integration_test_among_28_members_is_found_in_a_dozen_runs_not_28():
+    """The 00:34 batch named #5563 for target_facts after 21 minutes of serial alone runs (28 members, ~45 s each); halving names it in about 2 log2(28) runs."""
+    import parity_squash as ps
+
+    members = [str(n) for n in range(5500, 5528)]
+    asked = []
+    alone = []
+
+    def red_with(subset):
+        asked.append(len(subset))
+        return "5507" in subset
+
+    assert ps.red_members(members, red_with, lambda n: alone.append(n) or False) == ["5507"]
+    assert len(asked) <= 2 * 5 + 1 and not alone, asked
 
 
 # What run_tests.py printed for PROGRAMS on the tree of #4146 (a1d904596), 2026-10-24: 10 of 68 configurations, the 10 the 01:00 sweep counted (1004/1014).

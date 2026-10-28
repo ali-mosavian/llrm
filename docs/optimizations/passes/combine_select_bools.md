@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_bools.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_bools.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_bools.rs sha256:9541bdedfc896808dba8464e696c39a099de1bc4618a2ad9b7d868dad63213b1 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_bools.rs sha256:b36be05a98d677dc14126e3c5138f81dbc2029af286674f2d3ea90a44b18f6c1 -->
 
 # combine_select_bools
 
@@ -31,3 +31,6 @@ DEVIATE 3: `prof` branch weights are dropped where the arms swap.
 ```text
 %r = select i1 %a, i1 true, i1 %b        %r = or i1 %a, %b       ; %b is poison only if %a is
 ```
+
+## Used by
+Named by `combine_visit_select`.

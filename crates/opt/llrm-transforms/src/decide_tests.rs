@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/transform_tests.rs` (`d_tests`), each
+//! Adapted from llrm-codegen's `optimize/transform_tests.rs` (`d_tests`), each
 //! body now MIR text run by llrm-mir's interpreter.
 
 use llrm_analysis::testing::{DOS, layout};
@@ -831,4 +831,73 @@ b3:
     let found = super::loop_form_blocks(function, Some(loops));
     assert_eq!(llrm_analysis::cfg::graphs_built() - before, 0, "the whole graph was built");
     assert_eq!(found.into_iter().collect::<Vec<_>>(), [0, 2]);
+}
+
+/// Every nested loop's `Around::exits` read the successors of its whole body
+/// again (d_faces -O2: 188 loops, 1.5 M Ir). The blocks round the loops are
+/// the ones `exits`-based reading finds, with no exit scan at all.
+#[test]
+fn test_the_loop_form_blocks_of_nested_loops_need_no_exit_scan() {
+    use llrm_analysis::cfg::{Around, predecessors_of, successors_of};
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "define void @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %c = icmp slt i16 %n, 0
+  br i1 %c, label %b2, label %b7
+
+b2:
+  br label %b3
+
+b3:
+  %d = icmp slt i16 %n, 5
+  br i1 %d, label %b4, label %b5
+
+b4:
+  br label %b3
+
+b5:
+  %e = icmp slt i16 %n, 9
+  br i1 %e, label %b6, label %b1
+
+b6:
+  br label %b7
+
+b7:
+  ret void
+}
+",
+    );
+    let (_, function) = module.function_mut("f").expect("@f");
+    let function = &*function;
+    let reference = {
+        let mut edges = std::collections::BTreeSet::new();
+        for loop_ in llrm_analysis::cfg::loops_of(function) {
+            edges.extend(loop_.preheader(function));
+            if let Some(&latch) = loop_.latches.iter().next().filter(|_| loop_.latches.len() == 1)
+                && successors_of(function, latch)[..] == [loop_.header]
+            {
+                edges.insert(latch);
+            }
+            for (_, exit) in loop_.exits(function) {
+                let after = successors_of(function, exit);
+                if predecessors_of(function, exit).iter().all(|at| loop_.body.contains(at))
+                    && after.len() == 1
+                    && !loop_.body.contains(&after[0])
+                {
+                    edges.insert(exit);
+                }
+            }
+        }
+        edges
+    };
+    assert!(!reference.is_empty());
+    let loops = llrm_analysis::cfg::loops_of(function);
+    let before = get(Event::LoopExitScans);
+    let found = super::loop_form_blocks(function, Some(loops));
+    assert_eq!(get(Event::LoopExitScans) - before, 0, "an exit scan was made");
+    assert_eq!(found, reference);
 }

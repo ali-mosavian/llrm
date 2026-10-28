@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:b81e883884d21ef78b427cb7534c5e29cbaa69fad1cd4762c8e5afb4081e7011 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:93afc98269ca5a03ea51876d230d17aac59877d14b11aeac01c9d2a691bfc7dd -->
 
 # combine_compares
 
@@ -21,10 +21,17 @@ stays LLVM's. The owed steps, with their exits:
 `foldICmpTruncWithTruncOrExt`,
 `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
-`foldSignBitTest`, `foldOpIntoPhi`, `foldICmpInstWithConstantNotInt`,
+`foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
 `foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
 the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 `dyn_castNegVal` select fold.
+
+OPEN: two shapes the pin's first InstCombine folds and `visit_icmp` leaves,
+the producing fold unidentified (not `foldICmpAndConstConst`,
+`foldICmpWithLowBitMaskedVal`, InstSimplify's and-add or
+`getDemandedBitsLHSMask`; a known-bits or range fold in the icmp visitor is
+the lead). `(a & -4) == C` folds at C = 0 and signmin only
+(`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
 
 DEVIATE 1 (permanent): `samesign` is not a flag of MIR's `icmp`; the folds
 that read or set it are left out (the unsigned-to-`samesign` step of

@@ -538,20 +538,16 @@ fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    // `llvm.sdiv.fix` rounds toward negative infinity and a fixed-point `/`
-    // truncates toward zero: a negative inexact quotient (`q * b != a << 16`)
-    // gets one added back.
+    // A fixed-point `/` truncates toward zero and `llvm.sdiv.fix` rounds down:
+    // the 32-bit divide is the spec's `(a << 16) / b` in 64 bits, which
+    // truncates by itself.
     let body = "  %2 = call i32 @llvm.smul.fix.i32(i32 %0, i32 %1, i32 16)
-  %3 = call i32 @llvm.sdiv.fix.i32(i32 %2, i32 %1, i32 16)
-  %4 = xor i32 %2, %1
-  %5 = icmp slt i32 %4, 0
-  %6 = shl i32 %2, 16
-  %7 = mul i32 %3, %1
-  %8 = icmp ne i32 %6, %7
-  %9 = and i1 %5, %8
-  %10 = zext i1 %9 to i32
-  %11 = add i32 %3, %10
-  ret i32 %11
+  %3 = sext i32 %2 to i64
+  %4 = sext i32 %1 to i64
+  %5 = shl i64 %3, 16
+  %6 = sdiv i64 %5, %4
+  %7 = trunc i64 %6 to i32
+  ret i32 %7
 ";
     assert!(text.contains(body), "{text}");
 }
@@ -2105,4 +2101,20 @@ fn test_names_intrinsic_covers_every_op_that_names_a_callee() {
             }
         }
     }
+}
+
+/// Lowering grew the instruction arena by doubling (capacity 16 for 10
+/// instructions); it asks for the HIR function's count up front.
+#[test]
+fn test_lowering_reserves_the_functions_instructions() {
+    let mut function = difference();
+    let sub =
+        |id, result| Instruction::new(id, Op::Sub, vec![result], vec![Operand::value_ref(1), Operand::value_ref(2)]);
+    function.values.extend((4..=11).map(|id| Value { id, r#type: 1 }));
+    function.blocks[0].instructions.extend((4..=11).map(|id| sub(id, id)));
+    let mut emitted = emit(&program(function)).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let (_, lowered) = emitted.module.function_mut("DIFF%").expect("lowered");
+    assert_eq!(lowered.instruction_count(), 10);
+    assert_eq!(lowered.instruction_capacity(), 10);
 }

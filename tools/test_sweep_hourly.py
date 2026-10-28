@@ -220,3 +220,9 @@ def test_a_sweep_step_runs_under_a_build_slot():
     finally:
         s.subprocess.run = real
     assert Path(seen[0][seen[0].index("python3") - 1]).name == "buildslot" and seen[0][-2:] == ["python3", "step.py"]
+
+
+def test_a_red_unrun_test_target_is_a_red_of_the_sweep():
+    """greedy_inline sat red on parity for a day: the landing gate runs lib tests and scanners only, and no step of the sweep ran tests/*.rs."""
+    reds, count = s.parse_inventory("llrm/greedy_inline: 0.4 s, RED\nllrm/nearcalls: 0.0 s, ok\ninventory: 2 unrun targets run, 1 red\n")
+    assert [red.name for red in reds] == ["unrun:llrm/greedy_inline"] and count == "1/2"

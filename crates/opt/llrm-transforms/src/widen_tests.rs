@@ -46,7 +46,7 @@ fn widened(text: &str) -> String {
     let mut module = parsed(text);
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[40]];
     let before = results(&module, inputs);
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     let after = printed(&module);
     assert_eq!(results(&module, inputs), before, "{after}");
     after
@@ -90,7 +90,7 @@ fn test_a_counter_is_not_widened_past_the_pointer_width_on_the_16_bit_target() {
     let text = clearing("zext", "ult", "0", "nsw").replace("e-p:32:32-n8:16:32", "e-p:16:16-n8:16:32");
     let mut module = parsed(&text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { lftr: true });
+    manager.add(IndVars { lftr: true, size: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi i32"), "{after}");
@@ -163,4 +163,43 @@ b2:
     );
     assert!(!after.contains("phi i16"), "{after}");
     assert!(!after.contains("sext i16"), "{after}");
+}
+
+/// induction32: the narrow increment feeds the phi and the exit test, so the
+/// wide add was cloned for each; LFTR then found no counter and the exit test
+/// stayed `icmp ult i32` beside two identical adds.
+#[test]
+fn test_one_wide_increment_serves_the_phi_and_the_exit_test() {
+    let after = widened(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 zeroext %a) {
+b0:
+  %buf = alloca [64 x i8]
+  %s = add i16 %a, 1
+  %go = icmp ult i16 %s, 4
+  br i1 %go, label %pre, label %b3
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i16 [ %s, %pre ], [ %next, %b1 ]
+  %w = zext nneg i16 %i to i32
+  %p = getelementptr inbounds i8, ptr %buf, i32 %w
+  store i8 1, ptr %p
+  %next = add i16 %i, 1
+  %c = icmp ult i16 %next, 4
+  br i1 %c, label %b1, label %out
+
+out:
+  br label %b3
+
+b3:
+  ret i32 0
+}
+",
+    );
+    assert_eq!(after.matches("add nuw nsw i32").count(), 1, "{after}");
+    assert!(after.contains("icmp ne i16"), "the exit test is replaced: {after}");
 }

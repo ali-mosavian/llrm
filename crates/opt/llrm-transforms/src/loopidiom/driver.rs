@@ -86,14 +86,16 @@ impl LoopIdiomRecognize {
             run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize"))
                 && self.options.use_lir_code_size_heurs;
 
-        self.has_memset = self.library.memset;
+        self.no_builtins =
+            run.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins"));
+        self.has_memset = self.libcall(self.library.memset);
         // TODO (LLVM): Unconditionally enable use of the memset pattern
         // intrinsic (or at least, opt-in via target hook) once we are
         // confident it will never result in worse codegen than without. For
         // now, use it only when the target supports memset_pattern16 libcall
         // (or unless this is overridden by command line option).
-        self.has_memset_pattern = self.library.memset_pattern16;
-        self.has_memcpy = self.library.memcpy;
+        self.has_memset_pattern = self.libcall(self.library.memset_pattern16);
+        self.has_memcpy = self.libcall(self.library.memcpy);
 
         if self.has_memset
             || self.has_memset_pattern
@@ -153,9 +155,20 @@ impl LoopIdiomRecognize {
             made_change |= self.run_on_loop_block(run, block, be_count, &exit_blocks);
         }
 
-        // Attempt to optimize a CRC loop if one is detected by HashRecognize
-        // (D9, temporary, https://github.com/ali-mosavian/llrm/issues/2313:
-        // not translated).
+        // Attempt to optimize a CRC loop if one is detected by HashRecognize.
+        if !self.options.disable_hash_recognize
+            && self.options.crc_strategy != super::CrcStrategy::Disable
+            && let Some(tti) = run.tti
+        {
+            let found = {
+                let cx = cx!(run);
+                super::hashrecognize::recognize_crc(&cx, run.se, run.cur_loop)
+            };
+            if let Ok(info) = found {
+                made_change |= self.optimize_crc_loop(run, &info, tti);
+            }
+        }
+
         made_change
     }
 

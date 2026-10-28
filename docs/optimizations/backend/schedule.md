@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/schedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/schedule.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/schedule.rs sha256:286d3e7242f7d82094cb4874875438ada4feb58655e5eb3826a7d54c32c60b88 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/schedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/schedule.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/schedule.rs sha256:4f9f0fce3d7060dffa3ab92e58f77c9753b871c999eb2f105cb6b521c17a0b9c -->
 
 # schedule
 

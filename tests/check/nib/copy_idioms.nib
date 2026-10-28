@@ -8,13 +8,13 @@
 # CHECK-LABEL: _scroll_up proc
 # CHECK: rep movsd
 # CHECK: _scroll_up endp
+# The pin keeps a word fill and a descending copy as counted loops.
 # CHECK-LABEL: _scroll_down proc
-# CHECK: std
-# CHECK: rep movsd
-# CHECK: cld
+# CHECK-NOT: rep
+# CHECK-NOT: std
 # CHECK: _scroll_down endp
 # CHECK-LABEL: _palette proc
-# CHECK: rep stosw
+# CHECK-NOT: rep
 # CHECK: _palette endp
 # CHECK-LABEL: _smear proc
 # CHECK-NOT: rep
@@ -22,8 +22,10 @@
 # CHECK-LABEL: _changed proc
 # CHECK-NOT: rep
 # CHECK: _changed endp
+# The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b): two string moves.
 # CHECK-LABEL: _two_stores proc
-# CHECK-NOT: rep
+# CHECK: rep stos
+# CHECK: rep movs
 # CHECK: _two_stores endp
 # CHECK-LABEL: _strides proc
 # CHECK-NOT: rep
@@ -77,6 +79,8 @@ fn strides() -> i16:
     return 0
 
 fn main() -> i16:
+    # b is written, or GlobalOpt folds its loads to the zero it starts with
+    b[0] = 7
     let mut x: i16 = copy()
     x = scroll_up()
     x = scroll_down()

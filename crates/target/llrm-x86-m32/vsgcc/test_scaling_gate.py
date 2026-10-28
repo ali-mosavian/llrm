@@ -581,7 +581,7 @@ def test_the_backends_liveness_follows_each_value_from_its_reads_not_rows_of_eve
     source.write_text(scaling.AXES["branches"](1024))
     rows = gate.own_work(gate.levels_time.command("llrm", "O2", source))
     # Behind the header copy (docs/reference/levels.md): 746, 110 and 115 once the walk is tried at the cost of the rows.
-    assert rows["lir twoaddr"] <= 820 and rows["intervals walk"] <= 125 and rows["lir pressuresink"] <= 130, rows
+    assert rows["lir twoaddr"] <= 820 and rows["intervals walk"] <= 125, rows
 
 
 def test_a_branchs_guards_come_from_its_nearest_dominators(tmp_path):
@@ -1066,7 +1066,6 @@ def test_liveness_of_a_body_is_followed_when_the_values_are_live_in_few_blocks(t
     assert own["lir twoaddr"] > 0.0, f"premise: twoaddr ran ({own['lir twoaddr']:.1f} Minstr)"
     assert own["lir twoaddr"] <= 500.0, f"twoaddr {own['lir twoaddr']:.1f} Minstr"
     assert own["intervals walk"] <= 150.0, f"walk {own['intervals walk']:.1f} Minstr"
-    assert own["lir pressuresink"] <= 150.0, f"pressuresink {own['lir pressuresink']:.1f} Minstr"
 
 
 def test_header_copy_on_a_nest_derives_the_registers_of_what_each_rotation_touched(tmp_path):

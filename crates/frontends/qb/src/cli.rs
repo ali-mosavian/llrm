@@ -4,20 +4,20 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
-//! OPTIONS are gcc's, as `llrm_core::driver::flags` takes them;
+//! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
 //! `-fsanitize=bounds,integer-divide-by-zero,signed-integer-overflow` (all
 //! three: `undefined`) are BC's /D checks, and `-g` its /Zi line numbers.
 
 use std::path::PathBuf;
 
-use llrm_core::driver::{
+use llrm_codegen::driver::{
     self as codegen,
     flags::{self, Flags},
 };
-use llrm_core::hir::codec;
+use llrm_codegen::hir::codec;
 
 use super::compile;
 use super::driver::{self, Frontend, parsed};
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -41,6 +41,8 @@ pub(super) struct Arguments {
     /// The target, the built-in DOS unless `--machine` names another, and
     /// the pipeline.
     pub(super) codegen: codegen::Options,
+    /// `--arm64=linux|darwin`: the object is arm64's, from the 64-bit lowering.
+    pub(super) arm64: Option<llrm_arm64::machine::Platform>,
 }
 
 pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
@@ -53,6 +55,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let mut flags = Flags::default();
     flags.float_store = true;
     let (mut dump_hir, mut dump) = (None, None);
+    let mut arm64 = None;
     let mut at = 0;
     while at < argv.len() {
         // The runtime the program calls: the Microsoft ones by their stack ABI,
@@ -100,8 +103,21 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
             "--bc-codeview" => frontend.bc_codeview = true,
+            "--run-time-module" => frontend.run_time_module = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
+            "--arm64" => {
+                arm64 = Some(match value("--arm64")?.as_str() {
+                    "linux" => llrm_arm64::machine::Platform::Linux,
+                    "darwin" => llrm_arm64::machine::Platform::Darwin,
+                    other => {
+                        return Err(format!(
+                            "argument --arm64: invalid choice: '{other}' (choose from 'linux', 'darwin')"
+                        ));
+                    }
+                });
+                flags.take(&["-m64".to_owned()], &mut 0)?;
+            }
             _ if flag.starts_with('-') && flag.len() > 1 => return Err(format!("unrecognized arguments: {argument}")),
             _ if source.is_none() => source = Some(PathBuf::from(argument)),
             _ => return Err(format!("unrecognized arguments: {argument}")),
@@ -123,11 +139,17 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     let width = |space: u32| spaces.unmarked.keys().copied().filter(|bytes| spaces.unmarked(*bytes) == Ok(space)).max();
     frontend.near_bytes = width(spaces.near).map_or(0, |bytes| bytes as usize);
     frontend.far_bytes = width(spaces.far).map_or(frontend.near_bytes, |bytes| bytes as usize);
-    let codegen = llrm_core::driver::Options {
+    let codegen = llrm_codegen::driver::Options {
         spills_extended: true,
         ..bound.options(&flags, flags.machine(&*bound.target, bound.target.machine().with_stack_in_data())?)
     };
-    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen })
+    Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64 })
+}
+
+/// Whether the object format is a host's: an ELF or Mach-O object, whatever
+/// the target or its pointer width. An OMF object, or none, is the PC's.
+fn is_hosted(object_format: &str) -> bool {
+    object_format != "omf" && !object_format.is_empty()
 }
 
 pub fn main(argv: &[String]) -> i32 {
@@ -142,23 +164,45 @@ pub fn main(argv: &[String]) -> i32 {
         if let Some(dump) = &args.dump {
             qbstages::dumped(&args.source, dump, &args.frontend, &args.codegen)?;
         }
-        let mut program = llrm_core::support::debug::timed("frontend", || {
+        let mut program = llrm_codegen::support::debug::timed("frontend", || {
             parsed(&args.source, &args.frontend, args.dump_hir.as_deref())
         })
         .map_err(|error| error.0)?;
+        // A host links the runtime as C: an ELF object calls it by the target's
+        // C family where there is one (x86-32's default is Open
+        // Watcom's registers, which no C compiler for Linux speaks).
+        let mut codegen = args.codegen.clone();
+        if codegen.abi.is_none()
+            && codegen.object_format == "elf"
+            && codegen.arch.calling().chosen(Some("sysv")).is_ok()
+        {
+            codegen.abi = Some("sysv".to_owned());
+        }
+        let args = Arguments { codegen, ..args };
+        // a host (an ELF or Mach-O object) has no memory at the PC's low
+        // addresses: the object format states it, whatever the pointer width
+        program.promises.hosted = is_hosted(&args.codegen.object_format);
         if program.runtime.calls_natively() {
-            driver::natively_called(&mut program, args.codegen.arch.calling().native().cc.as_deref());
+            // the `-mabi=` family's convention, else the target's default
+            let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;
+            driver::natively_called(&mut program, native.cc.as_deref());
         }
         if args.flags.assembly {
             let module = compile::assembled(&program, None, &args.codegen).map_err(|error| error.to_string())?;
             let output = args.flags.output.clone().unwrap_or_else(|| args.source.with_extension("asm"));
-            llrm_core::driver::flags::write_output(&output, llrm_core::driver::basic::text(&module)?)
+            llrm_codegen::driver::flags::write_output(&output, llrm_codegen::driver::basic::text(&module)?)
                 .map_err(|error| error.to_string())?;
+        } else if let (Some(platform), Some(output)) = (args.arm64, &args.flags.output) {
+            let bytes = super::arm64::object_bytes(&program, &args.source, &args.codegen, platform)
+                .map_err(|error| error.to_string())?;
+            llrm_codegen::driver::flags::write_output(output, bytes).map_err(|error| error.to_string())?;
         } else if let Some(output) = &args.flags.output {
             let bytes = compile::object_bytes(&program, &args.source, None, &args.codegen)
                 .map_err(|error| error.to_string())?;
-            llrm_core::support::debug::timed("write output", || llrm_core::driver::flags::write_output(output, bytes))
-                .map_err(|error| error.to_string())?;
+            llrm_codegen::support::debug::timed("write output", || {
+                llrm_codegen::driver::flags::write_output(output, bytes)
+            })
+            .map_err(|error| error.to_string())?;
         } else if args.dump.is_none() {
             print!("{}", codec::encode(&program, None).map_err(|error| error.0)?);
         }
@@ -175,7 +219,16 @@ pub fn main(argv: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args;
+    use super::{is_hosted, parse_args};
+
+    /// `--arm64` and a 64-bit pointer once decided hosting (`arm64.is_none()`,
+    /// `bits == 64`): an arm64 Mach-O object ran the PC-memory path of a
+    /// bare-metal target. The object format decides, and only it.
+    #[test]
+    fn an_elf_or_macho_object_is_hosted_and_an_omf_or_no_object_is_not() {
+        assert!(is_hosted("elf64") && is_hosted("macho") && is_hosted("elf"));
+        assert!(!is_hosted("omf") && !is_hosted(""));
+    }
 
     fn runtime(argv: &[&str]) -> String {
         let argv: Vec<String> = argv.iter().map(|one| one.to_string()).collect();

@@ -2,14 +2,24 @@
 //! its quad spills are then 8-aligned, and a 486 takes 3 clocks more for each
 //! access off it (Intel486 data sheet 240440-002, section 10.1 and Table 2.1).
 
-use std::process::Command;
+mod common;
 
 fn listing(source: &str) -> String {
+    listing_with(source, None)
+}
+
+fn listing_with(
+    source: &str,
+    selector: Option<&str>,
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
-        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-S", "-o", "a.s", "a.c"])
+        // The call to `h` is the premise: inlined (the pin inlines it), `f`
+        // calls nothing that holds a double and needs no pad.
+        .args(selector)
+        .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "-fno-inline-functions", "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -50,19 +60,23 @@ int f(int a) { return g(a) + g(a + 1) + (int)h(a); }
 
 /// Where the module holds a double, a function that calls it is entered with,
 /// and keeps, the stack a multiple of 8: the entry takes it down by a multiple
-/// of 8 (the return address included), and a call with an odd number of
-/// argument words pushes a pad first.
+/// of 8 (the return address included). llrm-cc: the DAG selector stores the
+/// arguments in the area it reserves, as the pin does, so no call pushes a pad.
 #[test]
 fn a_function_that_reaches_a_double_keeps_the_stack_a_multiple_of_8() {
     let text = listing(MODULE);
     assert_eq!(entry_bytes(&text, "_f") % 8, 0, "{text}");
-    assert!(text.contains("pushd 0"), "{text}");
+    assert!(!text.contains("pushd"), "{text}");
 }
 
 /// A module that holds no double pays nothing for it: no pad, no rounding.
 #[test]
 fn a_module_of_integers_pays_nothing_for_it() {
-    let text = listing("extern int g(int);\nint f(int a) { return g(a) + g(a + 1); }\n");
+    // llrm-cc: the old selector allocates no callee-saved register across the
+    // two calls and reserves a frame for the result; the pin and the DAG
+    // selector do not. Gated on the DAG default (#4512), so it runs
+    // `--isel=dag`.
+    let text = listing_with("extern int g(int);\nint f(int a) { return g(a) + g(a + 1); }\n", Some("--isel=dag"));
     assert!(!text.contains("pushd 0"), "{text}");
     assert!(!text.contains("sub esp"), "{text}");
 }

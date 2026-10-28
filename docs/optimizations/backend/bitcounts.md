@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/bitcounts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/bitcounts.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/bitcounts.rs sha256:4ba4312025242689dcc7b2faa098cb54ff943ea458c4a60d3c8f901dedf9a8de -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/bitcounts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/bitcounts.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/bitcounts.rs sha256:50eda30b2186cdd553bfe67514d712b1c5d33e6a00e5f0804e5e57e9620aa802 -->
 
 # bitcounts
 
@@ -44,18 +44,18 @@ After, in the order the instructions are made:
 
 ```mir
 define i8 @f(i8 %x) {
-  %0 = lshr i8 %x, 1
-  %1 = and i8 %0, 85
-  %2 = sub i8 %x, %1
-  %3 = and i8 %2, 51
-  %4 = lshr i8 %2, 2
-  %5 = and i8 %4, 51
-  %6 = add i8 %3, %5
-  %7 = lshr i8 %6, 4
-  %8 = add i8 %6, %7
-  %9 = and i8 %8, 15
+  %1 = lshr i8 %x, 1
+  %2 = and i8 %1, 85
+  %3 = sub i8 %x, %2
+  %4 = and i8 %3, 51
+  %5 = lshr i8 %3, 2
+  %6 = and i8 %5, 51
+  %7 = add i8 %4, %6
+  %8 = lshr i8 %7, 4
+  %9 = add i8 %7, %8
   %10 = and i8 %9, 15
-  ret i8 %10
+  %11 = and i8 %10, 15
+  ret i8 %11
 }
 ```
 

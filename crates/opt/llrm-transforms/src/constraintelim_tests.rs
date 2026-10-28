@@ -1,6 +1,7 @@
 //! `constraint-elimination` on MIR text: what the dominating conditions
 //! decide becomes a constant, and nothing else changes.
 
+use llrm_analysis::testing::m16_ir;
 use llrm_mir::datalayout::DataLayout;
 
 use crate::constraintelim::eliminate_constraints;
@@ -202,4 +203,42 @@ fn the_positions_of_the_instructions_are_not_worked_out_per_check() {
         llrm_mir::counts::get(llrm_mir::counts::Event::Positions) - before
     };
     assert_eq!(positions_for(1), positions_for(20));
+}
+
+/// `for (p = buf; p < buf + 100000; p++)` over a huge pointer was folded to
+/// `br i1 false` and the loop deleted: the packed pointer was added as an
+/// integer. The loop kept its guard.
+#[test]
+fn a_huge_pointer_loop_keeps_its_guard() {
+    let text = m16_ir(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+
+define i32 @f(ptr addrspace(3) %buf) {
+b0:
+  br label %b1
+b1:
+  %s = phi i32 [ 0, %b0 ], [ %s2, %b2 ]
+  %p = phi ptr addrspace(3) [ %buf, %b0 ], [ %p2, %b2 ]
+  %end = getelementptr inbounds nuw i8, ptr addrspace(3) %buf, i32 100000
+  %c = icmp ult ptr addrspace(3) %p, %end
+  br i1 %c, label %b2, label %b3
+b2:
+  %v = load i8, ptr addrspace(3) %p
+  %z = zext i8 %v to i32
+  %s2 = add nsw i32 %s, %z
+  %p2 = getelementptr inbounds nuw i8, ptr addrspace(3) %p, i32 1
+  br label %b1
+b3:
+  ret i32 %s
+}
+",
+    );
+    let mut module = parsed(text);
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let declarations = module.declarations();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    eliminate_constraints(context, &layout, &declarations, &metadata, function);
+    let text = printed(&module);
+    assert!(text.contains("br i1 %c"), "{text}");
 }

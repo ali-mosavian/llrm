@@ -8,12 +8,19 @@
 //! and the loop passes read are plain compares; a branch to one block on both
 //! edges reads no condition.
 //!
+//! MIRROR: a branch that reaches the end of the visit is registered with the
+//! `DomConditionCache` (`DC.registerBranch`), so a query sees the branches
+//! visited before it and no others.
+//!
 //! DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
 //! no logical `select` pattern here yet), the `fcmp` predicate canonical form
-//! (`isCanonicalPredicate`), the constant condition at visit time (the driver
-//! folds a branch on a number, and `combine::prepare` kills the edges of an
-//! undef or poison one, `combine.rs`), and the replacement of the uses
-//! of the condition dominated by an edge with true or false.
+//! (`isCanonicalPredicate`), and the constant condition at visit time (the
+//! driver folds a branch on a number, and `combine::prepare` kills the edges
+//! of an undef or poison one, `combine.rs`).
+//!
+//! MIRROR: every use of the condition that an edge dominates becomes `true`
+//! (the first edge) or `false` (the second): a second branch on the same
+//! compare, further down, reads a number.
 //!
 //! DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
 //!
@@ -22,10 +29,15 @@
 //! %n = xor i1 %c, true                  br i1 %c, label %f, label %t
 //! br i1 %n, label %t, label %f
 //! ```
+//!
+//! # Used by
+//! `visit` in [`combine`](crate::combine), which dispatches a `br` here
+//! (`visit_cond_br`).
 
-use llrm_mir::module::{InstId, Operand};
+use llrm_mir::module::{InstId, Operand, Use};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::valuetracking::pattern;
+use llrm_mir::valuetracking::range::edge_dominates_use;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{query, replace_operand};
@@ -57,6 +69,36 @@ impl Combiner<'_> {
             let false_ = self.int(self.type_of(cond), 0);
             replace_operand(self, inst, 0, false_);
             return Visit::Changed;
+        }
+        // Replace all dominated uses of the condition with true/false.
+        if let Operand::Value(value) = cond {
+            let block = self.function.parent(inst).expect("a placed branch");
+            let tree = self.env.analyses.dominator_tree();
+            let ty = self.type_of(cond);
+            let mut changed = false;
+            let uses: Vec<Use> =
+                self.function.users(value).into_iter().map(|one| Use { user: one.user, index: one.index }).collect();
+            for used in uses {
+                let function = &*self.function;
+                let way = if edge_dominates_use(function, &tree, block, taken, &used) {
+                    1
+                } else if edge_dominates_use(function, &tree, block, other, &used) {
+                    0
+                } else {
+                    continue;
+                };
+                let number = self.int(ty, way);
+                replace_operand(self, used.user, used.index as usize, number);
+                self.add_to_worklist(used.user);
+                changed = true;
+            }
+            if changed {
+                return Visit::Changed;
+            }
+        }
+        // `DC.registerBranch(&BI)`.
+        if let Some(conditions) = self.env.analyses.dom_conditions() {
+            conditions.register_branch(&query(self, Some(inst)), inst);
         }
         Visit::None
     }

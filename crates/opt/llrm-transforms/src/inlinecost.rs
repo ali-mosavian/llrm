@@ -72,13 +72,14 @@
 //!   of a local callee, which goes with it, is the pin's. No shape of callee
 //!   but the loop and the one smaller than its call is tested.
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
-//!   address of a stack slot the caller stored a constant to and whose callee
-//!   loads through that parameter, is inlined if the caller, simplified again
-//!   with the call inlined, is smaller by the target's size cost (`walk.rs`,
-//!   callers of at most 300 instructions; the sites of a private callee that
-//!   dies with its last call are tried together, its body credited). The pin's
-//!   cost does not follow a load through a pointer argument, so it never sees
-//!   the loop or the arithmetic fold.
+//!   address of a stack slot or a global the caller stored a constant to and
+//!   whose callee loads through that parameter, is inlined if the caller,
+//!   simplified again with the call inlined, is smaller by the target's size
+//!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
+//!   private callee that dies with its last call are tried together, its body
+//!   credited; so are the sites of a private callee called only from this
+//!   caller, whatever they pass). The pin's cost does not follow a load through
+//!   a pointer argument, so it never sees the loop or the arithmetic fold.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
@@ -117,7 +118,7 @@ use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{AtomicKind, Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::tti::{CastKind, CostKind, Ty};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::HashMap;
@@ -179,6 +180,9 @@ pub struct InlineParams {
     /// `AllowRecursiveCall`: a callee that calls itself is priced, not
     /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
     pub allow_recursive_call: bool,
+    /// The `LastCallToStatic` bonus applies. The pin's always does;
+    /// `-fno-inline-functions-called-once` turns it off.
+    pub last_call_to_static: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -208,6 +212,7 @@ impl InlineParams {
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
             allow_recursive_call: false,
+            last_call_to_static: true,
             tti: Tti::Generic,
         }
     }
@@ -297,6 +302,26 @@ fn frame_bound(
     id: GlobalId,
 ) -> bool {
     module.global(id).function().is_some_and(|function| has_flag(&function.attrs, "frame_bound"))
+}
+
+/// Whether the caller makes a `frame_bound` call itself: it registers an error
+/// handler, so it is the frame that runs the callee's re-arm.
+fn registers_a_handler(site: &Site) -> bool {
+    site.caller
+        .layout()
+        .iter()
+        .any(
+            |&block| site.caller
+                .iter_block(block)
+                .any(
+                    |inst| matches!(
+                        site.caller.instruction(inst).opcode,
+                        Opcode::Call(_) | Opcode::Invoke(_)
+                    )
+                        && llrm_mir::memory::callee(&site.module.context, site.caller, inst)
+                            .is_some_and(|target| frame_bound(site.module, target)),
+                ),
+        )
 }
 
 fn call_info(
@@ -863,7 +888,21 @@ impl<'a> Analyzer<'a> {
                 match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
                     (Some(tti), Some(kind), Some(src), Some(dst)) => {
                         let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
-                        cost.valid && cost.value == 0
+                        // BasicTTIImpl.h:1298-1311: the extension of a simple
+                        // load.
+                        let of_load = match operation.operands[0] {
+                            Operand::Value(value) => match self.callee.value(value).def {
+                                llrm_mir::module::ValueDef::Instruction(def) => {
+                                    matches!(
+                                        self.callee.instruction(def).opcode,
+                                        Opcode::Load { volatile: false, .. }
+                                    )
+                                }
+                                llrm_mir::module::ValueDef::Argument(_) => false,
+                            },
+                            _ => false,
+                        };
+                        (cost.valid && cost.value == 0) || (of_load && tti.ext_load_free(kind, dst, src))
                     }
                     _ => false,
                 }
@@ -955,6 +994,13 @@ impl<'a> Analyzer<'a> {
             Opcode::FNeg => self.visit_fneg(inst),
             Opcode::Load { volatile, .. } => self.visit_load(inst, *volatile),
             Opcode::Store { volatile, .. } => self.visit_store(inst, *volatile),
+            // `LoadInst` and `StoreInst` that are not simple,
+            // then `visitInstruction`.
+            Opcode::Atomic(info) => match info.kind {
+                AtomicKind::Load => self.visit_load(inst, true),
+                AtomicKind::Store => self.visit_store(inst, true),
+                _ => self.visit_default(inst),
+            },
             Opcode::ExtractValue(_) | Opcode::InsertValue(_) => self.visit_aggregate(inst),
             Opcode::Call(_) | Opcode::Invoke(_) => self.visit_call(inst),
             Opcode::Ret => {
@@ -1442,7 +1488,9 @@ impl<'a> Analyzer<'a> {
         // registration): its effect belongs to the frame that runs it, so the
         // callee is not copied into another frame (the `returns_twice` rule of
         // `visitCallBase`, InlineCost.cpp:2473).
-        if frame_bound(self.site.module, target) {
+        // Not a handler its owner alone calls: its re-arm then runs in the
+        // frame that registered it (the owner's landing pad), not another.
+        if frame_bound(self.site.module, target) && !(self.site.sole_call_to_local && registers_a_handler(self.site)) {
             self.has_uninlineable_intrinsic = true;
             return false;
         }
@@ -1572,14 +1620,12 @@ impl<'a> Analyzer<'a> {
                 _ => None,
             })
             .collect();
-        let (clusters, table) = if self.params.tti == Tti::Generic {
-            (cases.len() as u64, 0)
-        } else {
-            llrm_mir::tti::basic_case_clusters(
-                &cases,
-                self.site.layout.pointer(0).bits,
-                self.site.caller_size != CallerSize::Speed,
-            )
+        let for_size = self.site.caller_size != CallerSize::Speed;
+        let index_bits = self.site.layout.pointer(0).bits;
+        let (clusters, table) = match self.site.tti {
+            Some(tti) => tti.estimated_number_of_case_clusters(&cases, index_bits, for_size),
+            None if self.params.tti == Tti::Generic => (cases.len() as u64, 0),
+            None => llrm_mir::tti::basic_case_clusters(&cases, index_bits, for_size),
         };
         let default_unreachable = match operation.operands[1] {
             Operand::Block(default) => self
@@ -1717,7 +1763,7 @@ impl<'a> Analyzer<'a> {
         } else {
             let mut single_bb_percent = 50;
             let mut vector_percent = VECTOR_BONUS_PERCENT;
-            let mut last_call_bonus = LAST_CALL_TO_STATIC_BONUS;
+            let mut last_call_bonus = if self.params.last_call_to_static { LAST_CALL_TO_STATIC_BONUS } else { 0 };
             let caller_size = self.site.caller_size;
             match caller_size {
                 CallerSize::MinSize => {
@@ -2545,7 +2591,8 @@ pub fn sites(
 }
 
 /// `sites`, and the sites the target's -Os bound alone refused whose call
-/// passes a constant or a stack slot (SZ2): `trials`
+/// passes a constant or a stack slot, or whose private callee has no call but
+/// these (SZ2): `trials`
 /// takes their copies, for the walk to try inlined against not.
 #[allow(clippy::too_many_arguments)]
 pub fn sites_with_trials(
@@ -2566,13 +2613,31 @@ pub fn sites_with_trials(
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
     let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
     let frequencies = caller_frequencies(module, layout, caller);
+    // The calls to each callee here: a private callee all of whose calls are
+    // here goes with the last one inlined.
+    let mut here: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if trials.is_some() {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *here.entry(callee).or_default() += 1;
+            }
+        }
+    }
+    let goes = |callee: GlobalId| {
+        local_linkage(module.global(callee).linkage)
+            && !addressed.contains(&callee)
+            && counts.get(&callee).is_some_and(|all| here.get(&callee) == Some(all))
+    };
     for (_, inst) in caller.walk() {
         let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        if !decision.inline && !(blocked && trials.is_some() && worth_a_trial(module, caller, inst, decision.callee)) {
+        let worth = blocked
+            && trials.is_some()
+            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+        if !decision.inline && !worth {
             continue;
         }
         let GlobalKind::Function(callee) = &module.global(decision.callee).kind else { continue };
@@ -2587,6 +2652,9 @@ pub fn sites_with_trials(
             body: std::rc::Rc::new((**callee).clone()),
             frame: crate::inline::grown(&module.context, layout, callee),
             moved: false,
+            last_call: local_linkage(module.global(decision.callee).linkage)
+                && !addressed.contains(&decision.callee)
+                && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
             self_calls: (!own.is_empty()).then(|| {
@@ -2633,10 +2701,27 @@ fn root_of(
     }
 }
 
+/// The global a constant pointer is the address of, or a step or a cast of.
+fn global_of(
+    context: &llrm_mir::context::Context,
+    operand: llrm_mir::module::Operand,
+) -> Option<GlobalId> {
+    use llrm_mir::context::{ConstantExpr, ConstantKind};
+    let llrm_mir::module::Operand::Constant(mut at) = operand else { return None };
+    loop {
+        match &context.get(at).kind {
+            ConstantKind::Global(global) => return Some(*global),
+            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
+            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
+            _ => return None,
+        }
+    }
+}
+
 /// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot the caller wrote a constant to, and
-/// the callee reads through that parameter, which the cost model does not
-/// follow (a constant argument it folds itself).
+/// call passes the address of a stack slot (or of a global) the caller wrote a
+/// constant to, and the callee reads through that parameter, which the cost
+/// model does not follow (a constant argument it folds itself).
 fn worth_a_trial(
     module: &Module,
     caller: &llrm_mir::module::Function,
@@ -2661,6 +2746,20 @@ fn worth_a_trial(
                 },
             )
     };
+    // A gate, not dataflow: the store may be to another field, or after the
+    // call; the trial decides on bytes.
+    let written_global = |global: GlobalId| {
+        caller
+            .walk()
+            .any(
+                |(_, inst)| {
+                    let store = caller.instruction(inst);
+                    matches!(store.opcode, Opcode::Store { .. })
+                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
+                        && global_of(&module.context, store.operands[1]) == Some(global)
+                },
+            )
+    };
     let read_through: Vec<llrm_mir::module::ValueId> = callee
         .walk()
         .filter_map(|(_, inst)| {
@@ -2671,16 +2770,21 @@ fn worth_a_trial(
             }
         })
         .collect();
-    arguments
-        .iter()
-        .zip(callee.parameters())
-        .any(
-            |(argument, parameter)| read_through.contains(parameter)
-                && matches!(
+    // A callee that reads a global directly (its pointer arguments were
+    // propagated into it), one the caller has stored a constant to.
+    let reads_written_global = callee.walk().any(|(_, inst)| {
+        let load = callee.instruction(inst);
+        matches!(load.opcode, Opcode::Load { .. })
+            && load.operands.first().and_then(|ptr| global_of(&module.context, *ptr)).is_some_and(written_global)
+    });
+    reads_written_global
+        || arguments.iter().zip(callee.parameters()).any(|(argument, parameter)| {
+            read_through.contains(parameter)
+                && (matches!(
                     root_of(caller, *argument),
                     Some(Root::Slot(slot)) if written(slot)
-                ),
-        )
+                ) || global_of(&module.context, *argument).is_some_and(written_global))
+        })
 }
 
 /// What `decide` reads of the module besides the site.

@@ -52,6 +52,20 @@ pub trait Machine {
         self.costs()
     }
 
+    /// Whether a division by a constant stays a divide instruction on
+    /// `bits`-bit values, `size` saying the build is for size
+    /// (`isIntDivCheap`, read the other way): the remainder is then the
+    /// divide's own, not `x - (x / c) * c`. By default no: a division is a
+    /// multiply.
+    fn keeps_division(
+        &self,
+        bits: u32,
+        size: bool,
+    ) -> bool {
+        let _ = (bits, size);
+        false
+    }
+
     /// How many integer values fit in registers at once.
     fn registers(&self) -> i64;
 
@@ -251,11 +265,20 @@ pub struct OperationCosts {
     pub set: i64,
     pub fill: i64,
     pub fill_cell: i64,
+    /// The code bytes of the routine a fill through a huge pointer is laid
+    /// down as, in a table priced by bytes; 0 where there is none.
+    pub huge_fill: i64,
+    /// The same for a copy or move through huge pointers: the smaller of the
+    /// upward and downward routines.
+    pub huge_copy: i64,
     /// `rep movs` as a copy sets it up (ES, the two addresses, the count) and
     /// what each cell costs it; `direction` is `std` and `cld` around a
     /// backward one.
     pub copy: i64,
     pub copy_cell: i64,
+    /// What a copy of a length known only at run time adds to `copy`: the
+    /// count in dwords and the odd bytes after it, a second `rep movs`.
+    pub copy_variable: i64,
     pub direction: i64,
     /// How many operations a completely unrolled loop may total before the work
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
@@ -369,8 +392,11 @@ impl Default for OperationCosts {
             set: 1,
             fill: 1,
             fill_cell: 1,
+            huge_fill: 0,
+            huge_copy: 0,
             copy: 1,
             copy_cell: 1,
+            copy_variable: 0,
             direction: 1,
             unroll_budget: 0,
             pieces_set: 0,

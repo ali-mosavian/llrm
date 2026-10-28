@@ -247,9 +247,16 @@ b3:
 }
 
 fn with_exit_values(text: &str) -> String {
+    with_exit_values_sized(text, false)
+}
+
+fn with_exit_values_sized(
+    text: &str,
+    size: bool,
+) -> String {
     let mut module = crate::testing::parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::IndVars { lftr: true });
+    manager.add(super::IndVars { lftr: true, size });
     manager.run_module(&mut module, Rc::new(llrm_x86_m16::Dos::default())).unwrap();
     crate::testing::printed(&module)
 }
@@ -288,6 +295,54 @@ b4:
 ",
     );
     assert!(text.contains("phi i32 [ %next, %b2 ]"), "{text}");
+}
+
+/// lcexit.bas (`FOR`/`EXIT` over an `INTEGER` counter read as `LONG`): the
+/// counter is widened, and the loop's exit count, worked out before that, is
+/// still the one in `i16`. LLVM tells ScalarEvolution nothing of the compares
+/// the widening rewrote in place, so LFTR tests the wide counter against
+/// `zext` of a limit built in `i16`. The port forgot the count and built the
+/// limit in `i32`: two copies of `umin(zext n - 1, 9) + 1`.
+#[test]
+fn test_a_widened_counters_limit_is_built_in_the_narrow_type_and_extended() {
+    let text = with_exit_values(
+        "target datalayout = \"e-p:32:32-n8:16:32\"
+
+define i32 @f(i16 %n) {
+b0:
+  %none = icmp eq i16 %n, 0
+  br i1 %none, label %b4, label %b2
+
+b2:
+  br label %b7
+
+b7:
+  %i = phi i16 [ 0, %b2 ], [ %next, %b7 ]
+  %acc = phi i32 [ 0, %b2 ], [ %sum, %b7 ]
+  %w = zext nneg i16 %i to i32
+  %sum = add i32 %acc, %w
+  %next = add nuw nsw i16 %i, 1
+  %big = icmp ugt i16 %i, 8
+  %hit = icmp eq i16 %next, %n
+  %stop = select i1 %big, i1 true, i1 %hit
+  br i1 %stop, label %x, label %b7
+
+x:
+  %sum.out = phi i32 [ %sum, %b7 ]
+  %i.out = phi i16 [ %next, %b7 ]
+  br label %b4
+
+b4:
+  %total = phi i32 [ 0, %b0 ], [ %sum.out, %x ]
+  %last = phi i16 [ 0, %b0 ], [ %i.out, %x ]
+  %wide = zext i16 %last to i32
+  %r = add i32 %total, %wide
+  ret i32 %r
+}
+",
+    );
+    assert!(text.contains("%wide.trip.count = zext i16"), "{text}");
+    assert!(text.contains("llvm.umin.i16") && !text.contains("llvm.umin.i32"), "{text}");
 }
 
 /// An exit whose count is not a number is written from the count, as
@@ -403,7 +458,7 @@ fn header_phis(module: &mut Module) -> usize {
 #[test]
 fn counters_with_one_start_and_one_step_are_one_counter() {
     let mut module = parsed(&two_counters(0, 1));
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let mut other = parsed(&two_counters(0, 1));
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -417,7 +472,7 @@ fn counters_with_one_start_and_one_step_are_one_counter() {
 fn counters_whose_steps_are_the_same_add_are_one_counter() {
     let text = two_counters(0, 1).replace("%j.next = add i16 %j, 1", "%j.next = add i16 %i, 1");
     let mut module = parsed(&text);
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
     let other = parsed(&text);
     assert_eq!(results(&module, &[&[0], &[3], &[9]]), results(&other, &[&[0], &[3], &[9]]));
@@ -428,7 +483,7 @@ fn counters_whose_steps_are_the_same_add_are_one_counter() {
 fn counters_that_start_or_step_otherwise_stay_two() {
     for (start, step) in [(1, 1), (0, 2)] {
         let mut module = parsed(&two_counters(start, step));
-        managed(&mut module, IndVars { lftr: true });
+        managed(&mut module, IndVars { lftr: true, size: false });
         assert_eq!(header_phis(&mut module), 2, "{start} {step}: {}", printed(&module));
     }
 }
@@ -487,7 +542,7 @@ fn a_run_that_changes_no_block_finds_the_loops_once() {
         managed(module, AsksWhatIndVarsDoes);
     }));
     let indvars = derived(Box::new(|module| {
-        managed(module, IndVars { lftr: true });
+        managed(module, IndVars { lftr: true, size: false });
     }));
     assert!(indvars <= manager, "{indvars} shapes against the manager's {manager}");
 }
@@ -621,7 +676,7 @@ e:
 ",
     );
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(IndVars { lftr: true });
+    manager.add(IndVars { lftr: true, size: false });
     manager.run_module(&mut module, m32()).unwrap();
     let after = printed(&module);
     assert_eq!(leaks_a_loop_value(&module), None, "{after}");
@@ -658,11 +713,11 @@ b2:
 #[test]
 fn test_lftr_off_leaves_the_test_of_a_loop_not_rotated() {
     let mut off = parsed(TOP_TESTED);
-    managed(&mut off, IndVars { lftr: false });
+    managed(&mut off, IndVars { lftr: false, size: false });
     let off = printed(&off);
     assert!(!off.contains("umax") && !off.contains("exitcond"), "{off}");
     let mut on = parsed(TOP_TESTED);
-    managed(&mut on, IndVars { lftr: true });
+    managed(&mut on, IndVars { lftr: true, size: false });
     let on = printed(&on);
     assert!(on.contains("exitcond"), "{on}");
 }
@@ -695,7 +750,7 @@ b3:
 }
 ",
     );
-    managed(&mut module, IndVars { lftr: false });
+    managed(&mut module, IndVars { lftr: false, size: false });
     let after = printed(&module);
     assert!(after.contains("br i1 false, label %b4, label %b3"), "{after}");
 }
@@ -725,7 +780,7 @@ fn counted_loops(loops: usize) -> String {
 fn computed_counts(loops: usize) -> usize {
     let mut module = parsed(&counted_loops(loops));
     let before = llrm_analysis::scev::trip::backedge_taken_computations();
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     llrm_analysis::scev::trip::backedge_taken_computations() - before
 }
 
@@ -746,7 +801,7 @@ fn a_loop_nothing_changes_has_its_trip_count_worked_out_once_in_a_run() {
 fn simplify_form_scans(loops: usize) -> usize {
     let mut module = parsed(&counted_loops(loops));
     let before = llrm_mir::loopinfo::simplify_form_scans();
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     llrm_mir::loopinfo::simplify_form_scans() - before
 }
 
@@ -886,7 +941,52 @@ b5:
 ";
     let mut module = parsed(text);
     let before = results(&module, &[&[]]);
-    managed(&mut module, IndVars { lftr: true });
+    managed(&mut module, IndVars { lftr: true, size: false });
     assert!(!printed(&module).contains("icmp slt i16 %i, -5"), "{}", printed(&module));
     assert_eq!(results(&module, &[&[]]), before);
+}
+
+/// After its edits `indvars` swept the whole function for dead code: 0.8 M Ir
+/// on d_faces' largest body, where the pin deletes what an edit stopped
+/// reading. The edits' own seeds are enough.
+#[test]
+fn a_run_that_edits_a_loop_does_not_sweep_the_function_for_dead_code() {
+    let mut module = parsed(&two_counters(0, 1));
+    crate::dead::SCANNED.with(|scanned| scanned.set(0));
+    managed(&mut module, IndVars { lftr: true, size: false });
+    assert_eq!(header_phis(&mut module), 1, "{}", printed(&module));
+    assert_eq!(crate::dead::SCANNED.with(std::cell::Cell::get), 0);
+}
+
+/// pressx at m16 -Os (+15 B in the early-GlobalOpt sweep): ten additions of a
+/// loop invariant stayed a loop, because the formula's price (an add and a
+/// multiply, 5) was set against the loop's four bodies alone (DEVIATE 15). The
+/// loop is its two counters and its branch too; the formula is smaller.
+#[test]
+fn test_under_size_a_ten_trip_sum_of_an_invariant_is_its_product() {
+    let text = with_exit_values_sized(
+        "declare void @sink(i16)
+define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {
+entry:
+  %m = mul i16 %a, %b
+  %k = mul i16 %c, %d
+  %p = add i16 %m, %k
+  br label %loop
+loop:
+  %i = phi i16 [ 1, %entry ], [ %inc, %loop ]
+  %s = phi i16 [ 0, %entry ], [ %s2, %loop ]
+  %s1 = add i16 %s, %p
+  %s2 = add i16 %s1, %k
+  %inc = add nuw nsw i16 %i, 1
+  %c2 = icmp ne i16 %inc, 11
+  br i1 %c2, label %loop, label %exit
+exit:
+  %out = phi i16 [ %s2, %loop ]
+  call void @sink(i16 %out)
+  ret i16 %out
+}
+",
+        true,
+    );
+    assert!(!text.contains("%s2 = add"), "the loop is gone: {text}");
 }

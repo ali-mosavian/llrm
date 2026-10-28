@@ -51,6 +51,15 @@ impl Lowering for X86 {
         matches!((low, high), (Float, Integer) | (Integer, Float))
     }
 
+    // A switch on an i8 or i16 is widened to i32 (checked on the pin's llc at
+    // m16, m32 and m64: `switch i32` after CodeGenPrepare).
+    fn preferred_switch_condition_bits(
+        &self,
+        bits: u32,
+    ) -> u32 {
+        bits.max(32)
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L3805
     fn prefer_zero_compare_branch(&self) -> bool {
         true
@@ -66,6 +75,18 @@ impl Lowering for X86 {
             return matches!(bits, 8 | 16 | 32 | 64);
         }
         MVT::integer(bits).is_some_and(|vt| table().types.is_type_legal(vt.into()))
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(bits)
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/X86ISelLowering.cpp#L2955

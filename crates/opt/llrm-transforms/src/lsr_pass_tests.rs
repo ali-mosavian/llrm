@@ -360,6 +360,8 @@ fn a_scaled_address_is_not_formed_in_real_mode_and_the_fill_steps_a_pointer() {
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&format!("{DOS}{FILL}"));
@@ -559,6 +561,8 @@ b3:
         registers: 6,
         scaled_index_insns: 2,
         huge_space: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -617,6 +621,8 @@ b5:
         registers: 6,
         scaled_index_insns: 2,
         huge_space: Some(3),
+        inline_size_guard: false,
+        float_code_size_percent: 100,
     };
     let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
     let mut module = parsed(&text);
@@ -641,14 +647,296 @@ fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let tti = X86::of_cpu("i486").unwrap();
-    let (_, kept) = crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, None);
+    let (_, kept) =
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, None);
     let kept = kept.expect("no edge was split");
     let mut nodes = |held| {
         let before = get(Event::ScevNodes);
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, held);
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, held);
         get(Event::ScevNodes) - before
     };
     let (cold, warm) = (nodes(None), nodes(Some(kept)));
     assert!(cold > 0);
     assert!(warm < cold, "the held expressions were not read: {warm} new nodes, {cold} cold");
+}
+
+/// x_reverse (AM-BT-26): the outer loop's `k & 15` was made its own `phi i4`
+/// stepped beside the i32 counter `k`, one live value too many, which spilled
+/// the counter at m32 (50 instructions against the pin's 42). The pin's final
+/// loop reads `trunc i32 %k to i4`: no second counter.
+#[test]
+fn a_masked_counter_is_a_truncation_of_the_counter_not_a_second_induction_variable() {
+    let (_changed, after) = reduced_on(FLAT, REVERSE, "i486", &[]);
+    assert!(!after.contains("phi i4"), "a second induction variable of the masked counter:\n{after}");
+}
+
+const REVERSE: &str = "@s = global [512 x i8] zeroinitializer
+define i32 @f(i32 %n) {
+entry:
+  %c0 = icmp sgt i32 %n, 0
+  br i1 %c0, label %outer, label %done
+outer:
+  %sum = phi i32 [ %sum2, %latch ], [ 0, %entry ]
+  %k = phi i32 [ %k2, %latch ], [ 0, %entry ]
+  %m = and i32 %k, 15
+  %len = sub nuw nsw i32 400, %m
+  %p = getelementptr i8, ptr @s, i32 %len
+  br label %inner
+inner:
+  %j = phi i32 [ 0, %outer ], [ %j2, %inner ]
+  %a = getelementptr i8, ptr @s, i32 %j
+  %x = load i8, ptr %a
+  %q = getelementptr i8, ptr %p, i32 %j
+  %y = load i8, ptr %q
+  store i8 %y, ptr %a
+  store i8 %x, ptr %q
+  %j2 = add nuw nsw i32 %j, 1
+  %ic = icmp ne i32 %j2, %len
+  br i1 %ic, label %inner, label %latch
+latch:
+  %b = and i32 %k, 255
+  %ga = getelementptr inbounds nuw i8, ptr @s, i32 %b
+  %v = load i8, ptr %ga
+  %vs = sext i8 %v to i32
+  %sum2 = add nsw i32 %sum, %vs
+  %k2 = add nuw nsw i32 %k, 1
+  %ec = icmp ne i32 %k2, %n
+  br i1 %ec, label %outer, label %exit
+exit:
+  ret i32 %sum2
+done:
+  ret i32 0
+}
+";
+
+/// The exit value of `s += (i * 97) % 211` was expanded at the end of the loop
+/// body, a second division in every trip (`-Os` m32: 35 instructions, two
+/// `div`, a spill, where one in the loop and one after it is 23).
+#[test]
+fn an_exit_value_is_expanded_in_the_exit_block_not_the_loop() {
+    let text = "define i32 @f(i32 %n) {
+b1:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %pre, label %b3
+pre:
+  br label %b4
+exit:
+  %last = phi i32 [ %s2, %b4 ]
+  br label %b3
+b3:
+  %r = phi i32 [ 0, %b1 ], [ %last, %exit ]
+  ret i32 %r
+b4:
+  %s = phi i32 [ %s2, %b4 ], [ 0, %pre ]
+  %i = phi i32 [ %i2, %b4 ], [ 0, %pre ]
+  %m = mul nuw nsw i32 %i, 97
+  %q = urem i32 %m, 211
+  %s2 = add nuw nsw i32 %q, %s
+  %i2 = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i2, %n
+  br i1 %done, label %exit, label %b4
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[0], &[1], &[5], &[300]]);
+    let body = after.split("b4:").nth(1).unwrap().split("\n}").next().unwrap();
+    assert_eq!(body.matches("urem").count() + body.matches("udiv").count(), 1, "{after}");
+}
+
+/// The exit value was expanded at the end of the exit block, after the store
+/// that reads it: addrm.bas -Os m16 died in live ranges ("a unique value").
+#[test]
+fn an_exit_value_is_defined_before_the_readers_in_the_exit_block() {
+    let text = "@g = global i32 0
+
+define void @f(i32 %n) {
+b1:
+  %c = icmp sgt i32 %n, 0
+  br i1 %c, label %pre, label %b3
+pre:
+  br label %b4
+exit:
+  %last = phi i32 [ %s2, %b4 ]
+  store i32 %last, ptr @g
+  br label %b3
+b3:
+  ret void
+b4:
+  %s = phi i32 [ %s2, %b4 ], [ 0, %pre ]
+  %i = phi i32 [ %i2, %b4 ], [ 0, %pre ]
+  %m = mul nuw nsw i32 %i, 97
+  %q = urem i32 %m, 211
+  %s2 = add nuw nsw i32 %q, %s
+  %i2 = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i2, %n
+  br i1 %done, label %exit, label %b4
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[1], &[7]]);
+    let exit = after.split("exit:").nth(1).unwrap().split("b3:").next().unwrap();
+    let (stored, defined) = (exit.find("store").unwrap(), exit.find("urem").or(exit.find("udiv")).unwrap());
+    assert!(defined < stored, "{after}");
+}
+
+/// Two sums of a loop-invariant step over a loop of seven trips were left as
+/// two phis and two adds in the loop (udtacc.bas, udtrng.bas m16 -Os); the pin
+/// reads the exit values as `step * 7` and leaves only the counter.
+#[test]
+fn a_sum_of_an_invariant_step_read_after_a_counted_loop_is_a_product() {
+    let text = "define i32 @f(i32 %x, i32 %y) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 1, %entry ], [ %next, %loop ]
+  %a = phi i32 [ 0, %entry ], [ %a2, %loop ]
+  %b = phi i32 [ 0, %entry ], [ %b2, %loop ]
+  %a2 = add i32 %x, %a
+  %b2 = add i32 %y, %b
+  %next = add nuw nsw i16 %i, 1
+  %c = icmp samesign ugt i16 %i, 6
+  br i1 %c, label %exit, label %loop
+exit:
+  %ra = phi i32 [ %a2, %loop ]
+  %rb = phi i32 [ %b2, %loop ]
+  %r = xor i32 %ra, %rb
+  ret i32 %r
+}
+";
+    let (_, after) = reduced_on(FLAT, text, "i486", &[&[3, 4], &[0, 9], &[-5, 6]]);
+    let body = after.split("loop:").nth(1).unwrap().split("exit:").next().unwrap();
+    assert_eq!(body.matches("phi").count(), 1, "{after}");
+}
+
+/// x_base64 m16 -Os grew 352 -> 397 B: the exit value of a counter in a loop
+/// that only counts, `4 * ((smax(n, 5) - 5) / 3 + ...)`, was written out
+/// after LSR under `-Os`, where the loop is kept (`exitvalues` DEVIATE 15).
+#[test]
+fn at_size_the_exit_value_of_a_counting_loop_is_not_written_out_by_lsr() {
+    let text = "define i16 @f(i16 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 2, %entry ], [ %i2, %loop ]
+  %q = phi i16 [ -4, %entry ], [ %q2, %loop ]
+  %i2 = add nuw nsw i16 %i, 3
+  %q2 = add i16 %q, 4
+  %c = icmp slt i16 %i2, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %last = phi i16 [ %q2, %loop ]
+  ret i16 %last
+}
+";
+    let phis = |size: bool| {
+        let mut module = parsed(&format!("{DOS}{text}"));
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let tti = X86::of_cpu("i486").unwrap();
+        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, None);
+        declared.place(&mut module).expect("the declarations");
+        printed(&module).split("loop:").nth(1).unwrap().split("exit:").next().unwrap().matches("phi").count()
+    };
+    assert_eq!(phis(false), 1, "for speed the counter is written out after the loop");
+    assert_eq!(phis(true), 2, "the loop at size lost its second counter");
+}
+
+/// The inner loop of an insertion sort, `for (j = i - 1; j >= 0 && a[j] > v;
+/// --j)` as the strength stage gets it: the countdown's `add nsw %j, -1` sits
+/// in the header beside the loads LSR rewrites. The pin moves the increment to
+/// the latch once those uses are gone (`ImplementSolution`: delete the dead
+/// instructions, then move the simple recurrences' increments), so the
+/// decrement and the compare share a block and isel emits `dec; cmp; jg`. Here
+/// the move ran before the deletion, saw the header gep as a user the latch
+/// does not dominate, and left `lea edi, [ebx-1]; cmp ebx, 1; mov ebx, edi`.
+#[test]
+fn a_countdown_loop_decrements_in_the_block_that_tests_it() {
+    let mut module = parsed(include_str!("lsr_insertion.ll"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    let changed = crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    assert!(changed, "{after}");
+    let block = after
+        .split("\n\n")
+        .find(|block| block.contains("add nsw i32") && block.contains(", -1"))
+        .unwrap_or_else(|| panic!("no decrement: {after}"));
+    assert!(
+        block.contains("icmp sgt i32") && block.contains(", 1\n"),
+        "the compare is in another block than the decrement: {after}"
+    );
+}
+
+/// particle.bas ADVANCE at m16 -Os with `foldICmpBinOp`: six far arrays read at
+/// one index. The rewrite to six pointer recurrences costs two instructions
+/// more than the loop as written and needs more registers than exist: six
+/// pointers reloaded and stored back every trip, +79 B and 344,761 -> 530,461
+/// clocks. The loop is kept.
+#[test]
+fn six_far_arrays_at_one_index_are_not_six_recurrences_in_real_mode() {
+    let arrays = ["a", "b", "c", "d", "e", "g"];
+    let mut globals = String::new();
+    let mut loads = String::new();
+    let mut body = String::new();
+    for name in arrays {
+        globals += &format!("@{name} = internal global [2 x i8] zeroinitializer\n");
+        loads += &format!(
+            "  %w{name} = load i16, ptr @{name}\n  %i{name} = inttoptr i16 %w{name} to ptr addrspace(2)\n  %f{name} = addrspacecast ptr addrspace(2) %i{name} to ptr addrspace(1)\n"
+        );
+        body += &format!(
+            "  %p{name} = getelementptr i8, ptr addrspace(1) %f{name}, i16 %o\n  %v{name} = load i16, ptr addrspace(1) %p{name}\n  %x{name} = add i16 %v{name}, 1\n  store i16 %x{name}, ptr addrspace(1) %p{name}\n"
+        );
+    }
+    let text = format!(
+        "{DOS}{globals}define void @f(i16 %n) {{
+b1:
+  %neg = sub i16 0, %n
+{loads}  br label %b5
+b5:
+  %i = phi i16 [ %neg, %b1 ], [ %i2, %b5 ]
+  %s = shl i16 %i, 1
+  %o = add i16 %s, 100
+{body}  %i2 = add i16 %i, 1
+  %done = icmp eq i16 %i, %n
+  br i1 %done, label %b6, label %b5
+b6:
+  ret void
+}}
+"
+    );
+    let real = RealMode {
+        scale_costs: vec![(1, 0)],
+        registers: 6,
+        scaled_index_insns: 0,
+        huge_space: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+    };
+    let tti = X86::of_cpu("i486").unwrap().in_real_mode(real);
+    let mut module = parsed(&text);
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let after = printed(&module);
+    let body = after.split("b5:").nth(1).unwrap().split("b6:").next().unwrap();
+    assert!(body.matches(" = phi ptr").count() == 0, "the loop is kept: {after}");
+}
+
+/// The first look at a loop whose exit test is edited made the users, the
+/// second made them again over the edited loop, the third (after the edge
+/// split) once more: 3 constructions for 1 loop. The edit moves no compare, so
+/// the second look keeps the first's users.
+#[test]
+fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
+    let mut module = parsed(include_str!("lsr_insertion.ll"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::ivusers::BUILDS.with(|made| made.set(0));
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let built = crate::ivusers::BUILDS.with(|made| made.get());
+    assert_eq!(built, 2, "{}", printed(&module));
 }

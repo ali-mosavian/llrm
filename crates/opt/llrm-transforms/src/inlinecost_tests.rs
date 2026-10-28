@@ -14,6 +14,23 @@ const GLOBAL: &str = "@g = global i32 0\n\n";
 /// The cost and threshold of the `at`th call of @callee in @f, `sole`: the
 /// callee's only call (the `LastCallToStatic` bonus is in the cost, as in
 /// `opt`'s remark).
+/// i486 in 16-bit code with the target's -Os growth guard (the m16
+/// description's `inline_size_guard`).
+fn x86_real() -> llrm_x86::tti::X86 {
+    llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .in_real_mode(
+            llrm_x86::tti::RealMode {
+                scale_costs: vec![(1, 0)],
+                registers: 6,
+                scaled_index_insns: 0,
+                huge_space: None,
+                inline_size_guard: true,
+                float_code_size_percent: 100,
+            },
+        )
+}
+
 fn priced_with(
     text: &str,
     at: usize,
@@ -173,10 +190,12 @@ b0:
 }
 
 /// An external callee that stays after the inline is not copied into an
-/// `optsize` caller on x86 (D11): crc, tile and recchop grew 52, 42 and 15
-/// bytes at -Os (cost 45, 30 and 40 against the pin's threshold of 50).
+/// `optsize` caller in 16-bit code (D11, the target's `inline_size_guard`):
+/// crc, tile and recchop grew 52, 42 and 15 bytes at -Os (cost 45, 30 and 40
+/// against the pin's threshold of 50). In 32-bit code the pin's decision
+/// stands: the `called_once` kernel's `twice` (cost 45) is inlined.
 #[test]
-fn an_optsize_caller_does_not_copy_a_callee_that_stays_on_x86() {
+fn an_optsize_caller_does_not_copy_a_callee_that_stays_in_16_bit_code() {
     let text = format!(
         "{GLOBAL}define i32 @callee(i32 %x) {{
 b0:
@@ -204,11 +223,13 @@ b0:
 }}
 "
     );
-    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (x86, flat) = (x86_real(), llrm_x86::tti::X86::of_cpu("i486").unwrap());
     let (generic, bound) = priced_with(&text, 0, false, CallerSize::OptSize, None);
     let (target, held) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&x86));
+    let (wide, kept) = priced_with(&text, 0, false, CallerSize::OptSize, Some(&flat));
     assert!(generic < bound, "premise: the pin inlines it, cost {generic} threshold {bound}");
-    assert!(target >= held, "x86 inlined it, cost {target} threshold {held}");
+    assert!(target >= held, "16-bit code inlined it, cost {target} threshold {held}");
+    assert!(wide < kept, "32-bit code kept it, cost {wide} threshold {kept}");
 }
 
 /// A callee at `-Os` on x86 (D11): the inline must not make the code bigger.
@@ -251,7 +272,7 @@ e:
     let small = "b0:
   %a = add i32 %x, 1
   ret i32 %a";
-    let x86 = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let x86 = x86_real();
     let held = |text: &str, sole: bool| {
         let (cost, threshold) = priced_with(text, 0, sole, CallerSize::OptSize, Some(&x86));
         cost < threshold
@@ -485,6 +506,20 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::MinSize).1, 5);
 }
 
+/// An `optsize` caller still raises an `inlinehint` callee to the hint
+/// threshold (`OptSizeHintThreshold` = `HintThreshold`, InlineCost.cpp:3394;
+/// opt: threshold 487 hinted, 75 not). `Threshold::for_size` once stated 1.
+#[test]
+fn test_an_inline_hint_still_raises_the_budget_at_an_optsize_caller() {
+    let text = |attrs: &str| {
+        format!(
+            "{GLOBAL}define internal i32 @callee(i32 %x) {attrs} {{\nb0:\n  %a = load i32, ptr @g\n  ret i32 %a\n}}\n\ndefine i32 @f(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n"
+        )
+    };
+    assert_eq!(priced(&text(""), 0, false, CallerSize::OptSize).1, 75);
+    assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::OptSize).1, 487);
+}
+
 /// intrinsics_errors_qb45.bas m32 -O1: the module handler registers the error
 /// handler of the frame that runs it (`onerror(true)`); inlined into a
 /// procedure's pad, the registration belonged to a frame that returns, and the
@@ -542,4 +577,84 @@ fn test_a_verdict_of_cost_zero_at_threshold_zero_does_not_pay() {
     assert!(!InlineCost::Cost { cost: 0, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
     assert!(InlineCost::Cost { cost: -1, threshold: 0, static_bonus: 0, blocked: false }.is_ok());
     assert!(!InlineCost::Cost { cost: 75, threshold: 75, static_bonus: 0, blocked: false }.is_ok());
+}
+
+/// `-fno-inline-functions-called-once` set `Threshold::last` and nothing read
+/// it after `decide` replaced the clocks inliner (5bff5e074): the sole call of
+/// a local callee still took the 15000 bonus and nib's `bench_scroll` was
+/// inlined into `main`.
+#[test]
+fn the_last_call_bonus_is_off_where_called_once_inlining_is() {
+    let text = "define internal i32 @callee(i32 %x) {
+b0:
+  %a = add i32 %x, 1
+  ret i32 %a
+}
+
+define i32 @f(i32 %y) {
+b0:
+  %r = call i32 @callee(i32 %y)
+  ret i32 %r
+}
+";
+    let price = |last_call_to_static: bool| {
+        let module: Module = parsed(text);
+        let layout = DataLayout::default();
+        let (caller_id, _, caller) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+        let (callee_id, _, callee) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("callee")).unwrap();
+        let call = caller
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+            .unwrap();
+        let site = Site {
+            module: &module,
+            layout: &layout,
+            caller,
+            caller_id,
+            call,
+            callee,
+            callee_id,
+            sole_call_to_local: true,
+            caller_recursive: false,
+            caller_size: CallerSize::Speed,
+            relative_frequency: None,
+            tti: None,
+        };
+        let params =
+            InlineParams { compute_full_inline_cost: true, last_call_to_static, ..InlineParams::from_level(2) };
+        match inline_cost(&site, params) {
+            InlineCost::Cost { cost, .. } => cost,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert_eq!(price(false) - price(true), 15000);
+}
+
+/// The extension of a simple load is free on x86 (an extending load:
+/// `BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1298-1311), where the
+/// cast alone costs an instruction: scroll's `sext (load i16)` made the callee
+/// 125 against the pin's 120 (`opt`: cost=-15025 for this callee at i386).
+#[test]
+fn test_a_sext_of_a_load_is_free_on_x86() {
+    let text = "@h = global i16 0
+
+define internal i32 @callee() {
+b0:
+  %a = load i16, ptr @h
+  %b = sext i16 %a to i32
+  ret i32 %b
+}
+
+define i32 @f() {
+b0:
+  %r = call i32 @callee()
+  ret i32 %r
+}
+";
+    let flat = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (cost, _) = priced_with(text, 0, true, CallerSize::Speed, Some(&flat));
+    assert_eq!(cost, -15025, "the pin prices this callee at -15025");
 }

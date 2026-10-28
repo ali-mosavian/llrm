@@ -4,7 +4,24 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, Module, ValueId};
 
 /// The layout HIR's modules state, as a module's first line.
-pub const DOS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+pub const DOS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
+
+/// The m16 datalayout string, read from the target's description by path: the
+/// analyses sit below the target crates and name none.
+static LAYOUT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml")
+        .lines()
+        .find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"'))
+        .expect("datalayout.toml states a datalayout")
+        .to_owned()
+});
+
+/// `text` with `@m16-datalayout@` replaced by the m16 target's datalayout
+/// string (its `datalayout.toml`, stated once), kept for the life of the test
+/// run.
+pub fn m16_ir(text: &str) -> &'static str {
+    Box::leak(text.replace("@m16-datalayout@", &LAYOUT).into_boxed_str())
+}
 
 pub fn parsed(text: &str) -> Module {
     llrm_mir::parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"))

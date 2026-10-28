@@ -12,6 +12,13 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+STAMPED = ("llrm-c", "llrm-llc")
+
+
+def compiler(found: Path) -> Path:
+    """The C compiler in the binaries directory `found`: llrm-cc where it is built, else llrm-c (until it is deleted).
+    Every tool names it through here."""
+    return found / "llrm-cc" if (found / "llrm-cc").is_file() else found / "llrm-c"
 
 
 def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
@@ -30,14 +37,16 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
 
 
 def stamped(found: Path) -> None:
-    """Prints the commit llrm-c was built from; refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    """Prints the commit the binaries were built from (llrm-c's or llrm-llc's stamp); refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import stamp
 
     expect = os.environ.get("LLRM_EXPECT_SHA") or None
-    if (found / "llrm-c").is_file():
+    # llrm-cc prints clang's --version; the stamp is the backend's, which is built from the same commit.
+    stamped_one = next((found / name for name in STAMPED if (found / name).is_file()), None)
+    if stamped_one:
         try:
-            stamp.check(found / "llrm-c", expect, allow_dirty=True, label=str(found))
+            stamp.check(stamped_one, expect, allow_dirty=True, label=str(found))
         except SystemExit:
             if expect:
                 raise  # a binary without a stamp is only refused where a sha is named
@@ -62,8 +71,21 @@ def built_from(directory: Path, default: Path) -> Path:
     return default
 
 
+def recorded_md5(directory: Path) -> dict[str, str]:
+    """name -> md5 from the `ok` file beside a `dist/` that tools/pairs/pair_build.sh built (`<md5>  <name>` lines, written at build time), else empty."""
+    ok = directory.parent / "ok"
+    if directory.name != "dist" or not ok.is_file():
+        return {}
+    pairs = (line.split() for line in ok.read_text().splitlines())
+    return {fields[1]: fields[0] for fields in pairs if len(fields) == 2 and len(fields[0]) == 32}
+
+
+def md5_of(binary: Path) -> str:
+    return hashlib.md5(binary.read_bytes()).hexdigest()
+
+
 def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, str, float]]:
-    """(binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
+    """A binary of a pair_build dist is judged by its md5 against the `ok` record (`recorded_md5`), not by time. (binary, its mtime, the newest source it is built from, that source's mtime) for each binary in `directory` older than a file cargo's dep-info says it is
     built from, or than the toolchain patches (build.rs reruns on them; dep-info does not list them) of the tree they were built from, which is `repo` unless
     their dep-info names another. A directory without dep-info is not checked."""
     repo = built_from(directory, repo)
@@ -74,6 +96,11 @@ def stale_found(directory: Path, repo: Path = REPO) -> list[tuple[str, float, st
         if binary.name not in built_here or not binary.is_file():
             continue
         built = binary.stat().st_mtime
+        # a pair_build dist records each binary's md5 when it is built: that decides, not the mtime (a copy or a checkout moves mtimes, and touching one would pass the guard)
+        if recorded := recorded_md5(directory).get(binary.name):
+            if md5_of(binary) != recorded:
+                stale.append((binary.name, built, f"{directory.parent / 'ok'} (md5 differs)", built))
+            continue
         sources = [Path(path) for path in info.read_text().partition(":")[2].replace("\\\n", " ").split()]
         # Sources only: a build script rewrites its outputs under the target directory whenever it reruns.
         written = directory.resolve().parent
@@ -130,7 +157,7 @@ def pinned(binary: Path) -> Path:
         _pins.append(tempfile.mkdtemp(prefix="llrm-pin-", dir="/tmp"))
         atexit.register(shutil.rmtree, _pins[0], True)
     key = hashlib.sha256(str(binary).encode()).hexdigest()[:8]
-    room = PINNED_BYTES - len(_pins[0]) - len("/llrm-c") - 1
+    room = PINNED_BYTES - len(_pins[0]) - len("/") - len(binary.name) - 1
     folder = Path(_pins[0]) / (key + "p" * (room - len(key)))
     folder.mkdir(exist_ok=True)
     link = folder / binary.name

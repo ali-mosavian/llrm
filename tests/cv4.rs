@@ -38,7 +38,7 @@ fn linked(
 ) -> Vec<u8> {
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codeview");
     std::fs::copy(fixtures.join("m.c"), scratch.join("m.c")).unwrap();
-    let made = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let made = common::cc::llrm_c()
         .args(["-m16", "-g", "-O0"])
         .arg(scratch.join("m.c"))
         .arg("-o")
@@ -116,7 +116,7 @@ fn synthetic() -> (llrm_object::Object, String) {
         Block, Enumerator, File, Function, Info, Kind, Language, Line, Location, Range, Register, Scalar, Type,
         Variable,
     };
-    use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
+    use llrm_object::{Binding, Definition, Object, Role, Section, Symbol};
     let code = vec![
         0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x06, 0xC7, 0x46, 0xFE, 0x05, 0x00, 0xBE, 0x2A, 0x00, 0xC7, 0x46, 0xFC, 0x07,
         0x00, 0x8B, 0x46, 0xFC, 0x33, 0xC0, 0x8B, 0xE5, 0x5D, 0xCB,
@@ -179,7 +179,7 @@ fn synthetic() -> (llrm_object::Object, String) {
     };
     let object = Object {
         name: "syn.c".into(),
-        arch: Arch::I8086,
+        bits: 16,
         sections: vec![text],
         symbols: vec![
             Symbol {
@@ -226,7 +226,11 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     let scratch = tempfile::tempdir().unwrap();
     let (object, source) = synthetic();
     std::fs::write(scratch.path().join("syn.c"), source).unwrap();
-    std::fs::write(scratch.path().join("syn.obj"), llrm_core::objectfile::write::write(&object).unwrap()).unwrap();
+    std::fs::write(
+        scratch.path().join("syn.obj"),
+        llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf).unwrap(),
+    )
+    .unwrap();
     dosbox::run(
         &[('c', &borland), ('v', &microsoft), ('w', scratch.path())],
         "v:\\bin",
@@ -255,7 +259,7 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
 
 /// What `llrm-nib --os-layer FIELD` says of the real-mode target's OS layer.
 fn os_layer(field: &str) -> String {
-    let out = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().join("llrm-nib"))
+    let out = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().join("llrm-nib"))
         .args(["-m16", "--os-layer", field])
         .output()
         .unwrap();
@@ -273,13 +277,14 @@ fn os_layer(field: &str) -> String {
 fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
     let Some(screen) = nib_in_codeview("p", &["-O0"], &["bp add", "g", "p"]) else { return };
     // `add`'s parameters arrive in registers (regparm3); `-g` stores them to no
-    // cell (it changes no code). `b` stays in EDX over the whole function,
-    // a register variable CodeView reads; `a` is overwritten by the first
-    // instruction, has no place for a scope, and is left out. The local is
-    // in a cell.
-    for expected in ["long s = 2", "EDX reg long b = 3"] {
+    // cell (it changes no code). `a` is overwritten by the first instruction
+    // and `b`'s EDX is reused for `t` (`add edx, eax`: a load-defined value
+    // is not tied), so neither has one place over the function and neither is
+    // a variable of CodeView's. The locals are in cells.
+    for expected in ["long s = 2"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
+    assert!(!screen.contains("reg long b"), "`b`, its register reused for `t`, is a register variable:\n{screen}");
     assert!(!screen.contains("short a ="), "`a`, in no one place, is in CodeView's screen:\n{screen}");
 }
 
@@ -312,7 +317,7 @@ fn ms_link_links_a_comdat_per_procedure_and_the_program_runs() {
         skipped("needs VB/DOS's LINK (VBDOS_DIR)");
         return;
     };
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned();
     if !dosbox::binary().exists() || !bin.join("jwasm").exists() {
         skipped("needs the DOSBox-X this crate builds and jwasm beside the compiler");
         return;
@@ -348,7 +353,7 @@ fn ms_link_links_a_comdat_per_procedure_and_the_program_runs() {
         run(bin.join("jwasm"), args);
     }
     let nib = bin.join("llrm-nib");
-    let runtime = root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string();
+    let runtime = root.join("crates/frontends/nib/src/runtime/runtime.nib").display().to_string();
     for (program, cut, flags) in [("p.obj", "rt.obj", None), ("pg.obj", "rtg.obj", Some("-g"))] {
         let mut arguments: Vec<String> = vec!["-m16".into(), "-O0".into(), "--procedure-segments".into()];
         arguments.extend(flags.map(str::to_owned));
@@ -393,7 +398,7 @@ fn nib_in_codeview(
 ) -> Option<String> {
     let (Some(microsoft), bin) = (
         directory("VBDOS_DIR", "work/other/d32x/toolchains/vbdos", "BIN/CV.EXE"),
-        Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap().to_owned(),
+        Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned(),
     ) else {
         skipped("needs VB/DOS's LINK, CVPACK and CV (VBDOS_DIR)");
         return None;
@@ -429,7 +434,7 @@ fn nib_in_codeview(
         vec![
             "-m16".into(),
             "-O0".into(),
-            root.join("crates/frontends/llrm-nib/src/runtime/runtime.nib").display().to_string(),
+            root.join("crates/frontends/nib/src/runtime/runtime.nib").display().to_string(),
             "-o".into(),
             scratch.path().join("rt.obj").display().to_string(),
         ],

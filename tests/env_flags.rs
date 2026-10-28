@@ -3,11 +3,14 @@
 //! `LLRM_DEBUG=checks`, which prints a `[checks] NAME n` line for each oracle
 //! the compile reached.
 
-use std::path::Path;
-use std::process::Command;
+mod common;
 
 /// The oracles llrm-c reached compiling a small program with
 /// `LLRM_CHECK_<name>` set to `value`.
+///
+/// llrm-cc: the command is `common::cc::llrm_c()`, which names the target and
+/// keeps `LLRM_OW` and the pinned clang that the old `env_remove` of every
+/// `LLRM_*` variable dropped.
 fn reached(
     name: &str,
     value: Option<&str>,
@@ -16,9 +19,14 @@ fn reached(
     let source = directory.path().join("t.c");
     std::fs::write(&source, "int f(int a) { int s = 0; while (a--) s += a * 3; return s; }\n")
         .expect("writes the source");
-    let mut command = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")));
+    let mut command = common::cc::llrm_c();
     command.args(["-m32", "-O2", "-o", directory.path().join("t.obj").to_str().unwrap()]).arg(&source);
-    for (key, _) in std::env::vars_os().filter(|(key, _)| key.to_string_lossy().starts_with("LLRM_")) {
+    // The target and the pinned toolchain stay; only the switches under test
+    // go.
+    for (key, _) in std::env::vars_os().filter(|(key, _)| {
+        let key = key.to_string_lossy();
+        key.starts_with("LLRM_CHECK_") || key == "LLRM_DEBUG"
+    }) {
         command.env_remove(key);
     }
     command.env("LLRM_DEBUG", "checks");

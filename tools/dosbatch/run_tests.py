@@ -49,7 +49,7 @@ DEFAULT_FLAGS = ["-O2"]
 KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "stdin", "mask", "targets")
 FLAT = dosbatch.linkrecipe.named(32)
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
-COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
+COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-cc"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
 
 
@@ -160,18 +160,36 @@ def first_difference(want: list[str], got: list[str]) -> str:
 def compile_command(program: Program, obj: Path) -> list[str]:
     """The compiler's command for `program`; a C program goes through $LLRM_ISEL (see dosbatch.with_isel)."""
     tool, *rest = COMPILERS[program.source.suffix]
+    tool = dosbatch.c_frontend() if program.source.suffix == ".c" else tool
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
-        dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
-    command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, "-o", str(obj)]
+        # llrm-cc reads the row's own llrm_os.h (-isystem); llrm-c's is for llrm-c's pragmas
+        dialect = [] if dosbatch.c_frontend() == "llrm-cc" else ["-I", str(dosbatch.c_include(target, obj.parent))]
+    # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
+    excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
+    extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
+    if program.source.suffix == ".c" and dosbatch.c_frontend() == "llrm-cc":
+        # llrm-cc takes the target as a row (compile_env), not a -m flag, and stops at the object with -c.
+        tool, flags = "llrm-cc", [one for one in program.flags if one not in ("-m16", "-m32")]
+        command = [str(BIN / tool), "-c", str(program.source), *rest, *dialect, *flags, *excess, *extra, "-o", str(obj)]
+        return dosbatch.with_isel(command)
+    command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, *excess, *extra, "-o", str(obj)]
     # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
     real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
     return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)
 
 
+def compile_env(program: Program) -> dict[str, str]:
+    """What `compile_command` needs set: llrm-cc's target row, for a C program where the run builds C with it."""
+    if program.source.suffix != ".c" or dosbatch.c_frontend() != "llrm-cc":
+        return {}
+    return dosbatch.c_compile(program.source, Path("x.obj"), dosbatch.target_of(program.flags, dosbatch.REAL_MODE), "-O2", Path("."), [])[1]
+
+
 def compile_one(program: Program, obj: Path) -> str | None:
-    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True)
+    env = compile_env(program)
+    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-600:]
     return None
@@ -219,7 +237,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
-            dosbatch._host(dosbatch.with_isel([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), *abi, level, "-o", str(obj)]))
+            command, env = dosbatch.c_compile(source, obj, target, level, include, abi)
+            dosbatch._host(command, env)
         objects.append(obj)
     return tuple(objects)
 
@@ -272,9 +291,10 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 elif source.suffix == ".asm":
                     dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
                 else:
-                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
+                    command, env = dosbatch.c_compile(source, extra, target, level, dosbatch.c_include(target, work), [one for one in program.flags if one.startswith("-mabi=")])
+                    dosbatch._host(command, env)
                 others.append(extra)
-            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others), defines=dosbatch.os_defines(target, "c", next((one[len("-mabi="):] for one in program.flags if one.startswith("-mabi=")), None)))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"
@@ -311,7 +331,7 @@ def main() -> int:
         # Only the programs whose target has that ABI: the compilers refuse the others.
         has = {}
         for target in dosbatch.target_modes():
-            done = subprocess.run([str(BIN / "llrm-c"), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
+            done = subprocess.run([str(BIN / dosbatch.c_frontend()), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
             has[target] = done.returncode == 0
         programs = [dataclasses.replace(p, flags=[*p.flags, f"-mabi={args.abi}"]) for p in programs if p.source.suffix in (".c", ".nib") and not any(one.startswith("-mabi=") for one in p.flags) and has[dosbatch.target_of(p.flags, dosbatch.REAL_MODE)] and not any(one.endswith(".wc") for one in p.link)]
     for program in [one for one in programs if unavailable(one)]:

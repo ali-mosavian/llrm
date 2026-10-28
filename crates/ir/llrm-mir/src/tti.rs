@@ -293,6 +293,19 @@ pub trait Tti {
         true
     }
 
+    /// Whether a `sext` or `zext` of a simple load is free: the target has the
+    /// extending load and both types legalize alike
+    /// (`BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1298-1311, which
+    /// `cast_cost` cannot see without the instruction).
+    fn ext_load_free(
+        &self,
+        _op: CastKind,
+        _dst: Ty,
+        _src: Ty,
+    ) -> bool {
+        false
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its
@@ -306,6 +319,14 @@ pub trait Tti {
     /// instruction (X86: a far call is 5 bytes and a push 1 to 4, against 2 to
     /// 3 for an ALU instruction); 100: as counted.
     fn call_code_size_percent(&self) -> i64 {
+        100
+    }
+
+    /// How many percent of its `CodeSize` units an instruction that touches a
+    /// float takes in code, where the target's unit undercounts it (16-bit
+    /// x87: every operand moves through the register stack, a load or store
+    /// each side of an operation the unit counts once); 100: as counted.
+    fn float_code_size_percent(&self) -> i64 {
         100
     }
 
@@ -554,6 +575,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU3: whether a rewrite the cost model rates worse than the loop
+    /// as written is dropped when it needs more registers than exist.
+    fn lsr_drops_spilling_solution(&self) -> bool {
+        false
+    }
+
     /// `canMacroFuseCmp`: a compare fuses with the branch that reads it.
     fn can_macro_fuse_cmp(&self) -> bool {
         false
@@ -582,6 +609,13 @@ pub trait Tti {
     /// LU1, `lsr_use.rs`).
     fn scaled_index_insns(&self) -> u32 {
         0
+    }
+
+    /// Whether the target adds registers and an immediate in one instruction
+    /// whatever the use (x86's `lea`): an unfolded offset beside two or more
+    /// registers then costs no add of its own. DEVIATE LU2 (`lsr_use.rs`).
+    fn address_form_adds_offsets(&self) -> bool {
+        false
     }
 
     /// `getCastInstrCost`.

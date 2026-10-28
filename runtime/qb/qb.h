@@ -41,6 +41,7 @@ enum {
     BE_STRINGFO = 16,
     BE_NORESUME = 19,
     BE_RESUME = 20,
+    BE_FIELD = 50,
     BE_FILENUM = 52,
     BE_NOFILE = 53,
     BE_FILEMODE = 54,
@@ -54,6 +55,8 @@ enum {
     BE_TOOMANY = 67,
     BE_UNAVAILABLE = 68,
     BE_HANDSOFF = 70,
+    BE_RENAMEDISK = 74,
+    BE_ACCESS = 75,
     BE_NOTFOUND = 76,
     FE_CORRUPT = 0x9000,
     FE_NOSTACK = 0x9007

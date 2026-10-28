@@ -3,7 +3,7 @@
 
     tools/dagisel/select_shadow.py LLRM_C SELECT_SHADOW [--src DIR] [--programs a,b] [--jobs N] [--out FILE]
 
-SELECT_SHADOW is `cargo build --release -p llrm-core --example select_shadow`. Each program is compiled
+SELECT_SHADOW is `cargo build --release -p llrm-codegen --example select_shadow`. Each program is compiled
 by `LLRM_C -m32 -march=i486 -O2 --dump`; the last IR the dump writes goes to the example (the DAG path:
 builder, legalizers, `select_node`) and to the pin's `llc -O2 -stop-after=finalize-isel` (through
 pin.py). Every defined function of the IR lands in exactly one bucket, so the total is fixed (a whole-program failure puts all its functions in one bucket; a program with no IR counts as one row). The first bucket that fits: a block the builder or a legalizer refuses

@@ -1,9 +1,13 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' ownf_free's loops: a FOR with a constant step is counted, its test one compare against the limit.
-' Main lost that (287e5640): the step was loaded each trip and tested for its sign, twice.
+' By-reference argument temporaries live in their own object, not in the module block
+' that holds the limit and step: a call receiving that block's address is taken to write
+' them, and the limit was loaded each trip and the step tested for its sign. The pin keeps one compare too (`--isel=old`, clang -m32 -O2 -march=i486 on
+' `for (i = 1; i <= 3000; i++) arrays(i % 50)`: `cmpl $3001`, `jl`); the bound's spelling
+' (2999 / 3000 / 3001) and its branch (jle / jl) are the optimiser's.
 ' CHECK-LABEL: $QB$MAIN proc
-' CHECK: cmp {{.*}}, 3000
-' CHECK: jle
+' CHECK: cmp {{.*}}, {{2999|3000|3001}}
+' CHECK: j{{l|le}}
 ' CHECK: $QB$MAIN endp
 ' Own frames: local dynamic arrays and strings are released at procedure exit. FRE
 ' reads the same after a loop of calls as before it. Numeric FRE does not build here

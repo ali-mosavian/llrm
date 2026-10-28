@@ -1,15 +1,18 @@
 //! A division by a constant is a multiply by its reciprocal where the multiply,
 //! priced by its operand, is cheaper.
 
-use std::process::Command;
+mod common;
 
-fn listing(source: &str) -> String {
+fn listing(
+    source: &str,
+    isel: &str,
+) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
-        .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "a.s", "a.c"])
+        .args(["-m32", "-mabi=sysv", "-O2", "-march=i486", &format!("--isel={isel}"), "-S", "-o", "a.s", "a.c"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
@@ -30,20 +33,28 @@ fn function(
 /// known-zero bits, not its leading ones), so a dividend of 30 bits read as
 /// unknown and was priced at the middle of the range: `mul`, 41 clocks, for
 /// `div`'s 40. And one of 16 bits, a quarter of the price, read as unknown too.
+///
+/// `wide` keeping its division is the 486 deviation: the pin multiplies it
+/// (clang-24 `imull`), the old selector prices the early-out and keeps `div`.
+/// The 16-bit case runs on `--isel=dag`: CVP (its second slot, #2398) narrows
+/// the divide to i16, which the old selector does not expand (`div cx`) and the
+/// pin and the DAG selector multiply. Flip condition: the DAG default lands
+/// before the main merge (docs: flip-conditions).
 #[test]
 fn test_a_dividend_of_30_bits_keeps_the_division_and_one_of_16_is_multiplied() {
     let text = listing(
         "unsigned wide(unsigned x) { return (x & 0x3fffffff) / 10; }
-unsigned narrow(unsigned x) { return (x & 0xffff) / 10; }
 unsigned unknown(unsigned x) { return x / 10; }
 unsigned nonnegative(unsigned x) { return (x & 0x7fffffff) / 10; }",
+        "old",
     );
-    let (wide, narrow, unknown) = (function(&text, "wide"), function(&text, "narrow"), function(&text, "unknown"));
-    let nonnegative = function(&text, "nonnegative");
+    let (wide, unknown, nonnegative) =
+        (function(&text, "wide"), function(&text, "unknown"), function(&text, "nonnegative"));
     assert!(wide.contains("div ") && !wide.contains("mul "), "{wide}");
-    assert!(narrow.contains("mul ") && !narrow.contains("div "), "{narrow}");
     assert!(unknown.contains("mul ") && !unknown.contains("div "), "an unknown dividend is gcc's: {unknown}");
     // No more than "not negative" is not a length: a loop counter below INT_MAX
     // runs far lower.
     assert!(nonnegative.contains("mul ") && !nonnegative.contains("div "), "{nonnegative}");
+    let narrow = function(&listing("unsigned narrow(unsigned x) { return (x & 0xffff) / 10; }", "dag"), "narrow");
+    assert!(narrow.contains("mul ") && !narrow.contains("div "), "{narrow}");
 }

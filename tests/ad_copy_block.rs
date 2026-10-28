@@ -2,8 +2,12 @@
 //! PRESERVE): a block copy, not the byte loop the C source was. At -m32 it was
 //! `movzx eax, byte ptr [..]; mov byte ptr [..], al` per byte; at -m16, the
 //! same over two far pointers.
+//!
+//! llrm-cc: the sources are compiled with the `dev/` headers on the include
+//! path, and the m32 one declares `str_free_bytes` (clang rejects the implicit
+//! declaration Watcom took).
 
-use std::process::Command;
+mod common;
 
 fn listing(
     directory: &str,
@@ -11,12 +15,21 @@ fn listing(
 ) -> String {
     let root = env!("CARGO_MANIFEST_DIR");
     let scratch = tempfile::tempdir().unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(flags)
         .args(["-O2", "-S", "-o", "ad.s"])
         .args(["-I", &format!("{root}/runtime/qb/dos/{directory}")])
-        .args(["-I", &format!("{root}/runtime/qb/dos"), "-I", &format!("{root}/runtime/qb")])
+        .args([
+            "-I",
+            &format!("{root}/runtime/qb/dev/dos/{directory}"),
+            "-I",
+            &format!("{root}/runtime/qb/dev"),
+            "-I",
+            &format!("{root}/runtime/qb/dos"),
+            "-I",
+            &format!("{root}/runtime/qb"),
+        ])
         .arg(format!("{root}/runtime/qb/dos/{directory}/ad.c"))
         .output()
         .unwrap();

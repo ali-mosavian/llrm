@@ -6,12 +6,12 @@
 //! arithmetic, `inbounds` on pointer arithmetic. The last two hold for
 //! objects of at most PTRDIFF_MAX bytes, as clang assumes of every object.
 
-use llrm_core::hir::facts::{Builder as Facts, Subject};
-use llrm_core::hir::model::{
+use llrm_codegen::hir::facts::{Builder as Facts, Subject};
+use llrm_codegen::hir::model::{
     self as h, AddressKind, CallDistance, DataLinkage, FloatEvaluation, FloatReturn, Number, Op, Operand, StackCleanup,
     Storage, TerminatorKind, TypeKind,
 };
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::support::hash::IndexMap;
 use llrm_mir::facts::Fact;
 use llrm_mir::types::FloatKind;
 use llrm_support::hash::{HashMap, HashSet};
@@ -199,7 +199,7 @@ pub fn program(
     // A call keeps what its target's C convention does not clobber; the
     // compiler's constants go in CONST.
     let contract = crate::raise_hir::contract(convention, String::new(), true, 0);
-    let preserved = llrm_core::abi::runtime::preserves(&contract);
+    let preserved = llrm_codegen::abi::runtime::preserves(&contract);
     Ok(h::Program {
         zeroed_locals: false,
         promises,
@@ -962,7 +962,7 @@ fn in_their_slots(
     if !interrupt && !variadic {
         return Ok(());
     }
-    let exposed = llrm_core::hir::escape::exposed_frame(function);
+    let exposed = llrm_codegen::hir::escape::exposed_frame(function);
     // STDARG.H's __size: rounded up to an int, the two bytes of Borland's.
     let rounded = |sizes: &[i64]| sizes.iter().map(|size| (size + 1) & !1).sum::<i64>();
     // A struct parameter whose address is taken lives in its words' slots,
@@ -3940,7 +3940,7 @@ mod tests {
             &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
         )
         .unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+        let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         emitted.module
     }
@@ -4078,7 +4078,7 @@ mod tests {
     }
 
     /// `fixture`'s HIR program.
-    fn program_of(fixture: &str) -> llrm_core::hir::model::Program {
+    fn program_of(fixture: &str) -> llrm_codegen::hir::model::Program {
         let text =
             std::fs::read_to_string(Path::new(env!("LLRM_ROOT")).join("tests/fixtures/c").join(fixture)).unwrap();
         super::program(
@@ -4119,7 +4119,7 @@ mod tests {
                     &crate::compile::Profile::of(&llrm_x86_m16::M16).unwrap(),
                 )
                 .ok()?;
-                llrm_core::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
+                llrm_codegen::hir::verify::verify(&program).err().map(|why| format!("{fixture}: {why:?}"))
             })
             .collect();
         assert!(invalid.is_empty(), "{invalid:#?}");
@@ -4132,29 +4132,30 @@ mod tests {
         let mut program = program_of("bytes.cgs");
         let machine = llrm_x86_m16::machine::BUILT_IN.clone();
         let options = llrm_driver::m16_options(machine);
-        assert!(llrm_core::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
+        assert!(llrm_codegen::driver::emitted(&program, &options).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module
             .types
             .iter()
-            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .find(|one| one.kind == llrm_codegen::hir::model::TypeKind::Integer && one.width == 1)
             .map(|one| one.id)
             .expect("a byte type");
         let stored =
             module.functions.iter_mut().flat_map(|one| &mut one.blocks).flat_map(|one| &mut one.instructions).find(
                 |one| {
-                    one.op == llrm_core::hir::model::Op::Store
+                    one.op == llrm_codegen::hir::model::Op::Store
                         && matches!(
                             &one.operands[0],
-                            llrm_core::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
+                            llrm_codegen::hir::model::Operand::IndirectPlace(place) if place.r#type != byte
                         )
                 },
             );
-        let Some(llrm_core::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0]) else {
+        let Some(llrm_codegen::hir::model::Operand::IndirectPlace(place)) = stored.map(|one| &mut one.operands[0])
+        else {
             panic!("premise: a store through a pointer")
         };
         place.r#type = byte;
-        let why = llrm_core::driver::emitted(&program, &options).err().unwrap_or_default();
+        let why = llrm_codegen::driver::emitted(&program, &options).err().unwrap_or_default();
         assert!(why.contains("store value type does not match its place"), "{why}");
     }
 
@@ -4163,12 +4164,12 @@ mod tests {
     #[test]
     fn test_a_stated_pointee_still_bounds_an_indirect_place() {
         let mut program = program_of("bytes.cgs");
-        assert!(llrm_core::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
+        assert!(llrm_codegen::hir::verify::verify(&program).is_ok(), "premise: valid as raised");
         let module = &mut program.modules[0];
         let byte = module
             .types
             .iter()
-            .find(|one| one.kind == llrm_core::hir::model::TypeKind::Integer && one.width == 1)
+            .find(|one| one.kind == llrm_codegen::hir::model::TypeKind::Integer && one.width == 1)
             .map(|one| one.id)
             .expect("a byte type");
         let wider = |ty: i64| module.types.iter().find(|one| one.id == ty).is_some_and(|one| one.width > 1);
@@ -4179,7 +4180,7 @@ mod tests {
             .flat_map(|one| &one.instructions)
             .flat_map(|one| &one.operands)
             .find_map(|operand| match operand {
-                llrm_core::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
+                llrm_codegen::hir::model::Operand::IndirectPlace(place) if wider(place.r#type) => Some(place.base),
                 _ => None,
             })
             .expect("premise: a place wider than a byte, read through a pointer");
@@ -4199,7 +4200,7 @@ mod tests {
                 value.r#type = narrowed;
             }
         }
-        let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+        let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("exceeds its pointee"), "{why:?}");
     }
 
@@ -4208,7 +4209,11 @@ mod tests {
     #[test]
     fn test_an_indirect_calls_order_is_over_its_arguments() {
         let mut program = program_of("codeptrs.cgs");
-        assert!(llrm_core::hir::verify::verify(&program).is_ok(), "{:?}", llrm_core::hir::verify::verify(&program));
+        assert!(
+            llrm_codegen::hir::verify::verify(&program).is_ok(),
+            "{:?}",
+            llrm_codegen::hir::verify::verify(&program)
+        );
         let function = program.modules[0]
             .functions
             .iter_mut()
@@ -4216,7 +4221,7 @@ mod tests {
             .unwrap();
         let site = function.calls.iter_mut().find(|site| !site.order.is_empty()).unwrap();
         site.order.iter_mut().for_each(|one| *one += 1);
-        let why = llrm_core::hir::verify::verify(&program).unwrap_err();
+        let why = llrm_codegen::hir::verify::verify(&program).unwrap_err();
         assert!(format!("{why:?}").contains("invalid argument order"), "{why:?}");
     }
 
@@ -4311,7 +4316,7 @@ mod tests {
         };
         let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
         let program = super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
-        let emitted = llrm_core::hir::mir::emit(&program, &layout).swap_remove(0);
+        let emitted = llrm_codegen::hir::mir::emit(&program, &layout).swap_remove(0);
         assert_eq!(emitted.refused, Vec::<(String, String)>::new());
         defined(&emitted.module, "_f")
     }
@@ -4349,7 +4354,7 @@ mod tests {
             let text = crate::compile::recorded_for(&path, &[], false, &[], &profile).expect("wccq records x.c");
             let program =
                 super::program(&hir::unit(&stream::parse(&text)).unwrap(), "test", calling, &profile).unwrap();
-            let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
+            let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout()).swap_remove(0);
             assert_eq!(emitted.refused, Vec::<(String, String)>::new());
             defined(&emitted.module, "_f")
         };
@@ -4482,11 +4487,22 @@ mod tests {
         assert!(text.contains("O_CONVERT") && text.contains("TY_LONG_DOUBLE"), "the shape the front end refused");
         let module = raised("longdouble.cgs");
         let printed = llrm_mir::print::module(&module);
-        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80", "sitofp i16"] {
+        // An integer constant converts at once (x86_fp80 constants fold
+        // exactly); the integer conversion is the next test's.
+        for conversion in ["fptrunc x86_fp80", "fpext double", "fptosi x86_fp80"] {
             assert!(printed.contains(conversion), "{conversion}: {printed}");
         }
         let main = defined(&module, "_main");
-        assert!(main.contains("sitofp") && main.contains("x86_fp80"), "{main}");
+        assert!(main.contains("fmul x86_fp80") && main.contains("4.000000e+00"), "{main}");
+    }
+
+    /// A short that is no constant converts to a long double by `sitofp`.
+    // It records C through wccq, which only the toolchain feature builds.
+    #[cfg(feature = "toolchain")]
+    #[test]
+    fn test_a_short_converts_to_a_long_double_by_sitofp() {
+        let text = raised_c("long double __cdecl f(short s) { return s; }\n", false);
+        assert!(text.contains("sitofp i16") && text.contains("x86_fp80"), "{text}");
     }
 
     /// `*seed` is a short's access: C's int2 class, not the character type.

@@ -33,6 +33,21 @@ fn add_of_two_registers_is_add32rr() {
     assert_eq!(dag.nodes[add as usize].ops, [a, b]);
 }
 
+/// Each selection built its own node stack and match scopes (five allocations
+/// and their growth a node, 5,336 nodes in d_faces -O2); the buffers are kept
+/// for the next selection now.
+#[test]
+fn the_buffers_of_a_selection_are_kept_for_the_next() {
+    let mut dag = TestDag::new();
+    let a = dag.input(1, mvt::i32);
+    let b = dag.input(2, mvt::i32);
+    let add = dag.node(isd::ADD, &[mvt::i32], &[a, b]);
+    let selector = Selector::new(table::TABLE);
+    let mut hooks = TestHooks { address: None };
+    assert_eq!(selector.select(&mut dag, &mut hooks, add), Outcome::Selected);
+    assert!(crate::interp::kept_capacity() > 0, "nothing was kept");
+}
+
 #[test]
 fn a_load_through_an_address_pattern_is_mov32rm_with_five_address_operands() {
     let mut dag = TestDag::new();
@@ -131,7 +146,7 @@ mod x86_addr {
     }
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32, size: false }
     }
 
     #[test]
@@ -401,7 +416,7 @@ mod address_folds {
     use crate::x86_addr::{AddressMode, Matcher};
 
     fn matcher(dag: &mut TestDag) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32 }
+        Matcher { dag, pointer_type: mvt::i32, mode: crate::x86_addr::AddrMode::Flat32, size: false }
     }
 
     fn masked_shift(
@@ -546,7 +561,7 @@ mod real_mode_addresses {
         dag: &mut TestDag,
         mode: AddrMode,
     ) -> Matcher<'_, TestDag> {
-        Matcher { dag, pointer_type: mvt::i16, mode }
+        Matcher { dag, pointer_type: mvt::i16, mode, size: false }
     }
 
     #[test]
@@ -787,12 +802,12 @@ mod far_pointer_loads {
         assert_eq!(name_in(x86_m16::MACHINE_OPCODES, &dag, wrapped.node), "MOV16ri");
     }
 
-    /// Real mode has no scaled index, so `lea` cannot take a multiply by 3, 5
-    /// or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
-    /// functions).
+    /// Real mode has no scaled index, so a word `lea` cannot take a multiply by
+    /// 3, 5 or 9 and the combiner's `MUL_IMM` stayed unselected (8 m16 corpus
+    /// functions). A dword one is the 386's 32-bit `lea`, as in the pin.
     #[test]
     fn a_multiply_by_a_lea_constant_is_imul_when_lea_cannot_take_it() {
-        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "IMUL32rri")] {
+        for (vt, want) in [(mvt::i16, "IMUL16rri"), (mvt::i32, "LEA32r")] {
             let mut dag = TestDag::new();
             let x = dag.input(1, vt);
             let three = dag.make_constant(3, vt);
@@ -1319,7 +1334,7 @@ mod symbol_plus_two_registers {
             let mut am = AddressMode::default();
 
             assert!(
-                !Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }
+                !Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32, size: false }
                     .match_address(address, &mut am)
             );
 
@@ -1427,7 +1442,8 @@ mod masked_operand_that_is_not_a_shift {
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i32], &[a, masked]), 0);
         let mut am = AddressMode::default();
 
-        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32 }.match_address(address, &mut am);
+        Matcher { dag: &mut dag, pointer_type: mvt::i32, mode: AddrMode::Flat32, size: false }
+            .match_address(address, &mut am);
     }
 }
 
@@ -1885,13 +1901,14 @@ mod x64_table {
         let two = dag.make_constant(2, mvt::i8);
         let scaled = SDValue::new(dag.node(isd::SHL, &[mvt::i64], &[index, two]), 0);
         let address = SDValue::new(dag.node(isd::ADD, &[mvt::i64], &[base, scaled]), 0);
-        let ops =
-            Matcher { dag: &mut dag, pointer_type: mvt::i64, mode: AddrMode::Flat64 }.select_addr(address).unwrap();
+        let ops = Matcher { dag: &mut dag, pointer_type: mvt::i64, mode: AddrMode::Flat64, size: false }
+            .select_addr(address)
+            .unwrap();
         assert_eq!(dag.nodes[ops.scale.node as usize].constant, Some(4));
     }
 
     fn rip_matcher(dag: &mut TestDag) -> crate::x86_addr::Matcher<'_, TestDag> {
-        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64 }
+        crate::x86_addr::Matcher { dag, pointer_type: mvt::i64, mode: crate::x86_addr::AddrMode::Flat64, size: false }
     }
 
     /// A `WrapperRIP` global had no arm: it stayed a register operand, not

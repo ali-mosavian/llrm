@@ -44,6 +44,31 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 /// The 16-bit x86 target as `llrm-driver` names it.
 pub struct M16;
 
+/// The registers the description states.
+static REGISTERS: std::sync::LazyLock<Vec<llrm_target::registers::Register>> = std::sync::LazyLock::new(|| {
+    llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses")
+});
+
+/// The pin's register pressure sets for the registers described above:
+/// `pressure.sets` (the pin's x86 tables are the same for 16 and 32 bits).
+static PRESSURE: std::sync::LazyLock<llrm_target::pressure::PressureSets> = std::sync::LazyLock::new(|| {
+    llrm_target::pressure::parse(include_str!("pressure.sets")).expect("pressure.sets parses")
+});
+
+impl M16 {
+    /// The limit of pressure set `set` here (`computePSetLimit`): a register
+    /// may be allocated if its root is a `gpr`.
+    fn pressure_limit(set: usize) -> u32 {
+        PRESSURE.limit(set, |name| {
+            REGISTERS
+                .iter()
+                .find(|one| one.name == name)
+                .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                .is_some_and(|root| root.is("gpr"))
+        })
+    }
+}
+
 fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::target::Machine> {
     let mut dos = Dos::priced(
         &prices.costs,
@@ -70,6 +95,23 @@ impl llrm_target::Target for M16 {
         GENERAL.len() as i64
     }
 
+    fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
+        Some((
+            &PRESSURE,
+            (0..PRESSURE.sets.len())
+                // A set whose largest class the table leaves out holds no value
+                // here: its raw limit stands.
+                .map(|set| {
+                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
+                        M16::pressure_limit(set)
+                    } else {
+                        PRESSURE.sets[set].limit
+                    }
+                })
+                .collect(),
+        ))
+    }
+
     fn march(
         &self,
         name: &str,
@@ -89,7 +131,7 @@ impl llrm_target::Target for M16 {
         instructions::TEXT.clone()
     }
 
-    fn dialect(&self) -> &'static llrm_instr::Dialect {
+    fn dialect(&self) -> &'static llrm_target::instr::Dialect {
         llrm_x86::instructions::dialect()
     }
 
@@ -117,6 +159,15 @@ impl llrm_target::Target for M16 {
         wide_divisor: bool,
     ) -> Result<llrm_target::routines::Divide, String> {
         llrm_x86::helpers::divide(signed, wide_divisor, 16).map_err(|refused| refused.message)
+    }
+
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_used(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
     }
 
     fn float_width(
@@ -196,6 +247,10 @@ impl llrm_target::Target for M16 {
 
     fn cost_model(&self) -> llrm_target::CostModel {
         cost_model
+    }
+
+    fn selects_by_dag(&self) -> bool {
+        true
     }
 
     fn name(&self) -> &'static str {
@@ -287,6 +342,17 @@ impl llrm_target::Target for M16 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_registers(&self) -> Option<llrm_target::StringRegisters> {
+        Some(llrm_target::StringRegisters {
+            count: RegId::CX,
+            source: RegId::SI,
+            destination: RegId::DI,
+            source_segment: RegId::DS,
+            destination_segment: RegId::ES,
+            tail: RegId::DX,
+        })
     }
 
     /// A Borland caller keeps SI and DI, not their upper halves.
@@ -486,5 +552,22 @@ mod tests {
             CALLING.named("cdecl16").unwrap().clobbered.iter().any(|one| one == "es")
                 && !CALLING.named("ia16").unwrap().clobbered.iter().any(|one| one == "es")
         );
+    }
+}
+
+#[cfg(test)]
+mod pressure_tests {
+    use llrm_target::Target;
+
+    /// The scheduler counted every m16 value against one set of six registers
+    /// (`pressure` was `None`, DEVIATE MS5): a byte value and a word value took
+    /// the same room, and the pin's per-set limits (GR8 and GR16
+    /// ten) never applied.
+    #[test]
+    fn test_m16_has_the_pins_pressure_sets_and_their_limits() {
+        let (sets, limits) = super::M16.pressure().expect("m16 has pressure sets");
+        assert_eq!(sets.sets.len(), limits.len());
+        let limit = |name: &str| limits[sets.sets.iter().position(|set| set.name == name).expect(name)];
+        assert_eq!((limit("GR8"), limit("GR16"), limit("GR32_BPSP")), (10, 10, 6));
     }
 }

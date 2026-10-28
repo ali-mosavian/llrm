@@ -63,7 +63,7 @@ pub fn simplify_form_scans() -> usize {
 }
 
 /// `LoopInfoBase<BlockT, LoopT>`, over blocks `B`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct LoopInfo<B = BlockId> {
     /// `BBMap`: each block's innermost loop, by block number.
     bb_map: Vec<u32>,
@@ -72,6 +72,53 @@ pub struct LoopInfo<B = BlockId> {
     top_level: Vec<LoopId>,
     /// `BlockLayout`.
     layout: Vec<B>,
+}
+
+/// `LoopInfoBase::verify` compares each loop's header, parent and set of
+/// blocks, not the order they were found in: swapping a branch's arms walks the
+/// same CFG in another order, and numbers the loops in another order.
+impl<B: BlockNumber> PartialEq for LoopInfo<B> {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.by_header() == other.by_header()
+    }
+}
+
+impl<B: BlockNumber> LoopInfo<B> {
+    /// Each loop named by its header: its parent's header, its sub-loops'
+    /// headers and its other blocks, sorted; each block's innermost loop's
+    /// header; the top-level loops' headers.
+    #[allow(clippy::type_complexity)]
+    fn by_header(
+        &self
+    ) -> (std::collections::BTreeMap<usize, (Option<usize>, Vec<usize>, Vec<usize>)>, Vec<Option<usize>>, Vec<usize>)
+    {
+        let header = |id: LoopId| {
+            let one = &self.loops[id.0 as usize];
+            self.layout[one.start as usize].number()
+        };
+        let loops = self
+            .loops
+            .iter()
+            .enumerate()
+            .map(|(at, one)| {
+                let mut subs: Vec<usize> = one.sub_loops.iter().map(|&sub| header(sub)).collect();
+                subs.sort_unstable();
+                let mut rest: Vec<usize> = self.layout[one.start as usize + 1..(one.start + one.len) as usize]
+                    .iter()
+                    .map(|&block| block.number())
+                    .collect();
+                rest.sort_unstable();
+                (header(LoopId(at as u32)), (one.parent.map(header), subs, rest))
+            })
+            .collect();
+        let innermost = self.bb_map.iter().map(|&at| (at != u32::MAX).then(|| header(LoopId(at)))).collect();
+        let mut top: Vec<usize> = self.top_level.iter().map(|&one| header(one)).collect();
+        top.sort_unstable();
+        (loops, innermost, top)
+    }
 }
 
 impl<B> Default for LoopInfo<B> {
@@ -222,6 +269,22 @@ impl LoopGraph for Function {
             }
         }
         None
+    }
+
+    fn children(
+        &self,
+        block: BlockId,
+    ) -> impl Iterator<Item = BlockId> {
+        // The terminator is found once, not once per edge as `child` does.
+        let operands = self.terminator(block).map(|one| self.instruction(one).operands.as_slice()).unwrap_or_default();
+        operands
+            .iter()
+            .filter_map(
+                |operand| match operand {
+                    Operand::Block(target) => Some(*target),
+                    _ => None,
+                },
+            )
     }
 
     fn inverse_children(
@@ -773,6 +836,92 @@ impl Loop<'_, BlockId> {
         inst: crate::module::InstId,
     ) -> bool {
         function.parent(inst).is_some_and(|block| self.contains(block))
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L198
+    /// `getLatchCmpInst`: the `icmp` a conditional branch at the latch's end
+    /// tests.
+    pub fn get_latch_cmp_inst(
+        &self,
+        function: &Function,
+    ) -> Option<crate::module::InstId> {
+        let latch = self.get_loop_latch(function)?;
+        let branch = function.terminator(latch)?;
+        let instruction = function.instruction(branch);
+        if instruction.opcode != Opcode::Br || instruction.operands.len() != 3 {
+            return None;
+        }
+        let Operand::Value(cond) = instruction.operands[0] else { return None };
+        let crate::module::ValueDef::Instruction(inst) = function.value(cond).def else { return None };
+        matches!(function.instruction(inst).opcode, Opcode::ICmp(_)).then_some(inst)
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L148
+    /// `getIncomingAndBackEdge`: the header's two predecessors, the one outside
+    /// the loop first.
+    pub fn get_incoming_and_back_edge(
+        &self,
+        function: &Function,
+    ) -> Option<(BlockId, BlockId)> {
+        let preds = function.predecessors(self.get_header());
+        let [mut backedge, mut incoming] = preds[..] else { return None };
+        if self.contains(incoming) {
+            if self.contains(backedge) {
+                return None;
+            }
+            std::mem::swap(&mut incoming, &mut backedge);
+        } else if !self.contains(backedge) {
+            return None;
+        }
+        Some((incoming, backedge))
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L174
+    /// `getCanonicalInductionVariable`: a header phi that starts at 0 and adds
+    /// 1 on the backedge.
+    pub fn get_canonical_induction_variable(
+        &self,
+        context: &crate::context::Context,
+        function: &Function,
+    ) -> Option<crate::module::InstId> {
+        use crate::context::ConstantKind;
+        use crate::module::ValueDef;
+        use crate::opcode::BinaryOp;
+        let (incoming, backedge) = self.get_incoming_and_back_edge(function)?;
+        let constant = |operand: Operand| match operand {
+            Operand::Constant(id) => match context.get(id).kind {
+                ConstantKind::Int(value) => Some(value),
+                ConstantKind::Zero => Some(0),
+                _ => None,
+            },
+            _ => None,
+        };
+        let value_for = |phi: crate::module::InstId, block: BlockId| {
+            function
+                .instruction(phi)
+                .operands
+                .chunks(2)
+                .find(|pair| pair[1] == Operand::Block(block))
+                .map(|pair| pair[0])
+        };
+        for phi in
+            function.iter_block(self.get_header()).take_while(|&inst| function.instruction(inst).opcode == Opcode::Phi)
+        {
+            if value_for(phi, incoming).and_then(constant) != Some(0) {
+                continue;
+            }
+            let Some(Operand::Value(next)) = value_for(phi, backedge) else { continue };
+            let ValueDef::Instruction(inc) = function.value(next).def else { continue };
+            let inc = function.instruction(inc);
+            let this = function.instruction(phi).result.map(Operand::Value);
+            if inc.opcode == Opcode::Binary(BinaryOp::Add)
+                && Some(inc.operands[0]) == this
+                && constant(inc.operands[1]) == Some(1)
+            {
+                return Some(phi);
+            }
+        }
+        None
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L67

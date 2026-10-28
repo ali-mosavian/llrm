@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/flagscopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/flagscopy.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/flagscopy.rs sha256:ab68d9e83ab21c1c8e54a5c7a6e4e2d4d28fd94459a92debda6e241a5f1b7204 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/flagscopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/flagscopy.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/flagscopy.rs sha256:79c32d9e66ae9efe7f7ef3df058c547d3c963335a49cdec9387f9619489c0eda -->
 
 # flagscopy
 

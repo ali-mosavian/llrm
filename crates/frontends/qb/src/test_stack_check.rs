@@ -1,7 +1,7 @@
 //! `-fsanitize=stack`: the limit and the handler are what the runtime's
 //! description says.
 
-use llrm_core::hir::model::{Program, StackCheck};
+use llrm_codegen::hir::model::{Program, StackCheck};
 
 use super::driver as qb_driver;
 use super::test_hir::{between, listing, written};
@@ -33,7 +33,7 @@ fn procedure(program: &Program) -> String {
 fn the_limit_and_handler_come_from_the_runtime_description() {
     for runtime in RUNTIMES {
         let mut checked = program(runtime, true, SOURCE);
-        assert_eq!(checked.stack_check, llrm_core::abi::runtime::semantics::stack(runtime), "{runtime}");
+        assert_eq!(checked.stack_check, llrm_codegen::abi::runtime::semantics::stack(runtime), "{runtime}");
         checked.stack_check = Some(StackCheck {
             limit: "FOO".into(),
             handler: "BAR".into(),
@@ -73,10 +73,10 @@ fn the_default_build_checks_nothing() {
                 !text.contains("pendchk") && !text.contains("ERR_OSS") && !text.contains("B$ENRD"),
                 "{runtime}: {text}"
             );
-            let mir = llrm_core::hir::mir::emit(&plain, &llrm_x86_m16::layout());
+            let mir = llrm_codegen::hir::mir::emit(&plain, &llrm_x86_m16::layout());
             assert!(mir.iter().all(|one| !format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
         }
-        let marked = llrm_core::hir::mir::emit(&program(runtime, true, SOURCE), &llrm_x86_m16::layout());
+        let marked = llrm_codegen::hir::mir::emit(&program(runtime, true, SOURCE), &llrm_x86_m16::layout());
         assert!(marked.iter().any(|one| format!("{:?}", one.module.globals).contains("stackcheck")), "{runtime}");
     }
 }

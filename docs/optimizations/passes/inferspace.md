@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferspace.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferspace.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:d92daa9c9e794ca9d76c976c41dfe5e791299d74fecd85c2c8522bb769615b9b -->
+<!-- src: crates/opt/llrm-transforms/src/inferspace.rs sha256:2aea7f2644346987cd8ebd6bee01bdef934bc3ca10c85860c7a45212a85ef23b -->
 
 # inferspace
 
@@ -10,6 +10,10 @@ allow it, so an access needs no segment register loaded and held for it.
 `addrspacecast` of a near pointer to a far space addresses what the near one
 does, so a load, a store or a `gep` through it can use the near pointer and
 drop the selector: no `les`, no segment register held across a loop.
+
+A far pointer that is a constant cast of a global (what forwarding a stored
+far pointer leaves where its load was) is read the same way: a load or store
+through it, or through steps of it that only memory reads, uses the global.
 
 A far value narrows when every user is one that does not need the selector:
 a non-volatile load's or store's pointer, the base of a `gep`, a phi or

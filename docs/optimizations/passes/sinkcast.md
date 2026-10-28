@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcast.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcast.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcast.rs sha256:e485e0cbc11aa9b88b49b790571d9ce2008592b91e9e4be12c0c188029d1eb98 -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcast.rs sha256:e740a5cc0b696dbdbb2ab46403fc950aeeaf7802e5466c1ff44bcf76bb1350ba -->
 
 # sinkcast
 
@@ -26,8 +26,16 @@ comes from), and the original goes once nothing reads it:
 ```
 
 MIRROR: `SinkCast`, the two entry conditions, the promotion of a narrow
-integer to the register that holds it. The address-space cast (a free one
-is a target's: x86 has none) is left alone.
+integer to the register that holds it. The pin leaves the address-space
+cast alone (a free one is a target's: x86 has none).
+
+DEVIATE SD220 (real mode): a segment made a far pointer (`addrspacecast`
+from the segment space to the far or huge one) is sunk too. Far pointers
+are ours, the pin has no such cast: its offset is the constant 0, and
+left in one block the halves cross every block edge in registers
+(`xor ebx, ebx` and a base register per store, deedlines COPPER +398 B).
+Owner w12. Exit: a `isFreeAddrSpaceCast` hook on the target. Review
+2026-12-10.
 
 ## Example
 `test_a_pointer_cast_read_in_another_block_is_made_there` in

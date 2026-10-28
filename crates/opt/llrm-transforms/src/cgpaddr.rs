@@ -38,7 +38,8 @@
 //!
 //! DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 //! rebuilds an address expression in the block that uses it, and by the select
-//! and switch lowering; this file is the compare and address-phi part.
+//! lowering; the width of a switch condition is `cgpswitch`'s
+//! (`optimizeSwitchType`); this file is the compare and address-phi part.
 //! Evidence, 2026-10-23, per function on the same IR against the pin's `llc`
 //! with and without the pass (`docs/working/codegenprepare.md`): at m32 the
 //! pass changes 16-17 of about 160 functions in the pin and ours is at its
@@ -116,7 +117,7 @@
 //! access, has the address made again just before it; a `select` of two offsets
 //! of one base selects the offsets. DEVIATE CGP1: no promoted extensions
 //! (`TypePromotionTransaction`), no phi combiner (the phi of equal addresses is
-//! merged above), no base-register-and-global form and no matching through
+//! merged above) and no matching through
 //! `ptrtoint`/`inttoptr`. Exit: those translated.
 
 use std::collections::BTreeMap;
@@ -127,7 +128,7 @@ use llrm_analysis::num::Num as BigInt;
 use llrm_mir::context::{ConstantKind, Context, signed};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
+use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{self, Analyses, Dominators, FunctionPass, Loops, PreservedAnalyses};
 use llrm_mir::tti::Tti;
@@ -144,7 +145,7 @@ pub struct CgpAddr;
 
 #[cfg(test)]
 #[path = "cgpaddr_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "cgpaddr_sink_tests.rs"]
@@ -168,15 +169,26 @@ impl FunctionPass for CgpAddr {
         // nothing after this needs loop-closed form, and isel cannot
         // fold a phi into an addressing mode.
         let merged = crate::emptyblocks::eliminated(unit.context, unit.function);
+        // `dupRetToEnableTailCallOpts`: a return after a tail call is the
+        // call's.
+        let merged =
+            crate::cgpretdup::returns_duplicated(unit.context, &analyses.outer().globals, unit.function) | merged;
         let closed = trivial_phis(unit.context, unit.layout, unit.function);
         let branched = crate::cgpbranch::branches_optimized(
             unit.context,
             unit.function,
             analyses.outer().target().lowering().as_deref(),
         );
+        // `optimizeSwitchInst`'s `optimizeSwitchType`.
+        let switches = match analyses.outer().target().lowering() {
+            Some(lowering) => {
+                crate::cgpswitch::switch_types_widened(unit.context, unit.layout, &*lowering, unit.function)
+            }
+            None => false,
+        };
         // Blocks and edges are as they were.
         let one_flag = !analyses.outer().target().multiple_condition_registers();
-        let sunk_compares = one_flag && compares_sunk(unit.function);
+        let sunk_compares = one_flag && compares_sunk(unit.context, &analyses.outer().globals, unit.function);
         let compares = match analyses.outer().target().lowering() {
             Some(lowering) => {
                 let outer = std::rc::Rc::clone(analyses.outer());
@@ -187,8 +199,21 @@ impl FunctionPass for CgpAddr {
         let masks =
             one_flag && masks_sunk(unit.context, unit.function, analyses.outer().target().lowering().as_deref());
         let phis = phis_sunk(unit.function);
+        // `optimizeCallInst`'s memory intrinsics: their pointers' known
+        // alignment.
+        let aligned = {
+            let outer = std::rc::Rc::clone(analyses.outer());
+            crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
+        };
         let sunk_casts = match analyses.outer().target().lowering() {
-            Some(lowering) => crate::sinkcast::casts_sunk(unit.context, unit.layout, &*lowering, unit.function),
+            Some(lowering) => crate::sinkcast::casts_sunk(
+                unit.context,
+                unit.layout,
+                &*lowering,
+                analyses.outer().target().spaces(),
+                unit.function,
+                false,
+            ),
             None => false,
         };
         let extended = match analyses.outer().target().lowering() {
@@ -221,19 +246,36 @@ impl FunctionPass for CgpAddr {
             Some(tti) => sunk(unit, &*tti),
             None => false,
         };
+        // An address sunk into a loop reads the cast from where it was; made
+        // again there, the far pointer's zero offset folds into the address.
+        let resunk = addresses
+            && match analyses.outer().target().lowering() {
+                Some(lowering) => crate::sinkcast::casts_sunk(
+                    unit.context,
+                    unit.layout,
+                    &*lowering,
+                    analyses.outer().target().spaces(),
+                    unit.function,
+                    true,
+                ),
+                None => false,
+            };
         if merged {
             // A block went: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis
+            || aligned
             || branched
             || sunk_compares
             || masks
             || addresses
             || extended
             || sunk_casts
+            || resunk
             || split
             || remainders
             || compares
+            || switches
         {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else if closed {
@@ -394,6 +436,9 @@ fn ext_uses(
 /// is made of.
 struct Mode {
     base: Operand,
+    /// A second register, scale 1, under a global base (`BaseGV` with `BaseReg`
+    /// and `ScaledReg`: `@g + reg + scale * index`).
+    reg: Option<Operand>,
     offset: i128,
     index: Option<(Operand, u64)>,
     insts: Vec<InstId>,
@@ -411,6 +456,35 @@ fn address_of(
     }
 }
 
+/// Whether folding `address` (made from the register `held` and a global)
+/// into an access in `block` extends no live range that is not folded away:
+/// `held` is read in `block`, or `address` is read only as memory addresses.
+fn register_free(
+    unit: &passes::Unit,
+    block: BlockId,
+    held: Operand,
+    address: Operand,
+) -> bool {
+    let live = match held {
+        Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
+        _ => true,
+    };
+    live || matches!(
+        address,
+        Operand::Value(v) if crate::spill::address_only(unit.function, v, DEPTH)
+    )
+}
+
+fn is_global(
+    context: &Context,
+    operand: Operand,
+) -> bool {
+    matches!(
+        operand,
+        Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Global(_))
+    )
+}
+
 fn integer(
     context: &Context,
     operand: Operand,
@@ -426,8 +500,8 @@ fn integer(
 /// `Shl` case through `matchScaledValue`): the `shl`, `x` and the new scale,
 /// when the scaled mode is legal and folding extends no live range
 /// (`isProfitableToFoldIntoAddressingMode`: `x` is already used in the
-/// access's block). DEVIATE SHL1: the pin also folds where every use of the
-/// `shl` is an access that folds it; that case is left unfolded. DEVIATE SHL2:
+/// access's block, or every use of the `shl` is an access that folds it).
+/// DEVIATE SHL2:
 /// not where a scaled index costs instructions of its own
 /// (`scaled_index_insns`, real mode's prefix): each access would pay them,
 /// where the shift is made once (quicksort at m16 grew 21 bytes, a spill for
@@ -464,7 +538,14 @@ fn shifted(
         Operand::Value(v) => unit.function.users(v).iter().any(|one| unit.function.parent(one.user) == Some(block)),
         _ => true,
     };
-    live.then_some((shl, x, scaled))
+    // `isProfitableToFoldIntoAddressingMode`, the last case: every use of the
+    // `shl` is a memory access that folds it, so it goes with them.
+    let folds = unit
+        .function
+        .instruction(shl)
+        .result
+        .is_some_and(|result| crate::spill::address_only(unit.function, result, DEPTH));
+    (live || folds).then_some((shl, x, scaled))
 }
 
 /// `matchAddr`: `address` read as a mode, `depth` more `gep`s allowed.
@@ -476,7 +557,7 @@ fn matched(
     address: Operand,
     depth: u32,
 ) -> Mode {
-    let plain = || Mode { base: address, offset: 0, index: None, insts: Vec::new() };
+    let plain = || Mode { base: address, reg: None, offset: 0, index: None, insts: Vec::new() };
     let Operand::Value(value) = address else { return plain() };
     let ValueDef::Instruction(gep) = unit.function.value(value).def else { return plain() };
     let instruction = unit.function.instruction(gep);
@@ -503,7 +584,21 @@ fn matched(
     }
     let inner = matched(unit, tti, space, block, instruction.operands[0], depth - 1);
     let mut insts = inner.insts;
+    let mut reg = inner.reg;
     let index = match (variable.first(), inner.index) {
+        // `BaseGV + BaseReg + ScaledReg`: the earlier index is a register of
+        // scale 1 beside the global.
+        // `isProfitableToFoldIntoAddressingMode`: only when the register is
+        // read in the access's block already, or every read of the address it
+        // makes is a memory access that folds it too.
+        (Some(&(at, scale)), Some((held, 1)))
+            if reg.is_none()
+                && is_global(unit.context, inner.base)
+                && register_free(unit, block, held, instruction.operands[0]) =>
+        {
+            reg = Some(held);
+            Some((instruction.operands[1 + at], scale))
+        }
         (Some(_), Some(_)) => return plain(),
         (Some(&(at, scale)), None) => {
             let operand = instruction.operands[1 + at];
@@ -522,11 +617,11 @@ fn matched(
     let total = offset + inner.offset;
     let scale = index.map_or(0, |(_, scale)| i64::try_from(scale).unwrap_or(i64::MAX));
     let Ok(displacement) = i64::try_from(total) else { return plain() };
-    if !tti.is_legal_addressing_mode_in(space, false, displacement, true, scale) {
+    if !tti.is_legal_addressing_mode_in(space, reg.is_some(), displacement, true, scale) {
         return plain();
     }
     insts.push(gep);
-    Mode { base: inner.base, offset: total, index, insts }
+    Mode { base: inner.base, reg, offset: total, index, insts }
 }
 
 /// Each load and store whose address is made in another block, with the address
@@ -614,7 +709,13 @@ fn select_combined(
     let (condition, first, second) = (chosen.operands[0], chosen.operands[1], chosen.operands[2]);
     let (one, other) =
         (matched(unit, tti, space, block, first, DEPTH), matched(unit, tti, space, block, second, DEPTH));
-    if one.base != other.base || one.index.is_some() || other.index.is_some() || one.offset == other.offset {
+    if one.base != other.base
+        || one.reg.is_some()
+        || other.reg.is_some()
+        || one.index.is_some()
+        || other.index.is_some()
+        || one.offset == other.offset
+    {
         return None;
     }
     if !tti.is_legal_addressing_mode_in(space, false, 0, true, 1) {
@@ -662,7 +763,7 @@ fn remade(
         unit.function.insert(inst, Position::Before(access)).expect("a position before the access");
         Operand::Value(unit.function.instruction(inst).result.expect("a value"))
     };
-    if let Some((index, scale)) = mode.index {
+    for (index, scale) in mode.reg.map(|reg| (reg, 1)).into_iter().chain(mode.index) {
         let width = unit
             .function
             .operand_type(unit.context, index)
@@ -793,7 +894,14 @@ fn phis_sunk(function: &mut Function) -> bool {
 /// LLVM's `sinkCmpExpression`: each comparison made again at the top of every
 /// block that reads it and is not its own (a phi's incoming block is not a
 /// read), and erased once nothing reads the original.
-fn compares_sunk(function: &mut Function) -> bool {
+///
+/// DEVIATE: a compare of a runtime call's flags result stays by the call; the
+/// flags do not survive to another block.
+fn compares_sunk(
+    context: &Context,
+    globals: &[GlobalValue],
+    function: &mut Function,
+) -> bool {
     let compares: Vec<(BlockId, InstId)> = function
         .walk()
         .filter(|&(_, inst)| matches!(
@@ -804,6 +912,9 @@ fn compares_sunk(function: &mut Function) -> bool {
     let mut changed = false;
     for (home, compare) in compares {
         let Some(result) = function.instruction(compare).result else { continue };
+        if llrm_mir::facts::compares_flags_result(context, globals, function, compare) {
+            continue;
+        }
         let mut made: Vec<(BlockId, Operand)> = Vec::new();
         for one in function.users(result).snapshot() {
             if function.instruction(one.user).opcode == Opcode::Phi {

@@ -5,9 +5,9 @@
 
 use std::collections::BTreeSet;
 
-use llrm_core::hir::{self, model};
-use llrm_core::objectfile::omf;
-use llrm_core::support::hash::IndexMap;
+use llrm_codegen::hir::{self, model};
+use llrm_codegen::objectfile::omf;
+use llrm_codegen::support::hash::IndexMap;
 
 use super::cli::parse_args;
 use super::qbstages;
@@ -469,10 +469,13 @@ dim shared explicitString as string * 8\r\n\
 dim shared implicitArray(1 to 2)\r\n\
 implicit = 1\r\n\
 explicitInteger = val(command$)\r\nexplicitLong = val(command$)\r\nexplicitSingle = val(command$)\r\n\
-explicitDouble = val(command$)\r\nexplicitString = command$\r\nimplicitArray(1) = val(command$)\r\nshow\r\n\
-sub show\r\nprint implicit; explicitInteger; explicitLong; explicitSingle; explicitDouble; explicitString; implicitArray(1)\r\nend sub\r\n";
+explicitDouble = val(command$)\r\nexplicitString = command$\r\nimplicitArray(explicitInteger) = val(command$)\r\nshow\r\n\
+sub show\r\nprint implicit; explicitInteger; explicitLong; explicitSingle; explicitDouble; explicitString; implicitArray(explicitInteger)\r\nimplicit = implicit + 1\r\nend sub\r\n";
 
 /// QB45 /Zi calls implicit `implicit` IMPLICIT!, not an anonymous data offset.
+/// Globals that could be forwarded or split (a lone store, an array read at a
+/// constant index; e66632b2f) lose the name this test looks for, so `show`
+/// stores `implicit` again and the array is indexed by a variable.
 #[test]
 fn test_module_globals_keep_bcs_effective_type_suffixes() {
     let listing = qb45_listing("SYMNAM.BAS", SYMNAM);

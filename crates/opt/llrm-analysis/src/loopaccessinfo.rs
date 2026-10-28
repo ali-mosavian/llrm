@@ -727,14 +727,17 @@ fn is_vector_intrinsic_call(
         cx.query(None).intrinsic(inst),
         Some(
             Intrinsic::WithOverflow { .. }
+                | Intrinsic::Saturating { .. }
                 | Intrinsic::MinMax { .. }
                 | Intrinsic::Fixed { .. }
                 | Intrinsic::BitCount(_)
                 | Intrinsic::ByteSwap
+                | Intrinsic::BitReverse
                 | Intrinsic::FunnelShift { .. }
                 | Intrinsic::Abs
                 | Intrinsic::Compare { .. }
                 | Intrinsic::FMulAdd
+                | Intrinsic::CopySign
                 | Intrinsic::Unary(_)
                 | Intrinsic::LRint
                 | Intrinsic::LifetimeStart

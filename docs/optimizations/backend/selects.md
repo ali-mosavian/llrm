@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/selects.rs sha256:4a162ab8b1861092f68a570b6a65cf67e2b85ee8fae056dc80e4ceea7f96fb86 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selects.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:17d3e1973353111fc1655ff9e9b9acda05499552e3210ad9f0eb3b85fe0f13e3 -->
 
 # selects
 
@@ -21,6 +21,11 @@ replaces the select's uses:
                                join:   %r = phi [a, taken], [b, block]
                                        rest
 ```
+
+DEVIATE S3 (no number): `llvm.usub.sat` is expanded here, before selection,
+to `umax(a, b) - b`. The pin expands it in the DAG legalizer
+(`TargetLowering::expandAddSubSat`, `TargetLowering.cpp`) to a subtraction
+and a conditional move. Exit: the legalizer's expansion lands.
 
 DEVIATE S2 (no number): the pin keeps the select to instruction selection.
 CodeGenPrepare's `optimizeSelectInst` forms no branch where

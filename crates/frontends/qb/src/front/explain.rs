@@ -5,8 +5,9 @@
 //! array before any DIM ..."), from `messages.txt` and the source text at the
 //! error; nothing here knows how an error was found.
 
-use std::collections::HashMap;
 use std::sync::OnceLock;
+
+use llrm_support::hash::HashMap;
 
 use crate::front::kw::Kw;
 use crate::syntax::Span;

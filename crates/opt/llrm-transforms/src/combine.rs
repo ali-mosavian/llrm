@@ -433,6 +433,7 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::Binary(BinaryOp::Xor) => &[visit_xor],
         Opcode::Binary(BinaryOp::Sub) => &[visit_sub],
         Opcode::Binary(BinaryOp::FDiv) => &[crate::combine_fp::visit_fdiv],
+        Opcode::Binary(BinaryOp::FSub) => &[crate::combine_fp::visit_fsub],
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => &[crate::combine_fp::visit_fadd_or_fmul],
         Opcode::Binary(BinaryOp::UDiv) => &[visit_udiv],
         Opcode::Binary(BinaryOp::SDiv) => &[visit_sdiv],
@@ -448,9 +449,11 @@ fn visitors(opcode: &Opcode) -> &'static [Visitor] {
         Opcode::GetElementPtr { .. } => &[|c, inst| c.visit_get_element_ptr(inst)],
         Opcode::Alloca { .. } => &[|c, inst| c.visit_alloca(inst)],
         Opcode::Store { .. } => &[|c, inst| c.visit_store(inst)],
+        Opcode::Load { .. } => &[|c, inst| c.visit_load(inst)],
         Opcode::Select => &[|c, inst| c.visit_select(inst)],
         Opcode::Br => &[|c, inst| c.visit_cond_br(inst)],
         Opcode::Call(_) => &[|c, inst| c.visit_call(inst)],
+        Opcode::Phi => &[|c, inst| c.visit_phi(inst)],
         _ => &[],
     }
 }
@@ -532,8 +535,10 @@ pub fn visit(
     {
         return Visit::None;
     }
-    let opcode = c.function.instruction(inst).opcode.clone();
-    visitors(&opcode).iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
+    // The table is 'static: the opcode (a clone per visit, a Box for calls) is
+    // not held.
+    let table = visitors(&c.function.instruction(inst).opcode);
+    table.iter().map(|visitor| visitor(c, inst)).find(|found| *found != Visit::None).unwrap_or(Visit::None)
 }
 
 /// `InstCombinerImpl::run` (:5780): drain the worklist. Whether anything
@@ -654,9 +659,9 @@ pub(crate) fn combine_with_sinking(
     sinking: bool,
     declared: &mut Declared,
 ) -> bool {
-    // InstCombine's `SQ.DC`: what the branches dominating an instruction say.
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function)
-        .with_dom_conditions_of(context, globals, metadata, function);
+    // InstCombine's `SQ.DC`: what the branches dominating an instruction say,
+    // those visited so far.
+    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function).with_lazy_dom_conditions();
     let env = Env { globals, callees, layout, analyses, sinking, back_edges: Default::default() };
     let mut c = Combiner { context, function, env: &env, worklist: InstWorklist::default(), declared };
     let mut changed = prepare(&env, c.context, c.function, &mut c.worklist);

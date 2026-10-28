@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/allocate.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/allocate.rs sha256:f4c329525ba62cda2979d3eb148739849700620984d54ee0f9c24b9dc72f3871 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/allocate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/allocate.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/allocate.rs sha256:f776b7a6aedfa65c4aa480e02c7e94a5af91b0102d9b85ba01ac5959ba76f3a4 -->
 
 # allocate
 
@@ -29,7 +29,6 @@ rewrite changes it (`Facts`):
 
 ```text
  live intervals     value -> segments of instruction slots, + spill weight
- LiveUnion          register root -> intervals placed in it   (no overlap)
  Masks              points that destroy a register without naming it:
                     calls (clobbers), 16-bit callees (clobbers_high:
                     the upper half only), points that need DS (the
@@ -43,7 +42,7 @@ the live values are not all looked at (`LLRM_CHECK_IDLE` compares with the
 scan of all of them).
 
 A value may use a register when no value placed there overlaps its
-interval (`LiveUnion::busy`) and no mask point lies inside it
+interval (`LiveIntervalUnion`) and no mask point lies inside it
 (`_clobbered`). Registers are compared by root, so `AX` and `EAX` are one
 register; a mask on the upper half matters only to values wider than a
 word. The weight is the references to the value, weighted by block
@@ -123,12 +122,8 @@ its range is unplaced, and every new, moved or unplaced value re-enters
 the queue. The loop stops when the queue is empty (`BUDGET` visits at
 most, 200000).
 
-The last chance before a value is spilled is recoloring (`Coloring`,
-LLVM's `tryLastChanceRecoloring`): move what holds a register it could take.
-It is not tried where more values are live at one point of the value than
-there are registers for them (`crowded`): no moving about places it. It
-finds each group member's segments once and asks a point by search;
-`LLRM_CHECK_CROWDED` compares it with the scan of every segment.
+The last chance before a value is spilled is recoloring
+(`greedy::greedy`'s `try_last_chance_recoloring`).
 
 Last, `_recolored_hints` moves a value into a copy partner's register when
 that register is free over its whole interval and joins more copies than
@@ -218,7 +213,7 @@ The file also holds the per-block liveness rows (`live`, `live_rows*`)
 that other phases read.
 
 ## Needs
-[`crate::backend::liveunion`](liveunion.md), [`crate::backend::live`](live.md),
+[`crate::backend::live`](live.md),
 [`crate::backend::regclass`](regclass.md), [`crate::backend::constrain`](constrain.md),
 `crate::backend::splitkit`, [`crate::backend::spillplacement`](spillplacement.md),
 `crate::backend::spiller`, [`crate::backend::datagroup`](datagroup.md) and

@@ -5,6 +5,7 @@
 # and after the build as a tripwire. One persistent dist target (SCRATCH/tgt-dist) under a lock holds the build of every sha in turn: a target dir per sha left a whole build (0.7 GB of binaries,
 # 7+ GB of deps) for each of 76 pairs, 51 GB in a day.
 set -e
+export PAIR_HERE=$(cd "$(dirname "$0")" && pwd)  # dist-bins.sh comes from this script, not from the commit being built (old ones lack it)
 S=$1; SHA=$2; T=$S/sbp-$SHA
 # `ok` is write-once: the md5 of every binary and the build line, the files read-only. A dist already built is checked against it and kept, never overwritten (another session
 # copied a different llrm-c over sbp-65eed2ad7b…/dist after its build); PAIR_REBUILD=1 builds it again into sbp-SHA-<n>. Readers check the md5 (tools/stamp.py).
@@ -28,9 +29,12 @@ flock "$S/tgt-dist.lock" bash -c '
   git -C "$REPO" worktree add -q --detach "$W" "$FULL"
   at() { [ "$(git -C "$W" rev-parse HEAD)" = "$FULL" ] || { echo "pair_build: $W is at $(git -C "$W" rev-parse --short HEAD), not $FULL $1" >&2; exit 1; }; }
   at "before the build"
-  (cd "$W" && nice -n 10 env SOURCE_DATE_EPOCH=0 RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront)
+  . "$PAIR_HERE/dist-bins.sh"; EXTRA=$(dist_extra_bins "$W"); EXTRAFLAGS=; for b in $EXTRA; do EXTRAFLAGS="$EXTRAFLAGS --bin $b"; done
+  (cd "$W" && nice -n 10 env SOURCE_DATE_EPOCH=0 RUSTFLAGS="--remap-path-prefix=$W=/llrm --remap-path-prefix=$B=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo" CARGO_INCREMENTAL=0 BUILDSLOT_PRIORITY=0 CARGO_TARGET_DIR=$B ${PAIR_CARGO:-buildslot cargo} build --profile dist -q --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront $EXTRAFLAGS)
   at "after the build"
-  mkdir -p $T/dist && cp -p $B/dist/llrm-c $B/dist/llrm-qb $B/dist/llrm-nib $B/dist/nibfront $B/dist/*.d $T/dist/ && for t in jwasm jwlink dosbox-x; do [ -e $B/dist/$t ] && cp -p $B/dist/$t $T/dist/; done
-  { echo "sha: $FULL"; echo "cmd: build --profile dist --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront (${PAIR_CARGO:-buildslot cargo}, CARGO_TARGET_DIR=$B)"; (cd $T/dist && md5sum *); } > $T/ok.part
+  # a build that left the previous one in place (cargo found nothing to do, or failed quietly) is copied under this sha otherwise: 4 dists (5e4cac094d, aa8170fbbd, 8cb8ed34df, 3d22dc1faa) held another commit'"'"'s binary
+  grep -q "wt-pair-$FULL/" $B/dist/llrm-c.d 2>/dev/null || { echo "pair_build: $B/dist/llrm-c.d does not name $W: the binary was not built from $FULL" >&2; exit 1; }
+  mkdir -p $T/dist && cp -p $B/dist/llrm-c $B/dist/llrm-qb $B/dist/llrm-nib $B/dist/nibfront $B/dist/*.d $T/dist/ && for t in $EXTRA jwasm jwlink dosbox-x; do [ -e $B/dist/$t ] && cp -p $B/dist/$t $T/dist/; done
+  { echo "sha: $FULL"; echo "cmd: build --profile dist --bin llrm-c --bin llrm-qb --bin llrm-nib --bin nibfront$EXTRAFLAGS (${PAIR_CARGO:-buildslot cargo}, CARGO_TARGET_DIR=$B)"; (cd $T/dist && md5sum *); } > $T/ok.part
   mv $T/ok.part $T/ok && chmod a-w $T/dist/* $T/ok
 ' "$S" "$T" "$FULL" "$REPO"

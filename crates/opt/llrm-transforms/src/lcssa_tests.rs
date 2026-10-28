@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/lcssa_tests.rs`, the port of
+//! Adapted from llrm-codegen's `optimize/lcssa_tests.rs`, the port of
 //! `tests/test_lcssa.py`, each body now MIR text; `==` on bodies is
 //! printed text.
 

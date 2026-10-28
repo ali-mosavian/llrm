@@ -18,7 +18,7 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
         &program,
         Path::new("MOD.BAS"),
         None,
-        &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()),
+        &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()),
     )
     .unwrap();
 }
@@ -52,7 +52,7 @@ fn test_a_string_comparison_compiles_where_on_error_is_on() {
             &program,
             Path::new("CMP.BAS"),
             None,
-            &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()),
+            &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()),
         )
         .unwrap_or_else(|error| panic!("{runtime}: {error}"));
     }
@@ -128,7 +128,7 @@ fn test_a_reference_parameter_is_dereferenceable() {
     ];
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("vbdos", "vbdos"), None).unwrap();
-    let emitted = llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout());
+    let emitted = llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout());
     let text = llrm_mir::print::module(&emitted[0].module);
     let define = text.lines().find(|line| line.starts_with("define") && line.contains("@S(")).expect("SUB s");
     assert!(define.contains("ptr dereferenceable(18) %0, ptr dereferenceable(4) %1, i16 %2"), "{define}");
@@ -162,7 +162,7 @@ fn mir_of(lines: &[&str]) -> String {
     let basic = directory.path().join("POLL.BAS");
     std::fs::write(&basic, format!("{}\r\n", lines.join("\r\n"))).unwrap();
     let program = qb_driver::parsed(&basic, &qb_driver::Frontend::new("qb45", "qb45"), None).unwrap();
-    llrm_mir::print::module(&llrm_core::hir::mir::emit(&program, &llrm_x86_m16::layout())[0].module)
+    llrm_mir::print::module(&llrm_codegen::hir::mir::emit(&program, &llrm_x86_m16::layout())[0].module)
 }
 
 /// What a loop waiting on another agent reads, it reads each trip. The

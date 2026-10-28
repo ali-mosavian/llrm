@@ -1,4 +1,4 @@
-//! `loopidioms` had no tests of its own in llrm-core; these are behaviour
+//! `loopidioms` had no tests of its own in llrm-codegen; these are behaviour
 //! tests, each body MIR text run by llrm-mir's interpreter before and after.
 
 use llrm_analysis::testing::{DOS, layout};
@@ -110,6 +110,17 @@ fn a_byte_loop_is_one_memset() {
             && text.contains("  br label %b3\n\nb3:\n  %e = phi i16 [ 0, %b1 ], [ %2, %b2 ]\n"),
         "{text}"
     );
+}
+
+/// A `"no-builtins"` function has every library function off in the pin's TLI,
+/// so no fill or copy loop becomes a call: x_radix's zero and copy loops were
+/// 3 memsets and 3 memcpys where the pin keeps the loops.
+#[test]
+fn a_no_builtins_function_keeps_its_fill_loop() {
+    let body = "  %p = getelementptr [64 x i8], ptr @buf, i16 0, i16 %i\n  store i8 65, ptr %p\n";
+    let text = looped("i8", "%n", body, "%e").replacen(") {", ") \"no-builtins\" {", 1);
+    assert!(text.contains("no-builtins"), "{text}");
+    kept(&text, TRIPS);
 }
 
 /// A known positive count enters without a test; a word of one repeated
@@ -380,6 +391,90 @@ b3:
         text.replace("[40000 x i16]", "[40000 x i8]").replace("i16 4660", "i8 65").replace("store i16", "store i8");
     let after = managed_fill(&bytes, &[&[0], &[1], &[300]]);
     assert!(after.contains("call void @llvm.memset.p3.i32(ptr addrspace(3) "), "{after}");
+}
+
+/// Under -Os a one-store loop through a huge pointer stays a loop: the fill is
+/// a routine laid down at the site, 94 bytes against the loop's dozen (fillw
+/// -Os 86 -> 176 bytes against main).
+#[test]
+fn a_one_store_loop_through_a_huge_pointer_stays_a_loop_under_size() {
+    let text = "@big = addrspace(3) global [40000 x i8] zeroinitializer
+
+define i16 @f(i32 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %p = getelementptr inbounds [40000 x i8], ptr addrspace(3) @big, i32 0, i32 %i
+  store i8 65, ptr addrspace(3) %p
+  %next = add i32 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+";
+    let before = parsed(&format!("{DOS}{text}"));
+    let on_dos = |size: bool| {
+        let mut module = before.clone();
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(LoopIdioms { size });
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+        printed(&module)
+    };
+    let after = on_dos(true);
+    assert!(!after.contains("llvm.memset"), "{after}");
+    let speed = on_dos(false);
+    assert!(speed.contains("call void @llvm.memset.p3.i32("), "premise: speed fills it\n{speed}");
+}
+
+/// A copy loop through huge pointers stays a loop under -Os as well (copyw
+/// -Os 321 -> 470 bytes against main, the routine laid down at the site).
+#[test]
+fn a_copy_loop_through_huge_pointers_stays_a_loop_under_size() {
+    let text = "@a = addrspace(3) global [40000 x i16] zeroinitializer
+@b = addrspace(3) global [40000 x i16] zeroinitializer
+
+define i16 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %c = icmp ult i16 %i, -25536
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %z = zext i16 %i to i32
+  %o = shl nuw nsw i32 %z, 1
+  %p = getelementptr inbounds nuw i8, ptr addrspace(3) @a, i32 %o
+  %v = load i16, ptr addrspace(3) %p
+  %q = getelementptr inbounds nuw i8, ptr addrspace(3) @b, i32 %o
+  store i16 %v, ptr addrspace(3) %q
+  %next = add nuw i16 %i, 1
+  br label %b1
+
+b3:
+  ret i16 0
+}
+";
+    let before = parsed(&format!("{DOS}{text}"));
+    let on_dos = |size: bool| {
+        let mut module = before.clone();
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(LoopIdioms { size });
+        manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
+        printed(&module)
+    };
+    let speed = on_dos(false);
+    assert!(speed.contains("call void @llvm.memcpy.p3.p3.i32("), "premise: speed copies it\n{speed}");
+    let after = on_dos(true);
+    assert!(!after.contains("llvm.memcpy"), "{after}");
 }
 
 /// Two arrays of 64 words, each cell its own number, and @f(n, q): `body`
@@ -960,4 +1055,14 @@ fn a_falling_word_copy_eighty_cells_up_is_never_a_memcpy_whatever_its_addresses_
             assert!(!after.contains("llvm.memmove") || after.contains("!llrm.backward"), "{start}\n{after}");
         }
     }
+}
+
+/// QCport m16 -Os, loop and fill bytes as the model sums them: mod_tex's two
+/// fills (loop 28) beat its loop, which grew the module 8 bytes at the
+/// table's 18 a fill; snd_mix's (24) and lru's four (42) lose to theirs.
+#[test]
+fn a_fill_is_priced_at_three_quarters_of_the_table() {
+    assert!(super::fills_cheaper(28, 2, 18));
+    assert!(!super::fills_cheaper(24, 2, 18));
+    assert!(!super::fills_cheaper(42, 4, 18));
 }

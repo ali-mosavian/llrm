@@ -366,6 +366,18 @@ def os_group_bits(source: Path) -> dict[str, int]:
     return {name.lower(): int(bit) for name, bit in found}
 
 
+def device_directory(platform: Path | None = None) -> Path:
+    """The QB device interface's code for that target: runtime/qb/dev/<os>/<mode> (the DOS BIOS, VGA, speaker and clock)."""
+    platform = platform or platform_directory()
+    return RUNTIME / "dev" / platform.parent.name / platform.name
+
+
+def device_includes(platform: Path | None = None) -> list[str]:
+    """The compiler's -I arguments for the device interface: dev.h, the target's devsym.h and device.h, and the code both targets share."""
+    where = device_directory(platform)
+    return ["-I", str(RUNTIME / "dev"), "-I", str(where), "-I", str(where.parent)]
+
+
 def shared_sources() -> list[Path]:
     return [os_directory() / dosbatch.os_layer(dosbatch.REAL_MODE, "implementation", "c")]
 
@@ -375,9 +387,15 @@ def portable_sources() -> list[Path]:
     return sorted(RUNTIME.glob("*.c"))
 
 
+def platform_sources_of(platform: Path) -> list[Path]:
+    """A target's own code: its C and its assembly, and its device interface's."""
+    device = device_directory(platform)
+    return sorted([*platform.glob("*.c"), *platform.glob("*.asm"), *device.glob("*.c"), *device.glob("*.asm"), *device.parent.glob("*.c")])
+
+
 def platform_sources() -> list[Path]:
     """The target's own code: its C and its assembly."""
-    return sorted([*platform_directory().glob("*.c"), *platform_directory().glob("*.asm"), *(RUNTIME / "dos").glob("*.c")])
+    return platform_sources_of(platform_directory())
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
@@ -395,8 +413,7 @@ def _compile_c(source: Path, obj: Path, include: Path) -> None:
             str(RUNTIME),
             "-I",
             str(platform_directory()),
-            "-I",
-            str(RUNTIME / "dos"),
+            *device_includes(),
             "-o",
             str(obj),
         ]
@@ -465,7 +482,7 @@ def build(directory: Path) -> tuple[Path, Path]:
     for source in shared:
         for group, bit in os_group_bits(source).items():
             obj = directory / f"{source.stem}_{group}.obj"
-            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"), f"OS_GROUPS={bit}")
+            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "qb"), f"OS_GROUPS={bit}")
             objects.append(obj)
     output = directory / ARCHIVE_NAME
     archive(objects, output, directory / "lib")

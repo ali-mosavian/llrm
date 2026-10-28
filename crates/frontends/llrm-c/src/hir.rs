@@ -7,8 +7,8 @@
 
 use std::fmt;
 
-use llrm_core::support::hash::IndexMap;
-use llrm_core::support::pyrepr::{self, Repr, Tuple};
+use llrm_codegen::support::hash::IndexMap;
+use llrm_codegen::support::pyrepr::{self, Repr, Tuple};
 
 use super::stream::Record;
 
@@ -505,6 +505,8 @@ fn open(proc: Option<usize>) -> usize {
 
 pub fn unit(records: &[Record<'_>]) -> Result<Unit, Unsupported> {
     let mut made = Unit::default();
+    // d_faces: 4256 nodes grew the map 12 times, copying 38 K Ir each.
+    made.nodes.reserve(records.len() / 2);
     let mut proc: Option<usize> = None;
     let mut segment: Option<i64> = None;
     let mut line = 0;
@@ -775,7 +777,7 @@ mod canonical_tests {
         type_: &str,
     ) -> String {
         let mut type_ = type_.to_owned();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = llrm_support::hash::HashSet::default();
         while let Some(next) = aliases.get(&type_) {
             if !seen.insert(type_.clone()) {
                 break;

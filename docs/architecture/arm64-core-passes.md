@@ -6,7 +6,7 @@ architecture-order: 7
 
 TL;DR: the allocator core (`greedy/`, `liveness/`, `coalescer/`) names no x86 fact in 28 of 32 files; the x86 coupling is in `backend/` (52 of 100 files) and sits at the places LLVM puts target hooks. Running the passes on arm64 waits for those hooks; this page is the inventory the hooks are measured against.
 
-Status: static inventory at the spike's head, `crates/backend/llrm-core/src`, non-test code. A "fact" is `llrm_x86::`, an iced type, an x86 register name (`RegId::AX`...), or an x86 mnemonic string. The arm64 selector's output does not run through them yet (see [the spike](arm64-spike.md) for why it has its own backend).
+Status: static inventory at the spike's head, `crates/codegen/llrm-codegen/src`, non-test code. A "fact" is `llrm_x86::`, an iced type, an x86 register name (`RegId::AX`...), or an x86 mnemonic string. The arm64 selector's output does not run through them yet (see [the spike](arm64-spike.md) for why it has its own backend).
 
 | directory | files | lines | files naming an x86 fact |
 |---|---|---|---|
@@ -31,7 +31,7 @@ Across `backend/` and `greedy/`: 296 mnemonic strings, 29 `llrm_x86` uses, 26 ic
 
 ## What this spike did instead, and what it cost
 
-The spike's own selector, allocator (ranges with holes, coalescing; DEVIATE 1), CSE/hoisting (DEVIATE 3) and pairing run on arm64 instructions in `llrm-arm64`. Against `llc -O2` on the same IR it is 1.07x the code and 1.14x the instructions executed (geomeans, `tools/arm64_compare.py backend`). The gap is the passes this page lists: machine CSE/LICM over a real loop nest, post-RA copy propagation, `ldp`/`stp` formation with LLVM's window, post-index addressing (LSR plus the load/store optimizer).
+The spike's own selector, allocator (ranges with holes, coalescing; DEVIATE 1), CSE/hoisting (DEVIATE 3) and pairing run on arm64 instructions in `llrm-arm64`. Against `llc -O2` on the same IR it is 1.07x the code and 1.14x the instructions executed (geomeans, `tools/targets/arm64_compare.py backend`). The gap is the passes this page lists: machine CSE/LICM over a real loop nest, post-RA copy propagation, `ldp`/`stp` formation with LLVM's window, post-index addressing (LSR plus the load/store optimizer).
 
 ## The experiment, once the hooks exist
 

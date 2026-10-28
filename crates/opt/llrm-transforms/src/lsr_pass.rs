@@ -20,9 +20,10 @@
 //! In the pipeline's strength slot, after `fixednarrow`.
 //!
 //! # Limits
-//! DEVIATE: not yet ported: `replaceCongruentIVs` (waits on the expander's
-//! #2773) and the debug value salvage. `DeleteDeadPHIs` reads the header's
-//! phis only. A loop of more than 200 IV users is left (`MaxIVUsers`).
+//! DEVIATE: not yet ported: the debug value salvage. `DeleteDeadPHIs` reads
+//! the header's phis only. `replaceCongruentIVs` runs on every loop in
+//! simplify form, as `ReduceLoopStrength` does. A loop of more than 200 IV
+//! users is left (`MaxIVUsers`).
 
 use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::{ScevSession, Scevs};
@@ -48,8 +49,11 @@ thread_local! {
 /// `MaxIVUsers`.
 const MAX_IV_USERS: usize = 200;
 
-/// LLVM's loop strength reduction.
-pub struct LoopStrengthReduce;
+/// LLVM's loop strength reduction. `size`: the compile is for size, which the
+/// exit-value rewrite after it reads (`exitvalues` DEVIATE 15).
+pub struct LoopStrengthReduce {
+    pub size: bool,
+}
 
 impl FunctionPass for LoopStrengthReduce {
     fn name(&self) -> &'static str {
@@ -82,6 +86,7 @@ impl FunctionPass for LoopStrengthReduce {
             &outer,
             &*tti,
             false,
+            self.size,
             Some(held.take()),
         );
         let kept = scev.is_some();
@@ -119,7 +124,7 @@ enum Outcome {
     /// The loop is left as it is, or this is its plan.
     Planned(Option<Plan>),
     /// Exit tests to edit first; the loop is then analysed again.
-    Edit(Vec<ExitEdit>),
+    Edit(Vec<ExitEdit>, IvUsers),
     /// An integer variable's conversion to float, made a variable of its own.
     Shadow(ShadowEdit),
 }
@@ -166,6 +171,7 @@ fn plan_loop(
     env: &ExpandEnv,
     header: BlockId,
     marked: Option<&[InstId]>,
+    carried: Option<IvUsers>,
     stress_chains: bool,
 ) -> Outcome {
     let planned = |plan| Outcome::Planned(plan);
@@ -191,8 +197,14 @@ fn plan_loop(
     let safe_to_speculate =
         |inst: InstId| crate::licm::hoist::is_safe_to_speculatively_execute_in(context, layout, function, outer, inst);
     let is_ephemeral = |inst: InstId| ephemeral.contains(&inst);
-    let mut users =
-        IvUsers::of(se, &cx, header, &Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral });
+    let env_users = Env { safe_to_speculate: &safe_to_speculate, ephemeral: &is_ephemeral };
+    let mut users = match carried {
+        Some(users) => {
+            users.assert_current(se, &cx, &env_users);
+            users
+        }
+        None => IvUsers::of(se, &cx, header, &env_users),
+    };
     // No interesting work, or too much analysis to model it.
     if users.uses.is_empty() || users.uses.len() > MAX_IV_USERS {
         return planned(None);
@@ -208,7 +220,7 @@ fn plan_loop(
             }
             let edits = lsr_prepare::analyze(se, &cx, tti, header, &users);
             if edits.iter().any(|edit| edit.max.is_some() || edit.post_inc) {
-                return Outcome::Edit(edits);
+                return Outcome::Edit(edits, users);
             }
         }
         Some(conds) => {
@@ -271,7 +283,7 @@ pub fn reduced_with(
     tti: &dyn Tti,
     stress_chains: bool,
 ) -> bool {
-    reduced_held(context, layout, function, declared, outer, tti, stress_chains, None).0
+    reduced_held(context, layout, function, declared, outer, tti, stress_chains, false, None).0
 }
 
 /// [`reduced_with`], continuing the expressions `held` of the passes before;
@@ -285,6 +297,7 @@ pub fn reduced_held(
     outer: &Outer,
     tti: &dyn Tti,
     stress_chains: bool,
+    size: bool,
     held: Option<ScalarEvolution>,
 ) -> (bool, Option<ScalarEvolution>) {
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
@@ -318,6 +331,8 @@ pub fn reduced_held(
         // The first look may find exit tests to edit, and the plan may split
         // edges: each is followed by an analysis of the loop as it is then.
         let mut marked: Option<Vec<InstId>> = None;
+        // The users of the first look, kept through the edit of the exit tests.
+        let mut carried: Option<IvUsers> = None;
         for _ in 0..6 {
             // What the edits since changed is no longer what the expressions
             // say; the rest of them stay, as they do in LLVM.
@@ -336,12 +351,24 @@ pub fn reduced_held(
                     &env,
                     header,
                     marked.as_deref(),
+                    carried.take(),
                     stress_chains,
                 ) {
                     Outcome::Planned(None) => break,
-                    Outcome::Edit(edits) => {
+                    Outcome::Edit(edits, mut users) => {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrPrepared);
-                        marked = Some(lsr_prepare::apply(function, &context.types, header, &edits));
+                        let applied = lsr_prepare::apply(function, &context.types, header, &edits);
+                        marked = Some(applied.marked.clone());
+                        // A moved or copied test is the same use; `OptimizeMax`
+                        // makes a new compare, so its users are made again.
+                        if edits.iter().all(|edit| edit.max.is_none()) {
+                            let ok = applied.moved.iter().all(|&test| users.carry_exit_test(function, test, None))
+                                && applied
+                                    .copied
+                                    .iter()
+                                    .all(|&(old, copy)| users.carry_exit_test(function, old, Some(copy)));
+                            carried = ok.then_some(users);
+                        }
                         changed = true;
                         continue;
                     }
@@ -381,17 +408,38 @@ pub fn reduced_held(
                         rewriter: &mut rewriter,
                         tti,
                         l: header,
+                        body: &lp_blocks,
                         iv_inc_insert_pos: plan.iv_inc_insert_pos,
                         dead: Vec::new(),
                         changed: false,
                     };
                     run.implement_solution(&plan);
-                    let mut dead = std::mem::take(&mut run.dead);
+                    let dead = std::mem::take(&mut run.dead);
+                    let rewrote = run.changed;
+                    // `ImplementSolution`: the dead instructions go first, so
+                    // the increments move over only the
+                    // uses that are left.
+                    crate::dead::dead_from(context, outer.callees(), function, dead);
+                    let mut run = Implement {
+                        context,
+                        function,
+                        declared,
+                        se,
+                        env: &env,
+                        rewriter: &mut rewriter,
+                        tti,
+                        l: header,
+                        body: &lp_blocks,
+                        iv_inc_insert_pos: plan.iv_inc_insert_pos,
+                        dead: Vec::new(),
+                        changed: false,
+                    };
                     run.move_increments();
-                    changed |= run.changed;
-                    if run.changed {
+                    changed |= rewrote | run.changed;
+                    if rewrote | run.changed {
                         llrm_mir::counts::bump(llrm_mir::counts::Event::LsrRewritten);
                     }
+                    let mut dead = Vec::new();
                     // `DeleteDeadPHIs`: the phis nothing reads any more, those
                     // of a cycle included.
                     dead.extend(
@@ -408,6 +456,67 @@ pub fn reduced_held(
                 stable = false;
                 session = new_session(context, function);
                 mark = function.mark();
+            }
+        }
+        // `Rewriter.replaceCongruentIVs(L, &DT, DeadInsts, &TTI)`: after the
+        // loop's strength reduction, or none, a phi of the loop that an equal
+        // or wider one makes (a narrower counter beside the one it truncates)
+        // is that one, cast.
+        session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+        mark = function.mark();
+        let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
+        let simple = {
+            let cx = env.cx(&*context, &*function);
+            cx.loops.get_loop_for(header).is_some_and(|found| found.is_loop_simplify_form(cx.function))
+        };
+        if simple {
+            let mut rewriter = Expander::new("lsr");
+            rewriter.set_canonical_mode(false);
+            let mut folded_away = Vec::new();
+            if rewriter.replace_congruent_ivs(&env, context, function, se, header, &mut folded_away, Some(tti)) > 0 {
+                changed = true;
+                let seeds: Vec<_> =
+                    folded_away.into_iter().filter_map(|inst| function.instruction(inst).result).collect();
+                crate::dead::dead_from(context, outer.callees(), function, seeds);
+            }
+        }
+        // `rewriteLoopExitValues(..., UnusedIndVarInLoop, ...)`: LSR may have
+        // removed every use of an induction variable from the loop; the exit
+        // phi is the only one left, and the final value replaces it.
+        let lcssa_exit = {
+            let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
+            env.loops
+                .get_loop_for(header)
+                .is_some_and(
+                    |found| found.get_exit_block(function).is_some()
+                        && crate::loopversioning::is_recursively_lcssa_form(function, env.loops, env.tree, found),
+                )
+        };
+        if lcssa_exit && crate::exitvalues::enabled() {
+            let mut rewriter = Expander::new("lsr");
+            rewriter.set_canonical_mode(true);
+            if crate::exitvalues::rewritten_unused_ivs(
+                context,
+                layout,
+                function,
+                declared,
+                outer,
+                &mut session,
+                &mut rewriter,
+                header,
+                size,
+            ) > 0
+            {
+                changed = true;
+                session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+                mark = function.mark();
+                // `DeleteDeadPHIs`.
+                let phis: Vec<_> = function
+                    .iter_block(header)
+                    .take_while(|&inst| function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi)
+                    .filter_map(|inst| function.instruction(inst).result)
+                    .collect();
+                crate::dead::dead_from(context, outer.callees(), function, phis);
             }
         }
     }

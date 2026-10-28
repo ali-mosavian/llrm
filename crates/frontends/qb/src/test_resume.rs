@@ -10,7 +10,7 @@ fn compiled(source: &str) -> Result<(), String> {
     let directory = tempfile::tempdir().expect("creates a directory");
     let path = written(&directory, "RESUME.BAS", source.as_bytes());
     let program = qb_driver::parsed(&path, &qb_driver::Frontend::new("qb45", "qb45"), None).map_err(|error| error.0)?;
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     qb_compile::assembled(&program, None, &codegen).map(|_| ()).map_err(|error| error.to_string())
 }
 
@@ -32,4 +32,11 @@ fn test_resume_to_a_label_in_the_body_compiles() {
         compiled("ON ERROR GOTO handler\nERROR 9\nPRINT \"no\"\nafter:\nPRINT \"yes\"\nEND\nhandler:\nRESUME after\n")
             .is_ok()
     );
+}
+
+/// ON ERROR GOTO 0 in a handler was refused ("not selected yet"), leaving
+/// qb45's FILERR.BAS uncompiled; it ends the program with the error handled.
+#[test]
+fn test_on_error_goto_0_in_the_handler_compiles() {
+    assert!(compiled("ON ERROR GOTO h\nERROR 11\nEND\nh:\nPRINT ERR\nON ERROR GOTO 0\nRESUME NEXT\n").is_ok());
 }

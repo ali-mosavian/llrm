@@ -1,6 +1,6 @@
 //! A local's address in flat code is a frame address, never a 16-bit register.
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -9,7 +9,7 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .env("LLRM_VERIFY", "1")
         .args(flags)
@@ -22,7 +22,8 @@ fn listing(
 
 /// `lea eax, [bx-52]` took the address of `l` for the first call: the frame
 /// base in the address was renamed to `bx` after `mov ebp, ebx`, as if it read
-/// register `bp`. The callee got `y - 52`.
+/// register `bp`. The callee got `y - 52`. With the callee-saved registers
+/// pushed before the locals the first local is at `[esp]`, no displacement.
 #[test]
 fn the_address_of_a_local_after_a_write_to_ebp_stays_a_frame_address() {
     let source = "typedef struct L { void *dst; unsigned count; int d, m4, s4, steps[2]; unsigned phase, xm, bit, px; \
@@ -40,7 +41,7 @@ fn the_address_of_a_local_after_a_write_to_ebp_stays_a_frame_address() {
         let leas: Vec<&str> = text.lines().filter(|line| line.trim_start().starts_with("lea ")).collect();
         assert_eq!(leas.len(), 2, "{level}:\n{text}");
         for lea in leas {
-            assert!(lea.contains("[esp+"), "{level}: {lea}\n{text}");
+            assert!(lea.contains("[esp"), "{level}: {lea}\n{text}");
         }
     }
 }

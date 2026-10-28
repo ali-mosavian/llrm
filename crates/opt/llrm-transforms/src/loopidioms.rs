@@ -16,9 +16,15 @@
 //! - A fill: a store, or a memset, of a loop-invariant value that is one byte
 //!   repeated, through an address `induction` derives as a GEP off an invariant
 //!   pointer, striding by the element's size. A cell whose bytes do not repeat
-//!   is `llvm.experimental.memset.pattern`. A loop with several fills to bytes
-//!   no other reaches is a memset each; fills that tile adjacent bytes with the
-//!   same byte are one.
+//!   is `llvm.experimental.memset.pattern` (DEVIATE: the pin forms none off
+//!   Darwin,
+//!   [L1214](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/LoopIdiomRecognize.cpp#L1214);
+//!   here it is priced from the target's table, so a word fill is `rep stosw`
+//!   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
+//!   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
+//!   near 16 trips with the segment setup; owner w-5). A loop with several
+//!   fills to bytes no other reaches is a memset each; fills that tile adjacent
+//!   bytes with the same byte are one.
 //! - A copy: a load and a store of one cell each trip, the stored value being
 //!   the loaded one, from one pointer to another with the same step. Where the
 //!   ranges are apart it is `llvm.memcpy`; where they overlap but each trip
@@ -206,6 +212,7 @@ impl FunctionPass for Merge {
     ) -> PreservedAnalyses {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
+        let bytes = analyses.outer().target().size_costs();
         let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
                 unit.context,
@@ -213,6 +220,7 @@ impl FunctionPass for Merge {
                 analyses.outer().callees(),
                 unit.function,
                 analyses.outer(),
+                self.size.then(|| (&mut *unit.declared, &bytes)),
             );
         let constants = crate::mergestores::merged_constants(
             unit.context,
@@ -278,6 +286,15 @@ pub fn filled_with(
     standing: &mut llrm_analysis::memory::Standing,
     wanted: &dyn Fn(&Loop) -> bool,
 ) -> bool {
+    // `"no-builtins"` turns every library function off in the pin's TLI.
+    if function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::opcode::Attribute::Str(key, _) if key == "no-builtins"
+        )
+    }) {
+        return false;
+    }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;
@@ -507,6 +524,26 @@ fn _fill(
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
     }
+    // DEVIATE, for `loopidiom`: a fill, copy or move through a huge pointer
+    // is a routine laid down at the site (`isel/huge.rs`), which a loop of a
+    // few instructions undercuts under -Os (fillw -Os 86 -> 176 bytes, copyw
+    // 321 -> 470, against main).
+    let routine = if matches!(stored, Stored::Fill(_)) { bytes_costs.huge_fill } else { bytes_costs.huge_copy };
+    if size
+        && routine > 0
+        && unit.layout.carries(unit.space(pointer)?)
+        && trip_cost(
+            unit.context,
+            unit.layout,
+            unit.function,
+            callees,
+            std::iter::once(&header).chain(&chain),
+            bytes_costs,
+            true,
+        ) <= routine
+    {
+        return None;
+    }
     // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its
     // setup.
     let moved = match &stored {
@@ -715,12 +752,34 @@ fn _pays(
     fills: i64,
     stored: Option<(i64, bool)>,
 ) -> bool {
-    let function = unit.function;
-    let each: i64 = std::iter::once(&header)
-        .chain(chain)
+    let each = trip_cost(
+        unit.context,
+        unit.layout,
+        unit.function,
+        callees,
+        std::iter::once(&header).chain(chain),
+        costs,
+        size,
+    );
+    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
+    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
+    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
+}
+
+/// What one trip of the loop through `blocks` costs, in `costs`' units. In
+/// bytes the loop's counter work is the step and its branch: the phi is a
+/// register, the address an operand, the test the step's flags.
+fn trip_cost<'a>(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: impl Iterator<Item = &'a BlockId>,
+    costs: &OperationCosts,
+    size: bool,
+) -> i64 {
+    blocks
         .flat_map(|&block| operations(function, block))
-        // In bytes the loop's counter work is the step and its branch: the phi
-        // is a register, the address an operand, the test the step's flags.
         .filter(|&inst| {
             !size
                 || !matches!(
@@ -728,11 +787,62 @@ fn _pays(
                     Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
                 )
         })
-        .map(|inst| profit::operation(unit.context, unit.layout, function, callees, inst, costs).unwrap_or(costs.add))
-        .sum();
-    let known = proof.count.as_ref().and_then(ToPrimitive::to_i64);
-    let most = proof.maximum.as_ref().and_then(ToPrimitive::to_i64);
-    _cheaper_by(each, known, most, costs, size, moved, fills, stored)
+        .map(|inst| profit::operation(context, layout, function, callees, inst, costs).unwrap_or(costs.add))
+        .sum()
+}
+
+/// DEVIATE, for `loopidiom`: whether `rep movs` over a length known only at
+/// run time is fewer code bytes than the loop over `blocks` it replaces. The
+/// pin lowers that copy to a libc call, which llrm has none of: the string
+/// instruction takes ES, three registers, the count split in dwords and odd
+/// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
+/// 16 bytes over the loop each).
+pub(crate) fn variable_copy_pays(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+) -> bool {
+    trip_cost(context, layout, function, callees, blocks.iter(), costs, true) > costs.copy + costs.copy_variable
+}
+
+/// DEVIATE, for `loopidiom`: whether `fills` fills, for the `stores` stores of
+/// the loop over `blocks`, are fewer code bytes than the loop. A loop of one
+/// store is always filled; of several, each fill is a `rep stos` with ES set
+/// around it, and the stores of one object with one value merge into one.
+pub(crate) fn fills_pay(
+    context: &Context,
+    layout: &DataLayout,
+    function: &Function,
+    callees: &Callees,
+    blocks: &[BlockId],
+    costs: &OperationCosts,
+    stores: i64,
+    fills: i64,
+    kept: i64,
+) -> bool {
+    // The loop stays for the stores of computed values: a fill saves one
+    // store, less than itself.
+    if kept > 0 {
+        return false;
+    }
+    // The table doubles an operation that becomes more than one instruction;
+    // a fill's three immediate loads are 2 to 3 bytes each, not 6: three
+    // quarters of `fill` is its real size (12 to 13 of 18 bytes at m16).
+    stores < 2
+        || fills_cheaper(trip_cost(context, layout, function, callees, blocks.iter(), costs, true), fills, costs.fill)
+}
+
+/// Whether a loop of `loop_bytes` is more than `fills` fills of `fill` bytes by
+/// the table, three quarters of which is their real size.
+fn fills_cheaper(
+    loop_bytes: i64,
+    fills: i64,
+    fill: i64,
+) -> bool {
+    4 * loop_bytes > 3 * fills * fill
 }
 
 /// What a copy of `length` bytes costs: the loads and stores isel expands it to
@@ -804,7 +914,7 @@ fn _cheaper_by(
     };
     let copy = match known {
         Some(count) => copy_price(costs, count * bytes, backward),
-        None => string_copy(costs, trips * bytes, backward),
+        None => string_copy(costs, trips * bytes, backward) + if size { costs.copy_variable } else { 0 },
     };
     trips * each > copy
 }

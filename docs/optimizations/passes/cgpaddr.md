@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpaddr.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpaddr.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:798816606b1fa5ef6b7c36f03c2edfa907d74cea88b47e7275911981576318d9 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpaddr.rs sha256:a96d4b8499e52f83b9b191fa6f30a173d07be99dce396f2bd8f963598313ce52 -->
 
 # cgpaddr
 
@@ -43,7 +43,8 @@ A phi whose arms differ in kind stays.
 
 DEVIATE C1 (m32): the rest of CodeGenPrepare's work is done by isel, which
 rebuilds an address expression in the block that uses it, and by the select
-and switch lowering; this file is the compare and address-phi part.
+lowering; the width of a switch condition is `cgpswitch`'s
+(`optimizeSwitchType`); this file is the compare and address-phi part.
 Evidence, 2026-10-23, per function on the same IR against the pin's `llc`
 with and without the pass (`docs/working/codegenprepare.md`): at m32 the
 pass changes 16-17 of about 160 functions in the pin and ours is at its

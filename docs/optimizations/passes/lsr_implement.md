@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_implement.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_implement.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_implement.rs sha256:5e766e1bde31c849c650c3222b1e4f5fca7fe888218e2db82e52859021ad6c55 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_implement.rs sha256:9980e10727b6036c01bcd5ba9559dec19346821b134f5aa74ea4ce27902de8f3 -->
 
 # lsr_implement
 
@@ -30,3 +30,8 @@ DEVIATE: the critical edges to a phi that a fixup rewrites are split before
 the loop is analysed (`split_phi_edges`), not in `RewriteForPHI`: the
 analyses hold the CFG while they are read. Post-indexed addressing and IV
 chains are not ported (see [`crate::lsr_collect`](lsr_collect.md)).
+
+DEVIATE LU5: an exit compare's limit is an existing narrow value whose
+zero-extension is the register the formula names (`narrow_existing`, the
+offset-free case: `narrow_original`), not the wide register expanded and
+truncated back; lcexit.bas m16 -Os -21 B, one other of 258 programs changes.

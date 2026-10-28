@@ -87,6 +87,9 @@ pub struct TargetLowering {
     cond_code: HashMap<(CondCode, MVT), Action>,
     /// `addLegalFPImmediate`: the float constants an instruction makes.
     legal_fp_immediates: Vec<(MVT, u128)>,
+    /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
+    /// more than a straight `movsd`.
+    keeps_f64_constants: bool,
 }
 
 impl TargetLowering {
@@ -100,6 +103,7 @@ impl TargetLowering {
             trunc_store: HashMap::default(),
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
+            keeps_f64_constants: false,
         }
     }
 
@@ -172,6 +176,14 @@ impl TargetLowering {
         self.legal_fp_immediates.push((vt, bits));
     }
 
+    /// `ShouldShrinkFPConstant`.
+    pub fn should_shrink_fp_constant(
+        &self,
+        vt: MVT,
+    ) -> bool {
+        vt == MVT::F80 || !self.keeps_f64_constants
+    }
+
     /// `isFPImmLegal`.
     pub fn is_fp_imm_legal(
         &self,
@@ -184,7 +196,7 @@ impl TargetLowering {
     /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
     /// an integer half only.
     ///
-    /// DEVIATE SD312: a target with the far pointer (m16) says so for two
+    /// DEVIATE SD240: a target with the far pointer (m16) says so for two
     /// integer halves too. A far pointer or a `long` stored from its two
     /// words is two word stores, where merging them took `shl; movzx; add`
     /// (QCport -Os: 131 stack arguments built so). Owner w10. Exit: none
@@ -277,12 +289,15 @@ impl TargetLowering {
         use ISD::*;
         for vt in ALL {
             self.set_ops(
-                &[SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat],
+                &[
+                    SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat, SMulFix, UMulFix,
+                    SMulFixSat, UMulFixSat, SShlSat, UShlSat,
+                ],
                 &[vt],
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(&[UAddOCarry, USubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -384,6 +399,9 @@ impl TargetLowering {
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
         // L300-L303, L850: `lrint` of an x87 value is `fist`
         t.set_ops(&[LRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
+        // an i64 result at 32 bits is expanded after the same `fist`, as
+        // FpToSInt's is
+        t.set_ops(&[LRint], &[MVT::I64], Custom);
         // L316
         if !features.sse2 {
             t.set_ops(&[BitCast], &[MVT::F32, MVT::I32], Expand);
@@ -445,6 +463,9 @@ impl TargetLowering {
         }
         t.set_operation_action(Trap, MVT::Other, Legal);
         t.set_operation_action(DynamicStackAlloc, ptr, Custom);
+        // The pin expands these to a stack pointer copy; the same, as Custom.
+        t.set_operation_action(StackSave, ptr, Custom);
+        t.set_operation_action(StackRestore, MVT::Other, Custom);
         // L559..L566: 32-bit va_list is a pointer
         t.set_operation_action(VAStart, MVT::Other, Custom);
         t.set_ops(&[VAEnd, VACopy], &[MVT::Other], Expand);
@@ -469,6 +490,7 @@ impl TargetLowering {
         // L806..L870: f80
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
+        t.keeps_f64_constants = features.sse2;
         // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
         // L690..L706: SSE has only +0.0 (`xorps`, `xorpd`)
         for (vt, one, sign) in [
@@ -485,7 +507,7 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], native, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SetCCCarry], native, Custom);
         t
     }
 }

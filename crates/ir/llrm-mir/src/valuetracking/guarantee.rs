@@ -32,7 +32,6 @@ use super::pattern::{self, IntrinsicId, arg_size, call_info, called_function};
 use super::query::Query;
 use super::range::shift_amount_known_in_range;
 use crate::context::{ConstantExpr, ConstantId, ConstantKind};
-use crate::dense::IdSet;
 use crate::facts::Facts;
 use crate::hash::HashSet;
 use crate::loopinfo::Loop;
@@ -552,6 +551,68 @@ pub fn implies_poison(
     implies_poison_at(q, val_assumed_poison, v, 0)
 }
 
+/// The pin's `SmallPtrSet<T, N>`: up to `N` members in place, a hash set past
+/// that. The walks that use it ask about a handful of values, and a hash set
+/// allocated on the first insert of each call was 6x the pin's cost per call
+/// (`isSCEVExprNeverPoison`: 3.3 k Ir against 0.57 k, d_faces -O2).
+pub struct SmallSet<T, const N: usize> {
+    few: [Option<T>; N],
+    len: usize,
+    many: HashSet<T>,
+}
+
+impl<T, const N: usize> Default for SmallSet<T, N> {
+    fn default() -> Self {
+        Self { few: [const { None }; N], len: 0, many: HashSet::default() }
+    }
+}
+
+impl<T: Copy + Eq + std::hash::Hash, const N: usize> SmallSet<T, N> {
+    /// Whether the set outgrew its inline slots.
+    #[cfg(test)]
+    pub fn spilled(&self) -> bool {
+        self.len > N
+    }
+
+    /// Whether `v` is in the set.
+    pub fn contains(
+        &self,
+        v: &T,
+    ) -> bool {
+        if self.len <= N {
+            self.few[..self.len].iter().any(|one| one.as_ref() == Some(v))
+        } else {
+            self.many.contains(v)
+        }
+    }
+
+    /// Whether `v` was not in the set.
+    pub fn insert(
+        &mut self,
+        v: T,
+    ) -> bool {
+        if self.len <= N {
+            if self.contains(&v) {
+                return false;
+            }
+            if self.len < N {
+                self.few[self.len] = Some(v);
+                self.len += 1;
+                return true;
+            }
+            self.many.extend(self.few.iter().flatten().copied());
+            self.len = N + 1;
+        }
+        self.many.insert(v)
+    }
+}
+
+/// A cast chain is rarely longer than four.
+pub(crate) type Seen = SmallSet<Operand, 4>;
+
+/// `SmallPtrSet<const Value *, 16>` of the values that yield poison.
+pub type PoisonSet = SmallSet<Operand, 16>;
+
 /// `stripPointerCastsSameRepresentation()`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/IR/Value.cpp#L642>
@@ -562,7 +623,7 @@ pub fn strip_pointer_casts_same_representation(
     if !q.is_pointer(v) {
         return v;
     }
-    let mut visited = HashSet::default();
+    let mut visited = Seen::default();
     let mut v = v;
     visited.insert(v);
     loop {
@@ -841,7 +902,7 @@ pub fn must_execute_ub_if_poison_on_path_to(
     on_path_to: InstId,
     dt: &crate::domtree::DomTree,
 ) -> bool {
-    let mut known_poison: HashSet<Operand> = HashSet::default();
+    let mut known_poison = PoisonSet::default();
     let mut worklist = vec![root];
     while let Some(inst) = worklist.pop() {
         if must_trigger_ub(q, inst, &known_poison) && dt.instruction_dominates(q.function, inst, on_path_to) {
@@ -1128,7 +1189,7 @@ fn handle_guaranteed_non_poison_ops(
 pub fn must_trigger_ub(
     q: &Query,
     inst: InstId,
-    known_poison: &HashSet<Operand>,
+    known_poison: &PoisonSet,
 ) -> bool {
     handle_guaranteed_non_poison_ops(q, inst, &mut |v| known_poison.contains(&v))
 }
@@ -1175,8 +1236,8 @@ fn program_undefined_if_undef_or_poison_of(
         return false;
     }
 
-    let mut yields_poison: HashSet<Operand> = HashSet::default();
-    let mut visited: IdSet<BlockId> = IdSet::new();
+    let mut yields_poison = PoisonSet::default();
+    let mut visited: SmallSet<BlockId, 4> = SmallSet::default();
     yields_poison.insert(v);
     visited.insert(block);
 

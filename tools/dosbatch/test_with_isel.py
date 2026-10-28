@@ -35,6 +35,7 @@ def test_a_c_program_itself_is_compiled_by_the_selected_selector(monkeypatch, tm
     """Only the `link:` helpers went through LLRM_ISEL: a run with LLRM_ISEL=dag passed 445 of 449 programs on the old selector."""
     import run_tests  # noqa: E402
 
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     monkeypatch.setenv("LLRM_ISEL", "dag")
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
@@ -48,6 +49,7 @@ def test_real_mode_c_keeps_the_old_selector(monkeypatch, tmp_path):
     """The DAG path selects 32-bit code only: under LLRM_ISEL=dag every real-mode program failed to build and the launch lost jobs."""
     import run_tests  # noqa: E402
 
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
     monkeypatch.setenv("LLRM_ISEL", "dag")
     source = tmp_path / "p.c"
     source.write_text("int main(void) { return 0; }\n")
@@ -85,3 +87,21 @@ def test_real_mode_c_takes_the_selector_when_the_run_is_the_real_mode_check(monk
     monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
     command = run_tests.compile_command(run_tests.Program(source=source, flags=[], known=None), tmp_path / "p.obj")
     assert command[1] == "--isel=dag", command
+
+
+def test_a_clock_pair_names_the_excess_precision_of_a_basic_program_and_extra_flags(monkeypatch, tmp_path):
+    """main compiled SINGLE as fast and the tip as standard, so a main-vs-tip clock row read the deliberate rounding as a slowdown (nbody_single.bas +29.6%).
+    LLRM_EXCESS sets it on a BASIC program only; LLRM_EXTRA_FLAGS adds flags to every program (an ablation)."""
+    import run_tests  # noqa: E402
+
+    monkeypatch.setenv("LLRM_EXCESS", "fast")
+    monkeypatch.setenv("LLRM_EXTRA_FLAGS", "-fno-tree-ch")
+    basic = tmp_path / "p.bas"
+    basic.write_text("PRINT 1\n")
+    c = tmp_path / "p.c"
+    c.write_text("int main(void) { return 0; }\n")
+    monkeypatch.setattr(dosbatch, "c_include", lambda target, work: tmp_path)
+    one = run_tests.compile_command(run_tests.Program(source=basic, flags=[], known=None), tmp_path / "p.obj")
+    two = run_tests.compile_command(run_tests.Program(source=c, flags=[], known=None), tmp_path / "p.obj")
+    assert "-fexcess-precision=fast" in one and "-fno-tree-ch" in one, one
+    assert "-fexcess-precision=fast" not in two and "-fno-tree-ch" in two, two
