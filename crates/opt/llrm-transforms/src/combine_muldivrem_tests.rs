@@ -891,3 +891,24 @@ fn a_division_by_a_select_with_a_zero_arm_uses_the_other_arm() {
         "  %r = udiv i16 %x, %y\n  ret i16 %r\n",
     );
 }
+
+/// `SimplifyDemandedInstructionBits` in `commonIDivTransforms`: a divide by
+/// four does not read the low two bits of the dividend, so the mask loses them
+/// (`opt` agrees). Left at 255 before.
+#[test]
+fn a_divide_by_four_drops_the_dividend_bits_it_does_not_read() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = and i32 %x, 255\n  %r = udiv i32 %a, 4\n  ret i32 %r\n",
+        "  %a = and i32 %x, 252\n  %0 = lshr i32 %a, 2\n  ret i32 %0\n",
+    );
+}
+
+/// `SimplifyDemandedInstructionBits` in `commonIRemTransforms`: the bits a
+/// remainder by 256 of a shifted value reads are all zero, so it is zero.
+/// Stayed an `and` before.
+#[test]
+fn a_remainder_of_shifted_out_bits_is_zero() {
+    check("i32", "i32 %x", "  %a = shl i32 %x, 8\n  %r = urem i32 %a, 256\n  ret i32 %r\n", "  ret i32 0\n");
+}
