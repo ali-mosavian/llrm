@@ -1,6 +1,8 @@
 //! x86-64 (m64): quadword arithmetic, the SysV call sequence, loops over
 //! arrays.
 
+use llrm_target::Target;
+
 use super::dag_function::selected;
 
 /// An m64 sum of two `i64` arguments stopped at emit with
@@ -837,6 +839,31 @@ entry:
     assert!(jump.is_some(), "a jmp that returns");
 }
 
+/// A tail call through a pointer that arrives in `rdi` jumped through a copy
+/// (`mov rax,rdi; jmp *rax`, one instruction more than the pin's `jmp *rdi`):
+/// the call's register was the first free one, not the one the pointer held.
+#[test]
+fn an_m64_sibling_call_through_an_argument_jumps_through_its_own_register() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define void @f(ptr %p) {
+entry:
+  tail call void %p()
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|why| panic!("{}", why.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .find(|i| i.what.as_ref().is_some_and(|w| w.indirect && w.name.as_deref() == Some("jmp")))
+        .expect("an indirect jmp");
+    let regs = llrm_lir::registers::Regs(llrm_x86_m64::M64.registers());
+    let (_, through) = jump.requires.last().expect("the callee's register");
+    assert_eq!(regs.root(*through), regs.root(llrm_lir::registers::RegId::RDI));
+}
+
 /// A function returning a `double` at m64 carried the x87 return pseudo (an
 /// unnamed `FloatStore` with no destination) that the stackifier reads at m32;
 /// the listing printer indexed its empty destinations and panicked
@@ -879,6 +906,24 @@ entry:
     let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
     assert!(names.iter().any(|n| &**n == "cvttss2si"), "{names:?}");
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
+}
+
+/// A sibling call through a pointer at m64 was `CannotSelect("Target(6)")`: the
+/// generated table checked the callee as `i32` (`ByHwMode0` resolved to the
+/// 32-bit type), so `TCRETURNri64` never matched. tail_calls*.c were refused.
+#[test]
+fn an_m64_tail_call_through_a_pointer_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(ptr %g, i32 %x) {
+entry:
+  %r = tail call i32 %g(i32 %x)
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.indirect)));
 }
 
 /// An address with an index and no base (`4 + 4*x`, a select of 4 and 8) at m64

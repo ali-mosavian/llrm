@@ -50,8 +50,9 @@ impl ObjectTarget for X86Objects {
         // `.eh_frame` goes in whether or not `-g` is on, for the frames the
         // backend declared.
         let unwound;
-        let object = if format == "elf" && object.bits == 64 && !object.frames.is_empty() {
-            unwound = llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?;
+        let object = if format == "elf" && matches!(object.bits, 32 | 64) && !object.frames.is_empty() {
+            let target = if object.bits == 32 { unwind::eh_target32() } else { unwind::eh_target() };
+            unwound = llrm_dwarf::eh_frame::expanded(object, &target)?;
             &unwound
         } else {
             object

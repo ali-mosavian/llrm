@@ -671,6 +671,9 @@ struct CfiState {
     depth: i64,
     framed: bool,
     frame: i64,
+    /// The stack pointer as the body names it, at the width of an address: the
+    /// sequences name the pseudo `STACK` at another.
+    stack: RegId,
 }
 
 impl CfiState {
@@ -678,8 +681,19 @@ impl CfiState {
         slot: i64,
         sp: u16,
         bp: u16,
+        stack: RegId,
     ) -> Self {
-        CfiState { slot, sp, bp, depth: slot, framed: false, frame: 0 }
+        CfiState { slot, sp, bp, depth: slot, framed: false, frame: 0, stack }
+    }
+
+    fn is_stack(
+        &self,
+        place: Option<&Loc>,
+    ) -> bool {
+        matches!(
+            place,
+            Some(Loc::Reg(one)) if one.register == STACK || one.register == self.stack
+        )
     }
 
     /// The directive that restates the frame address after code that left it
@@ -725,12 +739,12 @@ impl CfiState {
                     out.push(Cfi::DefCfaOffset { offset: self.depth });
                 }
             }
-            (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+            (Operation::Move, _) if what.dests.first() == Some(bp) && self.is_stack(what.sources.first()) => {
                 self.framed = true;
                 self.frame = self.depth;
                 out.push(Cfi::DefCfaRegister { register: self.bp });
             }
-            (Operation::Binary, Some(name @ ("sub" | "add"))) if what.dests.first() == Some(&sp_reg()) => {
+            (Operation::Binary, Some(name @ ("sub" | "add"))) if self.is_stack(what.dests.first()) => {
                 let size = what.sources.get(1).and_then(imm).unwrap_or(0);
                 self.depth += if name == "sub" { size } else { -size };
                 if !self.framed && size != 0 {
@@ -1631,11 +1645,15 @@ fn built(
         && sequences.entry.iter().all(|one| one.name.as_deref() != Some("enter"));
     let bp = reg(FRAME);
     // The DWARF numbers the directives name, from the target's table.
-    let dwarf =
-        |register: RegId| regs.name(register).and_then(llrm_x86::mc::unwind::register).map(|number| number as u16);
+    let dwarf = |register: RegId| {
+        regs.name(register)
+            .and_then(|name| llrm_x86::mc::unwind::register_in(procedure.body.bits, name))
+            .map(|number| number as u16)
+    };
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
-    let mut cfi =
-        numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let mut cfi = numbers
+        .filter(|_| plain)
+        .map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame, procedure.registers.stack));
     let hardware = |loc: &Loc| match loc {
         Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
         _ => None,
@@ -1655,11 +1673,12 @@ fn built(
             let marks = cfi.after(one, &bp);
             entry_items.extend(seh_after(one, &bp, &hardware));
             // The System V callee-saved registers: rbx, rbp and r12 to r15
-            // (the frame register's own push is told apart by its name).
+            // (ebx, ebp, esi, edi) (the frame register's own push
+            // is told apart by its name).
             if one.op == Operation::Push
                 && let Loc::Reg(pushed) = &one.sources[0]
-                && let Some(register) =
-                    dwarf(pushed.register).filter(|number| llrm_x86::mc::unwind::CALLEE_SAVED.contains(number))
+                && let Some(register) = dwarf(pushed.register)
+                    .filter(|number| llrm_x86::mc::unwind::callee_saved(procedure.body.bits).contains(number))
             {
                 // A callee-saved register's own offset is declared after the
                 // whole prologue (`emitCalleeSavedFrameMoves`).

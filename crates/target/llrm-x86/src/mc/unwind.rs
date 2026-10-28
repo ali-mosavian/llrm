@@ -12,34 +12,52 @@ const NAMES: [&str; 17] = [
     "rax", "rdx", "rcx", "rbx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "rip",
 ];
 
+const NAMES32: [&str; 9] = ["eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi", "eip"];
+
+/// The DWARF number of a register by name, in a `bits`-bit (32 or 64) function.
+pub fn register_in(
+    bits: u32,
+    name: &str,
+) -> Option<u64> {
+    if bits == 32 { NAMES32.iter().position(|one| *one == name).map(|number| number as u64) } else { register(name) }
+}
+
+/// The DWARF numbers of the registers a function must preserve, which the
+/// prologue's pushes are told apart by (rbp and ebp among them).
+pub fn callee_saved(bits: u32) -> &'static [u16] {
+    if bits == 32 { &[3, 5, 6, 7] } else { &[3, 6, 12, 13, 14, 15] }
+}
+
 /// The DWARF number of an x86-64 register by name.
 pub fn register(name: &str) -> Option<u64> {
     NAMES.iter().position(|one| *one == name).map(|number| number as u64)
 }
 
-/// The name of an x86-64 register by its DWARF number.
-pub fn register_name(number: u64) -> Option<&'static str> {
-    NAMES.get(number as usize).copied()
+/// The name of a register by its DWARF number, in a `bits`-bit function.
+pub fn register_name(
+    bits: u32,
+    number: u64,
+) -> Option<&'static str> {
+    if bits == 32 { NAMES32.get(number as usize).copied() } else { NAMES.get(number as usize).copied() }
 }
-
-/// The DWARF numbers of the registers a 64-bit function must preserve, which
-/// the prologue's pushes are told apart by (rbp among them).
-pub const CALLEE_SAVED: [u16; 6] = [3, 6, 12, 13, 14, 15];
 
 /// Whether functions of `bits`-bit code are given call frame information.
 pub fn declares(bits: u32) -> bool {
-    bits == 64
+    matches!(bits, 32 | 64)
 }
 
 /// A register's name by its DWARF number, `rip` for any that has none.
-pub fn register_label(number: u16) -> String {
-    register_name(u64::from(number)).unwrap_or("rip").to_owned()
+pub fn register_label(
+    bits: u32,
+    number: u16,
+) -> String {
+    register_name(bits, u64::from(number)).unwrap_or("rip").to_owned()
 }
 
-/// A function's frame at its entry: the frame address 8 past the stack
-/// pointer.
-pub fn entry_row() -> FrameRow {
-    eh_target().entry
+/// A function's frame at its entry: the frame address one return address
+/// past the stack pointer.
+pub fn entry_row(bits: u32) -> FrameRow {
+    if bits == 32 { eh_target32().entry } else { eh_target().entry }
 }
 
 /// At a function's entry the frame address is 8 past the stack pointer and
@@ -50,6 +68,9 @@ pub fn eh_target() -> EhTarget<'static> {
         section: ".eh_frame",
         address: 8,
         return_column: 16,
+        data_alignment: -8,
+        padding: 8,
+        return_saved: true,
         entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
         register: &register,
     }
@@ -93,6 +114,19 @@ pub fn macho_expanded(object: &Object) -> Result<Object, Unsupported> {
         });
     }
     llrm_dwarf::eh_frame::expanded(&Object { sections, ..object.clone() }, &macho_eh_target())
+}
+
+/// The same at 32 bits: 4-byte slots, the return address in column 8.
+pub fn eh_target32() -> EhTarget<'static> {
+    EhTarget {
+        address: 4,
+        return_column: 8,
+        data_alignment: -4,
+        padding: 4,
+        return_saved: true,
+        entry: FrameRow { offset: 0, cfa_register: "esp".into(), cfa_offset: 4, saved: Vec::new() },
+        register: &|name| register_in(32, name),
+    }
 }
 
 #[cfg(test)]

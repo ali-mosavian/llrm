@@ -1394,7 +1394,16 @@ fn a_variable_bit_clear_of_a_quadword_is_btr() {
 
 /// The `.eh_frame` of `text` (an x86-64 module) written as ELF.
 fn eh_frame_of(text: &str) -> Vec<u8> {
-    let (built, format) = crate::llc::compiled(&flags(&["-m64", "-O2"]), text, "f").unwrap();
+    eh_frame_in(&["-m64", "-O2"], text)
+}
+
+/// The `.eh_frame` of `text` compiled with `arguments`, written as ELF (32 or
+/// 64 bit, as its class byte says).
+fn eh_frame_in(
+    arguments: &[&str],
+    text: &str,
+) -> Vec<u8> {
+    let (built, format) = crate::llc::compiled(&flags(arguments), text, "f").unwrap();
     let bytes = llrm_codegen::backend::objbuild::written_in(
         &built,
         "f.ll",
@@ -1402,21 +1411,31 @@ fn eh_frame_of(text: &str) -> Vec<u8> {
         format,
     )
     .unwrap();
+    let wide = bytes[4] == 2;
     let (u16_at, u32_at, u64_at) = (
         |at: usize| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) as usize,
         |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize,
         |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()) as usize,
     );
-    let (headers, count, names) = (u64_at(0x28), u16_at(0x3C), u16_at(0x3E));
-    let header = |index: usize| headers + index * u16_at(0x3A);
-    let strings = u64_at(header(names) + 0x18);
+    // `e_shoff`, `e_shentsize`, `e_shnum` and `e_shstrndx`; `sh_offset` and
+    // `sh_size` of a header.
+    let (headers, size, count, names) = if wide {
+        (u64_at(0x28), u16_at(0x3A), u16_at(0x3C), u16_at(0x3E))
+    } else {
+        (u32_at(0x20), u16_at(0x2E), u16_at(0x30), u16_at(0x32))
+    };
+    let field = |at: usize, (wide_at, narrow_at): (usize, usize)| {
+        if wide { u64_at(at + wide_at) } else { u32_at(at + narrow_at) }
+    };
+    let header = |index: usize| headers + index * size;
+    let strings = field(header(names), (0x18, 0x10));
     (0..count)
         .map(header)
         .find(|&at| {
             let from = strings + u32_at(at);
             bytes[from..].starts_with(b".eh_frame\0")
         })
-        .map(|at| bytes[u64_at(at + 0x18)..u64_at(at + 0x18) + u64_at(at + 0x20)].to_vec())
+        .map(|at| bytes[field(at, (0x18, 0x10))..field(at, (0x18, 0x10)) + field(at, (0x20, 0x14))].to_vec())
         .unwrap_or_default()
 }
 
@@ -1605,6 +1624,41 @@ fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_add
         eh_frame_of(&text),
         hex("1400000000000000017a5200017810011b0c070890010000140000001c000000000000000b00000000410e10490e0800")
     );
+}
+
+const SYSV32: &str = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                      target triple = \"i386-unknown-linux-gnu\"\n";
+
+/// An x86 32-bit ELF object had no `.eh_frame`. The CIE is the pin's
+/// (`clang -target i386-linux-gnu`: 4-byte slots, `esp+4`, return column 8),
+/// and `push esi` declares `esi` at `cfa-8` after the prologue and the
+/// frame address 4 again at the `pop`.
+#[test]
+fn a_32_bit_function_with_a_pushed_register_has_the_pins_eh_frame() {
+    let text = format!(
+        "{SYSV32}declare i32 @g()\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g()\n  %s = add i32 %r, %a\n  %t = call i32 @g()\n  %u = add i32 %s, %t\n  ret i32 %u\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_in(&["-m32", "-mabi=sysv", "-fobject-format=elf", "-O2"], &text),
+        hex(
+            "1400000000000000017a5200017c08011b0c040488010000180000001c000000000000001500000000410e08860253 0e04000000"
+                .replace(' ', "")
+                .as_str()
+        )
+    );
+}
+
+/// The frame address stayed 4 higher after a call whose pushed argument was
+/// cleaned up with `add esp, 4`: the `add` was matched against the pseudo stack
+/// pointer at another width and never seen, so an unwinder in the rest of the
+/// function (and at `ret`) read the wrong return address.
+#[test]
+fn a_cleaned_up_argument_push_gives_the_frame_address_back() {
+    let text = format!(
+        "{SYSV32}declare i32 @g(i32)\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g(i32 %a)\n  %s = add i32 %r, 1\n  ret i32 %s\n}}\n"
+    );
+    let frame = eh_frame_in(&["-m32", "-mabi=sysv", "-fobject-format=elf", "-O2"], &text);
+    assert_eq!(frame[frame.len() - 7..], hex("440e08480e0400"));
 }
 
 /// `fptoui double to i64` on a target with no conditional move
