@@ -68,6 +68,7 @@ use llrm_target::object::{CodeModel, Format};
 use crate::backend::masm;
 use crate::backend::select;
 use crate::model::ir::{self, Loc, Operation, Semantics, Space};
+use crate::model::lir::SrcLoc;
 use crate::objectfile::omf;
 use crate::support::hash::IndexMap;
 use crate::support::pyrepr::{self, Repr};
@@ -288,7 +289,7 @@ pub struct Segment {
     pub spans: Vec<[usize; 2]>,
     pub fixups: Vec<Fixup>,
     /// (source line, offset) of each line's first code, in order.
-    pub lines: Vec<(u32, usize)>,
+    pub lines: Vec<(SrcLoc, usize)>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The widest alignment a data item in it asks for.
@@ -329,7 +330,7 @@ impl Segment {
     /// offset wins, as the one before it has no code.
     pub fn line(
         &mut self,
-        line: u32,
+        line: SrcLoc,
     ) {
         let at = self.image.len();
         if self.lines.last().is_some_and(|&(_, last)| last == at) {
@@ -1226,8 +1227,13 @@ pub fn object_of(
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });
     }
+    // The module is named for the source the debug info names: CodeView finds
+    // the lines' file by the module's name (THEADR), not the `.ll` a compiler
+    // was handed.
+    let name =
+        debug.as_ref().and_then(|info| info.files.first()).map_or_else(|| source.to_owned(), |file| file.name.clone());
     Ok(Object {
-        name: source.to_owned(),
+        name,
         bits: match model {
             CodeModel::Flat64 => 64u8,
             CodeModel::Flat32 => 32u8,
@@ -1237,6 +1243,7 @@ pub fn object_of(
         symbols: table,
         omf_groups,
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug,
     })
 }

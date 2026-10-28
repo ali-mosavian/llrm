@@ -1,6 +1,6 @@
 //! A byte product read in another block is exported.
 
-use std::process::Command;
+mod common;
 
 /// `(f & 3) * 0x55` computed before a loop that reads it failed the verifier
 /// under the DAG selector (`value 13 is read and not defined on every path`;
@@ -15,7 +15,7 @@ fn test_a_byte_product_used_in_a_loop_compiles() {
         "void g(unsigned char *at, unsigned h, unsigned f, unsigned char *b)\n{\n    unsigned ink = (f & 3) * 0x55;\n    for (; h; h--, b++) at[0] = *b & ink;\n}\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-O2", "--isel=dag", "-S", "-o", "-"])
         .output()
