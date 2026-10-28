@@ -210,7 +210,7 @@ def run_batches(groups: list[list], launch, work: Path) -> list[dict]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("names", nargs="*")
-    parser.add_argument("--bits", type=int, choices=[16, 32], default=32, help="the target's int width")
+    parser.add_argument("--bits", type=int, choices=[16, 32, 64], default=32, help="the target's int width (64: x86_64-linux objects, linked and run natively)")
     parser.add_argument("--levels", default="O0,O2,Os")
     parser.add_argument("--stage", choices=["compile", "run"], default="run")
     parser.add_argument("--sample", type=int, default=0, help="the first N programs only")
@@ -237,7 +237,41 @@ def build_support(target: str, out: Path) -> subprocess.CompletedProcess:
     return subprocess.run(command, capture_output=True, text=True, env={**os.environ, **row})
 
 
+NATIVE_SECONDS = 15
+
+
+def build_native(source: Path, level: str, work: Path, stem: str, rules: list[dict]) -> tuple[str, str, Path | None]:
+    """(class, why, exe) of `source` as an x86_64-linux object linked by the host's cc: the m64 row has no DOS to run in."""
+    text = source.read_text(errors="replace")
+    obj, exe = work / f"{stem}.o", work / stem
+    command = [str(BIN / "llrm-cc"), LEVELS[level], "-c", "-I", str(source.parent), *DIALECT, *program_options(text), str(source), "-o", str(obj)]
+    done = run_within_cpu(command, COMPILE_SECONDS, {"LLRM_CC_TARGET": "x86_64-linux"})
+    if done is None:
+        return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
+    if done.returncode != 0 or not obj.exists():
+        found = cause(done.stderr or done.stdout) or f"exit {done.returncode}"
+        why = refusal(found, rules)
+        return ("refused", why, None) if why else ("compile", found, None)
+    linked = subprocess.run(["cc", str(obj), "-o", str(exe), "-lm"], capture_output=True, text=True)
+    if linked.returncode != 0:
+        missing = re.search(r"undefined reference to `(\w+)'", linked.stderr)
+        return "link", f"undefined symbol {missing.group(1)}" if missing else cause(linked.stderr), None
+    return "built", "", exe
+
+
+def run_native(exe: Path) -> tuple[str, str]:
+    try:
+        done = subprocess.run([str(exe)], capture_output=True, timeout=NATIVE_SECONDS, cwd=exe.parent)
+    except subprocess.TimeoutExpired:
+        return "wrong", f"stopped: limit after {NATIVE_SECONDS} s"
+    if done.returncode == 0:
+        return "pass", ""
+    return "wrong", "aborted" if done.returncode in (134, -6) else f"exit code {done.returncode}"
+
+
 def run(args, work: Path) -> int:
+    if args.bits == 64:
+        return run_64(args, work)
     target = dosbatch.linkrecipe.named(args.bits)
     rules = expected()
     names_wanted = args.names
@@ -288,13 +322,53 @@ def run(args, work: Path) -> int:
         if kind == "wrong" and case[0].stem in by_design:
             result[case] = ("differs", f"{why}: {by_design[case[0].stem]}")
     summary(result, args)
+    write_out(args, result)
     if args.gate:
         failed = sorted(f"{case[0].stem}@{case[1]}" for case, (kind, _) in result.items() if kind in ("compile", "link", "wrong"))
         print("GATE: " + ("ok" if not failed else "FAILED: " + ", ".join(failed)))
         if failed:
             return 1
+    return 0
+
+
+def write_out(args, result) -> None:
+    """`--out`: every program's class and cause. A failing gate used to return before it was written."""
     if args.out:
         args.out.write_text(json.dumps({f"{case[0].stem}@{case[1]}": list(value) for case, value in result.items()}, indent=1))
+
+
+def run_64(args, work: Path) -> int:
+    rules = expected()
+    names_wanted = args.names
+    if args.gate:
+        names_wanted = [line.strip() for line in (HERE / "sample.txt").read_text().splitlines() if line.strip() and not line.startswith("#")]
+    chosen = programs(names_wanted)[: args.sample or None]
+    if not chosen:
+        print(f"no programs in {CORPUS} (TORTURE_CORPUS names the gcc.c-torture/execute directory)")
+        return 2
+    cases = [(source, level) for source in chosen for level in args.levels.split(",")]
+    names = {case: f"T{at:04d}" for at, case in enumerate(cases)}
+
+    def one(case):
+        source, level = case
+        kind, why, exe = build_native(source, level, work, names[case], rules)
+        if kind == "built" and args.stage == "run":
+            kind, why = run_native(exe)
+        return case, (kind, why)
+
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        result = dict(pool.map(one, cases))
+    by_design = differences()
+    for case, (kind, why) in list(result.items()):
+        if kind == "wrong" and case[0].stem in by_design:
+            result[case] = ("differs", f"{why}: {by_design[case[0].stem]}")
+    summary(result, args)
+    write_out(args, result)
+    if args.gate:
+        failed = sorted(f"{case[0].stem}@{case[1]}" for case, (kind, _) in result.items() if kind in ("compile", "link", "wrong"))
+        print("GATE: " + ("ok" if not failed else "FAILED: " + ", ".join(failed)))
+        if failed:
+            return 1
     return 0
 
 

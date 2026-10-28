@@ -82,6 +82,29 @@ class OptionTests(unittest.TestCase):
         self.assertIn("-Wno-implicit-function-declaration", torture.DIALECT)
 
 
+    def test_a_64_bit_program_runs_natively_and_its_abort_is_a_finding(self):
+        """There was no m64 gate: `--bits 64` was no choice. A program that exits 0 passes; one that aborts is `aborted`."""
+        import subprocess
+
+        done = subprocess.run(["cc", "-x", "c", "-", "-o", "/dev/null"], input="int main(void){return 0;}", capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, "the host has a cc")
+        with tempfile.TemporaryDirectory() as directory:
+            exe = Path(directory) / "aborts"
+            subprocess.run(["cc", "-x", "c", "-", "-o", str(exe)], input="void abort(void); int main(void){abort();}", text=True, check=True)
+            self.assertEqual(torture.run_native(exe), ("wrong", "aborted"))
+            ok = Path(directory) / "ok"
+            subprocess.run(["cc", "-x", "c", "-", "-o", str(ok)], input="int main(void){return 0;}", text=True, check=True)
+            self.assertEqual(torture.run_native(ok), ("pass", ""))
+
+
+    def test_out_is_written_whatever_the_gate_says(self):
+        """A failing --gate returned before --out was written: the 32-bit gate's 32 findings left no file to read them from."""
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory) / "gate.json"
+            torture.write_out(mock.Mock(out=out), {(Path("a.c"), "O2"): ("compile", "why")})
+            self.assertEqual(out.read_text().count("a@O2"), 1)
+
+
 class SymbolTests(unittest.TestCase):
     def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
         """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and
