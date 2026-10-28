@@ -132,7 +132,27 @@ impl Inst {
                     f(G(rm), Role::Use);
                 }
             }
-            Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::Svc { .. } | Inst::Brk { .. } | Inst::Nop => {}
+            Inst::Atomic { op, rs, rt, rn, .. } => {
+                match op {
+                    Atomic::Ldar | Atomic::Ldapr => f(G(rt), Role::Def),
+                    Atomic::Stlr => f(G(rt), Role::Use),
+                    Atomic::Cas => {
+                        f(G(rs), Role::UseDef);
+                        f(G(rt), Role::Use);
+                    }
+                    _ => {
+                        f(G(rs), Role::Use);
+                        f(G(rt), Role::Def);
+                    }
+                }
+                f(G(rn), Role::Use);
+            }
+            Inst::Branch { .. }
+            | Inst::BranchCond { .. }
+            | Inst::Svc { .. }
+            | Inst::Brk { .. }
+            | Inst::Dmb { .. }
+            | Inst::Nop => {}
             Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => f(G(rt), Role::Use),
             Inst::BranchReg { rn, .. } | Inst::Ret { rn } => f(G(rn), Role::Use),
             Inst::Load { mem, addr } => {

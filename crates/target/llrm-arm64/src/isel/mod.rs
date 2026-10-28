@@ -7,6 +7,7 @@
 //! where it is read.
 
 mod agg;
+mod atomic;
 mod call;
 mod control;
 mod divide;
