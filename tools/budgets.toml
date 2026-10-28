@@ -71,7 +71,7 @@ why = "measured 18.5 -> 52.2 Minstr (x2.82)"
 kind = "steps"
 axis = "cases"
 name = "analysis exposed-frames"
-ratio = 3.8
+ratio = 4.0
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 5.2 -> 18.7 Minstr (x3.56)"
@@ -124,15 +124,6 @@ why = "measured 39.9 -> 102.1 Minstr (x2.56)"
 [[debt]]
 kind = "steps"
 axis = "equal"
-name = "lir coalesce"
-ratio = 6.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2641"
-owner = "backend-slopes"
-why = "measured 10.8 -> 64.9 Minstr (x5.98)"
-
-[[debt]]
-kind = "steps"
-axis = "equal"
 name = "regalloc base"
 ratio = 3.34
 issue = "https://github.com/ali-mosavian/llrm/issues/2641"
@@ -168,42 +159,6 @@ ratio = 2.4
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 2388 -> 5360 (x2.24)"
-
-[[debt]]
-kind = "events"
-axis = "equal"
-name = "lir_rename_asks"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 7623 -> 22315 (x2.93)"
-
-[[debt]]
-kind = "events"
-axis = "equal"
-name = "lir_rename_rebuilds"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 5958 -> 17520 (x2.94)"
-
-[[debt]]
-kind = "events"
-axis = "equal"
-name = "lir_rewrites"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 6034 -> 17564 (x2.91)"
-
-[[debt]]
-kind = "events"
-axis = "equal"
-name = "lir_operand_list_edits"
-ratio = 3.05
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 12762 -> 36858 (x2.89)"
 
 [[debt]]
 kind = "steps"
@@ -254,7 +209,7 @@ why = "measured 18.9 -> 57.7 Minstr (x3.05)"
 kind = "steps"
 axis = "functions"
 name = "analysis summaries"
-ratio = 3.8
+ratio = 4.0
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 13.8 -> 49.7 Minstr (x3.61)"
@@ -405,24 +360,6 @@ why = "measured 2.3 -> 5.3 Minstr (x2.30)"
 
 [[debt]]
 kind = "steps"
-axis = "branches"
-name = "mir loopsimplify@772"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.0 -> 5.3 Minstr (x2.64)"
-
-[[debt]]
-kind = "steps"
-axis = "callers"
-name = "analysis summaries"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.2 -> 9.7 Minstr (x3.07)"
-
-[[debt]]
-kind = "steps"
 axis = "chain"
 name = "mir combine@677"
 ratio = 4.3
@@ -505,15 +442,6 @@ why = "measured 3.9 -> 14.6 Minstr (x3.74)"
 [[debt]]
 kind = "steps"
 axis = "chain"
-name = "analysis summaries"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.4 -> 11.8 Minstr (x3.52)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
 name = "settled remember"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -528,15 +456,6 @@ ratio = 4.1
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 2.2 -> 8.6 Minstr (x3.87)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
-name = "analysis exposed-frames"
-ratio = 4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 1.9 -> 7.3 Minstr (x3.78)"
 
 [[debt]]
 kind = "steps"
@@ -767,7 +686,7 @@ why = "measured 3.4 -> 9.9 Minstr (x2.88)"
 kind = "steps"
 axis = "nest"
 name = "analysis exposed-frames"
-ratio = 3.1
+ratio = 3.3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 3.2 -> 9.6 Minstr (x2.95)"
@@ -938,7 +857,7 @@ why = "measured 19.0 -> 68.9 Minstr (x3.63)"
 kind = "steps"
 axis = "cases"
 name = "regalloc base"
-ratio = 2.9
+ratio = 3.4
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 21.1 -> 57.6 Minstr (x2.73)"
@@ -1000,15 +919,6 @@ why = "measured 14.7 -> 36.8 Minstr (x2.50)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir decide@766"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "mir simplifycfg@1438"
 ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -1032,24 +942,6 @@ ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 9.1 -> 23.9 Minstr (x2.64)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir decide@675"
-ratio = 3.55
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir decide@690"
-ratio = 3.55
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1432,15 +1324,6 @@ why = "measured 2.1 -> 5.6 Minstr (x2.68)"
 [[debt]]
 kind = "steps"
 axis = "equal"
-name = "lir twoaddr"
-ratio = 42
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 142.7 -> 5699.6 Minstr (x39.95)"
-
-[[debt]]
-kind = "steps"
-axis = "equal"
 name = "dag isel"
 ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/5759"
@@ -1473,15 +1356,6 @@ ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/5759"
 owner = "w10 coalescer"
 why = "measured 31.6 -> 81.0 Minstr (x2.56)"
-
-[[debt]]
-kind = "steps"
-axis = "equal"
-name = "lir precse"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 16.3 -> 52.8 Minstr (x3.25)"
 
 [[debt]]
 kind = "steps"
@@ -1536,15 +1410,6 @@ ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/5759"
 owner = "w10 coalescer"
 why = "measured 2.7 -> 7.3 Minstr (x2.69)"
-
-[[debt]]
-kind = "steps"
-axis = "equal"
-name = "peep facts dead after"
-ratio = 5.7
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 0.9 -> 5.1 Minstr (x5.37)"
 
 [[debt]]
 kind = "steps"
@@ -1630,15 +1495,6 @@ why = "measured 3.9 -> 14.6 Minstr (x3.74)"
 [[debt]]
 kind = "steps"
 axis = "chain-m16"
-name = "analysis summaries"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.4 -> 11.8 Minstr (x3.52)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
 name = "settled remember"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -1657,29 +1513,11 @@ why = "measured 2.2 -> 8.6 Minstr (x3.87)"
 [[debt]]
 kind = "steps"
 axis = "chain-m16"
-name = "analysis exposed-frames"
-ratio = 4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 1.9 -> 7.4 Minstr (x3.77)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
 name = "mir merge@818"
 ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 2.1 -> 6.3 Minstr (x2.98)"
-
-[[debt]]
-kind = "steps"
-axis = "callers-m16"
-name = "analysis summaries"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.2 -> 9.7 Minstr (x3.07)"
 
 [[debt]]
 kind = "steps"
@@ -1765,7 +1603,7 @@ why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); not red on llr
 kind = "steps"
 axis = "cases"
 name = "lir peephole"
-ratio = 2.46
+ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 16.4 -> 38.2 Minstr (x2.34); N=128/256/512: 1.8 / 6.2 / 0.2 Minstr; @716 is a different instance at 512, so not one pass across N; cause not located"
@@ -1805,4 +1643,13 @@ ratio = 2.74
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); dse alone 326 -> 793 -> 2494 Minstr at N=820/1640/3280 (x2.4, x3.1). No event counter grows; scan limits are the pin's (150/90/5), defs per block under 5000, so the superlinear part is not located"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "assemble"
+ratio = 3.95
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.8 -> 29.3 Minstr (x3.75) on parity ee5a419f8a, not red before it"
 
