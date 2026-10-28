@@ -66,8 +66,11 @@ test    cmp    -/rm,ri    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,CF,PF    
 bt    cmp    -/r,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_r{w}
 bt    cmp    -/r,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_imm8
 btc    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btc_rm{w}_r{w}
+btc    binary    r/^0,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btc_rm{w}_imm8
 bts    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bts_rm{w}_r{w}
+bts    binary    r/^0,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bts_rm{w}_imm8
 btr    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btr_rm{w}_r{w}
+btr    binary    r/^0,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btr_rm{w}_imm8
 push    push    -/rmi    64    push_r    -    sp,ss    sp    -/-    Push_r{w}
 pop    pop    rm/-    64    pop_r    -    sp,ss    sp    -/-    Pop_r{w}
 # movsxd: the sign extension of a dword into a quadword.

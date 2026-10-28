@@ -87,7 +87,7 @@
 //! # Provides
 //! One answer to "which registers may this value be in", owned here (#441).
 //! Read by [`crate::backend::ssaspill`], [`crate::backend::allocate`],
-//! [`crate::backend::coalesce`], [`crate::backend::constrain`],
+//! [`crate::coalescer::pass`], [`crate::backend::constrain`],
 //! and `target.rs`.
 //!
 //! # Needs
@@ -1180,7 +1180,7 @@ pub fn violations(
     skip: &BTreeSet<u32>,
 ) -> Vec<Violation> {
     let confined = classes_with(body, &BTreeSet::new(), segments, registers, true);
-    let (_, live_out) = crate::backend::allocate::live(body);
+    let (_, live_out) = crate::backend::liverows::live(body);
     let general: BTreeSet<RegId> = registers.available.iter().map(|one| crate::backend::masks::_whole(*one)).collect();
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     let files: [(&'static str, &BTreeSet<RegId>); 2] = [("general", &general), ("selector", &selectors)];

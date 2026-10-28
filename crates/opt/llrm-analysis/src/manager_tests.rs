@@ -804,6 +804,32 @@ fn test_a_block_made_and_removed_leaves_the_exposed_frames_to_be_updated_not_rer
     assert_eq!(frames, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
+/// `ExposedFrames::update` read every operand of every edit before it found
+/// nothing to renew: in a function with no alloca, the third run of `cases`
+/// N=256 read 133 K operands for 3.6 K edits (a phi of N arms edited N times)
+/// (`analysis exposed-frames` x3.82 per doubling, though the full scan had been
+/// fixed).
+#[test]
+fn test_exposed_frames_update_reads_no_edit_in_a_function_with_no_alloca() {
+    let mut module = parsed(&format!(
+        "{DOS}define ptr @f(i1 %c, ptr %x, ptr %y) {{\nentry:\n  br i1 %c, label %l, label %r\nl:\n  br label %j\nr:\n  br label %j\nj:\n  %p = phi ptr [ %x, %l ], [ %y, %r ]\n  ret ptr %p\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<super::ExposedFrames>(context, &layout, f);
+    let a_value = value(f, "p");
+    let a = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(a_value)).unwrap();
+    let mut operands = f.instruction(a).operands.to_vec();
+    operands[0] = operands[2];
+    f.set_operands(a, operands);
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let before = crate::frameescape::reads();
+    assert!(analyses.get::<super::ExposedFrames>(context, &layout, f).is_empty());
+    assert_eq!(crate::frameescape::reads() - before, 0, "operands of the edits read with no alloca to renew");
+}
+
 /// A scalar written in each arm of N joins is reached by up to N stores at
 /// every load after, and the cell of each was decoded again for each load that
 /// store reaches (N^2 decodes over the body; 85 K instructions a load at
