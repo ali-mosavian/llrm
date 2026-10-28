@@ -47,7 +47,7 @@ r11d  32 r11d  0 gpr,byte,base,index,int  11 -
 r11   64 r11d  0 int  11 339
 r11w  16 r11d  0 int  11 -
 r11l  8  r11d  0 int  11 -
-ebx   32 ebx   0 gpr,byte,base,index,int  3 20
+ebx   32 ebx   0 gpr,byte,base,index,int,frame_follows  3 20
 rbx   64 ebx   0 int  3 329
 bx    16 ebx   0 int  3 12
 bl    8  ebx   0 int  3 4
