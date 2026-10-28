@@ -1839,6 +1839,24 @@ def test_a_squash_refused_for_merge_conflicts_prints_the_owner_and_files(capsys,
     assert "has merge conflicts (mergePullRequest) [owner w10; conflicts in: dag_function_tests.rs]" in capsys.readouterr().out
 
 
+def test_a_scanner_refusal_names_the_prs_and_files_behind_it():
+    """sqb-5378 refused on target_facts with three files and no PR; the owners were found by hand (the file list was the only clue)."""
+    failing = {"integration target_facts::shared_code_holds_no_copy_of_a_target_fact: read the target's description instead of copying it: [crates/codegen/llrm-codegen/src/backend/funnel.rs: 1 copies of a target fact, none allowed; crates/codegen/llrm-codegen/src/backend/latecleanup.rs: 3 copies; tools/other.py: 1]"}
+    members = lambda: {"5424": ["crates/codegen/llrm-codegen/src/backend/funnel.rs"], "5428": ["crates/codegen/llrm-codegen/src/backend/latecleanup.rs", "x.rs"], "5409": ["unrelated.rs"]}
+    got = ps.offender_detail(failing, members)
+    assert got == " [offending files: #5424 crates/codegen/llrm-codegen/src/backend/funnel.rs; #5428 crates/codegen/llrm-codegen/src/backend/latecleanup.rs; no PR of the batch: tools/other.py]", got
+    assert ps.offender_detail({"lib x::t: failed"}, members) == ""
+
+
+def test_a_link_refusal_names_the_prs_touching_the_directory_of_the_file_that_panicked():
+    """sqb-5413's link refusal said `panicked at greedy/spliteditor.rs:125` and no PR; it was #5486's change in the same directory, found by w13's bisect."""
+    unlinked = ["qb arena_type: llrm-c: thread 'main' (2594298) panicked at crates/codegen/llrm-codegen/src/greedy/spliteditor.rs:125:9:"]
+    members = lambda: {"5443": ["crates/codegen/llrm-codegen/src/greedy/spiller.rs"], "5486": ["crates/codegen/llrm-codegen/src/greedy/spill.rs"], "5409": ["crates/x/src/other.rs"]}
+    got = ps.offender_detail(unlinked, members, near=True)
+    assert got == " [offending files: crates/codegen/llrm-codegen/src/greedy/spliteditor.rs: same directory touched by #5443 #5486]", got
+    assert "no PR of the batch" in ps.offender_detail(unlinked, lambda: {"5409": ["crates/x/src/other.rs"]}, near=True)
+
+
 def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
     """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
     (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
@@ -1931,3 +1949,17 @@ def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp
 
     got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=slow, ensure=lambda: "")
     assert got and "600 s" in got[0], got
+
+
+def test_a_red_naming_a_file_asks_the_prs_touching_it_before_the_rest():
+    """The 06:53 batch refused a target_facts red naming fpregs.rs and then asked 37 PRs one by one, 80 s each; one PR touched that file."""
+    asked = []
+    alone = lambda number: asked.append(number) or number == "3"  # noqa: E731
+    assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["3"]
+    assert asked == ["3"], asked
+    asked.clear()
+    alone = lambda number: asked.append(number) or number == "5"  # noqa: E731
+    assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["5"]
+    assert asked[0] == "3", asked
+    assert ps.named_files("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
+    assert ps.named_files("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file

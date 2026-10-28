@@ -14,6 +14,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [presize-plan](presize-plan.md) | Vectors that grow by doubling to a size known up front: sites, growth Ir, capacities (2026-10-24) |
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [alias-stack-plan](alias-stack-plan.md) | Alias stack: module-by-module route to the pin's BasicAA/TBAA/CaptureTracking structure, Ir budget per stage |
+| [count-to-zero-plan](count-to-zero-plan.md) | Count-to-zero cost term in LSR, read from the target cost table: findings and rows AM-CZ-1 (x_bubble m32), AM-CZ-2 (PLASMA m16) |
 | [module-ipo-plan](module-ipo-plan.md) | Module walk and IPO against the pin: what `_sift` lacks in `-print-after-all`, rows by 2026-11-09 |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |

@@ -308,3 +308,34 @@ def test_drift_header_names_the_binary_the_ir_and_the_md5s(tmp_path):
     assert lines[1] == "# before: aaa llrm-llc md5 f97c5d29941b"
     assert lines[2] == "# after: bbb llrm-llc md5 b8a9f715dbb6"
 
+
+
+def test_the_libgcc_members_a_pin_object_calls_are_pulled_once_with_their_own_needs():
+    """x_ll_div read +60% bytes at m32 (2026-10-27): ours embeds the i64 divide helpers, the pin's object only calls `__divdi3`, and
+    nothing counted the ~1 KB libgcc a link adds on its side."""
+    pindiff = load("pindiff")
+    defined = {"__divdi3": "_divdi3.o", "__udivdi3": "_udivdi3.o", "__udivmoddi4": "_udivmoddi4.o"}
+    needs = {"_divdi3.o": {"__udivmoddi4"}, "_udivdi3.o": {"__udivmoddi4"}, "_udivmoddi4.o": set()}
+    pulled = pindiff.linked_members({"__divdi3", "__udivdi3", "memcpy"}, defined, lambda member: needs[member])
+    assert sorted(pulled) == ["_divdi3.o", "_udivdi3.o", "_udivmoddi4.o"]
+def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
+    """After llrm-cc's m32 default became regcall every m32 row read `no figures`: ours was run with -mabi=sysv ('calling convention 92')."""
+    pindiff = load("pindiff")
+    cfg = pindiff.MACHINES["m32"]
+    assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
+    assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
+
+
+def test_the_front_end_is_told_fno_builtin_so_its_ir_matches_the_pins_attributes():
+    """The wat rows are hosted on purpose: without -fno-builtin builtins fold into memcpy/memmove and the IR, hence every count, differs from the pin's (clang-frontend session, 2026-10-27)."""
+    pindiff = load("pindiff")
+    assert "-fno-builtin" in pindiff.front_end_flags("O2", False)
+    assert "-fno-builtin" in pindiff.front_end_flags("O2", True)
+
+
+def test_an_m16_row_whose_pin_object_calls_an_i64_divide_is_marked_not_compared(tmp_path):
+    """At m16 the pin's object calls __udivdi3 with no 16-bit libgcc to add: the row's bytes compared ours-with-helpers to a bare call (x_ll_div, 2026-10-27)."""
+    pindiff = load("pindiff")
+    row = {"name": "x", "ins": 5, "pin_ins": 5, "bytes": 9, "pin_bytes": 9, "free": 9, "pin_free": 9, "lib": [], "nolib": ["__udivdi3"]}
+    line = pindiff.table([{**row, "ins": 50}], False)[1]
+    assert "no pin comparison (no 16-bit libgcc)" in line and "INS>pin" not in line
