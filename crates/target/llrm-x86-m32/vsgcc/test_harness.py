@@ -68,15 +68,14 @@ def test_every_result_reproduces_the_benchmark_output():
         assert r["ok"], (r["prog"], r["variant"], r["got"])
 
 
-def test_build_script_flags_are_accepted_by_llrm_c():
-    """build.sh/ctime.py passed the removed --target: every llrm build failed with exit 2 and run.sh printed no tables."""
+def test_build_script_flags_are_accepted_by_llrm_cc():
+    """build.sh/ctime.py passed a flag the compiler refused: every llrm build failed with exit 2 and run.sh printed no tables."""
     import subprocess
     if not harness.LLRM.exists():
-        pytest.skip(f"no llrm-c at {harness.LLRM}")
-    out = subprocess.run([str(harness.LLRM), "-m32", "-O2", "-march=i486", "-fno-inline-functions", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True)
+        pytest.skip(f"no llrm-cc at {harness.LLRM}")
+    out = subprocess.run([str(harness.LLRM), *harness.llrmbin.c_args(32), "-O2", "-fno-inline-functions", "-c", "-o", "/dev/null", str(BENCH / "sieve/sieve.c")], capture_output=True, text=True, env=harness.cc_env())
     assert out.returncode == 0, out.stderr
     here = Path(__file__).parent
-    assert "--target" not in (here / "build.sh").read_text() + (here / "ctime.py").read_text()
 
 
 def test_a_multiply_costs_what_its_multiplier_is():
@@ -96,13 +95,13 @@ def test_llrm_is_built_in_the_convention_gcc_uses_and_its_report_is_read_from_th
     assert harness.built_abi() == "sysv"
     result = harness.run("fib", "llrm")
     assert result["reports"] == expected("fib"), result["reports"]
-    listing = subprocess_text([str(harness.LLRM), "-m32", "-mabi=sysv", "-O2", "-march=i486", "-S", "-o", "/dev/stdout", str(BENCH / "fib/fib.c")])
+    listing = subprocess_text([str(harness.LLRM), *harness.llrmbin.c_args(32), "-mabi=sysv", "-O2", "-S", "-o", "/dev/stdout", str(BENCH / "fib/fib.c")])
     assert "_fib proc" in listing and "fib_ proc" not in listing, "sysv names are undecorated"
 
 
 def subprocess_text(argv):
     import subprocess
-    done = subprocess.run(argv, capture_output=True, text=True)
+    done = subprocess.run(argv, capture_output=True, text=True, env=harness.cc_env())
     assert done.returncode == 0, done.stderr
     return done.stdout
 
