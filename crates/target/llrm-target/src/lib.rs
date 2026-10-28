@@ -348,6 +348,13 @@ pub trait Target {
         false
     }
 
+    /// Whether a function that computes in `float` or `double` is selected
+    /// through the DAG though `--isel` names none and the target otherwise
+    /// selects with the old selector (it has no SSE, only the x87 stack).
+    fn floats_by_dag(&self) -> bool {
+        false
+    }
+
     /// The linear ranges its platform states no program data occupies, where it
     /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
     /// worked out once, not for each profile.

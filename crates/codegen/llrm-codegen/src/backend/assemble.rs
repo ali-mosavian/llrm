@@ -954,6 +954,35 @@ impl Staged {
     }
 }
 
+/// Whether `name` takes, returns or computes a `float` or `double`.
+fn computes_in_floats(
+    module: &Module,
+    name: &str,
+) -> bool {
+    use llrm_mir::types::{FloatKind, Type};
+    let Some(global) = module.named(name) else { return false };
+    let GlobalKind::Function(function) = &module.global(global).kind else { return false };
+    let floating = |ty| matches!(
+        module.context.types.get(ty),
+        Type::Float(FloatKind::Float | FloatKind::Double)
+    );
+    function.parameters().iter().any(|&one| floating(function.value(one).ty))
+        || function.layout().iter().any(|&block| {
+            function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        let instruction = function.instruction(inst);
+                        floating(instruction.ty)
+                            || instruction
+                                .operands
+                                .iter()
+                                .any(|&operand| function.operand_type(&module.context, operand).is_some_and(floating))
+                    },
+                )
+        })
+}
+
 /// Whether `name` calls a function `llrm_mir::atomic::hidden` made.
 fn calls_atomic(
     module: &Module,
@@ -1003,6 +1032,27 @@ fn staged(
         facts: Some(target.facts),
     });
     let dag = match target.selector {
+        // The old selector has no SSE: a function with float arithmetic goes
+        // to the DAG and falls back to the old selector if that refuses it.
+        Selector::Old if target.arch.floats_by_dag() && computes_in_floats(module, name) => {
+            match timed("dag isel", || {
+                crate::backend::selectiondag::dag_function::selected_in_pool(
+                    module,
+                    name,
+                    target.arch,
+                    target.cpu,
+                    target.libcalls,
+                    contracts.as_ref(),
+                    &mut pool.borrow_mut(),
+                )
+            }) {
+                Ok(done) => Some(Ok(done)),
+                Err(why) => {
+                    llrm_support::debug!("isel", "{name} refused: {}", why.0);
+                    None
+                }
+            }
+        }
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
         // selector for the rest -- to bisect a wrong result to a function

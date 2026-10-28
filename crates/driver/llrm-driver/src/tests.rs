@@ -1437,3 +1437,15 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
 }
+
+/// x86-64 selected through the old selector unless `--isel=dag` was given, and
+/// that one has no SSE: a `double` product was refused with "floating
+/// instruction has no conversion rule: FloatArith fmul" (8 of the 146 programs
+/// of tests/run/c: float_return, wc_mixed, x87rotate, ...).
+#[test]
+fn an_x86_64_double_product_is_selected_without_naming_the_selector() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define double @scale(double %x, double %y) {\n  %m = fmul double %y, 2.0\n  %a = fadd double %m, %x\n  ret double %a\n}\n";
+    crate::llc::compiled(&flags(&["-m64", "-O2"]), text, "f").unwrap_or_else(|e| panic!("{e}"));
+}
