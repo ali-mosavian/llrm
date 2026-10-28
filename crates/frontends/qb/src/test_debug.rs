@@ -29,7 +29,7 @@ fn object(
         ..qb_driver::Frontend::new(dialect, runtime)
     };
     let program = qb_driver::parsed(&path, &frontend, None).unwrap_or_else(|error| panic!("{dialect}: {error}"));
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
     omf::parse(&bytes).expect("parses")
 }
@@ -119,7 +119,7 @@ fn a_local_is_where_its_code_keeps_it() {
         // out of CodeView 4, which names a cell).
         let codegen = llrm_codegen::driver::Options {
             pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
-            ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+            ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
         };
         let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
         let info = cvinfo::parse(&omf::parse(&bytes).expect("parses"));
@@ -164,7 +164,7 @@ fn g_writes_standard_codeview_4_by_default() {
     let path = written(&directory, "std.bas", source.as_bytes());
     let frontend = qb_driver::Frontend { debug: true, ..qb_driver::Frontend::new("vbdos", "vbdos") };
     let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
-    let codegen = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let codegen = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles");
     let shape = llrm_codegen::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
     assert!(shape.iter().any(|one| one.starts_with("PROC SQUARE ") || one.starts_with("PROC Square ")), "{shape:#?}");
@@ -185,7 +185,7 @@ fn a_string_variable_is_a_struct_of_its_length_and_characters() {
     // Not optimised: the variable is in its cell.
     let codegen = llrm_codegen::driver::Options {
         pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
-        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
     };
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
     let shape = llrm_codegen::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
@@ -204,7 +204,7 @@ fn a_variable_of_a_type_codeview_cannot_say_is_left_out_not_a_refused_compile() 
     let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
     let codegen = llrm_codegen::driver::Options {
         pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
-        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
     };
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
     let shape = llrm_codegen::objectfile::cv4info::shape(&omf::parse(&bytes).expect("parses"));
@@ -227,7 +227,7 @@ fn array_object(debug_format: llrm_object::debug::Format) -> (Vec<Rc<omf::Record
     let codegen = llrm_codegen::driver::Options {
         pipeline: llrm_transforms::pipeline::Options { optimize: false, ..Default::default() },
         debug_format,
-        ..llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+        ..llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
     };
     let bytes = qb_compile::object_bytes(&program, &path, None, &codegen).expect("compiles with -g");
     (omf::parse(&bytes).expect("parses"), directory)

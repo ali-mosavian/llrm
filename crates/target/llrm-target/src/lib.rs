@@ -342,6 +342,11 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
+    /// Whether `--isel` unnamed selects through the DAG, not the old selector.
+    fn selects_by_dag(&self) -> bool {
+        false
+    }
+
     /// The linear ranges its platform states no program data occupies, where it
     /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
     /// worked out once, not for each profile.
