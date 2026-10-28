@@ -32,12 +32,15 @@ fn graphs() -> Vec<(String, Vec<cfg::Block>)> {
     out
 }
 
-/// Functions the optimizer leaves irreducible although their source is not
-/// (`emitted/nib-examples-entries` is reducible). `-fno-unroll-loops` makes
-/// the entries one reducible: its nested loops come out of the -O2 pipeline
-/// with a second entry into one; the pipeline example's cause is not looked
-/// into. A known function that is reducible fails the test, so the entry goes
-/// with the fix.
+/// Functions the optimizer leaves irreducible although their source is not.
+/// Both are the pin's own passes, run as it runs them:
+/// - `entries/@main`: the late SimplifyCFG's `sinkCommonCodeFromPredecessors`
+///   after a loop peel gives the loop header a second entry (`-fno-unroll-loops`
+///   hides it; the pin's `opt` makes the same split block from the same CFG).
+/// - `pipeline/@$state3.next`: DFAJumpThreading on a state machine (on in the
+///   pin; `LLRM_NO_DFAJUMPTHREADING=1` makes it reducible).
+/// A known function that is reducible fails the test, so the entry goes with
+/// the change that makes it so.
 const KNOWN_IRREDUCIBLE: &[&str] =
     &["optimized/nib-examples-entries/@main", "optimized/nib-examples-pipeline/@$state3.next"];
 
