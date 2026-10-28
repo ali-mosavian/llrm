@@ -1276,7 +1276,9 @@ fn declared_frames(
             let entry = FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() };
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
+            let mut ops = Vec::new();
             for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+                ops.push(cfi);
                 match cfi {
                     Cfi::DefCfa { register, offset } => {
                         state.cfa_register = name(register);
@@ -1303,7 +1305,7 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept });
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, cfi: ops });
         }
     }
     frames

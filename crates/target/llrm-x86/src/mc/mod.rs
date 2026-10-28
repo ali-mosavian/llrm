@@ -55,6 +55,13 @@ impl ObjectTarget for X86Objects {
         } else {
             object
         };
+        let macho_unwound;
+        let object = if format == "macho" && object.bits == 64 && !object.frames.is_empty() {
+            macho_unwound = unwind::macho_expanded(object)?;
+            &macho_unwound
+        } else {
+            object
+        };
         match (format, object.bits) {
             ("elf", 32) => elf32::write(object),
             ("elf", 64) => elf64::write(object),

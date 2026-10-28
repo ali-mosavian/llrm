@@ -320,6 +320,9 @@ pub struct Frame {
     pub offset: usize,
     pub length: usize,
     pub rows: Vec<debug::FrameRow>,
+    /// The directives that declared the rows, in order (`.cfi_*`), for the
+    /// formats that encode them instead of the rows (Mach-O's compact unwind).
+    pub cfi: Vec<assembler::Cfi>,
 }
 
 /// What a target says of the object files it writes, so the code that holds an

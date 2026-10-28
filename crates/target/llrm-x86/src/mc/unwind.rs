@@ -1,8 +1,12 @@
 //! x86-64's `.eh_frame` facts (`X86MCTargetDesc.cpp`'s initial frame state, the
 //! System V DWARF register numbers).
 
-use llrm_dwarf::eh_frame::EhTarget;
+use llrm_dwarf::eh_frame::{EhTarget, Pointer};
+use llrm_object::assembler::AsmBackend;
 use llrm_object::debug::FrameRow;
+use llrm_object::{Fix, Object, Reloc, Role, Section, Target, Unsupported};
+
+use super::backend::X86Backend;
 
 const NAMES: [&str; 17] = [
     "rax", "rdx", "rcx", "rbx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "rip",
@@ -22,11 +26,53 @@ pub fn register_name(number: u64) -> Option<&'static str> {
 /// the return address is just below it.
 pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
+        pointer: Pointer::Pcrel4,
+        section: ".eh_frame",
         address: 8,
         return_column: 16,
         entry: FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() },
         register: &register,
     }
+}
+
+/// Mach-O's `__eh_frame`: the same CIE, but 8-byte FDE pointers the container
+/// resolves.
+pub fn macho_eh_target() -> EhTarget<'static> {
+    EhTarget { pointer: Pointer::Pcrel8, section: "__eh_frame", ..eh_target() }
+}
+
+/// `object` with Mach-O's unwind sections for its declared frames:
+/// `__compact_unwind`, an entry per function the compact form can say or leave
+/// to DWARF, then `__eh_frame`.
+pub fn macho_expanded(object: &Object) -> Result<Object, Unsupported> {
+    let backend = X86Backend { sixteen: false, wide: true, longest: 10 };
+    let mut image = Vec::new();
+    let mut relocs = Vec::new();
+    for frame in &object.frames {
+        let encoding = backend.generate_compact_unwind_encoding(&frame.cfi);
+        if encoding == 0 {
+            continue;
+        }
+        relocs.push(Reloc::new(image.len(), Fix::abs(8), Target::Section(frame.section), frame.offset as i64));
+        image.extend([0u8; 8]);
+        image.extend((frame.length as u32).to_le_bytes());
+        image.extend(encoding.to_le_bytes());
+        // No personality and no language-specific data area.
+        image.extend([0u8; 16]);
+    }
+    let mut sections = object.sections.clone();
+    if !image.is_empty() {
+        sections.push(Section {
+            name: "__compact_unwind".to_owned(),
+            role: Role::Unwind,
+            near: true,
+            align: 8,
+            spans: vec![[0, image.len()]],
+            image,
+            relocs,
+        });
+    }
+    llrm_dwarf::eh_frame::expanded(&Object { sections, ..object.clone() }, &macho_eh_target())
 }
 
 #[cfg(test)]
@@ -105,8 +151,9 @@ mod tests {
                     row(51, 16, &saved),
                     row(53, 8, &saved),
                 ],
+                cfi: Vec::new(),
             },
-            Frame { section: 0, offset: 0x38, length: 4, rows: Vec::new() },
+            Frame { section: 0, offset: 0x38, length: 4, rows: Vec::new(), cfi: Vec::new() },
         ]
     }
 
@@ -157,7 +204,7 @@ mod tests {
             row(0x2D, 16, &saved),
             row(0x2E, 8, &saved),
         ];
-        let frames = vec![Frame { section: 0, offset: 0, length: 0x33, rows }];
+        let frames = vec![Frame { section: 0, offset: 0, length: 0x33, rows, cfi: Vec::new() }];
         let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
         assert_eq!(written.sections.last().unwrap().image, PIN);
     }
