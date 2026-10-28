@@ -820,7 +820,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.interrupt.is_none()
         && !procedure.far
         && matches!(procedure.body.bits, 32 | 64)
-        && procedure.reserve != 0
+        && (procedure.reserve != 0 || moves_stack(&procedure.body))
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
@@ -838,7 +838,11 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             })
         });
     let pushed = saved_of(&procedure).len() as i64 * procedure.registers.slot;
-    if !eligible || pushed == 0 {
+    // A frame with no register to push is still the pin's where it keeps the
+    // frame register and moves the stack pointer (`alloca`): `mov rsp, rbp;
+    // pop rbp`, not `lea rsp, [rbp - N]; leave`.
+    let rebuilt = procedure.body.bits == 64 && moves_stack(&procedure.body);
+    if !eligible || (pushed == 0 && !rebuilt) {
         return procedure;
     }
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
