@@ -10,6 +10,7 @@ pub mod fixup;
 pub mod macho;
 pub mod omf;
 pub mod unwind;
+pub mod win64unwind;
 
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
@@ -59,7 +60,7 @@ impl ObjectTarget for X86Objects {
             ("elf", 64) => elf64::write(object),
             ("macho", 64) => llrm_macho::write(object, &macho::X8664MachO),
             ("coff", 32) => coff32::write(object),
-            ("coff", 64) => coff64::write(object),
+            ("coff", 64) => coff64::write(&win64unwind::expanded(object)?),
             _ => Err(Unsupported(format!("no {format} writer for a {}-bit object yet", object.bits))),
         }
     }

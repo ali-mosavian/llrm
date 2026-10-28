@@ -144,6 +144,8 @@ fn spelling(
     }
     let (base, flags) = match section.role {
         Role::Text => (".text", SCN_CNT_CODE | SCN_MEM_EXECUTE | SCN_MEM_READ),
+        // x64 unwind data keeps its name: the linker finds `.pdata` by it.
+        Role::ROData if unwind_data(section) => (section.name.as_str(), SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ),
         Role::ROData => (".rdata", SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ),
         Role::Data => (".data", SCN_CNT_INITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_WRITE),
         Role::Bss => (".bss", SCN_CNT_UNINITIALIZED_DATA | SCN_MEM_READ | SCN_MEM_WRITE),
@@ -161,12 +163,17 @@ fn spelling(
         )));
     }
     let align = (section.align.trailing_zeros() + 1) << 20;
-    let name = if taken && !matches!(section.role, Role::Debug(_)) {
+    let name = if taken && !matches!(section.role, Role::Debug(_)) && !unwind_data(section) {
         format!("{base}${}", section.name)
     } else {
         base.to_owned()
     };
     Ok((name, flags | align))
+}
+
+/// x64 unwind data (`.pdata`, `.xdata`), which the linker finds by name.
+fn unwind_data(section: &Section) -> bool {
+    section.role == Role::ROData && matches!(section.name.as_str(), ".pdata" | ".xdata")
 }
 
 fn pad(
