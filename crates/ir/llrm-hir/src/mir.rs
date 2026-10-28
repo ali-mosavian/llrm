@@ -63,7 +63,7 @@ pub fn emit(
 
 /// Every function the module defines checks the stack on entry, but one that
 /// runs on a stack of its own making: an interrupt handler's, a naked one's.
-pub fn check_stack(module: &mut Module) {
+fn check_stack(module: &mut Module) {
     for global in &mut module.globals {
         if global.linkage == Linkage::AvailableExternally {
             continue;

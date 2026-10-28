@@ -287,9 +287,6 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             || flag == "--help"
         {
             passthrough = true;
-        } else if flag == "-fsanitize=stack" || flag == "-fno-sanitize=stack" {
-            // The backend's check (clang has no such sanitizer).
-            build.llc.push(flag.to_owned());
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {

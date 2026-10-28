@@ -91,7 +91,14 @@ pub fn selected_requesting(
 /// description names, the OS layer's stack limit and Open Watcom's
 /// `__STKOVERFLOW`, which a checked function compares with and enters.
 pub fn stack_check(target: &dyn llrm_target::Target) -> llrm_codegen::hir::model::StackCheck {
-    llrm_codegen::abi::llvm::stack_check(target)
+    let description = target.runtime("c").expect("a C target has a C runtime");
+    let name = description.string("stack").expect("c.toml names its stack check");
+    stack_check_of(description.file(&name).expect("the stack check is shipped"))
+}
+
+fn stack_check_of(text: &str) -> llrm_codegen::hir::model::StackCheck {
+    let row = toml::Value::Table(text.parse().expect("stack.toml parses"));
+    llrm_codegen::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
 }
 
 /// The library routines C's runtime on `target` has (`libcalls` of its

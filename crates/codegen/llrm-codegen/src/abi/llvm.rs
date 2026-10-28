@@ -9,27 +9,9 @@ use crate::backend::assemble::{Abi, Registers};
 use crate::hir::model::StackCleanup;
 
 /// Calls and symbols of a module no HIR program made.
-pub struct LlvmAbi {
-    /// Where a function marked `StackCheck` compares SP and what it calls on
-    /// overflow (`-fsanitize=stack`).
-    pub stack_check: Option<crate::hir::model::StackCheck>,
-}
-
-/// The check the target's C runtime states (`stack.toml`): the OS layer's stack
-/// limit and the routine a checked function enters on overflow.
-pub fn stack_check(target: &dyn llrm_target::Target) -> crate::hir::model::StackCheck {
-    let description = target.runtime("c").expect("a C target has a C runtime");
-    let name = description.string("stack").expect("c.toml names its stack check");
-    let text = description.file(&name).expect("the stack check is shipped");
-    let row = toml::Value::Table(text.parse().expect("stack.toml parses"));
-    crate::hir::model::StackCheck::from_toml(&row).expect("stack.toml states a stack check")
-}
+pub struct LlvmAbi;
 
 impl Abi for LlvmAbi {
-    fn stack_check(&self) -> Option<&crate::hir::model::StackCheck> {
-        self.stack_check.as_ref()
-    }
-
     fn contract(
         &self,
         callee: &str,

@@ -46,16 +46,6 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
-/// `-fsanitize=stack` was refused as "not translated yet", so the C tests of
-/// the stack check could not leave llrm-c: the backend has it, clang does not
-/// know the sanitizer.
-#[test]
-fn the_stack_check_reaches_the_backend_and_not_clang() {
-    let one = built("-fsanitize=stack -c x.c");
-    assert_eq!(one.llc, words("-fsanitize=stack"));
-    assert!(one.clang.iter().all(|flag| !flag.contains("sanitize")), "{:?}", one.clang);
-}
-
 /// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
 /// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
 /// for 1485 under llrm-cc.
