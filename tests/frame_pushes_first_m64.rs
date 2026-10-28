@@ -63,3 +63,30 @@ fn test_an_omitted_m64_frame_reserves_no_cell_for_the_frame_register() {
     let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
     assert!(text.lines().any(|line| line.trim() == "sub rsp, 32"), "{text}");
 }
+
+/// A frame that keeps the frame register and moves the stack pointer
+/// (`alloca`) takes its stack back as the pin does, `mov rsp, rbp; pop rbp`.
+/// llrm wrote `lea rsp, [rbp-16]; leave`, 2 instructions the pin has not and a
+/// `leave` the CFI had to follow.
+#[test]
+fn test_a_frame_with_alloca_returns_through_the_frame_register_and_a_pop() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("a.c");
+    std::fs::write(
+        &source,
+        "extern int use(int *);\nint dyn(int n) { int *p = __builtin_alloca(n * 4); return use(p) + 1; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .current_dir(scratch.path())
+        .args(["-m64", "-O1", "-fno-builtin", "-S", "-o", "a.s"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    let at = lines.iter().position(|line| *line == "mov rsp, rbp").unwrap_or_else(|| panic!("{text}"));
+    assert_eq!(lines[at + 1], "pop rbp", "{text}");
+    assert!(!lines.iter().any(|line| *line == "leave"), "{text}");
+}
