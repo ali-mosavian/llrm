@@ -4,13 +4,18 @@
 use llrm_dwarf::eh_frame::EhTarget;
 use llrm_object::debug::FrameRow;
 
+const NAMES: [&str; 17] = [
+    "rax", "rdx", "rcx", "rbx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15", "rip",
+];
+
 /// The DWARF number of an x86-64 register by name.
 pub fn register(name: &str) -> Option<u64> {
-    const NAMES: [&str; 17] = [
-        "rax", "rdx", "rcx", "rbx", "rsi", "rdi", "rbp", "rsp", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15",
-        "rip",
-    ];
     NAMES.iter().position(|one| *one == name).map(|number| number as u64)
+}
+
+/// The name of an x86-64 register by its DWARF number.
+pub fn register_name(number: u64) -> Option<&'static str> {
+    NAMES.get(number as usize).copied()
 }
 
 /// At a function's entry the frame address is 8 past the stack pointer and
@@ -128,6 +133,33 @@ mod tests {
         let file = X86Objects.write_object("elf", &object(both())).unwrap();
         assert!(file.windows(4).any(|word| word == 0x7000_0001u32.to_le_bytes()));
         assert!(file.windows(PIN.len()).any(|bytes| bytes == PIN));
+    }
+
+    /// Pin clang's `-O1 -fomit-frame-pointer` of a function that pushes rbx,
+    /// subtracts 16 and leaves by two tail calls: the second exit re-declares
+    /// `def_cfa_offset 32` where the first left the frame, and no
+    /// `remember_state`/`restore_state` is written (`readelf`/`objdump` of
+    /// the pin's `.eh_frame`).
+    #[test]
+    fn two_exits_by_tail_call_need_no_remembered_state() {
+        const PIN: [u8; 0x40] = [
+            0x14, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x7A, 0x52, 0, 0x01, 0x78, 0x10, 0x01, 0x1B, 0x0C, 0x07, 0x08, 0x90, 0x01,
+            0, 0, 0x24, 0, 0, 0, 0x1C, 0, 0, 0, 0, 0, 0, 0, 0x33, 0, 0, 0, 0x00, 0x41, 0x0E, 0x10, 0x44, 0x0E, 0x20,
+            0x83, 0x02, 0x56, 0x0E, 0x10, 0x41, 0x0E, 0x08, 0x45, 0x0E, 0x20, 0x4C, 0x0E, 0x10, 0x41, 0x0E, 0x08,
+        ];
+        let saved = [("rbx", -16)];
+        let rows = vec![
+            row(1, 16, &[]),
+            row(5, 32, &saved),
+            row(0x1B, 16, &saved),
+            row(0x1C, 8, &saved),
+            row(0x21, 32, &saved),
+            row(0x2D, 16, &saved),
+            row(0x2E, 8, &saved),
+        ];
+        let frames = vec![Frame { section: 0, offset: 0, length: 0x33, rows }];
+        let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
+        assert_eq!(written.sections.last().unwrap().image, PIN);
     }
 
     #[test]
