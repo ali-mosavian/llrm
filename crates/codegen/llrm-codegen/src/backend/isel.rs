@@ -843,6 +843,13 @@ pub(super) fn width_of(
         // it is two halves (`is_wide`).
         (TypeClass::I64, _) if layout.largest_legal_integer() >= 64 => Ok(8),
         (TypeClass::Ptr, Type::Pointer(space)) => Ok(layout.pointer(*space).bits / 8),
+        // An integer between the legal widths (`i24`, a three-byte struct
+        // coerced) is promoted to the next one.
+        (TypeClass::Other, Type::Int(bits))
+            if (1..64).contains(bits) && (*bits <= 32 || layout.largest_legal_integer() >= 64) =>
+        {
+            Ok(bits.next_power_of_two().max(8) / 8)
+        }
         // An x87 register holds any float, extended.
         (TypeClass::Float, Type::Float(FloatKind::Float | FloatKind::Double | FloatKind::X86Fp80)) => Ok(FLOAT),
         _ => refuse(format!("a {} value", types.display(ty))),
