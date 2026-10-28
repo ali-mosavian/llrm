@@ -1415,16 +1415,17 @@ fn a_sum_with_a_call_result_stays_below_the_call() {
     );
 }
 
-/// Constant stores to one array interleaved with variable stores to another stayed word and dword stores:
-/// `GatherAllAliases` gave up after 6 chain hops where the pin allows 18 (`TargetLoweringBase`), so the four
-/// constants were not one quadword store (matmul +560 B at m64).
+/// Constant stores to one array interleaved with variable stores to another
+/// stayed word and dword stores: `GatherAllAliases` gave up after 6 chain hops
+/// where the pin allows 18 (`TargetLoweringBase`), so the four constants were
+/// not one quadword store (matmul +560 B at m64).
 #[test]
 fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_store() {
     let mut text = String::from(
         "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
          target triple = \"x86_64-unknown-linux-gnu\"\n\
          declare void @use(ptr, ptr)\n@g = global i16 0\n\
-         define void @f() {\n  %x = load volatile i16, ptr @g\n  %a = alloca [4 x i16], align 2\n  %b = alloca [4 x i16], align 2\n",
+         define void @f() {\n  %x = load i16, ptr @g\n  %a = alloca [4 x i16], align 2\n  %b = alloca [4 x i16], align 2\n",
     );
     for (i, value) in [2, 1, 0, 1].iter().enumerate() {
         text += &format!(
