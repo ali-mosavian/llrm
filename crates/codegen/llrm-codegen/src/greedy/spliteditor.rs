@@ -21,8 +21,7 @@
 //!
 //! DEVIATE D-SE1: `defFromParent` rematerializes only a definition that reads
 //! no register (a literal, address or load of a cell); `allUsesAvailableAt` and
-//! `rematWillIncreaseRestriction` are not translated, as D-E1 of
-//! `LiveRangeEdit`.
+//! `rematWillIncreaseRestriction` are not translated.
 //!
 //! DEVIATE D-SE2: no sub-ranges or lane masks (`addDeadDef`'s sub-range
 //! branches, `buildSingleSubRegCopy`, `getLiveLaneMaskAt`, the
@@ -1466,9 +1465,9 @@ impl<'d> SplitEditor<'d> {
     /// `deleteRematVictims`
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SplitKit.cpp#L1484>).
     ///
-    /// DEVIATE D-SE6: `eliminateDeadDefs` is not translated (D-E1); only the
-    /// copies this editor made and the pure definitions whose value nothing
-    /// reads are erased.
+    /// DEVIATE D-SE6 (D-E1): only the copies this editor made and the pure
+    /// definitions whose value nothing reads are erased, not any trivially
+    /// dead instruction.
     fn delete_remat_victims(
         &mut self,
         cx: &mut SplitCx,

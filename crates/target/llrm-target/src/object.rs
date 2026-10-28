@@ -34,6 +34,24 @@ impl Format {
     }
 }
 
+/// `LLRM_OBJECT_ALL_WRITERS=DIR`: the sweep's switch (tools/pairs/objsweep.py).
+/// An object is also run through every writer of its architecture, each result
+/// written to `DIR/<format>.bin`, so a writer the target does not
+/// choose by default is compared too.
+pub fn all_writers_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("LLRM_OBJECT_ALL_WRITERS").map(Into::into)
+}
+
+/// Writes `bytes` as `format`'s result in the sweep directory; a failure to
+/// write is the sweep's to see, not the compile's.
+pub fn record_writer(
+    dir: &std::path::Path,
+    format: Format,
+    bytes: &[u8],
+) {
+    let _ = std::fs::write(dir.join(format!("{}.bin", format.name())), bytes);
+}
+
 /// A target's object format.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObjectFormat {

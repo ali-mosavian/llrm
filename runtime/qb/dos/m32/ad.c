@@ -3,6 +3,7 @@
 #include "qb.h"
 #include "ad.h"
 #include "nheap.h"
+#include "nhstutil.h"
 
 int ad_allocated(const AD *ad)
 {

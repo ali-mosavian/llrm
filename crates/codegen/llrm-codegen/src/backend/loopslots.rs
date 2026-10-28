@@ -714,7 +714,7 @@ mod tests {
                             .any(|place| matches!(place, Loc::Reg(reg) if super::is_bp(regs, reg.register))),
                 )
         };
-        let parked = out.insns().iter().filter(|insn| is_bp(insn, Operation::Push)).count();
+        let parked = out.iter_insns().filter(|insn| is_bp(insn, Operation::Push)).count();
         assert_eq!((parked, mentions(&out)), (0, 8), "the slot stays in memory");
     }
 }

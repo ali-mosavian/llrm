@@ -1,5 +1,5 @@
 use llrm_object::debug::{Field, Function, Info, Kind, Language, Location, Range, Scalar as S, Type as T, Variable};
-use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
+use llrm_object::{Binding, Definition, Object, Role, Section, Symbol};
 
 use super::sections;
 
@@ -19,7 +19,7 @@ fn variable(
 /// `f` in 0x16 bytes of code with `types` and `variables`, its type the last of
 /// `types`.
 fn object(
-    arch: Arch,
+    bits: u8,
     types: Vec<T>,
     variables: Vec<Variable>,
 ) -> Object {
@@ -48,7 +48,7 @@ fn object(
     let info = Info {
         language: Language::C,
         dialect: llrm_object::debug::Dialect::Cv4,
-        frame_register: if arch == Arch::I8086 { "bp" } else { "ebp" }.into(),
+        frame_register: if bits == 16 { "bp" } else { "ebp" }.into(),
         code: vec![range],
         types,
         functions: vec![function],
@@ -56,7 +56,7 @@ fn object(
     };
     Object {
         name: "t.obj".into(),
-        arch,
+        bits,
         sections: vec![text],
         symbols: vec![Symbol {
             name: "_f".into(),
@@ -104,7 +104,7 @@ fn procedure() -> T {
 #[test]
 fn a_16_bit_procedure_is_the_records_ml_writes() {
     let made = object(
-        Arch::I8086,
+        16u8,
         vec![int(), procedure()],
         vec![
             variable("a", 0, Kind::Parameter, Location::Frame { disp: 4 }),
@@ -173,7 +173,7 @@ fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
         T::Pointer { target: 1, bytes: 2, reach: llrm_object::debug::Reach::Near },
         T::Procedure { result: None, parameters: vec![2], convention: None },
     ];
-    let (symbols, types, _) = written(&object(Arch::I8086, types, Vec::new()));
+    let (symbols, types, _) = written(&object(16u8, types, Vec::new()));
     let member = |kind: u16, offset: u8, name: &[u8], pad: &[u8]| {
         [
             vec![0x06, 0x04, kind as u8, (kind >> 8) as u8, 3, 0, offset, 0, name.len() as u8],
@@ -213,7 +213,7 @@ fn a_struct_that_points_to_itself_is_named_before_its_members_and_has_a_udt() {
 #[test]
 fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
     let mut made = object(
-        Arch::I386,
+        32u8,
         vec![
             T::Scalar(S::Int { bytes: 4, signed: true }),
             T::Procedure { result: None, parameters: vec![0], convention: None },
@@ -229,8 +229,8 @@ fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
         [vec![0; 12], vec![5, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0], vec![0; 6], vec![0x01, 0x10, 0, 1, b'f']].concat();
     assert_eq!(symbols[2..], [(0x0205, proc32), (0x0200, vec![8, 0, 0, 0, 0x74, 0, 1, b'a']), (0x0006, vec![])]);
     assert_eq!(
-        relocs.iter().map(|one| (one.kind, one.at - relocs[0].at)).collect::<Vec<_>>(),
-        [(llrm_object::Kind::Abs { width: 4 }, 0), (llrm_object::Kind::SegmentBase, 4)]
+        relocs.iter().map(|one| (one.fix(), one.at - relocs[0].at)).collect::<Vec<_>>(),
+        [(llrm_object::Fix::abs(4), 0), (llrm_object::Fix::SEGMENT_BASE, 4)]
     );
 }
 
@@ -240,7 +240,7 @@ fn a_32_bit_procedure_has_four_byte_fields_and_two_fixups() {
 /// popped the wrong return address.
 #[test]
 fn a_far_function_has_a_far_procedure_type_and_the_far_flag() {
-    let mut made = object(Arch::I8086, vec![int(), procedure()], Vec::new());
+    let mut made = object(16u8, vec![int(), procedure()], Vec::new());
     only_function(&mut made, |one| one.far = true);
     let (symbols, types, _) = written(&made);
     assert_eq!(types[1], (0x0008, vec![3, 0, 1, 0, 2, 0, 0, 0x10]));
@@ -257,7 +257,7 @@ fn local_of(
 ) -> (Vec<(u16, Vec<u8>)>, u16) {
     let mut all = types;
     all.push(T::Procedure { result: None, parameters: Vec::new(), convention: None });
-    let made = object(Arch::I8086, all, vec![variable("v", local, Kind::Local, Location::Frame { disp: -2 })]);
+    let made = object(16u8, all, vec![variable("v", local, Kind::Local, Location::Frame { disp: -2 })]);
     let (symbols, types, _) = written(&made);
     let bprel = symbols.iter().find(|(code, _)| *code == 0x0100).expect("the local");
     (types[2..].to_vec(), u16::from_le_bytes([bprel.1[2], bprel.1[3]]))
@@ -352,7 +352,7 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
     let part = Range { section: 0, offset: 0, length: 5 };
     let reg = |name: &str, location| variable(name, 0, Kind::Parameter, location);
     let mut made = object(
-        Arch::I8086,
+        16u8,
         vec![int(), T::Procedure { result: None, parameters: Vec::new(), convention: None }],
         vec![
             reg("r", Location::Register("ax".into())),
@@ -388,11 +388,8 @@ fn a_value_in_a_register_throughout_is_s_register_and_one_part_of_the_time_is_le
 /// against the section it is in.
 #[test]
 fn a_block_is_a_scope_with_its_variables_and_an_end() {
-    let mut made = object(
-        Arch::I8086,
-        vec![int(), T::Procedure { result: None, parameters: Vec::new(), convention: None }],
-        Vec::new(),
-    );
+    let mut made =
+        object(16u8, vec![int(), T::Procedure { result: None, parameters: Vec::new(), convention: None }], Vec::new());
     only_function(&mut made, |one| {
         one.blocks = vec![llrm_object::debug::Block {
             ranges: vec![Range { section: 0, offset: 8, length: 6 }],
@@ -437,7 +434,7 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
         union: false,
     };
     let made = object(
-        Arch::I8086,
+        16u8,
         vec![int(), point, procedure()],
         vec![
             variable("a", 0, Kind::Parameter, Location::Frame { disp: 4 }),
@@ -446,7 +443,7 @@ fn the_writers_object_reads_as_mls_for_the_same_program() {
             variable("q", 1, Kind::Local, Location::Frame { disp: -6 }),
         ],
     );
-    let ours = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap());
+    let ours = cv4info::shape(&omf::parse(&write::write_generic(&made).unwrap()).unwrap());
     assert_eq!(ours, ml);
 }
 
@@ -475,7 +472,7 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
         union: false,
     };
     let made = object(
-        Arch::I386,
+        32u8,
         vec![dword, point, T::Procedure { result: None, parameters: vec![0, 0], convention: None }],
         vec![
             variable("a", 0, Kind::Parameter, Location::Frame { disp: 8 }),
@@ -484,7 +481,7 @@ fn the_32_bit_writers_object_reads_as_mls_flat_object_does() {
             variable("q", 1, Kind::Local, Location::Frame { disp: -12 }),
         ],
     );
-    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write(&made).unwrap()).unwrap())
+    let ours: Vec<String> = cv4info::shape(&omf::parse(&write::write_generic(&made).unwrap()).unwrap())
         .into_iter()
         .map(|one| one.replace("UINT4", "UNSIGNED LONG"))
         .collect();
@@ -508,7 +505,7 @@ fn a_pointer_to_a_function_points_to_a_procedure_called_as_far_as_the_pointer_re
         T::Procedure { result: None, parameters: Vec::new(), convention: None },
     ];
     let made = object(
-        Arch::I8086,
+        16u8,
         types,
         vec![
             variable("p", 2, Kind::Local, Location::Frame { disp: -4 }),
@@ -548,7 +545,7 @@ fn arrays_of_scalars_of_two_spellings_are_one_record() {
     let spelled = |name: &str| T::Basic { name: name.into(), scalar: S::Int { bytes: 2, signed: true } };
     let array = |element| T::Array { element, bytes: Some(8) };
     let made = object(
-        Arch::I8086,
+        16u8,
         vec![
             spelled("int"),
             spelled("short"),
@@ -577,7 +574,7 @@ fn a_parameter_in_a_register_and_then_its_cell_is_written_as_the_cell() {
         (Range { section: 0, offset: 0, length: 9 }, Location::Register("ax".into())),
         (Range { section: 0, offset: 9, length: 0x16 - 9 }, Location::Frame { disp: 4 }),
     ]);
-    let made = object(Arch::I8086, vec![int(), procedure()], vec![variable("a", 0, Kind::Parameter, list)]);
+    let made = object(16u8, vec![int(), procedure()], vec![variable("a", 0, Kind::Parameter, list)]);
     let (symbols, ..) = written(&made);
     assert_eq!(symbols[3..], [(0x0100, vec![4, 0, 0x21, 0, 1, b'a']), (0x0006, vec![])]);
 }
