@@ -2200,7 +2200,7 @@ const _ARITHMETIC: u32 =
 static _DIFFERING: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::OF | RflagsBits::CF | RflagsBits::AF));
 // What `xor r,r` writes: a direction flag read later, as a string fill reads
 // it, is no objection.
-static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHMETIC));
+pub(crate) static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHMETIC));
 
 /// `inc edi; cmp edi,0; jne` is `inc edi; jne`.
 ///
