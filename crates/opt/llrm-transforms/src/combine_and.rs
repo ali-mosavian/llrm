@@ -44,7 +44,7 @@ use crate::combine::{Combiner, Visit};
 use crate::combine_and_select::fold_and_select;
 use crate::combine_bitorder::fold_bitwise_logic_with_intrinsics;
 use crate::combine_distribute::fold_using_distributive_laws;
-use crate::combine_icmp_logic::fold_boolean_and_or;
+use crate::combine_icmp_logic::{fold_boolean_and_or, reassociate_boolean_operands};
 use crate::combine_shared::{
     binop, commutative, has_one_use, inst_def, parts, query, simplify_associative_or_commutative, simplify_visited,
     width,
@@ -455,7 +455,10 @@ pub fn visit_and(
         return found;
     }
     // DEVIATE 4: the rest of visitAnd after this.
-    fold_boolean_and_or(c, inst, op0, op1, true, false).map_or(Visit::None, Visit::Replace)
+    if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, true, false) {
+        return Visit::Replace(found);
+    }
+    reassociate_boolean_operands(c, inst, (op0, op1), true).map_or(Visit::None, Visit::Replace)
 }
 
 #[cfg(test)]

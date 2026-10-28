@@ -2351,6 +2351,23 @@ impl Emitter<'_, '_> {
         self.ctx.names.get(&(op as u16)).is_some_and(|one| one.split('|').next() == Some(name))
     }
 
+    /// Whether `value` is the result of a machine instruction that writes a
+    /// register, not of a copy, a subregister pseudo or a register `mov`
+    /// (emitted as a `Move`, which the coalescer joins away).
+    fn is_dword_write(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        let ISD::Machine(op) = self.dag.opcode(value) else { return false };
+        self.ctx.names.get(&(op as u16)).is_some_and(|name| {
+            let name = name.split('|').next().unwrap_or_default();
+            !matches!(
+                name,
+                "COPY" | "COPY_TO_REGCLASS" | "EXTRACT_SUBREG" | "INSERT_SUBREG" | "SUBREG_TO_REG" | "IMPLICIT_DEF"
+            ) && !(name.starts_with("MOV") && name.ends_with("rr"))
+        })
+    }
+
     /// Whether `value` is an `IMPLICIT_DEF` machine node.
     fn is_implicit_def(
         &self,
@@ -2445,18 +2462,22 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             // An indirect sibling call: the callee's address is pinned to one
-            // of EAX, ECX, EDX (`GR32_TC`) the arguments do not take, as the
-            // epilogue restores every other register before the jump.
-            "TCRETURNri" => {
+            // of `GR32_TC` (EAX, ECX, EDX) or `GR64_TC` the arguments do not
+            // take, as the epilogue restores every other register before the
+            // jump.
+            "TCRETURNri" | "TCRETURNri64" => {
                 let Loc::Held(callee) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a sibling call through a non-register".to_owned()));
                 };
-                use llrm_lir::registers::RegId;
                 let mut requires = std::mem::take(&mut self.arguments);
-                let free = [RegId::EAX, RegId::ECX, RegId::EDX]
-                    .into_iter()
+                let registers = self.ctx.registers;
+                let free = registers
+                    .entries()
+                    .filter(|(_, one)| one.classes & llrm_lir::registers::class::TAIL_CALL != 0)
+                    .map(|(id, _)| id)
                     .find(|one| {
-                        self.ctx.caller_saved.contains(one) && requires.iter().all(|(_, taken)| taken.root() != *one)
+                        self.ctx.caller_saved.contains(&registers.root(*one))
+                            && requires.iter().all(|(_, taken)| registers.root(*taken) != registers.root(*one))
                     })
                     .ok_or_else(|| EmitError::Unsupported("a sibling call with no free register".to_owned()))?;
                 requires.push((callee, free));
@@ -3029,12 +3050,23 @@ impl Emitter<'_, '_> {
                 if index != 6 {
                     return Err(EmitError::Unsupported(format!("SUBREG_TO_REG index {index}")));
                 }
+                let written = self.is_dword_write(source);
                 let Loc::Held(source) = self.operand(source)? else {
                     return Err(EmitError::Unsupported("SUBREG_TO_REG of a non-value".to_owned()));
                 };
-                let held = self.fresh(width);
-                self.push(Operation::Extend, "movzx", vec![Loc::Held(held)], vec![Loc::Held(source)]);
-                self.values.insert(result, held.value);
+                // A source that is not an instruction's result (an argument, a
+                // call's value) may hold anything above its dword: the pin
+                // selects `MOV32rr` there, a write the coalescer keeps. A
+                // copy of an instruction's result is the write that zeroed it.
+                if written {
+                    let held = self.fresh(source.width);
+                    self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                    self.values.insert(result, held.value);
+                } else {
+                    let held = self.fresh(width);
+                    self.push(Operation::Extend, "movzx", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                    self.values.insert(result, held.value);
+                }
                 return Ok(Some(()));
             }
             // A register-class constraint is the allocator's business.

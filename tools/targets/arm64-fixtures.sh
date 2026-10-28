@@ -15,7 +15,8 @@ for source in "$crate"/tests/programs/*.c; do
     -S -emit-llvm -o "$crate/tests/darwin/$name.ll" "$source"
   # No path of this checkout in the fixture.
   sed -i -e '/^; ModuleID/d' -e 's|^source_filename = ".*/|source_filename = "|' "$crate/tests/darwin/$name.ll"
-  "$build/bin/clang" -target aarch64-unknown-linux-gnu -O2 -c -o "$tmp/$name.o" "$source"
+  # -fsigned-char: Linux AArch64 defaults to unsigned char, the Darwin IR above to signed.
+  "$build/bin/clang" -target aarch64-unknown-linux-gnu -fsigned-char -O2 -c -o "$tmp/$name.o" "$source"
   "$build/bin/ld.lld" -static -o "$tmp/$name" "$tmp/$name.o" "$tmp/rt.o"
   set +e
   qemu-aarch64 "$tmp/$name" > "$crate/tests/darwin/$name.out"

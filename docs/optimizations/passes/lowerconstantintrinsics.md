@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs sha256:718b034142d2fb8708a7ae47c71e91857c7b995c76220756f4595ecc0749c391 -->
+<!-- src: crates/opt/llrm-transforms/src/lowerconstantintrinsics.rs sha256:196cfbd3c6fef6fed5a6118d82077a4c6dac33f8fb92a0a55fc52681535913a3 -->
 
 # lowerconstantintrinsics
 
@@ -13,8 +13,13 @@ answer and the users are simplified in turn
 becomes a constant takes its one edge, and the blocks that leaves
 unreachable are deleted.
 
-`llvm.objectsize` is the pin's second case and is not translated: llrm has
-no `lowerObjectSizeCall` yet.
+`llvm.objectsize` is the pin's second case (`lowerObjectSizeCall`) and is
+answered as unknown: all ones, or zero where the minimum is asked.
+
+DEVIATE 1: the size of a known object (an alloca, a global) is not
+computed, so `objectsize` of one is also unknown. The answer is sound,
+as it is for the pin with no object visitor result. Exit: the object-size
+visitor of `MemoryBuiltins.cpp` on top of `getBaseObjectSize`.
 
 ## Example
 ```text

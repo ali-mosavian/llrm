@@ -662,6 +662,7 @@ impl<'m> Machine<'m> {
             Intrinsic::Code => return unsupported("inline code"),
             Intrinsic::Asm => return unsupported("inline assembly"),
             Intrinsic::IsConstant => return unsupported("a test for a constant"),
+            Intrinsic::ObjectSize => return unsupported("the size of an object"),
         })
     }
 

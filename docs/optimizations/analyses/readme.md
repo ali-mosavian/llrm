@@ -2,7 +2,7 @@
 
 # Analyses
 
-From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-analysis/src`: 74 documented, 0 undocumented.
 
 | Name | Summary | Provides | Page |
 |---|---|---|---|
@@ -65,6 +65,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undoc
 | num | An integer that is a machine word until it must not be. | `Num`, for [`crate::ranges`](ranges.md) and [`crate::induction`](induction.md). | [num](num.md) |
 | occurrence | Walks a function's instructions as occurrences, operations and phis apart, so an analysis can key by identity and keep two equal instructions distinct. | The three walks. Consumers: [`crate::induction`](induction.md), [`crate::ssa`](ssa.md), and the | [occurrence](occurrence.md) |
 | peelsize | Decides whether a counted loop is worth copying out completely, from the size the copy would have once constants fold, before anything is cloned. | `admitted`, `Limits`, `Site`. Consumers: the `peel` and `unroll` passes in | [peelsize](peelsize.md) |
+| placealias | Whether two memory accesses can touch the same byte, from what their addresses name: the pin's `BaseIndexOffset::computeAliasing`, on facts a caller has already read off its own IR (DAG nodes, machine operands). | The DAG combiner's chain walk (`mayAlias`) and arm64's load/store pairing. | [placealias](placealias.md) |
 | pointerfacts | Finds constant byte offsets between pointer values, and so whether two accesses off one base overlap, without any alias reasoning. | `Offsets` (made by `offsets`), `Location`. Consumers: [`crate::memoryssa`](memoryssa.md), | [pointerfacts](pointerfacts.md) |
 | ranger | The bounds the branch edges give a value at a block, worked out when asked and kept by (value, block), in place of a table of every value at every block (`ranges::edges_solved`). | `EdgeRanger::at`. | [ranger](ranger.md) |
 | ranges | Bounds each integer value in each block by a non-wrapping interval, from the branch edges that dominate the block. | The interval facts above. In the manager they are `DominatedEdges` | [ranges](ranges.md) |
@@ -72,6 +73,7 @@ From the `//!` headers of `crates/opt/llrm-analysis/src`: 72 documented, 0 undoc
 | references | The base reference of each load and store, decomposed once and shared. | `of` (what `MemRef::of` reads through), `built` (decompositions made on this | [references](references.md) |
 | regions | Decides whether a write through one memory reference can land on another (`may_alias`, `overlapping`), and indexes cells so a write checks only those that might meet it instead of every pair. | `may_alias`, `overlapping`, `typed_apart`, `foreign_provenance`, | [regions](regions.md) |
 | runtimecheck | `RuntimePointerChecking`: the bounds a loop's pointers walk, grouped so a few comparisons prove that the writes do not overlap the other accesses. | Named by `accessanalysis`, `laa_testing`, `loopaccessinfo`, `looploadelim`, `loopversioning`, `memdepchecker`, `runtimechecks`. | [runtimecheck](runtimecheck.md) |
+| saverestore | Where a procedure's frame and kept registers are set up and taken back: one Save block and one Restore block, from `ShrinkWrapImpl` in llvm/lib/CodeGen/ShrinkWrap.cpp at d1106deb71cc. | Named by `shrinkwrap`. | [saverestore](saverestore.md) |
 | sliceset | An ordered set of memory slices that holds most of itself as a run shared with other sets, so the callback effects every call summary repeats are built, compared and listed once. | `SliceSet`, `Shared` and `whole`. Consumers: [`crate::alias`](alias.md) (call | [sliceset](sliceset.md) |
 | slotstores | The stores that reach a load of a frame slot nothing else can write. | `reaching`: for each load asked, its stores, or none where its source is | [slotstores](slotstores.md) |
 | ssa | SSA helpers the transformations share: use lists, dead-phi pruning, value substitution and an updater that places the phis a new definition needs. | The helpers above. Consumers in llrm-transforms: `dead`, `promote` | [ssa](ssa.md) |

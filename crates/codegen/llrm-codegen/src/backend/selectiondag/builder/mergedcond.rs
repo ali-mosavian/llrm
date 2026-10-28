@@ -17,7 +17,6 @@
 use llrm_mir::context::ConstantKind;
 use llrm_mir::module::{BlockId, Function, InstId, Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, FloatPredicate, Opcode};
-use llrm_mir::tti::CostKind;
 
 use super::super::isd::{CondCode, ISD};
 use super::super::mvt::EVT;
@@ -199,107 +198,60 @@ impl Builder<'_> {
         }
         let Some(tti) = self.target.tti.clone() else { return true };
         let tti = tti.0;
-        let context = &self.module.context;
-        let is_eq = |operand: Operand| {
-            self.defining(operand).is_some_and(|inst| {
-                matches!(
-                    self.function.instruction(inst).opcode,
-                    Opcode::ICmp(llrm_mir::opcode::IntPredicate::Eq)
-                )
-            })
+        let shared = |logic: Logic| match logic {
+            Logic::And => llrm_mir::jumpmerge::Logic::And,
+            Logic::Or => llrm_mir::jumpmerge::Logic::Or,
         };
-        // `x86-br-merging-base-cost` 2; `a == b && a == c` is a fast pattern;
-        // an `or` of two `==` splits (no CCMP on these targets)
-        let mut base = 2i64;
-        if logic == Logic::And && is_eq(lhs) && is_eq(rhs) {
-            base += 1;
-        }
-        if logic == Logic::Or && is_eq(lhs) && is_eq(rhs) {
-            return false;
-        }
-        // likely bias 0, unlikely bias -1: the profile is asked
-        let thresh = base;
-        if self.target_optimizes() {
-            let function = self.function;
-            let block = self.block;
-            let bpi = self
-                .info
-                .bpi
-                .get_or_insert_with(
-                    || llrm_analysis::bpi::BranchProbabilityInfo::of(
-                        llrm_analysis::bpi::Module {
-                            context: &self.module.context,
-                            declarations: &self.module.globals,
-                            metadata: &self.module.metadata,
-                            layout: self.layout,
-                        },
-                        function,
-                    ),
-                );
+        let logic = shared(logic);
+        let params = tti.jump_condition_merging_params(&llrm_mir::jumpmerge::JumpMergeQuery {
+            context: &self.module.context,
+            function: self.function,
+            logic,
+            lhs,
+            rhs,
+        });
+        let optimizes = self.target_optimizes();
+        let (function, block) = (self.function, self.block);
+        let (module, layout) = (self.module, self.layout);
+        let bpi = &mut self.info.bpi;
+        let mut likely = || {
+            if !optimizes {
+                return None;
+            }
+            let bpi = bpi.get_or_insert_with(|| {
+                llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &module.context,
+                        declarations: &module.globals,
+                        metadata: &module.metadata,
+                        layout,
+                    },
+                    function,
+                )
+            });
             // the pin names the successors the other way round
             // (`IfFalse = getSuccessor(0)`): the edge to the false destination
             // is the one it calls true
-            let likely = if bpi.is_edge_hot(function, block, on_false) {
+            if bpi.is_edge_hot(function, block, on_false) {
                 Some(true)
             } else if bpi.is_edge_hot(function, block, on_true) {
                 Some(false)
             } else {
                 None
-            };
-            if let Some(likely) = likely {
-                let both = if likely { Logic::And } else { Logic::Or };
-                if logic != both {
-                    // an early out is likely: never merge
-                    return false;
-                }
             }
-        }
-        if thresh <= 0 {
-            return false;
-        }
-        // what the left side needs, and what only the right adds
-        let mut left: Vec<InstId> = Vec::new();
-        collect_deps(self.function, &mut left, lhs, None, 0);
-        let mut right: Vec<InstId> = Vec::new();
-        if !collect_deps(self.function, &mut right, rhs, Some(&left), 0) {
-            return false;
-        }
-        if let Some(inst) = self.defining(rhs)
-            && !left.contains(&inst)
-            && !right.contains(&inst)
-        {
-            right.push(inst);
-        }
-        // prune what unrelated instructions also use
-        for _ in 0..6 {
-            let drop = right.iter().position(|inst| {
-                let Some(result) = self.function.instruction(*inst).result else { return false };
-                self.function.users(result).iter().any(|one| one.user != cond_inst && !right.contains(&one.user))
-            });
-            match drop {
-                Some(at) => {
-                    right.remove(at);
-                }
-                None => break,
-            }
-        }
-        let mut total = llrm_mir::tti::Cost::FREE;
-        for inst in &right {
-            total = total
-                + llrm_mir::instructioncost::instruction_cost(
-                    &*tti,
-                    context,
-                    self.layout,
-                    &self.module.globals,
-                    self.function,
-                    *inst,
-                    CostKind::Latency,
-                );
-            if !total.valid || total.value > thresh {
-                return false;
-            }
-        }
-        true
+        };
+        llrm_mir::jumpmerge::should_keep_together(
+            &*tti,
+            &module.context,
+            layout,
+            &module.globals,
+            function,
+            cond_inst,
+            logic,
+            (lhs, rhs),
+            params,
+            &mut likely,
+        )
     }
 
     /// `FindMergedConditions`.
@@ -556,45 +508,6 @@ fn without_nan(cc: CondCode) -> CondCode {
         CondCode::SetONe | CondCode::SetUNe => CondCode::SetNe,
         other => other,
     }
-}
-
-/// `collectInstructionDeps`: the instructions `operand` depends on, in the
-/// order found, to the pin's recursion depth. False where the count is
-/// incomplete.
-fn collect_deps(
-    function: &Function,
-    deps: &mut Vec<InstId>,
-    operand: Operand,
-    necessary: Option<&Vec<InstId>>,
-    depth: usize,
-) -> bool {
-    // `SelectionDAG::MaxRecursionDepth`
-    if depth >= 6 {
-        return false;
-    }
-    let Operand::Value(value) = operand else { return true };
-    let ValueDef::Instruction(inst) = function.value(value).def else { return true };
-    if necessary.is_some_and(|necessary| necessary.contains(&inst)) {
-        return true;
-    }
-    if deps.contains(&inst) {
-        return true;
-    }
-    deps.push(inst);
-    for next in function.instruction(inst).operands.iter() {
-        if !collect_deps(function, deps, *next, necessary, depth + 1) {
-            return false;
-        }
-    }
-    // An `alloca` of one element keeps no count operand here; the pin's has
-    // one (`i32 1`), which one level down is the depth that ends the count.
-    if matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })
-        && function.instruction(inst).operands.is_empty()
-        && depth + 1 >= 6
-    {
-        return false;
-    }
-    true
 }
 
 #[cfg(test)]

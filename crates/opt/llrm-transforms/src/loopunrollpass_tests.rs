@@ -379,10 +379,11 @@ done:
 /// QCport's `pl_death_tick` loop with its count read from a constant table
 /// (`death_counts[set]`, `set` known): the integer exit's bound is a load.
 /// Fold's `_numbers` table folded it; with that switched off the loop kept
-/// "trips 0, max 32766" because MIR had no `simplifyLoadInst`. InstSimplify
-/// folds the load and the loop unrolls by the table's value.
+/// "trips 0, max 32766" because MIR had no `simplifyLoadInst`. SCEV folds
+/// the load at scope (`getSCEVAtScope`'s constant fold) and the loop unrolls
+/// by the table's value.
 #[test]
-fn a_loop_bounded_by_a_constant_table_unrolls_once_instsimplify_folds_the_load() {
+fn a_loop_bounded_by_a_constant_table_unrolls_as_scev_folds_the_load() {
     let text = "@counts = internal constant [12 x i8] c\"\\0B\\00\\09\\00\\0F\\00\\09\\00\\09\\00\\09\\00\"
 
 define i16 @f(float %limit) {
@@ -409,8 +410,6 @@ done:
 }
 ";
     let mut module = parsed(text);
-    assert!(!unrolled(&mut module.clone()), "premise: with the load in the bound the loop stays rolled");
-    crate::testing::managed(&mut module, crate::instsimplify::InstSimplify);
     assert!(unrolled(&mut module));
     let after = printed(&module);
     assert!(!after.contains("fadd"), "the float chain folded into constants: {after}");

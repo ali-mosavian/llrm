@@ -1,9 +1,16 @@
-//! Machine-level redundancy removal before registers are assigned: common
+//! Machine-level redundancy removal before registers are assigned: dead
+//! operations (`DeadMachineInstructionElim`), common
 //! subexpression elimination over the dominator tree (`MachineCSE`) and the
 //! hoisting of loop-invariant definitions to the loop's preheader
 //! (`MachineLICM`), for the values selection makes at each use: constants,
 //! frame and global addresses. Only side-effect-free operations whose result is
-//! a virtual register defined once are touched.
+//! a virtual register defined once are touched. A loop hoists only as many
+//! values as the registers left over once what it already holds is counted
+//! (`MachineLICM`'s `CanCauseHighRegPressure`): a value hoisted past that is
+//! spilled for the whole loop, dearer than making it at each use. The most
+//! used go first. What the loop already holds is what is live into its header,
+//! and equal values made in several blocks count once and are one value in the
+//! preheader (a second `MachineCSE` after the hoist).
 //!
 //! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
 //! over the arm64 selector's operations, standing in until the core machine
@@ -21,6 +28,15 @@ fn pure(op: &Op) -> bool {
     match op {
         Op::Imm { .. } | Op::FrameAddress { .. } => true,
         Op::Copy { .. } => false,
+        // A sum of two registers, as an address makes: equal sums of virtual
+        // registers are one value.
+        Op::I(
+            Inst::AddSubShifted { op: AddSub { set_flags: false, .. }, .. }
+            | Inst::AddSubExtended { op: AddSub { set_flags: false, .. }, .. },
+        ) => {
+            let (defs, uses) = op.defs_and_uses();
+            defs.iter().chain(&uses).all(|register| register.is_virtual())
+        }
         Op::I(inst) => {
             matches!(
                 inst,
@@ -30,6 +46,7 @@ fn pure(op: &Op) -> bool {
                     | Inst::AddPageOffset { .. }
                     | Inst::Adr { .. }
                     | Inst::FpMoveImm { .. }
+                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_), .. }
                     | Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }
             ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
                 // Reading the stack pointer (stacksave, a dynamic alloca's
@@ -170,12 +187,69 @@ fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
     count
 }
 
+/// Whether `op` only computes registers, so that it can go when none is read.
+/// Loads stay (a volatile load is not told apart), and so does anything that
+/// sets the flags.
+fn removable(op: &Op) -> bool {
+    match op {
+        Op::Imm { .. } | Op::FrameAddress { .. } | Op::Copy { .. } => true,
+        Op::I(inst) => match inst {
+            Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. } => {
+                !op.set_flags
+            }
+            Inst::LogicImm { op, .. } | Inst::LogicShifted { op, .. } => *op != Logic::Ands,
+            Inst::MoveWide { op, .. } => *op != Wide::Keep,
+            Inst::AddPageOffset { .. }
+            | Inst::BitfieldMove { .. }
+            | Inst::Extract { .. }
+            | Inst::Divide { .. }
+            | Inst::OneSource { .. }
+            | Inst::ThreeSource { .. }
+            | Inst::CondSelect { .. }
+            | Inst::Adr { .. }
+            | Inst::FpUnary { .. }
+            | Inst::FpBinary { .. }
+            | Inst::FpFused { .. }
+            | Inst::FpSelect { .. }
+            | Inst::FpMoveImm { .. }
+            | Inst::FpToFp { .. }
+            | Inst::FpInt { .. } => true,
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Operations whose every result is a virtual register nothing reads, until
+/// none is left.
+fn dead_code(function: &mut MFunc) {
+    loop {
+        let read: HashSet<Reg> =
+            function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
+        let mut changed = false;
+        for block in &mut function.blocks {
+            let before = block.ops.len();
+            block.ops.retain(|op| {
+                let (defs, _) = op.defs_and_uses();
+                !(removable(op) && !defs.is_empty() && defs.iter().all(|one| one.is_virtual() && !read.contains(one)))
+            });
+            changed |= block.ops.len() != before;
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+
 pub fn run(function: &mut MFunc) {
+    dead_code(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
     cse(function);
     hoist(function);
+    // What was hoisted from several blocks is one value in the preheader.
+    cse(function);
 }
 
 /// Equal pure computations of a dominating block are used instead of repeated.
@@ -272,10 +346,155 @@ fn cse(function: &mut MFunc) {
     }
 }
 
+/// The loop's invariant pure definitions, taken out of its `blocks` in the
+/// order they can go (each after what it reads); with `only`, just those
+/// defining one of its registers.
+fn invariants(
+    function: &mut MFunc,
+    blocks: &[usize],
+    definitions: &HashMap<Reg, usize>,
+    mut inside_defs: HashSet<Reg>,
+    only: Option<&HashSet<Reg>>,
+) -> Vec<Op> {
+    let mut hoisted: Vec<Op> = Vec::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in blocks {
+            let ops = std::mem::take(&mut function.blocks[block].ops);
+            let mut kept = Vec::with_capacity(ops.len());
+            for op in ops {
+                let invariant = pure(&op)
+                    && defined(&op).is_some_and(|register| {
+                        definitions.get(&register) == Some(&1) && only.is_none_or(|chosen| chosen.contains(&register))
+                    })
+                    && op
+                        .defs_and_uses()
+                        .1
+                        .iter()
+                        .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
+                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
+                if invariant {
+                    inside_defs.remove(&defined(&op).expect("a definition"));
+                    hoisted.push(op);
+                    changed = true;
+                } else {
+                    kept.push(op);
+                }
+            }
+            function.blocks[block].ops = kept;
+        }
+    }
+    hoisted
+}
+
+/// The registers among `candidates` (what `probe`, the loop without them,
+/// would have hoisted) worth a register for the whole loop: those the loop
+/// reads most, as many as the registers not already held by what the loop
+/// reads from outside, plus what they are made from.
+/// The virtual registers live into each block.
+fn live_in(
+    function: &MFunc,
+    cfg: &Cfg,
+) -> Vec<HashSet<Reg>> {
+    let count = function.blocks.len();
+    let mut gen_kill: Vec<(HashSet<Reg>, HashSet<Reg>)> = Vec::with_capacity(count);
+    for block in &function.blocks {
+        let (mut gen_set, mut kill) = (HashSet::new(), HashSet::new());
+        for op in &block.ops {
+            let (defs, uses) = op.defs_and_uses();
+            gen_set.extend(uses.into_iter().filter(|used| used.is_virtual() && !kill.contains(used)));
+            kill.extend(defs.into_iter().filter(|def| def.is_virtual()));
+        }
+        gen_kill.push((gen_set, kill));
+    }
+    let mut live: Vec<HashSet<Reg>> = vec![HashSet::new(); count];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in cfg.order.iter().rev() {
+            let mut input: HashSet<Reg> =
+                cfg.successors[block].iter().flat_map(|&next| live[next].iter().copied()).collect();
+            input.retain(|register| !gen_kill[block].1.contains(register));
+            input.extend(gen_kill[block].0.iter().copied());
+            if input != live[block] {
+                live[block] = input;
+                changed = true;
+            }
+        }
+    }
+    live
+}
+
+fn within_pressure(
+    probe: &MFunc,
+    blocks: &[usize],
+    candidates: &[Op],
+    held: &HashSet<Reg>,
+) -> HashSet<Reg> {
+    use crate::regalloc::pool;
+    let made: HashMap<Reg, &Op> =
+        candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
+    let (mut reads, mut calls) = (HashMap::<Reg, usize>::new(), false);
+    for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
+        calls |= matches!(op, Op::Call { .. });
+        for used in op.defs_and_uses().1 {
+            if made.contains_key(&used) {
+                *reads.entry(used).or_default() += 1;
+            }
+        }
+    }
+    // Held throughout the loop: what is live into its header (read from
+    // outside, or carried round it), which is not one of the values hoisted.
+    let outside: HashSet<Reg> = held.iter().copied().filter(|register| !made.contains_key(register)).collect();
+    // Across a call only the callee-saved registers keep a value.
+    let room = |gpr: bool| {
+        let (kept, rest) = if gpr {
+            (pool::GPR_CALLEE_SAVED.len(), pool::GPR_CALLER_SAVED.len())
+        } else {
+            (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
+        };
+        (if calls { kept } else { kept + rest })
+            .saturating_sub(outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count())
+    };
+    // Equal values made in different blocks are one value once hoisted (the
+    // `cse` after it joins them): they cost one register, and are read by all.
+    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::new();
+    for (register, count) in reads {
+        let group = groups.entry(keyed(made[&register])).or_default();
+        group.0.push(register);
+        group.1 += count;
+    }
+    let mut roots: Vec<(Vec<Reg>, usize)> = groups.into_values().map(|(registers, count)| (registers, count)).collect();
+    for (registers, _) in &mut roots {
+        registers.sort();
+    }
+    roots.sort_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
+    let mut chosen: HashSet<Reg> = HashSet::new();
+    let (mut gprs, mut fprs) = (room(true), room(false));
+    for (registers, _) in roots {
+        let gpr = matches!(registers[0], Reg::Gpr(_));
+        let left = if gpr { &mut gprs } else { &mut fprs };
+        if *left == 0 {
+            continue;
+        }
+        *left -= 1;
+        // What it is made from comes along, and lives only until it is made.
+        let mut work = registers;
+        while let Some(register) = work.pop() {
+            if chosen.insert(register) {
+                work.extend(made[&register].defs_and_uses().1.into_iter().filter(|used| made.contains_key(used)));
+            }
+        }
+    }
+    chosen
+}
+
 /// Loop-invariant pure definitions move to the end of the loop's preheader.
 fn hoist(function: &mut MFunc) {
     let cfg = cfg(function);
     let definitions = definitions(function);
+    let live = live_in(function, &cfg);
     // The natural loops: a back edge's header dominates its tail.
     let mut loops: Vec<(usize, HashSet<usize>)> = Vec::new();
     for tail in 0..function.blocks.len() {
@@ -313,35 +532,13 @@ fn hoist(function: &mut MFunc) {
                 inside_defs.extend(op.defs_and_uses().0);
             }
         }
-        let mut hoisted: Vec<Op> = Vec::new();
         let mut order: Vec<usize> = body.iter().copied().collect();
         order.sort_by_key(|block| cfg.order.iter().position(|one| one == block));
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for &block in &order {
-                let ops = std::mem::take(&mut function.blocks[block].ops);
-                let mut kept = Vec::with_capacity(ops.len());
-                for op in ops {
-                    let invariant = pure(&op)
-                        && defined(&op).is_some_and(|register| definitions.get(&register) == Some(&1))
-                        && op
-                            .defs_and_uses()
-                            .1
-                            .iter()
-                            .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
-                        && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
-                    if invariant {
-                        inside_defs.remove(&defined(&op).expect("a definition"));
-                        hoisted.push(op);
-                        changed = true;
-                    } else {
-                        kept.push(op);
-                    }
-                }
-                function.blocks[block].ops = kept;
-            }
-        }
+        // What the loop would hoist, on a copy, and how much of it fits.
+        let mut probe = function.clone();
+        let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
+        let chosen = within_pressure(&probe, &order, &candidates, &live[header]);
+        let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;
         }
@@ -417,7 +614,7 @@ mod tests {
                     branch_to("exit"),
                 ],
             },
-            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![] }] },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }] },
         ];
         function
     }
@@ -451,7 +648,14 @@ mod tests {
             })
         };
         let mut function = function();
-        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), branch_to("loop")];
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
+        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
         run(&mut function);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
@@ -471,5 +675,51 @@ mod tests {
                 .count()
         };
         assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
+    }
+}
+
+/// Argument and result copies are a parallel copy (`x0 <- v`, `x1 <- v`), and
+/// any order is correct when no source is a register the run writes; the
+/// order decides which of them the allocator can make a no-op. A value that
+/// came in on a register (`v <- x0`) stays there when the copy into that
+/// register is the run's last for it, so it goes last: `x1 <- v; x0 <- v`
+/// is one move, `x0 <- v; x1 <- v` two (the register coalescer's answer, by
+/// ordering).
+pub fn order_copies(function: &mut MFunc) {
+    let mut home: HashMap<Reg, Reg> = HashMap::new();
+    for block in &function.blocks {
+        for op in &block.ops {
+            if let Op::Copy { dst, src } = op
+                && dst.is_virtual()
+                && !src.is_virtual()
+            {
+                home.entry(*dst).or_insert(*src);
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.ops.len() {
+            let end = block.ops[at..]
+                .iter()
+                .position(|op| {
+                    !matches!(
+                        op,
+                        Op::Copy { dst, src } if !dst.is_virtual() && src.is_virtual()
+                    )
+                })
+                .map_or(block.ops.len(), |n| at + n);
+            // Stable: a copy into its source's home register moves behind the
+            // others.
+            block
+                .ops[at..end]
+                .sort_by_key(
+                    |op| match op {
+                        Op::Copy { dst, src } => home.get(src) == Some(dst),
+                        _ => false,
+                    },
+                );
+            at = end.max(at + 1);
+        }
     }
 }

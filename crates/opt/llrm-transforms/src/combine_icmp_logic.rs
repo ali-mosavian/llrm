@@ -40,11 +40,15 @@
 //! DEVIATE 2: of `foldAndOrOfICmps` only the compare-code merge, the sign-bit
 //! pair, `(ne A, 0) | (ne B, 0)` and `(ne A, -1) | (ne B, -1)` are here. Not
 //! yet: `foldAndOrOfICmpEqConstantAndICmp`, `foldAndOrOfICmpsWithConstEq`,
-//! `foldIsPowerOf2OrZero`, `simplifyRangeCheck`, `foldSignedTruncationCheck`,
+//! `foldIsPowerOf2OrZero`, `foldSignedTruncationCheck`,
 //! `foldIsPowerOf2`, `foldPowerOf2AndShiftedMask`,
 //! `foldUnsignedUnderflowCheck`, `foldAndOrOfICmpsWithPow2AndWithZero`, the
-//! `trunc`/`and` fold, the `isnormal` fold and `foldAndOrOfICmpsUsingRanges`;
-//! also `foldLogicOfFCmps` and `foldEqOfParts`.
+//! `trunc`/`and` fold and the `isnormal` fold; `simplifyRangeCheck` and
+//! `foldAndOrOfICmpsUsingRanges` are in `combine_icmp_ranges`; also
+//! `foldLogicOfFCmps` and `foldEqOfParts`.
+//!
+//! `reassociateBooleanAndOr` is here: `visit_and` and `visit_or` call it after
+//! the fold of the pair.
 //!
 //! # Used by
 //! `visit_and` and `visit_or` (the bitwise forms).
@@ -59,6 +63,7 @@ use llrm_mir::valuetracking::power2::is_known_to_be_a_power_of_two;
 use llrm_mir::valuetracking::{Query, pattern};
 
 use crate::combine::Combiner;
+use crate::combine_icmp_ranges::{fold_and_or_of_icmps_using_ranges, simplify_range_check};
 use crate::combine_shared::{binop, drop_poison_generating_flags, has_one_use, query};
 
 const A_MASK_ALL_ONES: u32 = 1;
@@ -672,6 +677,20 @@ fn fold_and_or_of_icmps(
         return Some(c.create_icmp(inst, pred_lhs, new_and, all_ones));
     }
 
+    // (icmp slt x, 0) | (icmp sgt x, n) --> icmp ugt x, n
+    // (icmp sge x, 0) & (icmp slt x, n) --> icmp ult x, n
+    // Not for the select form: one of the two directions is poison-safe, the
+    // other needs a freeze.
+    if !is_logical {
+        let (l, r) = ((lhs0, lhs1), (rhs0, rhs1));
+        if let Some(found) = simplify_range_check(c, inst, pred_lhs, l.0, l.1, pred_r, r.0, r.1, !is_and) {
+            return Some(found);
+        }
+        if let Some(found) = simplify_range_check(c, inst, pred_r, r.0, r.1, pred_lhs, l.0, l.1, !is_and) {
+            return Some(found);
+        }
+    }
+
     // This only handles icmp of constants: (icmp1 A, C1) | (icmp2 B, C2).
     let (lhs_c, rhs_c) = (lhs_c?, rhs_c?);
     // Naive tests of whether two values share a sign, and the inverted form:
@@ -715,7 +734,16 @@ fn fold_and_or_of_icmps(
             });
         }
     }
-    None
+    fold_and_or_of_icmps_using_ranges(
+        c,
+        inst,
+        pred_lhs,
+        (lhs0, lhs1),
+        pred_r,
+        (rhs0, rhs1),
+        (lhs_one_use, rhs_one_use),
+        is_and,
+    )
 }
 
 /// `foldBooleanAndOr`: the value `lhs &/| rhs` (of `i1`s) folds to, if any.
@@ -736,6 +764,50 @@ pub fn fold_boolean_and_or(
     }
     fold_and_or_of_icmps(c, inst, lhs, rhs, is_and, is_logical)
     // DEVIATE 2: foldLogicOfFCmps, foldEqOfParts.
+}
+
+/// `reassociateBooleanAndOr`: `lhs op (x lop y)` is `(lhs op x) lop y` or
+/// `x lop (lhs op y)`, where a pair of them folds.
+fn reassociate_boolean_and_or(
+    c: &mut Combiner,
+    inst: InstId,
+    lhs: Operand,
+    (x, y): (Operand, Operand),
+    is_and: bool,
+    rhs_is_logical: bool,
+) -> Option<Operand> {
+    let join = |c: &mut Combiner, a: Operand, b: Operand| match (is_and, rhs_is_logical) {
+        (true, true) => c.create_logical_and(inst, inst, a, b),
+        (false, true) => c.create_logical_or(inst, inst, a, b),
+        (true, false) => c.create_binop(inst, BinaryOp::And, a, b, Flags::default()),
+        (false, false) => c.create_binop(inst, BinaryOp::Or, a, b, Flags::default()),
+    };
+    if let Some(folded) = fold_boolean_and_or(c, inst, lhs, x, is_and, false) {
+        return Some(join(c, folded, y));
+    }
+    let folded = fold_boolean_and_or(c, inst, lhs, y, is_and, false)?;
+    Some(join(c, x, folded))
+}
+
+/// The `reassociateBooleanAndOr` calls of `visitAnd` and `visitOr`: the
+/// operand that is a one-use logical `op` of the same kind, the right one
+/// first.
+pub fn reassociate_boolean_operands(
+    c: &mut Combiner,
+    inst: InstId,
+    (op0, op1): (Operand, Operand),
+    is_and: bool,
+) -> Option<Operand> {
+    for (inner, other) in [(op1, op0), (op0, op1)] {
+        let q = query(c, Some(inst));
+        let parts = if is_and { pattern::logical_and(&q, inner) } else { pattern::logical_or(&q, inner) };
+        let Some(parts) = parts.filter(|_| has_one_use(c, inner)) else { continue };
+        let is_logical = c.select_of(inner).is_some();
+        if let Some(found) = reassociate_boolean_and_or(c, inst, other, parts, is_and, is_logical) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

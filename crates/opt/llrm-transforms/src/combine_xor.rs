@@ -12,14 +12,15 @@
 //! `undef` lanes are not matched or made).
 //!
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
-//! each named where it stood: `foldXorToXor`, `foldNot`,
-//! `visitMaskedMerge`, the `ctlz`/`cttz` and
-//! `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
-//! `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
+//! each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
+//! `ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
+//! (A | C)`, `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 //! `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 //! `canonicalizeConditionalNegationViaMathToSelect`,
 //! `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
 //! `foldMaskedAddXorPattern`.
+//!
+//! DEVIATE 3: `foldNot` is in `combine_not`.
 //!
 //! # Example
 //! `Y ^ (X | Y)` is `X & ~Y`:
@@ -648,7 +649,10 @@ pub fn visit_xor(
     if !matches!(found, Visit::None) {
         return found;
     }
-    // DEVIATE 2: foldXorToXor, foldNot.
+    // DEVIATE 2: foldXorToXor.
+    if let Some(found) = crate::combine_not::fold_not(c, inst) {
+        return found;
+    }
     if let Some(v) = fold_using_distributive_laws(c, inst) {
         return Visit::Replace(v);
     }

@@ -12,8 +12,8 @@
 //! DEVIATE 1: no floating-point folds (`fabs` of a bitcast) and no vectors.
 //!
 //! DEVIATE 2: `narrowMaskedBinOp`, `foldAndOrOfSelectUsingImpliedCond`,
-//! `matchDeMorgansLaws`, `foldBooleanAndOr`, `reassociateBooleanAndOr`,
-//! `foldCastedBitwiseLogic`, `foldBinopOfSextBoolToSelect` and the tail from
+//! `matchDeMorgansLaws`, `foldCastedBitwiseLogic`,
+//! `foldBinopOfSextBoolToSelect` and the tail from
 //! `sinkNotIntoOtherHandOfLogicalOp` on are the next strip.
 //!
 //! DEVIATE 3: `getFreelyInverted` (the not of a value that is not a one-use

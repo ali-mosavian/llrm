@@ -17,7 +17,7 @@ use crate::mc::inst::Target;
 /// One lowered function.
 pub struct Function {
     pub symbol: String,
-    pub public: bool,
+    pub binding: Binding,
     pub blocks: Vec<Lowered>,
 }
 
@@ -67,7 +67,7 @@ impl Symbols {
     fn defined(
         &mut self,
         name: &str,
-        public: bool,
+        binding: Binding,
         section: usize,
         offset: usize,
         size: usize,
@@ -75,7 +75,7 @@ impl Symbols {
         self.index.insert(name.to_owned(), self.list.len());
         self.list.push(Symbol {
             name: name.to_owned(),
-            binding: if public { Binding::Public } else { Binding::Local },
+            binding,
             definition: Definition::Defined { section, offset },
             size,
             group: None,
@@ -134,7 +134,7 @@ pub fn object(
     let text_size = at;
     for (function, offset) in functions.iter().zip(&text_offsets) {
         let size = function.blocks.iter().map(|block| block.insts.len() * 4).sum();
-        symbols.defined(&function.symbol, function.public, text_index, *offset, size);
+        symbols.defined(&function.symbol, function.binding, text_index, *offset, size);
     }
     // Data sections: constants, writable data, zero-filled.
     let roles =
@@ -167,7 +167,7 @@ pub fn object(
     }
     for (offset_of_section, (_, _, _, members, _)) in data_sections.iter().enumerate() {
         for (offset, one) in members.iter().filter(|(_, one)| !one.init_functions) {
-            symbols.defined(&one.name, one.public, 1 + offset_of_section, *offset, one.bytes.len());
+            symbols.defined(&one.name, one.binding, 1 + offset_of_section, *offset, one.bytes.len());
         }
     }
     // The code.
