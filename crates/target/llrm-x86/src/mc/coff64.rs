@@ -26,9 +26,9 @@ impl Machine for X8664 {
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/MCTargetDesc/X86WinCOFFObjectWriter.cpp#L83
             (FixupKind::DATA_4, false) if reloc.spec == Fix::S_IMGREL => (ADDR32NB, 4, 0, 0),
             (FixupKind::DATA_4, false) => (ADDR32, 4, 0, 0),
-            // REL32_n (types 5 to 9) is relative to the place n bytes past the
-            // field's end.
-            (FixupKind::DATA_4, true) if (4..=9).contains(&from) => (REL32 + (from - 4) as u16, 4, from, from),
+            // LLVM writes REL32 only, never REL32_n: the distance past the
+            // field's end goes into the field (`FixedValue += 4` in
+            // WinCOFFObjectWriter), so equal totals are one object.
             (FixupKind::DATA_4, true) => (REL32, 4, from, 4),
             (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
             (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
@@ -96,9 +96,12 @@ mod tests {
     }
 
     /// (type, field) of the one relocation of `.text`, for a pc-relative field
-    /// `from` bytes short of the place.
-    fn rel(from: usize) -> (u16, i32) {
-        let reloc = Reloc::new(2, Fix::pc_rel(4, from), Target::Symbol(0), 0);
+    /// `from` bytes short of the place and an `addend` past the symbol.
+    fn rel_to(
+        from: usize,
+        addend: i64,
+    ) -> (u16, i32) {
+        let reloc = Reloc::new(2, Fix::pc_rel(4, from), Target::Symbol(0), addend);
         let bytes =
             write(&object(vec![text(vec![0x83, 0x3D, 0, 0, 0, 0, 1], vec![reloc])], vec![defined("v", 0)])).unwrap();
         let (raw, relocs) = (
@@ -111,16 +114,30 @@ mod tests {
         )
     }
 
-    /// REL32_n is relative to n bytes past the field's end, so an instruction
-    /// with an immediate after the field takes the type and leaves the
-    /// field zero; plain REL32 there left the reference n bytes off.
+    fn rel(from: usize) -> (u16, i32) {
+        rel_to(from, 0)
+    }
+
+    /// LLVM writes `REL32` for every pc-relative field and folds the distance
+    /// past the field's end into the field; llrm picked `REL32_1..5` by that
+    /// distance alone.
     #[test]
-    fn a_field_before_an_immediate_is_rel32_n_and_a_field_past_the_end_compensates() {
+    fn a_field_before_an_immediate_is_rel32_with_the_distance_in_the_field() {
         assert_eq!(rel(4), (4, 0));
-        assert_eq!(rel(5), (5, 0));
-        assert_eq!(rel(8), (8, 0));
-        assert_eq!(rel(9), (9, 0));
+        assert_eq!(rel(5), (4, -1));
+        assert_eq!(rel(8), (4, -4));
+        assert_eq!(rel(9), (4, -5));
         assert_eq!(rel(10), (4, -6));
+    }
+
+    /// `cmpb $1, x(%rip)` (the field is 5 short of the place) and `lea
+    /// x-1(%rip)` (4 short, addend -1) have the same total, -5, and one object
+    /// in LLVM: `REL32` and a field of -1. llrm wrote `REL32_1` and `REL32`.
+    #[test]
+    fn two_instructions_with_the_same_total_addend_write_one_relocation() {
+        assert_eq!(rel_to(5, 0), rel_to(4, -1));
+        assert_eq!(rel_to(9, 0), rel_to(4, -5));
+        assert_eq!(rel_to(6, 1), rel_to(4, -1));
     }
 
     /// An image-relative field (the `.pdata` RVAs) was written as ADDR32, an
