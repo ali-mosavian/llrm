@@ -281,13 +281,14 @@ fn codeview_debugs_a_nib_program_as_it_does_a_c_one() {
     let Some(screen) = nib_in_codeview("p", &["-O0"], &["bp add", "g", "p"]) else { return };
     // `add`'s parameters arrive in registers (regparm3); `-g` stores them to no
     // cell (it changes no code). `a` is overwritten by the first instruction
-    // and `b`'s EDX is reused for `t` (`add edx, eax`: a load-defined value
-    // is not tied), so neither has one place over the function and neither is
-    // a variable of CodeView's. The locals are in cells.
-    for expected in ["long s = 2"] {
+    // (`movsx ecx, ax` ends its register, then `lea eax, ...` takes it), so it
+    // has no one place over the function and is not a variable of CodeView's.
+    // `b` stays in EDX through the whole function (the DAG selector adds into
+    // a fresh register, `lea eax, [edx+ecx]`), so it is a register variable.
+    // The locals are in cells.
+    for expected in ["long s = 2", "EDX reg long b = 3"] {
         assert!(screen.contains(expected), "no {expected:?} in CodeView's screen:\n{screen}");
     }
-    assert!(!screen.contains("reg long b"), "`b`, its register reused for `t`, is a register variable:\n{screen}");
     assert!(!screen.contains("short a ="), "`a`, in no one place, is in CodeView's screen:\n{screen}");
 }
 
@@ -474,4 +475,34 @@ fn nib_in_codeview(
         std::thread::sleep(Duration::from_secs(1));
     }
     Some(locals(&session, commands).join("\n"))
+}
+
+/// `-g` shape of `regvar.nib` built optimised with the selector `isel`.
+fn regvar_shape(isel: &str) -> Vec<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap().to_owned();
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("p.obj");
+    let made = Command::new(bin.join("llrm-nib"))
+        .args(["-m16", "-g", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
+        .arg(format!("--isel={isel}"))
+        .arg(root.join("tests/fixtures/codeview/regvar.nib"))
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let records = llrm_codegen::objectfile::omf::parse(&std::fs::read(&object).unwrap()).unwrap();
+    llrm_codegen::objectfile::cv4info::shape(&records)
+}
+
+/// The DAG selector kept no `dbg_value` (`k = a * 3` became `imul cx, ax, 3`
+/// and its record had no instruction to stand before): `k` was in no
+/// CodeView record, where the old selector wrote it as a register variable.
+#[test]
+fn a_nib_register_variable_is_in_the_object_under_the_dag_selector() {
+    let (old, dag) = (regvar_shape("old"), regvar_shape("dag"));
+    let has_k = |shape: &[String]| shape.iter().any(|one| one.starts_with("REGISTER work.k"));
+    assert!(has_k(&old), "{old:#?}");
+    assert!(has_k(&dag), "the DAG selector wrote no `k`:\n{dag:#?}\nthe old one wrote:\n{old:#?}");
 }
