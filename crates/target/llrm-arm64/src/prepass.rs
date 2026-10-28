@@ -8,7 +8,9 @@
 //! values as the registers left over once what it already holds is counted
 //! (`MachineLICM`'s `CanCauseHighRegPressure`): a value hoisted past that is
 //! spilled for the whole loop, dearer than making it at each use. The most
-//! used go first.
+//! used go first. What the loop already holds is what is live into its header,
+//! and equal values made in several blocks count once and are one value in the
+//! preheader (a second `MachineCSE` after the hoist).
 //!
 //! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
 //! over the arm64 selector's operations, standing in until the core machine
@@ -26,8 +28,12 @@ fn pure(op: &Op) -> bool {
     match op {
         Op::Imm { .. } | Op::FrameAddress { .. } => true,
         Op::Copy { .. } => false,
-        // A sum of two registers, as an address makes: equal sums of virtual registers are one value.
-        Op::I(Inst::AddSubShifted { op: AddSub { set_flags: false, .. }, .. } | Inst::AddSubExtended { op: AddSub { set_flags: false, .. }, .. }) => {
+        // A sum of two registers, as an address makes: equal sums of virtual
+        // registers are one value.
+        Op::I(
+            Inst::AddSubShifted { op: AddSub { set_flags: false, .. }, .. }
+            | Inst::AddSubExtended { op: AddSub { set_flags: false, .. }, .. },
+        ) => {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
         }
@@ -242,6 +248,8 @@ pub fn run(function: &mut MFunc) {
     }
     cse(function);
     hoist(function);
+    // What was hoisted from several blocks is one value in the preheader.
+    cse(function);
 }
 
 /// Equal pure computations of a dominating block are used instead of repeated.
@@ -360,7 +368,11 @@ fn invariants(
                     && defined(&op).is_some_and(|register| {
                         definitions.get(&register) == Some(&1) && only.is_none_or(|chosen| chosen.contains(&register))
                     })
-                    && op.defs_and_uses().1.iter().all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
+                    && op
+                        .defs_and_uses()
+                        .1
+                        .iter()
+                        .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
                     && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
                 if invariant {
                     inside_defs.remove(&defined(&op).expect("a definition"));
@@ -380,28 +392,61 @@ fn invariants(
 /// would have hoisted) worth a register for the whole loop: those the loop
 /// reads most, as many as the registers not already held by what the loop
 /// reads from outside, plus what they are made from.
+/// The virtual registers live into each block.
+fn live_in(
+    function: &MFunc,
+    cfg: &Cfg,
+) -> Vec<HashSet<Reg>> {
+    let count = function.blocks.len();
+    let mut gen_kill: Vec<(HashSet<Reg>, HashSet<Reg>)> = Vec::with_capacity(count);
+    for block in &function.blocks {
+        let (mut gen_set, mut kill) = (HashSet::new(), HashSet::new());
+        for op in &block.ops {
+            let (defs, uses) = op.defs_and_uses();
+            gen_set.extend(uses.into_iter().filter(|used| used.is_virtual() && !kill.contains(used)));
+            kill.extend(defs.into_iter().filter(|def| def.is_virtual()));
+        }
+        gen_kill.push((gen_set, kill));
+    }
+    let mut live: Vec<HashSet<Reg>> = vec![HashSet::new(); count];
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &block in cfg.order.iter().rev() {
+            let mut input: HashSet<Reg> =
+                cfg.successors[block].iter().flat_map(|&next| live[next].iter().copied()).collect();
+            input.retain(|register| !gen_kill[block].1.contains(register));
+            input.extend(gen_kill[block].0.iter().copied());
+            if input != live[block] {
+                live[block] = input;
+                changed = true;
+            }
+        }
+    }
+    live
+}
+
 fn within_pressure(
     probe: &MFunc,
     blocks: &[usize],
     candidates: &[Op],
-    definitions: &HashMap<Reg, usize>,
+    held: &HashSet<Reg>,
 ) -> HashSet<Reg> {
     use crate::regalloc::pool;
-    let made: HashMap<Reg, &Op> = candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
-    let (mut reads, mut outside, mut calls) = (HashMap::<Reg, usize>::new(), HashSet::<Reg>::new(), false);
-    let defined_inside: HashSet<Reg> =
-        blocks.iter().flat_map(|&block| &probe.blocks[block].ops).flat_map(|op| op.defs_and_uses().0).collect();
+    let made: HashMap<Reg, &Op> =
+        candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
+    let (mut reads, mut calls) = (HashMap::<Reg, usize>::new(), false);
     for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
         calls |= matches!(op, Op::Call { .. });
         for used in op.defs_and_uses().1 {
             if made.contains_key(&used) {
                 *reads.entry(used).or_default() += 1;
-            } else if used.is_virtual() && (!defined_inside.contains(&used) || definitions.get(&used) > Some(&1)) {
-                // Read from outside, or carried round the loop (defined more than once): held throughout.
-                outside.insert(used);
             }
         }
     }
+    // Held throughout the loop: what is live into its header (read from
+    // outside, or carried round it), which is not one of the values hoisted.
+    let outside: HashSet<Reg> = held.iter().copied().filter(|register| !made.contains_key(register)).collect();
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
@@ -409,23 +454,33 @@ fn within_pressure(
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
-        (if calls { kept } else { kept + rest }).saturating_sub(
-            outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count(),
-        )
+        (if calls { kept } else { kept + rest })
+            .saturating_sub(outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count())
     };
-    let mut roots: Vec<(Reg, usize)> = reads.into_iter().collect();
+    // Equal values made in different blocks are one value once hoisted (the
+    // `cse` after it joins them): they cost one register, and are read by all.
+    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::new();
+    for (register, count) in reads {
+        let group = groups.entry(keyed(made[&register])).or_default();
+        group.0.push(register);
+        group.1 += count;
+    }
+    let mut roots: Vec<(Vec<Reg>, usize)> = groups.into_values().map(|(registers, count)| (registers, count)).collect();
+    for (registers, _) in &mut roots {
+        registers.sort();
+    }
     roots.sort_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
     let mut chosen: HashSet<Reg> = HashSet::new();
     let (mut gprs, mut fprs) = (room(true), room(false));
-    for (root, _) in roots {
-        let gpr = matches!(root, Reg::Gpr(_));
+    for (registers, _) in roots {
+        let gpr = matches!(registers[0], Reg::Gpr(_));
         let left = if gpr { &mut gprs } else { &mut fprs };
         if *left == 0 {
             continue;
         }
         *left -= 1;
         // What it is made from comes along, and lives only until it is made.
-        let mut work = vec![root];
+        let mut work = registers;
         while let Some(register) = work.pop() {
             if chosen.insert(register) {
                 work.extend(made[&register].defs_and_uses().1.into_iter().filter(|used| made.contains_key(used)));
@@ -439,6 +494,7 @@ fn within_pressure(
 fn hoist(function: &mut MFunc) {
     let cfg = cfg(function);
     let definitions = definitions(function);
+    let live = live_in(function, &cfg);
     // The natural loops: a back edge's header dominates its tail.
     let mut loops: Vec<(usize, HashSet<usize>)> = Vec::new();
     for tail in 0..function.blocks.len() {
@@ -481,7 +537,7 @@ fn hoist(function: &mut MFunc) {
         // What the loop would hoist, on a copy, and how much of it fits.
         let mut probe = function.clone();
         let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
-        let chosen = within_pressure(&probe, &order, &candidates, &definitions);
+        let chosen = within_pressure(&probe, &order, &candidates, &live[header]);
         let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;
@@ -599,8 +655,7 @@ mod tests {
                 mmo: MemOperand::default(),
             })
         };
-        function.blocks[0].ops =
-            vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
+        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
         run(&mut function);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
@@ -647,13 +702,23 @@ pub fn order_copies(function: &mut MFunc) {
         while at < block.ops.len() {
             let end = block.ops[at..]
                 .iter()
-                .position(|op| !matches!(op, Op::Copy { dst, src } if !dst.is_virtual() && src.is_virtual()))
+                .position(|op| {
+                    !matches!(
+                        op,
+                        Op::Copy { dst, src } if !dst.is_virtual() && src.is_virtual()
+                    )
+                })
                 .map_or(block.ops.len(), |n| at + n);
-            // Stable: a copy into its source's home register moves behind the others.
-            block.ops[at..end].sort_by_key(|op| match op {
-                Op::Copy { dst, src } => home.get(src) == Some(dst),
-                _ => false,
-            });
+            // Stable: a copy into its source's home register moves behind the
+            // others.
+            block
+                .ops[at..end]
+                .sort_by_key(
+                    |op| match op {
+                        Op::Copy { dst, src } => home.get(src) == Some(dst),
+                        _ => false,
+                    },
+                );
             at = end.max(at + 1);
         }
     }
