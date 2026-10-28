@@ -878,6 +878,22 @@ impl Function {
         out
     }
 
+    /// The one block `block`'s terminator names, if it names no other: LLVM's
+    /// `getSingleSuccessor`, which stops at the first block that differs
+    /// where `successors` lists a switch of N cases whole.
+    pub fn sole_successor(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let last = self.terminator(block)?;
+        let mut blocks = self.instruction(last).operands.iter().filter_map(|operand| match operand {
+            Operand::Block(target) => Some(*target),
+            _ => None,
+        });
+        let first = blocks.next()?;
+        blocks.all(|other| other == first).then_some(first)
+    }
+
     /// The blocks `operands` name, once each, by a set: a switch of N cases
     /// named N blocks, and a scan of what was listed for each was N^2.
     #[cold]
