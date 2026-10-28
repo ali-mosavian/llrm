@@ -328,6 +328,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
+            ISD::FpRound => self.visit_fp_round(node),
+            ISD::FpExtend => self.visit_fp_extend(node),
+            ISD::SIntToFp | ISD::FpToSInt => self.visit_fp_int_convert(node),
             ISD::FAbs => self.visit_fabs(node),
             ISD::FDiv => self.visit_fdiv(node),
             ISD::Shl | ISD::Srl => self
@@ -346,6 +349,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
+            ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
             _ => None,

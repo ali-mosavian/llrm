@@ -3,6 +3,7 @@
 use super::dag_function::selected;
 use super::dag_function_tests::M16_STACK_ARGS;
 use crate::model::ir::Operation;
+use crate::testing::m16_ir;
 
 const GLOBAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 @g = global i32 7
@@ -492,7 +493,7 @@ fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(refused.contains("memmove"), "{refused}");
 }
 
-const SCALED_INDEX_AT_M16: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const SCALED_INDEX_AT_M16: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare cc 1006 void @\"_far_get@3\"(ptr, ptr addrspace(1))
 declare cc 1006 i16 @\"_con_gfx_trim@3\"(ptr addrspace(1))
 declare cc 1006 i16 @\"_con_back_load@3\"(ptr addrspace(1), ptr)
@@ -686,7 +687,7 @@ b28:
 #[test]
 fn a_scaled_lea_at_m16_has_no_literal_place() {
     use crate::model::ir::{Loc, Operation};
-    let module = llrm_mir::parse::module(SCALED_INDEX_AT_M16).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(SCALED_INDEX_AT_M16)).expect("parses");
     let done =
         selected(&module, "_con_draw@3", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
             .unwrap_or_else(|e| panic!("{}", e.0));
