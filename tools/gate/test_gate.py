@@ -222,7 +222,7 @@ def test_the_plan_names_each_skipped_step_and_its_missing_tool_as_json(tmp_path)
     env = {**__import__("os").environ, "HOME": str(tmp_path), "LLRM_REQUIRE_TURBO": "", "LLRM_REQUIRE_CODEVIEW": "", "QB45_DIR": "", "TCPP30_DIR": "", "TD_DIR": "", "VBDOS_DIR": "", "QCPORT": "", "QCPORT_BORLAND": "", "GATE_ALLOW_MISSING": "1"}
     out = subprocess.run([sys.executable, str(Path(gate.__file__)), "plan", "--json", "--files", "crates/ir/llrm-mir/src/lib.rs"], capture_output=True, text=True, check=True, env=env).stdout
     got = __import__("json").loads(out)
-    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "oracle-qcport", "bench", "dos-slow"} and "reference" not in got["groups"]
+    assert set(got["skipped"]) - {"measure", "pytest-perf", "oracle-premise"} == {"turbo", "cv4", "qcport", "oracle-qcport", "bench", "dos-slow", "integration"} and "reference" not in got["groups"]
     assert "run" in got["groups"]["run"]
 
 
@@ -1449,3 +1449,17 @@ def test_a_change_to_llrm_cc_runs_the_steps_and_the_language_llrm_c_changes_did(
     for step in ("qcport", "oracle-qcport", "measure"):
         assert (step in old.steps) == (step in new.steps), (step, new.steps)
     assert "c" in new.languages, new.languages
+
+
+def test_the_integration_step_waits_for_the_clang_trees_the_pins_name(tmp_path):
+    """The llrm-cc tests need the pinned and the m16 clang. They were looked up in ~/scratch, so a host without them failed every test at once
+    ('the target needs LLRM_OW'); now a missing tree is a missing capability: skipped with a reason locally, red in CI."""
+    env = {"HOME": str(tmp_path), "XDG_CACHE_HOME": str(tmp_path / "cache"), "GATE_ALLOW_MISSING": "1", "PATH": "/usr/bin:/bin"}
+    missing = gate.missing_capabilities(env)
+    assert "clang" in missing and "integration" in gate.skipped_steps(["integration"], missing)
+    for kind in ("pin", "m16"):
+        tree = subprocess.run(["sh", str(ROOT / "toolchain/clangbuild.sh"), "--print", kind], capture_output=True, text=True, env=env).stdout.strip()
+        (Path(tree) / "bin").mkdir(parents=True)
+        (Path(tree) / "bin/clang").write_text("#!/bin/sh\n")
+        (Path(tree) / "bin/clang").chmod(0o755)
+    assert "clang" not in gate.missing_capabilities(env)
