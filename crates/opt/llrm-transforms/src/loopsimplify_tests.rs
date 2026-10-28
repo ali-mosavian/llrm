@@ -440,8 +440,15 @@ fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
             .collect();
         for function_name in names {
             let (_, function) = module.function_mut(&function_name).unwrap();
+            // A loop whose header is a landing pad (an error handler that
+            // retries) keeps its latches: the pin cannot insert a backedge
+            // to an EH pad (`insertUniqueBackedgeBlock` asserts).
             let latches = |function: &llrm_mir::module::Function| {
-                loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>()
+                loops::loops(&cfg::graph(function), None)
+                    .iter()
+                    .filter(|one| !crate::edges::starts_with_landing_pad(function, cfg::block(one.header)))
+                    .map(|one| one.latches.len())
+                    .collect::<Vec<_>>()
             };
             let before = latches(function);
             simplified(function);
