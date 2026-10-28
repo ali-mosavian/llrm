@@ -1379,6 +1379,28 @@ fn homed(
     found
 }
 
+/// The source line the `!dbg` of `inst` names.
+pub(crate) fn dbg_line(
+    module: &Module,
+    function: &Function,
+    inst: InstId,
+) -> Option<u32> {
+    function
+        .instruction(inst)
+        .metadata
+        .iter()
+        .find(|(kind, _)| kind == "dbg")
+        .and_then(
+            |&(_, node)| match module.metadata[node.0 as usize].operands.first() {
+                Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
+                    llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
+                    _ => None,
+                },
+                _ => None,
+            },
+        )
+}
+
 /// `body` with each instruction's source line: that of the MIR instruction
 /// its `at` was selected from, as its `!dbg` names it.
 fn lined(
@@ -1389,20 +1411,7 @@ fn lined(
 ) -> LirBody {
     let mut lines: IndexMap<i64, u32> = IndexMap::default();
     for (&inst, &at) in ats {
-        let line = function
-            .instruction(inst)
-            .metadata
-            .iter()
-            .find(|(kind, _)| kind == "dbg")
-            .and_then(
-                |&(_, node)| match module.metadata[node.0 as usize].operands.first() {
-                    Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
-                        llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-            );
+        let line = dbg_line(module, function, inst);
         if let Some(line) = line {
             lines.insert(at, line);
         }

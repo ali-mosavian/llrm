@@ -1760,6 +1760,11 @@ impl Builder<'_> {
         self.current = Some(inst);
         // `++SDNodeOrder`: what the nodes built for this instruction carry.
         self.dag.cur_order += 1;
+        let at = self.dag.cur_order as usize;
+        if self.dag.lines.len() <= at {
+            self.dag.lines.resize(at + 1, 0);
+        }
+        self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).unwrap_or(0);
         if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
