@@ -3014,3 +3014,16 @@ fn test_simplifycfg_runs_first_so_no_unreachable_block_reaches_cgpaddr() {
         assert!(first.starts_with("decide@") || first.starts_with("simplifycfg"), "{early:?}");
     }
 }
+
+/// A slot the -O1 order leaves out (`pre` off) must be in `ABSENT_AT_O1`, or
+/// building the list fails the registry check: `mldst-motion@783` was gated on
+/// `pre` without being listed, and every -O1 build panicked (the m64 driver's
+/// `a_double_*` tests, `test_o1_states_the_ranges...`).
+#[test]
+fn test_the_o1_and_o2_simplify_lists_both_match_the_registry() {
+    for options in [pipeline::Options::basic(), pipeline::Options::default()] {
+        let applied = Applied { options, ..Applied::default() };
+        // `linear` debug-asserts the registry check.
+        let _ = pipeline::Fixed::linear(&applied, crate::parity::Phase::Simplify);
+    }
+}
