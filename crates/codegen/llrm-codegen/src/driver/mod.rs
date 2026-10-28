@@ -141,6 +141,15 @@ impl Options {
             debug.format = self.debug_format;
             debug.cfa = self.cfa_locations();
             debug.ranges = self.location_ranges();
+            // Only DWARF 5 has a place for a file's MD5; LLVM leaves it out of
+            // older ones.
+            if matches!(
+                debug.format,
+                llrm_object::debug::Format::Dwarf { version } if version < 5
+            ) && let Some((_, md5)) = debug.source.as_mut()
+            {
+                *md5 = None;
+            }
         }
     }
 
