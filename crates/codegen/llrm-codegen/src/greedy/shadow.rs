@@ -506,6 +506,10 @@ struct CallMasks {
     flow: Option<Vec<Vec<usize>>>,
     /// Each block's blocks reachable by one edge or more, as bits.
     reach: std::cell::OnceCell<Vec<Vec<u64>>>,
+    /// The value a split is tried for (`PhysInterference::set_lane`).
+    lane: std::cell::Cell<Option<u32>>,
+    /// The registers some call keeps the low half of only.
+    lane_registers: RegSet,
 }
 
 thread_local! {
@@ -541,13 +545,19 @@ impl CallMasks {
     ) -> Self {
         let destroying =
             calls.iter().map(|(_, destroyed, high, _)| !destroyed.is_empty() || !high.is_empty()).collect();
-        let calls = calls
+        let calls: Vec<(SlotIndex, RegSet, RegSet, RegSet)> = calls
             .into_iter()
             .map(|(slot, destroyed, high, read)| {
                 let narrow = destroyed.union(&read);
                 (slot, narrow, narrow.union(&high), read)
             })
             .collect();
+        let mut lane_registers = RegSet::default();
+        for (_, narrow, wide_lost, _) in &calls {
+            for root in wide_lost.iter().filter(|root| !narrow.contains(root)) {
+                lane_registers.insert(root);
+            }
+        }
         let ceiling = [false, true].map(|wide| {
             let mut all = RegSet::default();
             for &(_, narrow, lost, read) in &calls {
@@ -556,7 +566,17 @@ impl CallMasks {
             }
             all
         });
-        Self { calls, destroying, ceiling, blocks, widths, flow: None, reach: Default::default() }
+        Self {
+            calls,
+            destroying,
+            ceiling,
+            blocks,
+            widths,
+            flow: None,
+            reach: Default::default(),
+            lane: Default::default(),
+            lane_registers,
+        }
     }
 
     /// The same, told the blocks' successors.
@@ -779,6 +799,20 @@ impl PhysInterference for Fixed {
     ) -> bool {
         self.calls.reg_mask_clobbers(i, phys)
     }
+
+    fn lane_of(
+        &self,
+        phys: RegId,
+    ) -> Option<u32> {
+        self.calls.lane_of(phys)
+    }
+
+    fn set_lane(
+        &self,
+        virt: Option<u32>,
+    ) {
+        self.calls.set_lane(virt);
+    }
 }
 
 impl PhysInterference for CallMasks {
@@ -904,8 +938,29 @@ impl PhysInterference for CallMasks {
         phys: RegId,
     ) -> bool {
         let root = crate::model::ir::root(phys);
-        let (_, destroyed, high, _) = &self.calls[i];
-        destroyed.contains(&root) || high.contains(&root)
+        let (slot, destroyed, high, _) = &self.calls[i];
+        if destroyed.contains(&root) {
+            return true;
+        }
+        // DEVIATE C-LANE: the high half of a register a call keeps the low
+        // half of is lost to a value only where a wide read can follow.
+        high.contains(&root) && self.lane.get().is_none_or(|virt| self.wide_read_follows(virt, slot))
+    }
+
+    fn lane_of(
+        &self,
+        phys: RegId,
+    ) -> Option<u32> {
+        let root = crate::model::ir::root(phys);
+        self.flow.as_ref()?;
+        if self.lane_registers.contains(&root) { self.lane.get() } else { None }
+    }
+
+    fn set_lane(
+        &self,
+        virt: Option<u32>,
+    ) {
+        self.lane.set(virt);
     }
 }
 
@@ -1056,7 +1111,7 @@ pub fn decide_with_split(
     let bytes = inputs.registers.byte_order();
     for reg in lis.virt_regs() {
         let mut order: Vec<RegId> = if floats.contains(&reg) {
-            crate::backend::allocate::RFP.to_vec()
+            inputs.registers.rfp_registers().to_vec()
         } else {
             (inputs.order)(reg).into_iter().map(crate::model::ir::root).collect()
         };
@@ -1119,6 +1174,13 @@ pub fn decide_with_split(
         })
     };
     tables.remat.borrow_mut().extend(super::remat::values(body, &invariant));
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        if let [value] = one.defines.as_slice()
+            && tables.remat.borrow().contains(value)
+        {
+            tables.remat_roots.borrow_mut().entry(*value).or_insert_with(|| Arc::clone(one));
+        }
+    }
     let pins = inputs
         .pins
         .iter()
@@ -1164,7 +1226,7 @@ pub fn decide_with_split(
                     |list: &BTreeSet<RegId>| -> RegSet { list.iter().map(|r| crate::model::ir::root(*r)).collect() };
                 let mut destroyed = roots(&one.clobbers);
                 if empties {
-                    destroyed.extend(crate::backend::allocate::RFP);
+                    destroyed.extend(inputs.registers.rfp_registers().iter().copied());
                 }
                 calls.push((slot, destroyed, roots(&one.clobbers_high), read));
             }
@@ -1451,7 +1513,7 @@ mod tests {
             saved: &[],
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
-        let rfp = crate::backend::allocate::RFP;
+        let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
         assert!(decided.placed.iter().all(|(_, reg)| rfp.contains(reg)), "{:?}", decided.placed);
         // All nine live across the empty-stack point: none keeps a register
         // (the registers placed are the reloads' and the stores' short ranges).

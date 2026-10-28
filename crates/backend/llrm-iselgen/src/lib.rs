@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 
 use automaton::{Automaton, State};
 /// The instruction description's reader.
-pub use llrm_instr as description;
+pub use llrm_target::instr as description;
 use parse::{Call, Expr, OperandPattern, Pattern, Step};
 
 /// What each operand constructor may make, as `x86.instr` spells kinds,

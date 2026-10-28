@@ -44,7 +44,7 @@ The weight is computed when read, from what it is made of, because a rewrite cha
 
 `meeting(register, interval)` returns the holders, `busy` whether there are any, `add` and `remove` place and unplace. After a rewrite `refresh_among` re-indexes only the values whose intervals moved; `LLRM_CHECK_HOLDERS=1` checks every index against the pairwise answer. `Overlaps` is the same idea as a static tree, used to find the registers other values want (`Claims`).
 
-An interference graph exists in two other places, both before allocation and both of values, not registers: the coalescer's (`coalesce::_interference`, bit sets in `neighbours.rs`) and the spiller's check that two copies may share a slot (`_interference_among`, over one copy web).
+An interference graph of values, not registers, exists before allocation in one other place: the spiller's check that two copies may share a slot (`_interference_among`, over one copy web).
 
 ## Where a register is destroyed
 

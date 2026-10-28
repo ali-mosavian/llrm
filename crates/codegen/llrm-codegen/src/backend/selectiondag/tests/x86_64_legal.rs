@@ -96,7 +96,10 @@ fn fneg_and_fabs_of_a_float_are_sign_mask_logic() {
     ] {
         let (dag, root) = legalized_float_op(op, inner, f64v);
         assert_eq!((dag.opcode(root), dag.value_type(root)), (want, f64v), "{op:?}");
-        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))), "{op:?}: mask");
+        // The mask is in both lanes of the 16 bytes, as the pin's vector
+        // constant.
+        let splat = mask | mask << 64;
+        assert!(dag.constant_pool.contains(&(splat, EVT::Simple(MVT::I128))), "{op:?}: mask");
     }
 }
 
@@ -147,7 +150,8 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::FOR, f32v));
     for mask in [(1u128 << 31) - 1, 1 << 31] {
-        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))));
+        let splat = mask * 0x0000_0001_0000_0001_0000_0001_0000_0001;
+        assert!(dag.constant_pool.contains(&(splat, EVT::Simple(MVT::I128))));
     }
 }
 
@@ -305,4 +309,18 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::CopyToReg);
     assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::CopyFromReg);
+}
+
+/// An `undef` of `i1` (a phi's or select's unknown flag) was refused in the
+/// type legalizer ("promote result"): QCport's render/sc.c did not compile
+/// under `--isel=dag`. The pin's `PromoteIntRes_UNDEF` makes an undef of the
+/// promoted type.
+#[test]
+fn an_i1_undef_is_promoted() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let flag = dag.get_undef(EVT::Simple(MVT::I1));
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[flag]);
+    dag.set_root(wide);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
 }

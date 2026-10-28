@@ -8,7 +8,7 @@
 //! BASIC's compilers write a different, older dialect: `cvwrite` is that one.
 
 use llrm_object::debug::{self as model, Info, Location, Reach, Scalar, Type, TypeId};
-use llrm_object::{Binding, Kind as Fixup, Object, Reloc, Role, Section, Target};
+use llrm_object::{Binding, DebugSection, Fix, Object, Reloc, Role, Section, Target};
 use llrm_support::leaf::{numeric, pad};
 
 use crate::codeview::{SYMBOLS, TYPES};
@@ -551,10 +551,10 @@ impl Symbols<'_> {
         addend: i64,
     ) {
         if self.wide {
-            self.relocs.push(Reloc { at, kind: Fixup::Abs { width: 4 }, target, addend });
-            self.relocs.push(Reloc { at: at + 4, kind: Fixup::SegmentBase, target, addend: 0 });
+            self.relocs.push(Reloc::new(at, Fix::abs(4), target, addend));
+            self.relocs.push(Reloc::new(at + 4, Fix::SEGMENT_BASE, target, 0));
         } else {
-            self.relocs.push(Reloc { at, kind: Fixup::FarPointer, target, addend: i64::from(addend as i16) });
+            self.relocs.push(Reloc::new(at, Fix::FAR_POINTER, target, i64::from(addend as i16)));
         }
     }
 
@@ -787,7 +787,7 @@ pub fn sections(
     object: &Object,
     info: &Info,
 ) -> Result<[Section; 2], Error> {
-    let wide = object.arch.bits() == 32;
+    let wide = info.target_of(object.bits).address_bytes == 4;
     let mut types =
         Types { info, wide, records: Vec::new(), index: vec![None; info.types.len()], procedures: Vec::new() };
     let mut symbols = Symbols { object, info, wide, bytes: Vec::new(), relocs: Vec::new() };
@@ -830,7 +830,19 @@ pub fn sections(
     }
     let section = |name: &str, image: Vec<u8>, relocs: Vec<Reloc>| {
         let spans = vec![[0, image.len()]];
-        Section { name: name.to_owned(), role: Role::Debug, near: true, align: 1, image, spans, relocs }
+        Section {
+            name: name.to_owned(),
+            role: Role::Debug(if name == SYMBOLS {
+                DebugSection::CodeViewSymbols
+            } else {
+                DebugSection::CodeViewTypes
+            }),
+            near: true,
+            align: 1,
+            image,
+            spans,
+            relocs,
+        }
     };
     let image = [&SIGNATURE[..], &symbols.bytes].concat();
     let relocs = symbols.relocs.into_iter().map(|one| Reloc { at: one.at + SIGNATURE.len(), ..one }).collect();

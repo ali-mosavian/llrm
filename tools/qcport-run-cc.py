@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """QCport built through llrm-cc, run against the all-Borland build: the clang front end's gate.
 
-    QCPORT=.../src QCPORT_INC=... QCPORT_BORLAND=DIR [QCPORT_LLRMC_MODULES="dbg sys_time d_poly ent"] tools/qcport-run-cc.py [-Os] [--row x86_16-dos-rp3]
+    QCPORT=.../src QCPORT_INC=... QCPORT_BORLAND=DIR [QCPORT_LLRMC_MODULES="mod ..."] tools/qcport-run-cc.py [-Os] [--row x86_16-dos-rp3]
 
 Every module of QCport's six source directories is compiled by llrm-cc for the row --row names (default x86_16-dos, or QCPORT_CC_ROW; LLRM_CLANG_M16 names the i8086 clang;
-include path: LLRM_BORLAND_INC, made by tools/lowercase-includes.sh), except QCPORT_LLRMC_MODULES, which llrm-c compiles:
-Borland's `_asm` is not carried yet. The objects replace the Borland build's in QCPORT.LNK; both builds run headless as
+include path: LLRM_BORLAND_INC, made by tools/lowercase-includes.sh), except QCPORT_LLRMC_MODULES, which llrm-c compiles
+(none by default: Borland's `_asm` goes through -fasm-blocks). The objects replace the Borland build's in QCPORT.LNK; both builds run headless as
 tools/qcport-run.py runs them and must draw the same frames, polygons and BENCH.BMP. Exit 1 on a build failure or a difference.
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ def main() -> int:
     borland_include = qr.required("LLRM_BORLAND_INC")
     root = HERE.parent
     cc, llrm_c = root / "target/release/llrm-cc", qr.llrmbin.bin_dir() / "llrm-c"
-    by_llrm_c = set(os.environ.get("QCPORT_LLRMC_MODULES", "dbg sys_time d_poly ent").split())
+    by_llrm_c = set(os.environ.get("QCPORT_LLRMC_MODULES", "").split())
     sources = sorted(source for part in qr.MODULES for source in (qcport / part).glob("*.c"))
     dirs = [flag for part in (*qr.MODULES, "qgl") for flag in ("-I", str(qcport / part))]
     work = dosbatch.private_work("qcport-run-cc")

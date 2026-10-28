@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m16 -Os --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m16 -Os --isel=dag -S -o /dev/stdout
 // An 18-byte zeroed local was five dword stores (~24 B over `rep stosb`)
 // at -Os; the old selector filled it.
 int sink(int *);
