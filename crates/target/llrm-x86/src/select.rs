@@ -2109,7 +2109,7 @@ pub fn unary_mem(
         return None;
     }
     let built = operand_of(cell, at.bits);
-    if built.is_none() || !memory_widths(at).contains(&cell.width) {
+    if built.is_none() || !(cell.width == 1 || memory_widths(at).contains(&cell.width)) {
         return None;
     }
     let (r#where, relocated) = built?;
