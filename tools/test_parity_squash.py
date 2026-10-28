@@ -1890,3 +1890,15 @@ def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_pa
 
     got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: Done(), ensure=lambda: "")
     assert any("the real cause" in line for line in got), got
+
+
+def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
+    """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    def slow(command, **kw):
+        raise ps.subprocess.TimeoutExpired(command, 600)
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=slow, ensure=lambda: "")
+    assert got and "600 s" in got[0], got

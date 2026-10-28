@@ -1173,3 +1173,55 @@ entry:
     assert!(names.iter().any(|n| n == "setge"), "{names:?}");
     assert!(names.iter().any(|n| n == "inc"), "{names:?}");
 }
+
+/// At -O2 the same copy is three dword load and store pairs, as the pin's
+/// `MaxStoresPerMemcpy` (8) allows; only -Os (SD225, limit 2) uses `rep movsd`.
+#[test]
+fn at_o2_a_12_byte_copy_is_inline_dword_moves() {
+    let module = llrm_mir::parse::module(M16_COPY_12).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let copies =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.op == crate::model::ir::Operation::Copy).count();
+    let stores = insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    assert_eq!((copies, stores), (0, 3), "three stores and no string move");
+}
+
+const M16_FAR_COPY_12: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+@far = addrspace(1) global [12 x i8] zeroinitializer
+@near = global [12 x i8] zeroinitializer
+
+declare void @llvm.memcpy.p0.p1.i16(ptr, ptr addrspace(1), i16, i1)
+
+define void @f() {
+entry:
+  call void @llvm.memcpy.p0.p1.i16(ptr @near, ptr addrspace(1) @far, i16 12, i1 false)
+  ret void
+}
+";
+
+/// A 12-byte copy from a far pointer at -Os was `rep movsb` with cx = 12
+/// (QCport atk_army): the near copy of the same size is `rep movsd` with cx =
+/// 3, and the segment override does not change the unit.
+#[test]
+fn at_os_a_12_byte_far_copy_moves_dwords() {
+    let module = llrm_mir::parse::module(M16_FAR_COPY_12).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let moves: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| w.op == crate::model::ir::Operation::Copy)
+        .filter_map(|w| w.name.as_deref().map(str::to_owned))
+        .collect();
+    assert_eq!(moves, ["movsd"], "one string move of dwords");
+}

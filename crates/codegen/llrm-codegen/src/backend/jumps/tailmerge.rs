@@ -345,14 +345,15 @@ impl Folder {
             .map(|previous| previous.at)
     }
 
-    /// `canFallThrough`: a candidate with its jump taken off can; any other
-    /// block when its jump is to the block laid out next.
+    /// `canFallThrough`: a candidate with its jump taken off can when the
+    /// block laid out next is one of its successors (`getFallThrough`); any
+    /// other block when its jump is to the block laid out next.
     fn falls(
         &self,
         at: i64,
     ) -> bool {
         if self.stripped.contains(&at) {
-            return true;
+            return self.after(at).is_some_and(|next| self.block(at).succ.contains(&next));
         }
         let last = self.block(at).insns.iter().rev().find(|one| !one.is_meta());
         match last.and_then(|one| one.what.as_ref()) {
