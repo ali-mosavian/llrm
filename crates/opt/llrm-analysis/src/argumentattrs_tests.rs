@@ -59,6 +59,35 @@ b0:
     assert!(!q.no_capture() && !q.read_only() && !q.write_only(), "kept in a global, then read through by anyone");
 }
 
+/// `addAccessAttrs`'s `IsFree`: no parameter got `nofree` (the pin's `h` has
+/// `captures(none)` alone, `hn` and `get` also `nofree`).
+#[test]
+fn a_parameter_is_nofree_unless_a_call_that_may_free_writes_through_it() {
+    let (module, _) = stated(
+        "declare void @g(ptr captures(none))
+declare void @gn(ptr captures(none)) nofree
+define i32 @get(ptr %p) {
+b0:
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+define void @h(ptr %p) {
+b0:
+  call void @g(ptr %p)
+  ret void
+}
+define void @hn(ptr %p) {
+b0:
+  call void @gn(ptr %p)
+  ret void
+}
+",
+        &["get", "h", "hn"],
+    );
+    let nofree = |name| facts(&module, name, 0).no_free();
+    assert!(nofree("get") && !nofree("h") && nofree("hn"));
+}
+
 #[test]
 fn an_unused_parameter_is_nocapture_readnone() {
     let (module, _) = stated("define void @f(ptr %p) {\nb0:\n  ret void\n}\n", &["f"]);
