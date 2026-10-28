@@ -398,6 +398,20 @@ impl super::emit::Conventions for CallConventions<'_> {
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            // A call of a function the module defines disturbs what its
+            // convention says, not the contract's whole clobber list: a caller
+            // saves for its own caller only that (`isel.rs`, `disturbs`).
+            _ if matches!(callee, Some(Callee::Global(_))) && self.written(callee).is_none() => {
+                let regs = llrm_lir::registers::Regs(self.arch.registers());
+                self.convention_of(callee).map_or_else(Default::default, |found| {
+                    found
+                        .clobbered
+                        .iter()
+                        .filter(|name| !matches!(name.as_str(), "flags") && !name.starts_with("st"))
+                        .map(|name| regs.root(self.arch.register_named(name)))
+                        .collect()
+                })
+            }
             _ => clobbers.clone(),
         }
     }
@@ -446,15 +460,6 @@ impl super::emit::Conventions for CallConventions<'_> {
                 contracts.segments,
                 self.general,
             ));
-        }
-        // a runtime routine also destroys what its contract says
-        if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
-            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
-            if name.starts_with(crate::hir::mir::RUNTIME)
-                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
-            {
-                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
-            }
         }
         Some(out)
     }
@@ -929,6 +934,7 @@ fn selected_in(
     // What the debug records name: the LIR value of each IR value, and the
     // address each IR instruction's code starts at.
     let mut noted_values: crate::support::hash::IndexMap<ValueId, u32> = Default::default();
+    let mut noted_wides: crate::support::hash::IndexMap<ValueId, (Held, Held)> = Default::default();
     let mut noted_ats: crate::support::hash::IndexMap<llrm_mir::module::InstId, i64> = Default::default();
     let mut calls = IndexMap::default();
     let mut pops = IndexMap::default();
@@ -1016,8 +1022,16 @@ fn selected_in(
             }
         }
         for &(id, value) in &built.values {
-            if let Some(&made) = done.values.get(&value) {
+            if let Some(&made) = done.values.get(&built.dag.resolve(value)) {
                 noted_values.entry(id).or_insert(made);
+            }
+            // A value type legalization expanded is its two halves.
+            if let Some(&(low, high)) = built.dag.expanded_integers.get(&value)
+                && let (Some(&low_made), Some(&high_made)) =
+                    (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
+            {
+                let width = built.dag.value_type(low).size_in_bits() / 8;
+                noted_wides.entry(id).or_insert((Held { value: low_made, width }, Held { value: high_made, width }));
             }
         }
         emitted.extend(done.blocks);
@@ -1235,7 +1249,7 @@ fn selected_in(
         }
     }
     let mut body =
-        crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &Default::default(), &[], body);
+        crate::backend::isel::noted(module, function, name, &noted_ats, &noted_values, &noted_wides, &[], body);
     set_odds(&mut body, &info.edge_probs, &block_at);
     body.frequencies = Some(crate::analysis::frequency::Frequency::over(&body, &body.blocks).table());
     // The inline routines the calls name (`ExpandDivRemLibCall`'s `divN_s`):

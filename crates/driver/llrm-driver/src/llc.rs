@@ -215,6 +215,9 @@ fn decorate(
 /// no convention: here the one `-mabi` chose, in the functions and in their
 /// calls. LLVM's and llrm's own intrinsics stay as they are.
 ///
+/// With `c_library` the library's functions (`cos`, `strlen`) keep their C
+/// convention, as the Borland library the program links has them.
+///
 /// With `regcall_default` the front end marked the unmarked ones
 /// `x86_regcallcc` itself, so those take the ABI's convention and `ccc` is an
 /// explicit `__cdecl`, which stays C's. A variadic function stays on the ABI's:
@@ -223,6 +226,7 @@ fn with_default_convention(
     module: &mut llrm_mir::module::Module,
     default: &llrm_target::calling::Convention,
     regcall_default: bool,
+    c_library: bool,
 ) {
     let Some(number) = llrm_target::calling::Calling::number_of(default.cc.as_deref()).filter(|number| *number != 0)
     else {
@@ -239,7 +243,7 @@ fn with_default_convention(
     let main_is_watcom = default.cc.as_deref() == Some("regparm3");
     // Where the ABI is the register-size one, the library's functions are Open
     // Watcom's whichever way the front end marks the rest.
-    let library_is_watcom = !regcall_default || main_is_watcom;
+    let library_is_watcom = (!regcall_default || main_is_watcom) && !c_library;
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
@@ -274,6 +278,7 @@ fn with_default_convention(
             continue;
         }
         let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind else { continue };
+        let kept_c = c_library && library.contains(&llrm_mir::context::GlobalId(at as u32));
         // `main` is the ABI's, as the start-up calls it; clang leaves it `ccc`.
         let entry = global.name.as_deref() == Some("main");
         // A function the front end marked `regcall` where the default is not
@@ -281,11 +286,12 @@ fn with_default_convention(
         let watcom = (entry && main_is_watcom)
             || (!regcall_default && function.calling_convention == llrm_mir::opcode::REGCALL)
             || (library_is_watcom && library.contains(&llrm_mir::context::GlobalId(at as u32)));
-        if watcom
-            || takes(
-                function.calling_convention,
-                is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
-            )
+        if !kept_c
+            && (watcom
+                || takes(
+                    function.calling_convention,
+                    is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
+                ))
         {
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
@@ -322,13 +328,16 @@ fn with_default_convention(
             .walk()
             .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                 llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                    if takes(
-                        info.calling_convention,
-                        is_variadic(info.function_type)
-                            || (regcall_default
-                                && llrm_mir::memory::callee(&module.context, function, inst)
-                                    .is_some_and(|one| library.contains(&one))),
-                    ) =>
+                    if !(c_library
+                        && llrm_mir::memory::callee(&module.context, function, inst)
+                            .is_some_and(|one| library.contains(&one)))
+                        && takes(
+                            info.calling_convention,
+                            is_variadic(info.function_type)
+                                || (regcall_default
+                                    && llrm_mir::memory::callee(&module.context, function, inst)
+                                        .is_some_and(|one| library.contains(&one))),
+                        ) =>
                 {
                     Some(inst)
                 }
@@ -369,7 +378,7 @@ pub fn compiled_dumping(
     refuse_weak(&module, format.name())?;
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
-    with_default_convention(&mut module, default, flags.regcall_default);
+    with_default_convention(&mut module, default, flags.regcall_default, flags.c_library);
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.

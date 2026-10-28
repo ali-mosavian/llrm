@@ -4,11 +4,13 @@
 pub mod backend;
 pub mod coff32;
 pub mod coff64;
+pub mod compact_unwind;
 pub mod elf32;
 pub mod elf64;
 pub mod fixup;
 pub mod macho;
 pub mod omf;
+pub mod unwind;
 pub mod win64unwind;
 
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
@@ -44,6 +46,15 @@ impl ObjectTarget for X86Objects {
                 &expanded
             }
             _ => object,
+        };
+        // `.eh_frame` goes in whether or not `-g` is on, for the frames the
+        // backend declared.
+        let unwound;
+        let object = if format == "elf" && object.bits == 64 && !object.frames.is_empty() {
+            unwound = llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?;
+            &unwound
+        } else {
+            object
         };
         match (format, object.bits) {
             ("elf", 32) => elf32::write(object),

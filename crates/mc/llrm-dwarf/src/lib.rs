@@ -9,6 +9,7 @@
 
 mod buffer;
 mod die;
+pub mod eh_frame;
 mod frame;
 mod line;
 mod ranges;

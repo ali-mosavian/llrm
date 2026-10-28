@@ -41,6 +41,16 @@ use crate::aa::{IRMemLocation, MemoryEffects, ModRefInfo};
 use crate::alias::Summary;
 use crate::memory::{Identity, Key, MemoryKind, MemoryObject, ObjectInterner, Slice};
 
+thread_local! {
+    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has made the summaries of a module, for a test
+/// that an edit to a body does not make them again.
+pub fn summaries_made() -> usize {
+    MADE.with(std::cell::Cell::get)
+}
+
 /// The summaries of the defined functions of `module`, by name.
 ///
 /// `tracked` are the globals alias's queries treat as uncaptured (`GlobalsAA`);
@@ -52,6 +62,7 @@ pub fn summaries(
     tracked: &std::collections::BTreeSet<GlobalId>,
     found: &crate::globalsmodref::GlobalsModRef,
 ) -> IndexMap<String, Summary> {
+    MADE.with(|made| made.set(made.get() + 1));
     let objects = ObjectInterner::of(&module.context);
     let listable = tracked.iter().all(|&id| found.is_non_address_taken(id));
     let mut out = IndexMap::default();
