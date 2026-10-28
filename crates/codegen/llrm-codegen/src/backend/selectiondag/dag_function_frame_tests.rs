@@ -1311,6 +1311,7 @@ fn the_register_file_is_not_parsed_per_block() {
     // the first compile reads what the target caches once
     parses(3);
     assert_eq!(parses(30), parses(90));
+}
 
 /// The pin's `(i16 0)` is the low part of a `MOV32r0`: `xor edi, edi` at m32,
 /// 2 bytes. Narrowed to a word (`xor di, di`, 66-prefixed) it grew 1 B per
