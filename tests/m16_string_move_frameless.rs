@@ -1,6 +1,6 @@
 //! A function whose only inline code is a string move keeps no frame register.
 
-use std::process::Command;
+mod common;
 
 /// scroll.c under the DAG selector had `push bp; mov bp, sp` where the old one
 /// had none: the backward move is inline bytes, and any inline code was taken
@@ -13,7 +13,7 @@ fn test_a_backward_string_move_needs_no_frame() {
         "static short s[2000];\nvoid f(void)\n{\n    int i;\n    for (i = 1919; i >= 0; --i) s[i + 80] = s[i];\n}\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["a.c", "-m16", "-march=i386", "-Os", "--isel=dag", "-S", "-o", "-"])
         .output()

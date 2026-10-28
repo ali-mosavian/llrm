@@ -1,3 +1,4 @@
+use llrm_analysis::testing::m16_ir;
 use llrm_analysis::testing::{corpus_files, parse_corpus_entry};
 use llrm_mir::interpret;
 use llrm_mir::module::Module;
@@ -1234,8 +1235,8 @@ fn the_rounds_of_a_body_are_bounded_by_the_option_and_omax_has_none() {
 #[test]
 fn only_o3_jams_a_nest_that_sweeps_the_same_cells() {
     let cells = |base: i32| (0..100).map(|at| format!("i16 {}", base + at % 7)).collect::<Vec<_>>().join(", ");
-    let text = format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+    let text = m16_ir(&format!(
+        "target datalayout = \"@m16-datalayout@\"
 @p = global [100 x i16] [{}]
 @v = global [100 x i16] [{}]
 
@@ -1279,7 +1280,7 @@ done:
 ",
         cells(1),
         cells(3)
-    );
+    ));
     let through = |options: pipeline::Options| {
         let mut module = llrm_analysis::testing::parsed(&text);
         Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
@@ -1907,7 +1908,7 @@ impl llrm_mir::passes::FunctionPass for Agree {
 /// panicked at ranger.rs:925, #2369).
 #[test]
 fn test_the_ranger_and_the_table_agree_between_the_stages_of_the_llvm_order() {
-    let mut module = crate::testing::parsed("target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+    let mut module = crate::testing::parsed(m16_ir("target datalayout = \"@m16-datalayout@\"
 
 define internal cc 1005 void @insert(ptr addrspace(1) noalias readonly dereferenceable(8) nocapture %0, i16 %1, i16 %2) addrspace(1) nearcode memory(readwrite, argmem: read) {
 b1:
@@ -2235,7 +2236,7 @@ declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 !10 = !{i16 0, i16 -32768}
 !11 = !{i16 0, i16 -32768}
 !12 = !{i16 0, i16 -32768}
-");
+"));
     let applied = Applied::default();
     let mut manager = llrm_mir::passes::PassManager::default();
     manager.add(Agree("input"));
@@ -2633,8 +2634,8 @@ fn a_slot_names_the_member_that_left_a_phi_short() {
 /// (D11).
 #[test]
 fn an_inlined_body_is_spliced_as_it_is_after_it_took_its_own_callees_in() {
-    let mut module = llrm_analysis::testing::parsed(
-        r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
+    let mut module = llrm_analysis::testing::parsed(m16_ir(
+        r#"target datalayout = "@m16-datalayout@"
 
 define internal cc 1005 void @"_frame@3"(ptr addrspace(1) nocapture %0, i16 %1) memory(readwrite, inaccessiblemem: none) willreturn nounwind norecurse {
 b1:
@@ -2704,7 +2705,7 @@ declare cc 1005 i16 @"_report@3"(i32) addrspace(1)
 !8 = !{!"int2", !6, i64 0}
 !9 = !{!8, !8, i64 0}
 "#,
-    );
+    ));
     let applied = Applied { options: pipeline::Options::default(), ..Applied::default() };
     Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
         program.exports.entries.insert("_main".to_owned());
@@ -3012,5 +3013,18 @@ fn test_simplifycfg_runs_first_so_no_unreachable_block_reaches_cgpaddr() {
         let early: Vec<_> = pipeline::llvm_order(&applied, Phase::Early).iter().map(|one| one.name()).collect();
         let first = early.iter().find(|name| !name.starts_with("lowerexpect")).expect("a pass");
         assert!(first.starts_with("decide@") || first.starts_with("simplifycfg"), "{early:?}");
+    }
+}
+
+/// A slot the -O1 order leaves out (`pre` off) must be in `ABSENT_AT_O1`, or
+/// building the list fails the registry check: `mldst-motion@783` was gated on
+/// `pre` without being listed, and every -O1 build panicked (the m64 driver's
+/// `a_double_*` tests, `test_o1_states_the_ranges...`).
+#[test]
+fn test_the_o1_and_o2_simplify_lists_both_match_the_registry() {
+    for options in [pipeline::Options::basic(), pipeline::Options::default()] {
+        let applied = Applied { options, ..Applied::default() };
+        // `linear` debug-asserts the registry check.
+        let _ = pipeline::Fixed::linear(&applied, crate::parity::Phase::Simplify);
     }
 }

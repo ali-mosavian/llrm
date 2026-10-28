@@ -29,6 +29,13 @@ fn without_triple(text: &str) -> (Option<String>, String) {
         if line.starts_with(';') {
             continue;
         }
+        // Most lines carry none of the words below: they are copied as they
+        // are.
+        if !line.contains(" dso_local") && !line.contains(CLANG_PASCAL) && !line.contains('@') {
+            kept.push_str(line);
+            kept.push('\n');
+            continue;
+        }
         let line = line.replace(" dso_local", "").replace(CLANG_PASCAL, " cc1000 ");
         kept.push_str(&port_intrinsic(&lifetime_markers_with_a_size(&line)));
         kept.push('\n');
@@ -356,8 +363,9 @@ pub fn compiled_dumping(
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
-    llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
+    // After the rename: the debug info names the symbols the object has.
+    llrm_mir::dbgimport::types_and_globals(&mut module);
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     if let Some(dump) = dump {
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
@@ -604,4 +612,67 @@ fn compile(
         write_output(&output, bytes)
     }
     .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod text_tests {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    use super::without_triple;
+
+    thread_local! {
+        static COUNTING: Cell<Option<usize>> = const { Cell::new(None) };
+    }
+
+    struct Counting;
+
+    // SAFETY: every call is `System`'s; the counter is a thread-local `Cell`.
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(
+            &self,
+            layout: Layout,
+        ) -> *mut u8 {
+            let _ = COUNTING.try_with(|count| count.set(count.get().map(|n| n + 1)));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(
+            &self,
+            pointer: *mut u8,
+            layout: Layout,
+        ) {
+            unsafe { System.dealloc(pointer, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Counting = Counting;
+
+    /// Every line of the text was rewritten into fresh strings (two `replace`s,
+    /// a `format!` per port name, a copy per marker): 5,300 lines of a
+    /// jpeg_fixed.ll cost 23,000 string searches and as many allocations. A
+    /// line none of the rewrites touches costs none.
+    #[test]
+    fn a_plain_line_is_copied_once_into_the_text() {
+        let line = "  %5 = add nsw i32 %3, %4\n";
+        let text = line.repeat(5000);
+        COUNTING.with(|count| count.set(Some(0)));
+        let (_, kept) = without_triple(&text);
+        let made = COUNTING.with(|count| count.take()).expect("counting");
+        assert_eq!(kept, text);
+        assert!(made < 50, "{made} allocations for 5000 untouched lines");
+    }
+
+    #[test]
+    fn the_rewrites_still_apply() {
+        let text = "target triple = \"i386\"\n; c\n@x = dso_local global i32 0\ndeclare void @llvm.lifetime.start.p0(ptr)\n  %1 = call i16 @__inportw__(i16 %0)\n";
+        let (triple, kept) = without_triple(text);
+        assert_eq!(triple.as_deref(), Some("i386"));
+        assert_eq!(
+            kept,
+            "@x = global i32 0\ndeclare void @llvm.lifetime.start.p0(i64 immarg, ptr)\n  %1 = call i16 @llvm.ia16.in.i16(i16 %0)\n"
+                .replace("llvm.ia16", "llrm.ia16")
+        );
+    }
 }

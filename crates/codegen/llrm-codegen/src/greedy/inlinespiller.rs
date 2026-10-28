@@ -533,6 +533,7 @@ impl<'a> InlineSpiller<'a> {
             let mut folded = (**one).clone();
             folded.what = Some(Semantics { sources: vec![Loc::Mem(cell)], ..what.clone() });
             folded.uses.retain(|value| *value != reg);
+            folded.undefs.retain(|value| *value != reg);
             folded.symbol = Some(false);
             changed.push(Arc::new(folded));
         }
