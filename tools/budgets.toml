@@ -69,15 +69,6 @@ why = "measured 18.5 -> 52.2 Minstr (x2.82)"
 
 [[debt]]
 kind = "steps"
-axis = "cases"
-name = "analysis exposed-frames"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.2 -> 18.7 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
 axis = "nest"
 name = "lir coalesce"
 ratio = 3.3
