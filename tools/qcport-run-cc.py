@@ -86,12 +86,12 @@ def main() -> int:
             return 1
     cap, stall = float(os.environ.get("QCPORT_RUN_SECONDS", "900")), float(os.environ.get("QCPORT_STALL_SECONDS", "90"))
     with ThreadPoolExecutor() as pool:
-        stopped = [why for why in pool.map(lambda side: qr.run(side, qcport, stall, cap), sides.values()) if why]
+        stopped = [why for why in pool.map(lambda side: qr.run(side, qcport, stall, cap, over=qr.faults), sides.values()) if why]
     if stopped:
         print(f"a run did not finish: {', '.join(stopped)} ({work})")
         return 1
     reference, built = qr.measured(sides["borland"]), qr.measured(sides["llrm"])
-    differences = qr.verdict(reference, built)
+    differences = qr.verdict(reference, built) + (qr.pinned(len(sources), built) if level == "-Os" else [])
     if differences:
         print("QCport built through llrm-cc draws differently from the Borland build:", *differences, f"({work})", sep="\n  ")
         print("\n".join(line for side in sides.values() for line in qr.tails(side)))

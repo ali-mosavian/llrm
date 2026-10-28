@@ -554,6 +554,17 @@ mod tests {
             // `Op0HasNUW`/`Op0HasNSW`, L5552): a flag no instruction in the
             // compare's operands lacked, on a value only the compare reads.
             "combine_icmp_binop.rs",
+            // InstructionCombining.cpp's `EmitGEPOffsets` adds the offsets with
+            // `CreateAdd(Sum, Offset, "", NW.hasNoUnsignedWrap(),
+            // NW.isInBounds())`: the flags of the GEP chain's common no-wrap
+            // flags go on the new add, which only the compare reads. It
+            // reads none off an existing add.
+            "combine_gep_base.rs",
+            // InstructionCombining.cpp's `narrowMathIfNoOverflow` sets `nsw`
+            // (sext) or `nuw` (zext) on the narrow operation it builds, once
+            // `willNotOverflow` has shown the math cannot wrap at that width.
+            // It reads no flag off an existing instruction.
+            "combine_narrow.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

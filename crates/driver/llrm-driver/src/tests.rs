@@ -254,6 +254,22 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A `{ i64, i48 }` (a packed struct of 14 bytes) crossed the DAG selector as
+/// an `i48`, which nothing legalized: torture 20131127-1 was refused at -m64,
+/// "Unsupported CopyToReg Int(48) promote operand".
+#[test]
+fn a_struct_with_an_i48_member_is_returned_loaded_and_stored_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare { i64, i48 } @g()\n\
+                define { i64, i48 } @get(ptr %p) {\n  %v = load { i64, i48 }, ptr %p\n  ret { i64, i48 } %v\n}\n\
+                define void @put(ptr %p) {\n  %v = call { i64, i48 } @g()\n  store { i64, i48 } %v, ptr %p\n  ret void\n}\n";
+    for function in ["get", "put"] {
+        let made = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, function);
+        assert!(made.is_ok(), "{function}: {:?}", made.err());
+    }
+}
+
 /// The verifier read a 64-bit use of a register whose low word the entry
 /// delivers as 64 bits unwritten: `foo(unsigned short)` at m64 was
 /// "floatalloc: foo reads edi before every path writes it" under LLRM_VERIFY,

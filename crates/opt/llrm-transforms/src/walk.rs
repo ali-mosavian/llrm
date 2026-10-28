@@ -257,7 +257,8 @@ impl ProgramPass for Walk {
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
-                        let (context, function) = function_mut(module, id);
+                        let (context, function, metadata) =
+                            crate::interprocedural::function_and_metadata_mut(module, id);
                         let was = calls_of(context, function);
                         // DEVIATE (recursion): a recursive callee inlined here
                         // has its own calls peeled in
@@ -281,6 +282,7 @@ impl ProgramPass for Walk {
                             &peeled,
                             Some(&constant),
                             &mut declared,
+                            metadata,
                         )? > 0;
                         // A recursive callee's peeled copies spliced here make
                         // this body one with self-copies too (`SELF_COPIED`).
@@ -370,7 +372,8 @@ impl ProgramPass for Walk {
                                     chosen.iter().map(|one| (*one, trials[one].clone())).collect();
                                 *function_mut(module, id).1 = before.clone();
                                 let mut declared = crate::interprocedural::declared(&mut modules[at], module);
-                                let (context, function) = function_mut(module, id);
+                                let (context, function, metadata) =
+                                    crate::interprocedural::function_and_metadata_mut(module, id);
                                 crate::inline::expanded_all(
                                     context,
                                     function,
@@ -378,6 +381,7 @@ impl ProgramPass for Walk {
                                     &peeled,
                                     Some(&available),
                                     &mut declared,
+                                    metadata,
                                 )?;
                                 if declared.place(module)? > 0 {
                                     modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
@@ -576,7 +580,7 @@ impl SelfInline {
                 let frequencies = self_calls(module, &program.layout, id, self.for_size);
                 if let Some(frequencies) = frequencies {
                     let mut declared = declared(&mut modules[at], module);
-                    let (context, function) = function_mut(module, id);
+                    let (context, function, metadata) = crate::interprocedural::function_and_metadata_mut(module, id);
                     let itself = crate::inline::Candidate {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
@@ -593,7 +597,8 @@ impl SelfInline {
                         self_inlining: Some(&frequencies),
                         peeling: false,
                     };
-                    copies = crate::inline::expanded_all(context, function, &by, &available, None, &mut declared)?;
+                    copies =
+                        crate::inline::expanded_all(context, function, &by, &available, None, &mut declared, metadata)?;
                     if declared.place(module)? > 0 {
                         modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }

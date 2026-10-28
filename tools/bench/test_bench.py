@@ -3,6 +3,8 @@
 import re
 import sys
 import json
+import subprocess
+import pytest
 import unittest
 from pathlib import Path
 
@@ -423,11 +425,15 @@ def test_reference_builds_find_bench_io_in_the_volume_root(tmp_path):
     assert (tmp_path / "bench_io.h").read_bytes() == (bench.BENCH / "bench_io.h").read_bytes()
 
 
-def test_llrm_c_benches_find_the_os_layer_header(tmp_path):
-    """bench_io.h includes llrm_os.h: bench.py built C without -I for it, so jpeg's C variants did not compile."""
-    flag, directory = bench.c_include_arguments(tmp_path)
-    assert flag == "-I"
-    assert (Path(directory) / "llrm_os.h").exists()
+def test_a_c_benches_os_layer_header_is_the_rows_not_a_stale_one(tmp_path):
+    """A `-I` for llrm-c's llrm_os.h shadowed llrm-cc's: jpeg and stft (the file readers) built, then printed 0 and -1 (a failed open)."""
+    if not (bench.BIN / "llrm-cc").is_file():
+        pytest.skip("no llrm-cc in the dist")
+    variant = next(one for one in bench.variants(bench.BENCH / "stft_fixed") if one.language == "c")
+    (_, arguments, _), *_ = bench.compiles(variant, "Os", tmp_path, "stft")
+    done = subprocess.run([str(bench.BIN / "llrm-cc"), *arguments, "-E", "-H", "-o", "/dev/null"], env=bench.c_environment(variant), capture_output=True, text=True)
+    headers = [line for line in done.stderr.splitlines() if line.endswith("llrm_os.h")]
+    assert headers and not any(str(tmp_path) in line for line in headers), done.stderr
 
 
 def test_without_the_microsoft_install_its_basic_is_skipped_by_name_and_ours_is_not(monkeypatch, tmp_path):
@@ -833,3 +839,12 @@ def test_the_parity_kernels_that_folded_to_a_constant_read_their_inputs_at_run_t
     for name in ("branch", "loop", "qlight", "qmove"):
         assert "volatile" in (bench.BENCH / "parity" / name / f"{name}.c").read_text()
         assert re.search(r"^read ", (bench.BENCH / "parity" / name / f"{name}.bas").read_text(), re.M)
+
+
+def test_a_c_bench_row_builds_and_links(tmp_path):
+    """llrm-c built C benches that dosbatch then linked for llrm-cc's `main_` (6524193a71): all 48 `c` rows failed with `main_` undefined in start.asm."""
+    if not (bench.BIN / "llrm-cc").is_file():
+        pytest.skip("no llrm-cc in the dist")
+    variant = next(one for one in bench.variants(bench.BENCH / "bintree") if one.language == "c")
+    built = bench.build(variant, "Os", tmp_path, "bintree")
+    assert not isinstance(built, str), built
