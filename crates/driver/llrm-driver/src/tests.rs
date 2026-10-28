@@ -1202,3 +1202,15 @@ fn a_one_slot_frame_at_m64_is_push_and_pop() {
     assert!(lines.contains(&"push rax") && lines.contains(&"pop rcx"), "{listing}");
     assert!(!lines.iter().any(|line| line.starts_with("sub rsp") || line.starts_with("add rsp")), "{listing}");
 }
+
+/// Two byte stores of a value and of its high byte stopped the encoder at
+/// m64 (`mov [bp+13] width 4, dil`): the high byte's store is `MOV8mr_NOREX`
+/// and its cell was taken for a dword.
+#[test]
+fn a_store_of_the_high_byte_is_a_byte_store() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i32 %o) {\n  %h = alloca [7 x i8], align 1\n  %lo = trunc i32 %o to i8\n  %p3 = getelementptr i8, ptr %h, i64 3\n  store i8 %lo, ptr %p3\n  %s = lshr i32 %o, 8\n  %hi = trunc i32 %s to i8\n  %p4 = getelementptr i8, ptr %h, i64 4\n  store i8 %hi, ptr %p4\n  call void @use(ptr %h)\n  ret void\n}\n";
+    crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+}
