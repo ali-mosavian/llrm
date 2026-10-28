@@ -169,6 +169,10 @@ impl FunctionPass for CgpAddr {
         // nothing after this needs loop-closed form, and isel cannot
         // fold a phi into an addressing mode.
         let merged = crate::emptyblocks::eliminated(unit.context, unit.function);
+        // `dupRetToEnableTailCallOpts`: a return after a tail call is the
+        // call's.
+        let merged =
+            crate::cgpretdup::returns_duplicated(unit.context, &analyses.outer().globals, unit.function) | merged;
         let closed = trivial_phis(unit.context, unit.layout, unit.function);
         let branched = crate::cgpbranch::branches_optimized(
             unit.context,
@@ -208,6 +212,7 @@ impl FunctionPass for CgpAddr {
                 &*lowering,
                 analyses.outer().target().spaces(),
                 unit.function,
+                false,
             ),
             None => false,
         };
@@ -251,6 +256,7 @@ impl FunctionPass for CgpAddr {
                     &*lowering,
                     analyses.outer().target().spaces(),
                     unit.function,
+                    true,
                 ),
                 None => false,
             };

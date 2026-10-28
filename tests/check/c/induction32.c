@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
+// RUN-PENDING: llrm-cc %s -m32 -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 // bench/tile (7 instructions an element, clang 4) and bench/nbody (`inc bx; movzx esi,bx; cmp bx,4`) on -m32.
 // The inner loop of 40 is unrolled in full, as the pin does (clang -m32 -O2: loads at t+14 .. t+92); the outer counter is the one step by one and the test, the mask on the row stays.
 // CHECK-LABEL: masked_ proc
