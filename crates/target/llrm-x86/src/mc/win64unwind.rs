@@ -47,6 +47,19 @@ fn gpr(register: Register) -> Option<u8> {
     (register.is_gpr64() && register != Register::RIP).then(|| register.number() as u8)
 }
 
+/// A 64-bit register's hardware number by its name (`rbx` is 3), for a
+/// producer that names registers as the register file does.
+pub fn hardware(name: &str) -> Option<u8> {
+    const NAMES: [&str; 16] =
+        ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
+    NAMES.iter().position(|one| *one == name).map(|number| number as u8)
+}
+
+/// Whether a function must keep the register of hardware number `number`.
+pub fn is_nonvolatile(number: u8) -> bool {
+    NONVOLATILE.contains(&number)
+}
+
 fn nonvolatile(register: Register) -> Option<u8> {
     gpr(register).filter(|number| NONVOLATILE.contains(number))
 }

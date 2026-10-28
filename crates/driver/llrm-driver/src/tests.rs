@@ -1559,3 +1559,24 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
 }
+
+/// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
+/// layout: the frames the compiler declared (`.seh_*`) against the bytes read
+/// back from the same code agree.
+#[test]
+fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @g(i32 %b)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %a\n  ret i32 %t\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let object =
+        llrm_codegen::backend::objbuild::built(&built, "f.ll", llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
+            .unwrap();
+    let frame = object.frames.first().expect("a declared frame");
+    assert!(!frame.seh.is_empty(), "no .seh_* directive reached the frame");
+    let section = &object.sections[frame.section];
+    let body = &section.image[frame.offset..frame.offset + frame.length];
+    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
+    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
+    assert_eq!(declared, read, "{:?}", frame.seh);
+}

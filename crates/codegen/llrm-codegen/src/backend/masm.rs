@@ -748,6 +748,41 @@ impl CfiState {
     }
 }
 
+/// The `.seh_*` directive a prologue instruction needs
+/// (`X86FrameLowering::BuildCFI`'s Win64 arm): `.seh_pushreg` for a push of a
+/// register the function must keep, `.seh_stackalloc` for `sub rsp` and for a
+/// push of any other register, `.seh_setframe` where the frame register is set
+/// from `rsp`. `hardware` is a register's number in the instruction set.
+fn seh_after(
+    what: &Semantics,
+    bp: &Loc,
+    hardware: &dyn Fn(&Loc) -> Option<u8>,
+) -> Option<Item> {
+    use llrm_object::Seh;
+    let imm = |loc: &Loc| match loc {
+        Loc::Imm(imm) => Some(imm.value),
+        _ => None,
+    };
+    let seh = match (what.op, what.name.as_deref()) {
+        (Operation::Push, _) => {
+            let number = hardware(what.sources.first()?)?;
+            if llrm_x86::mc::win64unwind::is_nonvolatile(number) { Seh::PushReg(number) } else { Seh::StackAlloc(8) }
+        }
+        (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+            Seh::SetFrame(hardware(bp)?, 0)
+        }
+        (Operation::Address, _) if what.dests.first() == Some(bp) => match what.sources.first() {
+            Some(Loc::Mem(from)) => Seh::SetFrame(hardware(bp)?, u64::try_from(from.offset).ok()?),
+            _ => return None,
+        },
+        (Operation::Binary, Some("sub")) if what.dests.first() == Some(&sp_reg()) => {
+            Seh::StackAlloc(u64::try_from(what.sources.get(1).and_then(imm)?).ok()?)
+        }
+        _ => return None,
+    };
+    Some(Item::Seh(seh))
+}
+
 fn reg(register: RegId) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
@@ -1517,6 +1552,10 @@ fn built(
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
     let mut cfi =
         numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let hardware = |loc: &Loc| match loc {
+        Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
+        _ => None,
+    };
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
@@ -1525,6 +1564,7 @@ fn built(
         for (at, one) in enter.iter().enumerate() {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
+            entry_items.extend(seh_after(one, &bp, &hardware));
             if at >= pushes
                 && let Loc::Reg(pushed) = &one.sources[0]
                 && let Some(register) = dwarf(pushed.register)
