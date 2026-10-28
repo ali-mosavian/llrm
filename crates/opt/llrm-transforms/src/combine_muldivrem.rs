@@ -960,7 +960,24 @@ pub(crate) fn take_log2(
         return Some(if do_fold { c.create_select(at, cond, log_x, log_y) } else { op });
     }
 
-    // DEVIATE 3: log2(umin(X, Y)) -> umin(log2(X), log2(Y)), and umax.
+    // log2(umin(X, Y)) -> umin(log2(X), log2(Y))
+    // log2(umax(X, Y)) -> umax(log2(X), log2(Y))
+    if has_one_use(c, op) {
+        for base in ["umin", "umax"] {
+            let args = {
+                let q = query(c, None);
+                pattern::intrinsic_call(&q, op, &format!("llvm.{base}")).map(|(_, args)| args.to_vec())
+            };
+            // Use AssumeNonZero as false here. Otherwise we can hit case where
+            // log2(umax(X, Y)) != umax(log2(X), log2(Y)) (because overflow).
+            if let Some([x, y]) = args.as_deref()
+                && let Some(log_x) = take_log2(c, at, *x, depth, false, do_fold)
+                && let Some(log_y) = take_log2(c, at, *y, depth, false, do_fold)
+            {
+                return Some(if do_fold { c.create_intrinsic(at, base, ty, &[log_x, log_y]) } else { op });
+            }
+        }
+    }
 
     // log2(X + 1) IIF X[0,1] -> X
     if width(c, op) != 1

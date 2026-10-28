@@ -1053,3 +1053,25 @@ b0:
     assert!(after.contains("call i32 @llvm.abs.i32(i32 %x, i1 false)"), "{after}");
     assert!(!after.contains("mul"), "{after}");
 }
+
+/// `log2(umax(X, Y))` is `umax(log2(X), log2(Y))`: a divide by the larger of
+/// two powers of two is a shift by the larger exponent. Stayed a divide.
+#[test]
+fn a_division_by_a_max_of_two_powers_of_two_is_a_shift_by_the_max_exponent() {
+    let after = combined_declaring(
+        "declare i32 @llvm.umax.i32(i32, i32)
+
+define i32 @f(i32 %x, i32 %a, i32 %b) {
+b0:
+  %p = shl nuw i32 1, %a
+  %q = shl nuw i32 1, %b
+  %m = call i32 @llvm.umax.i32(i32 %p, i32 %q)
+  %r = udiv i32 %x, %m
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i32 @llvm.umax.i32(i32 %a, i32 %b)"), "{after}");
+    assert!(after.contains("lshr i32 %x,"), "{after}");
+    assert!(!after.contains("udiv"), "{after}");
+}
