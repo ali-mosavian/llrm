@@ -1473,3 +1473,11 @@ def test_a_variable_the_caller_set_is_never_replaced_and_a_missing_toolchain_nam
     pin = tmp_path / "pin"
     pin.write_text("d1106deb71cc81016406a1917d0508d2df296266\n")
     assert gate.toolchain_env({"HOME": str(tmp_path), "LLRM_OW": "/mine"}, pin) == {}
+
+
+def test_a_change_to_llrm_cc_runs_the_steps_and_the_language_llrm_c_changes_did():
+    """Only crates/frontends/llrm-c/** owned the C steps: a llrm-cc change gated without qcport, measure and the C programs."""
+    old, new = gate.plan(["crates/frontends/llrm-c/src/lib.rs"]), gate.plan(["crates/driver/llrm-cc/src/lib.rs"])
+    for step in ("qcport", "oracle-qcport", "measure"):
+        assert (step in old.steps) == (step in new.steps), (step, new.steps)
+    assert "c" in new.languages, new.languages

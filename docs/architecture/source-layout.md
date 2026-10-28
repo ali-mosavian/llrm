@@ -50,7 +50,7 @@ in [readme.md](readme.md).
 | `target/llrm-elf`, `llrm-elf32`, `llrm-elf64` | ELF common part and the 32- and 64-bit writers |
 | `target/llrm-coff`, `llrm-coff32`, `llrm-coff64` | COFF common part and the 32- and 64-bit writers |
 | `mc/llrm-macho` | Mach-O writer |
-| `mc/llrm-debuginfo` | DWARF 4 and 5 debug sections |
+| `mc/llrm-dwarf` | DWARF 4 and 5 debug sections |
 
 ## Other top-level paths
 

@@ -1636,38 +1636,34 @@ pub(crate) fn first_insertion_point(
         .expect("a terminated block")
 }
 
-/// The expander entry points `widenIVUse` and `createWideIV` call that
-/// loop-products-slope is translating (`isInsertedInstruction`, `hoistIVInc`,
-/// `canReuseFlagsFromOriginalIVInc`). DEVIATE 16 until they land: each answers
-/// "no", so the wide increment is cloned for the narrow one (the same value
-/// twice, which `gvn` merges), and an unused expansion is not removed.
+/// The expander entry points `widenIVUse` and `createWideIV` call.
 mod seam {
-    use super::{Edit, InstId};
+    use super::{Edit, Expander, InstId};
 
     pub fn can_reuse_flags_from_original_iv_inc(
-        _e: &Edit,
-        _orig_phi: InstId,
-        _wide_phi: InstId,
-        _orig_inc: InstId,
-        _wide_inc: InstId,
+        e: &Edit,
+        orig_phi: InstId,
+        wide_phi: InstId,
+        orig_inc: InstId,
+        wide_inc: InstId,
     ) -> bool {
-        false
+        Expander::can_reuse_flags_from_original_iv_inc(e.function, orig_phi, wide_phi, orig_inc, wide_inc)
     }
 
     pub fn hoist_iv_inc(
-        _e: &mut Edit,
-        _inc: InstId,
-        _insert_pos: InstId,
-        _recompute_poison_flags: bool,
+        e: &mut Edit,
+        inc: InstId,
+        insert_pos: InstId,
+        recompute_poison_flags: bool,
     ) -> bool {
-        false
+        e.rewriter.hoist_iv_inc(&e.env, e.context, e.function, e.se, inc, insert_pos, recompute_poison_flags)
     }
 
     pub fn is_inserted_instruction(
-        _e: &Edit,
-        _inst: InstId,
+        e: &Edit,
+        inst: InstId,
     ) -> bool {
-        false
+        e.rewriter.is_inserted_instruction(&inst)
     }
 }
 

@@ -109,6 +109,10 @@ impl Collection<'_, '_> {
             return solution;
         }
         assert_eq!(solution.len(), self.uses.len(), "Malformed solution!");
+        llrm_support::debug!("lsr", "chosen {:?} against {:?} as it stands", solution_cost.c, self.baseline_cost.c);
+        for (at, &chosen) in solution.iter().enumerate() {
+            llrm_support::debug!("lsr", "  use {at} {:?}: {:?}", self.uses[at].kind, self.uses[at].formulae[chosen]);
+        }
         // DEVIATE LU3: a rewrite that needs more registers than the loop and
         // than the target has, and costs two instructions more, is dropped.
         let budget = self.tti.number_of_gpr_registers().saturating_sub(1);
