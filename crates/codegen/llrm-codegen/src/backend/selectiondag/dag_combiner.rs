@@ -1653,6 +1653,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     ) -> Option<SDValue> {
         let (chain, value, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
         let NodeData::Mem(info) = self.dag.node(node).data else { return None };
+        // DEVIATE SD256: the call argument the builder cast to its bits stays
+        // a float store when the load can never become an integer load
+        // (`visit_bitcast`: volatile or extending): the cast alone would cost
+        // a temporary.
+        if matches!(info.base, super::dag::MemBase::CallArgument(_))
+            && self.dag.opcode(value) == ISD::BitCast
+            && self.dag.value_type(value) == EVT::I32
+        {
+            let source = self.dag.operand(value, 0);
+            if self.dag.value_type(source) == EVT::Simple(MVT::F32)
+                && self.dag.opcode(source) == ISD::Load
+                && matches!(
+                    self.dag.node(source).data,
+                    NodeData::Mem(load) if load.volatile || load.ext.is_some()
+                )
+            {
+                let float = MemInfo { mem_vt: EVT::Simple(MVT::F32), ..info };
+                return Some(self.dag.get_store(chain, source, ptr, float));
+            }
+        }
         // Walk up the chain skipping the memory nodes this store does not
         // alias, on it and on the stores chained below it.
         if let Some(better) = self.find_better_neighbor_chains(node) {
