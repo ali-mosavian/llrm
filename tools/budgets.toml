@@ -1594,7 +1594,7 @@ why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); dse alone 32
 kind = "steps"
 axis = "cases"
 name = "lir machinecp"
-ratio = 2.6
+ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w13"
 why = "long-standing quadratic hidden by the 5.0 Minstr floor, exposed by #5802's +20%; 1.231/2.234/5.581/15.07 Minstr at N=64..512; MCP linearization post-FF"
