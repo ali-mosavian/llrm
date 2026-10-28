@@ -409,3 +409,200 @@ fn a_sext_of_a_trunc_is_a_sext_or_a_shift_pair() {
         "  %0 = shl i32 %x, 24\n  %1 = ashr i32 %0, 31\n  ret i32 %1\n",
     );
 }
+
+/// `commonCastTransforms`: a cast of a select whose condition is not a compare
+/// goes into the arms (`FoldOpIntoSelect`): the constant arm folds, the other
+/// gets the cast. Stayed a select of narrow values before.
+#[test]
+fn a_zext_of_a_select_with_a_constant_arm_goes_into_the_arms() {
+    check(
+        "i32",
+        "i1 %c, i8 %y",
+        "  %s = select i1 %c, i8 1, i8 %y\n  %r = zext i8 %s to i32\n  ret i32 %r\n",
+        "  %0 = zext i8 %y to i32\n  %1 = select i1 %c, i32 1, i32 %0\n  ret i32 %1\n",
+    );
+}
+
+/// `trunc(smax(zext(a) - zext(b), 0))` is `usub.sat(a, b)`. Stayed a wide
+/// subtract, a max and a truncate before.
+#[test]
+fn a_truncated_clamped_difference_of_extensions_is_a_saturating_subtract() {
+    let text = "declare i32 @llvm.smax.i32(i32, i32)
+
+define i16 @f(i16 %a, i16 %b) {
+b0:
+  %x = zext i16 %a to i32
+  %y = zext i16 %b to i32
+  %d = sub i32 %x, %y
+  %m = call i32 @llvm.smax.i32(i32 %d, i32 0)
+  %r = trunc i32 %m to i16
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i16 @llvm.usub.sat.i16(i16 %a, i16 %b)"), "{out}");
+}
+
+/// `trunc (ctlz_i32 (zext A), B)` is `ctlz_i16 (A, B) + 16`. Stayed a 32-bit
+/// count and a truncate before.
+#[test]
+fn a_truncated_ctlz_of_an_extension_is_a_narrow_ctlz_plus_the_width_difference() {
+    let text = "declare i32 @llvm.ctlz.i32(i32, i1)
+
+define i16 @f(i16 %a) {
+b0:
+  %z = zext i16 %a to i32
+  %c = call i32 @llvm.ctlz.i32(i32 %z, i1 false)
+  %r = trunc i32 %c to i16
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i16 @llvm.ctlz.i16(i16 %a, i1 false)"), "{out}");
+    assert!(out.contains("add i16 %0, 16"), "{out}");
+}
+
+/// `canEvaluateTruncated` of a min, max or abs call: the call is evaluated in
+/// the narrow type. Stayed a wide call and a truncate before.
+#[test]
+fn a_truncated_umax_and_abs_of_extensions_are_narrow_calls() {
+    let text = "declare i32 @llvm.umax.i32(i32, i32)
+declare i32 @llvm.abs.i32(i32, i1)
+
+define i16 @f(i16 %a, i16 %b) {
+b0:
+  %x = zext i16 %a to i32
+  %y = zext i16 %b to i32
+  %m = call i32 @llvm.umax.i32(i32 %x, i32 %y)
+  %r = trunc i32 %m to i16
+  ret i16 %r
+}
+
+define i16 @g(i16 %a) {
+b0:
+  %x = sext i16 %a to i32
+  %m = call i32 @llvm.abs.i32(i32 %x, i1 false)
+  %r = trunc i32 %m to i16
+  ret i16 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    for name in ["f", "g"] {
+        let (context, function) = module.function_mut(name).expect("a function");
+        crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    }
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i16 @llvm.umax.i16(i16 %a, i16 %b)"), "{out}");
+    assert!(out.contains("call i16 @llvm.abs.i16(i16 %a, i1 false)"), "{out}");
+}
+
+/// `trunc` and `sext` of an `scmp` result (-1, 0 or 1) change the intrinsic's
+/// result type. Stayed an `i8` compare and a cast before.
+#[test]
+fn a_trunc_or_sext_of_scmp_changes_its_result_type() {
+    let text = "declare i8 @llvm.scmp.i8.i32(i32, i32)
+
+define i4 @f(i32 %x, i32 %y) {
+b0:
+  %c = call i8 @llvm.scmp.i8.i32(i32 %x, i32 %y)
+  %r = trunc i8 %c to i4
+  ret i4 %r
+}
+
+define i32 @g(i32 %x, i32 %y) {
+b0:
+  %c = call i8 @llvm.scmp.i8.i32(i32 %x, i32 %y)
+  %r = sext i8 %c to i32
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    for name in ["f", "g"] {
+        let (context, function) = module.function_mut(name).expect("a function");
+        crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    }
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i4 @llvm.scmp.i4.i32(i32 %x, i32 %y)"), "{out}");
+    assert!(out.contains("call i32 @llvm.scmp.i32.i32(i32 %x, i32 %y)"), "{out}");
+}
+
+/// `trunc (select (icmp ult A, 256), A, sext (icmp sgt A, 0))` is `trunc
+/// (smin (smax (0, A), 255))`. Stayed a compare, a select and a truncate.
+#[test]
+fn a_truncated_saturation_select_is_a_smax_and_a_smin() {
+    let text = "define i8 @f(i32 %a) {
+b0:
+  %lt = icmp ult i32 %a, 256
+  %gt = icmp sgt i32 %a, 0
+  %s = sext i1 %gt to i32
+  %sel = select i1 %lt, i32 %a, i32 %s
+  %r = trunc i32 %sel to i8
+  ret i8 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i32 @llvm.smax.i32(i32 0, i32 %a)"), "{out}");
+    assert!(out.contains("call i32 @llvm.smin.i32(i32 %0, i32 255)"), "{out}");
+}
+
+/// `narrowFunnelShift`: a rotate done in 32 bits and truncated to 8 is
+/// `fshl.i8` of the narrow value. Stayed two wide shifts, an or and a truncate.
+#[test]
+fn a_truncated_wide_rotate_is_a_narrow_funnel_shift() {
+    let text = "define i8 @f(i8 %x, i32 %amt) {
+b0:
+  %zx = zext i8 %x to i32
+  %n = and i32 %amt, 7
+  %sub = sub i32 8, %n
+  %shl = shl i32 %zx, %n
+  %shr = lshr i32 %zx, %sub
+  %or = or i32 %shl, %shr
+  %r = trunc i32 %or to i8
+  ret i8 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i8 @llvm.fshl.i8(i8 %"), "{out}");
+}

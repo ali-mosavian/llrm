@@ -20,15 +20,8 @@
 //! `foldExtractionOfVectorDeinterleave`, the shuffle step of
 //! `commonCastTransforms` and the `vscale` folds are not translated.
 //!
-//! DEVIATE 2 (temporary): `FoldOpIntoSelect`, the select step of
-//! `commonCastTransforms`, is left out until the select family lands it.
-//!
-//! DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
-//! `usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are
-//! left out until the Builder can declare an intrinsic (`combine_build`
-//! DEVIATE 2). So is the `llvm.abs` and min/max call case of
-//! `canEvaluateTruncated` and `EvaluateInDifferentType`: a call is not
-//! evaluable in the narrow type here.
+//! DEVIATE 4: the folds that build `uadd.sat` are not made: the selector has
+//! no `uadd.sat` lowering (`trunc(u/smin(zext a + zext b, MAX))`).
 //!
 //! DEVIATE 5: integers wider than 128 bits are left alone (masks are `u128`);
 //! a constant `ConstantExpr` would keep as an expression, or a shift amount
@@ -455,7 +448,33 @@ impl Evaluator<'_, '_> {
                     + u32::from(op == CastOp::FPToSI);
                 bw >= min
             }
-            // DEVIATE 4: llvm.abs and the min/max intrinsics.
+            // `llvm.abs`, and the min/max intrinsics performed in the narrow
+            // type when each operand has zero high bits (umin/umax) or enough
+            // sign bits (smin/smax).
+            Opcode::Call(_) => {
+                let Some(result) = inst.result else { return false };
+                let q = query(c, Some(self.cxt));
+                let max_significant = |op: Operand| orig_bits + 1 - compute_num_sign_bits(&q, op, 0);
+                if let Some((_, args)) = pattern::intrinsic_call(&q, Operand::Value(result), "llvm.abs") {
+                    let [arg, _] = *args else { return false };
+                    return max_significant(arg) <= bw && self.can_evaluate(arg, ty, Pred::Truncated);
+                }
+                for (base, signed) in [("umin", false), ("umax", false), ("smin", true), ("smax", true)] {
+                    let Some((_, args)) = pattern::intrinsic_call(&q, Operand::Value(result), &format!("llvm.{base}"))
+                    else {
+                        continue;
+                    };
+                    let [lhs, rhs] = *args else { return false };
+                    let fits = if signed {
+                        max_significant(lhs) <= bw && max_significant(rhs) <= bw
+                    } else {
+                        let high = mask(orig_bits) & !mask(bw);
+                        known::masked_value_is_zero(&q, lhs, high, 0) && known::masked_value_is_zero(&q, rhs, high, 0)
+                    };
+                    return fits && self.all(&[lhs, rhs], ty, Pred::Truncated);
+                }
+                false
+            }
             _ => false,
         }
     }
@@ -606,6 +625,31 @@ fn evaluate_in_different_type_impl(
         let inst = c.function.instruction(i);
         (inst.opcode.clone(), inst.flags, inst.operands.clone(), inst.ty)
     };
+    if matches!(opcode, Opcode::Call(_)) {
+        let result = value_of(c, i);
+        let narrow = {
+            let q = query(c, None);
+            let abs = pattern::intrinsic_call(&q, result, "llvm.abs").map(|(_, args)| ("abs", args.to_vec()));
+            abs.or_else(|| {
+                ["umin", "umax", "smin", "smax"].into_iter().find_map(|base| {
+                    pattern::intrinsic_call(&q, result, &format!("llvm.{base}")).map(|(_, args)| (base, args.to_vec()))
+                })
+            })
+        };
+        let (base, args) = narrow.expect("`can_evaluate` accepted a call");
+        let evaluated = if base == "abs" { &args[..1] } else { &args[..2] };
+        let mut narrowed: Vec<Operand> =
+            evaluated.iter().map(|&a| evaluate_in_different_type_impl(c, a, ty, is_signed, processed)).collect();
+        if base == "abs" {
+            let i1 = c.context.types.int(1);
+            narrowed.push(c.int(i1, 0));
+        }
+        let result = c.create_intrinsic(i, base, ty, &narrowed);
+        if !shared::has_one_use(c, v) {
+            processed.insert(v, result);
+        }
+        return result;
+    }
     let (new_opcode, new_flags, new_operands) = match opcode {
         Opcode::Binary(op) => {
             let lhs = evaluate_in_different_type_impl(c, operands[0], ty, is_signed, processed);
@@ -649,7 +693,6 @@ fn evaluate_in_different_type_impl(
         Opcode::Cast(cast @ (CastOp::FPToUI | CastOp::FPToSI)) => {
             (Opcode::Cast(cast), Flags::default(), vec![operands[0]])
         }
-        // DEVIATE 4: calls (llvm.abs and the min/max intrinsics).
         other => unreachable!("`can_evaluate` accepted {other:?}"),
     };
     let new = c.insert_before(i, new_opcode, ty, new_operands, new_flags);
@@ -704,6 +747,37 @@ fn is_eliminable_cast_pair(
     Some(result)
 }
 
+/// `scmp(x, y)` or `ucmp(x, y)` as `base` and its operands, when `v` is a call.
+fn cmp_intrinsic(
+    c: &Combiner,
+    v: Operand,
+) -> Option<(&'static str, Operand, Operand)> {
+    let q = query(c, None);
+    ["scmp", "ucmp"]
+        .into_iter()
+        .find_map(
+            |base| {
+                let (_, args) = pattern::intrinsic_call(&q, v, &format!("llvm.{base}"))?;
+                let [lhs, rhs] = *args else { return None };
+                Some((base, lhs, rhs))
+            },
+        )
+}
+
+/// `Builder.CreateIntrinsic(DestTy, scmp/ucmp, {x, y})`.
+fn create_cmp_intrinsic(
+    c: &mut Combiner,
+    at: InstId,
+    base: &str,
+    ty: TypeId,
+    lhs: Operand,
+    rhs: Operand,
+) -> Operand {
+    let result = bits_of(c, ty);
+    let operand = width(c, lhs);
+    c.create_intrinsic_named(at, &format!("llvm.{base}.i{result}.i{operand}"), ty, &[lhs, rhs])
+}
+
 /// `commonCastTransforms` (:223): the transforms common to all cast visitors.
 pub fn common_cast_transforms(
     c: &mut Combiner,
@@ -729,7 +803,34 @@ pub fn common_cast_transforms(
         let from = c.function.instruction(inner).operands[0];
         return Some(c.replace_with_new(inst, Opcode::Cast(new_op), ty, vec![from], Flags::default()));
     }
-    // DEVIATE 2: FoldOpIntoSelect of a cast of a select.
+    // We are casting a select. Try to fold the cast into the select if the
+    // select does not have a compare instruction with matching operand types
+    // or the select is likely better done in a narrow type. Creating a select
+    // with operands that are different sizes than its condition may inhibit
+    // other folds and lead to worse codegen.
+    if let Some(select) = def_of(c, src).filter(|&def| c.function.instruction(def).opcode == Opcode::Select) {
+        let cmp = def_of(c, c.function.instruction(select).operands[0])
+            .filter(|&def| matches!(
+                c.function.instruction(def).opcode,
+                Opcode::ICmp(_) | Opcode::FCmp(_)
+            ));
+        let compares_select_type =
+            cmp.is_some_and(|cmp| c.type_of(c.function.instruction(cmp).operands[0]) == c.type_of(src));
+        let narrows = matches!(
+            c.function.instruction(inst).opcode,
+            Opcode::Cast(CastOp::Trunc)
+        )
+            && matches!(
+                (c.context.types.int_bits(c.type_of(src)), c.context.types.int_bits(ty)),
+                (Some(from), Some(to)) if should_change_type(c, from, to)
+            );
+        if !compares_select_type || narrows {
+            let found = c.fold_op_into_select(inst, select, false, false);
+            if !matches!(found, Visit::None) {
+                return Some(found);
+            }
+        }
+    }
 
     // If we are casting a PHI, then fold the cast into the PHI.
     if let Some(phi) = def_of(c, src)
@@ -831,8 +932,123 @@ fn narrow_bin_op(
         }
         _ => {}
     }
-    // DEVIATE 4: narrowFunnelShift (fshl, fshr).
-    None
+    narrow_funnel_shift(c, inst)
+}
+
+/// `narrowFunnelShift`: funnel and rotate shifts may occur in a wider type than
+/// necessary because of type promotion rules. Narrow the inputs and make a
+/// funnel shift.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L810>
+fn narrow_funnel_shift(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let src = c.function.instruction(inst).operands[0];
+    let dest_ty = c.function.instruction(inst).ty;
+    let (wide_w, narrow_w) = (width(c, src), bits_of(c, dest_ty));
+    // Bail out on strange types.
+    if !narrow_w.is_power_of_two() {
+        return None;
+    }
+    let found = {
+        let q = query(c, Some(inst));
+        // First, find an or'd pair of opposite shifts:
+        // trunc (or (lshr ShVal0, ShAmt0), (shl ShVal1, ShAmt1))
+        let (or0, or1, _) = binop(&q, src, BinaryOp::Or)?;
+        let logical_shift = |v: Operand| {
+            let shl = binop(&q, v, BinaryOp::Shl).map(|(x, a, _)| (BinaryOp::Shl, x, a));
+            let shift = shl.or_else(|| binop(&q, v, BinaryOp::LShr).map(|(x, a, _)| (BinaryOp::LShr, x, a)))?;
+            shared::has_one_use(c, v).then_some(shift)
+        };
+        let (op0, mut val0, mut amt0) = logical_shift(or0)?;
+        let (op1, mut val1, mut amt1) = logical_shift(or1)?;
+        if op0 == op1 {
+            return None;
+        }
+        // Canonicalize to or(shl(ShVal0, ShAmt0), lshr(ShVal1, ShAmt1)).
+        if op0 == BinaryOp::LShr {
+            std::mem::swap(&mut val0, &mut val1);
+            std::mem::swap(&mut amt0, &mut amt1);
+        }
+        let and_with = |v: Operand, mask_value: u128| {
+            let (a, b, _) = binop(&q, v, BinaryOp::And)?;
+            [(a, b), (b, a)]
+                .into_iter()
+                .find_map(|(x, m)| q.int_constant(m).filter(|&(m, _)| m == mask_value).map(|_| x))
+        };
+        // Match the shift amount operands for a funnel/rotate pattern. This
+        // always matches a subtraction on the R operand.
+        let match_shift_amount = |l: Operand, r: Operand, width: u32| -> Option<Operand> {
+            // The shift amounts may add up to the narrow bit width:
+            // (shl ShVal0, L) | (lshr ShVal1, Width - L)
+            // If this is a funnel shift (different operands are shifted), then
+            // the shift amount can not over-shift (create poison) in the
+            // narrow type.
+            let hi_bit_mask = mask(wide_w) & !mask(narrow_w.ilog2());
+            if (val0 == val1 || known::masked_value_is_zero(&q, l, hi_bit_mask, 0))
+                && let Some((minuend, subtrahend, _)) = binop(&q, r, BinaryOp::Sub)
+                && shared::has_one_use(c, r)
+                && q.int_constant(minuend).is_some_and(|(m, _)| m == u128::from(width))
+                && subtrahend == l
+            {
+                return Some(l);
+            }
+            // The following patterns currently only work for rotation
+            // patterns.
+            if val0 != val1 {
+                return None;
+            }
+            // The shift amount may be masked with negation:
+            // (shl ShVal0, (X & (Width - 1))) | (lshr ShVal1, ((-X) & (Width -
+            // 1)))
+            let mask_value = u128::from(width - 1);
+            let negated = |v: Operand| {
+                let inner = and_with(v, mask_value)?;
+                pattern::neg(&q, inner).map(|(_, x, _)| x)
+            };
+            if let (Some(x), Some(neg_of)) = (and_with(l, mask_value), negated(r))
+                && x == neg_of
+            {
+                return Some(x);
+            }
+            // Same as above, but the shift amount may be extended after
+            // masking:
+            let extended = |v: Operand| pattern::cast(&q, v, CastOp::ZExt).map(|(_, _, inner)| inner);
+            if let (Some(le), Some(re)) = (extended(l), extended(r))
+                && let (Some(x), Some(neg_of)) = (and_with(le, mask_value), negated(re))
+                && x == neg_of
+            {
+                return Some(x);
+            }
+            None
+        };
+        let (amount, is_fshl) = match match_shift_amount(amt0, amt1, narrow_w) {
+            Some(amount) => (amount, true),
+            None => (match_shift_amount(amt1, amt0, narrow_w)?, false),
+        };
+        // The right-shifted value must have high zeros in the wide type (for
+        // example from 'zext', 'and' or 'shift'). High bits of the
+        // left-shifted value are truncated, so those do not matter.
+        let high = mask(wide_w) & !mask(narrow_w);
+        if !known::masked_value_is_zero(&q, val1, high, 0) {
+            return None;
+        }
+        (amount, is_fshl, val0, val1)
+    };
+    let (amount, is_fshl, val0, val1) = found;
+    // Adjust the width of ShAmt for the narrowed funnel shift: zero-extend if
+    // it is narrower than the destination type, truncate if wider.
+    let amount_w = width(c, amount);
+    let narrow_amount = match amount_w.cmp(&narrow_w) {
+        std::cmp::Ordering::Equal => amount,
+        std::cmp::Ordering::Less => c.create_cast(inst, CastOp::ZExt, amount, dest_ty, Flags::default()),
+        std::cmp::Ordering::Greater => c.create_cast(inst, CastOp::Trunc, amount, dest_ty, Flags::default()),
+    };
+    let x = c.create_cast(inst, CastOp::Trunc, val0, dest_ty, Flags::default());
+    let y = if val0 == val1 { x } else { c.create_cast(inst, CastOp::Trunc, val1, dest_ty, Flags::default()) };
+    let call = c.create_intrinsic(inst, if is_fshl { "fshl" } else { "fshr" }, dest_ty, &[x, y, narrow_amount]);
+    Some(Visit::Replace(call))
 }
 
 /// `visitTrunc`'s steps for a truncate to `i1` (:1102).
@@ -1007,8 +1223,25 @@ pub fn visit_trunc(
         return r;
     }
 
-    // DEVIATE 4: trunc(u/smin(zext(a) + zext(b), MAX)) --> uadd.sat(a, b)
-    // DEVIATE 4: trunc(smax(zext(a) - zext(b), 0)) --> usub.sat(a, b)
+    // DEVIATE 4: trunc(u/smin(zext(a) + zext(b), MAX)) --> uadd.sat(a, b): the
+    // selector has no `uadd.sat` lowering.
+    // trunc(smax(zext(a) - zext(b), 0)) --> usub.sat(a, b)
+    let usub_sat = {
+        let q = query(c, Some(inst));
+        pattern::commutative_intrinsic_with(&q, src, "llvm.smax", |v| pattern::zero(&q, v)).and_then(|difference| {
+            let (zx, zy, _) = binop(&q, difference, BinaryOp::Sub)?;
+            let (_, _, a) = pattern::cast(&q, zx, CastOp::ZExt)?;
+            let (_, _, b) = pattern::cast(&q, zy, CastOp::ZExt)?;
+            (c.type_of(a) == dest_ty
+                && c.type_of(b) == dest_ty
+                && shared::has_one_use(c, src)
+                && shared::has_one_use(c, difference))
+            .then_some((a, b))
+        })
+    };
+    if let Some((a, b)) = usub_sat {
+        return Visit::Replace(c.create_intrinsic(inst, "usub.sat", dest_ty, &[a, b]));
+    }
 
     let lshr_sext = {
         let q = query(c, Some(inst));
@@ -1074,12 +1307,73 @@ pub fn visit_trunc(
         }
     }
 
-    // DEVIATE 4: trunc (select(icmp_ult(A, DestTy_umax+1), A, sext(icmp_sgt(A,
-    // 0)))) --> trunc (smin(smax(0, A), DestTy_umax))
+    // trunc (select(icmp_ult(A, DestTy_umax+1), A, sext(icmp_sgt(A, 0)))) -->
+    // trunc (smin(smax(0, A), DestTy_umax))
+    if src_w.is_power_of_two() && dest_w.is_power_of_two() {
+        let clamp = {
+            let q = query(c, Some(inst));
+            (|| {
+                let (_, _, cond, taken, otherwise) = pattern::select(&q, src)?;
+                let (_, _, ult, a, upper) = pattern::icmp(&q, cond)?;
+                let (_, _, ext) = pattern::cast(&q, otherwise, CastOp::SExt)?;
+                let (_, _, sgt, a2, zero) = pattern::icmp(&q, ext)?;
+                let one_use = shared::has_one_use(c, src)
+                    && shared::has_one_use(c, cond)
+                    && shared::has_one_use(c, otherwise)
+                    && shared::has_one_use(c, ext);
+                (one_use
+                    && ult.pred == IntPredicate::Ult
+                    && sgt.pred == IntPredicate::Sgt
+                    && taken == a
+                    && a2 == a
+                    && pattern::zero(&q, zero))
+                .then_some(())?;
+                let (upper, _) = q.int_constant(upper)?;
+                Some((a, upper))
+            })()
+        };
+        if let Some((a, upper)) = clamp {
+            let truncated_max = mask(dest_w);
+            if upper != 0 && upper - 1 == truncated_max {
+                let zero = c.int(src_ty, 0);
+                let smax = c.create_intrinsic(inst, "smax", src_ty, &[zero, a]);
+                let max = c.int(src_ty, truncated_max);
+                let smin = c.create_intrinsic(inst, "smin", src_ty, &[smax, max]);
+                return c.replace_with_new(inst, Opcode::Cast(CastOp::Trunc), dest_ty, vec![smin], Flags::default());
+            }
+        }
+    }
     // DEVIATE 1: foldVecTruncToExtElt, foldVecExtTruncToExtElt.
-    // DEVIATE 4: trunc (ctlz_i32(zext(A), B) --> add(ctlz_i16(A, B), C)
+    // trunc (ctlz_i32(zext(A), B) --> add(ctlz_i16(A, B), C)
+    let narrow_ctlz = {
+        let q = query(c, Some(inst));
+        pattern::intrinsic_call(&q, src, "llvm.ctlz").and_then(|(_, args)| {
+            let [extended, flag] = *args else { return None };
+            let (_, _, a) = pattern::cast(&q, extended, CastOp::ZExt)?;
+            Some((a, flag))
+        })
+    };
+    if let Some((a, flag)) = narrow_ctlz
+        && shared::has_one_use(c, src)
+    {
+        let a_w = width(c, a);
+        if a_w == dest_w && a_w > src_w.ilog2() {
+            let width_diff = c.int(c.type_of(a), u128::from(src_w - a_w));
+            let narrow = c.create_intrinsic(inst, "ctlz", dest_ty, &[a, flag]);
+            return c.replace_with_binop(inst, BinaryOp::Add, narrow, width_diff, Flags::default());
+        }
+    }
     // DEVIATE 1: trunc (vscale).
-    // DEVIATE 4: trunc(scmp(x, y)), trunc(ucmp(x, y)).
+    // trunc(scmp(x, y)) -> scmp(x, y) with a narrower result type.
+    // trunc(ucmp(x, y)) -> ucmp(x, y) with a narrower result type.
+    // scmp/ucmp produce only -1, 0, or 1, so any result type with at least 2
+    // bits can represent every possible value and the truncation is lossless.
+    if dest_w >= 2
+        && shared::has_one_use(c, src)
+        && let Some((base, lhs, rhs)) = cmp_intrinsic(c, src)
+    {
+        return Visit::Replace(create_cmp_intrinsic(c, inst, base, dest_ty, lhs, rhs));
+    }
 
     if dest_w == 1 && (nuw || nsw) && nonzero::is_known_non_zero(&query(c, Some(inst)), src, 0) {
         return Visit::Replace(c.int(dest_ty, 1));
@@ -1650,7 +1944,14 @@ pub fn visit_sext(
     }
 
     // DEVIATE 1: sext (vscale).
-    // DEVIATE 4: sext(scmp(x, y)), sext(ucmp(x, y)).
+    // sext(scmp(x, y)) -> scmp(x, y) with a wider result type.
+    // sext(ucmp(x, y)) -> ucmp(x, y) with a wider result type.
+    if shared::has_one_use(c, src)
+        && let Some((base, lhs, rhs)) = cmp_intrinsic(c, src)
+    {
+        let dest_ty = c.function.instruction(inst).ty;
+        return Visit::Replace(create_cmp_intrinsic(c, inst, base, dest_ty, lhs, rhs));
+    }
 
     let nsw_trunc = {
         let q = query(c, Some(inst));

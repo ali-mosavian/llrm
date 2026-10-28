@@ -18,9 +18,10 @@ use crate::backend::frame::Frame;
 use crate::backend::target::Segments;
 use crate::backend::verify::{self, Malformed};
 use crate::backend::{
-    allocate, coalesce, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue,
-    schedule, twoaddr,
+    allocate, farcall, floatalloc, floatassign, jumps, loopslots, parcopy, peephole, phielim, prologue, schedule,
+    twoaddr,
 };
+use crate::coalescer::pass::Coalescer;
 use crate::model::lir::LirBody;
 use crate::model::passes::LIRTransform;
 use crate::support::hash::IndexMap;
@@ -241,7 +242,7 @@ pub fn machine_with<'a>(
                 Some(_) => crate::twoaddress::ThreeAddress::All,
             },
         }),
-        Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        Box::new(Coalescer { size: target.size, ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_add_idioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_add_idioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_add_idioms.rs sha256:d95c9867a55a6a8bcea92898de46003661255922841502025a180363433ec1f5 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_add_idioms.rs sha256:a9a0038121fb4bc5158d361d2ec9d22dea3e53f7c7fd7ba51b50133d2339f1fc -->
 
 # combine_add_idioms
 
@@ -17,8 +17,7 @@ them in the order `visitAdd` reaches them.
 DEVIATE 1: `SimplifyAddWithRemainder` (:1739), the align-up and
 `(A & -A) - 1` idioms, `~(A*C)+A`, signum, `select` of `icmp eq`,
 ceiling division, `~X + ~Y` (`isFreeToInvert`) and everything after
-`canonicalizeLowbitMask` are the next strip; `narrowMathIfNoOverflow`
-(:1790) waits on the shared helper.
+`canonicalizeLowbitMask` are the next strip.
 
 DEVIATE 2: `sext(A<B) + zext(A>B)` (:1766) and `X + (or X, -X)`'s
 sibling folds that build `umax`/`scmp` need `CreateIntrinsic`
