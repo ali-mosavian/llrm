@@ -1031,8 +1031,25 @@ pub fn visit_trunc(
         return r;
     }
 
-    // DEVIATE 4: trunc(u/smin(zext(a) + zext(b), MAX)) --> uadd.sat(a, b)
-    // DEVIATE 4: trunc(smax(zext(a) - zext(b), 0)) --> usub.sat(a, b)
+    // DEVIATE 4: trunc(u/smin(zext(a) + zext(b), MAX)) --> uadd.sat(a, b): the
+    // selector has no `uadd.sat` lowering.
+    // trunc(smax(zext(a) - zext(b), 0)) --> usub.sat(a, b)
+    let usub_sat = {
+        let q = query(c, Some(inst));
+        pattern::commutative_intrinsic_with(&q, src, "llvm.smax", |v| pattern::zero(&q, v)).and_then(|difference| {
+            let (zx, zy, _) = binop(&q, difference, BinaryOp::Sub)?;
+            let (_, _, a) = pattern::cast(&q, zx, CastOp::ZExt)?;
+            let (_, _, b) = pattern::cast(&q, zy, CastOp::ZExt)?;
+            (c.type_of(a) == dest_ty
+                && c.type_of(b) == dest_ty
+                && shared::has_one_use(c, src)
+                && shared::has_one_use(c, difference))
+            .then_some((a, b))
+        })
+    };
+    if let Some((a, b)) = usub_sat {
+        return Visit::Replace(c.create_intrinsic(inst, "usub.sat", dest_ty, &[a, b]));
+    }
 
     let lshr_sext = {
         let q = query(c, Some(inst));

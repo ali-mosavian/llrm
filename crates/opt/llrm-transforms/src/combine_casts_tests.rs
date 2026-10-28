@@ -422,3 +422,31 @@ fn a_zext_of_a_select_with_a_constant_arm_goes_into_the_arms() {
         "  %0 = zext i8 %y to i32\n  %1 = select i1 %c, i32 1, i32 %0\n  ret i32 %1\n",
     );
 }
+
+/// `trunc(smax(zext(a) - zext(b), 0))` is `usub.sat(a, b)`. Stayed a wide
+/// subtract, a max and a truncate before.
+#[test]
+fn a_truncated_clamped_difference_of_extensions_is_a_saturating_subtract() {
+    let text = "declare i32 @llvm.smax.i32(i32, i32)
+
+define i8 @f(i8 %a, i8 %b) {
+b0:
+  %x = zext i8 %a to i32
+  %y = zext i8 %b to i32
+  %d = sub i32 %x, %y
+  %m = call i32 @llvm.smax.i32(i32 %d, i32 0)
+  %r = trunc i32 %m to i8
+  ret i8 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i8 @llvm.usub.sat.i8(i8 %a, i8 %b)"), "{out}");
+}
