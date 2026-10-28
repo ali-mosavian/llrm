@@ -46,7 +46,7 @@ TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stages import PREFIX, stage  # noqa: E402
+from stages import PREFIX, stage, summary as stage_summary  # noqa: E402
 import pidfile  # noqa: E402
 
 
@@ -330,7 +330,7 @@ def precheck_checks(dev: Path, target: Path):
         return {"fmt": files or {"fmt --check failed"}} if done.returncode else {}
 
     def docs(root: Path) -> dict[str, set[str]]:
-        done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
+        done = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
         if not done.returncode:
             return {}
         out = (done.stdout + done.stderr).splitlines()
@@ -523,7 +523,7 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docsbuild/build.py --sync writes
+GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docs/docsbuild/build.py --sync writes
 
 
 def docs_stale_lines(output: str) -> list[str]:
@@ -538,7 +538,7 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
         return "conflicts in files nothing generates: " + ", ".join(path for path in conflicts if not path.startswith(GENERATED))
     for path in conflicts:
         git("checkout", "--ours", "--", path, cwd=cwd)
-    build = [sys.executable, "tools/docsbuild/build.py"]
+    build = [sys.executable, "tools/docs/docsbuild/build.py"]
     for flags in (["--sync", "--force"], ["--check"]):
         done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True, errors="replace")
         if flags == ["--check"]:
@@ -853,6 +853,71 @@ def beside(background, foreground):
         return front, future.result()
 
 
+OVERLAP_MAX_LOAD = float(os.environ.get("OVERLAP_MAX_LOAD") or 3 * (os.cpu_count() or 1))  # 1-minute load above this: the two builds would only fight over the CPUs; the host runs at ~2.4 x its cores with other sessions' builds
+OVERLAP_MIN_FREE_GB = 8  # two cargo builds at once; oomd kills sessions when memory runs out
+OVERLAP_OFF_SECONDS = 3600
+
+
+def overlap_flag() -> Path:
+    return Path(os.environ.get("LAND_TMP", "/tmp")) / "overlap-off"
+
+
+def free_gb() -> float:
+    """MemAvailable in GB; a host that does not say counts as plenty."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return float("inf")
+
+
+def overlap_verdict(load=os.getloadavg, now=time.time, flag: Path | None = None, free=free_gb) -> str:
+    """Why the workspace check and the scanner build run in a row, or "" when they run together: for an hour after an overlapped run took longer than its two halves in a row, at a load
+    above OVERLAP_MAX_LOAD, or with under OVERLAP_MIN_FREE_GB of memory free."""
+    flag = flag or overlap_flag()
+    if flag.exists() and now() - flag.stat().st_mtime < OVERLAP_OFF_SECONDS:
+        return "the last overlapped run was slower than its halves in a row"
+    if (current := load()[0]) > OVERLAP_MAX_LOAD:
+        return f"load {current:.0f} is above {OVERLAP_MAX_LOAD:.0f}"
+    if (spare := free()) < OVERLAP_MIN_FREE_GB:
+        return f"{spare:.0f} GB free is under {OVERLAP_MIN_FREE_GB}"
+    return ""
+
+
+def check_beside_scanners(load=os.getloadavg, now=time.time, flag: Path | None = None, free=free_gb) -> bool:
+    return not overlap_verdict(load, now, flag, free)
+
+
+def check_and_scan(check, scan) -> tuple[str, bool]:
+    """(the build error or "", whether the scan passed), the two run together. `beside` returns (foreground, background): the first draft of this unpacked them the other way round, so
+    every overlapped batch called a passing build broken (`True[:300]`, a TypeError) and a failing one lost its text."""
+    took: dict[str, float] = {}
+    begun = time.monotonic()
+    scanned, broken = beside(timed(took, "check", check), timed(took, "scanners", scan))
+    note_overlap(time.monotonic() - begun, took["check"] + took["scanners"])
+    return broken, scanned
+
+
+def note_overlap(wall: float, serial: float, flag: Path | None = None) -> None:
+    """Prints the overlapped wall time against its halves' sum; an overlap slower than that turns itself off for an hour."""
+    print(f"check beside scanners: {wall:.0f} s against {serial:.0f} s in a row")
+    if wall > serial:
+        (flag or overlap_flag()).write_text(f"{wall:.0f} > {serial:.0f}\n")
+
+
+def timed(took: dict[str, float], name: str, call):
+    def run():
+        begun = time.monotonic()
+        try:
+            return call()
+        finally:
+            took[name] = time.monotonic() - begun
+
+    return run
+
+
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
@@ -960,7 +1025,22 @@ def new_lib_failures(
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
 # without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
-ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts", "no_todo", "tracked_build_products", "block_list_ratchet", "no_kill_by_pattern")
+ALWAYS_SCANNERS = (
+    "block_list_ratchet",
+    "core_depends_on_no_target",
+    "core_fixtures_are_for_core_tests",
+    "descriptions_are_read",
+    "docs_in_sync",
+    "docs_links",
+    "dosbox_progress",
+    "no_kill_by_pattern",
+    "no_local_paths",
+    "no_partial_ecx_counts",
+    "no_todo",
+    "selectiondag_registry",
+    "target_facts",
+    "tracked_build_products",
+)
 
 
 BUILD_SCRIPT_INPUTS = ("crates/target/", "crates/backend/llrm-iselgen/", "crates/codegen/llrm-codegen/src/backend/peep/")
@@ -1127,13 +1207,32 @@ def head_files(head: str, base: str = BASE, cwd: Path = ROOT) -> list[str]:
     return git("diff", "--name-only", f"{base}...{head}", cwd=cwd).split()
 
 
-def behavioural_culprits(group: list[str], files_of, alone_red) -> list[str]:
-    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else each backend PR merged alone and asked."""
+def halve_red(members: list[str], red_with) -> list[str]:
+    """The members that are red on their own, found by halving: `red_with(subset)` merges the subset and asks. A 48-PR batch costs about 2 log2(48) runs per culprit, not 48."""
+    if not members or not red_with(members):
+        return []
+    if len(members) == 1:
+        return members
+    mid = len(members) // 2
+    return halve_red(members[:mid], red_with) + halve_red(members[mid:], red_with)
+
+
+def red_members(members: list[str], red_with, alone_red) -> list[str]:
+    """The red `members` by halving, else (an interaction: no half is red) each one merged alone and asked."""
+    found = halve_red(members, red_with) if red_with else []
+    return found or [number for number in members if alone_red(number)]
+
+
+def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -> list[str]:
+    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else the backend PRs found by halving (`red_with`),
+    else (an interaction: no half is red) each backend PR merged alone and asked."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import behavioural  # noqa: PLC0415
 
     backend = [number for number in group if behavioural.touches(files_of(number))]
-    return backend if len(backend) <= 1 else [number for number in backend if alone_red(number)]
+    if len(backend) <= 1:
+        return backend
+    return red_members(backend, red_with, alone_red)
 
 
 def _link_programs() -> list[str]:
@@ -1166,7 +1265,7 @@ def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
         git("fetch", "-q", "origin", infos[number]["headRefOid"])
         if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
             subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
-    subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync", "--force"], cwd=ROOT, capture_output=True)  # each member's pages are current alone; together the pass counts of docs/optimizations/passes/readme.md are not (11:35-11:49: the group scan was red, each member green)
+    subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=ROOT, capture_output=True)  # each member's pages are current alone; together the pass counts of docs/optimizations/passes/readme.md are not (11:35-11:49: the group scan was red, each member green)
     files = git("diff", "--name-only", BASE, "HEAD").split()
     return new_scanner_failures(files, only=scanners_for(files))
 
@@ -1344,7 +1443,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     if stale := (docs or docs_stale)(cwd):
         new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
         if new:
-            return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
+            return [f"generated docs out of date (tools/docs/docsbuild/build.py --sync): {', '.join(new[:5])}"]
     # the QB and C programs, built and linked: #4822 and #4839 (frontend changes) reached three batches and cost 19 refusals because only a batch member touching the runtime made the batch link
     if broken := (links or alone_link_failures)(files, cwd, target):
         return [f"programs do not link: {', '.join('link ' + line.split(':')[0] for line in broken[:5])}"]
@@ -1449,10 +1548,10 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
 
 
 def docs_stale(root: Path) -> set[str]:
-    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check: <its problem line>` when it fails without naming one)."""
-    if not (root / "tools/docsbuild/build.py").is_file():
+    """The generated pages `tools/docs/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check: <its problem line>` when it fails without naming one)."""
+    if not (root / "tools/docs/docsbuild/build.py").is_file():
         return set()
-    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
+    done = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
     if not done.returncode:
         return set()
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
@@ -1470,7 +1569,7 @@ def docs_recheck(head: str, base: str, cwd: Path, base_docs: set[str]) -> str:
     if sha is None:
         return why
     new = sorted(docs_stale(cwd) - base_docs)
-    return f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""
+    return f"generated docs out of date (tools/docs/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""
 
 
 def _alone_docs_recheck(head: str, base: str) -> str:
@@ -1494,19 +1593,19 @@ def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, se
     with six pages stale: the head's red docs_in_sync was excused, so the batch never saw a new one."""
     now = docs(root)
     new = sorted(now - before)
-    return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
+    return (f"generated docs out of date (tools/docs/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
 
 
 def docs_sync_commit(root: Path = ROOT) -> str:
-    """"" when `tools/docsbuild/build.py --sync` in `root` ran and its pages are committed on top (nothing to commit is fine); else why. Generated docs out of date refused #5129, #5131 and #5119 for a
+    """"" when `tools/docs/docsbuild/build.py --sync` in `root` ran and its pages are committed on top (nothing to commit is fine); else why. Generated docs out of date refused #5129, #5131 and #5119 for a
     page the landing could have written, as it formats an unformatted head."""
-    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync"], cwd=root, capture_output=True, text=True, errors="replace")
+    done = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync"], cwd=root, capture_output=True, text=True, errors="replace")
     if done.returncode:
         return f"docsbuild --sync failed: {' '.join((done.stdout + done.stderr).split()[-12:])}"
     git("add", "-A", "docs", cwd=root)
     if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=root).returncode == 0:
         return ""
-    made = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "-m", "docs: tools/docsbuild/build.py --sync"], cwd=root, capture_output=True, text=True, errors="replace")
+    made = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "-m", "docs: tools/docs/docsbuild/build.py --sync"], cwd=root, capture_output=True, text=True, errors="replace")
     return "" if made.returncode == 0 else f"committing the synced pages failed: {made.stderr.strip()[:200]}"
 
 
@@ -1614,7 +1713,7 @@ def keep_refused_evidence(head: str, cwd: Path, why: list[str], directory: Path)
     out.mkdir(parents=True, exist_ok=True)
     (out / "head.txt").write_text(f"tree {git('rev-parse', 'HEAD', cwd=cwd).strip()}\npr head {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}\n")
     (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
-    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    check = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
     (out / "check.txt").write_text(check.stdout + check.stderr)
 
 
@@ -1628,7 +1727,7 @@ def keep_batch_evidence(heads: dict[str, str], cwd: Path, directory: Path, stamp
         lines.append(f"#{number} {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}")
     (out / "heads.txt").write_text("\n".join(lines) + "\n")
     (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
-    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    check = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
     (out / "check.txt").write_text(check.stdout + check.stderr)
 
 
@@ -1829,10 +1928,13 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not kept:
             return True
         stage("workspace-check")
-        if broken := _workspace_check(ROOT):
+
+        def build_refused(broken: str) -> bool:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
+            failed_units.clear()  # a scanner run beside a tree that does not build says nothing; the build is the reason
             return False
+
         def blame(new: list[str]) -> None:
             if any(name.startswith("integration docs") for name in new):
                 keep_batch_evidence({number: infos[number]["headRefOid"] for number in group}, ROOT, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused", time.strftime("%H%M%S"))
@@ -1882,9 +1984,20 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return [], pre_merge_behavioural(files)
 
         if OVERLAP:
+            if broken := _workspace_check(ROOT):
+                return build_refused(broken)
             tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
         else:
-            tests_ok = tests_pass()
+            # the dev-profile check (its own target dir) and the release scanner build share nothing: 60 s + 100 s in a row in sqb-5342
+            why_serial = overlap_verdict()
+            print(f"check beside scanners: {'serial (' + why_serial + ')' if why_serial else 'on'}")
+            if not why_serial:
+                broken, tests_ok = check_and_scan(lambda: _workspace_check(ROOT), tests_pass)
+            else:
+                broken = _workspace_check(ROOT)
+                tests_ok = not broken and tests_pass()
+            if broken:
+                return build_refused(broken)
             unlinked, red = release_pass() if tests_ok else ([], [])
         if not tests_ok:
             return False
@@ -1908,6 +2021,17 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return False
         return True
 
+    def merge_all(numbers: list[str]) -> bool:
+        """The PRs `numbers` merged together onto a clean head in the batch's checkout."""
+        stage(f"halve {len(numbers)}: {' '.join('#' + n for n in numbers)}")
+        clean_checkout(BASE)
+        for number in numbers:
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                return False
+        return True
+
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
@@ -1920,7 +2044,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
         if wrong:
             files_of = lambda number: head_files(infos[number]['headRefOid'])  # noqa: E731
-            culprits = behavioural_culprits(group, files_of, lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))))
+            culprits = behavioural_culprits(
+                group,
+                files_of,
+                lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))),
+                lambda subset: merge_all(subset) and bool(pre_merge_behavioural(sorted({f for n in subset for f in files_of(n)}))),
+            )
             for number in culprits:
                 named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
                 print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
@@ -1934,7 +2063,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if not probe:
                 return []
             targets = sorted({name.split("::", 1)[0] for name in probe})
-            return [number for number in group if merge_alone(number) and probe & parity_smoke_module().integration_failures(targets)]
+            red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            return red_members(group, red_with, lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets)))
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
@@ -2051,7 +2181,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 late_drops.append(number)
                 return
             if synced_sha != infos[number]["headRefOid"]:
-                print(f"#{number}: generated docs synced with tools/docsbuild/build.py --sync ({synced_sha[:9]})")
+                print(f"#{number}: generated docs synced with tools/docs/docsbuild/build.py --sync ({synced_sha[:9]})")
                 infos[number] = {**infos[number], "headRefOid": synced_sha}
                 for _ in range(12):
                     seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
@@ -2080,6 +2210,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             print(f"batch older than {BATCH_MAX_SECONDS // 60} min: its heads and assembly are stale; back to the queue unlanded: {' '.join('#' + one for one in back) or '-'}")
     for line in hold_own_refusals(refused, {**left_out, **named}, {n: infos[n]["headRefOid"] for n in refused if n in infos}):
         print(line)
+    if times := stage_summary():
+        print(times)
     print(batch_summary(landed, refused, held, moved))
     return 1 if refused else 0
 

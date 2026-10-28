@@ -148,6 +148,10 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) tli: Option<&'a TargetLowering>,
 }
 
+fn op_is_srl(op: ISD) -> bool {
+    op == ISD::Srl
+}
+
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     pub fn new(
         dag: &'a mut SelectionDAG,
@@ -313,7 +317,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
-            ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
+            ISD::And => self
+                .visit_and(node)
+                .or_else(|| self.reduce_load_width_of(node))
+                .or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
@@ -321,10 +328,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
+            ISD::FpRound => self.visit_fp_round(node),
+            ISD::FpExtend => self.visit_fp_extend(node),
+            ISD::SIntToFp | ISD::FpToSInt => self.visit_fp_int_convert(node),
             ISD::FAbs => self.visit_fabs(node),
             ISD::FDiv => self.visit_fdiv(node),
-            ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
-            ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
+            ISD::Shl | ISD::Srl => self
+                .visit_shift(node)
+                .or_else(|| if op_is_srl(self.dag.opcode(node)) { self.reduce_load_width_of(node) } else { None })
+                .or_else(|| self.simplify_demanded(node)),
+            ISD::Sra => {
+                self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
+            }
             ISD::BSwap => self.visit_bswap(node),
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
@@ -333,6 +348,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
+            ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
             _ => None,
@@ -792,6 +808,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
             ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
+            // Narrow a binary operation with a constant operand ahead of the
+            // truncate: `trunc (and y, 31)` is `and (trunc y), 31`, which the
+            // shift patterns then drop as an unneeded mask. Before
+            // legalization only, as the pin does.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor
+                if self.level < CombineLevel::AfterLegalizeVectorOps
+                    && self.dag.use_count(n0.node) == 1
+                    && vt.is_integer()
+                    && {
+                        let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                        l == r || self.dag.constant(l).is_some() || self.dag.constant(r).is_some()
+                    } =>
+            {
+                let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
+                let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
+                Some(self.dag.get_node(self.dag.opcode(n0), vt, &[narrow_l, narrow_r]))
+            }
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
                 let from = self.dag.value_type(x);

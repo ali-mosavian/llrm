@@ -611,6 +611,13 @@ pub trait Tti {
         0
     }
 
+    /// Whether the target adds registers and an immediate in one instruction
+    /// whatever the use (x86's `lea`): an unfolded offset beside two or more
+    /// registers then costs no add of its own. DEVIATE LU2 (`lsr_use.rs`).
+    fn address_form_adds_offsets(&self) -> bool {
+        false
+    }
+
     /// `getCastInstrCost`.
     fn cast_cost(
         &self,

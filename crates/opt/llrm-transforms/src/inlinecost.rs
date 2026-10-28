@@ -118,7 +118,7 @@ use llrm_mir::context::{ConstantId, ConstantKind, Context, GlobalId};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::{Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
+use llrm_mir::opcode::{AtomicKind, Attribute, BinaryOp, CallInfo, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::tti::{CastKind, CostKind, Ty};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::HashMap;
@@ -302,6 +302,26 @@ fn frame_bound(
     id: GlobalId,
 ) -> bool {
     module.global(id).function().is_some_and(|function| has_flag(&function.attrs, "frame_bound"))
+}
+
+/// Whether the caller makes a `frame_bound` call itself: it registers an error
+/// handler, so it is the frame that runs the callee's re-arm.
+fn registers_a_handler(site: &Site) -> bool {
+    site.caller
+        .layout()
+        .iter()
+        .any(
+            |&block| site.caller
+                .iter_block(block)
+                .any(
+                    |inst| matches!(
+                        site.caller.instruction(inst).opcode,
+                        Opcode::Call(_) | Opcode::Invoke(_)
+                    )
+                        && llrm_mir::memory::callee(&site.module.context, site.caller, inst)
+                            .is_some_and(|target| frame_bound(site.module, target)),
+                ),
+        )
 }
 
 fn call_info(
@@ -974,6 +994,13 @@ impl<'a> Analyzer<'a> {
             Opcode::FNeg => self.visit_fneg(inst),
             Opcode::Load { volatile, .. } => self.visit_load(inst, *volatile),
             Opcode::Store { volatile, .. } => self.visit_store(inst, *volatile),
+            // `LoadInst` and `StoreInst` that are not simple,
+            // then `visitInstruction`.
+            Opcode::Atomic(info) => match info.kind {
+                AtomicKind::Load => self.visit_load(inst, true),
+                AtomicKind::Store => self.visit_store(inst, true),
+                _ => self.visit_default(inst),
+            },
             Opcode::ExtractValue(_) | Opcode::InsertValue(_) => self.visit_aggregate(inst),
             Opcode::Call(_) | Opcode::Invoke(_) => self.visit_call(inst),
             Opcode::Ret => {
@@ -1461,7 +1488,9 @@ impl<'a> Analyzer<'a> {
         // registration): its effect belongs to the frame that runs it, so the
         // callee is not copied into another frame (the `returns_twice` rule of
         // `visitCallBase`, InlineCost.cpp:2473).
-        if frame_bound(self.site.module, target) {
+        // Not a handler its owner alone calls: its re-arm then runs in the
+        // frame that registered it (the owner's landing pad), not another.
+        if frame_bound(self.site.module, target) && !(self.site.sole_call_to_local && registers_a_handler(self.site)) {
             self.has_uninlineable_intrinsic = true;
             return false;
         }

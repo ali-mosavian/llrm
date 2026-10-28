@@ -34,6 +34,13 @@ import omfcode  # noqa: E402
 import pin  # noqa: E402
 
 ROOT = HERE.parents[1]
+
+
+def abi_flags(cfg: dict, ir: str) -> list[str]:
+    """The llc's convention flags: an IR whose functions are regcall (llrm-cc's m32 default) needs the Watcom ABI that gives it registers."""
+    return ["-mabi=watcom", "-mregcall-default"] if "x86_regcallcc" in ir else [f"-mabi={cfg['abi']}"]
+
+
 # the comparison's fixed choices: llrm-cc's target, the -march of ours, and the convention the pin's llc has by default
 MACHINES = {
     "m16": {"cc": "x86_16-wat", "march": "i386", "abi": "cdecl", "bits": "16"},
@@ -172,6 +179,11 @@ def front_end_flags(level: str, reopt: bool) -> list[str]:
     return [f"-{level}", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *common]
 
 
+def forced_frame(asm: str, ir: str) -> bool:
+    """`push ebp; mov ebp, esp` in the pin's asm for IR that does not ask for one (frame-pointer=all made hanoi2/queens -Os look 4 bytes bigger). Stack realignment (`and esp, -N`) needs one."""
+    return bool(re.search(r"push\s+ebp\n\s+mov\s+ebp, esp", asm)) and not re.search(r"and\s+esp, -\d+", asm) and '"frame-pointer"' not in ir and "alloca i8, i32 %" not in ir and "dynamic_alloca" not in ir
+
+
 def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool, reopt: bool = False) -> dict | str:
     """The figures of one program, or why it has none."""
     cfg = MACHINES[machine]
@@ -198,12 +210,14 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
     level_flag = "-O2" if level in ("O2", "Os") else f"-{level}"
     pin_asm, pin_obj = work / f"{stem}.pin.s", work / f"{stem}.pin.o"
     for args, out in ((["-x86-asm-syntax=intel", "-filetype=asm"], pin_asm), (["-filetype=obj"], pin_obj)):
-        run = pin.llc([level_flag, "-frame-pointer=all", *args, "-o", str(out)], text, target)
+        run = pin.llc([level_flag, "-frame-pointer=none", *args, "-o", str(out)], text, target)
         if run.returncode or not out.exists():
             return "pin llc: " + (run.stderr.strip().splitlines() or ["failed"])[0]
+    if forced_frame(pin_asm.read_text(), text):
+        return "pin asm keeps a frame pointer the source did not force"
 
     def ours(isel: str, *extra: str) -> subprocess.CompletedProcess:
-        return subprocess.run([llc, f"-m{cfg['bits']}", f"-{level}", f"-march={cfg['march']}", f"--isel={isel}", f"-mabi={cfg['abi']}", *extra, str(ours_in)], capture_output=True, text=True)
+        return subprocess.run([llc, f"-m{cfg['bits']}", f"-{level}", f"-march={cfg['march']}", f"--isel={isel}", *abi_flags(cfg, ours_text), *extra, str(ours_in)], capture_output=True, text=True)
 
     asm = work / f"{stem}.ours.s"
     made = ours("dag", "-S", "-o", str(asm))

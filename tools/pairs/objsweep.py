@@ -52,6 +52,21 @@ def compile_one(binary: str, source: Path, target: str, level: str, out: Path, i
     return data, ""
 
 
+def summary(changed: list[tuple[str, int, int]], top: int = 5) -> list[str]:
+    """Lines splitting the changed objects (name `prog target -level`, old size, new size) per target and level into larger, smaller and
+    same-size (bytes differ, length does not), then the `top` largest growths."""
+    cells: dict[str, list[int]] = {}
+    for name, old, new in changed:
+        cell = " ".join(name.split()[1:])
+        row = cells.setdefault(cell, [0, 0, 0])
+        row[0 if new > old else 1 if new < old else 2] += 1
+    lines = [f"{cell}: larger {a}, smaller {b}, same-size {c}" for cell, (a, b, c) in sorted(cells.items())]
+    lines.append("largest growths:")
+    grown = sorted((c for c in changed if c[2] > c[1]), key=lambda c: c[1] - c[2])[:top]
+    lines += [f"  {name}: {new - old:+d}" for name, old, new in grown]
+    return lines
+
+
 def md5(path: str) -> str:
     return hashlib.md5(Path(path).read_bytes()).hexdigest()[:12]
 
@@ -82,6 +97,9 @@ def sweep(args, sources: list[Path], isel: str) -> int:
     print(f"objsweep --isel={isel} old {md5(args.old)} new {md5(args.new)}: {len(changed)} objects changed ({args.targets}, {args.levels}); {same} identical, {len(both)} failed on both sides, {len(one_side)} failed on one side of {len(cells)}")
     for name, x, y in changed:
         print(f"  changed {name}: {x} -> {y} bytes ({y - x:+d})")
+    print("split:")
+    for line in summary(changed):
+        print(f"  {line}")
     for name, why in one_side:
         print(f"  ONE-SIDED FAIL {name}: {why}")
     for name, why in both[:10]:
