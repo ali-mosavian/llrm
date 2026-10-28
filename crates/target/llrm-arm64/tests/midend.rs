@@ -537,3 +537,22 @@ fn a_compare_read_by_selects_and_a_branch_is_made_once_and_not_materialized() {
     assert!(!asm.contains("csinc w") && !asm.contains("ands wzr"), "{asm}");
     assert_eq!(asm.matches("subs xzr, x20, #32").count(), 1, "{asm}");
 }
+
+/// Inline-cost decisions were only visible through two undocumented environment variables; the pin's
+/// clang has no `-debug-only=inline-cost`, so a cost mismatch (`lh_alloc`, 311 vs 90 instructions)
+/// could not be read off. The option prints the decision and each callee instruction's cost.
+#[test]
+fn debug_only_inline_cost_prints_the_decision_and_the_instruction_costs() {
+    let llc = std::path::Path::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
+    let ir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/inline_small_callee.ll");
+    let run = |extra: &[&str]| {
+        let out = std::env::temp_dir().join(format!("inline_cost_{}.s", extra.len()));
+        let said = std::process::Command::new(llc).args(extra).args(["-S", "-o"]).arg(&out).arg(ir).output().expect("llc runs");
+        assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+        String::from_utf8_lossy(&said.stderr).into_owned()
+    };
+    let traced = run(&["-debug-only=inline-cost"]);
+    assert!(traced.contains("'twice' inlined into 'f'") && traced.contains("cost="), "{traced}");
+    assert!(traced.contains("[inlinetrace]"), "{traced}");
+    assert!(run(&[]).is_empty());
+}

@@ -64,6 +64,10 @@ Run the failing build under dosrun with a `:write` range over the damage, or `:m
 
 A bad segment (`lds`, `ss:` on data the program model places in DS) points at the machine model (`-m[no-]stack-is-data`), not a pass.
 
+## Inline costs
+
+`llrm-arm64-llc -debug-only=inline-cost f.ll` prints each inlining decision (`'callee' inlined into 'caller' with (cost=, threshold=)`) and the cost of every callee instruction (`[inlinetrace]`), as LLVM's option of that name does; the pin's clang has none. The switches behind it are `LLRM_INLINE_REMARKS` and `LLRM_EXP_INLINETRACE`.
+
 ## 4. Which pass: dump and diff
 
 Compile the one module with every stage dumped:
