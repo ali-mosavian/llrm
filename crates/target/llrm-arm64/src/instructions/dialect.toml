@@ -1,4 +1,4 @@
-# What the reader of arm64.instr must know: see llrm_instr::Dialect.
+# What the reader of arm64.instr must know: see llrm_target::instr::Dialect.
 file = "arm64.instr"
 # Register roots: the 64-bit general registers, sp, the zero register, the vector registers.
 registers = [

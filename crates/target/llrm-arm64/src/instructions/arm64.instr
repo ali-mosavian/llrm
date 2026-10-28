@@ -1,5 +1,5 @@
 # The arm64 instructions llrm selects, one form per line: LLVM's AArch64InstrInfo.td
-# for this target. Read by `llrm_instr` with `dialect.toml`; same columns as x86.instr
+# for this target. Read by `llrm_target::instr` with `dialect.toml`; same columns as x86.instr
 # without the assembler column. `h` is a shift (kind, amount), `e` an extend (kind,
 # amount), `c` a condition. `{cc}` makes one form per condition.
 #

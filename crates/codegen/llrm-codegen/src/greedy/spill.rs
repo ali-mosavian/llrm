@@ -71,6 +71,7 @@ impl Spiller for SimpleSpiller {
             if reads && !writes && lis.instr(instr).group.is_some() {
                 let mut folded = (**lis.instr(instr)).clone();
                 folded.uses.retain(|value| *value != reg);
+                folded.undefs.retain(|value| *value != reg);
                 lis.rewrite_instr(block, instr, Arc::new(folded));
                 self.folded += 1;
                 continue;
@@ -81,6 +82,7 @@ impl Spiller for SimpleSpiller {
             if writes && !reads && lis.instr(instr).group.is_some() {
                 let mut folded = (**lis.instr(instr)).clone();
                 folded.defines.retain(|value| *value != reg);
+                folded.undefs.retain(|value| *value != reg);
                 lis.rewrite_instr(block, instr, Arc::new(folded));
                 self.folded += 1;
                 continue;

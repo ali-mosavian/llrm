@@ -19,7 +19,7 @@ LAYERS = [
         "mc and target interface",
         [
             "llrm-object", "llrm-debuginfo", "llrm-omf", "llrm-elf", "llrm-elf32", "llrm-elf64", "llrm-elf-arm64",
-            "llrm-coff", "llrm-coff32", "llrm-coff64", "llrm-macho", "llrm-target", "llrm-instr", "llrm-iselgen",
+            "llrm-coff", "llrm-coff32", "llrm-coff64", "llrm-macho", "llrm-target", "llrm-iselgen",
             "llrm-peepgen",
         ],
     ),
@@ -82,6 +82,12 @@ def test_no_new_upward_dependency_and_the_allow_list_only_shrinks():
     found = violations(workspace())
     assert not found - ALLOWED, f"new upward dependencies: {sorted(found - ALLOWED)}"
     assert not ALLOWED - found, f"no longer violations, remove from ALLOWED: {sorted(ALLOWED - found)}"
+
+
+def test_the_root_mir_directory_is_not_tracked():
+    """`--dump` writes ./mir/ in the cwd; 97 of its files were committed by accident and nothing reads them."""
+    tracked = subprocess.check_output(["git", "ls-files", "mir"], cwd=ROOT, text=True)
+    assert tracked == "", tracked.splitlines()[:3]
 
 
 def test_the_default_build_does_not_make_llrm_c():
