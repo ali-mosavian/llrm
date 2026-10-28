@@ -67,6 +67,11 @@ pub struct ValueData {
     pub def: ValueDef,
 }
 
+/// The metadata kind of a load of an array descriptor's word: a frontend's
+/// statement that a selector made from it names the array's segment, not a
+/// forged one (`llrm_analysis::forging`).
+pub const DESCRIPTOR_WORD: &str = "llrm.descriptor";
+
 #[derive(Clone, Debug)]
 pub struct Instruction {
     pub opcode: Opcode,

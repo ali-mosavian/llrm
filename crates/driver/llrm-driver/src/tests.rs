@@ -1391,3 +1391,49 @@ fn a_variable_bit_clear_of_a_quadword_is_btr() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
 }
+
+/// `tot += r(&slot)` in a loop: `liverangeshrink` took the call's result for a
+/// value defined before the call's frame barrier and hoisted the add to the
+/// top of the loop. The first pass added garbage and the last never added
+/// (bq32 switch.bas -Os: "value is read but never defined").
+#[test]
+fn a_sum_with_a_call_result_stays_below_the_call() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                declare cc 1000 i32 @r(ptr)\n\
+                define cc 1000 i32 @f(ptr %p) {\n\
+                b1:\n  %slot = alloca i32\n  %n = load i16, ptr %p\n  %g = icmp slt i16 %n, 1\n  br i1 %g, label %b6, label %b5\n\
+                b5:\n  %cnt = phi i16 [ %n, %b1 ], [ %cnt1, %b5 ]\n  %st = phi i32 [ %st1, %b5 ], [ 1, %b1 ]\n  %tot = phi i32 [ %tot1, %b5 ], [ 0, %b1 ]\n  %d = and i32 %st, 10\n  store i32 %d, ptr %slot\n  %c = call cc 1000 i32 @r(ptr nonnull %slot)\n  %tot1 = add i32 %c, %tot\n  %cnt1 = add i16 %cnt, -1\n  %st1 = add i32 %st, 77\n  %e = icmp eq i16 %cnt1, 0\n  br i1 %e, label %b6, label %b5\n\
+                b6:\n  %res = phi i32 [ 0, %b1 ], [ %tot1, %b5 ]\n  ret i32 %res\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-march=i486", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let call = lines.iter().position(|line| line.starts_with("call")).expect("the call");
+    let top = lines.iter().rposition(|line| line.ends_with(':') && lines[..call].contains(line)).unwrap_or(0);
+    assert!(
+        !lines[top..call].iter().any(|line| line.starts_with("add ") && line.ends_with(", eax")),
+        "an add of the call's eax result sits above the call:\n{listing}"
+    );
+}
+
+/// Constant stores to one array interleaved with variable stores to another
+/// stayed word and dword stores: `GatherAllAliases` gave up after 6 chain hops
+/// where the pin allows 18 (`TargetLoweringBase`), so the four constants were
+/// not one quadword store (matmul +560 B at m64).
+#[test]
+fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_store() {
+    let mut text = String::from(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         declare void @use(ptr, ptr)\n@g = global i16 0\n\
+         define void @f() {\n  %x = load i16, ptr @g\n  %a = alloca [4 x i16], align 2\n  %b = alloca [4 x i16], align 2\n",
+    );
+    for (i, value) in [2, 1, 0, 1].iter().enumerate() {
+        text += &format!(
+            "  %a{i} = getelementptr inbounds [4 x i16], ptr %a, i64 0, i64 {i}\n  %b{i} = getelementptr inbounds [4 x i16], ptr %b, i64 0, i64 {i}\n  %x{i} = add i16 %x, {i}\n  store i16 %x{i}, ptr %a{i}\n  store i16 {value}, ptr %b{i}\n"
+        );
+    }
+    text += "  call void @use(ptr %a, ptr %b)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
+}

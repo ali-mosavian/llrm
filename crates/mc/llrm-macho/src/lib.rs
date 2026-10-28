@@ -73,10 +73,13 @@ fn debug_name(name: &str) -> Result<&'static str, Unsupported> {
         ".debug_abbrev" => "__debug_abbrev",
         ".debug_aranges" => "__debug_aranges",
         ".debug_info" => "__debug_info",
+        ".debug_frame" => "__debug_frame",
         ".debug_line" => "__debug_line",
         ".debug_line_str" => "__debug_line_str",
         ".debug_loc" => "__debug_loc",
         ".debug_loclists" => "__debug_loclists",
+        ".debug_ranges" => "__debug_ranges",
+        ".debug_rnglists" => "__debug_rnglists",
         ".debug_str" => "__debug_str",
         other => return Err(unsupported(format!("{other}: no Mach-O name for this debug section"))),
     })
@@ -104,6 +107,9 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
         Role::Debug(_) => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
+        Role::Unwind => {
+            return Err(unsupported(format!("{}: Mach-O unwind is __compact_unwind and __eh_frame", section.name)));
+        }
     })
 }
 
@@ -435,4 +441,23 @@ pub fn write<W: MachTargetWriter>(
     out.extend(&nlist);
     out.extend(&strings);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::debug_name;
+
+    /// The DWARF writer's `.debug_frame` and range sections had no Mach-O name,
+    /// so `-g` on a function with frame rows or several ranges refused the
+    /// whole object.
+    #[test]
+    fn every_dwarf_section_the_writer_makes_has_a_mach_o_name() {
+        for (dwarf, macho) in [
+            (".debug_frame", "__debug_frame"),
+            (".debug_ranges", "__debug_ranges"),
+            (".debug_rnglists", "__debug_rnglists"),
+        ] {
+            assert_eq!(debug_name(dwarf).unwrap(), macho);
+        }
+    }
 }

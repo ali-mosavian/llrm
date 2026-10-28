@@ -2487,6 +2487,11 @@ struct Body<'b, 'm, 'h> {
     /// The `!range` node of each bounds at each integer type, made on the first
     /// access that wants it.
     range_nodes: HashMap<(i64, i64, TypeId), MetadataId>,
+    descriptor_node: Option<MetadataId>,
+    /// The results of the loads through a pointer, which is where a
+    /// descriptor's words are read (a `DEF SEG` selector is read from a
+    /// variable's place).
+    indirect_loads: HashSet<i64>,
 }
 
 impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
@@ -2528,6 +2533,8 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             at_instruction: 0,
             operands_at: Vec::new(),
             range_nodes: HashMap::default(),
+            descriptor_node: None,
+            indirect_loads: HashSet::default(),
         })
     }
 
@@ -3027,6 +3034,26 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
         Some(node)
     }
 
+    /// Marks the `inttoptr` `cast` as making an array's own segment from a
+    /// descriptor word, which `forging::forges_selector` does not take for a
+    /// forged one.
+    fn described(
+        &mut self,
+        cast: Value,
+    ) {
+        let Value::Value(cast) = cast else { return };
+        let llrm_mir::ValueDef::Instruction(inst) = self.b.function.value(cast).def else { return };
+        let node = *self
+            .descriptor_node
+            .get_or_insert_with(
+                || {
+                    self.b.metadata.push(MetadataNode { distinct: false, operands: Vec::new() });
+                    MetadataId(self.b.metadata.len() as u32 - 1)
+                },
+            );
+        self.b.function.annotate(inst, llrm_mir::module::DESCRIPTOR_WORD, node);
+    }
+
     fn tagged(
         &mut self,
         tag: Option<MetadataId>,
@@ -3364,6 +3391,9 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
             }
             Op::Copy | Op::Load => {
                 let value = self.value(&instruction.operands[0])?;
+                if matches!(instruction.op, Op::Load) && matches!(instruction.operands[0], Operand::IndirectPlace(_)) {
+                    self.indirect_loads.extend(instruction.results.iter().copied());
+                }
                 self.define(instruction, value);
             }
             Op::Store => {
@@ -3584,6 +3614,12 @@ impl<'b, 'm, 'h> Body<'b, 'm, 'h> {
                 };
                 let segment = self.b.context.types.ptr(self.tables.spaces.segment_space()?);
                 let segment = self.b.cast(CastOp::IntToPtr, selector, segment, "");
+                if matches!(
+                    &instruction.operands[0],
+                    Operand::ValueRef(one) if self.indirect_loads.contains(&one.value)
+                ) {
+                    self.described(segment);
+                }
                 let ty = self.result_type(instruction.results[0])?;
                 let base = self.b.cast(CastOp::AddrSpaceCast, segment, ty, "");
                 let byte = self.b.context.types.int(8);

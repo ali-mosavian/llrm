@@ -700,7 +700,8 @@ impl Folder {
         let kept = &pots[same[keep].pot].seq.items[same[keep].start..];
         // The line of each kept instruction: what it and its copies share
         // (BranchFolding.cpp:933).
-        let mut lines: IndexMap<usize, Option<u32>> = kept.iter().map(|item| (item.index, item.insn.line)).collect();
+        let mut lines: IndexMap<usize, Option<crate::model::lir::SrcLoc>> =
+            kept.iter().map(|item| (item.index, item.insn.line)).collect();
         for (index, one) in same.iter().enumerate() {
             if index == keep {
                 continue;
