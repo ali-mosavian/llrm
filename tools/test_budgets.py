@@ -15,6 +15,7 @@ Two kinds:
 - steps, which need an instruction counter (`LLRM_DEBUG=time`'s `[instr]` rows): each step with at least `floor_minstr` Minstr of work at 2N (any share of the compile: a share is a cliff that build flags and neighbours move) is
   at most `steps` times its own work at N. Both less the empty file's.
 """
+import functools
 import os
 import math
 import re
@@ -86,6 +87,13 @@ def quad_steps(axis: str) -> dict[str, float]:
 def still_rising(work_small: float, work_big: float) -> bool:
     """Whether a debt's step still grows: not under the limit by the margin. x2.30 against 2.3 is still rising."""
     return work_big > PAID_MARGIN * DEFAULT["steps"] * max(work_small, 1e-9)
+
+
+def corroborated(limit: float, work_half: float, work_small: float, work_big: float, work_quad) -> bool:
+    """Whether a step over `limit` from N to 2N is growth, not a step in the count: the doubling before it (N/2 -> N) or after it (2N -> 4N, read only
+    if needed) is over too. The assembler's relaxation pass count flips once on a 16-byte shift (`assemble` x3.75 on cases, x1.8 at the sizes around it)."""
+    over = lambda small, big: big > limit * max(small, 1e-9)  # noqa: E731
+    return over(work_half, work_small) or over(work_big, work_quad())
 
 
 def onset(work_small: float) -> bool:
@@ -331,7 +339,8 @@ def test_no_step_grows_faster_than_the_program_does(axis):
     half = half_steps(axis)
     work = lambda table, name: max(table.get(name, 0.0) - empty.get(name, 0.0), 0.0)  # noqa: E731
     dipping = {name for name in big if work(big, name) >= DEFAULT["floor_minstr"] and dips(work(half, name), work(small, name), work(big, name))}
-    quad = quad_steps(axis) if dipping else {}
+    quad_of = functools.cache(lambda: quad_steps(axis))  # read once, and only for a step over its limit
+    quad = quad_of() if dipping else {}
     for name, value in big.items():
         work_small, work_big = max(small.get(name, 0.0) - empty.get(name, 0.0), 0.0), max(value - empty.get(name, 0.0), 0.0)
         work_quad = work(quad, name) if name in dipping else None
@@ -345,7 +354,7 @@ def test_no_step_grows_faster_than_the_program_does(axis):
         widest = judged_ratio(work_small, work_big, work_quad)
         if widest > PAID_MARGIN * DEFAULT["steps"]:
             rising.add(name)
-        if widest > ratio:
+        if widest > ratio and (work_quad is not None or corroborated(ratio, work(half, name), work_small, work_big, lambda: work(quad_of(), name))):
             readings = f"{work_small:.1f} -> {work_big:.1f}" + (f" -> {work_quad:.1f} (4N)" if work_quad is not None else "")
             grown.append(f"{name} {readings} Minstr (x{widest:.2f}, limit {ratio} per doubling{debt})")
     paid = paid_debts(debts("steps", axis), rising)
@@ -361,3 +370,12 @@ def test_the_dominators_of_branches_grow_with_the_program_at_2n_and_at_4n():
     work = [parsed_steps(run(source_of("branches", size), "branches", "time")).get("analysis dominators", 0.0) - empty for size in (n, 2 * n, 4 * n)]
     assert work[0] > 0.5, f"premise: the step ran and was counted, {work}"
     assert work[1] <= DEFAULT["steps"] * work[0] and work[2] <= DEFAULT["steps"] * work[1], f"N, 2N, 4N: {work[0]:.1f} {work[1]:.1f} {work[2]:.1f} Minstr (limit {DEFAULT['steps']} per doubling)"
+
+
+def test_a_step_over_its_limit_at_one_doubling_only_is_not_growth_and_at_two_is():
+    """cases `assemble` read 7.8 -> 29.3 Minstr (x3.75, limit 2.3) and flagged parity ee5a419f8a: the assembler's relaxation pass count flips on one 16-byte
+    shift, x1.8 on both sides of it. One doubling over the limit flags nothing; the same step over at the doubling before or after it is growth."""
+    flip = corroborated(2.3, 7.0, 7.8, 29.3, lambda: 29.3 * 1.8)
+    assert not flip
+    assert corroborated(2.3, 3.0, 7.8, 29.3, lambda: 29.3 * 1.8), "over at N/2 -> N too"
+    assert corroborated(2.3, 7.0, 7.8, 29.3, lambda: 29.3 * 2.6), "over at 2N -> 4N too"

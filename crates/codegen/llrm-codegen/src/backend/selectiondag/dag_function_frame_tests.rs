@@ -477,20 +477,27 @@ fn select_m32(ir: &str) -> Result<crate::backend::isel::Selected, String> {
 }
 
 /// A `memmove` a pass proved forward is `rep movsb`, one proved backward is
-/// `std; rep movsb; cld` from the last byte, where the runtime has no
+/// `std; rep movsd; cld` from the last dword, where the runtime has no
 /// `memmove` (`copyw.nib`'s scroll up and down at m32); one proved neither way
-/// is still refused.
+/// is still refused. The backward copy went a byte at a time at m32: scroll
+/// bq32 -Os ran 91270 instructions beside the old selector's 55165.
 #[test]
 fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(select_m32(&memmove_ir(", !llrm.forward !0")).is_ok());
     let backward = select_m32(&memmove_ir(", !llrm.backward !0")).unwrap_or_else(|why| panic!("{why}"));
-    assert!(
-        backward.inline.values().any(|bytes| bytes[..] == [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC]),
-        "{:?}",
-        backward.inline
-    );
+    assert!(backward.inline.values().any(|bytes| bytes[..] == [0xFD, 0xF3, 0xA5, 0xFC]), "{:?}", backward.inline);
     let refused = select_m32(&memmove_ir("")).err().expect("no direction proved");
     assert!(refused.contains("memmove"), "{refused}");
+}
+
+/// A backward `memmove` of a size that is no multiple of four goes a byte at a
+/// time at m32: a flat target names no register to carry a dword copy's tail.
+#[test]
+fn a_backward_memmove_at_m32_of_an_odd_size_moves_bytes() {
+    let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
+    let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
+    let bytes = [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC];
+    assert!(backward.inline.values().any(|code| code[..] == bytes), "{:?}", backward.inline);
 }
 
 const SCALED_INDEX_AT_M16: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
@@ -1281,4 +1288,23 @@ fn a_far_string_move_leaves_no_dword_join_once_dead_code_is_gone() {
     assert!(joins(&done.body) > 0, "the premise: selection builds the joined dword");
     let cleaned = crate::backend::deadmi::eliminated(&done.body);
     assert_eq!(joins(&cleaned), 0, "the unread join is gone");
+}
+
+/// The pin's `(i16 0)` is the low part of a `MOV32r0`: `xor edi, edi` at m32,
+/// 2 bytes. Narrowed to a word (`xor di, di`, 66-prefixed) it grew 1 B per
+/// zero (QB `frames` -Os bq32).
+#[test]
+fn a_zero_word_at_m32_is_a_dword_xor() {
+    use crate::model::ir::Loc;
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i16 @f() {
+  ret i16 0
+}
+";
+    let done = select_m32(ir).unwrap_or_else(|why| panic!("{why}"));
+    let zero = done.body.insns().iter().filter_map(|one| one.what.clone()).find(|what| {
+        what.name.as_deref() == Some("mov") && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.value == 0)
+    });
+    let zero = zero.expect("a zero");
+    assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
 }

@@ -67,21 +67,29 @@ fn rejects(text: &str) -> bool {
 }
 
 /// The constructs of `ConstantFolding.cpp` MIR cannot say: a test fails the
-/// day MIR gains one, so its translation is owed then.
+/// day MIR gains one, so its translation is owed then. `add`, `sub` and `xor`
+/// are said (`ConstantExpr::Binary`; torture loop-2d), and fold as the
+/// instructions they are.
 #[test]
-fn mir_has_no_binary_constant_expressions_and_no_inrange() {
-    for expr in [
-        "sub (i64 ptrtoint (ptr @g to i64), i64 1)",
-        "add (i64 ptrtoint (ptr @g to i64), i64 1)",
-        "xor (i64 ptrtoint (ptr @g to i64), i64 1)",
-        "select (i1 true, i64 1, i64 2)",
-    ] {
-        let text = format!("@g = global i32 0\ndefine void @f() {{\n  %x = add i64 {expr}, 1\n  ret void\n}}\n");
-        assert!(rejects(&text), "{expr}");
-    }
+fn mir_has_no_select_constant_expression_and_no_inrange() {
+    let text =
+        "@g = global i32 0\ndefine void @f() {\n  %x = add i64 select (i1 true, i64 1, i64 2), 1\n  ret void\n}\n";
+    assert!(rejects(text));
     assert!(rejects(
         "@g = global [2 x i32] zeroinitializer\n@h = global ptr getelementptr inrange(0, 8) ([2 x i32], ptr @g, i64 0, i64 1)\n"
     ));
+}
+
+#[test]
+fn mir_reads_add_sub_and_xor_of_an_address_as_constant_expressions() {
+    for op in ["add", "sub", "xor"] {
+        let text = format!(
+            "@g = global i32 0\ndefine i64 @f() {{\n  %x = add i64 {op} (i64 ptrtoint (ptr @g to i64), i64 1), 1\n  ret i64 %x\n}}\n"
+        );
+        let module = parse::module(&text).unwrap_or_else(|why| panic!("{op}: {why:?}"));
+        let printed = crate::print::module(&module);
+        assert!(printed.contains(&format!("{op} (i64 ptrtoint (ptr @g to i64), i64 1)")), "{printed}");
+    }
 }
 
 #[test]

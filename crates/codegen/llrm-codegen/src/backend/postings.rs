@@ -524,12 +524,12 @@ impl Postings {
                 new_slots[start + k as usize] = (low + step * (k + 1)) as u32;
             }
         }
-        for &position in &found.gone {
-            self.remove_entries(block, old_slots_at(&self.slots, block, position), &old[position]);
-        }
-        for &position in &found.added {
-            self.insert_entries(block, new_slots[position], position, &new[position]);
-        }
+        let gone: Vec<(u32, &Insn)> =
+            found.gone.iter().map(|&position| (old_slots_at(&self.slots, block, position), &*old[position])).collect();
+        self.remove_entries(block, &gone);
+        let added: Vec<(u32, usize, &Arc<Insn>)> =
+            found.added.iter().map(|&position| (new_slots[position], position, &new[position])).collect();
+        self.insert_entries(block, &added);
         let frames = &mut self.frames[block as usize];
         for &position in &found.gone {
             if is_framed(&old[position]) {
@@ -549,62 +549,119 @@ impl Postings {
         true
     }
 
+    /// The entries of `gone` (slot and instruction, ascending by slot) cut out
+    /// of their lists, each list once: cutting them one at a time moved the
+    /// rest of a list for each (a value read 4096 times, 12 k cuts, 650 M Ir of
+    /// the machine CSE; the pin unlinks a use in O(1)).
     fn remove_entries(
         &mut self,
         block: u32,
-        slot: u32,
-        one: &Insn,
+        gone: &[(u32, &Insn)],
     ) {
-        let entry = (block, slot);
-        let cut = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
-            if let Some(list) = map.get_mut(&value) {
-                if let Ok(at) = list.binary_search_by_key(&entry, Entry::key) {
-                    list.remove(at);
+        type Cuts = std::collections::BTreeMap<u32, Vec<u32>>;
+        let (mut defs, mut uses, mut needs) = (Cuts::new(), Cuts::new(), Cuts::new());
+        for &(slot, one) in gone {
+            for value in &one.defines {
+                defs.entry(*value).or_default().push(slot);
+            }
+            for value in &one.uses {
+                uses.entry(*value).or_default().push(slot);
+            }
+            for (held, _) in &one.requires {
+                needs.entry(held.value).or_default().push(slot);
+            }
+        }
+        let cut = |map: &mut HashMap<u32, Vec<Entry>>, cuts: &Cuts| {
+            for (value, slots) in cuts {
+                let Some(list) = map.get_mut(value) else { continue };
+                if slots.len() <= ONE_BY_ONE {
+                    for &slot in slots {
+                        if let Ok(at) = list.binary_search_by_key(&(block, slot), Entry::key) {
+                            #[cfg(test)]
+                            MOVES.with(|moves| moves.set(moves.get() + list.len() - at));
+                            list.remove(at);
+                        }
+                    }
+                } else {
+                    // Both ascending: one pass, a slot with no entry skipped.
+                    let mut next = 0;
+                    list.retain(|held| {
+                        while next < slots.len() && (block, slots[next]) < held.key() {
+                            next += 1;
+                        }
+                        if next < slots.len() && (block, slots[next]) == held.key() {
+                            next += 1;
+                            return false;
+                        }
+                        true
+                    });
                 }
                 if list.is_empty() {
-                    map.remove(&value);
+                    map.remove(value);
                 }
             }
         };
-        for value in &one.defines {
-            cut(&mut self.defs, *value);
-        }
-        for value in &one.uses {
-            cut(&mut self.uses, *value);
-        }
-        for value in one.defines.iter().chain(&one.uses) {
+        cut(&mut self.defs, &defs);
+        cut(&mut self.uses, &uses);
+        for value in defs.keys().chain(uses.keys()) {
             if !self.defs.contains_key(value) && !self.uses.contains_key(value) {
                 self.lowered(*value);
             }
         }
-        for (held, _) in &one.requires {
-            cut(&mut self.needs, held.value);
-        }
+        cut(&mut self.needs, &needs);
     }
 
+    /// The entries of `added` (slot, position and instruction, ascending by
+    /// slot) put into their lists, each list once.
     fn insert_entries(
         &mut self,
         block: u32,
-        slot: u32,
-        position: usize,
-        one: &Arc<Insn>,
+        added: &[(u32, usize, &Arc<Insn>)],
     ) {
-        let put = |map: &mut HashMap<u32, Vec<Entry>>, value: u32| {
-            let list = map.entry(value).or_default();
-            let at = list.partition_point(|held| held.key() < (block, slot));
-            list.insert(at, Entry { block, slot, insn: Arc::clone(one), hint: std::cell::Cell::new(position as u32) });
+        type Puts = std::collections::BTreeMap<u32, Vec<Entry>>;
+        let (mut defs, mut uses, mut needs) = (Puts::new(), Puts::new(), Puts::new());
+        for &(slot, position, one) in added {
+            let entry = || Entry { block, slot, insn: Arc::clone(one), hint: std::cell::Cell::new(position as u32) };
+            for value in &one.defines {
+                defs.entry(*value).or_default().push(entry());
+            }
+            for value in &one.uses {
+                uses.entry(*value).or_default().push(entry());
+            }
+            for (held, _) in &one.requires {
+                needs.entry(held.value).or_default().push(entry());
+            }
+        }
+        let put = |map: &mut HashMap<u32, Vec<Entry>>, puts: Puts| {
+            for (value, fresh) in puts {
+                let list = map.entry(value).or_default();
+                if fresh.len() <= ONE_BY_ONE {
+                    for entry in fresh {
+                        let at = list.partition_point(|held| held.key() < entry.key());
+                        #[cfg(test)]
+                        MOVES.with(|moves| moves.set(moves.get() + list.len() - at));
+                        list.insert(at, entry);
+                    }
+                } else {
+                    let mut merged = Vec::with_capacity(list.len() + fresh.len());
+                    let mut fresh = fresh.into_iter().peekable();
+                    for held in list.drain(..) {
+                        while fresh.peek().is_some_and(|entry| entry.key() < held.key()) {
+                            merged.push(fresh.next().expect("peeked"));
+                        }
+                        merged.push(held);
+                    }
+                    merged.extend(fresh);
+                    *list = merged;
+                }
+            }
         };
-        for value in &one.defines {
-            put(&mut self.defs, *value);
+        for value in defs.keys().chain(uses.keys()) {
             self.raise(*value);
         }
-        for value in &one.uses {
-            put(&mut self.uses, *value);
-            self.raise(*value);
-        }
-        for (held, _) in &one.requires {
-            put(&mut self.needs, held.value);
-        }
+        put(&mut self.defs, defs);
+        put(&mut self.uses, uses);
+        put(&mut self.needs, needs);
     }
 }
 
@@ -644,9 +701,15 @@ struct Followed {
     found: Postings,
 }
 
+/// Entries of one list cut or put at most this many at a time are moved one by
+/// one; more are merged in a single pass over the list.
+const ONE_BY_ONE: usize = 2;
+
 thread_local! {
     static CURRENT: RefCell<Option<Followed>> = const { RefCell::new(None) };
     static REDONE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    #[cfg(test)]
+    static MOVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     #[cfg(test)]
     static LOOKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -775,4 +838,38 @@ pub(crate) fn next_value_following(body: &LirBody) -> u32 {
         assert_eq!(found, body.next_value(), "{}: the next value from the postings differs from the walk", body.name);
     }
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::model::lir::{Insn, LirBlock};
+    use crate::support::hash::IndexMap;
+
+    const READERS: u32 = 400;
+
+    fn readers(def_base: u32) -> Vec<Arc<Insn>> {
+        (0..READERS).map(|at| Arc::new(Insn::new(i64::from(at), None, None, vec![def_base + at], vec![0]))).collect()
+    }
+
+    fn body(insns: Vec<Arc<Insn>>) -> LirBody {
+        LirBody::new("t", 0, vec![Block::from(LirBlock::new(0, insns))], IndexMap::default(), IndexMap::default())
+    }
+
+    /// A value read by 400 instructions that are all made again took 400 cuts
+    /// and 400 puts, each moving the rest of its 400-entry list: 12 k cuts of a
+    /// 4096-entry list were 650 M instructions of the machine CSE at N=4096.
+    #[test]
+    fn a_value_read_by_every_replaced_instruction_has_its_list_cut_once() {
+        let before = body(readers(1000));
+        following(&before, |_| ());
+        let moved = MOVES.with(std::cell::Cell::get);
+        let after = body(readers(5000));
+        let seen = following(&after, |postings| postings.uses_at(0).count());
+        assert_eq!(seen, READERS as usize);
+        let moves = MOVES.with(std::cell::Cell::get) - moved;
+        assert!(moves < 2 * READERS as usize, "{moves} entries were shifted by cutting and putting one at a time");
+    }
 }

@@ -166,6 +166,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         BrInd => pin::BRIND,
         Load => pin::LOAD,
         Store => pin::STORE,
+        AtomicSwap => pin::ATOMIC_SWAP,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
@@ -302,6 +303,11 @@ pub struct DagisAdapter<'a> {
     /// The memory operands each machine node got (`setNodeMemRefs`), as
     /// load/store node ids.
     pub mem_refs: BTreeMap<u32, Vec<u32>>,
+    /// `SDNode::getNodeId`: the topological position of each node at the start
+    /// of selection (operands before their users), -1 for a node selection
+    /// made, and `-(id + 1)` for an unselected successor of a selected node
+    /// (`InvalidateNodeId`): topological pruning looks at positive ids only.
+    node_id: Vec<i32>,
 }
 
 impl<'a> DagisAdapter<'a> {
@@ -319,7 +325,47 @@ impl<'a> DagisAdapter<'a> {
         }
         let dead =
             (0..dag.nodes().len() as u32).filter(|&node| dag.is_deleted(node) || !reached[node as usize]).collect();
-        DagisAdapter { dag, dead, mem_refs: BTreeMap::new() }
+        let mut node_id = vec![-1; dag.nodes().len()];
+        for (position, node) in super::dag_select::users_first(dag).into_iter().rev().enumerate() {
+            node_id[node as usize] = position as i32;
+        }
+        DagisAdapter { dag, dead, mem_refs: BTreeMap::new(), node_id }
+    }
+
+    /// `Node->setNodeId(-1)`.
+    pub(super) fn mark_selected(
+        &mut self,
+        node: u32,
+    ) {
+        if let Some(id) = self.node_id.get_mut(node as usize) {
+            *id = -1;
+        }
+    }
+
+    pub(super) fn id_of(
+        &self,
+        node: u32,
+    ) -> i32 {
+        self.node_id.get(node as usize).copied().unwrap_or(-1)
+    }
+
+    /// `SelectionDAGISel::EnforceNodeIdInvariant`: the unselected users of a
+    /// node a replacement made, and theirs, are no longer after what they read
+    /// in the numbering, so pruning by id must skip them.
+    fn enforce_node_id_invariant(
+        &mut self,
+        node: u32,
+    ) {
+        let mut work = vec![node];
+        while let Some(n) = work.pop() {
+            for user in Self::live_user_nodes(self, n) {
+                let id = self.id_of(user);
+                if id > 0 {
+                    self.node_id[user as usize] = -(id + 1);
+                    work.push(user);
+                }
+            }
+        }
     }
 
     pub fn is_dead(
@@ -444,6 +490,8 @@ impl Dag for DagisAdapter<'_> {
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
             NodeData::PhysReg(id) => pin_register(id),
+            // `$noreg`
+            NodeData::Register(0) => Some(0),
             _ => None,
         }
     }
@@ -827,7 +875,15 @@ impl Dag for DagisAdapter<'_> {
     ) -> (u32, Vec<u32>) {
         let vts: Vec<EVT> = vts.iter().copied().map(our_vt).collect();
         let ops: Vec<SDValue> = operands.iter().copied().map(ours).collect();
-        (self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops), Vec::new())
+        let morphed = self.dag.morph_node_to(node, ISD::Machine(u32::from(opcode)), &vts, &ops);
+        // `MorphNodeTo` reuses the node with new operands and resets its id
+        // ("to the isel this is a newly allocated machine node"): left small
+        // it would be pruned from a walk toward the later nodes it now reads.
+        if morphed == node {
+            self.mark_selected(node);
+        }
+        self.enforce_node_id_invariant(morphed);
+        (morphed, Vec::new())
     }
     fn update_node_operands(
         &mut self,
@@ -843,6 +899,7 @@ impl Dag for DagisAdapter<'_> {
         to: PinValue,
     ) {
         self.dag.replace_all_uses_with(ours(from), ours(to));
+        self.enforce_node_id_invariant(to.node);
     }
     fn replace_node(
         &mut self,
@@ -852,6 +909,7 @@ impl Dag for DagisAdapter<'_> {
         for res in 0..self.dag.nodes()[from as usize].values.len() as u8 {
             self.dag.replace_all_uses_with(SDValue { node: from, res }, SDValue { node: to, res });
         }
+        self.enforce_node_id_invariant(to);
         self.remove(from);
     }
     fn remove_dead_node(
@@ -868,6 +926,10 @@ impl Dag for DagisAdapter<'_> {
             self.remove(node);
         }
     }
+    /// `SDNode::hasPredecessorHelper` with `TopologicalPrune`, as every caller
+    /// in the pin asks: a node whose id is below the searched node's cannot
+    /// have it among its predecessors, so the walk does not go through it
+    /// (it stays local, where an unpruned one visits everything before it).
     fn has_predecessor_helper(
         &self,
         node: u32,
@@ -878,20 +940,32 @@ impl Dag for DagisAdapter<'_> {
         if visited.contains(node) {
             return true;
         }
+        let searched = match self.id_of(node) {
+            id if id < -1 => -(id + 1),
+            id => id,
+        };
+        let mut deferred = Vec::new();
+        let mut found = false;
         while let Some(m) = worklist.pop() {
-            if m == node {
-                return true;
-            }
-            if max != 0 && visited.len() >= max {
-                return true;
+            let id = self.id_of(m);
+            if self.dag.nodes()[m as usize].opcode != ISD::TokenFactor && searched > 0 && id > 0 && id < searched {
+                deferred.push(m);
+                continue;
             }
             for op in &self.dag.nodes()[m as usize].ops {
                 if visited.insert(op.node) {
                     worklist.push(op.node);
                 }
+                if op.node == node {
+                    found = true;
+                }
+            }
+            if found || (max != 0 && visited.len() >= max) {
+                break;
             }
         }
-        false
+        worklist.extend(deferred);
+        found || (max != 0 && visited.len() >= max)
     }
 }
 

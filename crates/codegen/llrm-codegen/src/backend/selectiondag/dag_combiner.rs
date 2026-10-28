@@ -439,7 +439,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // operand.
         if matches!(cond, CondCode::SetEq | CondCode::SetNe)
             && matches!(self.dag.opcode(n0), ISD::Add | ISD::Xor | ISD::Sub)
-            && self.dag.use_count(n0.node) == 1
+            && self.dag.has_one_use(n0.node)
         {
             let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
             let width = op_type.size_in_bits();
@@ -456,7 +456,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
             || self.level != CombineLevel::BeforeLegalizeTypes
-            || self.dag.use_count(n0.node) != 1
+            || !self.dag.has_one_use(n0.node)
         {
             return None;
         }
@@ -540,7 +540,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let arm_vt = self.dag.value_type(n1);
         // `select c0, (select c1, x, y), y` is `select (and c0, c1), x, y`.
-        if self.dag.opcode(n1) == ISD::Select && self.dag.use_count(n1.node) == 1 {
+        if self.dag.opcode(n1) == ISD::Select && self.dag.has_one_use(n1.node) {
             let (c1, x, y) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1), self.dag.operand(n1, 2));
             if y == n2 && self.dag.value_type(c1) == cond_vt {
                 let and = self.dag.get_node(ISD::And, cond_vt, &[n0, c1]);
@@ -548,7 +548,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         // `select c0, x, (select c1, x, y)` is `select (or c0, c1), x, y`.
-        if self.dag.opcode(n2) == ISD::Select && self.dag.use_count(n2.node) == 1 {
+        if self.dag.opcode(n2) == ISD::Select && self.dag.has_one_use(n2.node) {
             let (c1, x, y) = (self.dag.operand(n2, 0), self.dag.operand(n2, 1), self.dag.operand(n2, 2));
             if x == n1 && self.dag.value_type(c1) == cond_vt {
                 let or = self.dag.get_node(ISD::Or, cond_vt, &[n0, c1]);
@@ -742,11 +742,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.constant(n1) == Some(1)
             && vt == EVT::I1
             && matches!(self.dag.opcode(n0), ISD::Or | ISD::And)
-            && self.dag.use_count(n0.node) == 1
+            && self.dag.has_one_use(n0.node)
         {
             let (a, b) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-            let one_use_setcc =
-                |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.use_count(v.node) == 1;
+            let one_use_setcc = |dag: &SelectionDAG, v: SDValue| dag.opcode(v) == ISD::SetCC && dag.has_one_use(v.node);
             if one_use_setcc(self.dag, a) || one_use_setcc(self.dag, b) {
                 let flipped = if self.dag.opcode(n0) == ISD::And { ISD::Or } else { ISD::And };
                 let (not_a, not_b) =
@@ -849,7 +848,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // legalization only, as the pin does.
             ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor
                 if self.level < CombineLevel::AfterLegalizeVectorOps
-                    && self.dag.use_count(n0.node) == 1
+                    && self.dag.has_one_use(n0.node)
                     && vt.is_integer()
                     && {
                         let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
@@ -886,7 +885,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let wide = self.dag.value_type(load);
         if info.volatile
             || info.ext.is_some()
-            || self.dag.use_count(load.node) != 1
+            || !self.dag.has_one_use(load.node)
             || !vt.is_integer()
             || vt.size_in_bits() % 8 != 0
             || vt.size_in_bits() >= wide.size_in_bits()
@@ -1349,7 +1348,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         let (c2, c1) = (self.dag.constant(n1)?, self.dag.constant(self.dag.operand(inner, 1))?);
         let vt = self.dag.value_type(node);
         let width = u128::from(vt.size_in_bits());
-        if c1 >= width || c2 >= width || (c1 != c2 && self.dag.use_count(inner.node) != 1) {
+        if c1 >= width || c2 >= width || (c1 != c2 && !self.dag.has_one_use(inner.node)) {
             return None;
         }
         let x = self.dag.operand(inner, 0);
@@ -1398,10 +1397,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             let shifted = self.dag.get_node(ISD::Srl, inner_vt, &[self.dag.operand(inner, 0), amount]);
             return Some(self.dag.get_node(ISD::Truncate, vt, &[shifted]));
         }
-        if self.dag.use_count(trunc.node) == 1
-            && self.dag.use_count(inner.node) == 1
-            && c1 + c2 < inner_size
-            && c2 < op_size
+        if self.dag.has_one_use(trunc.node) && self.dag.has_one_use(inner.node) && c1 + c2 < inner_size && c2 < op_size
         {
             let amount = self.dag.get_constant(c1 + c2, amount_vt);
             let shifted = self.dag.get_node(ISD::Srl, inner_vt, &[self.dag.operand(inner, 0), amount]);
@@ -1702,7 +1698,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.opcode(value) != ISD::BuildPair
             || info.volatile
             || info.mem_vt != self.dag.value_type(value)
-            || self.dag.use_count(value.node) != 1
+            || !self.dag.has_one_use(value.node)
         {
             return None;
         }
