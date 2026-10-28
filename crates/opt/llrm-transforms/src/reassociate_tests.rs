@@ -762,3 +762,62 @@ fn test_the_digest_of_a_body_sees_an_operand_swap() {
     assert_eq!(body("%a", "%b"), body("%a", "%b"));
     assert_ne!(body("%a", "%b"), body("%b", "%a"));
 }
+
+mod operand_map_footprint {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    use llrm_mir::module::{Operand, ValueId};
+
+    use crate::reassociate::OperandMap;
+
+    thread_local! {
+        static LARGEST: Cell<usize> = const { Cell::new(0) };
+    }
+
+    struct Largest;
+
+    // SAFETY: forwards to `System`, only noting the size.
+    unsafe impl GlobalAlloc for Largest {
+        unsafe fn alloc(
+            &self,
+            layout: Layout,
+        ) -> *mut u8 {
+            let _ = LARGEST.try_with(|largest| largest.set(largest.get().max(layout.size())));
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(
+            &self,
+            ptr: *mut u8,
+            layout: Layout,
+        ) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+
+        unsafe fn realloc(
+            &self,
+            ptr: *mut u8,
+            layout: Layout,
+            new_size: usize,
+        ) -> *mut u8 {
+            let _ = LARGEST.try_with(|largest| largest.set(largest.get().max(new_size)));
+            unsafe { System.realloc(ptr, layout, new_size) }
+        }
+    }
+
+    #[global_allocator]
+    static ALLOCATOR: Largest = Largest;
+
+    /// A map made for one expression tree held a page table as long as the
+    /// highest value id (about 580 Ir to drop each at 256 chained adds, the
+    /// reassociate stage 1.9x the pin and growing faster).
+    #[test]
+    fn test_one_leaf_of_a_late_value_allocates_a_few_bytes() {
+        LARGEST.with(|largest| largest.set(0));
+        let mut leaves: OperandMap<u64> = OperandMap::new();
+        leaves.insert(Operand::Value(ValueId(1 << 24)), 1);
+        assert_eq!(leaves.get(Operand::Value(ValueId(1 << 24))), Some(&1));
+        assert!(LARGEST.with(Cell::get) < 4096);
+    }
+}

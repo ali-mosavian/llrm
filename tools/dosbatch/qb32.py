@@ -202,7 +202,7 @@ def compile_basic(source: Path, obj: Path, flags: tuple[str, ...] = ("-O2",)) ->
 
 
 def _compile_basic(source: Path, obj: Path, flags: tuple[str, ...]) -> None:
-    done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", dosbatch.m_flag(TARGET), *flags, "-o", str(obj)], capture_output=True, text=True)
+    done = dosbatch.subprocess.run(dosbatch.with_isel([str(dosbatch.BIN / "llrm-qb"), str(source), "--dialect", "qb45", "-fqb-runtime=llrm", dosbatch.m_flag(TARGET), *flags, "-o", str(obj)]), capture_output=True, text=True)
     if done.returncode != 0:
         raise RuntimeError((done.stderr or done.stdout).strip()[-400:])
 
