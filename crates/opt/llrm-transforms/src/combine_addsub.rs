@@ -20,10 +20,9 @@
 //! `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
 //! `foldBinOpSelectBinOp` are the phi and select families'.
 //!
-//! DEVIATE 3 (temporary): the folds that build an intrinsic call (`usub.sat`,
-//! `uadd.sat`, `umax`, `umin`, `scmp`, `ctpop`...) are left out until the
-//! Builder can declare an intrinsic (`combine_build` DEVIATE 2); each is a
-//! `// DEVIATE 3:` comment at its place.
+//! DEVIATE 3: `uadd.sat(X, C) + -C --> umin(X, ~C)` is not made: the selector
+//! has no `uadd.sat` lowering. Only the `umax` intrinsic call is matched for
+//! `m_UMax`, not the select-of-compare form.
 //!
 //! DEVIATE 4: a constant that `ConstantExpr::getAdd` would leave as an
 //! expression is not built (MIR holds no binary constant expressions): the
@@ -546,7 +545,7 @@ pub fn fold_add_with_constant(
             return Some(Visit::Replace(c.create_intrinsic(inst, "usub.sat", ty, &[x, k])));
         }
     }
-    // DEVIATE 3: uadd.sat(X, C) + -C --> umin(X, ~C)
+    // DEVIATE 3: uadd.sat(X, C) + -C --> umin(X, ~C): no `uadd.sat` lowering.
 
     // Fold (add (zext (add X, -C)), C) -> (zext X) if X u>= C. Truncate C to
     // the narrow type to avoid mismatched width comparisons.

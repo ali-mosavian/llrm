@@ -578,3 +578,31 @@ b0:
     assert!(out.contains("call i32 @llvm.smax.i32(i32 0, i32 %a)"), "{out}");
     assert!(out.contains("call i32 @llvm.smin.i32(i32 %0, i32 255)"), "{out}");
 }
+
+/// `narrowFunnelShift`: a rotate done in 32 bits and truncated to 8 is
+/// `fshl.i8` of the narrow value. Stayed two wide shifts, an or and a truncate.
+#[test]
+fn a_truncated_wide_rotate_is_a_narrow_funnel_shift() {
+    let text = "define i8 @f(i8 %x, i32 %amt) {
+b0:
+  %zx = zext i8 %x to i32
+  %n = and i32 %amt, 7
+  %sub = sub i32 8, %n
+  %shl = shl i32 %zx, %n
+  %shr = lshr i32 %zx, %sub
+  %or = or i32 %shl, %shr
+  %r = trunc i32 %or to i8
+  ret i8 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i8 @llvm.fshl.i8(i8 %"), "{out}");
+}

@@ -20,12 +20,8 @@
 //! `foldExtractionOfVectorDeinterleave`, the shuffle step of
 //! `commonCastTransforms` and the `vscale` folds are not translated.
 //!
-//! DEVIATE 4 (temporary): the folds that build an intrinsic call (`uadd.sat`,
-//! `usub.sat`, `smin`, `smax`, `ctlz`, `scmp`, `ucmp`, `fshl`, `fshr`) are
-//! left out until the Builder can declare an intrinsic (`combine_build`
-//! DEVIATE 2). So is the `llvm.abs` and min/max call case of
-//! `canEvaluateTruncated` and `EvaluateInDifferentType`: a call is not
-//! evaluable in the narrow type here.
+//! DEVIATE 4: the folds that build `uadd.sat` are not made: the selector has
+//! no `uadd.sat` lowering (`trunc(u/smin(zext a + zext b, MAX))`).
 //!
 //! DEVIATE 5: integers wider than 128 bits are left alone (masks are `u128`);
 //! a constant `ConstantExpr` would keep as an expression, or a shift amount
@@ -936,8 +932,123 @@ fn narrow_bin_op(
         }
         _ => {}
     }
-    // DEVIATE 4: narrowFunnelShift (fshl, fshr).
-    None
+    narrow_funnel_shift(c, inst)
+}
+
+/// `narrowFunnelShift`: funnel and rotate shifts may occur in a wider type than
+/// necessary because of type promotion rules. Narrow the inputs and make a
+/// funnel shift.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L810>
+fn narrow_funnel_shift(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let src = c.function.instruction(inst).operands[0];
+    let dest_ty = c.function.instruction(inst).ty;
+    let (wide_w, narrow_w) = (width(c, src), bits_of(c, dest_ty));
+    // Bail out on strange types.
+    if !narrow_w.is_power_of_two() {
+        return None;
+    }
+    let found = {
+        let q = query(c, Some(inst));
+        // First, find an or'd pair of opposite shifts:
+        // trunc (or (lshr ShVal0, ShAmt0), (shl ShVal1, ShAmt1))
+        let (or0, or1, _) = binop(&q, src, BinaryOp::Or)?;
+        let logical_shift = |v: Operand| {
+            let shl = binop(&q, v, BinaryOp::Shl).map(|(x, a, _)| (BinaryOp::Shl, x, a));
+            let shift = shl.or_else(|| binop(&q, v, BinaryOp::LShr).map(|(x, a, _)| (BinaryOp::LShr, x, a)))?;
+            shared::has_one_use(c, v).then_some(shift)
+        };
+        let (op0, mut val0, mut amt0) = logical_shift(or0)?;
+        let (op1, mut val1, mut amt1) = logical_shift(or1)?;
+        if op0 == op1 {
+            return None;
+        }
+        // Canonicalize to or(shl(ShVal0, ShAmt0), lshr(ShVal1, ShAmt1)).
+        if op0 == BinaryOp::LShr {
+            std::mem::swap(&mut val0, &mut val1);
+            std::mem::swap(&mut amt0, &mut amt1);
+        }
+        let and_with = |v: Operand, mask_value: u128| {
+            let (a, b, _) = binop(&q, v, BinaryOp::And)?;
+            [(a, b), (b, a)]
+                .into_iter()
+                .find_map(|(x, m)| q.int_constant(m).filter(|&(m, _)| m == mask_value).map(|_| x))
+        };
+        // Match the shift amount operands for a funnel/rotate pattern. This
+        // always matches a subtraction on the R operand.
+        let match_shift_amount = |l: Operand, r: Operand, width: u32| -> Option<Operand> {
+            // The shift amounts may add up to the narrow bit width:
+            // (shl ShVal0, L) | (lshr ShVal1, Width - L)
+            // If this is a funnel shift (different operands are shifted), then
+            // the shift amount can not over-shift (create poison) in the
+            // narrow type.
+            let hi_bit_mask = mask(wide_w) & !mask(narrow_w.ilog2());
+            if (val0 == val1 || known::masked_value_is_zero(&q, l, hi_bit_mask, 0))
+                && let Some((minuend, subtrahend, _)) = binop(&q, r, BinaryOp::Sub)
+                && shared::has_one_use(c, r)
+                && q.int_constant(minuend).is_some_and(|(m, _)| m == u128::from(width))
+                && subtrahend == l
+            {
+                return Some(l);
+            }
+            // The following patterns currently only work for rotation
+            // patterns.
+            if val0 != val1 {
+                return None;
+            }
+            // The shift amount may be masked with negation:
+            // (shl ShVal0, (X & (Width - 1))) | (lshr ShVal1, ((-X) & (Width -
+            // 1)))
+            let mask_value = u128::from(width - 1);
+            let negated = |v: Operand| {
+                let inner = and_with(v, mask_value)?;
+                pattern::neg(&q, inner).map(|(_, x, _)| x)
+            };
+            if let (Some(x), Some(neg_of)) = (and_with(l, mask_value), negated(r))
+                && x == neg_of
+            {
+                return Some(x);
+            }
+            // Same as above, but the shift amount may be extended after
+            // masking:
+            let extended = |v: Operand| pattern::cast(&q, v, CastOp::ZExt).map(|(_, _, inner)| inner);
+            if let (Some(le), Some(re)) = (extended(l), extended(r))
+                && let (Some(x), Some(neg_of)) = (and_with(le, mask_value), negated(re))
+                && x == neg_of
+            {
+                return Some(x);
+            }
+            None
+        };
+        let (amount, is_fshl) = match match_shift_amount(amt0, amt1, narrow_w) {
+            Some(amount) => (amount, true),
+            None => (match_shift_amount(amt1, amt0, narrow_w)?, false),
+        };
+        // The right-shifted value must have high zeros in the wide type (for
+        // example from 'zext', 'and' or 'shift'). High bits of the
+        // left-shifted value are truncated, so those do not matter.
+        let high = mask(wide_w) & !mask(narrow_w);
+        if !known::masked_value_is_zero(&q, val1, high, 0) {
+            return None;
+        }
+        (amount, is_fshl, val0, val1)
+    };
+    let (amount, is_fshl, val0, val1) = found;
+    // Adjust the width of ShAmt for the narrowed funnel shift: zero-extend if
+    // it is narrower than the destination type, truncate if wider.
+    let amount_w = width(c, amount);
+    let narrow_amount = match amount_w.cmp(&narrow_w) {
+        std::cmp::Ordering::Equal => amount,
+        std::cmp::Ordering::Less => c.create_cast(inst, CastOp::ZExt, amount, dest_ty, Flags::default()),
+        std::cmp::Ordering::Greater => c.create_cast(inst, CastOp::Trunc, amount, dest_ty, Flags::default()),
+    };
+    let x = c.create_cast(inst, CastOp::Trunc, val0, dest_ty, Flags::default());
+    let y = if val0 == val1 { x } else { c.create_cast(inst, CastOp::Trunc, val1, dest_ty, Flags::default()) };
+    let call = c.create_intrinsic(inst, if is_fshl { "fshl" } else { "fshr" }, dest_ty, &[x, y, narrow_amount]);
+    Some(Visit::Replace(call))
 }
 
 /// `visitTrunc`'s steps for a truncate to `i1` (:1102).

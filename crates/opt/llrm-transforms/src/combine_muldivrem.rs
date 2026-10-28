@@ -22,11 +22,6 @@
 //! `foldBinOpOfSelectAndCastOfSelectCondition` (select family) are left out,
 //! each a `// DEVIATE 2:` comment at its place in the order.
 //!
-//! DEVIATE 3 (temporary): the folds that build an intrinsic call (`abs`,
-//! `umin`, `umax`, `cttz`) are left out until the Builder can declare an
-//! intrinsic (`combine_build` DEVIATE 2); each is a `// DEVIATE 3:` comment at
-//! its place. `takeLog2` cannot look through `umin`/`umax` for the same reason.
-//!
 //! DEVIATE 4: a constant that `ConstantExpr::getNeg` or `getShl` would leave
 //! as an expression is not built (MIR holds no binary constant expressions):
 //! the fold is skipped where the constants do not fold to a number.
