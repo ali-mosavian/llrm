@@ -38,10 +38,6 @@
 //! DEVIATE 5 (temporary): `narrowMathIfNoOverflow` (`InstructionCombining.cpp`,
 //! shared with `visitAdd`) is left out until `combine_shared` has it.
 //!
-//! DEVIATE 7 (temporary): `SimplifyDemandedInstructionBits` is not translated
-//! (no demanded-bits simplifier in `combine`); its steps in
-//! `commonIDivTransforms` and `commonIRemTransforms` are left out.
-//!
 //! DEVIATE 8: `simplifyICmpInst` in `visitURem` is asked without the context
 //! instruction, dominator tree and assumptions (no query that takes them):
 //! it can only find less.
@@ -1588,7 +1584,11 @@ fn common_idiv_transforms(
         return Some(replace_with_cast(c, inst, CastOp::ZExt, cmp));
     }
 
-    // DEVIATE 7: SimplifyDemandedInstructionBits.
+    // See if we can fold away this div instruction.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return Some(found);
+    }
 
     // (X - (X rem Y)) / Y -> X / Y; usually originates as ((X / Y) * Y) / Y
     let rem_op = if is_signed { BinaryOp::SRem } else { BinaryOp::URem };
@@ -2176,7 +2176,11 @@ fn common_irem_transforms(
             }
             _ => {}
         }
-        // DEVIATE 7: SimplifyDemandedInstructionBits.
+        // See if we can fold away this rem instruction.
+        let found = c.simplify_demanded_instruction_bits(inst);
+        if !matches!(found, Visit::None) {
+            return Some(found);
+        }
     }
     simplify_irem_mul_shl(c, inst)
 }
