@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:9184f614bae310f583888e415335c0d5296a7550e65caa068a7b5762bc7b77c0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:3325dd2b1134d3aa8f91b0dae5aa94dbc7dba6ffdd15e65c18f6f04163c5c549 -->
 
 # machinesink
 
@@ -55,8 +55,11 @@ clocks, matmul -2.9% clocks and -5.3% code; objects -Os: x_mergesort m16
 263235 -> 263448 (+213 B, +0.081%, 40 modules changed; -O1 to -O3
 identical). The rule had bought -85 B of QCport -Os on the old allocator.
 
-DEVIATE M5 (#2903): in a build for size no edge is broken, except one that
-leaves the loop its instruction runs in (row M6, below). The block
+DEVIATE M5 (#2903): in a build for size no edge is broken, except where the
+instruction is in a loop (row M6, below); the pin breaks it at any size
+(`isWorthBreakingCriticalEdge`, MachineSink.cpp:1040-1105, has no size
+check). Without the rule m16 -Os grows 66 B in 22 objects (recgcd +5,
+recsum +5, switch +4, bintree +4), m32 79 B. The block
 costs a jump (`bench/recpow` -Os +5 bytes with the edge split; over the
 834-object sweep at head 1b78847ae, breaking it at -Os is 37 objects larger,
 +228 bytes, and 26 smaller, -106 bytes). `bench/hanoi` -Os m32 keeps the
@@ -65,7 +68,8 @@ constant (195 bytes against 190 with the edge broken). Exit, decided
 2026-10-22 with jumps' block-by-block diff: a placement rule jumps names,
 or sinking with shrink-wrapping (lir-cleanup-port for the sinking half).
 
-Row M6: the edge that leaves a loop is broken in a build for size too: the
+Row M6: an edge of a loop is broken in a build for size too (x_collatz -Os
+m32 313 -> 309 B, m16 340 -> 334, no object grows): the
 pin's `mov ecx, 32` of an exit phi runs once, in a block of its own, not
 every trip in the latch. Measured (own dist pair, sizes.py, clocksweep, m16
 -Os, 312 programs): 185933 -> 185910 B, 10 programs changed (6 smaller, 4
@@ -81,6 +85,13 @@ The flags are the pin's rule in full: a def moves only if dead (read by no
 later instruction of its block and no successor), and not into a block that
 reads them (`SinkInstruction`'s zombie check).
 Exit: honor a dead implicit def when LIR marks one.
+
+DEVIATE M7 (no number): an instruction whose pinned operands are all
+sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
+makes it read a physical register; ours names the pin only in the register
+class, so `touches_machine_state` asks the classes. One with a pinned result
+(a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
+in its block grew switch.c 16 B at m16 -Os. Exit: none.
 
 DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
 (`SinkInstsIntoCycle`, off by default), no debug-value handling (an

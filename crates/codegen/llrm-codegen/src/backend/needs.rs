@@ -8,12 +8,12 @@
 //! for the machine passes.
 //!
 //! ```text
-//!   COPY        register-to-register mov       regthrash, machinecp
+//!   COPY        register-to-register mov       machinecp
 //!   UNHELD      cell read via a reg32          upperzero
 //!   EXACT_CELL  a cell lowering proved exact   exactaddress
 //! ```
 //!
-//! A bit is the sub-pass's own candidate test (`regthrash::_plain_copy`,
+//! A bit is the sub-pass's own candidate test (
 //! `upperzero::unheld`, `exactaddress::cell_of`), so "can this pass match" has
 //! one definition. `Contents` keeps the bits of each block for as long as the
 //! block is the same list of instructions (`Insns::same_as`), so a pass that

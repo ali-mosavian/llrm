@@ -527,11 +527,11 @@ impl Dag for TestDag {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut crate::dag::Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {
-        if visited.contains(&node) {
+        if visited.contains(node) {
             return true;
         }
         while let Some(m) = worklist.pop() {
@@ -542,8 +542,7 @@ impl Dag for TestDag {
                 return true;
             }
             for op in &self.nodes[m as usize].ops {
-                if !visited.contains(&op.node) {
-                    visited.push(op.node);
+                if visited.insert(op.node) {
                     worklist.push(op.node);
                 }
             }
@@ -803,5 +802,46 @@ impl AddrDag for TestDag {
             }),
             0,
         )
+    }
+}
+
+#[cfg(test)]
+mod visited_tests {
+    use super::*;
+    use crate::dag::Visited;
+
+    #[test]
+    fn a_visited_set_counts_each_node_once() {
+        let mut seen = Visited::of(7);
+        assert!(seen.contains(7) && !seen.contains(8) && !seen.contains(100_000));
+        assert!(!seen.insert(7) && seen.insert(8) && seen.insert(100_000));
+        assert_eq!(seen.len(), 3);
+        seen.clear();
+        assert!(seen.is_empty() && !seen.contains(7));
+    }
+
+    /// `hasPredecessorHelper` kept its visited nodes in a list searched for
+    /// each operand: a walk of n nodes cost n squared (37 calls of
+    /// `IsLegalToFold` were 349 M of 3.8 G instructions on a 256-statement
+    /// block). A chain of 400,000 nodes is walked in well under a second; the
+    /// list took about six seconds.
+    #[test]
+    fn walking_a_long_chain_costs_the_nodes_not_their_square() {
+        let mut dag = TestDag::new();
+        let mut last = 0;
+        for _ in 0..400_000 {
+            last = dag.add(Node {
+                opcode: isd::CopyFromReg,
+                vts: vec![mvt::i16],
+                ops: vec![SDValue::new(last, 0)],
+                ..Node::default()
+            });
+        }
+        let started = std::time::Instant::now();
+        let mut visited = Visited::new();
+        let mut worklist = vec![last];
+        assert!(!dag.has_predecessor_helper(u32::MAX - 1, &mut visited, &mut worklist, 0));
+        assert!(visited.len() > 300_000);
+        assert!(started.elapsed().as_secs_f64() < 1.0, "{:?}", started.elapsed());
     }
 }
