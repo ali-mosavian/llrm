@@ -107,6 +107,7 @@ impl Builder<'_> {
             | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap
+            | Intrinsic::PtrMask
             | Intrinsic::BitReverse
             | Intrinsic::Abs
             | Intrinsic::LRint
