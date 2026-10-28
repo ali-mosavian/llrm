@@ -1478,6 +1478,11 @@ why = "greedy region split on N values live across a call; ours x2.3/doubling vs
 # test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
 
 [[window]]
+axis = "cases"
+name = "assemble"
+why = "b74aef4830 (machinelicm keeps a loop phi's constant in the loop) moved the object by 16 bytes and the assembler's relaxation loop takes one more pass past a threshold: 6.25/9.99/17.86 -> 6.25/9.98/31.49 Minstr at N=64/128/256, equal again at 512. A step on the curve that moves with any code-size change, not a slope (w17, 2026-10-28)."
+
+[[window]]
 axis = "joins"
 name = "mir dse@820"
 why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
