@@ -60,6 +60,8 @@ pub enum Intrinsic {
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
+    /// `llvm.ptrmask`: the pointer with the bits the mask clears cleared.
+    PtrMask,
     /// `llvm.bswap`: the bytes of its argument in the opposite order.
     ByteSwap,
     /// `llvm.bitreverse`: the bits of its argument in the opposite order.
@@ -522,6 +524,14 @@ const TABLE: [Spec; 72] = [
     arithmetic("llvm.abs", Intrinsic::Abs, Slot::Any(0), ABS, Kind::Int),
     compare("llvm.scmp", true),
     compare("llvm.ucmp", false),
+    Spec {
+        name: "llvm.ptrmask",
+        intrinsic: Intrinsic::PtrMask,
+        overloads: &[Kind::Pointer, Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(0), Slot::Any(1)],
+        own: None,
+    },
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
     fixed_mul("llvm.umul.fix", false, false),
     fixed_mul("llvm.smul.fix.sat", true, true),

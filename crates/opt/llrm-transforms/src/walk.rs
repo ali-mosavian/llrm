@@ -454,7 +454,8 @@ impl ProgramPass for Walk {
                     }
                     // What it stated reaches the next body's callees.
                     if stated {
-                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                        // Each body stated was reported to `changed`.
+                        modules[at].invalidate_logged(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }

@@ -454,6 +454,10 @@ impl<'m> Machine<'m> {
                 }
                 Val::Int { bits: count.apply(bits, width), width }
             }
+            Intrinsic::PtrMask => match (argument(0), argument(1)) {
+                (Val::Ptr(address), Val::Int { bits, .. }) => Val::Ptr(address & bits as u64),
+                _ => Val::Poison,
+            },
             Intrinsic::ByteSwap => {
                 let Val::Int { bits, width } = argument(0) else { return Ok(Val::Poison) };
                 Val::Int { bits: bits.swap_bytes() >> (128 - width), width }
