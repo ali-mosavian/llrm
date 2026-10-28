@@ -40,3 +40,11 @@ jobs:
           sudo apt-get install -y -qq ninja-build cmake ccache lld
           sh toolchain/clangbuild.sh ${{ matrix.kind }}
       - run: ${{ steps.tree.outputs.dir }}/bin/clang --version
+      # The same tree as an artifact: a pull request into main cannot read this branch's cache (toolchain/clangfetch.sh).
+      - run: tar -C "${{ steps.tree.outputs.dir }}" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/tree.tar.zst"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: llrm-${{ steps.tree.outputs.name }}
+          path: ${{ runner.temp }}/tree.tar.zst
+          compression-level: 0
+          retention-days: 90
