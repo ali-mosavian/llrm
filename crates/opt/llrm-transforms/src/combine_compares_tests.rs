@@ -599,6 +599,37 @@ fn a_value_compared_with_its_sign_extended_truncation_is_a_range_check() {
     );
 }
 
+/// `foldICmpOrXX` and `foldICmpAndXX`, the equality forms: `(x | y) == y` and
+/// `(x & y) == y` with `y` or `x` freely invertible (`getFreelyInverted`).
+#[test]
+fn an_or_or_and_against_its_operand_absorbs_a_freely_inverted_side() {
+    check(
+        "i32 %x, i32 %z",
+        "  %y = xor i32 %z, -1\n  %o = or i32 %x, %y\n  %r = icmp eq i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = and i32 %x, %z\n  %1 = icmp eq i32 %0, 0\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %xx, i32 %y",
+        "  %x = xor i32 %xx, -1\n  %o = or i32 %x, %y\n  %r = icmp ne i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = or i32 %y, %xx\n  %1 = icmp ne i32 %0, -1\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %x, i32 %z",
+        "  %y = xor i32 %z, -1\n  %o = and i32 %x, %y\n  %r = icmp eq i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = or i32 %x, %z\n  %1 = icmp eq i32 %0, -1\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %xx, i32 %y",
+        "  %x = xor i32 %xx, -1\n  %o = and i32 %x, %y\n  %r = icmp ne i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = and i32 %y, %xx\n  %1 = icmp ne i32 %0, 0\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %p, i32 %y",
+        "  %x = add i32 %p, 5\n  %o = and i32 %x, %y\n  %r = icmp eq i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = sub i32 -6, %p\n  %1 = and i32 %y, %0\n  %2 = icmp eq i32 %1, 0\n  ret i1 %2\n",
+    );
+}
+
 /// `foldICmpBinOp`: `(x & -P2) == INT_MIN` is `x s< INT_MIN + P2`, `!=` is
 /// `s>=` (`opt`: `icmp slt i16 %x, -32764`, `icmp sgt i16 %x, -32765`). Left
 /// alone, the masked compare reached the selector as an and plus a compare.
