@@ -17,7 +17,6 @@
 use std::sync::OnceLock;
 
 use llrm_mir::lowering::{Isd, LoadExt, Lowering};
-
 use llrm_sdag::actions::{Features, TargetLowering};
 use llrm_sdag::isd::ISD;
 use llrm_sdag::mvt::MVT;

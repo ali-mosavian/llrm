@@ -1,5 +1,6 @@
-//! The interpreter against the generated AArch64 table, on hand-built DAGs, with hooks that name no x86
-//! concept: the table and `Hooks` are the target's, `X86Predicates` is not asked for.
+//! The interpreter against the generated AArch64 table, on hand-built DAGs,
+//! with hooks that name no x86 concept: the table and `Hooks` are the target's,
+//! `X86Predicates` is not asked for.
 
 use crate::dag::{Dag, Hooks, SDValue};
 use crate::generated::aarch64::aarch64_apple_m1 as table;
@@ -96,8 +97,8 @@ fn name(opcode: u16) -> &'static str {
     table::MACHINE_OPCODES.iter().find(|(v, _)| *v == opcode).map_or("?", |(_, n)| n)
 }
 
-/// `(add i32, i32)` is `ADDWrr`, and an `i64` pair `ADDXrr`: the table is the pin's AArch64 one, selected by
-/// the generic interpreter.
+/// `(add i32, i32)` is `ADDWrr`, and an `i64` pair `ADDXrr`: the table is the
+/// pin's AArch64 one, selected by the generic interpreter.
 #[test]
 fn an_add_of_two_registers_is_addwrr_and_addxrr() {
     for (vt, expected) in [(mvt::i32, "ADDWrr"), (mvt::i64, "ADDXrr")] {
@@ -111,8 +112,8 @@ fn an_add_of_two_registers_is_addwrr_and_addxrr() {
     }
 }
 
-/// The scalar table keeps no SVE instruction: `features_aarch64.toml` turns SVE, SME and NEON off. NEON
-/// forms of scalar operations (`FCVTZSv1i64`) stay.
+/// The scalar table keeps no SVE instruction: `features_aarch64.toml` turns
+/// SVE, SME and NEON off. NEON forms of scalar operations (`FCVTZSv1i64`) stay.
 #[test]
 fn the_scalar_table_emits_no_sve_instruction() {
     let sve: Vec<_> = table::MACHINE_OPCODES

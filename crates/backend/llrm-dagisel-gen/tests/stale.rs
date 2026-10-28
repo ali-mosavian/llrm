@@ -22,7 +22,8 @@ fn checked_in_tables_match_a_fresh_regeneration() {
         .expect("run regen.sh");
     assert!(status.success(), "regen.sh failed; set DAGISEL_SKIP_PIN=1 where the pin is not installed");
 
-    // `aarch64/` is written by `aarch64/regen.sh` and checked by `stale_aarch64.rs`.
+    // `aarch64/` is written by `aarch64/regen.sh` and checked by
+    // `stale_aarch64.rs`.
     let mut names: Vec<_> = std::fs::read_dir(&checked_in)
         .unwrap()
         .map(|e| e.unwrap().file_name())

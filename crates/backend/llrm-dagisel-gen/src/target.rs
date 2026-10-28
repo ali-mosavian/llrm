@@ -110,6 +110,7 @@ pub fn run(inputs: &Inputs) -> Result<(), String> {
         local_desc: true,
         dag_imports: "Dag, Hooks, PatternContext, SDValue",
         listed_predicates: target.listed_predicates,
+        predicate_bound: "Hooks<D>",
     };
     let write = |name: &str, text: String| {
         let path = inputs.out.join(name);

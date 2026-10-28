@@ -72,7 +72,8 @@ pub enum Matcher {
     RecordChild(u8),
     RecordMemRef,
     CaptureGlueInput,
-    /// `OPC_CaptureDeactivationSymbol`: a trailing `ISD::DEACTIVATION_SYMBOL` operand (PAuth).
+    /// `OPC_CaptureDeactivationSymbol`: a trailing `ISD::DEACTIVATION_SYMBOL`
+    /// operand (PAuth).
     CaptureDeactivationSymbol,
     MoveChild(u8),
     MoveSibling(u8),

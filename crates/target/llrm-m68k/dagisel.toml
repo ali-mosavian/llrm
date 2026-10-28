@@ -4,6 +4,7 @@
 # The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
 [target]
 name = "m68k"
+llvm_build = "llvm-build-m68k"
 ns = "M68k::"
 isd = "M68kISD::"
 llvm_dir = "M68k"

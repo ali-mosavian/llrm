@@ -2,6 +2,7 @@
 # The tables sit in llrm-dagisel (`in_dagisel`) and list their node predicates by name until the AArch64 hooks exist.
 [target]
 name = "aarch64"
+llvm_build = "llvm-build-aarch64"
 ns = "AArch64::"
 isd = "AArch64ISD::"
 llvm_dir = "AArch64"

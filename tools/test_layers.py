@@ -20,7 +20,7 @@ LAYERS = [
         [
             "llrm-object", "llrm-dwarf", "llrm-omf", "llrm-elf",
             "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-target", "llrm-iselgen",
-            "llrm-peepgen",
+            "llrm-peepgen", "llrm-sdag",
         ],
     ),
     ("codegen", ["llrm-codegen", "llrm-dagisel", "llrm-dagisel-gen"]),

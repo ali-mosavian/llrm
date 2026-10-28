@@ -477,8 +477,9 @@ mod tests {
         assert!(err.contains("table ends") || err.contains("overran"), "{err}");
     }
 
-    /// `OPC_EmitCopyToRegTwoByte` (an AArch64 register past 255, `WZR`, `SP`) was refused as not in the
-    /// x86 table, so the AArch64 table could not be decoded at all.
+    /// `OPC_EmitCopyToRegTwoByte` (an AArch64 register past 255, `WZR`, `SP`)
+    /// was refused as not in the x86 table, so the AArch64 table could not
+    /// be decoded at all.
     #[test]
     fn a_copy_to_a_register_past_255_decodes_both_bytes() {
         let ids = Ids::parse("OPC_EmitCopyToRegTwoByte 6\nOPC_CompleteMatch 4\nMVT::i32 7\n").unwrap();

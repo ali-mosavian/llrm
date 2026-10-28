@@ -31,9 +31,13 @@ pub struct Style {
     pub local_desc: bool,
     /// The dag items the table's header imports besides the matcher types.
     pub dag_imports: &'static str,
-    /// The node predicates are listed by name (`NODE_PREDICATES`) instead of called: the target has
-    /// no predicate hooks yet, and a pattern predicate left open is an error.
+    /// The node predicates are listed by name (`NODE_PREDICATES`) instead of
+    /// called: the target has no predicate hooks yet, and a pattern
+    /// predicate left open is an error.
     pub listed_predicates: bool,
+    /// What the `node_predicate` function asks of its hooks (`X86Predicates<D>`
+    /// for the x86 tables).
+    pub predicate_bound: &'static str,
 }
 
 impl Style {
@@ -47,6 +51,7 @@ impl Style {
         local_desc: false,
         dag_imports: "Dag, Hooks, PatternContext, SDValue, X86Predicates",
         listed_predicates: false,
+        predicate_bound: "X86Predicates<D>",
     };
 }
 
@@ -222,14 +227,16 @@ pub fn render(src: &Source) -> Result<String, String> {
         writeln!(w, "];\n").unwrap();
     } else {
         writeln!(w, "/// The pattern predicates still checked when a function is selected.").unwrap();
-        writeln!(w, "pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {{\n    match id {{").unwrap();
+        writeln!(w, "pub fn pattern_predicate<C: PatternContext>(ctx: &C, id: u16) -> bool {{\n    match id {{")
+            .unwrap();
         for (id, e) in src.open {
             writeln!(w, "        {id} => {},", expr(e, src.cpu)?).unwrap();
         }
-        writeln!(w, "        _ => unreachable!(\"pattern predicate {{id}} is not in this table\"),\n    }}\n}}\n").unwrap();
+        writeln!(w, "        _ => unreachable!(\"pattern predicate {{id}} is not in this table\"),\n    }}\n}}\n")
+            .unwrap();
 
         writeln!(w, "/// The node predicates the table checks.").unwrap();
-        writeln!(w, "pub fn node_predicate<D: Dag, H: X86Predicates<D>>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {{\n    let args = (dag, hooks, value);\n    match id {{").unwrap();
+        writeln!(w, "pub fn node_predicate<D: Dag, H: {}>(dag: &D, hooks: &H, value: SDValue, id: u16) -> bool {{\n    let args = (dag, hooks, value);\n    match id {{", style.predicate_bound).unwrap();
         let mut unmapped = Vec::new();
         for id in &used {
             let names = &src.node_predicates[usize::from(*id)];
@@ -241,9 +248,8 @@ pub fn render(src: &Source) -> Result<String, String> {
         if !unmapped.is_empty() {
             return Err(format!("node predicates with no [node_predicate] entry:\n  {}", unmapped.join("\n  ")));
         }
-        writeln!(w, "        _ => unreachable!(\"node predicate {{id}} is not in this table\"),\n    }}\n}}\n").unwrap();
-
-
+        writeln!(w, "        _ => unreachable!(\"node predicate {{id}} is not in this table\"),\n    }}\n}}\n")
+            .unwrap();
     }
 
     writeln!(w, "/// The complex patterns the table checks: `(number, selector function, results)`.").unwrap();
