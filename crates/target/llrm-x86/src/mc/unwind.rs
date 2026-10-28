@@ -264,7 +264,9 @@ mod tests {
         use llrm_object::assembler::Cfi;
         let compact = "00000000000000000b0000000000000400000000000000000000000000000000";
         let eh = "1400000000000000017a520001781001100c070890010000240000001c000000b0ffffffffffffff0b0000000000000000420e108c02430d0c450c0708000000";
-        let hex = |text: &str| -> Vec<u8> { (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect() };
+        let hex = |text: &str| -> Vec<u8> {
+            (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect()
+        };
         let frame = Frame {
             section: 0,
             offset: 0,

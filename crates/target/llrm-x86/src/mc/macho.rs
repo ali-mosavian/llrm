@@ -134,7 +134,6 @@ mod tests {
             omf_comdat: Vec::new(),
             frames: Vec::new(),
             debug: None,
-            frames: Vec::new(),
         };
         let bytes = llrm_macho::write(&object, &X8664MachO).unwrap();
         let tail = &image[at + 4..];
