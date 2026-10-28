@@ -599,6 +599,9 @@ fn located(at: super::valuetrack::Where) -> Location {
         }
         super::valuetrack::Where::Place(masm::Place::Cell { disp, .. }) => Location::Frame { disp },
         super::valuetrack::Where::Constant(value) => Location::Constant(value),
+        super::valuetrack::Where::Offset(place, add) => {
+            Location::Offset(Box::new(located(super::valuetrack::Where::Place(place))), add)
+        }
     }
 }
 

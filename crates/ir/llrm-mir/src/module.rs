@@ -1322,7 +1322,65 @@ pub struct Module {
     pub sections: std::collections::BTreeMap<String, String>,
 }
 
+/// One operation of a `!DIExpression`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DwOp {
+    /// `DW_OP_plus_uconst, n`.
+    PlusUconst(u64),
+    /// `DW_OP_stack_value`: the expression's result is the variable's value,
+    /// not its address.
+    StackValue,
+    /// `DW_OP_LLVM_fragment, offset, size`, in bits.
+    Fragment { offset: u64, size: u64 },
+    /// Any other operation: not read.
+    Other,
+}
+
 impl Module {
+    /// The operations of the `!DIExpression` node `id`, `None` for any other
+    /// node. An operation of a kind not listed stands as [`DwOp::Other`], with
+    /// its operands.
+    pub fn expression(
+        &self,
+        id: MetadataId,
+    ) -> Option<Vec<DwOp>> {
+        if self.special.get(&id)?.kind != "DIExpression" {
+            return None;
+        }
+        let operands = &self.metadata[id.0 as usize].operands;
+        let number = |at: usize| match operands.get(at) {
+            Some(MetadataOperand::Constant(value)) => match self.context.get(*value).kind {
+                crate::ConstantKind::Int(number) => u64::try_from(number).ok(),
+                _ => None,
+            },
+            _ => None,
+        };
+        let mut ops = Vec::new();
+        let mut at = 0;
+        while at < operands.len() {
+            let MetadataOperand::Ident(name) = &operands[at] else {
+                ops.push(DwOp::Other);
+                at += 1;
+                continue;
+            };
+            at += 1;
+            let wanted = match name.as_str() {
+                "DW_OP_plus_uconst" => 1,
+                "DW_OP_LLVM_fragment" => 2,
+                _ => 0,
+            };
+            let op = match (name.as_str(), number(at), number(at + 1)) {
+                ("DW_OP_plus_uconst", Some(n), _) => DwOp::PlusUconst(n),
+                ("DW_OP_stack_value", ..) => DwOp::StackValue,
+                ("DW_OP_LLVM_fragment", Some(offset), Some(size)) => DwOp::Fragment { offset, size },
+                _ => DwOp::Other,
+            };
+            ops.push(op);
+            at += wanted;
+        }
+        Some(ops)
+    }
+
     pub fn global(
         &self,
         id: GlobalId,

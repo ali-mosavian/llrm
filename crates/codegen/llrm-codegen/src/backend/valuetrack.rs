@@ -316,6 +316,8 @@ pub enum Where {
     Place(Place),
     /// In no place: the value is the constant.
     Constant(i64),
+    /// In no place: the value is that of the place plus a constant.
+    Offset(Place, i64),
 }
 
 /// `state` after the variable `note` names takes its value: the whole variable
@@ -353,11 +355,21 @@ fn holders(
     match state.has.get(&(variable, piece)) {
         None | Some(NoteValue::Nothing) => Vec::new(),
         Some(NoteValue::Constant(value)) => vec![Where::Constant(*value)],
-        Some(NoteValue::Value(value)) => {
+        Some(&(NoteValue::Value(value) | NoteValue::Offset(value, _))) => {
+            let add = match state.has.get(&(variable, piece)) {
+                Some(&NoteValue::Offset(_, add)) => Some(add),
+                _ => None,
+            };
             let mut found: Vec<&Held> =
-                state.holds.iter().filter(|(_, held)| *held == value).map(|(held, _)| held).collect();
+                state.holds.iter().filter(|(_, held)| **held == value).map(|(held, _)| held).collect();
             found.sort_by_key(|held| matches!(held, Held::Cell { .. }));
-            found.into_iter().map(|held| Where::Place(*held)).collect()
+            found
+                .into_iter()
+                .map(|held| match add {
+                    Some(add) => Where::Offset(*held, add),
+                    None => Where::Place(*held),
+                })
+                .collect()
         }
     }
 }

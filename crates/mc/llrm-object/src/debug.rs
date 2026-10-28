@@ -336,6 +336,9 @@ pub enum Location {
     Relative { register: String, disp: i64 },
     /// The value itself, which is in no place.
     Constant(i64),
+    /// The value of the place plus a constant (`DW_OP_plus_uconst, n,
+    /// DW_OP_stack_value`), which is in no place.
+    Offset(Box<Location>, i64),
     /// Its bytes in pieces, from the first: each piece's size in bytes and
     /// where it is; none for a piece that is nowhere.
     Pieces(Vec<(u32, Option<Location>)>),

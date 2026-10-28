@@ -327,6 +327,24 @@ impl Tree<'_> {
                     _ => [vec![0x92], named[1..].to_vec(), crate::sleb(*disp)].concat(),
                 })
             }
+            // The register's value plus the constant, as a value: DW_OP_breg<n>
+            // add, DW_OP_stack_value. A value in a cell is not said: its
+            // width is not known to dereference it.
+            Location::Offset(base, add) => match &**base {
+                Location::Register(name) => {
+                    let named = self.register(name)?;
+                    Ok([
+                        match named[..] {
+                            [one] if (0x50..0x70).contains(&one) => vec![one + 0x20],
+                            _ => [vec![0x92], named[1..].to_vec()].concat(),
+                        },
+                        crate::sleb(*add),
+                        vec![0x9F],
+                    ]
+                    .concat())
+                }
+                _ => refused("a value plus a constant is said for a value in a register"),
+            },
             // DW_OP_consts, DW_OP_stack_value.
             Location::Constant(value) => Ok([vec![0x11], crate::sleb(*value), vec![0x9F]].concat()),
             // Each piece's place, then DW_OP_piece and its size; a piece with
@@ -356,6 +374,7 @@ impl Tree<'_> {
             | Location::Register(_)
             | Location::Relative { .. }
             | Location::Constant(_)
+            | Location::Offset(..)
             | Location::Pieces(_) => Value::Expr(self.expression(location)?),
             Location::Static { symbol, disp } => Value::ExprAddr { symbol: *symbol, delta: *disp },
             Location::List(entries) => Value::LocList(self.list(entries)?),

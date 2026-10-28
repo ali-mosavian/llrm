@@ -1202,3 +1202,27 @@ fn a_function_inlined_twice_has_two_inlined_subroutines_with_their_calls() {
     assert!(dump.contains("DW_AT_call_column\t(68)"), "{dump}");
     assert_eq!(dump.matches("DW_AT_inline\t(DW_INL_inlined)").count(), 1, "one abstract sq: {dump}");
 }
+
+/// `q = &s->c` kept as `dbg.value(%2, !DIExpression(DW_OP_plus_uconst, 8,
+/// DW_OP_stack_value))` was written as the register alone: a debugger showed
+/// `q` 8 bytes short (`DW_OP_reg0`). It is `DW_OP_breg0 +8, DW_OP_stack_value`.
+#[test]
+fn a_value_plus_a_constant_is_written_with_its_constant() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("offset.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/offset.ll");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
+        .args(["-O2", "-march=i486", "-fobject-format=elf", "-mabi=sysv", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    assert!(dump.contains("DW_OP_breg0 EAX+8, DW_OP_stack_value"), "{dump}");
+}

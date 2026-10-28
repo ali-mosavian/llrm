@@ -1523,7 +1523,29 @@ pub(crate) fn noted(
         }
         let (value, piece) = match record.what {
             llrm_mir::DebugWhat::Declare(_) => continue,
-            llrm_mir::DebugWhat::Value(one) => (said(one), None),
+            llrm_mir::DebugWhat::Value(one) => {
+                // What the expression does to the value: nothing, add to it, or
+                // say a part of the variable; any other is not read, and the
+                // value it would make is not said.
+                let ops = record.expression.and_then(|node| module.expression(node)).unwrap_or_default();
+                let ops = ops.strip_suffix(&[llrm_mir::DwOp::StackValue]).unwrap_or(&ops);
+                match (ops, said(one)) {
+                    ([], value) => (value, None),
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Value(vreg)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Offset(vreg, add)), None)
+                    }
+                    ([llrm_mir::DwOp::PlusUconst(add)], NoteValue::Constant(value)) => {
+                        (i64::try_from(*add).map_or(NoteValue::Nothing, |add| NoteValue::Constant(value + add)), None)
+                    }
+                    ([llrm_mir::DwOp::Fragment { offset, size }], value) if offset % 8 == 0 && size % 8 == 0 => {
+                        match (u32::try_from(offset / 8), u32::try_from(size / 8)) {
+                            (Ok(offset), Ok(bytes)) => (value, Some((offset, bytes))),
+                            _ => (NoteValue::Nothing, None),
+                        }
+                    }
+                    _ => (NoteValue::Nothing, None),
+                }
+            }
             llrm_mir::DebugWhat::Piece { value, offset, bytes } => (said(value), Some((offset, bytes))),
             llrm_mir::DebugWhat::GonePiece { offset, bytes } => (NoteValue::Nothing, Some((offset, bytes))),
             llrm_mir::DebugWhat::Gone => (NoteValue::Nothing, None),
@@ -1559,7 +1581,7 @@ pub(crate) fn noted(
         let note = u32::try_from(notes.len()).expect("a few notes");
         notes.push(DebugNote { variable, piece, value });
         before.entry(at).or_default().push(note);
-        if let NoteValue::Value(vreg) = value {
+        if let NoteValue::Value(vreg) | NoteValue::Offset(vreg, _) = value {
             named.insert(vreg);
         }
     }

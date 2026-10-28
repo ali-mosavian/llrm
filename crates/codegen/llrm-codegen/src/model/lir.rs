@@ -233,7 +233,10 @@ impl LirBody {
     pub fn named_values(&self) -> BTreeSet<u32> {
         self.notes
             .iter()
-            .filter_map(|note| if let NoteValue::Value(value) = note.value { Some(value) } else { None })
+            .filter_map(|note| match note.value {
+                NoteValue::Value(value) | NoteValue::Offset(value, _) => Some(value),
+                _ => None,
+            })
             .collect()
     }
 
@@ -1112,6 +1115,8 @@ pub enum NoteValue {
     Value(u32),
     /// A constant.
     Constant(i64),
+    /// The value plus a constant (`DW_OP_plus_uconst, n, DW_OP_stack_value`).
+    Offset(u32, i64),
 }
 
 /// How often each block runs per call, by `at`.

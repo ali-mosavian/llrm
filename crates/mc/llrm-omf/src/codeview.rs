@@ -181,7 +181,7 @@ fn module(
                 }
                 // A value in no place, or in pieces: nothing in CodeView 4's
                 // records says it, so it is left out.
-                Location::Constant(_) | Location::Pieces(_) | Location::Relative { .. } => {}
+                Location::Constant(_) | Location::Offset(..) | Location::Pieces(_) | Location::Relative { .. } => {}
             }
         }
         if !function.blocks.is_empty() {
