@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::loops as loopy;
-use crate::backend::allocate;
+use crate::backend::liverows;
 use crate::model::ir;
 use crate::model::lir::{Insn, Insns, LirBlock, LirBody};
 use crate::support::hash::{IndexMap, IndexSet};
@@ -1579,7 +1579,7 @@ fn _walked_at(
     keep: &impl Fn(u32) -> bool,
     given: Option<&[Vec<i64>]>,
 ) -> IndexMap<u32, Interval> {
-    let live = llrm_support::debug::timed("intervals liveness", || allocate::live_rows_by(body, keep));
+    let live = llrm_support::debug::timed("intervals liveness", || liverows::live_rows_by(body, keep));
     let _walk = llrm_support::debug::span("intervals walk");
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     let mut starts: Vec<i64> = Vec::new();
@@ -1671,7 +1671,7 @@ pub(crate) fn _ranges_reference(
     index: &Indexes,
     keep: &impl Fn(u32) -> bool,
 ) -> IndexMap<u32, Interval> {
-    let live = allocate::live_rows_by(body, keep);
+    let live = liverows::live_rows_by(body, keep);
     let mut pieces: IndexMap<u32, Vec<Segment>> = IndexMap::default();
     for block in &body.blocks {
         let (first, last) = index.span[&block.at];
