@@ -1913,7 +1913,7 @@ impl Selector<'_, '_, '_> {
         let mut homes = IndexMap::<usize, i64>::default();
         // Every alloca whose address is exposed, in one pass: the scan for each
         // asked the whole body of it.
-        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst| self.marker(inst));
+        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst, _| self.marker(inst));
         // An object lies on its type's alignment, or its size's largest power
         // of two where the front end typed it as bytes, at most the stack slot
         // or where the function keeps the stack, which is wider: a local

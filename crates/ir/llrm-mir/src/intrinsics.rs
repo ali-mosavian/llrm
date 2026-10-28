@@ -31,6 +31,12 @@ pub enum Intrinsic {
         op: BinaryOp,
         signed: bool,
     },
+    /// `llvm.{s,u}{add,sub}.sat`: the result clamped to the type's range
+    /// rather than wrapped.
+    Saturating {
+        op: BinaryOp,
+        signed: bool,
+    },
     /// `llvm.{s,u}{max,min}`.
     MinMax {
         signed: bool,
@@ -427,6 +433,14 @@ const fn shift_sat(
     arithmetic(name, Intrinsic::ShiftSat { signed }, Slot::Any(0), INTS, Kind::Int)
 }
 
+const fn saturating(
+    name: &'static str,
+    op: BinaryOp,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::Saturating { op, signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
 const FLOAT: &[Slot] = &[Slot::Any(0)];
 
 const fn unary(
@@ -477,13 +491,17 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 66] = [
+const TABLE: [Spec; 70] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
     overflow("llvm.usub.with.overflow", BinaryOp::Sub, false),
     overflow("llvm.smul.with.overflow", BinaryOp::Mul, true),
     overflow("llvm.umul.with.overflow", BinaryOp::Mul, false),
+    saturating("llvm.sadd.sat", BinaryOp::Add, true),
+    saturating("llvm.uadd.sat", BinaryOp::Add, false),
+    saturating("llvm.ssub.sat", BinaryOp::Sub, true),
+    saturating("llvm.usub.sat", BinaryOp::Sub, false),
     min_max("llvm.smax", true, true),
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),

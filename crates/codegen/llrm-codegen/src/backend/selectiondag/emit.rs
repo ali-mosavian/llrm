@@ -1146,6 +1146,9 @@ impl Emitter<'_, '_> {
                         };
                         Some(Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone())))
                     }
+                    // An `add` has no cheaper form: made again with a result of
+                    // its own, as the pin's scheduler clones the unit.
+                    (Operation::Binary, Some("add")) if what.sources.len() == 2 => Some(Arc::clone(last)),
                     _ => None,
                 });
                 if let Some(again) = again {
@@ -1717,6 +1720,9 @@ impl Emitter<'_, '_> {
             // fudge of an unsigned conversion).
             EVT::Simple(MVT::I64) => 8,
             EVT::Simple(MVT::I32) => 4,
+            // The 16-byte mask of `fabs`, `fneg` and `copysign` (the pin's
+            // vector constant): the bitwise SSE instruction reads all of it.
+            EVT::Simple(MVT::I128) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))

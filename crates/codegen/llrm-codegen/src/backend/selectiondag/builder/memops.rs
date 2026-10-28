@@ -102,6 +102,7 @@ impl Builder<'_> {
             | Intrinsic::FixedMul { .. }
             | Intrinsic::ShiftSat { .. } => self.visit_math(instruction, intrinsic),
             Intrinsic::WithOverflow { .. }
+            | Intrinsic::Saturating { .. }
             | Intrinsic::MinMax { .. }
             | Intrinsic::BitCount(_)
             | Intrinsic::ByteSwap

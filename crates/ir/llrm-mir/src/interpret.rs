@@ -410,6 +410,25 @@ impl<'m> Machine<'m> {
                 };
                 Val::Aggregate(vec![wrapped, overflowed])
             }
+            Intrinsic::Saturating { op, signed } => {
+                let exact = binary(op, if signed { Flags::NSW } else { Flags::NUW }, argument(0), argument(1))?;
+                match (exact, argument(0), argument(1)) {
+                    (Val::Poison, Val::Int { bits, width }, Val::Int { .. }) => {
+                        // Overflow is toward the first argument's sign when
+                        // signed, else off the top (add) or bottom (sub).
+                        let ones = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+                        let sign = 1u128 << (width - 1);
+                        let bits = match (signed, op) {
+                            (true, _) if bits & sign != 0 => sign,
+                            (true, _) => ones >> 1,
+                            (false, BinaryOp::Add) => ones,
+                            (false, _) => 0,
+                        };
+                        Val::Int { bits, width }
+                    }
+                    (exact, _, _) => exact,
+                }
+            }
             Intrinsic::MinMax { signed, max } => {
                 let predicate = match (signed, max) {
                     (true, true) => IntPredicate::Sgt,

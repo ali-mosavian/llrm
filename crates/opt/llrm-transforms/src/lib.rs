@@ -159,6 +159,7 @@ pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
+pub mod constmerge;
 pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]

@@ -75,6 +75,16 @@ impl Builder<'_> {
                 let second = self.get_value(instruction.operands[1])?;
                 self.dag.get_node(if *signed { ISD::SShlSat } else { ISD::UShlSat }, dest, &[first, second])
             }
+            Intrinsic::Saturating { op, signed } => {
+                let second = self.get_value(instruction.operands[1])?;
+                let code = match (op, signed) {
+                    (BinaryOp::Add, true) => ISD::SAddSat,
+                    (BinaryOp::Add, false) => ISD::UAddSat,
+                    (_, true) => ISD::SSubSat,
+                    (_, false) => ISD::USubSat,
+                };
+                self.dag.get_node(code, dest, &[first, second])
+            }
             Intrinsic::MinMax { signed, max } => {
                 let second = self.get_value(instruction.operands[1])?;
                 let code = match (signed, max) {

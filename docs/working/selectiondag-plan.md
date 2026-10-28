@@ -260,6 +260,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
 | SD103 | sdag-a | `ExpandIntRes_MULFIX` takes its pieces from `forceExpandMultiply`, never `expandMUL_LOHI` | `selectiondag/legalize_types.rs` |
 | SD104 | sdag-a | an unsigned `ExpandIntRes_MULFIXSAT` scale above a half shifts `HH`, where the pin shifts `HL` (upstream fixed it) | `selectiondag/legalize_types.rs` |
+| SD107 | sdag-a | `lowerFaddFsub` never forms a horizontal add (SSE3 `haddps` is not described); scalar `FADD`/`FSUB` stay as they are | `selectiondag/x86_lowering.rs` |
+| SD108 | sdag-a | `FAND`/`FOR`/`FXOR` of a scalar float against its pool mask select `andps`/`orps`/`xorps` directly (no `SCALAR_TO_VECTOR` node); `double` takes the `ps` rows `x86.instr` has | `crates/backend/llrm-dagisel/src/x86_fplogic.rs` |
 | SD106 | sdag-a | `expandDIVREMByConstant` ports the unsigned forms; the sign-extended `MUL` shortcut of `expandMUL_LOHI` and the UDIVREM-decomposition of a missing UREM libcall are not ported | `selectiondag/expand_divrem_const.rs` |
 | SD300 | sdag-c | the adapter answers conservatively: no known bits, extending loads or memory operands on machine nodes | `selectiondag/dagisel_adapter.rs` |
 | SD301 | sdag-c | Select hand cases beyond shifts, stores and DIVREM (AND/OR/XOR shrink, MUL_LOHI, intrinsics, atomics) come with their patterns | `crates/backend/llrm-dagisel/src/x86_select.rs` |
