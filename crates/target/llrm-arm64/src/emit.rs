@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
+use llrm_object::assembler::{Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
 
 use crate::data::{self, DataReloc};
@@ -18,6 +19,43 @@ pub struct Function {
     pub symbol: String,
     pub public: bool,
     pub blocks: Vec<Lowered>,
+}
+
+/// A function's pieces for the layout: a block's label, then its words.
+enum Laid<'a> {
+    Label(&'a str),
+    Words(usize),
+}
+
+impl Fragment for Laid<'_> {
+    type Context = ();
+
+    fn label(&self) -> Option<&str> {
+        match self {
+            Laid::Label(name) => Some(name),
+            Laid::Words(_) => None,
+        }
+    }
+
+    fn size(
+        &self,
+        _: i64,
+        _: &(),
+    ) -> usize {
+        match self {
+            Laid::Label(_) => 0,
+            Laid::Words(count) => count * 4,
+        }
+    }
+
+    fn relax(
+        &mut self,
+        _: i64,
+        _: &HashMap<String, i64>,
+        _: &(),
+    ) -> Result<bool, llrm_object::Unsupported> {
+        Ok(false)
+    }
 }
 
 struct Symbols {
@@ -136,12 +174,16 @@ pub fn object(
     let mut text = Vec::with_capacity(text_size);
     let mut text_relocs = Vec::new();
     for (function, function_offset) in functions.iter().zip(&text_offsets) {
-        let mut labels: HashMap<&str, usize> = HashMap::new();
-        let mut cursor = *function_offset;
+        // Every instruction is a word, so nothing relaxes: the layout only
+        // places the blocks' labels.
+        let mut fragments = Vec::new();
         for block in &function.blocks {
-            labels.insert(block.label.as_str(), cursor);
-            cursor += block.insts.len() * 4;
+            fragments.push(Laid::Label(block.label.as_str()));
+            fragments.push(Laid::Words(block.insts.len()));
         }
+        let placed = place(&mut fragments, &()).map_err(|error| format!("{}: {}", function.symbol, error.0))?;
+        let labels: HashMap<String, usize> =
+            placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
         let mut cursor = *function_offset;
         for block in &function.blocks {
             for inst in &block.insts {
