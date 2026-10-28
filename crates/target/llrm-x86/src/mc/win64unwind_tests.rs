@@ -36,32 +36,82 @@ fn xdata(code: &[u8]) -> Vec<u8> {
     section.image.clone()
 }
 
-/// A COFF x64 object had no `.pdata` or `.xdata`, so the Windows unwinder
-/// found no frame to walk; the bytes below are derived by hand from the
-/// UNWIND_INFO layout (version, prolog size, slot count, frame; the codes last
-/// executed first, padded to an even slot count).
-#[test]
-fn push_and_a_small_allocation_are_two_codes_last_first() {
-    // push rbp; sub rsp,32; ret
-    assert_eq!(xdata(&[0x55, 0x48, 0x83, 0xEC, 0x20, 0xC3]), [0x01, 0x05, 0x02, 0x00, 0x05, 0x32, 0x01, 0x50]);
+/// Function bodies and the `.xdata` that the pin's clang
+/// (`clang -target x86_64-pc-windows-msvc -O1 [-fno-omit-frame-pointer] -c`)
+/// writes for them: `(name, code, xdata)`. A decoder that read only
+/// `[rsp+d]` saves stopped at the first `movaps [rbp-0x10]` of a function with
+/// a frame register and wrote its unwind data without the xmm saves.
+const PIN: &[(&str, &str, &str)] = &[
+    ("plain_f", "564883ec4089ce488d4c2420e80000000089f04883c4405ec3", "0105020005720160"),
+    ("fp_frame", "55564883ec48488d6c244089ce488d4de8e80000000089f04883c4485e5dc3", "010b04450b03068202600150"),
+    (
+        "fp_big",
+        "55564881ec78020000488dac248000000089ce488d4da0e80000000089f04881c4780200005e5dc3",
+        "01110585110309014f00026001500000",
+    ),
+    (
+        "fp_saves",
+        "5541565657534883ec30488d6c24304489c689d789cb4c8d75f04c89f1e8000000004c89f1e80000000001fb01f30fb645f00fbec001d84883c4305b5f5e415e5dc3",
+        "010f07350f030a5206300570046003e001500000",
+    ),
+    (
+        "fp_xmm",
+        "554883ec60488d6c2460440f294df0440f2945e00f297dd00f2975c0660f28f1660f28f8e80000000066440f28c0660f28c6e80000000066440f28c8660f28c7f20f58c6e800000000f2450f59c8f2410f58c1f20f58c7f20f58c60f2875c00f287dd0440f2845e0440f284df04883c4605dc3",
+        "011c0b651c68020018780300148804000f9805000a0305b201500000",
+    ),
+    ("nofp_big", "564881ec8002000089ce488d4c2428e80000000089f04881c4800200005ec3", "010803000801500001600000"),
+    (
+        "nofp_saves",
+        "41565657534883ec384489c689d789cb4c8d7424284c89f1e8000000004c89f1e80000000001fb01f30fb64424280fbec001d84883c4385b5f5e415ec3",
+        "01090500096205300470036002e00000",
+    ),
+    (
+        "nofp_xmm",
+        "4883ec68440f294c2450440f294424400f297c24300f29742420660f28f1660f28f8e80000000066440f28c0660f28c6e80000000066440f28c8660f28c7f20f58c6e800000000f2450f59c8f2410f58c1f20f58c7f20f58c60f287424200f287c2430440f28442440440f284c24504883c468c3",
+        "011a09001a68020015780300108804000a98050004c20000",
+    ),
+];
+
+fn bytes(text: &str) -> Vec<u8> {
+    (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
 }
 
 #[test]
-fn a_frame_register_and_an_odd_slot_count_is_padded() {
-    // push rbp; sub rsp,48; lea rbp,[rsp+32]; ret
-    let code = [0x55, 0x48, 0x83, 0xEC, 0x30, 0x48, 0x8D, 0x6C, 0x24, 0x20, 0xC3];
-    assert_eq!(xdata(&code), [0x01, 0x0A, 0x03, 0x25, 0x0A, 0x03, 0x05, 0x52, 0x01, 0x50, 0x00, 0x00]);
+fn the_unwind_data_is_what_the_pins_clang_writes_for_the_same_code() {
+    for (name, code, expected) in PIN {
+        assert_eq!(xdata(&bytes(code)), bytes(expected), "{name}");
+    }
 }
 
+/// The builder takes codes whoever made them. Bytes by hand from the Microsoft
+/// x64 unwind spec (learn.microsoft.com/cpp/build/exception-handling-x64): the
+/// brief's `push rbp; sub rsp,32`, a two-slot large allocation, and a far save.
 #[test]
-fn a_large_allocation_and_a_register_save_take_an_operand_slot() {
-    // sub rsp,4096; ret
+fn a_list_of_codes_is_encoded_last_first_with_operand_slots_after_theirs() {
+    let info = |codes: Vec<(u8, Op)>, frame| Info {
+        prolog: codes.last().map_or(0, |one| one.0),
+        frame,
+        codes: codes.into_iter().map(|(offset, op)| Code { offset, op }).collect(),
+    };
     assert_eq!(
-        xdata(&[0x48, 0x81, 0xEC, 0x00, 0x10, 0x00, 0x00, 0xC3]),
-        [0x01, 0x07, 0x02, 0x00, 0x07, 0x01, 0x00, 0x02]
+        info(vec![(1, Op::PushNonvol(5)), (5, Op::Alloc(32))], None).bytes().unwrap(),
+        [0x01, 0x05, 0x02, 0x00, 0x05, 0x32, 0x01, 0x50]
     );
-    // mov [rsp+8],rbx; ret
-    assert_eq!(xdata(&[0x48, 0x89, 0x5C, 0x24, 0x08, 0xC3]), [0x01, 0x05, 0x02, 0x00, 0x05, 0x34, 0x01, 0x00]);
+    // sub rsp,0x20000: 0x4000 qwords, one operand slot.
+    assert_eq!(
+        info(vec![(7, Op::Alloc(0x20000))], None).bytes().unwrap(),
+        [0x01, 0x07, 0x02, 0x00, 0x07, 0x01, 0x00, 0x40]
+    );
+    // sub rsp,0x1000000: past 512K, two operand slots (low, high), padded.
+    assert_eq!(
+        info(vec![(7, Op::Alloc(0x1000000))], None).bytes().unwrap(),
+        [0x01, 0x07, 0x03, 0x00, 0x07, 0x11, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00]
+    );
+    // rbx saved at rsp+0x80000: past 512K, a far save.
+    assert_eq!(
+        info(vec![(9, Op::SaveNonvol(3, 0x80000))], None).bytes().unwrap(),
+        [0x01, 0x09, 0x03, 0x00, 0x09, 0x35, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00]
+    );
 }
 
 #[test]

@@ -17,6 +17,10 @@
 //!  =>  01 05 02 00 | 05 32 | 01 50                  version, prolog, 2 slots, no frame | codes, last first
 //! ```
 //!
+//! `Info::bytes` takes a list of codes, so a declared prologue can feed it as
+//! `from_prologue` does. Saves are recorded relative to `rsp` even when the
+//! code addresses them from the frame register.
+//!
 //! A function that needs a stack probe (`__chkstk`) is not described: its
 //! `sub rsp` follows the call, which ends the run.
 //!
@@ -47,58 +51,101 @@ fn nonvolatile(register: Register) -> Option<u8> {
     gpr(register).filter(|number| NONVOLATILE.contains(number))
 }
 
-/// One function's `UNWIND_INFO`: the prologue's size, the frame register and
-/// its offset, and the codes' slots in execution order.
-struct Unwind {
-    prolog: u8,
-    frame: Option<(u8, u8)>,
-    slots: Vec<u16>,
+/// What one unwind code does (`UNWIND_CODE`), with the sizes and offsets in
+/// bytes: the encoding (small or large, near or far) is the builder's choice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Op {
+    /// `push` of a non-volatile register, by its hardware number.
+    PushNonvol(u8),
+    /// `sub rsp, size`.
+    Alloc(u64),
+    /// The frame register is set (`SET_FPREG`; its number and offset are the
+    /// info's).
+    SetFpreg,
+    /// A non-volatile register saved at `rsp + offset`.
+    SaveNonvol(u8, u64),
+    /// An `xmm` register saved at `rsp + offset`.
+    SaveXmm128(u8, u64),
 }
 
-impl Unwind {
-    /// The bytes: the codes last-executed first, padded to an even slot count.
-    fn bytes(&self) -> Vec<u8> {
-        let mut groups: Vec<&[u16]> = Vec::new();
-        let mut at = 0;
-        while at < self.slots.len() {
-            let width = slot_count(self.slots[at]);
-            groups.push(&self.slots[at..at + width]);
-            at += width;
+/// An unwind code, from the offset after its instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Code {
+    pub offset: u8,
+    pub op: Op,
+}
+
+/// One function's `UNWIND_INFO`: the prologue's size, the frame register and
+/// its offset in 16-byte units, and the codes in execution order. Any
+/// producer of this list uses the builder: reading the prologue from the
+/// code's bytes (`from_prologue`) is one; a declared prologue is another.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Info {
+    pub prolog: u8,
+    pub frame: Option<(u8, u8)>,
+    pub codes: Vec<Code>,
+}
+
+impl Info {
+    /// The bytes: the codes last-executed first, padded to an even slot count
+    /// (https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64#struct-unwind_info).
+    pub fn bytes(&self) -> Result<Vec<u8>, String> {
+        let mut groups: Vec<Vec<u16>> = Vec::new();
+        for code in &self.codes {
+            let at = |operation, info| slot(code.offset, operation, info);
+            groups.push(match code.op {
+                Op::PushNonvol(register) => vec![at(PUSH_NONVOL, register)],
+                Op::Alloc(size) if size % 8 != 0 || size == 0 => {
+                    return Err("a stack allocation that is not a multiple of 8".into());
+                }
+                Op::Alloc(size @ 8..=128) => vec![at(ALLOC_SMALL, (size / 8 - 1) as u8)],
+                Op::Alloc(size) if size / 8 <= 0xFFFF => vec![at(ALLOC_LARGE, 0), (size / 8) as u16],
+                Op::Alloc(size) if size <= u64::from(u32::MAX) => {
+                    vec![at(ALLOC_LARGE, 1), size as u16, (size >> 16) as u16]
+                }
+                Op::Alloc(_) => return Err("a stack allocation past 4 GiB".into()),
+                Op::SetFpreg => vec![at(SET_FPREG, 0)],
+                Op::SaveNonvol(register, offset) | Op::SaveXmm128(register, offset) => {
+                    let xmm = matches!(code.op, Op::SaveXmm128(..));
+                    let unit = if xmm { 16 } else { 8 };
+                    if offset % unit != 0 {
+                        return Err(format!("a register saved at an offset that is not a multiple of {unit}"));
+                    }
+                    if offset / unit <= 0xFFFF {
+                        vec![at(if xmm { SAVE_XMM128 } else { SAVE_NONVOL }, register), (offset / unit) as u16]
+                    } else if offset <= u64::from(u32::MAX) {
+                        vec![
+                            at(if xmm { SAVE_XMM128_FAR } else { SAVE_NONVOL_FAR }, register),
+                            offset as u16,
+                            (offset >> 16) as u16,
+                        ]
+                    } else {
+                        return Err("a save offset past 4 GiB".into());
+                    }
+                }
+            });
         }
-        let mut slots: Vec<u16> = groups.iter().rev().flat_map(|group| group.iter().copied()).collect();
+        let count: usize = groups.iter().map(Vec::len).sum();
+        if count > 255 {
+            return Err("more than 255 unwind code slots".into());
+        }
+        let mut slots: Vec<u16> = groups.iter().rev().flatten().copied().collect();
         if slots.len() % 2 == 1 {
             slots.push(0);
         }
         let (register, offset) = self.frame.unwrap_or((0, 0));
-        let mut out = vec![1, self.prolog, (self.slots_len()) as u8, register | (offset << 4)];
+        let mut out = vec![1, self.prolog, count as u8, register | (offset << 4)];
         out.extend(slots.iter().flat_map(|slot| slot.to_le_bytes()));
-        out
-    }
-
-    /// `CountOfCodes`: the slots before padding.
-    fn slots_len(&self) -> usize {
-        self.slots.len()
-    }
-}
-
-/// The slots one code takes, from its first slot's operation.
-fn slot_count(first: u16) -> usize {
-    let operation = ((first >> 8) & 0xF) as u8;
-    let info = (first >> 12) as u8;
-    match operation {
-        ALLOC_LARGE => 2 + usize::from(info),
-        SAVE_NONVOL | SAVE_XMM128 => 2,
-        SAVE_NONVOL_FAR | SAVE_XMM128_FAR => 3,
-        _ => 1,
+        Ok(out)
     }
 }
 
 fn slot(
-    offset: usize,
+    offset: u8,
     operation: u8,
     info: u8,
 ) -> u16 {
-    offset as u16 | (u16::from(operation) | u16::from(info) << 4) << 8
+    u16::from(offset) | (u16::from(operation) | u16::from(info) << 4) << 8
 }
 
 fn refused(
@@ -108,83 +155,69 @@ fn refused(
     Unsupported(format!("{function}: no Win64 unwind data for its prologue: {why}"))
 }
 
-/// The memory operand `[rsp + displacement]` of `instruction`'s operand `n`.
-fn at_rsp(
+/// Where operand `n` of `instruction` is, as an offset from `rsp` once the
+/// prologue is done: its displacement from `rsp`, or from the frame register
+/// plus the frame's offset (LLVM saves relative to the frame register when
+/// there is one, and the codes still say `rsp`-relative).
+fn from_rsp(
     instruction: &Instruction,
     n: u32,
-) -> Option<u64> {
-    (instruction.op_kind(n) == OpKind::Memory
-        && instruction.memory_base() == Register::RSP
-        && instruction.memory_index() == Register::None)
-        .then(|| instruction.memory_displacement64())
+    frame: Option<(u8, u8)>,
+) -> Option<i64> {
+    if instruction.op_kind(n) != OpKind::Memory || instruction.memory_index() != Register::None {
+        return None;
+    }
+    let displacement = instruction.memory_displacement64() as i64;
+    match (instruction.memory_base(), frame) {
+        (Register::RSP, _) => Some(displacement),
+        (base, Some((register, offset))) if gpr(base) == Some(register) => Some(displacement + i64::from(offset) * 16),
+        _ => None,
+    }
 }
 
 /// The unwind data of the function whose bytes are `code`.
-fn unwind(
+pub fn from_prologue(
     function: &str,
     code: &[u8],
-) -> Result<Unwind, Unsupported> {
-    let mut out = Unwind { prolog: 0, frame: None, slots: Vec::new() };
+) -> Result<Info, Unsupported> {
+    let mut out = Info { prolog: 0, frame: None, codes: Vec::new() };
     let mut decoder = Decoder::with_ip(64, code, 0, DecoderOptions::NONE);
     while decoder.can_decode() {
         let instruction = decoder.decode();
         let end = decoder.position();
-        let mut slots = Vec::new();
-        match instruction.mnemonic() {
+        if end > 255 {
+            return Err(refused(function, "a prologue past 255 bytes"));
+        }
+        let offset = end as u8;
+        let op = match instruction.mnemonic() {
             Mnemonic::Push if instruction.op0_kind() == OpKind::Register => {
                 match nonvolatile(instruction.op0_register()) {
-                    Some(register) => slots.push(slot(end, PUSH_NONVOL, register)),
+                    Some(register) => Op::PushNonvol(register),
                     // `push rax` as an 8-byte allocation.
-                    None if gpr(instruction.op0_register()).is_some() => slots.push(slot(end, ALLOC_SMALL, 0)),
+                    None if gpr(instruction.op0_register()).is_some() => Op::Alloc(8),
                     None => break,
                 }
             }
             Mnemonic::Sub
                 if instruction.op0_register() == Register::RSP && instruction.op1_kind() != OpKind::Register =>
             {
-                let size = instruction.immediate(1);
-                if size % 8 != 0 || size == 0 {
-                    return Err(refused(function, "a stack allocation that is not a multiple of 8"));
-                }
-                match size {
-                    8..=128 => slots.push(slot(end, ALLOC_SMALL, (size / 8 - 1) as u8)),
-                    _ if size / 8 <= 0xFFFF => {
-                        slots.push(slot(end, ALLOC_LARGE, 0));
-                        slots.push((size / 8) as u16);
-                    }
-                    _ if size <= u64::from(u32::MAX) => {
-                        slots.push(slot(end, ALLOC_LARGE, 1));
-                        slots.push(size as u16);
-                        slots.push((size >> 16) as u16);
-                    }
-                    _ => return Err(refused(function, "a stack allocation past 4 GiB")),
-                }
+                Op::Alloc(instruction.immediate(1))
             }
             Mnemonic::Lea | Mnemonic::Mov if out.frame.is_none() && is_frame_set(&instruction) => {
-                let displacement =
-                    if instruction.mnemonic() == Mnemonic::Lea { at_rsp(&instruction, 1).unwrap_or(0) } else { 0 };
-                if displacement % 16 != 0 || displacement > 240 {
+                let displacement = if instruction.mnemonic() == Mnemonic::Lea {
+                    from_rsp(&instruction, 1, None).unwrap_or(0)
+                } else {
+                    0
+                };
+                if displacement % 16 != 0 || !(0..=240).contains(&displacement) {
                     return Err(refused(function, "a frame register offset past 240 or not a multiple of 16"));
                 }
-                let register = gpr(instruction.op0_register()).expect("checked");
-                out.frame = Some((register, (displacement / 16) as u8));
-                slots.push(slot(end, SET_FPREG, 0));
+                out.frame = Some((gpr(instruction.op0_register()).expect("checked"), (displacement / 16) as u8));
+                Op::SetFpreg
             }
             Mnemonic::Mov if instruction.op1_kind() == OpKind::Register => {
-                match (at_rsp(&instruction, 0), nonvolatile(instruction.op1_register())) {
-                    (Some(displacement), Some(register)) => {
-                        if displacement % 8 != 0 {
-                            return Err(refused(function, "a register saved at an offset that is not a multiple of 8"));
-                        }
-                        if displacement / 8 <= 0xFFFF {
-                            slots.push(slot(end, SAVE_NONVOL, register));
-                            slots.push((displacement / 8) as u16);
-                        } else {
-                            slots.push(slot(end, SAVE_NONVOL_FAR, register));
-                            slots.push(displacement as u16);
-                            slots.push((displacement >> 16) as u16);
-                        }
-                    }
+                match (from_rsp(&instruction, 0, out.frame), nonvolatile(instruction.op1_register())) {
+                    (Some(at), Some(register)) if at >= 0 => Op::SaveNonvol(register, at as u64),
                     _ => break,
                 }
             }
@@ -192,37 +225,17 @@ fn unwind(
                 if instruction.op1_kind() == OpKind::Register =>
             {
                 let xmm = instruction.op1_register();
-                match (at_rsp(&instruction, 0), xmm.is_xmm().then(|| xmm.number() as u8)) {
-                    (Some(displacement), Some(number)) if number >= 6 => {
-                        if displacement % 16 != 0 {
-                            return Err(refused(
-                                function,
-                                "an xmm register saved at an offset that is not a multiple of 16",
-                            ));
-                        }
-                        if displacement / 16 <= 0xFFFF {
-                            slots.push(slot(end, SAVE_XMM128, number));
-                            slots.push((displacement / 16) as u16);
-                        } else {
-                            slots.push(slot(end, SAVE_XMM128_FAR, number));
-                            slots.push(displacement as u16);
-                            slots.push((displacement >> 16) as u16);
-                        }
-                    }
+                match (from_rsp(&instruction, 0, out.frame), xmm.is_xmm().then(|| xmm.number() as u8)) {
+                    (Some(at), Some(number)) if number >= 6 && at >= 0 => Op::SaveXmm128(number, at as u64),
                     _ => break,
                 }
             }
             _ => break,
-        }
-        if end > 255 {
-            return Err(refused(function, "a prologue past 255 bytes"));
-        }
-        out.slots.extend(slots);
-        out.prolog = end as u8;
+        };
+        out.codes.push(Code { offset, op });
+        out.prolog = offset;
     }
-    if out.slots.len() > 255 {
-        return Err(refused(function, "more than 255 unwind code slots"));
-    }
+    out.bytes().map_err(|why| refused(function, &why))?;
     Ok(out)
 }
 
@@ -233,7 +246,7 @@ fn is_frame_set(instruction: &Instruction) -> bool {
     }
     match instruction.mnemonic() {
         Mnemonic::Mov => instruction.op1_kind() == OpKind::Register && instruction.op1_register() == Register::RSP,
-        _ => at_rsp(instruction, 1).is_some(),
+        _ => from_rsp(instruction, 1, None).is_some(),
     }
 }
 
@@ -268,11 +281,13 @@ pub fn expanded(object: &Object) -> Result<Object, Unsupported> {
     for (section, offset, size, index) in functions {
         let name = object.symbols[index].name.clone();
         let code = &object.sections[section].image;
-        let info =
-            unwind(&name, code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?)?;
+        let info = from_prologue(
+            &name,
+            code.get(offset..offset + size).ok_or_else(|| refused(&name, "a body past its section"))?,
+        )?;
 
         let at = xdata_image.len();
-        xdata_image.extend(info.bytes());
+        xdata_image.extend(info.bytes().map_err(|why| refused(&name, &why))?);
         object
             .symbols
             .push(
