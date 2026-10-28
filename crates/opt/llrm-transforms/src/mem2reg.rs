@@ -578,7 +578,7 @@ fn promote_single_block_alloca(
     // First pass: decide, so a bail out changes nothing (LLVM bails before
     // the loads it has rewritten matter, as those are replaced by values that
     // stay right).
-    let mut replacements: Vec<(InstId, Operand)> = Vec::new();
+    let mut replacements: Vec<(InstId, Result<InstId, Operand>)> = Vec::new();
     for &user in &uses {
         if !matches!(function.instruction(user).opcode, Opcode::Load { .. }) {
             continue;
@@ -587,18 +587,24 @@ fn promote_single_block_alloca(
         let at = stores.partition_point(|&(index, _)| index < load_index);
         let value = if at == 0 {
             if stores.is_empty() {
-                uninitialized(context, function.instruction(user).ty)
+                Err(uninitialized(context, function.instruction(user).ty))
             } else {
                 // No store before this load: it may be affected by the stores
                 // after it.
                 return false;
             }
         } else {
-            function.instruction(stores[at - 1].1).operands[0]
+            Ok(stores[at - 1].1)
         };
         replacements.push((user, value));
     }
-    for (load, mut value) in replacements {
+    for (load, source) in replacements {
+        // The stored value is read now: an earlier load of this loop may have
+        // been the stored value, and been replaced.
+        let mut value = match source {
+            Ok(store) => function.instruction(store).operands[0],
+            Err(value) => value,
+        };
         let load_value = function.instruction(load).result.expect("a load's value");
         if value == Operand::Value(load_value) {
             value = poison(context, function.instruction(load).ty);

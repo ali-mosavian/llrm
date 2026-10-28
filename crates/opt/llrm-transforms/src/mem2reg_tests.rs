@@ -355,3 +355,47 @@ b0:
         vec![llrm_mir::interpret::Val::Int { bits: 0xffeb, width: 16 }]
     );
 }
+
+/// A load stored back to its own alloca, then loaded again, in one block, with
+/// the loads reached in program order. The second load's value was captured as
+/// the first load, which was erased first: an erased value left in the
+/// result, and a panic in adce on `20000801-1`.
+#[test]
+fn test_a_load_stored_back_to_its_alloca_leaves_no_erased_value() {
+    for forward in [false, true] {
+        let mut module = module(
+            "define i32 @f(i32 %a) {
+b0:
+  %s = alloca i32
+  store i32 %a, ptr %s
+  %l1 = load i32, ptr %s
+  store i32 %l1, ptr %s
+  %l2 = load i32, ptr %s
+  store i32 %l2, ptr %s
+  %l3 = load i32, ptr %s
+  %r = add i32 %l3, 1
+  ret i32 %r
+}
+",
+        );
+        // The use list says in which order the loads are reached.
+        let (_, function) = module.function_mut("f").expect("@f");
+        let block = function.entry().expect("an entry");
+        let mut loads: Vec<_> = function
+            .iter_block(block)
+            .filter(|&one| matches!(
+                function.instruction(one).opcode,
+                llrm_mir::Opcode::Load { .. }
+            ))
+            .collect();
+        if forward {
+            loads.reverse();
+        }
+        for load in loads {
+            let operands = function.instruction(load).operands.clone();
+            function.set_operands(load, operands);
+        }
+        let after = managed(&mut module, Mem2Reg);
+        assert!(!after.contains("load") && after.contains("add i32 %a, 1"), "forward={forward}: {after}");
+    }
+}
