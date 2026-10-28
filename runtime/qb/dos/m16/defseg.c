@@ -4,6 +4,9 @@
 #include "far.h"
 #include "rtinit.h"
 
+#pragma aux b_seg "b$seg"
+#pragma aux B_DSG0 "B$DSG0"
+
 u16 b_seg;
 
 /* DEF SEG with no segment: the data segment. */
@@ -21,6 +24,3 @@ void defseg_xinit(void)
 {
     qb_comp_add(&comp);
 }
-
-#pragma aux b_seg "b$seg"
-#pragma aux B_DSG0 "B$DSG0"

@@ -43,6 +43,8 @@ static void put_entry(const unsigned char *entry)
     put_text(entry[ENTRY_ATTR] & ATTR_SUBDIR ? "<DIR> " : "      ");
 }
 
+#pragma aux B_FILS "B$FILS"
+
 /* B$FILS: FILES [pattern]. */
 void B_FILS(SD *pattern)
 {
@@ -81,5 +83,3 @@ void B_FILS(SD *pattern)
     put_text("Bytes free");
     cn_crlf();
 }
-
-#pragma aux B_FILS "B$FILS"

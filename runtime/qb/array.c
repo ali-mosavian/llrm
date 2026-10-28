@@ -120,6 +120,9 @@ static void preserve(AD *ad, const DimCall *call)
         SD *from = ad_near_data(ad), *to = ad_near_data(&fresh.ad);
         unsigned kept = (unsigned)((old_bytes < new_bytes ? old_bytes : new_bytes) / sizeof(SD));
 
+#pragma aux B_ERAS "B$ERAS"
+#pragma aux array_dim "@array_dim@4"
+
         for (i = 0; i < kept; i++) {
             str_owner_moved(&to[i], (int)((char *)&to[i] - (char *)&from[i]));
             from[i].len = 0;
@@ -220,6 +223,3 @@ void array_xinit(void)
 {
     lh_on_move(LH_ARRAY, moved);
 }
-
-#pragma aux B_ERAS "B$ERAS"
-#pragma aux array_dim "@array_dim@4"

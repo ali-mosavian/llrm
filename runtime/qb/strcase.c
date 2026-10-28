@@ -17,6 +17,9 @@ static SD *recase(SD *sd, char low, char high, int shift)
     return result;
 }
 
+#pragma aux B_UCAS "B$UCAS"
+#pragma aux B_LCAS "B$LCAS"
+
 SD *B_UCAS(SD *sd)
 {
     return recase(sd, 'a', 'z', 'A' - 'a');
@@ -26,6 +29,3 @@ SD *B_LCAS(SD *sd)
 {
     return recase(sd, 'A', 'Z', 'a' - 'A');
 }
-
-#pragma aux B_UCAS "B$UCAS"
-#pragma aux B_LCAS "B$LCAS"

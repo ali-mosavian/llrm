@@ -106,6 +106,9 @@ static int fits(const InputBlock QB_FAR *block, unsigned count)
     return fit && fin_error == 0;
 }
 
+#pragma aux B_INPP "B$INPP"
+#pragma aux B_LNIN "B$LNIN"
+
 /* B$INPP: the prompt, the line, and the check. */
 void B_INPP(SD *prompt, const InputBlock QB_FAR *block)
 {
@@ -169,6 +172,3 @@ void B_LNIN(SD *prompt, qb_data_ptr destination, short fixed, short newline)
     copy_bytes(text, line, length);
     str_assign(item, QB_NEAR_OF(destination));
 }
-
-#pragma aux B_INPP "B$INPP"
-#pragma aux B_LNIN "B$LNIN"

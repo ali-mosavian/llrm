@@ -68,6 +68,35 @@ static short open_file(const char *path, enum FileMode mode)
     return handle;
 }
 
+#pragma aux B_OPEN "B$OPEN"
+#pragma aux B_FLOC "B$FLOC"
+#pragma aux B_FSEK "B$FSEK"
+#pragma aux B_REST "B$REST"
+#pragma aux B_KILL "B$KILL"
+#pragma aux B_NAME "B$NAME"
+#pragma aux B_MDIR "B$MDIR"
+#pragma aux B_CDIR "B$CDIR"
+#pragma aux B_RDIR "B$RDIR"
+#pragma aux B_GET3 "B$GET3"
+#pragma aux B_PUT3 "B$PUT3"
+#pragma aux B_FLOF "B$FLOF"
+#pragma aux B_FATR "B$FATR"
+#pragma aux B_FLDP "B$FLDP"
+#pragma aux B_GET1 "B$GET1"
+#pragma aux B_PUT1 "B$PUT1"
+#pragma aux B_GET2 "B$GET2"
+#pragma aux B_PUT2 "B$PUT2"
+#pragma aux B_FIEL "B$FIEL"
+#pragma aux file_close "@file_close@4"
+#pragma aux B_GET4 "B$GET4"
+#pragma aux B_PUT4 "B$PUT4"
+#pragma aux B_SSEK "B$SSEK"
+#pragma aux B_FINP "B$FINP"
+#pragma aux B_FREF "B$FREF"
+#pragma aux B_FEOF "B$FEOF"
+#pragma aux B_CHOU "B$CHOU"
+#pragma aux B_DSKI "B$DSKI"
+
 /* B$OPEN: OPEN "name" FOR mode AS #channel LEN = record_length. */
 void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
 {
@@ -834,32 +863,3 @@ void file_xinit(void)
     lh_on_move(LH_LINE, line_moved);
     lh_on_move(LH_FILE, file_moved);
 }
-
-#pragma aux B_OPEN "B$OPEN"
-#pragma aux B_FLOC "B$FLOC"
-#pragma aux B_FSEK "B$FSEK"
-#pragma aux B_REST "B$REST"
-#pragma aux B_KILL "B$KILL"
-#pragma aux B_NAME "B$NAME"
-#pragma aux B_MDIR "B$MDIR"
-#pragma aux B_CDIR "B$CDIR"
-#pragma aux B_RDIR "B$RDIR"
-#pragma aux B_GET3 "B$GET3"
-#pragma aux B_PUT3 "B$PUT3"
-#pragma aux B_FLOF "B$FLOF"
-#pragma aux B_FATR "B$FATR"
-#pragma aux B_FLDP "B$FLDP"
-#pragma aux B_GET1 "B$GET1"
-#pragma aux B_PUT1 "B$PUT1"
-#pragma aux B_GET2 "B$GET2"
-#pragma aux B_PUT2 "B$PUT2"
-#pragma aux B_FIEL "B$FIEL"
-#pragma aux file_close "@file_close@4"
-#pragma aux B_GET4 "B$GET4"
-#pragma aux B_PUT4 "B$PUT4"
-#pragma aux B_SSEK "B$SSEK"
-#pragma aux B_FINP "B$FINP"
-#pragma aux B_FREF "B$FREF"
-#pragma aux B_FEOF "B$FEOF"
-#pragma aux B_CHOU "B$CHOU"
-#pragma aux B_DSKI "B$DSKI"

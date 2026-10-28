@@ -3,7 +3,8 @@
 #ifndef QB_MATHOPS_H
 #define QB_MATHOPS_H
 
-extern void qb_sincos(const double *angle, double *sine, double *cosine);
 #pragma aux qb_sincos "B$SINCOS"
+
+extern void qb_sincos(const double *angle, double *sine, double *cosine);
 
 #endif

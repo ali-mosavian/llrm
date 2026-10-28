@@ -129,7 +129,7 @@ def build(work: Path) -> dict[str, Path]:
     include = dosbatch.c_include(TARGET, work)
     made: dict[str, Path] = {}
     failures = []
-    tree, tools = _tree(), _stamp("llrm-c", "jwasm", "jwlink")
+    tree, tools = _tree(), _stamp(dosbatch.c_frontend(), "jwasm", "jwlink")
     for source in sorted([*RUNTIME.glob("*.c"), *qbruntime.platform_sources_of(PLATFORM)]):
         if source.name == "start.asm":
             continue
@@ -137,7 +137,7 @@ def build(work: Path) -> dict[str, Path]:
 
         def produce(source=source, obj=obj):
             if source.suffix == ".c":
-                dosbatch._host([str(dosbatch.BIN / "llrm-c"), str(source), dosbatch.m_flag(TARGET), "-Os", "-I", str(include), "-I", str(RUNTIME), "-I", str(PLATFORM), *qbruntime.device_includes(PLATFORM), "-o", str(obj)])
+                dosbatch._host(*dosbatch.c_compile(source, obj, TARGET, "-Os", include, [], ["-I", str(RUNTIME), "-I", str(PLATFORM), *qbruntime.device_includes(PLATFORM)]))
             else:
                 dosbatch.assemble(source, obj)
 

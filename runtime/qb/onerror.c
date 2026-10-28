@@ -3,8 +3,11 @@
 #include "error.h"
 #include "module.h"
 
-extern void qb_land(void);
 #pragma aux qb_land "QB_LAND"
+#pragma aux on_error "@on_error@2"
+#pragma aux raise "@raise@2"
+
+extern void qb_land(void);
 extern void (*qb_lander)(void);
 
 /* B$OEGA: the handler's offset in the module's code, or 0 for none.  A handler
@@ -37,6 +40,3 @@ void onerror_xinit(void)
 {
     qb_lander = land;
 }
-
-#pragma aux on_error "@on_error@2"
-#pragma aux raise "@raise@2"

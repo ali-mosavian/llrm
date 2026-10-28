@@ -460,6 +460,47 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
     assert!(linked, "the rp3 program did not link");
 }
 
+/// The m32 row packed structs to a byte (`-fpack-struct=1`, copied from the m16
+/// rows): `struct { char id; void *next; }` was 5 bytes where llrm-c
+/// and the assembly sharing the QB runtime's structs (compvect: ids at +4,
+/// vectors at +8) have 8, so every m32 QB program died at start-up
+/// ("Out of memory", "String formula too complex") once the runtime was built
+/// by llrm-cc.
+#[test]
+fn a_struct_has_its_natural_layout_at_m32_and_is_byte_packed_at_m16() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-pack-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("s.c"),
+        "struct S { char id; void *next; };\nint size(void) { return sizeof(struct S); }\n",
+    )
+    .unwrap();
+    let size = |target: &str| {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+            )
+            .args(["-O1", "-w", "-S", "-o"])
+            .arg(dir.join("s.s"))
+            .arg(dir.join("s.c"))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{target}: {}", String::from_utf8_lossy(&run.stderr));
+        std::fs::read_to_string(dir.join("s.s")).unwrap()
+    };
+    let (flat, real) = (size("x86_32-wat"), size("x86_16-wat"));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(flat.contains("mov eax, 8"), "{flat}");
+    assert!(real.contains("mov ax, 3"), "{real}");
+}
+
 /// `int (far *fp)(int) = callee;` with `int far callee(int)` was refused by the
 /// fork's clang ("incompatible function pointer types"): `far` qualified the
 /// result of `callee` instead of its code, and the pointer's `far` was dropped
