@@ -1121,7 +1121,7 @@ name = "lir machinecp"
 ratio = 2.7
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 2.9 -> 7.3 Minstr (x2.52)"
+why = "measured 2.9 -> 7.3 Minstr (x2.52); ~1% of the compile; the pin runs no liveness solve here, so no fix (coordinator, 10-28)"
 
 [[debt]]
 kind = "steps"
@@ -1265,7 +1265,7 @@ name = "lir machinecp"
 ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 3.0 -> 7.4 Minstr (x2.47)"
+why = "measured 3.0 -> 7.4 Minstr (x2.47); ~1% of the compile; the pin runs no liveness solve here, so no fix (coordinator, 10-28)"
 
 [[debt]]
 kind = "steps"
