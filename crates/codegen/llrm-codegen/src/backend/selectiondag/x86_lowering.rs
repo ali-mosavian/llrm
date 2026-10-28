@@ -61,8 +61,6 @@ pub mod x86isd {
     /// (`sbb r, r`), else `0`.
     pub const SETCC_CARRY: ISD = ISD::Target(740);
     pub const BSF: ISD = ISD::Target(495);
-    pub const FSHL: ISD = ISD::Target(625);
-    pub const FSHR: ISD = ISD::Target(626);
     pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
@@ -2042,53 +2040,6 @@ fn lower_abs(
     let flags = SDValue { node: neg.node, res: 1 };
     let code = cond_code(dag, cond::NS);
     dag.get_node(x86isd::CMOV, vt, &[x, neg, code, flags])
-}
-
-/// `LowerFunnelShift` for a scalar ([L32188][pin]): an `i8` with a variable
-/// amount shifts a doubleword (`aext(x) << 8 | zext(y)`); the other `i8`s
-/// take the generic expansion; an `i16` is `SHLD`/`SHRD` on the amount modulo
-/// 16. (`SHLD` is never slow on a cpu this selects, `shld_slow`, so
-/// `ExpandFunnel` is false.)
-///
-/// [pin]:
-/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L32188
-fn lower_funnel_shift(
-    dag: &mut SelectionDAG,
-    node: SDValue,
-) -> Option<SDValue> {
-    let vt = dag.value_type(node);
-    let (op0, op1, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
-    let bits = vt.size_in_bits();
-    let right = dag.opcode(node) == ISD::FShr;
-    let amount_vt = dag.value_type(amount);
-    if vt == EVT::I8 && dag.constant(amount).is_none() {
-        // fshl(x,y,z) -> (((aext(x) << bw) | zext(y)) << (z & (bw-1))) >> bw.
-        // fshr(x,y,z) -> (((aext(x) << bw) | zext(y)) >> (z & (bw-1))).
-        let mask = dag.get_constant(u128::from(bits - 1), amount_vt);
-        let high_shift = dag.get_constant(u128::from(bits), amount_vt);
-        let op0 = dag.get_node(ISD::AnyExtend, EVT::I32, &[op0]);
-        let op1 = dag.get_zext_or_trunc(op1, EVT::I32);
-        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
-        let high = dag.get_node(ISD::Shl, EVT::I32, &[op0, high_shift]);
-        let joined = dag.get_node(ISD::Or, EVT::I32, &[high, op1]);
-        let shifted = if right {
-            dag.get_node(ISD::Srl, EVT::I32, &[joined, amount])
-        } else {
-            let left = dag.get_node(ISD::Shl, EVT::I32, &[joined, amount]);
-            dag.get_node(ISD::Srl, EVT::I32, &[left, high_shift])
-        };
-        return Some(dag.get_zext_or_trunc(shifted, vt));
-    }
-    match vt {
-        EVT::I8 => None,
-        EVT::I16 => {
-            // i16 needs to modulo the shift amount.
-            let mask = dag.get_constant(15, amount_vt);
-            let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
-            Some(dag.get_node(if right { x86isd::FSHR } else { x86isd::FSHL }, vt, &[op0, op1, amount]))
-        }
-        _ => Some(node),
-    }
 }
 
 /// `LowerCTLZ` ([L29730][pin]): `bsr`, a `cmov` for a zero source, and
