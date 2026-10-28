@@ -1509,3 +1509,44 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
 }
+
+/// A callee-saved register pushed before the stack `sub` (the pin's order,
+/// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
+/// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
+/// rbx`), as the pin writes it.
+#[test]
+fn a_pushed_register_before_the_stack_adjustment_is_declared_after_it() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr)\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [24 x i8]\n  %r = call i32 @g(ptr %buf)\n  %s = add i32 %r, %a\n  ret i32 %s\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    assert!(frame.windows(4).any(|window| window[0] == 0x0E && window[2..] == [0x83, 0x02]), "{frame:02x?}");
+}
+
+/// The pin declares the offsets of the saved registers last pushed first
+/// (`rbx` at cfa-32, `r14` at -24, `rbp` at -16 after pushes of rbp, r14,
+/// rbx). They were listed in push order, and a pushed `rbp` that was no frame
+/// register got no offset at all.
+#[test]
+fn saved_registers_are_declared_last_pushed_first() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @h(i32 %b)\n  %z = call i32 @g(i32 %x)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %z\n  ret i32 %t\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    let offsets = |window: &[u8]| window[0] & 0xC0 == 0x80 && window[2] & 0xC0 == 0x80 && window[1] > window[3];
+    assert!(frame.windows(4).any(offsets), "{frame:02x?}");
+}
+
+/// An `add eax, 2` was read as a move of the stack pointer: the frame address
+/// went 2 lower (`def_cfa_offset 14`, then 6) in the middle of the function.
+/// The bytes are the pin's for `push rax; call; add eax,2; pop rcx; ret`.
+#[test]
+fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_address() {
+    let text = format!(
+        "{SYSV}declare i32 @g()\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g()\n  %s = add i32 %r, 2\n  ret i32 %s\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c070890010000140000001c000000000000000b00000000410e10490e0800")
+    );
+}
