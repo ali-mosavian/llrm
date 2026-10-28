@@ -201,6 +201,7 @@ fn synthetic() -> (llrm_object::Object, String) {
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug: Some(info),
     };
     (object, "int main(void)\n{\n    enum color e = GREEN;\n    register int r = 42;\n    { const int k = 7;\n      r = k; }\n    return 0;\n}\n".to_owned())
