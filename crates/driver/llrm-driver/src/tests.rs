@@ -375,7 +375,14 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
-    assert!(lines.contains(&"push rbp") && lines.contains(&"leave"), "the frame register is kept\n{listing}");
+    // The pin takes the stack back through the frame register and a pop, not
+    // `leave`.
+    let at = lines.iter().position(|line| *line == "mov rsp, rbp");
+    assert!(
+        lines.contains(&"push rbp") && at.is_some_and(|at| lines[at + 1] == "pop rbp"),
+        "the frame register is kept\n{listing}"
+    );
+    assert!(!lines.contains(&"leave"), "{listing}");
 }
 
 /// A constant count above one reserved one element's bytes.
