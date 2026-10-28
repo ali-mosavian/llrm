@@ -119,6 +119,7 @@ use std::sync::{Arc, LazyLock};
 
 use llrm_lir::registers::Regs;
 use llrm_lir::registers::{RegId, RegSet};
+use llrm_object::assembler::Cfi;
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
@@ -580,6 +581,9 @@ pub enum Item {
     Callee(Callee),
     Semantics(Semantics),
     Mark(Mark),
+    /// A `.cfi_*` directive (`MCCFIInstruction`), where LLVM's lands: no
+    /// code of its own.
+    Cfi(llrm_object::assembler::Cfi),
 }
 
 /// `-g`: a place in the code a debugger is told of.
@@ -605,13 +609,9 @@ pub enum Mark {
     /// The call before it clobbers this register (one mark for each it
     /// clobbers).
     Clobbered(RegId),
-    /// Declared call frame information (`.cfi_def_cfa`, `_offset`,
-    /// `_register`): from here the frame address is `offset` past the frame
-    /// register (`framed`) or the stack pointer.
-    Cfa { framed: bool, offset: i64 },
-    /// `.cfi_offset`: from here `register` is saved at `at` from the frame
-    /// address.
-    Saved { register: RegId, at: i64 },
+    /// The procedure declares its call frame information (`Item::Cfi`): it
+    /// has a frame descriptor even where it has no directive.
+    Declared,
 }
 
 /// Where an instruction put a value `-g` names.
@@ -656,54 +656,79 @@ fn placed(dest: &Loc) -> Option<Place> {
 /// frame address minus the stack pointer; once the frame register is set the
 /// address is `frame` past it and pushes and pops no longer move it.
 #[derive(Clone, Debug)]
-struct Cfi {
+struct CfiState {
     slot: i64,
+    sp: u16,
+    bp: u16,
     depth: i64,
     framed: bool,
     frame: i64,
 }
 
-impl Cfi {
-    fn entry(slot: i64) -> Self {
-        Cfi { slot, depth: slot, framed: false, frame: 0 }
+impl CfiState {
+    fn entry(
+        slot: i64,
+        sp: u16,
+        bp: u16,
+    ) -> Self {
+        CfiState { slot, sp, bp, depth: slot, framed: false, frame: 0 }
     }
 
-    fn mark(&self) -> Item {
-        Item::Mark(Mark::Cfa { framed: self.framed, offset: if self.framed { self.frame } else { self.depth } })
+    /// The directive that restates the frame address after code that left it
+    /// (a return): the prologue's.
+    fn restate(&self) -> Item {
+        Item::Cfi(if self.framed {
+            Cfi::DefCfa { register: self.bp, offset: self.frame }
+        } else {
+            Cfi::DefCfaOffset { offset: self.depth }
+        })
     }
 
-    /// The marks that follow `what`. `bp` is the frame register as the
-    /// sequence names it; `spelled` (below) maps it to the target's later.
+    /// The directives that follow `what`, where `X86FrameLowering` states them.
+    /// `bp` is the frame register as the sequence names it.
     fn after(
         &mut self,
         what: &Semantics,
         bp: &Loc,
     ) -> Vec<Item> {
-        let before = (self.framed, self.depth);
-        let mut out = Vec::new();
         let imm = |loc: &Loc| match loc {
             Loc::Imm(imm) => Some(imm.value),
             _ => None,
         };
+        let mut out = Vec::new();
         match (what.op, what.name.as_deref()) {
             (Operation::Push, _) => {
                 self.depth += self.slot;
                 if &what.sources[0] == bp {
                     // The frame register's own save is declared at once, the
                     // others' at the end of the prologue.
-                    if let Loc::Reg(one) = bp {
-                        out.push(Item::Mark(Mark::Saved { register: one.register, at: -self.depth }));
-                    }
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                    out.push(Cfi::Offset { register: self.bp, offset: -self.depth });
+                } else if !self.framed {
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
                 }
             }
-            (Operation::Pop, _) => self.depth -= self.slot,
+            (Operation::Pop, _) => {
+                self.depth -= self.slot;
+                if self.framed && what.dests.first() == Some(bp) {
+                    self.framed = false;
+                    out.push(Cfi::DefCfa { register: self.sp, offset: self.depth });
+                } else if !self.framed {
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                }
+            }
             (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
                 self.framed = true;
                 self.frame = self.depth;
-                return vec![self.mark()];
+                out.push(Cfi::DefCfaRegister { register: self.bp });
             }
-            (Operation::Binary, Some("sub")) => self.depth += what.sources.get(1).and_then(imm).unwrap_or(0),
-            (Operation::Binary, Some("add")) => self.depth -= what.sources.get(1).and_then(imm).unwrap_or(0),
+            (Operation::Binary, Some(name @ ("sub" | "add"))) => {
+                let size = what.sources.get(1).and_then(imm).unwrap_or(0);
+                self.depth += if name == "sub" { size } else { -size };
+                if !self.framed && size != 0 {
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                }
+            }
             (Operation::Address, _) => {
                 if let Some(Loc::Mem(from)) = what.sources.first() {
                     self.depth = self.frame - from.offset;
@@ -712,17 +737,11 @@ impl Cfi {
             (Operation::Nothing, Some("leave")) => {
                 self.depth = self.frame - self.slot;
                 self.framed = false;
+                out.push(Cfi::DefCfa { register: self.sp, offset: self.depth });
             }
             _ => {}
         }
-        // The frame register popped: the address is the stack pointer's again.
-        if self.framed && what.op == Operation::Pop && what.dests.first() == Some(bp) {
-            self.framed = false;
-        }
-        if !self.framed && (before.0 || before.1 != self.depth) {
-            out.insert(0, self.mark());
-        }
-        out
+        out.into_iter().map(Item::Cfi).collect()
     }
 }
 
@@ -1471,10 +1490,17 @@ fn built(
         && procedure.stack_check.is_none()
         && sequences.entry.iter().all(|one| one.name.as_deref() != Some("enter"));
     let bp = reg(FRAME);
-    let mut cfi = plain.then(|| Cfi::entry(procedure.registers.slot));
+    // The DWARF numbers the directives name, from the target's table.
+    let dwarf = |register: RegId| {
+        let name = format!("{register:?}").to_lowercase();
+        llrm_x86::mc::unwind::register(&name).map(|number| number as u16)
+    };
+    let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
+    let mut cfi =
+        numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
-        entry_items.push(cfi.mark());
+        entry_items.push(Item::Mark(Mark::Declared));
         let pushes = sequences.entry.len() - sequences.saved.len();
         let mut pending = Vec::new();
         for (at, one) in enter.iter().enumerate() {
@@ -1482,11 +1508,12 @@ fn built(
             let marks = cfi.after(one, &bp);
             if at >= pushes
                 && let Loc::Reg(pushed) = &one.sources[0]
+                && let Some(register) = dwarf(pushed.register)
             {
                 // A callee-saved register's own offset is declared after the
                 // whole prologue (`emitCalleeSavedFrameMoves`).
-                pending.push(Item::Mark(Mark::Saved { register: pushed.register, at: -cfi.depth }));
-                entry_items.extend(marks.into_iter().filter(|mark| !matches!(mark, Item::Mark(Mark::Saved { .. }))));
+                pending.push(Item::Cfi(Cfi::Offset { register, offset: -cfi.depth }));
+                entry_items.extend(marks);
             } else {
                 entry_items.extend(marks);
             }
@@ -1709,7 +1736,7 @@ fn built(
             };
             if ends {
                 cfi = done.clone();
-                out.push(done.mark());
+                out.push(done.restate());
             }
         }
     }
@@ -1899,7 +1926,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items.iter_mut() {
         match item {
-            Item::Align(_) => {}
+            Item::Align(_) | Item::Cfi(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -2137,9 +2164,6 @@ fn spelled(
     registers: &llrm_target::FrameRegisters,
 ) -> Item {
     let register = |one: RegId| registers.spelled(one);
-    if let Item::Mark(Mark::Saved { register: saved, at }) = item {
-        return Item::Mark(Mark::Saved { register: register(saved), at });
-    }
     // A frame place with no register is addressed through the frame register.
     let framed = |through: RegId, addr: Option<Addr>, index: RegId| {
         if through == RegId::None && index == RegId::None && addr.is_some_and(|addr| addr.space == Space::Frame) {
@@ -2274,7 +2298,7 @@ pub fn _procedure_of(
         match item {
             Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
-            Item::Mark(_) => {}
+            Item::Mark(_) | Item::Cfi(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }

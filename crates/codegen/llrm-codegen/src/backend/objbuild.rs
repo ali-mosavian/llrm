@@ -61,7 +61,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use llrm_lir::registers::{RegId, Regs};
+use llrm_lir::registers::Regs;
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 
@@ -262,6 +262,8 @@ pub enum Encoded {
     Near(Near),
     /// A mark, and the symbol a line's defines.
     Mark(masm::Mark, Option<String>),
+    /// A `.cfi_*` directive: no bytes.
+    Cfi(llrm_object::assembler::Cfi),
     /// `MCAlignFragment`: nops up to the alignment.
     Align(masm::CodeAlign),
     /// `.prefalign` (`MCAssembler::relaxPrefAlign`): a function aligned to
@@ -292,7 +294,9 @@ pub struct Segment {
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
     /// The declared call frame information and where it stands.
-    pub cfi: Vec<(masm::Mark, usize)>,
+    pub cfi: Vec<(llrm_object::assembler::Cfi, usize)>,
+    /// Where a procedure that declares call frame information starts.
+    pub declared: Vec<usize>,
     /// The widest alignment a data item in it asks for.
     pub align: usize,
 }
@@ -313,6 +317,7 @@ impl Segment {
             lines: Vec::new(),
             bodies: Vec::new(),
             cfi: Vec::new(),
+            declared: Vec::new(),
             align: 1,
         }
     }
@@ -324,9 +329,7 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
-            declared @ (masm::Mark::Cfa { .. } | masm::Mark::Saved { .. }) => {
-                self.cfi.push((declared, self.image.len()))
-            }
+            masm::Mark::Declared => self.declared.push(self.image.len()),
             bound => self.bodies.push((bound, self.image.len())),
         }
     }
@@ -439,6 +442,7 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Label(_)
                     | Encoded::Jump(_)
                     | Encoded::Mark(..)
+                    | Encoded::Cfi(_)
                     | Encoded::Align(_)
                     | Encoded::Prefer { .. }
                     | Encoded::End(_) => {}
@@ -753,6 +757,7 @@ pub fn _code_by(
             Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, at));
             }
+            Encoded::Cfi(cfi) => segment.cfi.push((*cfi, segment.image.len())),
             Encoded::Mark(mark, name) => {
                 segment.mark(*mark);
                 if let Some(name) = name {
@@ -815,6 +820,7 @@ pub fn _items(
             vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))]
         }
         masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
+        masm::Item::Cfi(cfi) => vec![Encoded::Cfi(*cfi)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => code
             .iter()
             .map(|part| _part(part, model))
@@ -1096,7 +1102,7 @@ pub fn _length(
     model: CodeModel,
 ) -> usize {
     match item {
-        Encoded::Label(_) | Encoded::Mark(..) | Encoded::End(_) => 0,
+        Encoded::Label(_) | Encoded::Mark(..) | Encoded::Cfi(_) | Encoded::End(_) => 0,
         // Padding depends on where it lands: see `_size`.
         Encoded::Align(_) | Encoded::Prefer { .. } => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
@@ -1249,39 +1255,36 @@ pub fn object_of(
     })
 }
 
-/// The frames the procedures declared (`Mark::Cfa`, `Mark::Saved`): one row
-/// where the frame address or a save changes, as the state after the marks
-/// at that offset.
+/// The frames the procedures declared (`Item::Cfi`): one row where the frame
+/// address or a save changes, as the state after the directives at that offset.
 fn declared_frames(
     segments: &[Segment],
     symbols: &IndexMap<String, (usize, usize)>,
     sizes: &IndexMap<String, usize>,
 ) -> Vec<llrm_object::Frame> {
+    use llrm_object::assembler::Cfi;
     use llrm_object::debug::FrameRow;
-    let name = |register: RegId| format!("{register:?}").to_lowercase();
+    let name = |number: u16| llrm_x86::mc::unwind::register_name(u64::from(number)).unwrap_or("rip").to_owned();
     let mut frames = Vec::new();
     for (section, segment) in segments.iter().enumerate() {
-        if segment.cfi.is_empty() {
-            continue;
-        }
         for (symbol, &(home, start)) in symbols {
             let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
-            let marks: Vec<&(masm::Mark, usize)> =
-                segment.cfi.iter().filter(|(_, at)| (start..start + length).contains(at) || *at == start).collect();
-            if marks.is_empty() {
+            let within = |at: &usize| (start..start + length).contains(at);
+            if !segment.declared.iter().any(within) {
                 continue;
             }
             let entry = FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() };
             let mut state = entry.clone();
             let mut rows: Vec<FrameRow> = Vec::new();
-            for &&(mark, at) in &marks {
-                match mark {
-                    masm::Mark::Cfa { framed, offset } => {
-                        state.cfa_register = if framed { "rbp" } else { "rsp" }.into();
+            for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+                match cfi {
+                    Cfi::DefCfa { register, offset } => {
+                        state.cfa_register = name(register);
                         state.cfa_offset = offset;
                     }
-                    masm::Mark::Saved { register, at: place } => state.saved.push((name(register), place)),
-                    _ => {}
+                    Cfi::DefCfaRegister { register } => state.cfa_register = name(register),
+                    Cfi::DefCfaOffset { offset } => state.cfa_offset = offset,
+                    Cfi::Offset { register, offset } => state.saved.push((name(register), offset)),
                 }
                 state.offset = at - start;
                 if rows.last().is_some_and(|row| row.offset == state.offset) {
