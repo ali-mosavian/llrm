@@ -1642,6 +1642,7 @@ pub fn fill(
         "stosb" => Instruction::with_stosb,
         "stosw" => Instruction::with_stosw,
         "stosd" => Instruction::with_stosd,
+        "stosq" => Instruction::with_stosq,
         _ => return None,
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };
@@ -1660,6 +1661,7 @@ pub fn copy(
         "movsb" => Instruction::with_movsb,
         "movsw" => Instruction::with_movsw,
         "movsd" => Instruction::with_movsd,
+        "movsq" => Instruction::with_movsq,
         _ => return None,
     };
     let prefix = if repeated { RepPrefixKind::Repe } else { RepPrefixKind::None };

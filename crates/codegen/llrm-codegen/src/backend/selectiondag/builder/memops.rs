@@ -717,9 +717,8 @@ impl Builder<'_> {
                     (None, Intrinsic::MemCpy, Some(bytes)) if self.has_min_size() => {
                         self.rep_movs(root, dst, other, bytes, 1, dst_align, src_align)?
                     }
-                    (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => {
-                        self.rep_movs(root, dst, other, bytes, alignment.min(4), dst_align, src_align)?
-                    }
+                    (None, Intrinsic::MemCpy, Some(bytes)) if bytes <= MAX_INLINE_SIZE && alignment >= 4 => self
+                        .rep_movs(root, dst, other, bytes, alignment.min(self.string_block()), dst_align, src_align)?,
                     // no `memcpy` to call for a copy the pin leaves to one
                     // (alignment under 4): dwords, as the old selector copies;
                     // x86 takes them unaligned
@@ -1125,7 +1124,7 @@ impl Builder<'_> {
         if self.is_far(dst) || self.is_far(src) {
             return self.inline_memcpy(chain, dst, src, size, usize::MAX, align, align);
         }
-        self.rep_movs(chain, dst, src, size, align.min(4), align, align).map(Some)
+        self.rep_movs(chain, dst, src, size, align.min(self.string_block()), align, align).map(Some)
     }
 
     /// `emitRepmovs` with the block width of `emitConstantSizeRepmov`.
@@ -1206,6 +1205,12 @@ impl Builder<'_> {
         Ok(self.dag.get_token_factor(&[rep, tail]))
     }
 
+    /// The widest block a `rep movs` moves: a quadword where the pointer is one
+    /// (`emitConstantSizeRepmovs` takes `i64` at 8-byte alignment on x86-64).
+    fn string_block(&self) -> u64 {
+        u64::from(self.target.dag.pointer.size_in_bits() / 8).max(4)
+    }
+
     /// `emitConstantSizeRepstos`.
     fn rep_stos(
         &mut self,
@@ -1235,6 +1240,9 @@ impl Builder<'_> {
             if block >= 4 {
                 pattern |= pattern << 16;
             }
+            if block >= 8 {
+                pattern |= pattern << 32;
+            }
             (block, size / block, self.dag.get_constant(u128::from(pattern), EVT::integer(block as u32 * 8)))
         } else {
             (1, size, value)
@@ -1243,6 +1251,7 @@ impl Builder<'_> {
         let acc = match block {
             1 => self.arch.register_named("al"),
             2 => self.arch.register_named("ax"),
+            8 => self.arch.register_named("rax"),
             _ => self.arch.register_named("eax"),
         };
         let (cx, di, _) = self.string_registers();
