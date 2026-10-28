@@ -715,8 +715,7 @@ fn _copies_sunk_to_high_shifts(
             if one.is_meta() {
                 continue;
             }
-            let Some((copied, source)) = crate::backend::copysink::copy_of(one).filter(|(copied, _)| *copied == dest)
-            else {
+            let Some((_, source)) = crate::backend::copysink::copy_of(one).filter(|(copied, _)| *copied == dest) else {
                 between.push(one);
                 continue;
             };
