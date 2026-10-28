@@ -217,6 +217,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-6502"
+version = "0.1.0"
+dependencies = [
+ "llrm-dagisel",
+]
+
+[[package]]
 name = "llrm-alloc"
 version = "0.1.0"
 dependencies = [

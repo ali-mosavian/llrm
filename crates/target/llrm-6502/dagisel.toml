@@ -1,0 +1,35 @@
+# The 6502 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
+[target]
+name = "mos"
+ns = "MOS::"
+isd = "MOSISD::"
+llvm_dir = ""
+td = "mos6502.td"
+cpus = ["mos6502", "w65c02"]
+own_ids = "own_ids.txt"
+ids_includes = [
+  "#define GET_INSTRINFO_ENUM",
+  '#include "GenInstrInfo.inc"',
+  "#define GET_REGINFO_ENUM",
+  '#include "GenRegisterInfo.inc"',
+]
+
+# The NMOS 6502 has no extra features; the 65C02 adds CMOS.
+[cpu.mos6502]
+features = []
+
+[cpu.w65c02]
+features = ["CMOS"]
+
+[atom]
+"Subtarget->hasCMOS()" = ["CMOS"]
+
+[types]
+dead_prefixes = ["v", "nxv"]
+
+[node_predicate]
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+load = "non_extending_load"
+unindexedload = "unindexed_load"

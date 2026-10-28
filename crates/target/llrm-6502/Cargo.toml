@@ -1,0 +1,9 @@
+[package]
+name = "llrm-6502"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The 6502 target: its descriptions and DAG selector tables, generated from mos6502.td"
+
+[dependencies]
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }
