@@ -1510,7 +1510,14 @@ impl Emitter<'_, '_> {
         }
         if matches!(
             name,
-            "CMOV_GR8" | "CMOV_GR16" | "CMOV_GR32" | "CMOV_FR32" | "CMOV_FR64"
+            "CMOV_GR8"
+                | "CMOV_GR16"
+                | "CMOV_GR32"
+                | "CMOV_FR32"
+                | "CMOV_FR64"
+                | "CMOV_RFP32"
+                | "CMOV_RFP64"
+                | "CMOV_RFP80"
         ) {
             return self.lowered_select(n);
         }
