@@ -14,8 +14,8 @@ fn forms() -> String {
     format!("{}\n{}", read("llrm-x86"), read("llrm-x86-m16"))
 }
 
-fn dialect() -> llrm_instr::Dialect {
-    llrm_instr::Dialect::parse(include_str!("../../../target/llrm-x86/src/instructions/dialect.toml"))
+fn dialect() -> llrm_target::instr::Dialect {
+    llrm_target::instr::Dialect::parse(include_str!("../../../target/llrm-x86/src/instructions/dialect.toml"))
         .expect("x86's dialect")
 }
 
@@ -123,7 +123,7 @@ fn every_operation_of_llrm_lir_has_a_spelling_and_a_variant() {
 /// of.
 #[test]
 fn a_rule_names_the_flags_of_its_dialect() {
-    let arm = llrm_instr::Dialect::parse(
+    let arm = llrm_target::instr::Dialect::parse(
         "file = \"arm64.instr\"\nregisters = [\"x0\"]\nwidths = [32, 64]\narithmetic = [\"N\", \"Z\"]\n\
          [flags]\nN = 8\nZ = 4\n",
     )

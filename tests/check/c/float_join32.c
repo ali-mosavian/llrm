@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -O1 -march=i486 -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -O1 -march=i486 -S -o /dev/stdout
 // A float a call returns on one path and a parameter is on the other, joined and returned: both stay in st(0).
 // It was stored to a frame cell on both paths and loaded again at the join.
 extern double g(double);

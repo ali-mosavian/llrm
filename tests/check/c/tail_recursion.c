@@ -1,4 +1,4 @@
-// RUN: llrm-c %s {-m16 | -m32} {-O2 | -Os} -march=i486 -fno-inline-functions -S -o /dev/stdout
+// RUN: llrm-cc %s {-m16 | -m32} {-O2 | -Os} -march=i486 -fno-inline-functions -S -o /dev/stdout
 // A call a function ends with was a call per level (bench/bintree 102097 instructions, gcc 44110;
 // bench/hanoi 286704, gcc 143356); each is a loop, an add or a product on the way out an accumulator.
 // CHECK-LABEL: {{_gcd(@3)?}} proc
