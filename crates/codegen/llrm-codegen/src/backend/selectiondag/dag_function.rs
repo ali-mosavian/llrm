@@ -398,6 +398,16 @@ impl super::emit::Conventions for CallConventions<'_> {
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
+            // BASIC's convention (no row in calling.toml) keeps every register
+            // for its caller, as the old selector reads it: a call of one
+            // disturbs nothing the caller must save. Its `clobbers` are what
+            // the caller may not keep a value in.
+            _ if matches!(callee, Some(Callee::Global(_)))
+                && self.convention_of(callee).is_none()
+                && self.written(callee).is_none() =>
+            {
+                Default::default()
+            }
             _ => clobbers.clone(),
         }
     }
