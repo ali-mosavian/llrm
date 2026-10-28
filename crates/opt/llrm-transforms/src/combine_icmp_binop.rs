@@ -423,13 +423,83 @@ pub fn fold_icmp_bin_op(
     if let Some(r) = fold_doubling(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: foldMultiplicationOverflowCheck.
+    if let Some(r) = fold_multiplication_overflow_check(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
     if let Some(r) = fold_icmp_and_xx(c, inst, pred, op0, op1) {
         return Some(r);
     }
     // OWED: foldICmpWithTruncSignExtendedVal and
     // foldShiftIntoShiftInAnotherHandOfAndInICmp.
     None
+}
+
+/// `foldMultiplicationOverflowCheck`: `(-1 u/ x) u< y` and
+/// `((x * y) ?/ x) != y` are the overflow bit of `x * y`.
+fn fold_multiplication_overflow_check(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let (need_negation, signed, x, y, mul) = if !is_equality(pred) {
+        // Look for: (-1 u/ x) u</u>= y
+        let udiv_of_all_ones = |c: &Combiner, d: Operand| {
+            let (op, ones, x, _) = binary_operator(c, d)?;
+            let all_ones = query(c, None).int_constant(ones).is_some_and(|(bits, width)| bits == mask(width));
+            (op == BinaryOp::UDiv && all_ones && has_one_use(c, d)).then_some(x)
+        };
+        let (pred, x, y) = if let Some(x) = udiv_of_all_ones(c, op0) {
+            (pred, x, op1)
+        } else {
+            (swapped(pred), udiv_of_all_ones(c, op1)?, op0)
+        };
+        // Are we checking that overflow does not happen, or does happen?
+        let need_negation = match pred {
+            IntPredicate::Ult => false,
+            IntPredicate::Uge => true,
+            _ => return None,
+        };
+        (need_negation, false, x, y, None)
+    } else {
+        // Look for: ((x * y) / x) !=/== y
+        let idiv_of_mul = |c: &Combiner, y: Operand, d: Operand| {
+            let (op, product, x, _) = binary_operator(c, d)?;
+            if !matches!(op, BinaryOp::UDiv | BinaryOp::SDiv) || !has_one_use(c, d) {
+                return None;
+            }
+            // m_c_Mul(m_Deferred(Y), m_Value(X)), the divisor being X
+            let (_, a, b, _) = binary_operator(c, product).filter(|&(op, ..)| op == BinaryOp::Mul)?;
+            ((a == y && b == x) || (b == y && a == x)).then_some((op == BinaryOp::SDiv, x, product))
+        };
+        let (y, (signed, x, product)) = match idiv_of_mul(c, op0, op1) {
+            Some(found) => (op0, found),
+            None => (op1, idiv_of_mul(c, op1, op0)?),
+        };
+        (pred == IntPredicate::Eq, signed, x, y, Some(product))
+    };
+    let mul_inst = mul.and_then(|m| query(c, None).instruction_of(m).map(|(id, _)| id));
+    let mul_had_other_uses = mul.is_some_and(|m| !has_one_use(c, m));
+    // If the pattern included (x * y), the new instructions go right before
+    // that original multiplication so that it can be replaced.
+    let at = mul_inst.filter(|_| mul_had_other_uses).unwrap_or(inst);
+    let pair = c.create_mul_with_overflow(at, signed, x, y);
+    let i1 = c.context.types.int(1);
+    if let (true, Some(mul_inst)) = (mul_had_other_uses, mul_inst) {
+        // The multiplication was used elsewhere: its uses read the result.
+        let ty = c.type_of(x);
+        let value = c.create_extract_value(at, pair, 0, ty);
+        c.replace_inst_with(mul_inst, value);
+    }
+    let mut result = c.create_extract_value(at, pair, 1, i1);
+    if need_negation {
+        result = c.create_not(at, result);
+    }
+    if let (true, Some(mul_inst)) = (mul_had_other_uses, mul_inst) {
+        c.erase(mul_inst);
+    }
+    Some(Visit::Replace(result))
 }
 
 /// `foldICmpAndXX`: a compare of `X & A` with `X`. OWED: its two equality
