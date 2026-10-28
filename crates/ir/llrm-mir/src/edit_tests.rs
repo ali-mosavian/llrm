@@ -1063,3 +1063,28 @@ fn the_sole_successor_of_a_switch_stops_at_a_second_target() {
     assert_eq!((switch, jump), (None, Some(layout[2])));
     assert_eq!(scans, 0, "the successors of the switch were listed whole");
 }
+
+/// Removing one entry of a phi of 256 arms unlinked and linked all 512
+/// operands (`set_operands` 64 K Ir a call, 1,050 calls in a 256-state
+/// machine). The arms before the removed one keep their uses; the use lists
+/// stay consistent.
+#[test]
+fn rewriting_a_phi_after_its_first_arms_relinks_only_what_changed() {
+    let arms: String = (0..256).map(|i| format!("[ {i}, %e ], ")).collect();
+    let text = format!(
+        "define i32 @f() {{\nentry:\n  br label %m\ne:\n  br label %m\nm:\n  %p = phi i32 {}\n  ret i32 %p\n}}\n",
+        arms.trim_end_matches(", ")
+    );
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let m = f.layout()[2];
+    let phi = f.iter_block(m).next().expect("the phi");
+    let mut operands = f.instruction(phi).operands.clone();
+    let last = operands.len();
+    operands.truncate(last - 2);
+    crate::uselist::LINKS.with(|links| links.set(0));
+    f.set_operands(phi, operands);
+    let links = crate::uselist::LINKS.with(std::cell::Cell::get);
+    assert!(links <= 4, "{links} operands relinked for a rewrite that changed the end");
+    assert!(f.check_uses().is_empty());
+}
