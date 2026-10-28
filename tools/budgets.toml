@@ -909,15 +909,6 @@ why = "measured 2.8 -> 8.6 Minstr (x3.09)"
 
 [[debt]]
 kind = "steps"
-axis = "cells"
-name = "mir extload"
-ratio = 5.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 1.3 -> 6.6 Minstr (x5.31)"
-
-[[debt]]
-kind = "steps"
 axis = "cases"
 name = "mir cvp@669"
 ratio = 2.8
@@ -1590,15 +1581,6 @@ ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/5759"
 owner = "w10 coalescer"
 why = "measured 1551.8 -> 5526.7 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
-axis = "equal"
-name = "mir extload"
-ratio = 5.4
-issue = "https://github.com/ali-mosavian/llrm/issues/5759"
-owner = "w10 coalescer"
-why = "measured 256.8 -> 1313.9 -> 5881.6 (4N) Minstr (x5.12)"
 
 [[debt]]
 kind = "steps"
