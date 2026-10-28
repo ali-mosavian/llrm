@@ -733,10 +733,16 @@ pub fn common_cast_transforms(
     // other folds and lead to worse codegen.
     if let Some(select) = def_of(c, src).filter(|&def| c.function.instruction(def).opcode == Opcode::Select) {
         let cmp = def_of(c, c.function.instruction(select).operands[0])
-            .filter(|&def| matches!(c.function.instruction(def).opcode, Opcode::ICmp(_) | Opcode::FCmp(_)));
+            .filter(|&def| matches!(
+                c.function.instruction(def).opcode,
+                Opcode::ICmp(_) | Opcode::FCmp(_)
+            ));
         let compares_select_type =
             cmp.is_some_and(|cmp| c.type_of(c.function.instruction(cmp).operands[0]) == c.type_of(src));
-        let narrows = matches!(c.function.instruction(inst).opcode, Opcode::Cast(CastOp::Trunc))
+        let narrows = matches!(
+            c.function.instruction(inst).opcode,
+            Opcode::Cast(CastOp::Trunc)
+        )
             && matches!(
                 (c.context.types.int_bits(c.type_of(src)), c.context.types.int_bits(ty)),
                 (Some(from), Some(to)) if should_change_type(c, from, to)

@@ -409,3 +409,16 @@ fn a_sext_of_a_trunc_is_a_sext_or_a_shift_pair() {
         "  %0 = shl i32 %x, 24\n  %1 = ashr i32 %0, 31\n  ret i32 %1\n",
     );
 }
+
+/// `commonCastTransforms`: a cast of a select whose condition is not a compare
+/// goes into the arms (`FoldOpIntoSelect`): the constant arm folds, the other
+/// gets the cast. Stayed a select of narrow values before.
+#[test]
+fn a_zext_of_a_select_with_a_constant_arm_goes_into_the_arms() {
+    check(
+        "i32",
+        "i1 %c, i8 %y",
+        "  %s = select i1 %c, i8 1, i8 %y\n  %r = zext i8 %s to i32\n  ret i32 %r\n",
+        "  %0 = zext i8 %y to i32\n  %1 = select i1 %c, i32 1, i32 %0\n  ret i32 %1\n",
+    );
+}

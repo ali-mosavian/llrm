@@ -891,3 +891,49 @@ fn a_division_by_a_select_with_a_zero_arm_uses_the_other_arm() {
         "  %r = udiv i16 %x, %y\n  ret i16 %r\n",
     );
 }
+
+/// `narrowMathIfNoOverflow` in `visitMul`: `zext (and X, 7) * 5` fits in 8
+/// bits.
+#[test]
+fn an_extended_value_times_a_constant_that_cannot_wrap_is_multiplied_narrow() {
+    check(
+        "i32",
+        "i8 %x",
+        "  %m = and i8 %x, 7\n  %a = zext i8 %m to i32\n  %r = mul i32 %a, 5\n  ret i32 %r\n",
+        "  %m = and i8 %x, 7\n  %0 = mul nuw nsw i8 %m, 5\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+    );
+}
+
+/// `C sdiv (select c, C1, C2)` is the select of the two quotients
+/// (`FoldOpIntoSelect`, multi-use allowed).
+#[test]
+fn a_constant_divided_by_a_select_of_constants_is_a_select_of_quotients() {
+    check(
+        "i32",
+        "i1 %c",
+        "  %s = select i1 %c, i32 5, i32 10\n  %r = sdiv i32 100, %s\n  ret i32 %r\n",
+        "  %0 = select i1 %c, i32 20, i32 10\n  ret i32 %0\n",
+    );
+}
+
+/// `urem (select c, 7, 9), 4` is `select c, 3, 1` (`FoldOpIntoSelect`).
+#[test]
+fn a_remainder_of_a_select_of_constants_is_a_select_of_remainders() {
+    check(
+        "i32",
+        "i1 %c",
+        "  %s = select i1 %c, i32 7, i32 9\n  %r = urem i32 %s, 4\n  ret i32 %r\n",
+        "  %0 = select i1 %c, i32 3, i32 1\n  ret i32 %0\n",
+    );
+}
+
+/// `udiv (select c, 7, 9), 3` is `select c, 2, 3` (`foldBinOpIntoSelectOrPhi`).
+#[test]
+fn a_division_of_a_select_of_constants_is_a_select_of_quotients() {
+    check(
+        "i32",
+        "i1 %c",
+        "  %s = select i1 %c, i32 7, i32 9\n  %r = udiv i32 %s, 3\n  ret i32 %r\n",
+        "  %0 = select i1 %c, i32 2, i32 3\n  ret i32 %0\n",
+    );
+}

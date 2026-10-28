@@ -674,7 +674,10 @@ pub fn visit_sub(
         fold_xor_of_sext_bool,
         fold_saturating_difference,
     ];
-    steps.iter().find_map(|step| step(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {
+        return found;
+    }
+    infer_sub_flags(c, inst, op0, op1, flags)
 }
 
 #[cfg(test)]

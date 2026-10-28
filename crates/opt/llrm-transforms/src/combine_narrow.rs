@@ -23,11 +23,11 @@
 
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
+use llrm_mir::valuetracking::pattern;
 use llrm_mir::valuetracking::range::{
     OverflowResult, compute_overflow_for_signed_add, compute_overflow_for_signed_mul, compute_overflow_for_signed_sub,
     compute_overflow_for_unsigned_add, compute_overflow_for_unsigned_mul, compute_overflow_for_unsigned_sub,
 };
-use llrm_mir::valuetracking::pattern;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_minmax::lossless_trunc;
@@ -82,9 +82,9 @@ impl Combiner<'_> {
         // and we can eliminate at least one (hasOneUse), this might work.
         let same = {
             let q = query(self, Some(inst));
-            pattern::cast(&q, op1, ext).map(|(_, _, y)| y).filter(|&y| {
-                self.type_of(x) == self.type_of(y) && (has_one_use(self, op0) || has_one_use(self, op1))
-            })
+            pattern::cast(&q, op1, ext)
+                .map(|(_, _, y)| y)
+                .filter(|&y| self.type_of(x) == self.type_of(y) && (has_one_use(self, op0) || has_one_use(self, op1)))
         };
         let mut y = match same {
             Some(y) => y,
