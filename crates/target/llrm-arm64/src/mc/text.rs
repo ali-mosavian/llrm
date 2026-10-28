@@ -375,7 +375,12 @@ impl fmt::Display for Inst {
                     Atomic::Ldapr => write!(out, "ldapr{suffix} {}, [{base}]", gpr(*rt, width, false)),
                     Atomic::Stlr => write!(out, "stlr{suffix} {}, [{base}]", gpr(*rt, width, false)),
                     Atomic::Cas => {
-                        write!(out, "cas{order}{suffix} {}, {}, [{base}]", gpr(*rs, width, false), gpr(*rt, width, false))
+                        write!(
+                            out,
+                            "cas{order}{suffix} {}, {}, [{base}]",
+                            gpr(*rs, width, false),
+                            gpr(*rt, width, false)
+                        )
                     }
                     other => {
                         let name = match other {

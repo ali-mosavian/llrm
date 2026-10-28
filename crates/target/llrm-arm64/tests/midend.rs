@@ -85,9 +85,9 @@ fn the_page_and_the_offset_of_a_global_plus_offset_agree() {
     assert!(adrp.contains("6896"), "{asm}");
 }
 
-/// Atomics were refused in the parser, and then no pass may treat one as a plain access. Selected as
-/// the pin selects them (`apple-m1`: LSE and RCPC): `ldar`/`ldapr`, `stlr`, one LSE instruction,
-/// `casal`, `dmb`.
+/// Atomics were refused in the parser, and then no pass may treat one as a
+/// plain access. Selected as the pin selects them (`apple-m1`: LSE and RCPC):
+/// `ldar`/`ldapr`, `stlr`, one LSE instruction, `casal`, `dmb`.
 #[test]
 fn atomics_are_kept_and_selected_as_the_pin_does() {
     let asm = driver::assembly(include_str!("data/atomics.ll"), Platform::Darwin, true).expect("lowers");

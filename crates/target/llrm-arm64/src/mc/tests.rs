@@ -445,8 +445,9 @@ fn floating_point() {
     check(&all);
 }
 
-/// The atomic instructions as Apple's `clang` (apple-m1, with LSE and RCPC) assembles them, and
-/// the text the printer gives back. The pinned `llvm-mc` is not needed: the words are fixed.
+/// The atomic instructions as Apple's `clang` (apple-m1, with LSE and RCPC)
+/// assembles them, and the text the printer gives back. The pinned `llvm-mc` is
+/// not needed: the words are fixed.
 #[test]
 fn atomics() {
     let atomic = |op, size, acquire, release, rs: u32, rt: u32, rn: u32| Inst::Atomic {

@@ -1,19 +1,21 @@
-//! Atomic accesses and fences, as the pin selects them for `apple-m1` (LSE and RCPC): a load-acquire
-//! is `ldapr` (`ldar` for `seq_cst`), a store-release `stlr`, a read-modify-write one LSE
-//! instruction (`ldadd`, `swp`, ...; `sub` and `and` negate or complement the operand first),
-//! `cmpxchg` a `cas`, and a fence a `dmb`. A relaxed access is an ordinary load or store.
+//! Atomic accesses and fences, as the pin selects them for `apple-m1` (LSE and
+//! RCPC): a load-acquire is `ldapr` (`ldar` for `seq_cst`), a store-release
+//! `stlr`, a read-modify-write one LSE instruction (`ldadd`, `swp`, ...; `sub`
+//! and `and` negate or complement the operand first), `cmpxchg` a `cas`, and a
+//! fence a `dmb`. A relaxed access is an ordinary load or store.
 //!
-//! `nand`, the float operations and the wrapping increments have no LSE instruction: LLVM writes a
-//! `ldaxr`/`stlxr` loop for them, which is refused here.
+//! `nand`, the float operations and the wrapping increments have no LSE
+//! instruction: LLVM writes a `ldaxr`/`stlxr` loop for them, which is refused
+//! here.
 
-use llrm_mir::opcode::{AtomicKind, AtomicOrdering, RmwOp};
 use llrm_mir::Instruction;
+use llrm_mir::opcode::{AtomicKind, AtomicOrdering, RmwOp};
 
 use super::val::{AddrExpr, Base, G, Known, Val, width_of};
 use super::{Selected, Selector, Src, refuse};
 use crate::mc::inst::*;
-use crate::mfunc::Op;
 use crate::mc::visit::Reg;
+use crate::mfunc::Op;
 
 /// Whether a read-modify-write of `ordering` acquires and whether it releases.
 fn acquires_and_releases(ordering: AtomicOrdering) -> (bool, bool) {
@@ -30,8 +32,9 @@ fn log2(bytes: u8) -> u8 {
 }
 
 impl Selector<'_> {
-    /// A call of a `llrm.atomic.*` function (`llrm_mir::atomic::hidden`): the instruction it stands for.
-    /// What has no instruction here (`nand`, floats, a loop of `ldaxr`/`stlxr`, widths over 64 bits) is refused.
+    /// A call of a `llrm.atomic.*` function (`llrm_mir::atomic::hidden`): the
+    /// instruction it stands for. What has no instruction here (`nand`,
+    /// floats, a loop of `ldaxr`/`stlxr`, widths over 64 bits) is refused.
     pub(super) fn atomic_call(
         &mut self,
         name: &str,
@@ -40,11 +43,17 @@ impl Selector<'_> {
         let Some(info) = llrm_mir::atomic::decode(name) else { return refuse(format!("{name}: not an atomic")) };
         let ordering = info.ordering;
         match info.kind {
-            AtomicKind::Load if matches!(ordering, AtomicOrdering::Unordered | AtomicOrdering::Monotonic) => {
+            AtomicKind::Load if matches!(
+                ordering,
+                AtomicOrdering::Unordered | AtomicOrdering::Monotonic
+            ) => {
                 self.load(instruction)
             }
             AtomicKind::Load => self.ordered_load(instruction, ordering),
-            AtomicKind::Store if matches!(ordering, AtomicOrdering::Unordered | AtomicOrdering::Monotonic) => {
+            AtomicKind::Store if matches!(
+                ordering,
+                AtomicOrdering::Unordered | AtomicOrdering::Monotonic
+            ) => {
                 self.store(instruction)
             }
             AtomicKind::Store => self.ordered_store(instruction),
@@ -92,7 +101,15 @@ impl Selector<'_> {
         };
         let address = self.pointer_operand(instruction.operands[1])?;
         let rn = self.pointer_register(&address)?;
-        self.inst(Inst::Atomic { op: Atomic::Stlr, size: log2(bytes), acquire: false, release: true, rs: Gpr::R31, rt, rn });
+        self.inst(Inst::Atomic {
+            op: Atomic::Stlr,
+            size: log2(bytes),
+            acquire: false,
+            release: true,
+            rs: Gpr::R31,
+            rt,
+            rn,
+        });
         Ok(())
     }
 
@@ -161,13 +178,16 @@ impl Selector<'_> {
         self.define(instruction.result, Src::Val(value))
     }
 
-    /// `cmpxchg`: `cas` writes the old value over the expected one; the pair is that and whether they were equal.
+    /// `cmpxchg`: `cas` writes the old value over the expected one; the pair is
+    /// that and whether they were equal.
     pub(super) fn cmpxchg(
         &mut self,
         instruction: &Instruction,
         success: AtomicOrdering,
     ) -> Selected<()> {
-        let [pointer, expected, new] = instruction.operands[..instruction.operands.len() - 1] else { return refuse("a cmpxchg without its operands") };
+        let [pointer, expected, new] = instruction.operands[..instruction.operands.len() - 1] else {
+            return refuse("a cmpxchg without its operands");
+        };
         let ty = self.operand_type(expected)?;
         let (bytes, float) = self.access(ty)?;
         if float {
@@ -203,13 +223,21 @@ impl Selector<'_> {
         });
         let equal = self.mf.gpr();
         // cset equal, eq = csinc equal, wzr, wzr, ne
-        self.inst(Inst::CondSelect { op: Select::Csinc, width: Width::W, rd: equal, rn: Gpr::R31, rm: Gpr::R31, cond: Cond::Ne });
+        self.inst(Inst::CondSelect {
+            op: Select::Csinc,
+            width: Width::W,
+            rd: equal,
+            rn: Gpr::R31,
+            rm: Gpr::R31,
+            cond: Cond::Ne,
+        });
         let old = self.loaded(ty, old);
         let flag = Val::Int(G { reg: equal, bits: 1, known: Known::Zero });
         self.define(instruction.result, Src::Val(Val::Agg(vec![old, flag])))
     }
 
-    /// `fence`: an acquire fence orders loads before it (`dmb ishld`); the others, all accesses (`dmb ish`).
+    /// `fence`: an acquire fence orders loads before it (`dmb ishld`); the
+    /// others, all accesses (`dmb ish`).
     pub(super) fn fence(
         &mut self,
         ordering: AtomicOrdering,
@@ -219,7 +247,8 @@ impl Selector<'_> {
         Ok(())
     }
 
-    /// The value of type `ty` an atomic instruction left in `reg`: zero-extended from its size.
+    /// The value of type `ty` an atomic instruction left in `reg`:
+    /// zero-extended from its size.
     fn loaded(
         &self,
         ty: llrm_mir::TypeId,

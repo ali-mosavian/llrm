@@ -427,7 +427,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 return error(format!("an atomic access of 2^{size} bytes"));
             }
             let (rs, rt, rn) = (reg(*rs)?, reg(*rt)?, reg(*rn)?);
-            let memory = |opc: u32, o3: u32| 0x3820_0000 | size << 30 | a << 23 | l << 22 | rs << 16 | o3 << 15 | opc << 12 | rn << 5 | rt;
+            let memory = |opc: u32, o3: u32| {
+                0x3820_0000 | size << 30 | a << 23 | l << 22 | rs << 16 | o3 << 15 | opc << 12 | rn << 5 | rt
+            };
             match op {
                 Atomic::Ldar => 0x08DF_FC00 | size << 30 | rn << 5 | rt,
                 Atomic::Stlr => 0x089F_FC00 | size << 30 | rn << 5 | rt,

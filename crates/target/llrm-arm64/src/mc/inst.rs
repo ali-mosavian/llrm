@@ -277,8 +277,8 @@ pub enum Memory {
     Fp { bytes: u8, reg: Vreg },
 }
 
-/// What an [`Inst::Atomic`] does: `ldar`, `ldapr`, `stlr`, `swp`, `ldadd`, `ldclr`, `ldeor`, `ldset`,
-/// `ldsmax`, `ldsmin`, `ldumax`, `ldumin`, `cas`.
+/// What an [`Inst::Atomic`] does: `ldar`, `ldapr`, `stlr`, `swp`, `ldadd`,
+/// `ldclr`, `ldeor`, `ldset`, `ldsmax`, `ldsmin`, `ldumax`, `ldumin`, `cas`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Atomic {
     Ldar,
@@ -572,10 +572,12 @@ pub enum Inst {
     Svc {
         imm16: u16,
     },
-    /// An atomic access through `[rn]`: a load-acquire or store-release, or one of the LSE
-    /// read-modify-writes and `cas`, which order as `acquire` and `release` say. `rs` is the operand
-    /// (the value to combine, or `cas`'s expected value, which it overwrites with the old one) and `rt`
-    /// the register the old value comes to (the data of a store-release; `cas`'s new value).
+    /// An atomic access through `[rn]`: a load-acquire or store-release, or one
+    /// of the LSE read-modify-writes and `cas`, which order as `acquire`
+    /// and `release` say. `rs` is the operand (the value to combine, or
+    /// `cas`'s expected value, which it overwrites with the old one) and `rt`
+    /// the register the old value comes to (the data of a store-release;
+    /// `cas`'s new value).
     Atomic {
         op: Atomic,
         /// log2 of the access's bytes.
