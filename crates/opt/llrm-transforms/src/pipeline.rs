@@ -447,7 +447,13 @@ impl Options {
 
     /// -Oz: no loop is copied.
     pub fn min_size() -> Self {
-        Self { unroll: false, peel: false, has_min_size: true, ..Self::size() }
+        Self {
+            unroll: false,
+            peel: false,
+            has_min_size: true,
+            inline: inline::Threshold::default().for_min_size(),
+            ..Self::size()
+        }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
