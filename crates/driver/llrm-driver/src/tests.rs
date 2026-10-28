@@ -1437,3 +1437,15 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
 }
+
+/// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
+/// quadword width (`isel: 0x0004 names 25 at width 8`, the verifier): the
+/// lowering took `RegId::SP` for every pointer width. It is `rsp`.
+#[test]
+fn a_variable_alloca_at_m64_names_the_quadword_stack_pointer() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
+    crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fverify-ir"]), text, "f").unwrap();
+}
