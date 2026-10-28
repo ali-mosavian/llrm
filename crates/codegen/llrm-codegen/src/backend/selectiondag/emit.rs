@@ -127,6 +127,7 @@ pub trait Conventions {
         &self,
         _callee: Option<&Callee>,
         clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
+        _arguments: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
         clobbers.clone()
     }
@@ -1713,7 +1714,7 @@ impl Emitter<'_, '_> {
             disturbs: self
                 .ctx
                 .conventions
-                .disturbs(callee, &clobbers)
+                .disturbs(callee, &clobbers, &self.arguments.iter().map(|(_, register)| *register).collect())
                 .into_iter()
                 .filter(|register| *register != self.ctx.stack_pointer)
                 .collect(),
