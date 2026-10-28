@@ -78,7 +78,7 @@ while true; do
       | stamp_lines > $log ) 9>"$W.checkout.lock"
   touch "$log.done"
   for m in "${batch[@]}"; do [[ $m =~ ^[0-9]+$ ]] || continue
-    if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
+    if [ "$(landed_state $log $m)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
     else echo "$m: REFUSED: batch $log: $(batch_refusal_reason "$log" "$m")"; fi
   done
 done
