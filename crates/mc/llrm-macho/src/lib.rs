@@ -5,7 +5,7 @@
 //! reference to a local one names its section, and the field holds the address.
 //!
 //! arm64 lists its local symbols and names them in every relocation, as LLVM's
-//! writer does; an addend goes in an `ARM64_RELOC_ADDEND` entry before its
+//! writer does; an addend goes in an `RELOC_ADDEND` entry before its
 //! relocation.
 //!
 //! An arm64 object carries `LC_BUILD_VERSION` (macOS 11, no tools, no SDK), as
@@ -17,41 +17,27 @@
 //! (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols
 //! is a relocation.
 
-use llrm_object::{Arch, Binding, Definition, Kind, Object, Role, Section, Target, Unsupported};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
-const CPU_TYPE_X86_64: u32 = 0x0100_0007;
-const CPU_SUBTYPE_X86_64_ALL: u32 = 3;
 const MH_OBJECT: u32 = 1;
 const MH_SUBSECTIONS_VIA_SYMBOLS: u32 = 0x2000;
-const LC_SYMTAB: u32 = 0x2;
+pub const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xB;
 const LC_SEGMENT_64: u32 = 0x19;
-const LC_BUILD_VERSION: u32 = 0x32;
-const PLATFORM_MACOS: u32 = 1;
+pub const LC_BUILD_VERSION: u32 = 0x32;
+pub const PLATFORM_MACOS: u32 = 1;
 const S_ZEROFILL: u32 = 1;
 const S_MOD_INIT_FUNC_POINTERS: u32 = 9;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 const S_ATTR_DEBUG: u32 = 0x0200_0000;
-const N_EXT: u8 = 1;
-const N_WEAK_DEF: u16 = 0x80;
+pub const N_EXT: u8 = 1;
+pub const N_WEAK_DEF: u16 = 0x80;
 const N_SECT: u8 = 0xE;
-const X86_64_RELOC_UNSIGNED: u32 = 0;
-const X86_64_RELOC_SIGNED: u32 = 1;
-const X86_64_RELOC_BRANCH: u32 = 2;
-const X86_64_RELOC_SIGNED_1: u32 = 6;
-const X86_64_RELOC_SIGNED_2: u32 = 7;
-const X86_64_RELOC_SIGNED_4: u32 = 8;
-const CPU_TYPE_ARM64: u32 = 0x0100_000C;
-const CPU_SUBTYPE_ARM64_ALL: u32 = 0;
-const ARM64_RELOC_UNSIGNED: u32 = 0;
-const ARM64_RELOC_BRANCH26: u32 = 2;
-const ARM64_RELOC_PAGE21: u32 = 3;
-const ARM64_RELOC_PAGEOFF12: u32 = 4;
-const ARM64_RELOC_GOT_LOAD_PAGE21: u32 = 5;
-const ARM64_RELOC_GOT_LOAD_PAGEOFF12: u32 = 6;
-const ARM64_RELOC_ADDEND: u32 = 10;
+/// `ARM64_RELOC_ADDEND`, the one entry Mach-O has for an addend a field cannot
+/// hold.
+const RELOC_ADDEND: u32 = 10;
 
 fn unsupported(text: impl Into<String>) -> Unsupported {
     Unsupported(text.into())
@@ -117,135 +103,52 @@ fn spelling(section: &Section) -> Result<(&'static str, &'static str, u32), Unsu
         }
         // `.debug_info` is `__debug_info` of the segment `__DWARF`.
         Role::InitFunctions => ("__DATA", "__mod_init_func", S_MOD_INIT_FUNC_POINTERS),
-        Role::Debug => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
+        Role::Debug(_) => ("__DWARF", debug_name(&section.name)?, S_ATTR_DEBUG),
     })
 }
 
 /// What a relocation entry says of a field.
-struct Described {
-    kind: u32,
+pub struct Described {
+    pub kind: u32,
     /// log2 of the field's bytes.
-    length: u32,
-    pcrel: bool,
+    pub length: u32,
+    pub pcrel: bool,
     /// The bytes between the field's end and the place it is relative to.
-    beyond: i64,
+    pub beyond: i64,
     /// Whether the field holds the addend. The fields of arm64's instructions
     /// do not: the instruction keeps its zeros, and an addend travels in an
     /// `ARM64_RELOC_ADDEND` entry before the relocation.
-    addend_in_field: bool,
+    pub addend_in_field: bool,
 }
 
-/// What differs between the machines a Mach-O object is written for.
-trait Flavor {
+/// What a target says of the Mach-O object it writes (LLVM's
+/// `MCMachObjectTargetWriter`).
+pub trait MachTargetWriter {
+    /// `cputype` and `cpusubtype`.
     fn cpu(&self) -> (u32, u32);
-
-    /// The platform and minimum OS (`xxxx.yy.zz` packed) of `LC_BUILD_VERSION`,
-    /// if the machine's objects carry one.
-    fn build_version(&self) -> Option<(u32, u32)>;
 
     /// Whether the symbol table lists the symbols the object keeps local. A
     /// relocation then names the symbol and not its section.
     fn lists_locals(&self) -> bool;
 
-    /// Whether the linker may treat each symbol of a section as an atom of its
-    /// own (`MH_SUBSECTIONS_VIA_SYMBOLS`): then a weak definition replaces
-    /// only itself, and every reference between two symbols of a section
-    /// carries a relocation.
-    fn subsections_via_symbols(&self) -> bool;
-
-    fn relocation(
-        &self,
-        kind: Kind,
-    ) -> Result<Described, Unsupported>;
-}
-
-struct X8664;
-
-impl Flavor for X8664 {
-    fn cpu(&self) -> (u32, u32) {
-        (CPU_TYPE_X86_64, CPU_SUBTYPE_X86_64_ALL)
-    }
-
+    /// The platform and minimum OS (`xxxx.yy.zz` packed) of `LC_BUILD_VERSION`,
+    /// if the machine's objects carry one.
     fn build_version(&self) -> Option<(u32, u32)> {
         None
     }
 
+    /// Whether the linker may treat each symbol of a section as an atom of its
+    /// own (`MH_SUBSECTIONS_VIA_SYMBOLS`): then a weak definition replaces
+    /// only itself, and every reference between two symbols of a section
+    /// carries a relocation.
     fn subsections_via_symbols(&self) -> bool {
-        false
-    }
-
-    fn lists_locals(&self) -> bool {
         false
     }
 
     fn relocation(
         &self,
-        kind: Kind,
-    ) -> Result<Described, Unsupported> {
-        let (kind, length, pcrel, beyond) = match kind {
-            Kind::Abs { width: 8 } => (X86_64_RELOC_UNSIGNED, 3, false, 0),
-            Kind::Abs { width: 4 } => (X86_64_RELOC_UNSIGNED, 2, false, 0),
-            Kind::Branch { width: 4 } => (X86_64_RELOC_BRANCH, 2, true, 0),
-            Kind::PcRel { width: 4, from: 4 } => (X86_64_RELOC_SIGNED, 2, true, 0),
-            Kind::PcRel { width: 4, from: 5 } => (X86_64_RELOC_SIGNED_1, 2, true, 1),
-            Kind::PcRel { width: 4, from: 6 } => (X86_64_RELOC_SIGNED_2, 2, true, 2),
-            Kind::PcRel { width: 4, from: 8 } => (X86_64_RELOC_SIGNED_4, 2, true, 4),
-            Kind::SegmentBase => return Err(unsupported("a segment selector has no Mach-O relocation")),
-            Kind::FarPointer => return Err(unsupported("a 16:16 far pointer has no Mach-O relocation")),
-            other => return Err(unsupported(format!("Mach-O x86-64 has no relocation for {other:?}"))),
-        };
-        Ok(Described { kind, length, pcrel, beyond, addend_in_field: true })
-    }
-}
-
-/// arm64, as LLVM's `AArch64MachObjectWriter` writes it
-/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64MachObjectWriter.cpp>).
-struct Arm64;
-
-impl Flavor for Arm64 {
-    fn cpu(&self) -> (u32, u32) {
-        (CPU_TYPE_ARM64, CPU_SUBTYPE_ARM64_ALL)
-    }
-
-    /// macOS 11, the first with arm64; `ld` takes the platform from this
-    /// command and warns "no platform load command" without it.
-    fn build_version(&self) -> Option<(u32, u32)> {
-        Some((PLATFORM_MACOS, 11 << 16))
-    }
-
-    fn subsections_via_symbols(&self) -> bool {
-        true
-    }
-
-    fn lists_locals(&self) -> bool {
-        true
-    }
-
-    fn relocation(
-        &self,
-        kind: Kind,
-    ) -> Result<Described, Unsupported> {
-        let (kind, length, pcrel, addend_in_field) = match kind {
-            Kind::Abs { width: 8 } => (ARM64_RELOC_UNSIGNED, 3, false, true),
-            Kind::Abs { width: 4 } => (ARM64_RELOC_UNSIGNED, 2, false, true),
-            Kind::Branch26 => (ARM64_RELOC_BRANCH26, 2, true, false),
-            Kind::Page21 => (ARM64_RELOC_PAGE21, 2, true, false),
-            Kind::PageOffset12 { .. } => (ARM64_RELOC_PAGEOFF12, 2, false, false),
-            Kind::GotPage21 => (ARM64_RELOC_GOT_LOAD_PAGE21, 2, true, false),
-            Kind::GotPageOffset12 => (ARM64_RELOC_GOT_LOAD_PAGEOFF12, 2, false, false),
-            other => return Err(unsupported(format!("Mach-O arm64 has no relocation for {other:?}"))),
-        };
-        Ok(Described { kind, length, pcrel, beyond: 0, addend_in_field })
-    }
-}
-
-/// The flavor of the machine `arch`.
-fn flavor(arch: Arch) -> Result<&'static dyn Flavor, Unsupported> {
-    match arch {
-        Arch::X8664 => Ok(&X8664),
-        Arch::Arm64 => Ok(&Arm64),
-        other => Err(unsupported(format!("{other:?} has no Mach-O writer"))),
-    }
+        reloc: &Reloc,
+    ) -> Result<Described, Unsupported>;
 }
 
 fn align_up(
@@ -256,18 +159,10 @@ fn align_up(
 }
 
 /// `object` as a Mach-O relocatable file.
-pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
-    let flavor = flavor(object.arch)?;
-    // DWARF's sections are this writer's, made from the object's debug
-    // information.
-    let expanded;
-    let object = match &object.debug {
-        Some(info) => {
-            expanded = llrm_debuginfo::expanded(object, info)?;
-            &expanded
-        }
-        None => object,
-    };
+pub fn write<W: MachTargetWriter>(
+    object: &Object,
+    flavor: &W,
+) -> Result<Vec<u8>, Unsupported> {
     if !object.omf_groups.is_empty() {
         return Err(unsupported("a group of segments is OMF's"));
     }
@@ -354,8 +249,8 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let mut image = section.image.clone();
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
-            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one.kind)?;
-            let width = one.kind.width();
+            let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
+            let width = one.width();
             // A section's start is a local symbol at offset 0 of it.
             let (target, home) = match one.target {
                 Target::Symbol(target) => (Some(target), None),
@@ -365,7 +260,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
             // One debug section's offset into another is not relocated:
             // dsymutil reads the object's own sections, where it is
             // the offset itself.
-            if section.role == Role::Debug && home.is_some_and(|home| object.sections[home].role == Role::Debug) {
+            if matches!(section.role, Role::Debug(_))
+                && home.is_some_and(|home| matches!(object.sections[home].role, Role::Debug(_)))
+            {
                 let offset = u32::try_from(one.addend)
                     .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
                 image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);
@@ -405,7 +302,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
                         )));
                     }
                     let addend = (one.addend as u32) & 0x00FF_FFFF;
-                    made.push((one.at, [one.at as u32, addend | length << 25 | ARM64_RELOC_ADDEND << 28]));
+                    made.push((one.at, [one.at as u32, addend | length << 25 | RELOC_ADDEND << 28]));
                 }
                 made.push((
                     one.at,
@@ -416,18 +313,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
                 ));
                 continue;
             }
-            let fits = match (width, pcrel) {
-                (8, _) => true,
-                (_, true) => i32::try_from(field).is_ok(),
-                (_, false) => u32::try_from(field).is_ok(),
-            };
-            if !fits {
-                return Err(unsupported(format!(
-                    "{}: a value of {field} does not fit its {width}-byte field",
-                    section.name
-                )));
-            }
-            image[one.at..one.at + width].copy_from_slice(&field.to_le_bytes()[..width]);
+            apply_fixup(&mut image, one.at, width, pcrel, field, &section.name)?;
             made.push((
                 one.at,
                 [
@@ -451,7 +337,9 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     // strings.
     let version = flavor.build_version();
     let commands = 72 + 80 * order.len() + 24 + 80 + if version.is_some() { 24 } else { 0 };
-    let first = align_up(32 + commands, 16);
+    // The section data follows the load commands, as `MachObjectWriter` places
+    // it; with no build version the commands end 16-aligned.
+    let first = 32 + commands;
     let mut offsets = vec![0usize; object.sections.len()];
     for &one in order.iter().take(file_backed) {
         offsets[one] = first + address[one];
@@ -547,521 +435,4 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Unsupported> {
     out.extend(&nlist);
     out.extend(&strings);
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::Path;
-    use std::process::Command;
-
-    use llrm_object::{Reloc, Symbol};
-
-    use super::*;
-
-    const LLVM: &str = "/usr/lib/llvm-20/bin";
-
-    fn tool(name: &str) -> Option<String> {
-        let path = format!("{LLVM}/{name}");
-        Path::new(&path).exists().then_some(path)
-    }
-
-    fn section(
-        name: &str,
-        role: Role,
-        image: Vec<u8>,
-        relocs: Vec<Reloc>,
-    ) -> Section {
-        let spans = vec![[0, image.len()]];
-        Section { name: name.into(), role, near: true, align: 1, image, spans, relocs }
-    }
-
-    fn defined(
-        name: &str,
-        section: usize,
-        offset: usize,
-    ) -> Symbol {
-        Symbol {
-            name: name.into(),
-            binding: Binding::Public,
-            definition: Definition::Defined { section, offset },
-            size: 0,
-            group: None,
-        }
-    }
-
-    fn external(name: &str) -> Symbol {
-        Symbol { name: name.into(), binding: Binding::Public, definition: Definition::Undefined, size: 0, group: None }
-    }
-
-    fn reloc(
-        at: usize,
-        kind: Kind,
-        target: usize,
-        addend: i64,
-    ) -> Reloc {
-        Reloc { at, kind, target: Target::Symbol(target), addend }
-    }
-
-    /// The program `REFERENCE` assembles: a call, a `lea`, a `movb $1,
-    /// flag(%rip)` (four bytes of field and one of immediate), a load, and
-    /// a pointer to `msg+1`.
-    fn program() -> Object {
-        let text = vec![
-            0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC6, 0x05, 0, 0, 0, 0, 0x01, 0x48, 0x8B, 0x05, 0, 0, 0, 0,
-            0xC3,
-        ];
-        let relocs = vec![
-            reloc(1, Kind::Branch { width: 4 }, 3, 0),
-            reloc(8, Kind::PcRel { width: 4, from: 4 }, 1, 0),
-            reloc(14, Kind::PcRel { width: 4, from: 5 }, 4, 0),
-            reloc(22, Kind::PcRel { width: 4, from: 4 }, 2, 0),
-        ];
-        Object {
-            name: "ref.s".into(),
-            arch: Arch::X8664,
-            sections: vec![
-                section("text", Role::Text, text, relocs),
-                section("const", Role::ROData, b"hello\n".to_vec(), vec![]),
-                {
-                    let mut data =
-                        section("data", Role::Data, vec![0; 9], vec![reloc(0, Kind::Abs { width: 8 }, 1, 1)]);
-                    data.image[8] = 0;
-                    data
-                },
-            ],
-            symbols: vec![
-                defined("_start", 0, 0),
-                defined("_msg", 1, 0),
-                defined("_ptr", 2, 0),
-                external("_ext"),
-                defined("_flag", 2, 8),
-            ],
-            omf_groups: Vec::new(),
-            omf_comdat: Vec::new(),
-            debug: None,
-        }
-    }
-
-    /// Every command of a Mach-O object: `(cmd, bytes)`.
-    fn commands_of(object: &[u8]) -> Vec<(u32, Vec<u8>)> {
-        let word = |at: usize| u32::from_le_bytes(object[at..at + 4].try_into().unwrap());
-        let (count, mut at) = (word(16), 32);
-        (0..count)
-            .map(|_| {
-                let (cmd, size) = (word(at), word(at + 4) as usize);
-                let one = (cmd, object[at..at + size].to_vec());
-                at += size;
-                one
-            })
-            .collect()
-    }
-
-    /// An arm64 object had no `LC_BUILD_VERSION`: `ld` warned "no platform load
-    /// command found" for every object and assumed macOS.
-    #[test]
-    fn an_arm64_object_names_its_platform() {
-        let mut object = program();
-        object.arch = Arch::Arm64;
-        object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
-        object.symbols = vec![defined("_f", 0, 0)];
-        let written = write(&object).unwrap();
-        let build: Vec<_> = commands_of(&written).into_iter().filter(|(cmd, _)| *cmd == LC_BUILD_VERSION).collect();
-        assert_eq!(build.len(), 1);
-        let words: Vec<u32> = build[0].1.chunks(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
-        assert_eq!(words, [LC_BUILD_VERSION, 24, PLATFORM_MACOS, 11 << 16, 0, 0]);
-        // The header's byte count covers it: the symbol table is where the
-        // commands end.
-        let total: usize = commands_of(&written).iter().map(|(_, bytes)| bytes.len()).sum();
-        assert_eq!(total, u32::from_le_bytes(written[20..24].try_into().unwrap()) as usize);
-    }
-
-    /// An x86-64 object's bytes are unchanged: it carries no build version.
-    #[test]
-    fn an_x86_64_object_has_none() {
-        let written = write(&program()).unwrap();
-        assert!(commands_of(&written).iter().all(|(cmd, _)| *cmd != LC_BUILD_VERSION));
-    }
-
-    /// A weak definition (`__attribute__((weak))`) was written as a strong one:
-    /// two objects that defined it were "duplicate symbol" to `ld`. It
-    /// carries `N_WEAK_DEF`.
-    #[test]
-    fn a_weak_symbol_is_a_weak_definition() {
-        let mut object = program();
-        object.arch = Arch::Arm64;
-        object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
-        object.symbols = vec![defined("_strong", 0, 0), Symbol { binding: Binding::Weak, ..defined("_hook", 0, 0) }];
-        let written = write(&object).unwrap();
-        let word = |at: usize| u32::from_le_bytes(written[at..at + 4].try_into().unwrap()) as usize;
-        let symtab = commands_of(&written).into_iter().find(|(cmd, _)| *cmd == LC_SYMTAB).unwrap().1;
-        let field = |at: usize| u32::from_le_bytes(symtab[at..at + 4].try_into().unwrap()) as usize;
-        let (symbols_at, count, strings_at) = (field(8), field(12), field(16));
-        let mut found = Vec::new();
-        for index in 0..count {
-            let entry = symbols_at + index * 16;
-            let name_at = strings_at + word(entry);
-            let name =
-                written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
-            let desc = u16::from_le_bytes([written[entry + 6], written[entry + 7]]);
-            found.push((name, written[entry + 4] & N_EXT != 0, desc & N_WEAK_DEF != 0));
-        }
-        found.sort();
-        assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
-    }
-
-    const REFERENCE: &str = "
-        .text
-        .globl _start
-_start:
-        call _ext
-        leaq _msg(%rip), %rsi
-        movb $1, _flag(%rip)
-        movq _ptr(%rip), %rax
-        ret
-        .section __TEXT,__const
-        .globl _msg
-_msg:   .ascii \"hello\\n\"
-        .data
-        .globl _ptr
-_ptr:   .quad _msg+1
-        .globl _flag
-_flag:  .byte 0
-";
-
-    fn dump(
-        tool_path: &str,
-        object: &Path,
-    ) -> String {
-        let said = Command::new(tool_path)
-            .args(["-r", "-d", "-t", "--macho", "--full-contents"])
-            .arg(object)
-            .output()
-            .unwrap();
-        assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
-        String::from_utf8_lossy(&said.stdout).into_owned()
-    }
-
-    /// The object, dumped by llvm-objdump, says what llvm-mc's object of the
-    /// same program says: relocations (BRANCH, SIGNED, SIGNED_1, UNSIGNED
-    /// against a symbol), fields, sections, symbols.
-    #[test]
-    fn it_reads_as_llvm_mc_writes_the_same_program() {
-        let (Some(objdump), Some(mc)) = (tool("llvm-objdump"), tool("llvm-mc")) else {
-            eprintln!("skipped: no LLVM tools");
-            return;
-        };
-        let scratch = tempfile::tempdir().unwrap();
-        let (mine, theirs, source) =
-            (scratch.path().join("mine.o"), scratch.path().join("theirs.o"), scratch.path().join("ref.s"));
-        std::fs::write(&mine, write(&program()).unwrap()).unwrap();
-        std::fs::write(&source, REFERENCE).unwrap();
-        let made = Command::new(mc)
-            .args(["-triple", "x86_64-apple-macos11", "-filetype=obj"])
-            .arg(&source)
-            .arg("-o")
-            .arg(&theirs)
-            .output()
-            .unwrap();
-        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-        // The reference's symbol `_flag` is a global there, as here; the dumps
-        // differ only in the file's name.
-        let (mine, theirs) = (dump(&objdump, &mine), dump(&objdump, &theirs));
-        assert_eq!(mine.replace("mine.o", "x"), theirs.replace("theirs.o", "x"));
-    }
-
-    const ARM64_REFERENCE: &str = "
-        .section __TEXT,__text
-        .p2align 2
-        .globl _main
-_main:
-        bl _puts
-        adrp x0, _msg@PAGE
-        add x0, x0, _msg@PAGEOFF
-        adrp x1, _count@PAGE
-        ldr w2, [x1, _count@PAGEOFF]
-        adrp x3, _ext@GOTPAGE
-        ldr x3, [x3, _ext@GOTPAGEOFF]
-        bl _puts+8
-        adrp x4, _count@PAGE+16
-        mov w0, #0
-        ret
-        .section __TEXT,__const
-_msg:   .asciz \"hi\"
-        .section __DATA,__data
-_count: .long 7
-        .quad _count
-";
-
-    /// The pinned build the arm64 comparison reads, if it is there. The
-    /// version it prints is the premise: a different LLVM is not the oracle.
-    fn arm64_tools() -> Option<(String, String, String)> {
-        let build = std::env::var("LLVM_BUILD")
-            .unwrap_or_else(|_| format!("{}/scratch/llvm-build-aarch64", std::env::var("HOME").unwrap_or_default()));
-        let tool = |name: &str| format!("{build}/bin/{name}");
-        let (mc, objdump, readobj) = (tool("llvm-mc"), tool("llvm-objdump"), tool("llvm-readobj"));
-        if ![&mc, &objdump, &readobj].iter().all(|path| Path::new(path).exists()) {
-            return None;
-        }
-        let version = Command::new(&objdump).arg("--version").output().ok()?;
-        let version = String::from_utf8_lossy(&version.stdout).into_owned();
-        assert!(version.contains("24.0.0git"), "not the pinned LLVM: {version}");
-        Some((mc, objdump, readobj))
-    }
-
-    /// The relocation entries as written (`llvm-readobj` lists the
-    /// `ARM64_RELOC_ADDEND` entries `llvm-objdump` folds away), the code with
-    /// its symbols, and every section's bytes.
-    fn arm64_dump(
-        (objdump, readobj): (&str, &str),
-        object: &Path,
-    ) -> String {
-        let run = |tool: &str, args: &[&str]| {
-            let said = Command::new(tool).args(args).arg(object).output().unwrap();
-            assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
-            String::from_utf8_lossy(&said.stdout).into_owned()
-        };
-        let name = object.file_name().unwrap().to_string_lossy().into_owned();
-        [run(readobj, &["-r", "-S"]), run(objdump, &["-t", "-s"])].join("\n").replace(&name, "x")
-    }
-
-    fn arm64_program() -> Object {
-        let words = [
-            0x9400_0000u32,
-            0x9000_0000,
-            0x9100_0000,
-            0x9000_0001,
-            0xB940_0022,
-            0x9000_0003,
-            0xF940_0063,
-            0x9400_0000,
-            0x9000_0004,
-            0x5280_0000,
-            0xD65F_03C0,
-        ];
-        let text: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
-        let relocs = vec![
-            reloc(0, Kind::Branch26, 2, 0),
-            reloc(4, Kind::Page21, 1, 0),
-            reloc(8, Kind::PageOffset12 { access: None }, 1, 0),
-            reloc(12, Kind::Page21, 3, 0),
-            reloc(16, Kind::PageOffset12 { access: Some(2) }, 3, 0),
-            reloc(20, Kind::GotPage21, 4, 0),
-            reloc(24, Kind::GotPageOffset12, 4, 0),
-            reloc(28, Kind::Branch26, 2, 8),
-            reloc(32, Kind::Page21, 3, 16),
-        ];
-        let mut data = vec![7, 0, 0, 0];
-        data.extend([0; 8]);
-        let mut text = section("text", Role::Text, text, relocs);
-        text.align = 4;
-        let local = |name: &str, section, offset| Symbol { binding: Binding::Local, ..defined(name, section, offset) };
-        Object {
-            name: "m.s".into(),
-            arch: Arch::Arm64,
-            sections: vec![
-                text,
-                section("const", Role::ROData, b"hi\0".to_vec(), vec![]),
-                section("data", Role::Data, data, vec![reloc(4, Kind::Abs { width: 8 }, 3, 0)]),
-            ],
-            symbols: vec![
-                defined("_main", 0, 0),
-                local("_msg", 1, 0),
-                external("_puts"),
-                local("_count", 2, 0),
-                external("_ext"),
-            ],
-            omf_groups: vec![],
-            omf_comdat: vec![],
-            debug: None,
-        }
-    }
-
-    /// What `-t` says of the symbols the program names, in the order of the
-    /// table: the assembler's own `ltmp` section symbols are its choice.
-    fn named_symbols(dump: &str) -> Vec<String> {
-        dump.lines()
-            .filter(|line| ["_main", "_msg", "_puts", "_count", "_ext"].iter().any(|name| line.ends_with(name)))
-            .map(str::to_owned)
-            .collect()
-    }
-
-    /// The object, dumped by the pinned llvm-objdump, says what the pinned
-    /// llvm-mc's object of the same arm64 program says: every relocation kind
-    /// (BRANCH26, PAGE21, PAGEOFF12, GOT_LOAD_*, UNSIGNED) against a local,
-    /// a global and an undefined symbol, two addends (`ARM64_RELOC_ADDEND`
-    /// entries), the section contents and the symbols.
-    #[test]
-    fn arm64_reads_as_llvm_mc_writes_the_same_program() {
-        let Some((mc, objdump, readobj)) = arm64_tools() else {
-            eprintln!("skipped: no pinned LLVM with AArch64");
-            return;
-        };
-        let scratch = tempfile::tempdir().unwrap();
-        let (mine, theirs, source) =
-            (scratch.path().join("mine.o"), scratch.path().join("theirs.o"), scratch.path().join("ref.s"));
-        std::fs::write(&mine, write(&arm64_program()).unwrap()).unwrap();
-        std::fs::write(&source, ARM64_REFERENCE).unwrap();
-        let made = Command::new(mc)
-            .args(["-triple", "arm64-apple-macos", "-filetype=obj"])
-            .arg(&source)
-            .arg("-o")
-            .arg(&theirs)
-            .output()
-            .unwrap();
-        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-        let (mine, theirs) = (arm64_dump((&objdump, &readobj), &mine), arm64_dump((&objdump, &readobj), &theirs));
-        // Premise: the dump of the reference does list its relocations.
-        assert!(theirs.contains("ARM64_RELOC_ADDEND") && theirs.contains("ARM64_RELOC_GOT_LOAD_PAGEOFF12"), "{theirs}");
-        assert_eq!(named_symbols(&mine), named_symbols(&theirs));
-        let body = |dump: &str| {
-            dump.lines()
-                .filter(|line| !line.contains("ltmp") && !line.contains("SYMBOL TABLE"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        let (mine, theirs) = (body(&mine), body(&theirs));
-        let first = mine.lines().zip(theirs.lines()).find(|(mine, theirs)| mine != theirs);
-        assert_eq!(first, None, "first difference, mine then theirs");
-        assert_eq!(mine, theirs);
-    }
-
-    /// A reference to a symbol the object keeps local names its section, and
-    /// the link resolves it: the call lands on clang's function, the load
-    /// on the local data.
-    #[test]
-    fn ld64_links_it_with_a_clang_object() {
-        let (Some(ld), Some(objdump)) = (tool("ld64.lld"), tool("llvm-objdump")) else {
-            eprintln!("skipped: no LLVM tools");
-            return;
-        };
-        let scratch = tempfile::tempdir().unwrap();
-        let dir = scratch.path();
-        // _start: call _ext; lea local(%rip), %rsi; ret. `local` is not
-        // exported.
-        let text = vec![0xE8, 0, 0, 0, 0, 0x48, 0x8D, 0x35, 0, 0, 0, 0, 0xC3];
-        let made = Object {
-            name: "m.s".into(),
-            arch: Arch::X8664,
-            sections: vec![
-                section(
-                    "text",
-                    Role::Text,
-                    text,
-                    vec![reloc(1, Kind::Branch { width: 4 }, 1, 0), reloc(8, Kind::PcRel { width: 4, from: 4 }, 2, 0)],
-                ),
-                section("data", Role::Data, vec![7, 0, 0, 0], vec![]),
-            ],
-            symbols: vec![
-                defined("_start", 0, 0),
-                external("_ext"),
-                Symbol {
-                    name: "local".into(),
-                    binding: Binding::Local,
-                    definition: Definition::Defined { section: 1, offset: 0 },
-                    size: 0,
-                    group: None,
-                },
-            ],
-            omf_groups: Vec::new(),
-            omf_comdat: Vec::new(),
-            debug: None,
-        };
-        std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
-        std::fs::write(dir.join("ext.c"), "int ext(void) { return 3; }\n").unwrap();
-        let compiled = Command::new("clang")
-            .args(["-target", "x86_64-apple-macos11", "-c", "-O1"])
-            .arg(dir.join("ext.c"))
-            .arg("-o")
-            .arg(dir.join("ext.o"))
-            .output()
-            .unwrap();
-        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
-        let linked = Command::new(&ld)
-            .args(["-arch", "x86_64", "-platform_version", "macos", "11.0", "11.0", "-e", "_start", "-o"])
-            .arg(dir.join("out"))
-            .arg(dir.join("mine.o"))
-            .arg(dir.join("ext.o"))
-            .output()
-            .unwrap();
-        assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
-        let run = |arguments: &[&str]| {
-            String::from_utf8_lossy(
-                &Command::new(&objdump).args(arguments).arg(dir.join("out")).output().unwrap().stdout,
-            )
-            .into_owned()
-        };
-        let text = run(&["-d", "--macho"]);
-        assert!(text.contains("callq\t_ext"), "{text}");
-        // The `lea`'s displacement reaches the start of __data, a section the
-        // reference named only by number.
-        let lea = text.lines().find(|line| line.contains("leaq")).unwrap_or_else(|| panic!("{text}"));
-        let (at, disp) = (
-            u64::from_str_radix(lea.split(':').next().unwrap().trim(), 16).unwrap(),
-            u64::from_str_radix(lea.split("0x").nth(1).unwrap().split('(').next().unwrap(), 16).unwrap(),
-        );
-        let sections = run(&["-h", "--macho"]);
-        let data = sections.lines().find(|line| line.contains("__data")).unwrap_or_else(|| panic!("{sections}"));
-        let data = u64::from_str_radix(data.split_whitespace().nth(3).unwrap(), 16).unwrap();
-        assert_eq!(at + 7 + disp, data, "{text}{sections}");
-    }
-
-    /// A pc-relative field is signed: 0x8000_0000 was accepted as an unsigned
-    /// value and wrote a call that jumps backwards 2 GiB.
-    #[test]
-    fn a_pc_relative_field_must_fit_a_signed_word() {
-        let mut made = program();
-        made.sections[0].relocs[0].addend = 0x8000_0000;
-        assert!(write(&made).unwrap_err().0.contains("does not fit"));
-    }
-
-    /// A constant that holds an address is written to by the dynamic linker,
-    /// which ld64 refuses in __TEXT: it is __DATA,__const.
-    #[test]
-    fn a_constant_with_relocations_is_in_data_const() {
-        let mut made = program();
-        made.sections[1] = section("const", Role::ROData, vec![0; 8], vec![reloc(0, Kind::Abs { width: 8 }, 0, 0)]);
-        let bytes = write(&made).unwrap();
-        let text = String::from_utf8_lossy(&bytes);
-        assert!(
-            text.contains("__const")
-                && !bytes.windows(14).any(|one| one == b"__const         __TEXT ".get(..14).unwrap() && false)
-        );
-        let at = bytes.windows(7).position(|one| one == b"__const").unwrap();
-        assert_eq!(&bytes[at + 16..at + 22], b"__DATA");
-    }
-
-    /// What Mach-O cannot say is refused, never written near.
-    #[test]
-    fn what_mach_o_cannot_say_is_refused() {
-        let with = |kind| {
-            let mut made = program();
-            made.sections[0].relocs[0].kind = kind;
-            write(&made)
-        };
-        assert!(with(Kind::SegmentBase).is_err());
-        assert!(with(Kind::FarPointer).is_err());
-        assert!(with(Kind::PcRel { width: 4, from: 7 }).is_err());
-        let mut far = program();
-        far.sections[1].near = false;
-        assert!(write(&far).unwrap_err().0.contains("selector"));
-        let mut other = program();
-        other.arch = Arch::I386;
-        assert!(write(&other).unwrap_err().0.contains("has no Mach-O writer"));
-    }
-
-    /// An object that asks for CodeView or Turbo Debugger information is
-    /// refused by name: the information of another format is never written
-    /// in its place.
-    #[test]
-    fn a_debug_format_this_object_cannot_carry_is_refused() {
-        for (format, name) in [
-            (llrm_object::debug::Format::CodeView, "CodeView"),
-            (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
-        ] {
-            let mut made = program();
-            made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
-            let why = write(&made).unwrap_err().0;
-            assert!(why.contains("cannot carry") && why.contains(name), "{why}");
-        }
-    }
 }

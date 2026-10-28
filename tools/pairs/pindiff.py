@@ -9,7 +9,7 @@ LEVEL is O1, O2, O3 or Os. Each `DIR/*.c` goes through the pinned clang with the
 instead gives both llcs the pin-optimised IR, which measures the back ends only if ours does not re-optimise it (it does). `irguard` refuses an IR whose `target-cpu` is not the CPU both llcs run with. Ours is `LLRM_LLC` with
 `--isel=dag` and the pin's default convention (cdecl at m16, sysv at m32), the pin's llc is `LLVM_BIN`'s.
 
-The table has, per program, the instructions of ours and of the pin's asm (directives, labels and comments not counted) and the code bytes of
+The table has, per program, the instructions of ours and of the pin's asm (directives, labels and comments not counted; the pin's include the libgcc i64 divide members its object calls, which ours embeds: rows say `+libgcc[..]`, none at m16) and the code bytes of
 ours (the OMF object's code segments, data left out) against the pin's `.text`; with `--old` also ours under `--isel=old`. A row is flagged
 where ours is larger in instructions or in bytes without nops (`nopad`: alignment padding moves a small row in steps of 16). The first line names the llc (md5 and `--version`) and the pin. At m16 the pin picks 32-bit
 registers and prefixes: its bytes are longer than any 16-bit selection could be, so read that column as a size bar only.
@@ -43,8 +43,8 @@ def abi_flags(cfg: dict, ir: str) -> list[str]:
 
 # the comparison's fixed choices: llrm-cc's target, the -march of ours, and the convention the pin's llc has by default
 MACHINES = {
-    "m16": {"cc": "x86_16-wat", "march": "i386", "abi": "cdecl", "bits": "16"},
-    "m32": {"cc": "x86_32-wat", "march": "i486", "abi": "sysv", "bits": "32"},
+    "m16": {"cc": "x86_16-wat", "march": "i386", "abi": "cdecl", "bits": "16", "libgcc": False},
+    "m32": {"cc": "x86_32-wat", "march": "i486", "abi": "sysv", "bits": "32", "libgcc": True},
 }
 NOT_INSTRUCTIONS = {"align", "db", "dw", "dd", "public", "extern", "proc", "endp", "label", "end", "assume"}
 
@@ -76,7 +76,13 @@ def clang_flags(machine: str) -> tuple[str, list[str]]:
         return re.sub(r"\{env:(\w+)\}", lambda found: os.environ[found.group(1)], word)
 
     binary = os.environ.get(entry.get("clang_env", ""), "") or os.environ.get("LLRM_PIN_CLANG", "") or str(pin.PINNED_BIN / "clang")
-    return binary, [fill(word) for word in entry["clang"]]
+    words = [fill(word) for word in entry["clang"]]
+    # llrm-cc's m32 default is regcall; ours runs with the pin's (sysv), so the IR must not mark every function regcall.
+    for at in range(len(words) - 1):
+        if words[at:at + 2] == ["-Xclang", "-fdefault-calling-conv=regcall"]:
+            del words[at:at + 2]
+            break
+    return binary, words
 
 
 def pin_text_size(obj: Path) -> int:
@@ -119,6 +125,62 @@ def pin_padding_free(obj: Path, bits: int) -> int:
     """The pin's `.text` without its nops."""
     listing = subprocess.run(["objdump", "-d", *objdump_mode(bits), str(obj)], capture_output=True, text=True).stdout
     return pin_text_size(obj) - nop_bytes(listing)
+
+
+I64_DIVIDE = {"__divdi3", "__udivdi3", "__moddi3", "__umoddi3", "__divmoddi4", "__udivmoddi4"}
+
+
+def archive_members(archive: Path) -> dict[str, str]:
+    """Symbol -> the archive member defining it."""
+    out = subprocess.run(["nm", "-g", "--defined-only", str(archive)], capture_output=True, text=True).stdout
+    owner, defined = "", {}
+    for line in out.splitlines():
+        if line.endswith(":") and ".o" in line:
+            owner = line[:-1]
+        elif len(parts := line.split()) == 3 and owner:
+            defined[parts[2]] = owner
+    return defined
+
+
+def linked_members(wanted: set[str], defined: dict[str, str], undefined_of) -> list[str]:
+    """The archive members a linker pulls for `wanted`: those defining a symbol, and those their own undefined symbols need, each once."""
+    pulled, queue = [], sorted(wanted)
+    while queue:
+        member = defined.get(queue.pop())
+        if member and member not in pulled:
+            pulled.append(member)
+            queue.extend(sorted(undefined_of(member)))
+    return pulled
+
+
+def nm_undefined(obj: Path) -> set[str]:
+    return set(subprocess.run(["nm", "-u", str(obj)], capture_output=True, text=True).stdout.split()[1::2])
+
+
+def libgcc_cost(obj: Path, bits: int, work: Path, has_libgcc: bool) -> tuple[int, int, int, list[str]]:
+    """Instructions, bytes and nop-free bytes of the libgcc members the pin's object calls (the i64 divide family): ours embeds those
+    helpers (SD231/232), the pin's object only calls them, so a row that compared the two measured the link, not the compiler.
+    None are counted at m16: there is no 16-bit libgcc, so the pin's calls stay unresolved there."""
+    found = subprocess.run(["gcc", "-m32", "-print-libgcc-file-name"], capture_output=True, text=True).stdout.strip()
+    if not has_libgcc or not found or not Path(found).exists():
+        return 0, 0, 0, sorted(s for s in nm_undefined(obj) if s in I64_DIVIDE) if not has_libgcc else []
+    archive, defined = Path(found), archive_members(Path(found))
+    extracted: dict[str, Path] = {}
+
+    def member_obj(member: str) -> Path:
+        if member not in extracted:
+            extracted[member] = work / f"libgcc.{member}"
+            extracted[member].write_bytes(subprocess.run(["ar", "p", str(archive), member], capture_output=True).stdout)
+        return extracted[member]
+
+    names = linked_members({s for s in nm_undefined(obj) if s.startswith("__")}, defined, lambda member: nm_undefined(member_obj(member)))
+    ins = total = free = 0
+    for member in names:
+        listing = subprocess.run(["objdump", "-d", "--no-show-raw-insn", *objdump_mode(bits), str(member_obj(member))], capture_output=True, text=True).stdout
+        ins += sum(1 for line in listing.splitlines() if re.match(r"\s+[0-9a-f]+:\t(?!nop|data16|cs nop|xchg\s+ax,ax)\S", line))
+        total += pin_text_size(member_obj(member))
+        free += pin_padding_free(member_obj(member), bits)
+    return ins, total, free, names
 
 
 def corpus_sources(into: Path) -> Path:
@@ -173,7 +235,7 @@ def front_end_flags(level: str, reopt: bool) -> list[str]:
     """What clang is told besides the machine's flags. Raw (default): the front end's IR with no pass run, as llrm-cc writes it, so each
     side runs its whole pipeline once. `reopt`: clang's own `-O` IR, then the pin's opt, then both llcs; ours re-optimises that IR, so it
     measures a different thing (w3, 2026-10-27: the pin's -O3 output is not a fixpoint of its own -O3)."""
-    common = ["-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
+    common = ["-fno-builtin", "-fno-vectorize", "-fno-slp-vectorize", "-S", "-emit-llvm"]
     if reopt:
         return [f"-{level}", *common]
     return [f"-{level}", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", *common]
@@ -235,28 +297,47 @@ def one(source: Path, machine: str, level: str, llc: str, work: Path, old: bool,
 
     ours_bytes = bytes_of("dag")
     old_bytes = bytes_of("old") if old else None
+    lib_ins, lib_bytes, lib_free, lib_names = libgcc_cost(pin_obj, int(cfg["bits"]), work, cfg["libgcc"])
     return {
         "name": stem,
         "ins": instructions(asm.read_text()),
-        "pin_ins": instructions(pin_asm.read_text()),
+        "pin_ins": instructions(pin_asm.read_text()) + lib_ins,
+        "lib": lib_names if cfg["libgcc"] else [],
+        "nolib": lib_names if not cfg["libgcc"] else [],
         "bytes": ours_bytes and ours_bytes[0],
         "free": ours_bytes and ours_bytes[1],
-        "pin_bytes": pin_text_size(pin_obj),
-        "pin_free": pin_padding_free(pin_obj, int(cfg["bits"])),
+        "pin_bytes": pin_text_size(pin_obj) + lib_bytes,
+        "pin_free": pin_padding_free(pin_obj, int(cfg["bits"])) + lib_free,
         "old_bytes": old_bytes and old_bytes[0],
         "old_free": old_bytes and old_bytes[1],
     }
 
 
-def table(rows: list[dict], old: bool) -> list[str]:
+def table(rows: list[dict], old: bool, dyn: dict | None = None) -> list[str]:
     head = f"{'program':16} {'ins':>5} {'pin':>5} {'d':>5} | {'bytes':>6} {'pin':>6} {'d':>5} | {'nopad':>6} {'pin':>6} {'d':>5}" + (f" | {'old':>6} {'d':>5}" if old else "") + "  flag"
+    if dyn is not None:
+        head = head.replace("  flag", f" | {'clk':>9} {'pin':>9} {'d%':>6}  flag")
     lines = [head]
     flagged = 0
-    for row in sorted(rows, key=lambda one: one["name"]):
+
+    def worst(one: dict) -> tuple:
+        # With --dyn the rows that run slower than the pin come first, the slowest first.
+        figures = (dyn or {}).get(one["name"])
+        lost = figures["clk"] / figures["pin_clk"] if isinstance(figures, dict) and figures["pin_clk"] else 0
+        return (-lost, one["name"]) if dyn is not None else (one["name"],)
+
+    for row in sorted(rows, key=worst):
         flags = []
-        if row["ins"] > row["pin_ins"]:
+        figures = (dyn or {}).get(row["name"])
+        if isinstance(figures, dict):
+            if not figures["same"]:
+                flags.append("OUTPUT-DIFFERS")
+            if figures["clk"] > figures["pin_clk"]:
+                flags.append("CLK>pin")
+        compared = not row.get("nolib")
+        if compared and row["ins"] > row["pin_ins"]:
             flags.append("INS>pin")
-        if row["free"] and row["pin_free"] and row["free"] > row["pin_free"]:
+        if compared and row["free"] and row["pin_free"] and row["free"] > row["pin_free"]:
             flags.append("BYTES>pin")
         if old and row["free"] and row["old_free"] and row["free"] > row["old_free"]:
             flags.append("BYTES>old")
@@ -264,7 +345,12 @@ def table(rows: list[dict], old: bool) -> list[str]:
         text = f"{row['name']:16} {row['ins']:5} {row['pin_ins']:5} {row['ins'] - row['pin_ins']:+5} | {row['bytes'] or -1:6} {row['pin_bytes']:6} {(row['bytes'] or 0) - row['pin_bytes']:+5} | {row['free'] or -1:6} {row['pin_free']:6} {(row['free'] or 0) - row['pin_free']:+5}"
         if old:
             text += f" | {row['old_free'] or -1:6} {((row['free'] or 0) - row['old_free']) if row['old_free'] else 0:+5}"
-        lines.append(text + "  " + " ".join(flags))
+        if dyn is not None:
+            if isinstance(figures, dict):
+                text += f" | {figures['clk']:9} {figures['pin_clk']:9} {100 * (figures['clk'] - figures['pin_clk']) / max(figures['pin_clk'], 1):+6.1f}"
+            else:
+                text += f" | {'-':>9} {'-':>9} {'-':>6}"
+        lines.append(text + "  " + " ".join(flags) + (f" +libgcc[{','.join(m.removesuffix('.o').strip('_') for m in row['lib'])}]" if row.get("lib") else "") + (" no pin comparison (no 16-bit libgcc)" if row.get("nolib") else ""))
     lines.append(
         f"programs {len(rows)} flagged {flagged} | ins {sum(r['ins'] for r in rows)} vs {sum(r['pin_ins'] for r in rows)}"
         f" | bytes {sum(r['bytes'] or 0 for r in rows)} vs {sum(r['pin_bytes'] for r in rows)}"
@@ -300,6 +386,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--old", action="store_true")
     parser.add_argument("--ref", default="origin/feat/parity", help="the branch the llc should be built on")
     parser.add_argument("--max-behind", type=int, default=20, help="commits behind --ref before the header warns")
+    parser.add_argument("--dyn", action="store_true", help="m32 only: also run each kernel in the vsgcc harness (dyn.py) and rank flagged rows by dynamic clocks")
     parser.add_argument("--reopt", action="store_true", help="clang's -O IR re-run through the pin's opt, then both llcs (not the default: see front_end_flags)")
     args = parser.parse_args(argv)
     work = Path(args.work)
@@ -307,7 +394,8 @@ def main(argv: list[str]) -> int:
     version = subprocess.run([args.llc, "--version"], capture_output=True, text=True).stdout.strip()
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
-    print(f"# pindiff {args.machine} -{args.level}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
+    scope = " (backend only: --reopt feeds pin-optimised IR, ours' middle-end size gates do not run)" if args.reopt and args.level == "Os" else ""
+    print(f"# pindiff {args.machine} -{args.level}{scope} frontend clang -fno-builtin isel=dag libgcc-divide-helpers=pin side: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
     note = layout_note(pin.target(args.machine).datalayout, pin_llc_datalayout(pin.target(args.machine)))
     if note:
         print(note)
@@ -322,7 +410,17 @@ def main(argv: list[str]) -> int:
     for source, result in zip(sources, results):
         if isinstance(result, str):
             print(f"# no figures for {source.stem}: {result}")
-    print("\n".join(table(rows, args.old)))
+    dyn = None
+    if args.dyn:
+        if args.machine != "m32":
+            parser.error("--dyn is m32 only")
+        import dyn as dynmod
+
+        dyn = dynmod.measure([row["name"] for row in rows], args.level, MACHINES["m32"]["march"], args.llc, work / "dyn", one)
+        for name, result in dyn.items():
+            if isinstance(result, str):
+                print(f"# no dynamic figures for {name}: {result}")
+    print("\n".join(table(rows, args.old, dyn)))
     return 0 if rows else 1
 
 

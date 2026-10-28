@@ -102,12 +102,19 @@ impl ProgramPass for ModuleIpo {
             modules[at].changed(id);
             changed = true;
         }
+        // `CalledValuePropagationPass`, which follows IPSCCP.
+        for at in 0..count {
+            for id in crate::calledvaluepropagation::propagated(&mut program.modules[at]) {
+                modules[at].changed(id);
+                changed = true;
+            }
+        }
         // `GlobalOptPass`, which LLVM runs here: a variable is split into the
         // pieces its loads read, and one a body writes before it reads is that
         // body's stack slot, while the loads are still there to be seen.
         for at in 0..count {
             let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
-                crate::globalsra::split(module, &program.layout)
+                crate::globalsra::split(module, &program.layout, program.target.spaces())
             });
             changed |= !ids.is_empty();
             for id in ids {

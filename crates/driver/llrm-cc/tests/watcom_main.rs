@@ -377,3 +377,43 @@ fn a_near_pointer_initialised_from_an_integer_is_data() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
+
+/// The all-llrm DOS configuration: `x86_16-dos-rp3` is regparm3 (`name@3`,
+/// `main_`) where `x86_16-dos` is cdecl (`_name`), and a program in it links
+/// with the shared start-up. Without the row, QCport-sized comparisons against
+/// llrm-c had cdecl's push/pop cleanup in them (+8.6 KB of +9.8 KB over 65
+/// modules).
+#[test]
+fn the_rp3_dos_row_is_regparm3_and_links() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-rp3-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("g.c"), "int g(int a) { return a + 1; }\nint main(void) { return g(1) - 2; }\n").unwrap();
+    let llc = std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into());
+    let cc = |target: &str, args: &[&str], output: &str| {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_LLC", &llc)
+            .args(args)
+            .arg(dir.join("g.c"))
+            .arg("-o")
+            .arg(dir.join(output))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{target}: {}", String::from_utf8_lossy(&run.stderr));
+    };
+    cc("x86_16-dos-rp3", &["-O0", "-S"], "rp3.s");
+    cc("x86_16-dos", &["-O0", "-S"], "cdecl.s");
+    cc("x86_16-dos-rp3", &["-O2"], "g.exe");
+    let rp3 = std::fs::read_to_string(dir.join("rp3.s")).unwrap();
+    let cdecl = std::fs::read_to_string(dir.join("cdecl.s")).unwrap();
+    let linked = dir.join("g.exe").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(rp3.contains("_g@3 proc") && rp3.contains("main_ proc"), "{rp3}");
+    assert!(cdecl.contains("_g proc") && cdecl.contains("_main proc"), "{cdecl}");
+    assert!(linked, "the rp3 program did not link");
+}

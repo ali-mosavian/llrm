@@ -802,10 +802,7 @@ impl Builder<'_> {
                         fixed += 1;
                         self.dag
                             .fixed_offsets
-                            .insert(
-                                -fixed,
-                                offset + part as i64 * i64::from(self.target.dag.pointer.size_in_bits() / 8),
-                            );
+                            .insert(-fixed, offset + part as i64 * i64::from(part_vt.size_in_bits() / 8));
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         // The fixed object is a whole stack slot
                         // (`CreateFixedObject`),

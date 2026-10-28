@@ -345,8 +345,14 @@ impl Initializer<'_> {
                     self.bytes(&vec![0; (total - at) as usize]);
                 }
                 _ => {
+                    // An element takes its alloc size: an `x86_fp80` is 10
+                    // bytes stored and 12 apart at f80:32.
                     for member in members.clone() {
                         self.constant(member)?;
+                        let types = &self.module.context.types;
+                        let ty = self.module.context.get(member).ty;
+                        let padding = self.layout.alloc_size(types, ty) - self.layout.store_size(types, ty);
+                        self.bytes(&vec![0; padding as usize]);
                     }
                 }
             },

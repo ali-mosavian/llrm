@@ -1,6 +1,6 @@
 //! `LLRM_CHECK_PRESERVED` compares a kept SE with a fresh one.
 
-use std::process::Command;
+mod common;
 
 /// queens at -O3: LSR keeps the expression of the or of two exit tests as
 /// `umin_seq`; a fresh SE proves the second test not poison and says `umin`.
@@ -11,9 +11,10 @@ fn a_kept_sequential_min_that_a_fresh_se_makes_plain_is_not_stale() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
     for flags in [&[][..], &["-m32", "-mabi=sysv", "-march=i486"][..]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        let output = common::cc::llrm_c()
             .env("LLRM_CHECK_PRESERVED", "scev")
             .current_dir(scratch.path())
+            .arg("-c")
             .arg("-O3")
             .args(flags)
             .arg("-I")

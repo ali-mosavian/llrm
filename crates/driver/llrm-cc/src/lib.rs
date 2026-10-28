@@ -205,6 +205,7 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-bss-begin",
     "-fstack-usage",
     "-ffloat-store",
+    "-fverify-ir",
     "-fno-float-store",
 ];
 const LLC_PREFIXES: &[&str] =
@@ -287,6 +288,13 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             || flag == "--help"
         {
             passthrough = true;
+        } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
+            && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
+        {
+            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // `stack` checks SP on entry; `bounds` checks nothing in IR, which
+            // carries no subscripts.
+            build.llc.push(flag.to_owned());
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {
@@ -320,6 +328,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 build.clang.push("-funsigned-char".to_owned());
             }
             build.llc.push(flag.to_owned());
+            if flag == "-mabi=watcom" {
+                build.clang.push("-funsigned-char".to_owned());
+            }
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());
@@ -634,6 +645,11 @@ fn build(
         let near_code = build.clang.iter().any(|flag| matches!(flag.as_str(), "-mcmodel=small" | "-mcmodel=compact"));
         let mut link = Command::new(&command[0]);
         link.args(&command[1..]);
+        // The link script compiles the float helpers with this same driver,
+        // wherever cargo put it.
+        if let Ok(own) = std::env::current_exe() {
+            link.env("LLRM_CC", own);
+        }
         if near_code {
             link.env("LLRM_NEAR_CODE", "1");
         }
@@ -682,6 +698,10 @@ pub fn run_main(argv: &[String]) -> i32 {
         };
     }
     let go = || -> Result<(), i32> {
+        llrm_mir::dumpdir::refuse(argv).map_err(|why| {
+            eprintln!("llrm-cc: {why}");
+            2
+        })?;
         let table = targets(TARGETS).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1

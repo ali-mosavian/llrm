@@ -423,17 +423,130 @@ pub fn fold_icmp_bin_op(
     if let Some(r) = fold_doubling(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: foldMultiplicationOverflowCheck.
+    if let Some(r) = fold_multiplication_overflow_check(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
     if let Some(r) = fold_icmp_and_xx(c, inst, pred, op0, op1) {
         return Some(r);
     }
-    // OWED: foldICmpWithTruncSignExtendedVal and
-    // foldShiftIntoShiftInAnotherHandOfAndInICmp.
+    if let Some(r) = fold_icmp_with_trunc_sign_extended_val(c, inst, pred, op0, op1) {
+        return Some(r);
+    }
+    // OWED: foldShiftIntoShiftInAnotherHandOfAndInICmp.
     None
 }
 
-/// `foldICmpAndXX`: a compare of `X & A` with `X`. OWED: its two equality
-/// forms, which need `getFreelyInverted`.
+/// `foldICmpWithTruncSignExtendedVal`: `((x << K) a>> K) == x` is a check for
+/// a lossy signed truncation:
+/// `(add x, (1 << (KeptBits-1))) u< (1 << KeptBits)`, `KeptBits = width - K`.
+fn fold_icmp_with_trunc_sign_extended_val(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    // We are ok with 'shl' having multiple uses, but 'ashr' must be one-use.
+    let extended = |c: &Combiner, ashr: Operand, x: Operand| {
+        let (op, shl, amount, _) = binary_operator(c, ashr)?;
+        let (inner, shifted, amount0, _) = binary_operator(c, shl)?;
+        if op != BinaryOp::AShr || inner != BinaryOp::Shl || shifted != x || !has_one_use(c, ashr) {
+            return None;
+        }
+        let (masked, width) = query(c, None).int_constant(amount)?;
+        let (masked0, _) = query(c, None).int_constant(amount0)?;
+        // The shift amounts must be equal.
+        (masked == masked0 && masked != 0 && masked < u128::from(width)).then_some((masked as u32, width))
+    };
+    let (masked_bits, width) = extended(c, op0, op1).or_else(|| extended(c, op1, op0))?;
+    let dst = match pred {
+        IntPredicate::Eq => IntPredicate::Ult,
+        IntPredicate::Ne => IntPredicate::Uge,
+        _ => return None,
+    };
+    let x = if extended(c, op0, op1).is_some() { op1 } else { op0 };
+    let ty = c.type_of(x);
+    // KeptBits = bitwidth(%x) - MaskedBits
+    let kept_bits = width - masked_bits;
+    // ICmpCst = (1 << KeptBits), AddCst = (1 << (KeptBits-1))
+    let icmp_cst = 1u128 << kept_bits;
+    let add_cst = icmp_cst >> 1;
+    let add_cst = c.int(ty, add_cst);
+    let t0 = c.create_add(inst, x, add_cst);
+    let limit = c.int(ty, icmp_cst);
+    let t1 = c.create_icmp(inst, dst, t0, limit);
+    Some(Visit::Replace(t1))
+}
+
+/// `foldMultiplicationOverflowCheck`: `(-1 u/ x) u< y` and
+/// `((x * y) ?/ x) != y` are the overflow bit of `x * y`.
+fn fold_multiplication_overflow_check(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let (need_negation, signed, x, y, mul) = if !is_equality(pred) {
+        // Look for: (-1 u/ x) u</u>= y
+        let udiv_of_all_ones = |c: &Combiner, d: Operand| {
+            let (op, ones, x, _) = binary_operator(c, d)?;
+            let all_ones = query(c, None).int_constant(ones).is_some_and(|(bits, width)| bits == mask(width));
+            (op == BinaryOp::UDiv && all_ones && has_one_use(c, d)).then_some(x)
+        };
+        let (pred, x, y) = if let Some(x) = udiv_of_all_ones(c, op0) {
+            (pred, x, op1)
+        } else {
+            (swapped(pred), udiv_of_all_ones(c, op1)?, op0)
+        };
+        // Are we checking that overflow does not happen, or does happen?
+        let need_negation = match pred {
+            IntPredicate::Ult => false,
+            IntPredicate::Uge => true,
+            _ => return None,
+        };
+        (need_negation, false, x, y, None)
+    } else {
+        // Look for: ((x * y) / x) !=/== y
+        let idiv_of_mul = |c: &Combiner, y: Operand, d: Operand| {
+            let (op, product, x, _) = binary_operator(c, d)?;
+            if !matches!(op, BinaryOp::UDiv | BinaryOp::SDiv) || !has_one_use(c, d) {
+                return None;
+            }
+            // m_c_Mul(m_Deferred(Y), m_Value(X)), the divisor being X
+            let (_, a, b, _) = binary_operator(c, product).filter(|&(op, ..)| op == BinaryOp::Mul)?;
+            ((a == y && b == x) || (b == y && a == x)).then_some((op == BinaryOp::SDiv, x, product))
+        };
+        let (y, (signed, x, product)) = match idiv_of_mul(c, op0, op1) {
+            Some(found) => (op0, found),
+            None => (op1, idiv_of_mul(c, op1, op0)?),
+        };
+        (pred == IntPredicate::Eq, signed, x, y, Some(product))
+    };
+    let mul_inst = mul.and_then(|m| query(c, None).instruction_of(m).map(|(id, _)| id));
+    let mul_had_other_uses = mul.is_some_and(|m| !has_one_use(c, m));
+    // If the pattern included (x * y), the new instructions go right before
+    // that original multiplication so that it can be replaced.
+    let at = mul_inst.filter(|_| mul_had_other_uses).unwrap_or(inst);
+    let pair = c.create_mul_with_overflow(at, signed, x, y);
+    let i1 = c.context.types.int(1);
+    if let (true, Some(mul_inst)) = (mul_had_other_uses, mul_inst) {
+        // The multiplication was used elsewhere: its uses read the result.
+        let ty = c.type_of(x);
+        let value = c.create_extract_value(at, pair, 0, ty);
+        c.replace_inst_with(mul_inst, value);
+    }
+    let mut result = c.create_extract_value(at, pair, 1, i1);
+    if need_negation {
+        result = c.create_not(at, result);
+    }
+    if let (true, Some(mul_inst)) = (mul_had_other_uses, mul_inst) {
+        c.erase(mul_inst);
+    }
+    Some(Visit::Replace(result))
+}
+
+/// `foldICmpAndXX`: a compare of `X & A` with `X`.
 fn fold_icmp_and_xx(
     c: &mut Combiner,
     inst: InstId,
@@ -455,6 +568,28 @@ fn fold_icmp_and_xx(
     // (icmp (X & Y) u>= X --> (X & Y) == X
     if pred == IntPredicate::Uge {
         return Some(new_icmp(c, inst, IntPredicate::Eq, op0, op1));
+    }
+    if is_equality(pred) && has_one_use(c, op0) {
+        let ty = c.type_of(op1);
+        let mut consumes = false;
+        // icmp (X & Y) eq/ne Y --> (X | ~Y) eq/ne -1 if Y is freely invertible
+        // and Y is non-constant. If Y is constant the `X & C == C` form is
+        // preferable so don't do this fold.
+        if !is_constant(c, op1) {
+            let invertible = !has_n_uses_or_more(c, op1, 3);
+            if let Some(not_op1) = c.get_freely_inverted(inst, op1, invertible, true, &mut consumes) {
+                let or = c.create_binop(inst, BinaryOp::Or, a, not_op1, Flags::default());
+                let ones = c.all_ones(ty);
+                return Some(new_icmp(c, inst, pred, or, ones));
+            }
+        }
+        // icmp (X & Y) eq/ne Y --> (~X & Y) eq/ne 0 if X  is freely invertible.
+        let a_inverts = has_one_use(c, a);
+        if let Some(not_a) = c.get_freely_inverted(inst, a, a_inverts, true, &mut consumes) {
+            let and = c.create_binop(inst, BinaryOp::And, op1, not_a, Flags::default());
+            let zero = c.int(ty, 0);
+            return Some(new_icmp(c, inst, pred, and, zero));
+        }
     }
     if !is_signed(pred) {
         return None;
@@ -850,8 +985,7 @@ fn fold_icmp_xor_xx(
     None
 }
 
-/// `foldICmpOrXX`: a compare of `X | A` with `X`. OWED: its two equality
-/// forms, which need `getFreelyInverted`.
+/// `foldICmpOrXX`: a compare of `X | A` with `X`.
 fn fold_icmp_or_xx(
     c: &mut Combiner,
     inst: InstId,
@@ -873,6 +1007,26 @@ fn fold_icmp_or_xx(
     // icmp (X | Y) u> X --> (X | Y) != X
     if pred == IntPredicate::Ugt {
         return Some(new_icmp(c, inst, IntPredicate::Ne, op0, op1));
+    }
+    if is_equality(pred) && has_one_use(c, op0) {
+        let a = commutative_with_specific(c, inst, op0, BinaryOp::Or, op1)?;
+        let ty = c.type_of(op1);
+        let mut consumes = false;
+        // icmp (X | Y) eq/ne Y --> (X & ~Y) eq/ne 0 if Y is freely invertible
+        let op1_inverts = !is_constant(c, op1) && !has_n_uses_or_more(c, op1, 3);
+        if let Some(not_op1) = c.get_freely_inverted(inst, op1, op1_inverts, true, &mut consumes) {
+            let and = c.create_binop(inst, BinaryOp::And, a, not_op1, Flags::default());
+            let zero = c.int(ty, 0);
+            return Some(new_icmp(c, inst, pred, and, zero));
+        }
+        // icmp (X | Y) eq/ne Y --> (~X | Y) eq/ne -1 if X  is freely
+        // invertible.
+        let a_inverts = has_one_use(c, a);
+        if let Some(not_a) = c.get_freely_inverted(inst, a, a_inverts, true, &mut consumes) {
+            let or = c.create_binop(inst, BinaryOp::Or, op1, not_a, Flags::default());
+            let ones = c.all_ones(ty);
+            return Some(new_icmp(c, inst, pred, or, ones));
+        }
     }
     None
 }
@@ -1029,4 +1183,24 @@ fn new_icmp(
 ) -> Visit {
     let i1 = c.context.types.int(1);
     c.replace_with_new(inst, Opcode::ICmp(pred), i1, vec![a, b], Flags::default())
+}
+
+/// `isa<Constant>`: an integer constant here.
+fn is_constant(
+    c: &Combiner,
+    v: Operand,
+) -> bool {
+    matches!(v, Operand::Constant(_)) || query(c, None).int_constant(v).is_some()
+}
+
+/// `Value::hasNUsesOrMore`.
+fn has_n_uses_or_more(
+    c: &Combiner,
+    v: Operand,
+    n: usize,
+) -> bool {
+    match v {
+        Operand::Value(value) => c.function.users(value).iter().take(n).count() >= n,
+        _ => false,
+    }
 }

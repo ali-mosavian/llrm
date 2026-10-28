@@ -29,7 +29,7 @@ use crate::backend::layout::_OPPOSITE;
 use crate::backend::masm;
 use crate::model::ir::{Operation, Semantics};
 use crate::model::lir::{BlockOdds, Insn, LirBlock, LirBody};
-use crate::support::hash::{HashSet, IndexMap};
+use crate::support::hash::{HashMap, HashSet, IndexMap};
 
 /// `TailMergeThreshold`: the most predecessors looked at together.
 const THRESHOLD: usize = 150;
@@ -142,18 +142,48 @@ fn seq_of(
     block: &LirBlock,
     onward: Option<i64>,
 ) -> Option<Seq> {
-    let mut items = Vec::new();
-    for (index, insn) in block.insns.iter().enumerate() {
-        let nop =
-            insn.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"));
-        // An anchor emits nothing: LLVM has none after allocation to count.
-        if insn.is_meta() || nop || super::_inert(insn) {
-            if !insn.owned().is_empty() {
-                items.push(Item { insn: Arc::clone(insn), index, fixed: true });
-            }
-            continue;
+    seq_from(block, 0, onward)
+}
+
+/// The item `insn` at `index` makes, if it counts.
+fn item_of(
+    insn: &Arc<Insn>,
+    index: usize,
+) -> Option<Item> {
+    let nop =
+        insn.what.as_ref().is_some_and(|what| what.op == Operation::Nothing && what.name.as_deref() == Some("nop"));
+    // An anchor emits nothing: LLVM has none after allocation to count.
+    if insn.is_meta() || nop || super::_inert(insn) {
+        return (!insn.owned().is_empty()).then(|| Item { insn: Arc::clone(insn), index, fixed: true });
+    }
+    Some(Item { insn: Arc::clone(insn), index, fixed: !mergeable(insn) })
+}
+
+/// Where the end of `block` is seen from: the last three items, a jump, the
+/// branch before it and the instruction before that, are all that
+/// `HashEndOfMBB` and `CountTerminators` read.
+fn end_of(block: &LirBlock) -> usize {
+    let mut seen = 0;
+    for (index, insn) in block.insns.iter().enumerate().rev() {
+        seen += usize::from(item_of(insn, index).is_some());
+        if seen == 3 {
+            return index;
         }
-        items.push(Item { insn: Arc::clone(insn), index, fixed: !mergeable(insn) });
+    }
+    0
+}
+
+/// `seq_of` of the instructions from `from` on, indexed as in `block`.
+fn seq_from(
+    block: &LirBlock,
+    from: usize,
+    onward: Option<i64>,
+) -> Option<Seq> {
+    let mut items = Vec::new();
+    for (index, insn) in block.insns.iter().enumerate().skip(from) {
+        #[cfg(test)]
+        ITEMS_BUILT.with(|one| one.set(one.get() + 1));
+        items.extend(item_of(insn, index));
     }
     let mut terms = 0;
     if let Some(onward) = onward {
@@ -238,6 +268,7 @@ struct Folder {
 
 #[cfg(test)]
 thread_local! {
+    pub(crate) static ITEMS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     pub(crate) static SELF_LOOP_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -345,14 +376,15 @@ impl Folder {
             .map(|previous| previous.at)
     }
 
-    /// `canFallThrough`: a candidate with its jump taken off can; any other
-    /// block when its jump is to the block laid out next.
+    /// `canFallThrough`: a candidate with its jump taken off can when the
+    /// block laid out next is one of its successors (`getFallThrough`); any
+    /// other block when its jump is to the block laid out next.
     fn falls(
         &self,
         at: i64,
     ) -> bool {
         if self.stripped.contains(&at) {
-            return true;
+            return self.after(at).is_some_and(|next| self.block(at).succ.contains(&next));
         }
         let last = self.block(at).insns.iter().rev().find(|one| !one.is_meta());
         match last.and_then(|one| one.what.as_ref()) {
@@ -708,6 +740,25 @@ impl Folder {
         }
     }
 
+    /// The candidates whose hash another has, with the whole of their blocks
+    /// seen: `ComputeSameTails` compares those alone, and reads their
+    /// instructions from the end only as far as they match.
+    fn completed(
+        &self,
+        mut pots: Vec<Pot>,
+        onward: Option<i64>,
+    ) -> Vec<Pot> {
+        let mut count: HashMap<u64, usize> = HashMap::default();
+        for pot in &pots {
+            *count.entry(pot.hash).or_default() += 1;
+        }
+        pots.retain(|pot| count[&pot.hash] > 1);
+        for pot in &mut pots {
+            pot.seq = seq_of(self.block(pot.at), onward).expect("seen from its end above");
+        }
+        pots
+    }
+
     /// `TailMergeBlocks`.
     fn run(&mut self) {
         // The blocks with no successor.
@@ -718,7 +769,7 @@ impl Folder {
             }
             if !self.tried.contains(&block.at)
                 && block.succ.is_empty()
-                && let Some(seq) = seq_of(block, None)
+                && let Some(seq) = seq_from(block, end_of(block), None)
                 && let Some(last) = seq.items.last()
                 && !last.fixed
             {
@@ -728,6 +779,7 @@ impl Folder {
         if pots.len() == THRESHOLD {
             self.tried.extend(pots.iter().map(|pot| pot.at));
         }
+        let pots = self.completed(pots, None);
         if pots.len() >= 2 {
             self.try_merge(pots, None, None);
         }
@@ -753,7 +805,7 @@ impl Folder {
                 if !block.phis.is_empty() {
                     continue;
                 }
-                if let Some(seq) = seq_of(block, Some(ibb))
+                if let Some(seq) = seq_from(block, end_of(block), Some(ibb))
                     && let Some(last) = seq.items.last()
                     && !last.fixed
                 {
@@ -786,6 +838,7 @@ impl Folder {
             if pots.len() == THRESHOLD {
                 self.tried.extend(pots.iter().map(|pot| pot.at));
             }
+            let pots = self.completed(pots, Some(ibb));
             if pots.len() >= 2 {
                 let before = self.order.len();
                 self.stripped = pots.iter().map(|pot| pot.at).collect();
@@ -903,6 +956,7 @@ pub fn merged(
             table.shift_remove(at);
         }
         out.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+        super::_forget_moved_inflow(body, &mut out);
     }
     Ok(Some(out))
 }
