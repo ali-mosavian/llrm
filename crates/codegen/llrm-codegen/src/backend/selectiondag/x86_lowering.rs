@@ -338,6 +338,10 @@ impl Hooks for X86Lowering {
             }
             // `LowerFP_EXTEND`: the Custom arm exists for `f16`; a scalar
             // `f32` to `f64` is returned as is and selected by pattern.
+            // DEVIATE SD107. `lowerFaddFsub`: the node itself unless an operand
+            // pair is a horizontal add (SSE3 `haddps`), which the target does
+            // not describe; so the scalar op is selected by pattern.
+            ISD::FAdd | ISD::FSub => Some(node),
             ISD::FpExtend if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::F32) => Some(node),
             ISD::CtLz | ISD::CtLzZeroPoison => Some(lower_ctlz(dag, node)),
             ISD::CtTz => Some(lower_cttz(dag, node)),
@@ -1937,7 +1941,7 @@ fn min_leading_zeros(known: &super::known_bits::KnownBits) -> u32 {
 
 /// `LowerFABSorFNEG` for a scalar: no scalar bitwise SSE instruction exists, so
 /// the sign bit is cleared (`FAND`), flipped (`FXOR`) or set (`FOR`, for
-/// `fneg (fabs x)`) by a 16-byte pool mask whose low lane is the sign mask.
+/// `fneg (fabs x)`) by a 16-byte pool mask, the sign mask in every lane.
 fn lower_fabs_or_fneg(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1963,10 +1967,23 @@ fn lower_fabs_or_fneg(
         (false, true) => (x86isd::FOR, sign),
         (false, false) => (x86isd::FXOR, sign),
     };
-    let pointer = dag.config().pointer;
-    let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
-    let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+    let address = mask_address(dag, mask, vt);
     Some(dag.get_node(op, vt, &[x, address]))
+}
+
+/// The address of the 16-byte constant `mask` of a scalar `vt` repeated in each
+/// lane: the pin's `getConstantFP` of a `v4f32` or `v2f64` splat, a pool entry
+/// the bitwise instruction reads whole.
+fn mask_address(
+    dag: &mut SelectionDAG,
+    mask: u128,
+    vt: EVT,
+) -> SDValue {
+    let lane = vt.size_in_bits();
+    let splat = (0..128 / lane).fold(0u128, |all, at| all | mask << (at * lane));
+    let pointer = dag.config().pointer;
+    let pool = dag.get_constant_pool(pointer, splat, EVT::Simple(MVT::I128), true);
+    dag.get_node(wrapper_kind(pointer), pointer, &[pool])
 }
 
 /// `LowerFCOPYSIGN` for a scalar: `(mag & ~sign) | (sgn & sign)`, the sign
@@ -1991,10 +2008,8 @@ fn lower_fcopysign(
             dag.get_node(ISD::FpRound, vt, &[sgn, zero])
         };
     }
-    let pointer = dag.config().pointer;
     let masked = |dag: &mut SelectionDAG, op, value, mask| {
-        let pool = dag.get_constant_pool(pointer, mask, EVT::Simple(MVT::I128), false);
-        let address = dag.get_node(wrapper_kind(pointer), pointer, &[pool]);
+        let address = mask_address(dag, mask, vt);
         dag.get_node(op, vt, &[value, address])
     };
     let magnitude = masked(dag, x86isd::FAND, mag, sign - 1);

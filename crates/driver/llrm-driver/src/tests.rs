@@ -441,7 +441,10 @@ fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
     let (built, _) =
         crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fno-optimize-sibling-calls"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
+    // The call's one-slot frame is `push rax` / `pop rcx`, as the pin's: only a
+    // copy touching an xmm register counts.
+    let through_rax = |line: &&str| line.contains("rax") && line.contains("xmm");
+    assert!(!listing.lines().any(|line| through_rax(&line)), "no general register holds a double\n{listing}");
 }
 
 /// `fcmp` of two doubles at m64 selected the x87 compare (`fcom`), which the
