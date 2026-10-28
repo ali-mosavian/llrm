@@ -174,3 +174,16 @@ def test_a_launch_that_raises_fails_the_run_instead_of_vanishing(tmp_path):
 
     with pytest.raises(RuntimeError):
         torture.run_batches([[1], [2]], launch, tmp_path)
+
+
+def test_int_max_follows_the_compilers_int_not_a_target_macro():
+    """llrm-cc's 32-bit row does not define `__386__`: limits.h gave INT_MAX 32767 there and 20040409-1 (wrong-xor) aborted at m32 at every level."""
+    import subprocess
+
+    include = Path(__file__).parent / "include"
+    for width in ("32767", "2147483647"):
+        done = subprocess.run(
+            ["cc", "-E", "-P", "-U__INT_MAX__", f"-D__INT_MAX__={width}", "-I", str(include), "-"],
+            input="#include <limits.h>\nINT_MAX\n", capture_output=True, text=True, check=True,
+        )
+        assert done.stdout.strip() == width
