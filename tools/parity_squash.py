@@ -63,6 +63,15 @@ def with_merge_driver(env: dict[str, str]) -> None:
 with_merge_driver(os.environ)
 
 
+def with_pinned_clang(env: dict[str, str], root: Path, by_sha: Path | None = None) -> None:
+    """LLRM_CLANG_M16 is the clang built at the m16 sha of `root`'s toolchain/clang/pin (its second line), found at <by_sha>/<sha>/bin/clang;
+    where no such build is there the variable stays as the runner has it. A batch that bumps the pin changes the clang its tests need."""
+    by_sha = by_sha or Path(env.get("CLANG_BY_SHA") or Path.home() / "scratch/clang-by-sha")
+    lines = (root / "toolchain/clang/pin").read_text().splitlines() if (root / "toolchain/clang/pin").exists() else []
+    if len(lines) > 1 and (clang := by_sha / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(clang)
+
+
 RATE_LIMITED = ("API rate limit exceeded", "rate limit exceeded")
 
 
@@ -2089,6 +2098,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
         def tests_pass() -> bool:
             """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
+            with_pinned_clang(os.environ, ROOT)
             # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
             if os.environ.get("LAND_FAST_TESTS") == "1":
                 changed = git("diff", "--name-only", BASE, "HEAD").split()
