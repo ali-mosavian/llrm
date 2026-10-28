@@ -141,3 +141,11 @@ def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypat
     assert Path(command[0]).name == "llrm-cc" and "-mbss-begin" in command and env == {"LLRM_CC_TARGET": "x86_16-wat"}, (command, env)
     assert not any(Path(one).name == "llrm-c" for one in command)
     assert qb32._stamp(dosbatch.c_frontend()).startswith("llrm-cc")
+
+
+def test_a_qb_program_links_the_start_up_that_calls_underscore_main(monkeypatch):
+    """The QB link took C's defines, so under llrm-cc its start-up asked for `main_`, which no QB program defines (jwlink E2028: main_ is an undefined reference)."""
+    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
+    monkeypatch.setattr(dosbatch, "subprocess", type("S", (), {"run": staticmethod(lambda *a, **k: type("R", (), {"stdout": "A=1"})())}))
+    assert dosbatch.os_defines("x86-m32", "c") == ("A=1", "LL_MAIN=main_")
+    assert dosbatch.os_defines("x86-m32", "qb") == ("A=1",)

@@ -466,7 +466,7 @@ def build(directory: Path) -> tuple[Path, Path]:
     for source in shared:
         for group, bit in os_group_bits(source).items():
             obj = directory / f"{source.stem}_{group}.obj"
-            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"), f"OS_GROUPS={bit}")
+            dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "qb"), f"OS_GROUPS={bit}")
             objects.append(obj)
     output = directory / ARCHIVE_NAME
     archive(objects, output, directory / "lib")
