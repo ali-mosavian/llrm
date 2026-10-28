@@ -40,10 +40,33 @@ fn preprocess_and_dependency_jobs_pass_through_without_the_target_flag() {
 
 #[test]
 fn untranslated_features_are_refused_not_dropped() {
-    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto", "-g", "-gdwarf-4"] {
+    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto"] {
         assert!(parse(&words(&format!("{flag} x.c"))).is_err(), "{flag}");
     }
     assert!(parse(&words("-g0 x.c")).is_ok());
+}
+
+/// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
+/// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
+/// for 1485 under llrm-cc.
+#[test]
+fn the_watcom_abi_makes_char_unsigned() {
+    let unsigned = |args: &str| built(args).clang.iter().any(|one| one == "-funsigned-char");
+    assert!(unsigned("-mabi=watcom -c x.c"));
+    assert!(!unsigned("-mabi=sysv -c x.c"));
+    assert!(!unsigned("-mabi=watcom -fsigned-char -c x.c"));
+}
+
+/// `-g` was refused ("debug info is not carried yet"), so no program could
+/// carry debug info: clang gets `-g`, the backend the flag that names the
+/// format.
+#[test]
+fn debug_flags_reach_clang_and_the_backend() {
+    let one = built("-gcodeview -c x.c");
+    assert!(one.clang.iter().any(|flag| flag == "-g"), "{:?}", one.clang);
+    assert!(one.clang.iter().any(|flag| flag == "-fexperimental-assignment-tracking=disabled"), "{:?}", one.clang);
+    assert_eq!(one.llc, words("-gcodeview"));
+    assert!(built("-g0 -c x.c").clang.iter().all(|flag| flag != "-g"));
 }
 
 #[test]

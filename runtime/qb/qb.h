@@ -41,6 +41,7 @@ enum {
     BE_STRINGFO = 16,
     BE_NORESUME = 19,
     BE_RESUME = 20,
+    BE_FIELD = 50,
     BE_FILENUM = 52,
     BE_NOFILE = 53,
     BE_FILEMODE = 54,

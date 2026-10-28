@@ -3,6 +3,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/pr-state.sh"
 open_only() {
   local s d line
   for m; do
+    [[ $m =~ ^[0-9]+$ ]] || { echo "$m: SKIPPED not a PR number" >&2; continue; }
     s=$(cached_state "$m" state); d=$(cached_state "$m" isDraft)
     [ -n "$s" ] || { line=$(gh pr view "$m" --repo "${R:-x}" --json state,isDraft -q '.state+" "+(.isDraft|tostring)'); s=${line%% *}; d=${line#* }; }
     [ "$s" = OPEN ] || { echo "$m: SKIPPED not open" >&2; continue; }

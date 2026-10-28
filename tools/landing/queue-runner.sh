@@ -19,7 +19,9 @@ while true; do
   # never run beside another landing (old runner's land.sh)
   while landing_busy; do sleep 20; done
   rate_limit_pause
+  bq_start=$(date +%s)
   "$HERE/build-queue.sh" > $Q.new && mv $Q.new $Q || echo "build-queue failed, keeping the old queue"
+  echo "$(date +%H:%M:%S) build-queue $(( $(date +%s) - bq_start )) s" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
   # landings outside the gate: every first-parent commit of feat/parity not in landed.log, reported once
   git -C "$W" fetch -q origin 2>/dev/null; (cd "$W" && "$HERE/unlogged.sh" 2>/dev/null) | while read -r l; do
     grep -qxF "$l" "${LAND_TMP:-/tmp/landing}/unlogged.log" 2>/dev/null || { echo "UNLOGGED LANDING: $l"; echo "$l" >> "${LAND_TMP:-/tmp/landing}/unlogged.log"; }
@@ -41,7 +43,8 @@ while true; do
     # a PR listed in solo.txt at the head of the queue is a batch of its own (the others wait one cycle)
     solo=$(solo_listed "$HERE/solo.txt" "$n"); [ -n "$solo" ] && cand=("$n")
     # PRs in $LAND_TMP/urgent.txt (landing fixes) are a batch of their own, in that order; the rest wait one cycle
-    urgent=($(urgent_listed "${LAND_TMP:-/tmp/landing}/urgent.txt" "${cand[@]}")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
+    urgent=($(urgent_from_queue "${LAND_TMP:-/tmp/landing}/urgent.txt" "$Q")); [ -z "$solo" ] && [ ${#urgent[@]} -gt 0 ] && cand=("${urgent[@]}")
+    echo "$(date +%H:%M:%S) queue $(wc -l < $Q) lines, window ${#cand[@]}, urgent: ${urgent[*]:-none}" >> "${LAND_TMP:-/tmp/landing}/assemble.log"
     python3 "$HERE/pr_state.py" fill "${cand[@]:0:BATCH_CAP}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"  # one GraphQL call for the cycle's reads below
     cand=($(open_only "${cand[@]:0:BATCH_CAP}" 2>/dev/null)); cand=($(HEAD_MIN_AGE=$(batch_head_age $([ -z "$solo" ] && echo ${#urgent[@]} || echo 0)) aged "${cand[@]}" 2>>"${LAND_TMP:-/tmp/landing}/assemble.log"))
     # each PR alone on parity+PR (merge, build, fmt, scanners) under buildslot; one that fails is dropped here, with its REFUSED line, and never enters the batch
@@ -60,7 +63,7 @@ while true; do
   batch=("${open[@]}"); [ ${#batch[@]} -eq 0 ] && continue; n=${batch[0]}
   echo "== $(date +%H:%M) landing ${batch[*]}"
   if [ ${#batch[@]} -eq 1 ]; then "$HERE/land.sh" "$n" 2>&1 | cut -c1-260; continue; fi
-  for m in "${batch[@]}"; do
+  for m in "${batch[@]}"; do [[ $m =~ ^[0-9]+$ ]] || continue
     info="$(cached_state $m state) $(cached_state $m isDraft) $(cached_state $m baseRefName)"; [[ $info =~ ^[A-Z]+\ (true|false)\  ]] || info=$(gh pr view $m --repo $R --json state,isDraft,baseRefName -q '"\(.state) \(.isDraft) \(.baseRefName)"'); set -- $info
     [ "$1" = OPEN ] || continue
     [ "$3" = feat/parity ] || gh pr edit $m --repo $R --base feat/parity >/dev/null
@@ -73,7 +76,7 @@ while true; do
     && { echo "STAGE assemble ${asm_s:-0}s"; WAITS=${WAITS:-$HERE/waits.txt} PARITY_BIN=$T/release CARGO_TARGET_DIR=$T CARGO_INCREMENTAL=0 PYTHONUNBUFFERED=1 uv run --project tools python tools/parity_squash.py merge-batch "${batch[@]}"; } 2>&1 \
       | stamp_lines > $log ) 9>"$W.checkout.lock"
   touch "$log.done"
-  for m in "${batch[@]}"; do
+  for m in "${batch[@]}"; do [[ $m =~ ^[0-9]+$ ]] || continue
     if [ "$(gh pr view $m --repo $R --json state -q .state)" = MERGED ]; then echo "$m: MERGED  $(gh pr view $m --repo $R --json title -q .title)"
     else echo "$m: REFUSED: batch $log: $(batch_refusal_reason "$log" "$m")"; fi
   done

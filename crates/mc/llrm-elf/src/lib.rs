@@ -10,6 +10,7 @@ const SHT_SYMTAB: u32 = 2;
 const SHT_STRTAB: u32 = 3;
 const SHT_RELA: u32 = 4;
 const SHT_NOBITS: u32 = 8;
+const SHT_INIT_ARRAY: u32 = 14;
 const SHT_REL: u32 = 9;
 const SHF_WRITE: u64 = 1;
 const SHF_ALLOC: u64 = 2;
@@ -17,6 +18,7 @@ const SHF_EXECINSTR: u64 = 4;
 const SHF_INFO_LINK: u64 = 0x40;
 const STB_LOCAL: u8 = 0;
 const STB_GLOBAL: u8 = 1;
+const STB_WEAK: u8 = 2;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
 const STT_SECTION: u8 = 3;
@@ -120,6 +122,7 @@ fn spelling(section: &Section) -> Result<(&'static str, u32, u64), Unsupported> 
         Role::Bss => (".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE),
         Role::Stack => return Err(unsupported(format!("{}: an OMF stack segment has no ELF section", section.name))),
         // Named as the DWARF writer names it.
+        Role::InitFunctions => (".init_array", SHT_INIT_ARRAY, SHF_ALLOC | SHF_WRITE),
         Role::Debug => (".debug", SHT_PROGBITS, 0),
     })
 }
@@ -228,7 +231,8 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         match one.definition {
             Definition::Defined { section, offset } => {
                 let kind = if object.sections[section].role == Role::Text { STT_FUNC } else { STT_OBJECT };
-                symbol(&mut symtab, name, offset as u64, one.size as u64, STB_GLOBAL << 4 | kind, section as u16 + 1);
+                let binding = if one.binding == Binding::Weak { STB_WEAK } else { STB_GLOBAL };
+                symbol(&mut symtab, name, offset as u64, one.size as u64, binding << 4 | kind, section as u16 + 1);
             }
             Definition::Undefined => symbol(&mut symtab, name, 0, 0, STB_GLOBAL << 4, 0),
         }
