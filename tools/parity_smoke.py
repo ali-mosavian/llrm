@@ -616,7 +616,7 @@ SCANNERS = {
     "no_todo": "scans sources",
     "tracked_build_products": "lists tracked files",
 }
-TOOL_COMPILERS = ("llrm-c", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
+TOOL_COMPILERS = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront")  # what tools/dosbatch and the run_tests scripts build programs with
 
 
 def with_common(
