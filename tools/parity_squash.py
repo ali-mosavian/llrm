@@ -9,7 +9,7 @@ Subset rule: the fast set runs on the head (origin/feat/parity, failure set cach
 when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
 Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
 LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
-PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
+PARITY_BIN names the directory of the built release llrm-cc, llrm-llc, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
 `--known-red sc=2438` skips ONLY that smoke step (named, with its issue), still runs every other check, and puts one line in the squash's body:
 `Known red: sc (#2438)`.
@@ -61,6 +61,15 @@ def with_merge_driver(env: dict[str, str]) -> None:
 
 
 with_merge_driver(os.environ)
+
+
+def with_pinned_clang(env: dict[str, str], root: Path, by_sha: Path | None = None) -> None:
+    """LLRM_CLANG_M16 is the clang built at the m16 sha of `root`'s toolchain/clang/pin (its second line), found at <by_sha>/<sha>/bin/clang;
+    where no such build is there the variable stays as the runner has it. A batch that bumps the pin changes the clang its tests need."""
+    by_sha = by_sha or Path(env.get("CLANG_BY_SHA") or Path.home() / "scratch/clang-by-sha")
+    lines = (root / "toolchain/clang/pin").read_text().splitlines() if (root / "toolchain/clang/pin").exists() else []
+    if len(lines) > 1 and (clang := by_sha / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(clang)
 
 
 RATE_LIMITED = ("API rate limit exceeded", "rate limit exceeded")
@@ -427,7 +436,7 @@ def pr_body(number: str) -> str:
     return done.stdout if done.returncode == 0 else ""
 
 
-BINARIES = ("llrm-c", "llrm-qb", "llrm-nib")
+BINARIES = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib")
 
 
 def smoke_bins(env: dict | None = None) -> str:
@@ -441,7 +450,7 @@ def smoke_bins(env: dict | None = None) -> str:
     found = llrmbin.bin_dir(env)
     if all((found / name).is_file() for name in BINARIES):
         return str(found)
-    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
+    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bins`, or set PARITY_BIN to a directory that has them")
 
 
 def bins_command(directory: Path) -> list[str]:
@@ -1221,7 +1230,7 @@ def alone_link_failures(files: list[str], cwd: Path, target: Path | None, run=su
     built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
     if built.returncode:
         return [f"release: {(built.stdout + built.stderr).strip().splitlines()[-1:] or ['the bins do not build']}"]
-    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+    for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront"):
         (out / "release" / name).touch()  # the runners refuse a binary older than its sources
     done = run([sys.executable, "tools/link_check.py", str(out / "link-check")], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release")}, capture_output=True, text=True, errors="replace")
     return [line for line in done.stdout.splitlines() if line.startswith(("qb ", "c "))]
@@ -1251,8 +1260,17 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
     started = time.time()
     (build or _build_release)()
     red = behavioural.red_programs((run or _run_behavioural)())
-    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s")
+    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (LLRM_OW missing) and refused #5785
+        print(f"behavioural: {len(red)} wrong; running once more on the same tree{red_env_cause()}")
+        red = [program for program in behavioural.red_programs((run or _run_behavioural)()) if program in red]
+    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s{red_env_cause() if red else ''}")
     return red
+
+
+def red_env_cause() -> str:
+    """What a behavioural run needs from the environment and lacks, for the REFUSED line; empty when it has it."""
+    ow = os.environ.get("LLRM_OW")
+    return "" if ow and Path(ow).expanduser().is_dir() else " (LLRM_OW is unset or not a directory: a missing Open Watcom tree, not a miscompile)"
 
 
 def _run_behavioural() -> str:
@@ -1312,8 +1330,8 @@ def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -
     import behavioural  # noqa: PLC0415
 
     backend = [number for number in group if behavioural.touches(files_of(number))]
-    if len(backend) <= 1:
-        return backend
+    if len(backend) <= 1:  # a PR is blamed only after it is run alone: the batch's red may be the environment's
+        return [number for number in backend if alone_red(number)]
     return red_members(backend, red_with, alone_red)
 
 
@@ -1321,7 +1339,7 @@ def _link_programs() -> list[str]:
     import link_check  # noqa: PLC0415
 
     target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
-    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+    for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront"):
         (target / "release" / name).touch()  # the runners refuse a binary older than its sources
     os.environ["LLRM_BIN"] = str(target / "release")
     return link_check.link_failures(target / "link-check")
@@ -2090,6 +2108,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
         def tests_pass() -> bool:
             """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
+            with_pinned_clang(os.environ, ROOT)
             # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
             if os.environ.get("LAND_FAST_TESTS") == "1":
                 changed = git("diff", "--name-only", BASE, "HEAD").split()
@@ -2157,7 +2176,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
         if red:
-            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
+            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}{red_env_cause()}")
             failed_units.update(f"behavioural {program}" for program in red)
             return False
         return True
@@ -2202,8 +2221,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 lambda subset: merge_all(subset) and bool(pre_merge_behavioural(sorted({f for n in subset for f in files_of(n)}))),
             )
             for number in culprits:
-                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
-                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
+                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}{red_env_cause()}"
+                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}{red_env_cause()}")
             return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
