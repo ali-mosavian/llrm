@@ -72,7 +72,8 @@ fn rejects(text: &str) -> bool {
 /// instructions they are.
 #[test]
 fn mir_has_no_select_constant_expression_and_no_inrange() {
-    let text = "@g = global i32 0\ndefine void @f() {\n  %x = add i64 select (i1 true, i64 1, i64 2), 1\n  ret void\n}\n";
+    let text =
+        "@g = global i32 0\ndefine void @f() {\n  %x = add i64 select (i1 true, i64 1, i64 2), 1\n  ret void\n}\n";
     assert!(rejects(text));
     assert!(rejects(
         "@g = global [2 x i32] zeroinitializer\n@h = global ptr getelementptr inrange(0, 8) ([2 x i32], ptr @g, i64 0, i64 1)\n"
