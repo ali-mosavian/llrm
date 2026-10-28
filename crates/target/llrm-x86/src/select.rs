@@ -2274,7 +2274,7 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
-        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) => {
+        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && !name.starts_with("cvtsi2") => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
