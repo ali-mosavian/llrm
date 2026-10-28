@@ -119,6 +119,8 @@ pub fn macho_expanded(object: &Object) -> Result<Object, Unsupported> {
 /// The same at 32 bits: 4-byte slots, the return address in column 8.
 pub fn eh_target32() -> EhTarget<'static> {
     EhTarget {
+        pointer: Pointer::Pcrel4,
+        section: ".eh_frame",
         address: 4,
         return_column: 8,
         data_alignment: -4,

@@ -3,7 +3,7 @@
 //! function's prologue and epilogue make, read from its final instructions as
 //! `AArch64FrameLowering` declares them.
 
-use llrm_dwarf::eh_frame::EhTarget;
+use llrm_dwarf::eh_frame::{EhTarget, Pointer};
 use llrm_object::Frame;
 use llrm_object::debug::FrameRow;
 
@@ -27,6 +27,8 @@ pub fn register(name: &str) -> Option<u64> {
 /// return address is in x30.
 pub fn eh_target() -> EhTarget<'static> {
     EhTarget {
+        pointer: Pointer::Pcrel4,
+        section: ".eh_frame",
         address: 8,
         return_column: 30,
         // The pin's CIE: data alignment -4 and entries padded to 4, and the
@@ -181,7 +183,7 @@ pub fn frame(
             _ => {}
         }
     }
-    Some(Frame { section, offset: start, length: insts.len() * 4, rows })
+    Some(Frame { section, offset: start, length: insts.len() * 4, rows, cfi: Vec::new(), seh: Vec::new() })
 }
 
 #[cfg(test)]
@@ -286,7 +288,7 @@ mod tests {
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
             debug: None,
-            frames: vec![Frame { section: 0, offset: 0, length: 8, rows }],
+            frames: vec![Frame { section: 0, offset: 0, length: 8, rows, cfi: Vec::new(), seh: Vec::new() }],
         };
         let image = |object: &Object| {
             let object = llrm_dwarf::eh_frame::expanded(object, &eh_target()).expect("expands");
@@ -295,8 +297,9 @@ mod tests {
         let leaf = image(&object(vec![eh_target().entry]));
         let pin = [
             // CIE
-            0x10u8, 0, 0, 0, 0, 0, 0, 0, 1, b'z', b'R', 0, 1, 0x7C, 0x1E, 1, 0x1B, 0x0C, 0x1F, 0, // FDE
-            0x10, 0, 0, 0, 0x18, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0,
+            // FDE
+            0x10u8, 0, 0, 0, 0, 0, 0, 0, 1, b'z', b'R', 0, 1, 0x7C, 0x1E, 1, 0x1B, 0x0C, 0x1F, 0, 0x10, 0, 0, 0, 0x18,
+            0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0,
         ];
         assert_eq!(leaf, pin);
         // d8 saved 16 below the frame address: DW_CFA_offset_extended.
