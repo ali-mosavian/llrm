@@ -3,7 +3,7 @@
 //! folds (`reassociateOps`), and where the target has no native instruction
 //! `smax x, -1` is `x | (x >>s 31)` and `smin x, 0` is `x & (x >>s 31)`.
 //!
-//! DEVIATE SD243: not the FP-to-saturate folds, `reassociateReduction`, the
+//! DEVIATE SD252: not the FP-to-saturate folds, `reassociateReduction`, the
 //! `vscale` fold, nor the flip to the opposite signedness (it needs the
 //! opposite op to be legal, and none is on this target). Owner sdag-b.
 //!
