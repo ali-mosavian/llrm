@@ -201,6 +201,12 @@ fn safe_to_move(
         && !one.defines.is_empty()
 }
 
+/// Whether `lane` is a bit of EFLAGS: the other lanes of `RegId::None` are
+/// x87 state, which `fld` writes without touching the flags.
+fn is_flag(lane: crate::backend::lanes::Lane) -> bool {
+    lane.0 == llrm_lir::registers::RegId::None && lane.1 < 6
+}
+
 /// `MBPI->getEdgeProbability(From, To)` of every edge of `body`, by block
 /// index: the sum over the successor positions that lead to `To`.
 fn edge_probabilities(
@@ -575,9 +581,7 @@ impl Sinker {
         block: usize,
         index: usize,
     ) -> bool {
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
+        let flags = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&lane| is_flag(lane));
         let physical = |lanes: &crate::backend::lanes::Lanes| {
             lanes.iter().any(|&(register, _)| register != llrm_lir::registers::RegId::None)
         };
@@ -621,18 +625,14 @@ impl Sinker {
         &self,
         one: &Insn,
     ) -> bool {
-        liveness::effect(self.regs, self.bits, one).is_none_or(|effect| {
-            effect.writes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        })
+        liveness::effect(self.regs, self.bits, one).is_none_or(|effect| effect.writes.iter().any(|&lane| is_flag(lane)))
     }
 
     /// The flags live at each block's entry: read before written there, or
     /// untouched there and live at a successor's.
     fn solve_flags(&self) -> Vec<bool> {
         let n = self.cfg.len();
-        let flags = |lanes: &crate::backend::lanes::Lanes| {
-            lanes.iter().any(|&(register, _)| register == llrm_lir::registers::RegId::None)
-        };
+        let flags = |lanes: &crate::backend::lanes::Lanes| lanes.iter().any(|&lane| is_flag(lane));
         // What each block does first: reads the flags (live in), writes them
         // (not), or neither (as its successors). An unknown effect reads them.
         let first: Vec<Option<bool>> = (0..n)
