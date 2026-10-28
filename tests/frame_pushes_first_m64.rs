@@ -38,3 +38,28 @@ fn test_an_m64_frame_pushes_its_registers_before_it_reserves() {
     assert!(pushes.len() >= 2 && pushes.iter().all(|one| *one < sub), "{text}");
     assert!(pops.len() >= 2 && pops.iter().all(|one| *one > add), "{text}");
 }
+
+/// The same function with no frame register: the pin's `sub rsp, 32` (3 pushes
+/// and the return address are 32 bytes, the 24-byte local is padded to 16).
+/// llrm kept the frame register's cell and wrote `sub rsp, 48`, 16 bytes more
+/// stack than the pin on every omitted-frame function with pushed registers.
+#[test]
+fn test_an_omitted_m64_frame_reserves_no_cell_for_the_frame_register() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("a.c");
+    std::fs::write(
+        &source,
+        "extern int g(int *, int);\nextern int h(int);\n\
+         int f(int a, int b, int c) { int buf[6]; int x = g(buf, a); int y = h(b) + x; int z = h(c) + y; return z + buf[2]; }\n",
+    )
+    .unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .current_dir(scratch.path())
+        .args(["-m64", "-O1", "-fno-builtin", "-S", "-o", "a.s"])
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = std::fs::read_to_string(scratch.path().join("a.s")).unwrap();
+    assert!(text.lines().any(|line| line.trim() == "sub rsp, 32"), "{text}");
+}
