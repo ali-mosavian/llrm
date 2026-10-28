@@ -201,6 +201,7 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
         (Role::InitFunctions, _) => "DATA",
+        (Role::Unwind, _) => "DATA",
         (Role::Debug(DebugSection::CodeViewSymbols), _) => "DEBSYM",
         (Role::Debug(DebugSection::Dwarf), _) => "DWARF",
         (Role::Debug(DebugSection::CodeViewTypes), _) => "DEBTYP",
@@ -914,6 +915,7 @@ mod tests {
             symbols,
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            frames: Vec::new(),
             debug: None,
         }
     }

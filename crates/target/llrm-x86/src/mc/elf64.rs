@@ -25,6 +25,8 @@ impl Machine for X8664 {
     const WIDE: bool = true;
     const NUMBER: u16 = 62;
     const ADDEND: bool = true;
+    /// `SHT_X86_64_UNWIND`.
+    const UNWIND_TYPE: u32 = 0x7000_0001;
 
     fn relocation(reloc: &Reloc) -> Result<Relocation, Unsupported> {
         let from = reloc.pc_bias;
@@ -121,6 +123,7 @@ mod tests {
             ],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            frames: Vec::new(),
             debug: None,
         }
     }
@@ -230,6 +233,7 @@ mod tests {
             ],
             omf_groups: Vec::new(),
             omf_comdat: Vec::new(),
+            frames: Vec::new(),
             debug: None,
         };
         let scratch = tempfile::tempdir().unwrap();
