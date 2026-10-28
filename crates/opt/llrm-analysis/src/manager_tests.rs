@@ -1424,3 +1424,38 @@ fn summaries_stand_while_only_bodies_change() {
     let made = crate::attrsummary::summaries_made() - before;
     assert!(made <= 1, "the summaries of the module were made {made} times for edits to bodies alone");
 }
+
+/// Each function's declaration changed in turn made the summaries of every
+/// function again: `functions` at N=128 spent 40 Minstr in 132 runs, x3.84 for
+/// twice the functions. A summary is of its own declaration, so the cost of the
+/// edits is the functions edited.
+#[test]
+fn a_declaration_change_summarizes_only_that_function_again() {
+    const N: usize = 24;
+    let mut text = String::new();
+    for at in 0..N {
+        text.push_str(&format!("define i16 @f{at}(i16 %x) {{\nentry:\n  ret i16 %x\n}}\n\n"));
+    }
+    let mut module = parsed(&text);
+    let mut passes = PassManager::default();
+    passes.require_cached::<GlobalsAA>();
+    passes.require_cached::<super::GlobalsModRefAnalysis>();
+    passes.require::<Summaries>();
+    for at in 0..N {
+        // Pass `at` changes the declaration of `@f{at}` alone.
+        let mut seen = 0;
+        passes.add(step(
+            move |unit, _| {
+                if seen == at {
+                    unit.function.attrs.extend(llrm_mir::facts::Fact::NoUnwind.attribute());
+                }
+                seen += 1;
+            },
+            PreservedAnalyses::none(),
+        ));
+    }
+    let before = crate::attrsummary::functions_summarized();
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let made = crate::attrsummary::functions_summarized() - before;
+    assert!(made <= 3 * N, "{made} summaries worked out for {N} functions each changed once");
+}

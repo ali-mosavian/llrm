@@ -306,9 +306,23 @@ impl ModuleAnalysis for Summaries {
             Some(held) => Result::as_ref(&**held).map_err(String::clone)?.tracked_globals(),
             None => &none,
         };
-        let summaries = Ok(crate::attrsummary::summaries(module, &analyses.program().layout, tracked, &inputs.found));
-        *analyses.memo::<Option<SummaryInputs>>() = Some(inputs);
-        summaries
+        let before = analyses.memo::<Option<SummariesMade>>().take();
+        let last = before
+            .as_ref()
+            .map(
+                |then| crate::attrsummary::Last {
+                    declared: &then.inputs.declared,
+                    declared_now: &inputs.declared,
+                    found: &then.inputs.found,
+                    tracked: &then.tracked,
+                    made: &then.made,
+                },
+            );
+        let made =
+            crate::attrsummary::summaries_reusing(module, &analyses.program().layout, tracked, &inputs.found, last);
+        let tracked = tracked.clone();
+        *analyses.memo::<Option<SummariesMade>>() = Some(SummariesMade { inputs, tracked, made: made.clone() });
+        Ok(made)
     }
 
     /// A summary is made of its function's declaration (attributes and
@@ -322,8 +336,15 @@ impl ModuleAnalysis for Summaries {
         _: &Self::Result,
     ) -> bool {
         let now = SummaryInputs::of(module, analyses);
-        analyses.memo::<Option<SummaryInputs>>().as_ref().is_some_and(|last| now.is_the_last(last))
+        analyses.memo::<Option<SummariesMade>>().as_ref().is_some_and(|last| now.is_the_last(&last.inputs))
     }
+}
+
+/// What the last `Summaries::run` read and made.
+struct SummariesMade {
+    inputs: SummaryInputs,
+    tracked: BTreeSet<GlobalId>,
+    made: IndexMap<String, Summary>,
 }
 
 /// The results `Summaries::run` read.
