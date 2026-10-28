@@ -263,6 +263,10 @@ pub enum Encoded {
     Near(Near),
     /// A mark, and the symbol a line's defines.
     Mark(masm::Mark, Option<String>),
+    /// A `.cfi_*` directive: no bytes.
+    Cfi(llrm_object::assembler::Cfi),
+    /// A `.seh_*` directive: no bytes.
+    Seh(llrm_object::Seh),
     /// `MCAlignFragment`: nops up to the alignment.
     Align(masm::CodeAlign),
     /// `.prefalign` (`MCAssembler::relaxPrefAlign`): a function aligned to
@@ -292,6 +296,12 @@ pub struct Segment {
     pub lines: Vec<(SrcLoc, usize)>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
+    /// The declared call frame information and where it stands.
+    pub cfi: Vec<(llrm_object::assembler::Cfi, usize)>,
+    /// The declared `.seh_*` directives and the offset after each.
+    pub seh: Vec<(llrm_object::Seh, usize)>,
+    /// Where a procedure that declares call frame information starts.
+    pub declared: Vec<usize>,
     /// The widest alignment a data item in it asks for.
     pub align: usize,
 }
@@ -311,6 +321,9 @@ impl Segment {
             fixups: Vec::new(),
             lines: Vec::new(),
             bodies: Vec::new(),
+            cfi: Vec::new(),
+            seh: Vec::new(),
+            declared: Vec::new(),
             align: 1,
         }
     }
@@ -322,6 +335,7 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
+            masm::Mark::Declared => self.declared.push(self.image.len()),
             bound => self.bodies.push((bound, self.image.len())),
         }
     }
@@ -434,6 +448,8 @@ fn live_inner(module: &masm::Module) -> Result<masm::Module, Error> {
                     Encoded::Label(_)
                     | Encoded::Jump(_)
                     | Encoded::Mark(..)
+                    | Encoded::Cfi(_)
+                    | Encoded::Seh(_)
                     | Encoded::Align(_)
                     | Encoded::Prefer { .. }
                     | Encoded::End(_) => {}
@@ -748,6 +764,8 @@ pub fn _code_by(
             Encoded::Label(masm::Label { name }) => {
                 symbols.insert(name.clone(), (index, at));
             }
+            Encoded::Cfi(cfi) => segment.cfi.push((*cfi, segment.image.len())),
+            Encoded::Seh(seh) => segment.seh.push((*seh, segment.image.len())),
             Encoded::Mark(mark, name) => {
                 segment.mark(*mark);
                 if let Some(name) = name {
@@ -810,6 +828,8 @@ pub fn _items(
             vec![Encoded::Mark(*mark, Some(masm::line_label(number, *index)))]
         }
         masm::Item::Mark(mark) => vec![Encoded::Mark(*mark, None)],
+        masm::Item::Cfi(cfi) => vec![Encoded::Cfi(*cfi)],
+        masm::Item::Seh(seh) => vec![Encoded::Seh(*seh)],
         masm::Item::Callee(masm::Callee { code, .. }) if !code.is_empty() => code
             .iter()
             .map(|part| _part(part, model))
@@ -1091,7 +1111,7 @@ pub fn _length(
     model: CodeModel,
 ) -> usize {
     match item {
-        Encoded::Label(_) | Encoded::Mark(..) | Encoded::End(_) => 0,
+        Encoded::Label(_) | Encoded::Mark(..) | Encoded::Cfi(_) | Encoded::Seh(_) | Encoded::End(_) => 0,
         // Padding depends on where it lands: see `_size`.
         Encoded::Align(_) | Encoded::Prefer { .. } => 0,
         Encoded::Piece(Piece { code, .. }) => code.len(),
@@ -1210,6 +1230,7 @@ pub fn object_of(
         .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
         .transpose()
         .map_err(Unencodable)?;
+    let frames = if model == CodeModel::Flat64 { declared_frames(&segments, symbols, sizes) } else { Vec::new() };
     let mut sections = Vec::new();
     for segment in segments {
         let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
@@ -1243,9 +1264,64 @@ pub fn object_of(
         symbols: table,
         omf_groups,
         omf_comdat: Vec::new(),
-        frames: Vec::new(),
+        frames,
         debug,
     })
+}
+
+/// The frames the procedures declared (`Item::Cfi`): one row where the frame
+/// address or a save changes, as the state after the directives at that offset.
+fn declared_frames(
+    segments: &[Segment],
+    symbols: &IndexMap<String, (usize, usize)>,
+    sizes: &IndexMap<String, usize>,
+) -> Vec<llrm_object::Frame> {
+    use llrm_object::assembler::Cfi;
+    use llrm_object::debug::FrameRow;
+    let name = |number: u16| llrm_x86::mc::unwind::register_name(u64::from(number)).unwrap_or("rip").to_owned();
+    let mut frames = Vec::new();
+    for (section, segment) in segments.iter().enumerate() {
+        for (symbol, &(home, start)) in symbols {
+            let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
+            let within = |at: &usize| (start..start + length).contains(at);
+            if !segment.declared.iter().any(within) {
+                continue;
+            }
+            let entry = FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() };
+            let mut state = entry.clone();
+            let mut rows: Vec<FrameRow> = Vec::new();
+            for &(cfi, at) in segment.cfi.iter().filter(|(_, at)| within(at)) {
+                match cfi {
+                    Cfi::DefCfa { register, offset } => {
+                        state.cfa_register = name(register);
+                        state.cfa_offset = offset;
+                    }
+                    Cfi::DefCfaRegister { register } => state.cfa_register = name(register),
+                    Cfi::DefCfaOffset { offset } => state.cfa_offset = offset,
+                    Cfi::Offset { register, offset } => state.saved.push((name(register), offset)),
+                }
+                state.offset = at - start;
+                if rows.last().is_some_and(|row| row.offset == state.offset) {
+                    rows.pop();
+                }
+                rows.push(state.clone());
+            }
+            // A row is a change: one that repeats the one before it, or ends at
+            // the function's end, says nothing.
+            let mut kept: Vec<FrameRow> = Vec::new();
+            for row in rows {
+                let before = kept.last().unwrap_or(&entry);
+                let same = (&row.cfa_register, row.cfa_offset, &row.saved)
+                    == (&before.cfa_register, before.cfa_offset, &before.saved);
+                if !same && row.offset < length {
+                    kept.push(row);
+                }
+            }
+            let seh = segment.seh.iter().filter(|(_, at)| within(at)).map(|&(seh, at)| (at - start, seh)).collect();
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, seh });
+        }
+    }
+    frames
 }
 
 pub fn _target(name: &str) -> &str {
@@ -1774,5 +1850,24 @@ mod tests {
         assert_eq!(items[at], masm::Item::Align(masm::CodeAlign { log2: 4, max_skip: 7 }));
         assert!(matches!(&items[at + 1], masm::Item::Label(label) if label.name == "L0_2"), "{items:?}");
         assert_eq!(items.iter().filter(|one| matches!(one, masm::Item::Align(_))).count(), 1);
+    }
+
+    /// A procedure's `.seh_*` directives reached `Object.frames` only through
+    /// the call frame information, so a Win64 prologue declared on its own was
+    /// dropped and `.xdata` was read back from the bytes. They are the
+    /// function's, at offsets from its start.
+    #[test]
+    fn declared_seh_directives_reach_the_frame_at_function_relative_offsets() {
+        let mut segment = Segment::new("A_TEXT", Role::Text, true);
+        segment.declared.push(8);
+        segment.seh.push((llrm_object::Seh::PushReg(6), 9));
+        segment.seh.push((llrm_object::Seh::StackAlloc(32), 13));
+        let symbols: IndexMap<String, (usize, usize)> = [("f".to_owned(), (0, 8))].into_iter().collect();
+        let sizes: IndexMap<String, usize> = [("f".to_owned(), 20)].into_iter().collect();
+        let frames = declared_frames(&[segment], &symbols, &sizes);
+        assert_eq!(
+            frames.iter().map(|frame| (frame.offset, frame.seh.clone())).collect::<Vec<_>>(),
+            vec![(8, vec![(1, llrm_object::Seh::PushReg(6)), (5, llrm_object::Seh::StackAlloc(32))])]
+        );
     }
 }
