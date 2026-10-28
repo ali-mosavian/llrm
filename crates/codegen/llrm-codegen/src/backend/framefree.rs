@@ -189,6 +189,9 @@ pub fn pinned_by(
     let mut leaves: BTreeMap<i64, i64> = BTreeMap::new();
     for block in &body.blocks {
         let mut depth = 0i64;
+        // Between `call_frame_setup` and `call_frame_destroy`, whose operands
+        // give the bytes a callee pops.
+        let mut in_call_frame = false;
         for one in &block.insns {
             let Some(what) = &one.what else { continue };
             for place in what.dests.iter().chain(&what.sources) {
@@ -253,7 +256,8 @@ pub fn pinned_by(
                         Some(Loc::Imm(imm)) => imm.value,
                         _ => 0,
                     };
-                    if what.name.as_deref() == Some("call_frame_setup") {
+                    in_call_frame = what.name.as_deref() == Some("call_frame_setup");
+                    if in_call_frame {
                         depth += imm(0) - imm(2);
                     } else {
                         depth -= imm(0) - imm(1);
@@ -263,7 +267,7 @@ pub fn pinned_by(
                 Operation::Exchange | Operation::Escape | Operation::Barrier => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Nothing if what.name.as_deref().is_some_and(|name| name.starts_with("push") || name.starts_with("pop")) => return Some(Pinned::OpaqueSpAdjustment),
                 Operation::Call => {
-                    if what.indirect {
+                    if what.indirect && !in_call_frame {
                         return Some(Pinned::OpaqueSpAdjustment);
                     }
                     depth -= pops.get(&one.at).copied().unwrap_or(0);
