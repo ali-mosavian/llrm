@@ -207,7 +207,7 @@ pub fn program(
             buf.u8(0);
             buf.uleb(3);
             buf.u8(LNE_SET_SEGMENT);
-            buf.segment(section);
+            buf.segment(out.segment_kind()?, section);
         }
         buf.u8(0);
         buf.uleb(1 + address as u64);

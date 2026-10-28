@@ -221,11 +221,23 @@ pub trait OmfTargetWriter {
         &self,
         kind: FixupKind,
     ) -> bool;
+    /// The machine as a debug writer reads it: for a 16-bit one, the kinds
+    /// that name a segment.
+    fn debug_target(
+        &self,
+        bits: u8,
+    ) -> llrm_object::debug::DebugTarget;
 }
 
-/// The generic kinds alone: what the tests write without a target.
+/// The generic kinds alone, with two made-up target kinds for a segment's
+/// selector and a far pointer: what the tests write without a target.
 #[cfg(test)]
 pub(crate) struct GenericOmf;
+
+#[cfg(test)]
+pub(crate) const TEST_SEGMENT_BASE: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 4);
+#[cfg(test)]
+pub(crate) const TEST_FAR_POINTER: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 5);
 
 #[cfg(test)]
 impl OmfTargetWriter for GenericOmf {
@@ -233,7 +245,11 @@ impl OmfTargetWriter for GenericOmf {
         &self,
         kind: FixupKind,
     ) -> FixupKindInfo {
-        kind.info()
+        match kind {
+            TEST_SEGMENT_BASE => FixupKindInfo { name: "segment_base", offset: 0, bits: 16 },
+            TEST_FAR_POINTER => FixupKindInfo { name: "far_pointer", offset: 0, bits: 32 },
+            generic => generic.info(),
+        }
     }
 
     fn is_branch(
@@ -241,6 +257,16 @@ impl OmfTargetWriter for GenericOmf {
         _: FixupKind,
     ) -> bool {
         false
+    }
+
+    fn debug_target(
+        &self,
+        bits: u8,
+    ) -> llrm_object::debug::DebugTarget {
+        let mut target = llrm_object::debug::DebugTarget::of(bits);
+        target.segment_base = Some(TEST_SEGMENT_BASE);
+        target.far_pointer = Some(TEST_FAR_POINTER);
+        target
     }
 }
 
@@ -255,11 +281,12 @@ fn location(
     fix: Fix,
 ) -> Result<(u8, bool), Error> {
     let width = writer.kind_info(fix.kind).bits / 8;
+    let segments = writer.debug_target(16);
     Ok(match (fix.kind, fix.pc_rel) {
         (FixupKind::DATA_2, false) => (OFFSET, false),
         (FixupKind::DATA_4, false) => (OFFSET32, false),
-        (FixupKind::SEGMENT_BASE, false) => (BASE, false),
-        (FixupKind::FAR_POINTER, false) => (POINTER, false),
+        (kind, false) if Some(kind) == segments.segment_base => (BASE, false),
+        (kind, false) if Some(kind) == segments.far_pointer => (POINTER, false),
         (FixupKind::DATA_2 | FixupKind::DATA_4, true) if fix.pc_bias == usize::from(width) => {
             (if width == 2 { OFFSET } else { OFFSET32 }, true)
         }
@@ -274,8 +301,9 @@ fn packed(
     writer: &dyn OmfTargetWriter,
     fix: Fix,
 ) -> usize {
+    let segments = writer.debug_target(16);
     match fix.kind {
-        FixupKind::FAR_POINTER | FixupKind::SEGMENT_BASE => 2,
+        kind if Some(kind) == segments.far_pointer || Some(kind) == segments.segment_base => 2,
         kind if writer.kind_info(kind).bits == 32 => 4,
         _ => 2,
     }
@@ -474,7 +502,7 @@ fn ledata(
     for &at in &at_sorted {
         let made = resolved(writer, object, extern_index, comdats, section, at)?;
         let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").fix();
-        if kind.kind == FixupKind::SEGMENT_BASE && made.value != 0 {
+        if Some(kind.kind) == writer.debug_target(16).segment_base && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
         }
         pack_field(&mut image, at, packed(writer, kind), made.value);
@@ -584,13 +612,24 @@ pub fn write(
     object: &Object,
     writer: &dyn OmfTargetWriter,
 ) -> Result<Vec<u8>, Error> {
+    // The debug writers name the segment fixups from the machine the target
+    // describes.
+    let targeted;
+    let object = match &object.debug {
+        Some(info) if info.target.is_none() => {
+            let info = llrm_object::debug::Info { target: Some(writer.debug_target(object.bits)), ..info.clone() };
+            targeted = Object { debug: Some(info), ..object.clone() };
+            &targeted
+        }
+        _ => object,
+    };
     let turbo = matches!(
         &object.debug,
-        Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
+        Some(info) if info.options.format == llrm_object::debug::Format::TurboDebugger
     );
     let dwarf = matches!(
         &object.debug,
-        Some(info) if matches!(info.format, llrm_object::debug::Format::Dwarf { .. })
+        Some(info) if matches!(info.options.format, llrm_object::debug::Format::Dwarf { .. })
     );
     let debug = object.debug.is_some() && !turbo && !dwarf;
     // Turbo Debugger's records go among the object's own; CodeView's two
@@ -943,7 +982,8 @@ mod tests {
     fn a_fixup_is_never_split_between_ledata_records() {
         let size = CHUNK * 3;
         let starts = [CHUNK - 1, 2 * CHUNK - 2];
-        let relocs = starts.iter().map(|&at| Reloc::new(at, Fix::FAR_POINTER, Target::Symbol(0), 0)).collect();
+        let relocs =
+            starts.iter().map(|&at| Reloc::new(at, Fix::plain(TEST_FAR_POINTER), Target::Symbol(0), 0)).collect();
         let made = object(16u8, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
         let bytes = write(&made).unwrap();
         let records = crate::omf::parse(&bytes).unwrap();
@@ -1002,7 +1042,7 @@ mod tests {
     fn a_debug_address_in_a_group_is_addressed_through_the_group() {
         let mut data = section("D", vec![0; 4], vec![]);
         data.role = Role::Data;
-        let far = Reloc::new(2, Fix::FAR_POINTER, Target::Section(0), 0);
+        let far = Reloc::new(2, Fix::plain(TEST_FAR_POINTER), Target::Section(0), 0);
         let mut debug = section("$$SYMBOLS", vec![0; 8], vec![far]);
         debug.role = Role::Debug(DebugSection::CodeViewSymbols);
         let mut made = object(16u8, vec![data, debug], vec![]);

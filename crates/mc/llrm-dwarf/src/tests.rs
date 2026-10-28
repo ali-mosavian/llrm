@@ -1,4 +1,6 @@
-use llrm_object::debug::{Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable};
+use llrm_object::debug::{
+    DebugOptions, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
+};
 use llrm_object::{Binding, Object, Section, Symbol, Target};
 
 use super::*;
@@ -39,7 +41,7 @@ fn object(
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
-        format,
+        options: DebugOptions { format, ..Default::default() },
         language: llrm_object::debug::Language::C,
         frame_register: "ebp".into(),
         registers: vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
@@ -526,11 +528,34 @@ fn a_base_type_is_named_as_the_source_spells_it() {
 #[test]
 fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
-    made.debug.as_mut().unwrap().target =
-        Some(llrm_object::debug::DebugTarget { address_bytes: 3, segmented: false, codeview_machine: None });
+    made.debug.as_mut().unwrap().target = Some(llrm_object::debug::DebugTarget {
+        address_bytes: 3,
+        segmented: false,
+        codeview_machine: None,
+        segment_base: None,
+        far_pointer: None,
+    });
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let (_, info) = named(&written, ".debug_info");
     assert_eq!(info.image[7], 3, "the unit header's address size");
+}
+
+/// Segment fixups came from constants of the object crate, so a 16-bit target
+/// that named none still got x86's; the target says the kind or the writer
+/// refuses.
+#[test]
+fn a_segmented_address_takes_the_targets_segment_fixup() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
+    made.bits = 16;
+    let info = made.debug.as_mut().unwrap();
+    info.target = Some(llrm_object::debug::DebugTarget::of(16));
+    let error = expanded(&made, made.debug.as_ref().unwrap()).unwrap_err();
+    assert!(error.0.contains("segment fixup"), "{error:?}");
+    let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
+    made.debug.as_mut().unwrap().target =
+        Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
+    let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    assert!(written.sections.iter().flat_map(|one| &one.relocs).any(|one| one.kind == kind));
 }
 
 /// `object` through x86's writer for `format`, which expands its debug

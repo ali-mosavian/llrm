@@ -61,10 +61,6 @@ impl FixupKind {
     pub const SECREL_2: Self = Self(4005);
     /// COFF: the target's offset within its section (`FK_SecRel_4`).
     pub const SECREL_4: Self = Self(4006);
-    /// OMF: the selector of the target's segment.
-    pub const SEGMENT_BASE: Self = Self(4007);
-    /// OMF: a 16:16 pointer, whose offset is the field's first two bytes.
-    pub const FAR_POINTER: Self = Self(4008);
     /// A target's kinds start here and are its own (`FIRST_TARGET + n`), so two
     /// targets reuse the numbers.
     pub const FIRST_TARGET: Self = Self(4010);
@@ -79,8 +75,6 @@ impl FixupKind {
             Self::DATA_8 => ("FK_Data_8", 64),
             Self::SECREL_2 => ("FK_SecRel_2", 16),
             Self::SECREL_4 => ("FK_SecRel_4", 32),
-            Self::SEGMENT_BASE => ("segment_base", 16),
-            Self::FAR_POINTER => ("far_pointer", 32),
             _ => ("none", 0),
         };
         FixupKindInfo { name, offset: 0, bits }
@@ -116,8 +110,6 @@ pub struct Fix {
 impl Fix {
     pub const S_ABS: u8 = 0;
     pub const S_GOT: u8 = 1;
-    pub const SEGMENT_BASE: Fix = Fix::plain(FixupKind::SEGMENT_BASE);
-    pub const FAR_POINTER: Fix = Fix::plain(FixupKind::FAR_POINTER);
     pub const SECTION_INDEX: Fix = Fix::plain(FixupKind::SECREL_2);
 
     /// An absolute fixup of `kind`.
@@ -387,8 +379,6 @@ mod tests {
             (Fix::abs(4), 4),
             (Fix::abs(8), 8),
             (Fix::pc_rel(4, 5), 4),
-            (Fix::SEGMENT_BASE, 2),
-            (Fix::FAR_POINTER, 4),
             (Fix::section_offset(4), 4),
         ];
         for (fix, width) in widths {

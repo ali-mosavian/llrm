@@ -464,8 +464,8 @@ fn what_mach_o_cannot_say_is_refused() {
         made.sections[0].relocs[0] = Reloc::new(at, fix, Target::Symbol(3), 0);
         write(&made)
     };
-    assert!(with(Fix::SEGMENT_BASE).is_err());
-    assert!(with(Fix::FAR_POINTER).is_err());
+    assert!(with(Fix::plain(llrm_x86::mc::fixup::SEGMENT_BASE)).is_err());
+    assert!(with(Fix::plain(llrm_x86::mc::fixup::FAR_POINTER)).is_err());
     assert!(with(Fix::pc_rel(4, 7)).is_err());
     let mut far = program();
     far.sections[1].near = false;
@@ -485,7 +485,10 @@ fn a_debug_format_this_object_cannot_carry_is_refused() {
         (llrm_object::debug::Format::TurboDebugger, "Turbo Debugger"),
     ] {
         let mut made = program();
-        made.debug = Some(llrm_object::debug::Info { format, ..Default::default() });
+        made.debug = Some(llrm_object::debug::Info {
+            options: llrm_object::debug::DebugOptions { format, ..Default::default() },
+            ..Default::default()
+        });
         let why = write(&made).unwrap_err().0;
         assert!(why.contains("cannot carry") && why.contains(name), "{why}");
     }
