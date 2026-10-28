@@ -13,16 +13,16 @@
 // CHECK-NOT: std
 // CHECK: {{_scroll_up(@3)?}} endp
 // CHECK-LABEL: {{_scroll_down(@3)?}} proc
-// CHECK[-O2]: std
-// CHECK[-O2]: rep movsd
-// CHECK[-O2]: cld
+// A backward move is the fixed byte string `push ds; pop es; std; rep movsd; ...; cld` (memops.rs), listed as `db`.
+// CHECK[-O2]: db 01eh,007h,0fdh,0f3h,066h,0a5h
+// CHECK[-O2]: db 0fch
 // CHECK[-Os]: dec ax
 // CHECK: {{_scroll_down(@3)?}} endp
 // CHECK-LABEL: {{_palette(@3)?}} proc
 // DEVIATE: the pin leaves a variable 16-bit fill a loop (no memset_pattern off Darwin, LoopIdiomRecognize.cpp L1214 at
 // d1106deb71cc); llrm forms `rep stosw` where the target's table prices it under the loop: clocks at speed, bytes at -Os
-// (loopidioms.rs `_pays`). The check takes either, the loop being the -Os answer.
-// CHECK: {{rep stosw|dec ax}}
+// (loopidioms.rs `_pays`). The check takes either: at -O2 the loop counts up to the bound (`jb`), at -Os down (`dec ax`).
+// CHECK: {{rep stosw|dec ax|jb}}
 // CHECK: {{_palette(@3)?}} endp
 // CHECK-LABEL: {{_block(@3)?}} proc
 // CHECK[-O2]: rep movsd
