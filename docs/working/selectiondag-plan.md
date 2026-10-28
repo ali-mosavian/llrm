@@ -230,6 +230,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD218 | sdag-b | `expandBITREVERSE` is the byte-swap and mask form only (no loop of single bits for a width that is not a power of two; none is legal here) | `selectiondag/legalize_dag.rs` |
 | SD219 | sdag-b | `combineAddOrSubToADCOrSBB` without the `ADOX` form (no ADX), the or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)`/`SUB(…, SBB)` folds | `selectiondag/x86_carry.rs` |
 | SD227 | sdag-b | `visitBSWAP`: no half-width `bswap (shl x, c)` form, no `bswap (bitreverse x)` canonicalisation | `selectiondag/bswap_combine.rs` |
+| SD245 | sdag-b | `visitCTLZ/CTTZ/CTPOP`: no `foldCTLZToCTLS`, no half-width `ctpop`; non-zero is what known bits prove | `selectiondag/ctcount_combine.rs` |
 | SD254 | sdag-b | `visitRotate`: no demanded-bits simplification of the operand, no `distributeTruncateThroughAnd` | `selectiondag/rotate_combine.rs` |
 | SD237 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
