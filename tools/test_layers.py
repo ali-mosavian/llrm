@@ -28,7 +28,7 @@ LAYERS = [
         "concrete targets",
         [
             "llrm-x86", "llrm-x86-m16", "llrm-x86-m32", "llrm-x86-m64", "llrm-x86-m16-select", "llrm-x86-m32-select",
-            "llrm-x86-m64-select", "llrm-arm64",
+            "llrm-x86-m64-select", "llrm-arm64", "llrm-m68k",
         ],
     ),
     ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver"]),

@@ -26,6 +26,11 @@ A small trait in `llrm-target`/codegen (`DagTarget`: pin ids of target nodes, re
 - The DAG vocabulary (`MVT`, `ISD`, `TargetLoweringInfo`, `TargetLowering` action tables) lives in `llrm-x86/src/dag`, re-exported by codegen's `selectiondag.rs`. It is generic in shape (`TargetLowering::empty(types)`, `set_operation_action`, ...) with x86 constructors beside it. A non-x86 target must depend on `llrm-x86` for it until it moves to a neutral crate (layout item for S2).
 - `legalize_dag::Hooks::lower_operation` and `CombineHooks` are pub traits: the m68k lowering can be a new module in llrm-m68k with no edit to the sdag files; only the binding in `selected_in` needs S2.
 
+## Numbered rows
+| Id | Owner | Row | Where |
+|---|---|---|---|
+| SD500 | m68k spike | DEVIATE: `llrm-m68k` depends on `llrm-x86` for `MVT`, `ISD`, `TargetLoweringInfo` and `TargetLowering`. Reason: they live in `llrm-x86/src/dag` and a neutral crate does not exist. Exit: S2 moves them to the crate the layout plan names (ask reorg-layout first). Same layer, so `tools/test_layers.py` needs no exception; it only lists `llrm-m68k` among the concrete targets. | `crates/target/llrm-m68k/Cargo.toml` |
+
 ## Order
 S1a generator + regen for M68k alone (new files, no x86 file touched) → S1b x86 through the record, byte-identical → S2 trait. m68k work (lowering, hooks) proceeds on S1a.
 
