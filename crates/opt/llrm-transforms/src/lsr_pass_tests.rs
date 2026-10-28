@@ -927,3 +927,20 @@ b6:
     let body = after.split("b5:").nth(1).unwrap().split("b6:").next().unwrap();
     assert!(body.matches(" = phi ptr").count() == 0, "the loop is kept: {after}");
 }
+
+/// The first look at a loop whose exit test is edited made the users, the
+/// second made them again over the edited loop, the third (after the edge
+/// split) once more: 3 constructions for 1 loop. The edit moves no compare, so
+/// the second look keeps the first's users.
+#[test]
+fn the_users_of_a_loop_are_kept_through_the_edit_of_its_exit_test() {
+    let mut module = parsed(include_str!("lsr_insertion.ll"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::ivusers::BUILDS.with(|made| made.set(0));
+    crate::lsr_pass::reduced(context, &layout, function, &mut declared, &outer, &tti);
+    let built = crate::ivusers::BUILDS.with(|made| made.get());
+    assert_eq!(built, 2, "{}", printed(&module));
+}

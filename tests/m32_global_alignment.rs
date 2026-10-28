@@ -1,5 +1,7 @@
 //! A global states its alignment in the IR; the object keeps it.
 
+mod common;
+
 use std::process::Command;
 
 /// `llrm-llc` placed `align 8` globals right after a byte, with no
@@ -7,11 +9,12 @@ use std::process::Command;
 /// clocks.
 #[test]
 fn test_a_global_double_array_is_aligned_to_its_stated_eight() {
-    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+    let ir = "target datalayout = \"@LAYOUT@\"\n\
               @C = internal global i8 1, align 1\n\
               @A = internal global [4 x double] zeroinitializer, align 8\n\
               define ptr @f() { ret ptr @A }\n\
-              define ptr @g() { ret ptr @C }\n";
+              define ptr @g() { ret ptr @C }\n"
+        .replace("@LAYOUT@", &common::datalayout("x86-m32"));
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.ll"), ir).unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))

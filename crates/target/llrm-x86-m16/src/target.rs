@@ -224,6 +224,13 @@ impl Machine for Dos {
             pieces_clear: self.costs.pieces_clear,
             pieces_set_size: self.costs.pieces_set_size,
             pieces_clear_size: self.costs.pieces_clear_size,
+            huge_fill: llrm_x86::helpers::huge_fill(1).map_or(0, |routine| routine.code.len() as i64),
+            huge_copy: [false, true]
+                .into_iter()
+                .filter_map(|down| llrm_x86::helpers::huge_copy(down).ok())
+                .map(|routine| routine.code.len() as i64)
+                .min()
+                .unwrap_or(0),
             ..DESCRIPTION.size_costs()
         }
     }

@@ -841,6 +841,11 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
     }
 
+    /// `lea` forms `base + index + displacement` in one instruction.
+    fn address_form_adds_offsets(&self) -> bool {
+        true
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
@@ -848,6 +853,25 @@ impl Tti for X86 {
 
     fn scaled_index_insns(&self) -> u32 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
+    }
+
+    /// i8 and i16 extending loads are legal, and free when the result
+    /// legalizes to as many registers as the loaded type does.
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+    ) -> bool {
+        matches!(op, CastKind::ZExt | CastKind::SExt)
+            && matches!(
+                (src, dst),
+                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+            )
+            && matches!(
+                (legalized(src, self.native()), legalized(dst, self.native())),
+                (Some((one, _)), Some((same, _))) if one == same
+            )
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

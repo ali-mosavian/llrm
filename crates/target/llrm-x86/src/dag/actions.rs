@@ -289,7 +289,10 @@ impl TargetLowering {
         use ISD::*;
         for vt in ALL {
             self.set_ops(
-                &[SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat],
+                &[
+                    SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat, SMulFix, UMulFix,
+                    SMulFixSat, UMulFixSat, SShlSat, UShlSat,
+                ],
                 &[vt],
                 Action::Expand,
             );

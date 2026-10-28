@@ -42,3 +42,17 @@ fn test_a_byte_load_stays_when_the_code_is_for_size() {
     let text = asm("char g8(char *p) { return *p; }\n", &["-m32", "-mabi=sysv", "-march=i486", "-Os"]);
     assert!(text.contains(&"mov al, byte ptr [eax]".to_owned()), "{text:?}");
 }
+
+/// A word loaded into the register a loop then reads as a dword stayed `mov ax,
+/// [m]`: the rest of EAX is live (the loop reads it) though nothing defined it.
+/// The pin's `MOV16rm` carries `implicit-def $eax` there and becomes the
+/// `movzx` (quicksort, +0.8% clk).
+#[test]
+fn test_a_word_load_read_wider_by_a_loop_is_the_zero_extending_load() {
+    let text = asm(
+        "unsigned short f(unsigned short *p, int n) {\n unsigned short x = *p;\n int i;\n for (i = 0; i < n; i++) x = x * 25173 + 13849;\n return x;\n}\n",
+        &M32,
+    );
+    assert!(text.contains(&"movzx eax, word ptr [eax]".to_owned()), "{text:?}");
+    assert!(!text.iter().any(|one| one.starts_with("mov ax,")), "{text:?}");
+}
