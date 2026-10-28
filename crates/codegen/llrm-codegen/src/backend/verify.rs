@@ -180,6 +180,12 @@ pub fn physical(
         }
         preds
     };
+    // At 64 bits a read of RAX also reaches the lane above EAX, which no
+    // 32-bit view of the register names.
+    let whole = |register: RegId| {
+        let lanes = _lanes(regs, register);
+        regs.view(regs.root(register), body.bits).map_or(lanes, |all| lanes.or(&_lanes(regs, all)))
+    };
     let walked = |at: i64, defined: Lanes, complaint: &mut Lanes| -> Lanes {
         let mut defined = defined;
         let block = body.blocks.iter().find(|block| block.at == at).expect("a block of the body");
@@ -205,7 +211,7 @@ pub fn physical(
                         .reads
                         .iter()
                         .filter(|&&(register, _)| !_lanes(regs, register).is_disjoint(&defined))
-                        .fold(Lanes::new(), |all, &(register, _)| all.or(&_lanes(regs, regs.named(register, 8))));
+                        .fold(Lanes::new(), |all, &(register, _)| all.or(&whole(register)));
                     *complaint = complaint.or(&effect.reads.minus(&defined).minus(&touched));
                     defined = defined.or(&effect.writes);
                 }
@@ -878,5 +884,25 @@ mod tests {
             physical(&physical_body(vec![read]), &BTreeSet::from([physical_body(vec![]).regs().root(RegId::BX)]))
                 .is_empty()
         );
+    }
+
+    /// `mov ax, 1` then `mov rcx, rax` at 64 bits (`load volatile i16` and
+    /// word stores, `LLRM_VERIFY=1 -m64 -O2 --isel=dag`): the quadword read
+    /// reached the high-dword lane of RAX, which the "read whole" allowance
+    /// left out, and a valid program was refused.
+    #[test]
+    fn test_a_word_written_register_readwhole_at_64_bits_is_not_refused() {
+        let mov = |at: i64, to: Loc, from: Loc| {
+            Insn::new(at, Some((at, at)), Some(semantics(Operation::Move, "mov", vec![to], vec![from])), vec![], vec![])
+        };
+        let one = Loc::Imm(ir::Imm { value: 1, width: 2, address: None });
+        let mut made = physical_body(vec![
+            mov(1, register(RegId::AX, 2), one),
+            mov(2, register(RegId::RCX, 8), register(RegId::RAX, 8)),
+        ]);
+        made.bits = 64;
+        made.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let said = physical(&made, &BTreeSet::new());
+        assert!(said.is_empty(), "{said:?}");
     }
 }
