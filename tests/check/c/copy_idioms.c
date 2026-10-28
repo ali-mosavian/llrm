@@ -1,4 +1,4 @@
-// RUN: llrm-c %s {-O2 | -Os} -march=i486 -fno-inline-functions -S -o /dev/stdout
+// RUN: llrm-cc %s {-O2 | -Os} -march=i486 -fno-inline-functions -S -o /dev/stdout
 // Loops people write that are one string move, and look-alikes that are not.
 // DEVIATE: at -Os a copy whose length is known only at run time stays a loop when the split `rep movs` is more bytes
 // (no libc memcpy to call; loopidiom `variable_copy_pays`, 08ceb5c21): copy, scroll_up, scroll_down, block and the copy of two_stores are loops there.
