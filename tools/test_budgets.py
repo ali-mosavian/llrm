@@ -139,18 +139,51 @@ def test_a_step_at_x2_read_three_percent_lower_on_another_tree_is_not_paid():
     assert still_rising(2.58, 5.22) and still_rising(2.58, 2.58 * 1.9)
 
 
+CC_TARGETS = {"m32": ("x86_32-wat", ["-march=i486"]), "m16": ("x86_16-wat", ["-march=i386"])}
+# llrm-cc reads these from the environment, the first two with the tree's usual defaults.
+CC_ENV = ("LLRM_OW", "LLRM_PIN_CLANG", "LLRM_CLANG_M16")
+
+
+def compile_command(axis: str, source_path: Path, object_path: str) -> tuple[list[str], dict[str, str]]:
+    """llrm-cc's argv and environment for one axis: the clang front end into llrm-llc (llrm-c, the Watcom front end, is being deleted, and its IR is not
+    the IR of the compiler that stays), the 32-bit target at -march=i486 and the 16-bit at i386 (llrm-c rejects i286 at m16 and llrm-cc has no such flag)."""
+    target, flags = CC_TARGETS["m16" if axis.endswith("-m16") else "m32"]
+    env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_") or k in CC_ENV}, "LLRM_CC_TARGET": target}
+    env.setdefault("LLRM_OW", str(Path.home() / "scratch/ow-src"))
+    return [str(llrmbin.bin_dir() / "llrm-cc"), *flags, "-O2", "-c", "-o", object_path, str(source_path)], env
+
+
 def run(source: str, axis: str, stage: str) -> str:
     """The compiler's stderr with `stage` on (`counts`, `time` or both) for `source`, compiled as the axis is."""
-    compiler = llrmbin.bin_dir() / "llrm-c"
-    flags = ["-m16"] if axis.endswith("-m16") else ["-m32", "-march=i486"]
     with tempfile.TemporaryDirectory() as work:
         path = Path(work) / "a.c"
         path.write_text(source)
-        env = {**{k: v for k, v in os.environ.items() if not k.startswith("LLRM_")}, "LLRM_DEBUG": stage, "LLRM_TIME_TOP": "100000"}
-        with llrmbin.with_object([str(compiler), *flags, "-O2", "-o", llrmbin.OBJECT, str(path)]) as command:
+        command, env = compile_command(axis, path, llrmbin.OBJECT)
+        env = {**env, "LLRM_DEBUG": stage, "LLRM_TIME_TOP": "100000"}
+        with llrmbin.with_object(command) as command:
             done = subprocess.run(command, capture_output=True, text=True, env=env)
     assert done.returncode == 0, done.stderr[-500:]
     return done.stderr
+
+
+def test_the_axes_are_compiled_by_llrm_cc(monkeypatch):
+    """run() invoked llrm-c, the Watcom front end being deleted: every row of budgets.toml was measured on the IR of a compiler that does not stay (branches'
+    lir_rename_asks read x2.65 there and x2.0 through llrm-cc)."""
+    seen, real = {}, subprocess.run
+    llrmbin.bin_dir()  # its stamp check runs the binaries: before the patch
+
+    def fake(command, **kwargs):
+        if "env" not in kwargs:
+            return real(command, **kwargs)
+        seen["command"], seen["env"] = command, kwargs["env"]
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", fake)
+    run("int x;", "equal", "counts")
+    assert Path(seen["command"][0]).name == "llrm-cc", seen["command"]
+    assert "-c" in seen["command"] and seen["env"]["LLRM_CC_TARGET"] == "x86_32-wat"
+    run("int x;", "chain-m16", "counts")
+    assert seen["env"]["LLRM_CC_TARGET"] == "x86_16-wat" and "-march=i386" in seen["command"]
 
 
 def source_of(axis: str, size: int) -> str:
