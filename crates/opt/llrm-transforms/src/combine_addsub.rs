@@ -532,7 +532,20 @@ pub fn fold_add_with_constant(
         }
     }
 
-    // DEVIATE 3: umax(X, C) + -C --> usub.sat(X, C)
+    // umax(X, C) + -C --> usub.sat(X, C)
+    let negated = c_value.wrapping_neg() & mask(bits);
+    if has_one_use(c, op0) {
+        let x = {
+            let q = query(c, Some(inst));
+            pattern::commutative_intrinsic_with(&q, op0, "llvm.umax", |a| {
+                pattern::apint(&q, a).is_some_and(|(value, _)| value == negated)
+            })
+        };
+        if let Some(x) = x {
+            let k = c.int(ty, negated);
+            return Some(Visit::Replace(c.create_intrinsic(inst, "usub.sat", ty, &[x, k])));
+        }
+    }
     // DEVIATE 3: uadd.sat(X, C) + -C --> umin(X, ~C)
 
     // Fold (add (zext (add X, -C)), C) -> (zext X) if X u>= C. Truncate C to
