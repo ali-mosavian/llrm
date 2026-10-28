@@ -69,15 +69,6 @@ why = "measured 18.5 -> 52.2 Minstr (x2.82)"
 
 [[debt]]
 kind = "steps"
-axis = "cases"
-name = "analysis exposed-frames"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.2 -> 18.7 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
 axis = "nest"
 name = "lir coalesce"
 ratio = 3.3
@@ -802,15 +793,6 @@ why = "measured 28.2 -> 78.3 Minstr (x2.77)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir dfajumpthreading@806"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 19.0 -> 68.9 Minstr (x3.63)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "regalloc base"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -874,24 +856,6 @@ why = "measured 14.7 -> 36.8 Minstr (x2.50)"
 [[debt]]
 kind = "steps"
 axis = "cases"
-name = "mir simplifycfg@1438"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 9.7 -> 29.4 Minstr (x3.02)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir simplifycfg@1682"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 8.3 -> 26.7 Minstr (x3.20)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
 name = "lir split returns"
 ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -924,15 +888,6 @@ ratio = 3.56
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 1.8 -> 6.2 Minstr (x3.39); N=128/256/512: 16.4 / 38.3 / 59.2 Minstr (x2.3, x1.5); the doubling past 256 is under the limit, cause not located"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir cgpaddr"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 2.3 -> 6.0 Minstr (x2.63)"
 
 [[debt]]
 kind = "steps"
@@ -1562,15 +1517,6 @@ ratio = 2.42
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w11"
 why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 vs 256: placement::order self x3.6, top_fall_through x3.9, build_chain x3.5 (chain building over one N-way switch; top_fall_through scans a join's preds as the pin does), the rest x2.0-2.6. succ_seen is not it (HashSet: no change). The pin is as superlinear: Branch Probability Basic Block Placement 0.6 -> 0.8 -> 4.9 ms at N=64/128/256 (x6.1 for 128 -> 256, ours x3.6); selectBestSuccessor/hasBetterLayoutPredecessor loop a switch block's successors per candidate in both"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir adce@815"
-ratio = 2.49
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w2"
-why = "llrm-cc 2026-10-28: measured 2.1 -> 5.1 Minstr (x2.37); N=128/256/512: 2.1 / 5.1 / 3.2 Minstr; @815 is a different pipeline instance at 512, so not one pass across N; cause not located"
 
 [[debt]]
 kind = "steps"
