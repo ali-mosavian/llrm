@@ -319,6 +319,21 @@ fn a_cmov_commutes_so_abs_needs_one_copy() {
     assert!(copies == 1 && listing.contains("cmovs"), "{listing}");
 }
 
+/// `add` overflow selecting 0 is `xor; add; cmovno`: the commute lets the
+/// zero stay in the tied register. It was one `mov` more.
+#[test]
+fn an_overflow_select_needs_no_copy() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)\n\
+                define i32 @f(i32 %a, i32 %b) {\n  %p = call {i32, i1} @llvm.sadd.with.overflow.i32(i32 %a, i32 %b)\n\
+                  %v = extractvalue {i32, i1} %p, 0\n  %o = extractvalue {i32, i1} %p, 1\n\
+                  %r = select i1 %o, i32 0, i32 %v\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.lines().any(|line| line.trim_start().starts_with("mov ")), "{listing}");
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
