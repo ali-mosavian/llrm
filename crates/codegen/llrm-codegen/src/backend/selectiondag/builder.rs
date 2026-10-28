@@ -298,6 +298,8 @@ pub struct BlockDag {
     /// The calls in tail position (`isInTailCallPosition`); step 3 makes them
     /// `TC_RETURN`s.
     pub tail_calls: Vec<InstId>,
+    /// The DAG value each IR value of the block was built as.
+    pub values: Vec<(ValueId, SDValue)>,
 }
 
 /// `SelectionDAGISel::SelectBasicBlock` for `block`; the entry block also
@@ -341,6 +343,7 @@ pub fn build_block(
     let root = builder.control_root();
     builder.dag.set_root(root);
     let switch_name = dag_name(&builder.dag, block);
+    let values: Vec<(ValueId, SDValue)> = builder.node_map.iter().map(|(id, one)| (id, *one)).collect();
     let Builder { dag, phi_updates, live_ins, deferred, order, info, next_synthetic, tail_calls, .. } = builder;
     // `FinishBasicBlock`: the blocks the switch lowering made, in a layout that
     // is final
@@ -380,11 +383,12 @@ pub fn build_block(
                 live_ins: Vec::new(),
                 extra: Vec::new(),
                 tail_calls: one.tail_calls,
+                values: Vec::new(),
             },
         ));
     }
     info.next_block = next;
-    Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls })
+    Ok(BlockDag { dag, phi_updates, live_ins, extra, tail_calls, values })
 }
 
 fn dag_name(
@@ -987,6 +991,36 @@ impl Builder<'_> {
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
+    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
+    /// store that must be ordered, is `ATOMIC_SWAP`. The machine locks `xchg`
+    /// without asking, so every ordering is met.
+    fn visit_atomic(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+        info: llrm_mir::opcode::AtomicInfo,
+    ) -> Result<(), Refused> {
+        use llrm_mir::opcode::{AtomicKind, RmwOp};
+        let arguments = &instruction.operands[..instruction.operands.len() - 1];
+        let (pointer, value) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Store => (arguments[1], arguments[0]),
+            _ => return Err(Refused("an atomic other than an exchange")),
+        };
+        if self.operand_type(pointer)? == MVT::Far.into() {
+            return Err(Refused("an atomic access through a far pointer"));
+        }
+        let ty = self.function.operand_type(&self.module.context, value).ok_or(Refused("block operand"))?;
+        let (src, ptr) = (self.get_value(value)?, self.get_value(pointer)?);
+        let mem = self.mem_info(ty, info.align, true, pointer)?;
+        let root = self.root();
+        let swap = self.dag.get_atomic_swap(root, ptr, src, mem);
+        self.dag.set_root(SDValue { node: swap.node, res: 1 });
+        if let Some(result) = instruction.result {
+            self.set_value(result, swap);
+        }
+        Ok(())
+    }
+
     /// `X86ISD::CALL`, `callseq_end`, then the result read back.
     fn visit_call(
         &mut self,
@@ -1004,6 +1038,12 @@ impl Builder<'_> {
             },
             _ => None,
         };
+        if let Some(atomic) = direct
+            .and_then(|global| self.module.global(global).name.owned())
+            .and_then(|name| llrm_mir::atomic::decode(&name))
+        {
+            return self.visit_atomic(instruction, atomic);
+        }
         if let Some(intrinsic) = direct.and_then(|global| self.module.global(global).intrinsic()) {
             let name = direct.and_then(|global| self.module.global(global).name.owned()).unwrap_or_default();
             if intrinsic == llrm_mir::intrinsics::Intrinsic::Asm {
@@ -1405,17 +1445,17 @@ impl Builder<'_> {
             let mut pieces = Vec::new();
             for ((leaf, _), reg) in leaves.into_iter().zip(plan.returns.clone()) {
                 let leaf_vt = self.type_of(leaf)?;
-                // `getCopyFromParts`: a leaf narrower than its register is
-                // read in the register's type and truncated
-                let wide = match self.parts_in(leaf_vt, 1) {
-                    Ok((wide, 1)) if leaf_vt.is_integer() && leaf_vt.size_in_bits() < wide.size_in_bits() => wide,
+                // `getCopyFromParts`: a member between the legal widths comes
+                // in a register of the register type and is truncated
+                let reg_vt = match self.register_type(leaf_vt) {
+                    Ok(reg_vt) if leaf_vt.is_integer() => reg_vt,
                     _ => leaf_vt,
                 };
-                let reg = self.sized_register(reg, wide);
-                let copy = self.dag.get_copy_from_phys_reg(chain, reg, wide, glue);
+                let reg = self.sized_register(reg, reg_vt);
+                let copy = self.dag.get_copy_from_phys_reg(chain, reg, reg_vt, glue);
                 chain = SDValue { node: copy.node, res: 1 };
                 glue = SDValue { node: copy.node, res: 2 };
-                pieces.push(if wide == leaf_vt { copy } else { self.dag.get_node(ISD::Truncate, leaf_vt, &[copy]) });
+                pieces.push(if reg_vt == leaf_vt { copy } else { self.dag.get_node(ISD::Truncate, leaf_vt, &[copy]) });
             }
             self.dag.set_root(chain);
             return Ok(Some(self.merge(&pieces)));
@@ -1494,12 +1534,11 @@ impl Builder<'_> {
                 return Err(Refused("an aggregate result that is not one register a member"));
             }
             for (piece, reg) in parts.into_iter().zip(self.convention.returns.clone()) {
-                // `getCopyToParts`: a leaf narrower than its register is
-                // any-extended to the register's type (`{ i64, i48 }`)
-                let narrow = self.dag.value_type(piece);
-                let piece = match self.parts_in(narrow, 1) {
-                    Ok((wide, 1)) if narrow.is_integer() && narrow.size_in_bits() < wide.size_in_bits() => {
-                        self.dag.get_node(ISD::AnyExtend, wide, &[piece])
+                // `getCopyToParts`: a member between the legal widths (`i48`)
+                // is any-extended to the register type
+                let piece = match self.register_type(self.dag.value_type(piece)) {
+                    Ok(reg_vt) if reg_vt != self.dag.value_type(piece) && self.dag.value_type(piece).is_integer() => {
+                        self.dag.get_node(ISD::AnyExtend, reg_vt, &[piece])
                     }
                     _ => piece,
                 };
@@ -1657,6 +1696,18 @@ impl Builder<'_> {
                 }
                 self.cast_value(*op, operand, vt, SDNodeFlags::default())
             }
+            // `getValueImpl` visits a constant expression as the instruction it
+            // is: `add (ptrtoint @a), 3` is an add of the two.
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::Binary { op, lhs, rhs }) => {
+                let opcode = match op {
+                    BinaryOp::Add => ISD::Add,
+                    BinaryOp::Sub => ISD::Sub,
+                    BinaryOp::Xor => ISD::Xor,
+                    _ => return Err(Refused("a constant binary operator")),
+                };
+                let (lhs, rhs) = (self.constant_value(*lhs)?, self.constant_value(*rhs)?);
+                Ok(self.dag.get_node(opcode, vt, &[lhs, rhs]))
+            }
             _ => Err(Refused("aggregate constant")),
         }
     }
@@ -1780,6 +1831,7 @@ impl Builder<'_> {
             self.dag.lines.resize(at + 1, None);
         }
         self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).filter(|at| at.line != 0);
+        self.dag.inst_order.push((inst, self.dag.cur_order));
         if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
@@ -1898,7 +1950,13 @@ impl Builder<'_> {
                 _ => 64,
             };
             let wide = self.dag.value_type(operand).size_in_bits() > mantissa;
-            if self.target.float_store && matches!(op, CastOp::SIToFP | CastOp::UIToFP) && wide {
+            // As the pin: a conversion that only feeds float arithmetic stays
+            // exact, where `fimul`/`fiadd` fold it.
+            if self.target.float_store
+                && matches!(op, CastOp::SIToFP | CastOp::UIToFP)
+                && wide
+                && !self.read_only_by_float_arithmetic(instruction)
+            {
                 self.round_through_memory(converted, dest)
             } else {
                 converted
@@ -1906,6 +1964,23 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether every reader of `instruction`'s value is a float `fadd`, `fsub`
+    /// or `fmul`.
+    fn read_only_by_float_arithmetic(
+        &self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = instruction.result else { return false };
+        let users = self.function.users(result);
+        !users.is_empty()
+            && users.iter().all(|one| {
+                matches!(
+                    self.function.instruction(one.user).opcode,
+                    Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul)
+                )
+            })
     }
 
     /// Whether every reader of `instruction`'s value stores it: a store's

@@ -330,9 +330,6 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 build.clang.push("-funsigned-char".to_owned());
             }
             build.llc.push(flag.to_owned());
-            if flag == "-mabi=watcom" {
-                build.clang.push("-funsigned-char".to_owned());
-            }
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());
