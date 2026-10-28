@@ -1856,3 +1856,10 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
     assert "tool_test_failures(" in inspect.getsource(ps.merge_batch)
 
+
+
+def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
+    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
+    assert "c-legacy" not in ps.bins_command(tmp_path)
+    (tmp_path / "llrm-c").write_text("")
+    assert ps.bins_command(tmp_path)[-2:] == ["--features", "c-legacy"]
