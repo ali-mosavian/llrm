@@ -1820,7 +1820,7 @@ impl State<'_> {
         li: InstId,
         bbi: &mut Option<InstId>,
     ) -> bool {
-        let Opcode::Load { volatile: false, align: load_align , .. } = self.function.instruction(li).opcode else {
+        let Opcode::Load { volatile: false, align: load_align } = self.function.instruction(li).opcode else {
             return false;
         };
         let Opcode::Store { align: store_align, .. } = self.function.instruction(si).opcode else { return false };

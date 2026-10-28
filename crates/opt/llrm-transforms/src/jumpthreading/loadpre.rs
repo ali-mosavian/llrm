@@ -85,7 +85,7 @@ impl State<'_, '_> {
         load: InstId,
     ) -> bool {
         // Don't hack volatile and ordered loads.
-        let Opcode::Load { align, volatile: false , .. } = *self.opcode(load) else { return false };
+        let Opcode::Load { align, volatile: false } = *self.opcode(load) else { return false };
 
         // If the load is defined in a block with exactly one predecessor, it
         // can't be partially redundant. Nor in an EH pad, whose edges cannot
@@ -338,7 +338,7 @@ impl State<'_, '_> {
             .unit
             .function
             .create_instruction(
-                Opcode::Load { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align, volatile: false },
                 ty,
                 vec![ptr],
                 Flags::default(),

@@ -1870,7 +1870,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     .and_then(|result| self.function().value(result).name.clone());
                 let part_load = self.build_inst(
                     load,
-                    Opcode::Load { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                    Opcode::Load { align: Some(align), volatile: false },
                     part_ty,
                     vec![pointer],
                     name.as_deref(),
@@ -1909,7 +1909,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     let void = self.unit.context.types.void();
                     self.build(
                         store,
-                        Opcode::Store { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                        Opcode::Store { align: Some(align), volatile: false },
                         void,
                         vec![value, pointer],
                         None,
@@ -1960,7 +1960,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                             .and_then(|result| self.function().value(result).name.clone());
                         self.build_inst(
                             load,
-                            Opcode::Load { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                            Opcode::Load { align: Some(align), volatile: false },
                             part_ty,
                             vec![pointer],
                             name.as_deref(),
@@ -1973,7 +1973,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 let void = self.unit.context.types.void();
                 let part_store = self.build_inst(
                     store,
-                    Opcode::Store { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                    Opcode::Store { align: Some(align), volatile: false },
                     void,
                     vec![value, pointer],
                     None,
@@ -2497,7 +2497,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let align = self.new_ai_align(rewriter);
         let mut value = self.build(
             load,
-            Opcode::Load { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Load { align: Some(align), volatile: false },
             rewriter.new_alloca_ty,
             vec![Operand::Value(rewriter.new_ai_value)],
             Some("load"),
@@ -2548,7 +2548,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.function().instruction(load).result.and_then(|result| self.function().value(result).name.clone());
             value = self.build(
                 load,
-                Opcode::Load { align: Some(align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(align), volatile },
                 rewriter.new_alloca_ty,
                 vec![Operand::Value(rewriter.new_ai_value)],
                 name.as_deref(),
@@ -2580,7 +2580,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 self.function().instruction(load).result.and_then(|result| self.function().value(result).name.clone());
             value = self.build(
                 load,
-                Opcode::Load { align: Some(align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(align), volatile },
                 target_ty,
                 vec![pointer],
                 name.as_deref(),
@@ -2602,7 +2602,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 .unit
                 .function
                 .create_instruction(
-                    Opcode::Load { align: Some(1), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                    Opcode::Load { align: Some(1), volatile: false },
                     load_ty,
                     vec![poison_ptr],
                     Flags::default(),
@@ -2652,7 +2652,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if self.unit.layout.size_bits(&self.context().types, value_ty) != u64::from(int_width) {
             let old = self.build(
                 store,
-                Opcode::Load { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(align), volatile: false },
                 rewriter.new_alloca_ty,
                 vec![Operand::Value(rewriter.new_ai_value)],
                 Some("oldload"),
@@ -2666,7 +2666,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let void = self.unit.context.types.void();
         let created = self.build(
             store,
-            Opcode::Store { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Store { align: Some(align), volatile: false },
             void,
             vec![value, Operand::Value(rewriter.new_ai_value)],
             None,
@@ -2717,7 +2717,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             (pointer, self.slice_align(rewriter), value)
         };
         let created =
-            self.build(store, Opcode::Store { align: Some(align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic }, void, vec![stored, new_pointer], None);
+            self.build(store, Opcode::Store { align: Some(align), volatile }, void, vec![stored, new_pointer], None);
         let _ = created;
         self.dead_insts.push(store);
         self.delete_if_trivially_dead(old_op);
@@ -2850,7 +2850,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 let align = self.new_ai_align(rewriter);
                 let old = self.build(
                     memset,
-                    Opcode::Load { align: Some(align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                    Opcode::Load { align: Some(align), volatile: false },
                     new_ty,
                     vec![Operand::Value(rewriter.new_ai_value)],
                     Some("oldload"),
@@ -2869,7 +2869,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let align = self.new_ai_align(rewriter);
         self.build(
             memset,
-            Opcode::Store { align: Some(align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Store { align: Some(align), volatile },
             void,
             vec![value, Operand::Value(rewriter.new_ai_value)],
             None,
@@ -2954,7 +2954,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if let (Some(int_ty), false, false) = (rewriter.int_ty, whole, is_dest) {
             value = self.build(
                 transfer,
-                Opcode::Load { align: Some(new_align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(new_align), volatile: false },
                 new_ty,
                 vec![Operand::Value(rewriter.new_ai_value)],
                 Some("load"),
@@ -2965,7 +2965,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         } else {
             value = self.build(
                 transfer,
-                Opcode::Load { align: Some(1), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(1), volatile },
                 other_ty,
                 vec![source],
                 Some("copyload"),
@@ -2974,7 +2974,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         if let (Some(int_ty), false, true) = (rewriter.int_ty, whole, is_dest) {
             let old = self.build(
                 transfer,
-                Opcode::Load { align: Some(new_align), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(new_align), volatile: false },
                 new_ty,
                 vec![Operand::Value(rewriter.new_ai_value)],
                 Some("oldload"),
@@ -2985,7 +2985,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             value = self.bit_preserving_cast_chain(transfer, value, new_ty);
         }
         let void = self.unit.context.types.void();
-        self.build(transfer, Opcode::Store { align: Some(1), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic }, void, vec![value, destination], None);
+        self.build(transfer, Opcode::Store { align: Some(1), volatile }, void, vec![value, destination], None);
         !volatile
     }
 
@@ -3269,7 +3269,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let terminator = self.function().terminator(pred).expect("a terminated block");
             let load = self.build(
                 terminator,
-                Opcode::Load { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align, volatile: false },
                 load_ty,
                 vec![pair[0]],
                 Some("sroa.speculate.load"),
@@ -3351,14 +3351,14 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let Opcode::Load { align, .. } = self.function().instruction(load).opcode else { unreachable!("a load") };
             let true_load = self.build(
                 load,
-                Opcode::Load { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align, volatile: false },
                 ty,
                 vec![operands[1]],
                 Some("sroa.speculate.load.true"),
             );
             let false_load = self.build(
                 load,
-                Opcode::Load { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align, volatile: false },
                 ty,
                 vec![operands[2]],
                 Some("sroa.speculate.load.false"),
@@ -3531,7 +3531,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let (address, offset) = self.leaf_pointer(load, pointer, ty, &indices, "fca.gep");
             let piece = self.build(
                 load,
-                Opcode::Load { align: Some(common_alignment(base_align, offset)), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: Some(common_alignment(base_align, offset)), volatile: false },
                 leaf_ty,
                 vec![address],
                 Some("fca.load"),
@@ -3568,7 +3568,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             let (address, offset) = self.leaf_pointer(store, pointer, ty, &indices, "fca.gep");
             self.build(
                 store,
-                Opcode::Store { align: Some(common_alignment(base_align, offset)), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Store { align: Some(common_alignment(base_align, offset)), volatile: false },
                 void,
                 vec![piece, address],
                 None,

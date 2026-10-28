@@ -980,11 +980,7 @@ impl<'a> Analyzer<'a> {
             Opcode::Switch => self.visit_switch(inst),
             Opcode::Resume => false,
             Opcode::Unreachable => true,
-            Opcode::LandingPad { .. }
-            | Opcode::Freeze
-            | Opcode::AtomicRmw { .. }
-            | Opcode::CmpXchg { .. }
-            | Opcode::Fence { .. } => self.visit_default(inst),
+            Opcode::LandingPad { .. } | Opcode::Freeze => self.visit_default(inst),
         }
     }
 

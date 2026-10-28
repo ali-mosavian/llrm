@@ -383,7 +383,7 @@ impl LoopIdiomRecognize {
         let table_ld = emit(
             function,
             at,
-            Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Load { align: None, volatile: false },
             crc_ty,
             vec![table_gep],
             Flags::default(),

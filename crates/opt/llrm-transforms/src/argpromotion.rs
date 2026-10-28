@@ -410,7 +410,7 @@ fn applied(
                 Operand::Value(function.instruction(step).result.expect("an address"))
             };
             let load = function.create_instruction(
-                Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Load { align: None, volatile: false },
                 field.ty,
                 vec![at],
                 Flags::default(),

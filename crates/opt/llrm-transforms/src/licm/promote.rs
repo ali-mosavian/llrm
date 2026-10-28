@@ -464,7 +464,7 @@ pub fn promote_loop_accesses_to_scalars(
                 }
                 let instruction = function.instruction(inst);
                 match instruction.opcode {
-                    Opcode::Load { volatile, align, .. } => {
+                    Opcode::Load { volatile, align } => {
                         if instruction.operands[0] != pointer {
                             continue;
                         }
@@ -488,7 +488,7 @@ pub fn promote_loop_accesses_to_scalars(
                             alignment = alignment.max(inst_alignment);
                         }
                     }
-                    Opcode::Store { volatile, align, .. } => {
+                    Opcode::Store { volatile, align } => {
                         // Stores *of* the pointer are not interesting, only
                         // stores *to* the pointer.
                         if instruction.operands[1] != pointer {

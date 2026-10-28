@@ -426,7 +426,7 @@ pub fn promote(
             _ => Some("promoted".to_owned()),
         };
         let load = function.create_instruction(
-            Opcode::Load { align: Some(found.alignment), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Load { align: Some(found.alignment), volatile: false },
             ty,
             vec![some_ptr],
             Flags::default(),
@@ -518,7 +518,7 @@ pub fn promote(
             let pointer = maybe_insert_lcssa_phi(function, site, some_ptr, exit)?;
             let void = context.types.void();
             let store = function.create_instruction(
-                Opcode::Store { align: Some(found.alignment), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+                Opcode::Store { align: Some(found.alignment), volatile: false },
                 void,
                 vec![live_in, pointer],
                 Flags::default(),

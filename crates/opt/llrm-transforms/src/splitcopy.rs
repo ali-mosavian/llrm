@@ -270,7 +270,7 @@ fn replace(
     for &(offset, ty) in leaves {
         let source = at(function, context, from, offset);
         let load = function.create_instruction(
-            Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Load { align: None, volatile: false },
             ty,
             vec![source],
             Flags::default(),
@@ -280,7 +280,7 @@ fn replace(
         let value = Operand::Value(function.instruction(load).result.expect("a loaded value"));
         let destination = at(function, context, to, offset);
         let store = function.create_instruction(
-            Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Store { align: None, volatile: false },
             void,
             vec![value, destination],
             Flags::default(),

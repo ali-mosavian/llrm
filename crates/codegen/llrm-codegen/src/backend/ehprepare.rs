@@ -570,7 +570,7 @@ fn selected(
         }
         let (ty, result) = (user.ty, user.result.expect("a value"));
         let load = function.create_instruction(
-            Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Load { align: None, volatile: false },
             i16,
             vec![Operand::Constant(landed)],
             Flags::default(),
@@ -621,7 +621,7 @@ fn store(
 ) -> Result<InstId, String> {
     let void = context.types.void();
     let made = function.create_instruction(
-        Opcode::Store { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+        Opcode::Store { align: None, volatile: false },
         void,
         vec![value, slot],
         Flags::default(),
@@ -638,7 +638,7 @@ fn load(
     at: Position,
 ) -> Result<Operand, String> {
     let made = function.create_instruction(
-        Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+        Opcode::Load { align: None, volatile: false },
         ty,
         vec![slot],
         Flags::default(),

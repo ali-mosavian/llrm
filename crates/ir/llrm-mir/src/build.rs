@@ -408,7 +408,7 @@ impl Builder<'_> {
         volatile: bool,
         name: &str,
     ) -> Operand {
-        self.value(Opcode::Load { align: None, volatile, ordering: crate::opcode::AtomicOrdering::NotAtomic }, ty, vec![pointer], Flags::default(), name)
+        self.value(Opcode::Load { align: None, volatile }, ty, vec![pointer], Flags::default(), name)
     }
 
     pub fn store(
@@ -417,7 +417,7 @@ impl Builder<'_> {
         pointer: Operand,
         volatile: bool,
     ) {
-        self.effect(Opcode::Store { align: None, volatile, ordering: crate::opcode::AtomicOrdering::NotAtomic }, vec![value, pointer]);
+        self.effect(Opcode::Store { align: None, volatile }, vec![value, pointer]);
     }
 
     pub fn gep(

@@ -334,7 +334,7 @@ fn merged_to_address(
         _ => unreachable!("stores"),
     };
     let store = function.create_instruction(
-        Opcode::Store { align, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+        Opcode::Store { align, volatile: false },
         ty,
         vec![q_phi, address(function, qstore)],
         Flags::default(),

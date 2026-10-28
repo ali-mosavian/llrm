@@ -906,7 +906,7 @@ impl Plan {
                         Flags::INBOUNDS,
                         "switch.gep",
                     );
-                    let load = Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic };
+                    let load = Opcode::Load { align: None, volatile: false };
                     let loaded = emit(function, at, load, *cell, vec![place], Flags::default(), "switch.load");
                     if cell == ty {
                         loaded

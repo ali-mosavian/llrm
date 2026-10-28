@@ -15,8 +15,8 @@ use crate::module::{
     ValueId,
 };
 use crate::opcode::{
-    ATOMIC_OPS, Attribute, AtomicOrdering, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
-    INT_ATTRIBUTES, INT_PREDICATE, ORDERINGS, Opcode, TARGET_FLAG_ATTRIBUTES, TYPE_ATTRIBUTES, Tail, spelled,
+    Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
+    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TARGET_FLAG_ATTRIBUTES, TYPE_ATTRIBUTES, Tail, spelled,
 };
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
@@ -1440,19 +1440,6 @@ impl Parser {
         flags
     }
 
-    /// An atomic access's ordering. `syncscope` is not read: a scope narrower than the system's
-    /// changes what the access orders against, and MIR has none.
-    fn atomic_ordering(&mut self) -> Parsed<AtomicOrdering> {
-        if self.is_word("syncscope") {
-            return self.fail("`syncscope` is not in MIR's subset");
-        }
-        let word = self.word()?;
-        match spelled(&ORDERINGS, &word) {
-            Some(ordering) => Ok(ordering),
-            None => self.fail(format!("expected an atomic ordering, found `{word}`")),
-        }
-    }
-
     fn align(&mut self) -> Parsed<Option<u64>> {
         if self.is_punct(',') && self.peek_at(1) == &Token::Word("align".to_owned()) {
             self.next();
@@ -1740,59 +1727,20 @@ impl Parser {
                     (Opcode::Alloca { allocated, align, address_space }, ty, operands)
                 }
                 "load" => {
-                    let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
                     let ty = self.ty()?;
                     self.expect_punct(',')?;
                     let (_, pointer) = self.typed_value(local)?;
-                    let ordering = if atomic { self.atomic_ordering()? } else { AtomicOrdering::NotAtomic };
                     let align = self.align()?;
-                    // Every pass keeps a volatile access whole; an atomic one is held to that.
-                    let volatile = volatile || atomic;
-                    (Opcode::Load { align, volatile, ordering }, ty, vec![pointer])
+                    (Opcode::Load { align, volatile }, ty, vec![pointer])
                 }
                 "store" => {
-                    let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
                     let (_, value) = self.typed_value(local)?;
                     self.expect_punct(',')?;
                     let (_, pointer) = self.typed_value(local)?;
-                    let ordering = if atomic { self.atomic_ordering()? } else { AtomicOrdering::NotAtomic };
                     let align = self.align()?;
-                    let volatile = volatile || atomic;
-                    (Opcode::Store { align, volatile, ordering }, void, vec![value, pointer])
-                }
-                "atomicrmw" => {
-                    let volatile = self.eat_word("volatile");
-                    let name = self.word()?;
-                    let Some(op) = spelled(&ATOMIC_OPS, &name) else {
-                        return self.fail(format!("expected an atomicrmw operation, found `{name}`"));
-                    };
-                    let (_, pointer) = self.typed_value(local)?;
-                    self.expect_punct(',')?;
-                    let (ty, value) = self.typed_value(local)?;
-                    let ordering = self.atomic_ordering()?;
-                    let align = self.align()?;
-                    (Opcode::AtomicRmw { op, align, volatile, ordering }, ty, vec![pointer, value])
-                }
-                "cmpxchg" => {
-                    let weak = self.eat_word("weak");
-                    let volatile = self.eat_word("volatile");
-                    let (_, pointer) = self.typed_value(local)?;
-                    self.expect_punct(',')?;
-                    let (ty, expected) = self.typed_value(local)?;
-                    self.expect_punct(',')?;
-                    let (_, new) = self.typed_value(local)?;
-                    let success = self.atomic_ordering()?;
-                    let failure = self.atomic_ordering()?;
-                    let align = self.align()?;
-                    let flag = self.module.context.types.int(1);
-                    let pair = self.module.context.types.intern(Type::Struct { fields: vec![ty, flag], packed: false });
-                    (Opcode::CmpXchg { align, volatile, weak, success, failure }, pair, vec![pointer, expected, new])
-                }
-                "fence" => {
-                    let ordering = self.atomic_ordering()?;
-                    (Opcode::Fence { ordering }, void, vec![])
+                    (Opcode::Store { align, volatile }, void, vec![value, pointer])
                 }
                 "getelementptr" => {
                     self.gep_flags(&mut flags);

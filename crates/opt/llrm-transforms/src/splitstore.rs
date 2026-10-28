@@ -125,7 +125,7 @@ fn split(
     store: InstId,
 ) -> bool {
     let one = function.instruction(store).clone();
-    let Opcode::Store { align, volatile, .. } = one.opcode else { return false };
+    let Opcode::Store { align, volatile } = one.opcode else { return false };
     let &[value, pointer] = &one.operands[..] else { return false };
     let Some(store_ty) = function.operand_type(context, value) else { return false };
     let Type::Int(bits) = *context.types.get(store_ty) else { return false };
@@ -222,7 +222,7 @@ fn split(
     }
     for (widened, address, aligned) in halves {
         let made = function.create_instruction(
-            Opcode::Store { align: Some(aligned), volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Store { align: Some(aligned), volatile: false },
             void,
             vec![widened, address],
             Flags::default(),

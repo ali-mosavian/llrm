@@ -167,47 +167,6 @@ fn appending_linkage_is_read_and_printed_as_llvm_spells_it() {
     assert_eq!(round(&once), once);
 }
 
-/// Atomic accesses were refused (`expected a type, found atomic`; `atomicrmw is not an instruction
-/// of MIR's subset`): the forms clang writes for C11 atomics, read and written as LLVM spells them.
-#[test]
-fn atomic_instructions_are_read_and_printed_as_llvm_spells_them() {
-    let text = "define i32 @f(ptr %p, i32 %v) {
-  %a = load atomic i32, ptr %p seq_cst, align 4
-  store atomic i32 %v, ptr %p release, align 4
-  %b = load atomic volatile i8, ptr %p monotonic, align 1
-  %c = atomicrmw xchg ptr %p, i32 %v acquire, align 4
-  %d = atomicrmw add ptr %p, i32 %v monotonic, align 4
-  %e = cmpxchg weak ptr %p, i32 %a, i32 %v seq_cst acquire, align 4
-  fence seq_cst
-  ret i32 %a
-}
-";
-    let once = round(text);
-    for spelling in [
-        "load atomic i32, ptr %p seq_cst, align 4",
-        "store atomic i32 %v, ptr %p release, align 4",
-        "atomicrmw xchg ptr %p, i32 %v acquire, align 4",
-        "atomicrmw add ptr %p, i32 %v monotonic, align 4",
-        "cmpxchg weak ptr %p, i32 %a, i32 %v seq_cst acquire, align 4",
-        "fence seq_cst",
-    ] {
-        assert!(once.contains(spelling), "{spelling}\n{once}");
-    }
-    assert_eq!(round(&once), once);
-}
-
-/// An atomic access is held to what a volatile one is: no pass may drop, merge or move it.
-#[test]
-fn an_atomic_access_is_not_simple() {
-    let module = parse::module(
-        "define i32 @f(ptr %p) {\n  %a = load atomic i32, ptr %p monotonic, align 4\n  %b = load i32, ptr %p, align 4\n  ret i32 %a\n}\n",
-    )
-    .unwrap();
-    let function = module.globals.iter().find_map(|global| global.function()).unwrap();
-    let simple: Vec<bool> = function.walk().map(|(_, inst)| function.instruction(inst).opcode.is_simple_access()).collect();
-    assert_eq!(simple, [false, true, false]);
-}
-
 #[test]
 fn every_invalid_fixture_is_refused_for_its_reason() {
     let fixtures = fixtures(true);

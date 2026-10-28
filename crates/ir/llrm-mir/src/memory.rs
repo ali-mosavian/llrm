@@ -307,7 +307,8 @@ pub fn pure_operation(opcode: &Opcode) -> bool {
             | Opcode::InsertValue(_)
             | Opcode::Freeze
             | Opcode::Alloca { .. }
-    ) || matches!(opcode, Opcode::Load { .. }) && opcode.is_simple_access()
+            | Opcode::Load { volatile: false, .. }
+    )
 }
 
 /// What `memory(...)`, `readnone`, `readonly` or `writeonly` among `attrs`
@@ -492,15 +493,10 @@ pub fn of(
 ) -> Effects {
     let instruction = function.instruction(inst);
     match &instruction.opcode {
-        opcode @ Opcode::Load { .. } if opcode.is_simple_access() => Effects { reads: true, writes: false },
-        opcode @ Opcode::Store { .. } if opcode.is_simple_access() => Effects { reads: false, writes: true },
-        // Volatile or atomic, as LLVM has it: ordered with every other access. So are the
-        // read-modify-writes and the fence.
-        Opcode::Load { .. }
-        | Opcode::Store { .. }
-        | Opcode::AtomicRmw { .. }
-        | Opcode::CmpXchg { .. }
-        | Opcode::Fence { .. } => Effects::ANY,
+        Opcode::Load { volatile: false, .. } => Effects { reads: true, writes: false },
+        Opcode::Store { volatile: false, .. } => Effects { reads: false, writes: true },
+        // Volatile, as LLVM has it: ordered with every other access.
+        Opcode::Load { .. } | Opcode::Store { .. } => Effects::ANY,
         Opcode::Call(info) | Opcode::Invoke(info) => {
             let callee = callee(context, function, inst).and_then(|one| callees.get(&one)).map(|one| one.effects);
             let at_site = stated(&info.attrs);
@@ -539,8 +535,7 @@ pub fn invariant_load(
     inst: InstId,
 ) -> bool {
     let instruction = function.instruction(inst);
-    matches!(instruction.opcode, Opcode::Load { .. })
-        && instruction.opcode.is_simple_access()
+    matches!(instruction.opcode, Opcode::Load { volatile: false, .. })
         && (Facts::of_instruction(function, inst).invariant()
             || invariant(context, layout, function, instruction.operands[0]))
 }

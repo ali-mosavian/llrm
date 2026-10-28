@@ -93,7 +93,7 @@ impl Combiner<'_> {
         let void = self.context.types.void();
         let load = self.insert_before(
             call,
-            Opcode::Load { align: Some(source_align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Load { align: Some(source_align), volatile },
             ty,
             vec![source],
             Flags::default(),
@@ -101,7 +101,7 @@ impl Combiner<'_> {
         let loaded = Operand::Value(self.function.instruction(load).result.expect("a load has a result"));
         self.insert_before(
             call,
-            Opcode::Store { align: Some(destination_align), volatile, ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+            Opcode::Store { align: Some(destination_align), volatile },
             void,
             vec![loaded, destination],
             Flags::default(),

@@ -337,7 +337,7 @@ fn fwrite_call(
     // fwrite(S, 1, 1, F) --> fputc(S[0], F)
     let i8 = unit.context.types.int(8);
     let load = unit.function.create_instruction(
-        Opcode::Load { align: None, volatile: false , ordering: llrm_mir::opcode::AtomicOrdering::NotAtomic },
+        Opcode::Load { align: None, volatile: false },
         i8,
         vec![operands[0]],
         Flags::default(),

@@ -334,9 +334,6 @@ pub fn instruction_cost_with(
                 None => Cost::INVALID,
             }
         }
-        // A fence is one barrier instruction; a read-modify-write is priced as a load and a store.
-        Opcode::Fence { .. } => Cost::BASIC,
-        Opcode::AtomicRmw { .. } | Opcode::CmpXchg { .. } => Cost::BASIC * 2,
         Opcode::Select => {
             // `select x, y, false` is `x & y` and `select x, true, y` is `x |
             // y`.

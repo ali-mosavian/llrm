@@ -933,11 +933,6 @@ impl<'m> Machine<'m> {
                         }
                         None
                     }
-                    // One thread runs: a fence orders nothing, and the read-modify-writes are not modelled.
-                    Opcode::Fence { .. } => None,
-                    Opcode::AtomicRmw { .. } | Opcode::CmpXchg { .. } => {
-                        return unsupported(format!("`{}`", instruction.opcode.mnemonic()));
-                    }
                     Opcode::GetElementPtr { source } => {
                         let operands = (0..ops.len()).map(|at| value(self, at)).collect::<Run<Vec<_>>>()?;
                         Some(self.gep(*source, instruction.ty, &operands)?)
