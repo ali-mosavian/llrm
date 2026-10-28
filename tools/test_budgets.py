@@ -44,7 +44,7 @@ WINDOWS = BUDGETS.get("window", [])
 # Programs of one function, where a count of copies, selections or allocations is a count of work done per function.
 # A debt is paid only when its step is clearly under the limit: instruction counts move between commits and between hosts (x2.37 on one, under
 # x2.23 on another: regalloc base on live), and a step at x2.30 against 2.3 read paid on one build and over on the next (lir twoaddr, lir coalesce).
-PAID_MARGIN = 0.85
+PAID_MARGIN = 0.75
 ONE_FUNCTION = ("straight", "mulconst", "branches", "live", "nest", "cells", "cases", "joins", "fjoins", "unrolled", "fanout", "equal")
 PER_FUNCTION = ("function_clones", "function_forks", "machinings", "selections", "allocations", "cold_scans")
 # The gate's N per axis, but nest 32 and unrolled 16 (their steps change regime between N=16 and 32, N=8 and 16: the readings below read 8x jumps, not
@@ -123,14 +123,20 @@ def test_a_step_is_judged_by_its_own_slope_whatever_share_of_the_compile_it_is()
 def test_a_step_at_the_limit_is_not_paid_and_one_well_under_it_is():
     """lir twoaddr read x2.30 (60.3 -> 138.8): paid on one build, over on the next, and its debt was deleted as paid (#2191) then needed again."""
     assert still_rising(60.3, 138.8) and still_rising(60.3, 138.0)
-    assert not still_rising(60.3, 110.0)
+    assert not still_rising(60.3, 100.0)
 
 
 def test_a_step_that_reads_under_the_limit_on_another_host_is_not_paid():
     """regalloc base on live read x2.37 on the runner's host and under x2.23 on another: a margin of 0.97 deleted its row as paid there, and the
     runner refused (13:28). The step reads 2.2 here: still rising."""
     assert still_rising(36.9, 36.9 * 2.2) and still_rising(36.9, 36.9 * 2.0)
-    assert not still_rising(36.9, 36.9 * 1.9)
+    assert not still_rising(36.9, 36.9 * 1.6)
+
+
+def test_a_step_at_x2_read_three_percent_lower_on_another_tree_is_not_paid():
+    """cases `mir decide@675` read 2.58 -> 5.22 (x2.02) on one tree and under x1.955 on the runner's (16:56, refused as paid): instruction counts are exact per tree and
+    differ between trees by a few percent, so no second reading of one tree settles it. The band is wide enough for a step near x2 either way."""
+    assert still_rising(2.58, 5.22) and still_rising(2.58, 2.58 * 1.9)
 
 
 def run(source: str, axis: str, stage: str) -> str:
