@@ -361,8 +361,9 @@ pub fn compiled_dumping(
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
-    llrm_mir::dbgimport::types_and_globals(&mut module);
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
+    // After the rename: the debug info names the symbols the object has.
+    llrm_mir::dbgimport::types_and_globals(&mut module);
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     // `-fno-inline=NAME` takes a function as the source names it, whatever
     // the convention spells it as; a name already spelled stays.

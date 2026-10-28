@@ -240,6 +240,20 @@ fn llvm_ir_is_found_by_its_triple_and_optimized() {
     assert_eq!(body, ["mov eax, 42", "ret"], "{listing}");
 }
 
+/// An add of a constant to a dword that stays live is a three-address `lea` at
+/// m64 (`LEA64_32r`). It was off there, so each such add cost a `mov` and an
+/// `add`.
+#[test]
+fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @g = global i32 0\n@h = global i32 0\n\
+                define i32 @f() {\n  %a = load volatile i32, ptr @g\n  %r = add i32 %a, 5\n  store volatile i32 %r, ptr @h\n  %s = mul i32 %r, %a\n  ret i32 %s\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
@@ -376,6 +390,75 @@ fn an_alloca_with_a_constant_count_reserves_all_its_elements() {
     let reserved: i64 =
         listing.lines().map(str::trim).find_map(|line| line.strip_prefix("sub rsp, ")?.parse().ok()).expect("a frame");
     assert!(reserved >= 64, "{reserved} bytes for eight quadwords\n{listing}");
+}
+
+/// A `double` argument came in `xmm0` and went to `rax` and back
+/// (`mov rax, xmm0; mov xmm0, rax; addsd xmm0, xmm1`): the value delivered in
+/// an xmm register named no xmm operand, so the allocator took a
+/// general-purpose register for it, which the object writer cannot encode.
+#[test]
+fn a_double_argument_stays_in_its_xmm_register() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define double @f(double %a, double %b) {\n  %r = fadd double %a, %b\n  ret double %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
+}
+
+/// A `double` returned by a call was popped from `st(0)`, which the SysV
+/// convention does not use: the compile stopped "a floating value used as an
+/// integer". It is read from `xmm0`, and a `double` returned from another
+/// register is copied into `xmm0` first.
+#[test]
+fn a_double_result_travels_in_xmm0() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare double @g(double)\n\
+                define double @f(double %a, double %b) {\n  %r = call double @g(double %b)\n  %s = fadd double %r, %a\n  ret double %s\n}\n\
+                define double @second(double %a, double %b) {\n  ret double %b\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(
+        !listing.lines().any(|line| ["fld", "fst", "fxch"].iter().any(|op| line.trim().starts_with(op))),
+        "no x87 instruction\n{listing}"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "second").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().ends_with("xmm0, xmm1")), "the result is copied to xmm0\n{listing}");
+}
+
+/// A `double` returned by a call and passed straight to the return went
+/// `rax` -> `xmm0` (`mov rax, xmm0; mov xmm0, rax`): the copies around a value
+/// pinned in `xmm0` are plain moves, which named no class, so the value between
+/// them took a general register and the object writer refused it.
+#[test]
+fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare double @g(double)\n\
+                define double @f(double %a) {\n  %r = call double @g(double %a)\n  ret double %r\n}\n";
+    let (built, _) =
+        crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fno-optimize-sibling-calls"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
+}
+
+/// `fcmp` of two doubles at m64 selected the x87 compare (`fcom`), which the
+/// emitter drops: `fcmp olt` was a lone `seta al` on whatever flags were live.
+/// The CPU has CMOV, so the table's `UCOMISD` pattern selects it.
+#[test]
+fn a_double_compare_is_ucomisd() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i1 @f(double %a, double %b) {\n  %r = fcmp olt double %a, %b\n  ret i1 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("ucomisd")), "{listing}");
+    assert!(
+        !listing.lines().any(|line| line.trim().starts_with("fcom") || line.trim().starts_with("fucom")),
+        "{listing}"
+    );
 }
 
 /// A `select` was expanded into a branch diamond (`cmp; jl; mov; jmp`). It is
@@ -975,6 +1058,27 @@ fn a_static_function_is_entered_by_a_near_call() {
     assert!(listing.contains("call far ptr _taken@3"), "{listing}");
 }
 
+/// COFF spells `f` as `_f`: the debug info imported before the rename named a
+/// symbol that no longer existed, no function was described, and the writer
+/// refused "the line table's lines are in no function".
+#[test]
+fn a_clang_unit_with_decorated_symbols_keeps_its_functions_in_the_debug_info() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-g", "-fobject-format=coff"]), &text, "dbgfix").unwrap();
+    assert!(!built.debug.expect("debug info").procedures.is_empty());
+}
+
 /// A `-g` object from clang's IR names clang's source, `dbg.c`, with its MD5,
 /// not the `.ll` file: the debugger could not find the text.
 #[test]
@@ -1028,4 +1132,20 @@ fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
     };
     assert!(!listing(&[]).contains("STKOVERFLOW"), "unchecked");
     assert!(listing(&["-fsanitize=stack"]).contains("STKOVERFLOW"), "checked");
+}
+
+/// A 64-bit function whose frame is one slot (the alignment of its call)
+/// adjusted the stack with `sub rsp, 8` / `add rsp, 8`, six bytes where the pin
+/// has `push rax` / `pop rcx`.
+#[test]
+fn a_one_slot_frame_at_m64_is_push_and_pop() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @g()\n\
+                define i32 @f() {\n  call void @g()\n  ret i32 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    assert!(lines.contains(&"push rax") && lines.contains(&"pop rcx"), "{listing}");
+    assert!(!lines.iter().any(|line| line.starts_with("sub rsp") || line.starts_with("add rsp")), "{listing}");
 }
