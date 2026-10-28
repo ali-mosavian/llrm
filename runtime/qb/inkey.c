@@ -18,6 +18,8 @@ byte cn_wait_key(void)
     return dev_key_read();
 }
 
+#pragma aux B_INKY "B$INKY"
+
 /* The empty string when no key is waiting; a key is one character, and an
    extended key (function and cursor keys) is a zero and its scan code.  The end
    of redirected input ends the program. */
@@ -50,5 +52,3 @@ SD *B_INKY(void)
     text[1] = (char)dev_key_read();
     return key;
 }
-
-#pragma aux B_INKY "B$INKY"

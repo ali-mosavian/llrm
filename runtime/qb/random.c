@@ -20,6 +20,10 @@ static float *advance(void)
     return current();
 }
 
+#pragma aux B_RND0 "B$RND0"
+#pragma aux B_RND1 "B$RND1"
+#pragma aux B_RNZP "B$RNZP"
+
 /* B$RND0: RND with no argument. */
 float *B_RND0(void)
 {
@@ -49,7 +53,3 @@ void B_RNZP(double x)
     copy_bytes((char *)words, (const char *)&x, 8);
     seed = seed & 0xFF0000FFUL | (unsigned long)(words[2] ^ words[3]) << 8;
 }
-
-#pragma aux B_RND0 "B$RND0"
-#pragma aux B_RND1 "B$RND1"
-#pragma aux B_RNZP "B$RNZP"

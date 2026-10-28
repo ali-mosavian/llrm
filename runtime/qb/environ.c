@@ -55,6 +55,8 @@ static void move_down(unsigned to, unsigned from, unsigned count)
     }
 }
 
+#pragma aux B_SENV "B$SENV"
+
 /* B$SENV: ENVIRON "name=value" or "name value". An existing name is replaced; no value, or a lone ';', removes
    it. No delimiter or an empty name is Illegal function call; no room is Out of memory. */
 void B_SENV(SD *spec)
@@ -118,5 +120,3 @@ void B_SENV(SD *spec)
     entry[length + 1] = 0;
     env_write(offset, entry, length + 2);
 }
-
-#pragma aux B_SENV "B$SENV"

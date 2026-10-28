@@ -28,6 +28,8 @@ static void interpreter(char *shell)
         ;
 }
 
+#pragma aux B_SSHL "B$SSHL"
+
 /* B$SSHL: SHELL [command]. Too long a command is Illegal function call; the child failing to load for want of
    memory is Out of memory, any other failure Illegal function call. */
 void B_SSHL(SD *command)
@@ -58,5 +60,3 @@ void B_SSHL(SD *command)
     if (result < 0)
         qb_error(-result == OUT_OF_MEMORY ? BE_MEMORY : BE_ILLFUN);
 }
-
-#pragma aux B_SSHL "B$SSHL"

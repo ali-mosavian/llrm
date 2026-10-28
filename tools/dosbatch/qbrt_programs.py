@@ -24,7 +24,7 @@ ALL_SOURCES = {path.stem: path for path in [*PROBES, *qbruntime.milestone_source
 SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswith(LLRM_ONLY)}
 
 # (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
-# test so the entry goes.  Only the flat target has any.
+# test so the entry goes.
 KNOWN: dict[tuple[str, str], str] = {
     ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
 }

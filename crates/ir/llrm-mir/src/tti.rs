@@ -363,6 +363,14 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE U1: the bar (unrolled size) an `optsize` loop of at most this
+    /// many trips is fully unrolled under, where the target says so: its
+    /// body's tests fold on the trip, and few copies cost little; none: the
+    /// pin's.
+    fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
+        None
+    }
+
     /// `getUnrollingPreferences` given the loop's shape, which targets read
     /// (nesting depth, exits); by default the loop-blind
     /// `get_unrolling_preferences`.
