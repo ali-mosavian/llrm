@@ -26,10 +26,6 @@ fn cx() -> Loc {
     Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
-fn dx() -> Loc {
-    Loc::Reg(Reg { register: RegId::DX, width: 2 })
-}
-
 fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
