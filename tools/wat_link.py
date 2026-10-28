@@ -3,7 +3,6 @@
     wat_link.py m16|m32 OWDIR EXE OBJECT...
 
 OWDIR is the tree the build ran in; WATCOM names an installed Open Watcom (its wlink and its math libraries).
-LLRM_CC names the llrm-cc that compiles floatm.c (llrm-cc sets it to itself).
 m16: DOS .EXE, medium model; m32: DOS/32A LE.
 """
 import os
