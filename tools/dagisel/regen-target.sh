@@ -25,14 +25,16 @@ field() { python3 -I -c 'import sys,tomllib; t=tomllib.load(open(sys.argv[1],"rb
 
 NS=$(field ns); ISD=$(field isd); DIR=$(field llvm_dir); TD=$(field td)
 if [ -n "$DIR" ]; then
-  T=$S/lib/Target/$DIR; INC=(-I"$T"); HDR=(-I"$T" -I"$LLVM_BUILD/lib/Target/$DIR")
+  T=$S/lib/Target/$DIR; INC=(-I"$T"); HDR=(-I"$T" -I"$LLVM_BUILD/lib/Target/$DIR" -I"$WORK")
 else
-  T=$RECDIR; INC=(-I"$T"); HDR=(-I"$T")
+  T=$RECDIR; INC=(-I"$T"); HDR=(-I"$T" -I"$WORK")
 fi
 TBLGEN=("$LLVM_BUILD/bin/llvm-tblgen" "${INC[@]}" -I"$LLVM_BUILD/include" -I"$S/include" -I"$S/lib/Target" -omit-comments)
 
 "${TBLGEN[@]}" -gen-dag-isel "$T/$TD" -o "$WORK/GenDAGISel.inc"
 "${TBLGEN[@]}" -gen-instr-info "$T/$TD" -o "$WORK/GenInstrInfo.inc"
+# An in-crate .td has no build directory: its enums come from these (ids_includes names them).
+"${TBLGEN[@]}" -gen-register-info "$T/$TD" -o "$WORK/GenRegisterInfo.inc"
 python3 -I "$ROOT/tools/dagisel/instrinfo.py" "$WORK/GenInstrInfo.inc" "$WORK/instrinfo.txt" "$WORK/instr_symbols.txt" "${NS%::}"
 
 # Only the tables name matcher symbols; the predicate code after them names types too.
