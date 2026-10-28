@@ -1180,7 +1180,7 @@ const SMALL_STRUCT_BY_VALUE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16
 fn a_one_byte_struct_is_passed_in_a_register_under_the_watcom_convention() {
     let (built, _) = crate::llc::compiled(&flags(&["-mabi=watcom", "-m16"]), SMALL_STRUCT_BY_VALUE, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("mov ax, 5") && listing.contains("mov dx, 6"), "{listing}");
+    assert!(listing.contains("mov al, 5") && listing.contains("mov dx, 6"), "{listing}");
     assert!(!listing.contains("sub sp") && !listing.contains("push 6") && !listing.contains("pushw 6"), "{listing}");
     assert!(listing.contains("movzx ax, al\n    add ax, dx"), "the callee reads AL and DX\n{listing}");
 }
