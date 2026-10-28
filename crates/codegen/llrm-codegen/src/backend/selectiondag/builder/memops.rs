@@ -1272,12 +1272,13 @@ impl Builder<'_> {
             (1, size, value)
         };
         let _ = &mut val;
-        let acc = match block {
-            1 => self.arch.register_named("al"),
-            2 => self.arch.register_named("ax"),
-            8 => self.arch.register_named("rax"),
-            _ => self.arch.register_named("eax"),
+        let name = match block {
+            1 => "al",
+            2 => "ax",
+            _ => "eax",
         };
+        // `RAX` for a quadword block: the dword's name widened (`rax`).
+        let acc = self.arch.register_named(&if block == 8 { format!("r{}", &name[1..]) } else { name.to_owned() });
         let (cx, di, _) = self.string_registers();
         let count = self.dag.get_constant(u128::from(count), pointer);
         let copy = self.dag.get_copy_to_phys_reg(chain, acc, val, None);
