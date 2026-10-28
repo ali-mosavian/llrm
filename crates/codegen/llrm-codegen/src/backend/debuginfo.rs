@@ -827,8 +827,8 @@ pub fn laid_out(
             section,
             offset,
             file: 0,
-            line,
-            column: 0,
+            line: line.line,
+            column: line.column,
         }));
     }
     Ok(info)

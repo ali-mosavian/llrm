@@ -236,7 +236,10 @@ fn with_default_convention(
     };
     // Under the register-size convention `main` is Watcom's, `main_`: both
     // its start-up and the repo's (`LL_MAIN`) call that.
-    let main_is_watcom = !regcall_default && default.cc.as_deref() == Some("regparm3");
+    let main_is_watcom = default.cc.as_deref() == Some("regparm3");
+    // Where the ABI is the register-size one, the library's functions are Open
+    // Watcom's whichever way the front end marks the rest.
+    let library_is_watcom = !regcall_default || main_is_watcom;
     // clang gives the library functions it knows (`strlen`, `atan`) their C
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
@@ -275,10 +278,9 @@ fn with_default_convention(
         let entry = global.name.as_deref() == Some("main");
         // A function the front end marked `regcall` where the default is not
         // is the Watcom register convention (`__watcall` of its headers).
-        let watcom = !regcall_default
-            && ((entry && main_is_watcom)
-                || function.calling_convention == llrm_mir::opcode::REGCALL
-                || library.contains(&llrm_mir::context::GlobalId(at as u32)));
+        let watcom = (entry && main_is_watcom)
+            || (!regcall_default && function.calling_convention == llrm_mir::opcode::REGCALL)
+            || (library_is_watcom && library.contains(&llrm_mir::context::GlobalId(at as u32)));
         if watcom
             || takes(
                 function.calling_convention,
@@ -297,12 +299,12 @@ fn with_default_convention(
             }
             function.calling_convention = if watcom { llrm_mir::opcode::WATCALL } else { number };
         }
-        if !regcall_default {
+        if library_is_watcom {
             let watcom: Vec<_> = function
                 .walk()
                 .filter_map(|(_, inst)| match &function.instruction(inst).opcode {
                     llrm_mir::opcode::Opcode::Call(info) | llrm_mir::opcode::Opcode::Invoke(info)
-                        if info.calling_convention == llrm_mir::opcode::REGCALL
+                        if (!regcall_default && info.calling_convention == llrm_mir::opcode::REGCALL)
                             || (info.calling_convention == 0
                                 && llrm_mir::memory::callee(&module.context, function, inst)
                                     .is_some_and(|one| library.contains(&one))) =>

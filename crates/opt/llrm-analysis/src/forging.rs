@@ -19,6 +19,10 @@
 //! it; a selector computed (`VARSEG`, arithmetic, a `PEEK` result) is not
 //! exempt.
 //!
+//! A selector read from an array descriptor (an `inttoptr` the frontend marks
+//! `!llrm.descriptor`) is exempt too: it is the array's own segment, which an
+//! access in bounds never leaves.
+//!
 //! The runtime's own code is no forger of the program's: its bodies are
 //! `available_externally`, and the runtime module is another module; both are
 //! out of the scan, the same trust boundary as `!llrm.named`.
@@ -33,7 +37,7 @@
 //! a module, and `GlobalsAA` and `GlobalsModRef` take it from there.
 
 use llrm_mir::context::{ConstantExpr, ConstantKind, Context};
-use llrm_mir::module::{Function, Linkage, Module, Operand};
+use llrm_mir::module::{DESCRIPTOR_WORD, Function, Linkage, Module, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::spaces::Spaces;
 use llrm_mir::types::Type;
@@ -61,6 +65,12 @@ fn forges(
     spaces.is_segment(Some(*space)) && !numeric(context, operand)
 }
 
+/// Whether the frontend marks `instruction`, an `inttoptr`, as making an
+/// array's own segment from a descriptor word.
+fn described(instruction: &llrm_mir::module::Instruction) -> bool {
+    instruction.metadata.iter().any(|(kind, _)| kind == DESCRIPTOR_WORD)
+}
+
 /// Whether `function` makes a pointer into the data segment from an integer.
 fn forging_body(
     context: &Context,
@@ -74,6 +84,7 @@ fn forging_body(
                 let instruction = function.instruction(inst);
                 if matches!(instruction.opcode, Opcode::Cast(CastOp::IntToPtr))
                     && forges(context, spaces, instruction.ty, instruction.operands[0])
+                    && !described(instruction)
                 {
                     return true;
                 }
