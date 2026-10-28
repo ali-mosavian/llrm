@@ -112,6 +112,13 @@ struct State {
     lv: crate::liveness::livevariables::LiveVariables,
 }
 
+// The instructions the reschedules looked at to find a source's kill, for a
+// test that the search does not walk the rest of the block.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static KILL_SEARCHED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 // The values whose kills were made again from a block, for a test that an edit
 // remakes only the ones whose naming changed.
 #[cfg(test)]
@@ -307,6 +314,32 @@ impl BodyFacts {
         key: InstrKey,
     ) -> Arc<Insn> {
         Arc::clone(&self.state.borrow().insns[&key])
+    }
+
+    /// The last reader of `value` in `block` after `after`, when no definition
+    /// of it follows (the pin reads it from `LiveVariables::findKill`).
+    pub fn last_reader_after(
+        &self,
+        block: usize,
+        after: InstrKey,
+        value: u32,
+    ) -> Option<InstrKey> {
+        let state = self.state.borrow();
+        let floor = *state.stamp_of.get(&after)?;
+        let (mut reader, mut def): (Option<(u64, InstrKey)>, Option<u64>) = (None, None);
+        for &(key, defines) in state.operands.get(&value)? {
+            if state.block_of.get(&key) != Some(&block) {
+                continue;
+            }
+            let stamp = state.stamp_of[&key];
+            if defines {
+                def = def.max(Some(stamp));
+            } else if stamp > floor && reader.is_none_or(|(best, _)| stamp > best) {
+                reader = Some((stamp, key));
+            }
+        }
+        let (stamp, key) = reader?;
+        def.is_none_or(|def| def <= stamp).then_some(key)
     }
 
     /// `isPlainlyKilled(MI, Reg)`: `MI` is the kill of `value` in its block
@@ -1246,13 +1279,11 @@ impl<'a> Commuter<'a> {
         }
         // The last reader of `reg` in the block, which must be the kill and no
         // later definition.
-        let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
-            return false;
-        };
-        if work[last + 1..].iter().any(|one| one.defines.contains(&reg)) || !self.facts.killed(work[last].id(), reg) {
+        let Some(kill_key) = self.facts.last_reader_after(self.block, mi.id(), reg) else { return false };
+        if !self.facts.killed(kill_key, reg) {
             return false;
         }
-        let kill = Arc::clone(&work[last]);
+        let kill = self.facts.insn(kill_key);
         if crate::coalescer::pair::full_copy(&kill).is_some() || barrier(&kill) {
             return false;
         }
@@ -1281,9 +1312,15 @@ impl<'a> Commuter<'a> {
         }
         // The flags it reads or writes are not to be read or written between.
         let writes_flags = flags_touched(&mi, regs, bits);
-        if end > last {
+        // The kill is within the eleven instructions the walk below allows.
+        let Some(found) = work[end.min(work.len())..].iter().take(11).position(|one| {
+            #[cfg(test)]
+            KILL_SEARCHED.with(|n| n.set(n.get() + 1));
+            one.id() == kill_key
+        }) else {
             return false;
-        }
+        };
+        let last = end + found;
         let mut visited = 0;
         for other in &work[end..=last] {
             if visited > 10 {
@@ -1387,13 +1424,11 @@ impl<'a> Commuter<'a> {
         }
         let reg = source.value;
         let Some(&dist) = self.distance.get(&mi.id()) else { return false };
-        let Some(last) = (at + 1..work.len()).rev().find(|&place| work[place].uses.contains(&reg)) else {
-            return false;
-        };
-        if work[last + 1..].iter().any(|one| one.defines.contains(&reg)) || !self.facts.killed(work[last].id(), reg) {
+        let Some(kill_key) = self.facts.last_reader_after(self.block, mi.id(), reg) else { return false };
+        if !self.facts.killed(kill_key, reg) {
             return false;
         }
-        let kill = Arc::clone(&work[last]);
+        let kill = self.facts.insn(kill_key);
         // A copy is left to the coalescer (the pin moves one only for a folded
         // load, which has no case here).
         if crate::coalescer::pair::full_copy(&kill).is_some() || !movable(&kill) {
@@ -1424,6 +1459,15 @@ impl<'a> Commuter<'a> {
             }
         }
         let touches_flags = flags_touched(&kill, regs, bits);
+        // The kill is within the eleven instructions the walk below allows.
+        let Some(found) = work[at + 1..].iter().take(11).position(|one| {
+            #[cfg(test)]
+            KILL_SEARCHED.with(|n| n.set(n.get() + 1));
+            one.id() == kill_key
+        }) else {
+            return false;
+        };
+        let last = at + 1 + found;
         let mut visited = 0;
         for other in &work[at..last] {
             if visited > 10 {

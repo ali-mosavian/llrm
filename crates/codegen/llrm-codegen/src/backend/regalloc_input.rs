@@ -118,7 +118,14 @@ pub fn before_phase_skipping<'a>(
     skipped: &[&str],
 ) -> (LirBody, Vec<Box<dyn LIRTransform + 'a>>) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/check/mir").join(fixture);
-    let module = llrm_mir::parse::module(&std::fs::read_to_string(path).unwrap()).expect("parses");
+    // The fixtures are m16 and state no datalayout of their own: the target's
+    // is stated once, in its description.
+    let text = std::fs::read_to_string(path).unwrap();
+    let layout = llrm_x86_m16::DATALAYOUT_TOML
+        .lines()
+        .find_map(|line| line.strip_prefix("datalayout = \"")?.strip_suffix('"'))
+        .expect("datalayout.toml states a datalayout");
+    let module = llrm_mir::parse::module(&format!("target datalayout = \"{layout}\"\n{text}")).expect("parses");
     let clobbered = [Hard::Ax, Hard::Bx, Hard::Cx, Hard::Dx, Hard::Es, Hard::Flags];
     let abi = crate::abi::qb::HirAbi {
         runtime: crate::hir::model::RuntimeProfile::Freestanding,
