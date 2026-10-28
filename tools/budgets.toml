@@ -1623,9 +1623,9 @@ why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator
 [[window]]
 axis = "equal"
 name = "lir twoaddr"
-why = "97096c07c2 (the DAG selector is the default on 16- and 32-bit x86) changed the LIR shape and a threshold flips inside the N=1024..2048 window: work moves between instances, not a new superlinear pass. Bisected 10-28: green at 05171a027c, red from that commit."
+why = "DEBT, not a window move: 97096c07c2 (the DAG selector default on 16- and 32-bit x86, bisected 2026-10-28) made it superlinear. equal, Minstr at N=1024/2048/4096: 50.9/142.7/5699.6 (x40 per doubling at 2N) against 38.1/91.6/201.8 under the old selector (x2.2). Plan: fix lir twoaddr under the DAG selector, then delete this row."
 
 [[window]]
 axis = "equal"
 name = "lir coalesce"
-why = "97096c07c2 (the DAG selector is the default on 16- and 32-bit x86) changed the LIR shape and a threshold flips inside the N=1024..2048 window: work moves between instances, not a new superlinear pass. Bisected 10-28: green at 05171a027c, red from that commit."
+why = "DEBT, not a window move: 97096c07c2 (the DAG selector default on 16- and 32-bit x86, bisected 2026-10-28) made it superlinear. equal, Minstr at N=1024/2048/4096: 8.7/10.9/64.9 (x6 at 2N) against 13.2/16.5/23.0 under the old selector. Plan: fix with lir twoaddr, then delete this row."
