@@ -622,6 +622,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "llrm-wasm"
+version = "0.1.0"
+dependencies = [
+ "llrm-target",
+]
+
+[[package]]
 name = "llrm-x86"
 version = "0.1.0"
 dependencies = [
