@@ -681,7 +681,7 @@ pub fn optimized_with<E: From<String>>(
     // slot: GlobalOpt's `SRAGlobal` and its localizing branch.
     for at in 0..count {
         let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
-            crate::globalsra::split(module, &program.layout)
+            crate::globalsra::split(module, &program.layout, program.target.spaces())
         });
         // Every body is told changed before the first runs again: the global
         // analyses see the new variables once, not once per body.

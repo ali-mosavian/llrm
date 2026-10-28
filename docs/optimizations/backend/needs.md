@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/needs.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/needs.rs sha256:b25f7d9cc7df0af1d7d8a184ecb271eab95da151b27cfa5c5f7637f00c2ec4cd -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/needs.rs sha256:3bf97306127da388cc21a23c9db012062463c27cb5621704b090500dbdae3909 -->
 
 # needs
 
@@ -13,12 +13,12 @@ the body has all of them. The shape is that of the MIR passes' `Depends`,
 for the machine passes.
 
 ```text
-  COPY        register-to-register mov       regthrash, machinecp
+  COPY        register-to-register mov       machinecp
   UNHELD      cell read via a reg32          upperzero
   EXACT_CELL  a cell lowering proved exact   exactaddress
 ```
 
-A bit is the sub-pass's own candidate test (`regthrash::_plain_copy`,
+A bit is the sub-pass's own candidate test (
 `upperzero::unheld`, `exactaddress::cell_of`), so "can this pass match" has
 one definition. `Contents` keeps the bits of each block for as long as the
 block is the same list of instructions (`Insns::same_as`), so a pass that
