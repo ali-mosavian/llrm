@@ -133,3 +133,53 @@ fn test_the_expansion_is_priced_by_the_targets_cost_model() {
     let unit = MachineCosts { tti: None, minimum_size: false };
     assert_eq!(unit.get_arithmetic_instr_cost(Opc::UDiv, Ty::Int(32)), 1);
 }
+
+/// A sum over `n` trips widened to i64, read after the loop.
+const WIDE_SUM: &str = "define i64 @f(i32 %n) {
+entry:
+  %any = icmp ne i32 %n, 0
+  br i1 %any, label %pre, label %done
+pre:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %pre ], [ %inc, %loop ]
+  %s = phi i64 [ 0, %pre ], [ %s2, %loop ]
+  %w = zext i32 %i to i64
+  %s2 = add i64 %s, %w
+  %inc = add i32 %i, 1
+  %c = icmp ne i32 %inc, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %out = phi i64 [ %s2, %loop ]
+  br label %done
+done:
+  %r = phi i64 [ 0, %entry ], [ %out, %exit ]
+  ret i64 %r
+}
+";
+
+/// `text` under `datalayout` with its exit values rewritten at `-Os` (`size`).
+fn rewritten_at_size(
+    datalayout: &str,
+    text: &str,
+) -> bool {
+    let mut module = parsed(&format!("{datalayout}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::lcssa::closed(function).expect("closes");
+    let mut session =
+        llrm_analysis::scev::analysis::ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    super::rewritten_in(&mut session, context, &layout, function, &mut declared, &outer, true)
+}
+
+/// The pin's `rewriteLoopExitValues` reads no optsize: a sum widened to i64
+/// is its closed form at -Os on a 32-bit target. Only the 16-bit targets keep
+/// the loop where the formula is more code than it (DEVIATE 15, QCport m16
+/// -Os).
+#[test]
+fn test_the_size_gate_on_a_closed_form_is_a_16_bit_row_only() {
+    const M32: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n\n";
+    assert!(rewritten_at_size(M32, WIDE_SUM), "the pin rewrites it at -Os");
+    assert!(!rewritten_at_size(DOS, WIDE_SUM), "m16 -Os keeps the loop");
+}

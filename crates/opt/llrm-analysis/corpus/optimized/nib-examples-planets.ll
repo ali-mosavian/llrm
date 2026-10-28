@@ -1,274 +1,191 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$f64_3ff0000000000000 = internal constant [8 x i8] c"\00\00\00\00\00\00\F0?"
-@$f64_4000000000000000 = internal constant [8 x i8] c"\00\00\00\00\00\00\00@"
-@$f64_3dd25868f4deae16 = internal constant [8 x i8] c"\16\AE\DE\F4hX\D2="
-@$f64_46391ace3d05aef4 = internal constant [8 x i8] c"\F4\AE\05=\CE\1A9F"
-@$f64_400921fb54442d18 = internal constant [8 x i8] c"\18-DT\FB!\09@"
-@$f64_40f5180000000000 = internal constant [8 x i8] c"\00\00\00\00\00\18\F5@"
-@$str7 = internal constant [11 x i8] c"\08\00\04\00\04\00: g \00"
-@$str8 = internal constant [20 x i8] c"\08\00\0D\00\0D\00 m/s2, orbit \00"
-@$str9 = internal constant [18 x i8] c"\08\00\0B\00\0B\00 m/s, year \00"
-@$str10 = internal constant [12 x i8] c"\08\00\05\00\05\00 days\00"
-@$str11 = internal constant [14 x i8] c"\08\00\07\00\07\00Mercury\00"
-@$f64_44d179b07057cf97 = internal constant [8 x i8] c"\97\CFWp\B0y\D1D"
-@$f64_41429d0a00000000 = internal constant [8 x i8] c"\00\00\00\00\0A\9DBA"
-@$f64_422af768f3000000 = internal constant [8 x i8] c"\00\00\00\F3h\F7*B"
-@$str15 = internal constant [12 x i8] c"\08\00\05\00\05\00Earth\00"
-@$f64_4513c27b13272fb6 = internal constant [8 x i8] c"\B6/'\13{\C2\13E"
-@$f64_41584dae00000000 = internal constant [8 x i8] c"\00\00\00\00\AEMXA"
-@$f64_42416a6d6c000000 = internal constant [8 x i8] c"\00\00\00lmjAB"
-@$str19 = internal constant [14 x i8] c"\08\00\07\00\07\00Jupiter\00"
-@$f64_459887f488aced67 = internal constant [8 x i8] c"g\ED\AC\88\F4\87\98E"
-@$f64_4190ab0760000000 = internal constant [8 x i8] c"\00\00\00`\07\AB\90A"
-@$f64_4266a846e9200000 = internal constant [8 x i8] c"\00\00 \E9F\A8fB"
-@$str23 = internal constant [9 x i8] c"\08\00\02\00\02\00G \00"
-@$str24 = internal constant [13 x i8] c"\08\00\06\00\06\00, sun \00"
-@$str25 = internal constant [24 x i8] c"\08\00\11\00\11\00 kg, one part in \00"
-@$f32_41ac0000 = internal constant [4 x i8] c"\00\00\ACA"
-@$f32_41ae0000 = internal constant [4 x i8] c"\00\00\AEA"
-@$f32_404ccccd = internal constant [4 x i8] c"\CD\CCL@"
-@$f32_3dcccccd = internal constant [4 x i8] c"\CD\CC\CC="
-@$f32_00000000 = internal constant [4 x i8] zeroinitializer
-@$str31 = internal constant [24 x i8] c"\08\00\11\00\11\00thermometer mean \00"
-@$f32_40800000 = internal constant [4 x i8] c"\00\00\80@"
-@$str33 = internal constant [17 x i8] c"\08\00\0A\00\0A\00 C, first \00"
-@$str34 = internal constant [14 x i8] c"\08\00\07\00\07\00, zero \00"
+@$str11 = internal constant [11 x i8] c"\08\00\04\00\04\00: g \00"
+@$str12 = internal constant [20 x i8] c"\08\00\0D\00\0D\00 m/s2, orbit \00"
+@$str13 = internal constant [18 x i8] c"\08\00\0B\00\0B\00 m/s, year \00"
+@$str14 = internal constant [12 x i8] c"\08\00\05\00\05\00 days\00"
+@$str15 = internal constant [14 x i8] c"\08\00\07\00\07\00Mercury\00"
+@$str19 = internal constant [12 x i8] c"\08\00\05\00\05\00Earth\00"
+@$str23 = internal constant [14 x i8] c"\08\00\07\00\07\00Jupiter\00"
+@$str27 = internal constant [9 x i8] c"\08\00\02\00\02\00G \00"
+@$str28 = internal constant [13 x i8] c"\08\00\06\00\06\00, sun \00"
+@$str29 = internal constant [24 x i8] c"\08\00\11\00\11\00 kg, one part in \00"
+@$str40 = internal constant [24 x i8] c"\08\00\11\00\11\00thermometer mean \00"
+@$str41 = internal constant [17 x i8] c"\08\00\0A\00\0A\00 C, first \00"
+@$str42 = internal constant [14 x i8] c"\08\00\07\00\07\00, zero \00"
 
-define internal double @root(double %0) addrspace(1) willreturn {
+define cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
-  %1 = load double, ptr @$f64_3ff0000000000000, !tbaa !2
-  %2 = fcmp ogt double %0, %1
-  br i1 %2, label %b4, label %b3
+  %0 = alloca [78 x i8]
+  store ptr getelementptr inbounds nuw (i8, ptr @$str15, i16 6), ptr %0, !tbaa !2
+  %1 = getelementptr inbounds nuw i8, ptr %0, i16 2
+  store double 3.301000e+23, ptr %1, !tbaa !2
+  %2 = getelementptr inbounds nuw i8, ptr %0, i16 10
+  store double 2.439700e+06, ptr %2, !tbaa !2
+  %3 = getelementptr inbounds nuw i8, ptr %0, i16 18
+  store double 5.791000e+10, ptr %3, !tbaa !2
+  %4 = getelementptr inbounds nuw i8, ptr %0, i16 26
+  store ptr getelementptr inbounds nuw (i8, ptr @$str19, i16 6), ptr %4, !tbaa !2
+  %5 = getelementptr inbounds nuw i8, ptr %0, i16 28
+  store double 5.972000e+24, ptr %5, !tbaa !2
+  %6 = getelementptr inbounds nuw i8, ptr %0, i16 36
+  store double 6.371000e+06, ptr %6, !tbaa !2
+  %7 = getelementptr inbounds nuw i8, ptr %0, i16 44
+  store double 1.496000e+11, ptr %7, !tbaa !2
+  %8 = getelementptr inbounds nuw i8, ptr %0, i16 52
+  store ptr getelementptr inbounds nuw (i8, ptr @$str23, i16 6), ptr %8, align 4, !tbaa !2
+  %9 = getelementptr inbounds nuw i8, ptr %0, i16 54
+  store double 1.898000e+27, ptr %9, !tbaa !2
+  %10 = getelementptr inbounds nuw i8, ptr %0, i16 62
+  store double 6.991100e+07, ptr %10, !tbaa !2
+  %11 = getelementptr inbounds nuw i8, ptr %0, i16 70
+  store double 7.785000e+11, ptr %11, !tbaa !2
+  %12 = fmul double 6.674000e-11, 1.989000e+30
+  br label %13
 
-b3:
-  br label %b4
-
-b4:
-  %3 = phi double [ %0, %b1 ], [ %1, %b3 ]
-  %4 = load double, ptr @$f64_4000000000000000, !tbaa !2
-  br label %b5
-
-b5:
-  %5 = phi double [ %3, %b4 ], [ %10, %b6 ]
-  %6 = phi i16 [ 0, %b4 ], [ %11, %b6 ]
-  %7 = icmp slt i16 %6, 80
-  br i1 %7, label %b6, label %b8
-
-b6:
-  %8 = fdiv double %0, %5
-  %9 = fadd double %5, %8
-  %10 = fdiv double %9, %4
-  %11 = add i16 %6, 1
-  br label %b5
-
-b8:
-  ret double %5
-}
-
-define internal void @report(ptr addrspace(1) %0) addrspace(1) {
-b1:
-  %1 = load double, ptr @$f64_3dd25868f4deae16, !tbaa !2
-  %2 = getelementptr i8, ptr addrspace(1) %0, i16 2
-  %3 = load double, ptr addrspace(1) %2
-  %4 = fmul double %1, %3
-  %5 = getelementptr i8, ptr addrspace(1) %0, i16 10
-  %6 = load double, ptr addrspace(1) %5
-  %7 = fmul double %6, %6
-  %8 = fdiv double %4, %7
-  %9 = load double, ptr @$f64_46391ace3d05aef4, !tbaa !2
-  %10 = fmul double %1, %9
-  %11 = getelementptr i8, ptr addrspace(1) %0, i16 18
-  %12 = load double, ptr addrspace(1) %11
-  %13 = fdiv double %10, %12
-  %14 = load double, ptr @$f64_3ff0000000000000
-  %15 = fcmp ogt double %13, %14
-  br i1 %15, label %17, label %16
-
-16:
-  br label %17
-
-17:
-  %18 = phi double [ %13, %b1 ], [ %14, %16 ]
-  %19 = load double, ptr @$f64_4000000000000000
-  br label %20
-
-20:
-  %21 = phi double [ %18, %17 ], [ %27, %24 ]
-  %22 = phi i16 [ 0, %17 ], [ %28, %24 ]
-  %23 = icmp slt i16 %22, 80
-  br i1 %23, label %24, label %29
-
-24:
-  %25 = fdiv double %13, %21
-  %26 = fadd double %21, %25
-  %27 = fdiv double %26, %19
-  %28 = add i16 %22, 1
-  br label %20
+13:
+  %14 = phi i16 [ 0, %b1 ], [ %71, %63 ]
+  %15 = getelementptr inbounds nuw [26 x i8], ptr %0, i16 %14
+  %16 = addrspacecast ptr %15 to ptr addrspace(5)
+  %17 = getelementptr inbounds nuw i8, ptr addrspace(5) %16, i16 2
+  %18 = load double, ptr addrspace(5) %17
+  %19 = fmul double %18, 6.674000e-11
+  %20 = getelementptr inbounds nuw i8, ptr addrspace(5) %16, i16 10
+  %21 = load double, ptr addrspace(5) %20
+  %22 = fmul double %21, %21
+  %23 = fdiv double %19, %22
+  %24 = fmul double %23, 1.000000e+03
+  %25 = fadd double %24, 5.000000e-01
+  %26 = fcmp ogt double %25, 0xC1E0000000200000
+  %27 = fcmp olt double %25, 0x41E0000000000000
+  %28 = and i1 %26, %27
+  br i1 %28, label %30, label %29
 
 29:
-  %30 = load double, ptr @$f64_4000000000000000, !tbaa !2
-  %31 = load double, ptr @$f64_400921fb54442d18, !tbaa !2
-  %32 = fmul double %30, %31
-  %33 = load double, ptr addrspace(1) %11
-  %34 = fmul double %32, %33
-  %35 = fdiv double %34, %21
-  %36 = load double, ptr @$f64_40f5180000000000, !tbaa !2
-  %37 = fdiv double %35, %36
-  %38 = load ptr, ptr addrspace(1) %0
-  call addrspace(1) void @N$PS(ptr %38)
-  %39 = getelementptr i8, ptr @$str7, i16 6
-  call addrspace(1) void @N$PS(ptr %39)
-  call addrspace(1) void @N$PR8(double %8)
-  %40 = getelementptr i8, ptr @$str8, i16 6
-  call addrspace(1) void @N$PS(ptr %40)
-  call addrspace(1) void @N$PR8(double %21)
-  %41 = getelementptr i8, ptr @$str9, i16 6
-  call addrspace(1) void @N$PS(ptr %41)
-  call addrspace(1) void @N$PR8(double %37)
-  %42 = getelementptr i8, ptr @$str10, i16 6
-  call addrspace(1) void @N$PS(ptr %42)
-  call addrspace(1) void @N$PN()
-  ret void
-}
+  tail call cc 1005 addrspace(1) void @N$ECNV()
+  unreachable
 
-define internal i16 @main() addrspace(1) {
-b1:
-  %0 = alloca [16 x i8]
-  %1 = alloca [78 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 16, i1 false)
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 78, i1 false)
-  %2 = getelementptr i8, ptr @$str11, i16 6
-  %3 = load double, ptr @$f64_44d179b07057cf97, !tbaa !2
-  %4 = load double, ptr @$f64_41429d0a00000000, !tbaa !2
-  %5 = load double, ptr @$f64_422af768f3000000, !tbaa !2
-  %6 = getelementptr inbounds [26 x i8], ptr %1, i16 0
-  store ptr %2, ptr %6, !tbaa !2
-  %7 = getelementptr inbounds i8, ptr %6, i16 2
-  store double %3, ptr %7, !tbaa !2
-  %8 = getelementptr inbounds i8, ptr %6, i16 10
-  store double %4, ptr %8, !tbaa !2
-  %9 = getelementptr inbounds i8, ptr %6, i16 18
-  store double %5, ptr %9, !tbaa !2
-  %10 = getelementptr i8, ptr @$str15, i16 6
-  %11 = load double, ptr @$f64_4513c27b13272fb6, !tbaa !2
-  %12 = load double, ptr @$f64_41584dae00000000, !tbaa !2
-  %13 = load double, ptr @$f64_42416a6d6c000000, !tbaa !2
-  %14 = getelementptr inbounds [26 x i8], ptr %1, i16 1
-  store ptr %10, ptr %14, !tbaa !2
-  %15 = getelementptr inbounds i8, ptr %14, i16 2
-  store double %11, ptr %15, !tbaa !2
-  %16 = getelementptr inbounds i8, ptr %14, i16 10
-  store double %12, ptr %16, !tbaa !2
-  %17 = getelementptr inbounds i8, ptr %14, i16 18
-  store double %13, ptr %17, !tbaa !2
-  %18 = getelementptr i8, ptr @$str19, i16 6
-  %19 = load double, ptr @$f64_459887f488aced67, !tbaa !2
-  %20 = load double, ptr @$f64_4190ab0760000000, !tbaa !2
-  %21 = load double, ptr @$f64_4266a846e9200000, !tbaa !2
-  %22 = getelementptr inbounds [26 x i8], ptr %1, i16 2
-  store ptr %18, ptr %22, !tbaa !2
-  %23 = getelementptr inbounds i8, ptr %22, i16 2
-  store double %19, ptr %23, !tbaa !2
-  %24 = getelementptr inbounds i8, ptr %22, i16 10
-  store double %20, ptr %24, !tbaa !2
-  %25 = getelementptr inbounds i8, ptr %22, i16 18
-  store double %21, ptr %25, !tbaa !2
-  br label %b2
+30:
+  %31 = getelementptr inbounds nuw i8, ptr addrspace(5) %16, i16 18
+  %32 = load double, ptr addrspace(5) %31
+  %33 = fdiv double %12, %32
+  %34 = fcmp ogt double %33, 1.000000e+00
+  %35 = select i1 %34, double %33, double 1.000000e+00
+  br label %36
 
-b2:
-  %26 = phi i16 [ 0, %b1 ], [ %30, %b3 ]
-  %27 = icmp ult i16 %26, 3
-  br i1 %27, label %b3, label %b5
+36:
+  %37 = phi i16 [ %42, %36 ], [ 80, %30 ]
+  %38 = phi double [ %35, %30 ], [ %41, %36 ]
+  %39 = fdiv double %33, %38
+  %40 = fadd double %38, %39
+  %41 = fmul double %40, 5.000000e-01
+  %42 = add nsw i16 %37, -1
+  %exitcond = icmp eq i16 %42, 0
+  br i1 %exitcond, label %43, label %36
 
-b3:
-  %28 = getelementptr inbounds [26 x i8], ptr %1, i16 %26
-  %29 = addrspacecast ptr %28 to ptr addrspace(1)
-  call addrspace(1) void @report(ptr addrspace(1) %29)
-  %30 = add i16 %26, 1
-  br label %b2
+43:
+  %44 = fmul double %41, 1.000000e+03
+  %45 = fadd double %44, 5.000000e-01
+  %46 = fcmp ogt double %45, 0xC1E0000000200000
+  %47 = fcmp olt double %45, 0x41E0000000000000
+  %48 = and i1 %46, %47
+  br i1 %48, label %50, label %49
+
+49:
+  tail call cc 1005 addrspace(1) void @N$ECNV()
+  unreachable
+
+50:
+  %51 = fptosi double %45 to i32
+  %52 = sitofp i32 %51 to double
+  %53 = fdiv double %52, 1.000000e+03
+  %54 = fmul double %32, 0x401921FB54442D18
+  %55 = fdiv double %54, %53
+  %56 = fdiv double %55, 8.640000e+04
+  %57 = fmul double %56, 1.000000e+03
+  %58 = fadd double %57, 5.000000e-01
+  %59 = fcmp ogt double %58, 0xC1E0000000200000
+  %60 = fcmp olt double %58, 0x41E0000000000000
+  %61 = and i1 %59, %60
+  br i1 %61, label %63, label %62
+
+62:
+  tail call cc 1005 addrspace(1) void @N$ECNV()
+  unreachable
+
+63:
+  %64 = fptosi double %25 to i32
+  %65 = sitofp i32 %64 to double
+  %66 = fdiv double %65, 1.000000e+03
+  %67 = fptosi double %58 to i32
+  %68 = sitofp i32 %67 to double
+  %69 = fdiv double %68, 1.000000e+03
+  %70 = load ptr, ptr addrspace(5) %16
+  tail call cc 1005 addrspace(1) void @N$PS(ptr %70)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str11, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR8(double %66)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str12, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR8(double %53)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str13, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR8(double %69)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str14, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PN()
+  %71 = add nuw nsw i16 %14, 1
+  %exitcond2 = icmp eq i16 %71, 3
+  br i1 %exitcond2, label %b5, label %13
 
 b5:
-  %31 = getelementptr i8, ptr @$str23, i16 6
-  call addrspace(1) void @N$PS(ptr %31)
-  %32 = load double, ptr @$f64_3dd25868f4deae16, !tbaa !2
-  call addrspace(1) void @N$PR8(double %32)
-  %33 = getelementptr i8, ptr @$str24, i16 6
-  call addrspace(1) void @N$PS(ptr %33)
-  %34 = load double, ptr @$f64_46391ace3d05aef4, !tbaa !2
-  call addrspace(1) void @N$PR8(double %34)
-  %35 = getelementptr i8, ptr @$str25, i16 6
-  call addrspace(1) void @N$PS(ptr %35)
-  %36 = load double, ptr @$f64_46391ace3d05aef4, !tbaa !2
-  %37 = load double, ptr @$f64_3ff0000000000000, !tbaa !2
-  %38 = fdiv double %37, %36
-  call addrspace(1) void @N$PR8(double %38)
-  call addrspace(1) void @N$PN()
-  %39 = load float, ptr @$f32_41ac0000, !tbaa !2
-  %40 = getelementptr inbounds float, ptr %0, i16 0
-  store float %39, ptr %40, !tbaa !2
-  %41 = load float, ptr @$f32_41ae0000, !tbaa !2
-  %42 = getelementptr inbounds float, ptr %0, i16 1
-  store float %41, ptr %42, !tbaa !2
-  %43 = load float, ptr @$f32_404ccccd, !tbaa !2
-  %44 = fneg float %43
-  %45 = getelementptr inbounds float, ptr %0, i16 2
-  store float %44, ptr %45, !tbaa !2
-  %46 = load float, ptr @$f32_3dcccccd, !tbaa !2
-  %47 = getelementptr inbounds float, ptr %0, i16 3
-  store float %46, ptr %47, !tbaa !2
-  %48 = load float, ptr @$f32_00000000, !tbaa !2
-  br label %b6
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str27, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR8(double 6.674000e-11)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str28, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR8(double 1.989000e+30)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str29, i16 6))
+  %72 = fdiv double 1.000000e+00, 1.989000e+30
+  tail call cc 1005 addrspace(1) void @N$PR8(double %72)
+  tail call cc 1005 addrspace(1) void @N$PN()
+  %73 = fadd float 4.325000e+01, 0xC0099999A0000000
+  %74 = fadd float %73, 0x3FB99999A0000000
+  %75 = fmul float %74, 2.500000e-01
+  %76 = fmul float %75, 1.000000e+02
+  %77 = fadd float %76, 5.000000e-01
+  %78 = fcmp oge float %77, 0xC1E0000000000000
+  %79 = fcmp olt float %77, 0x41E0000000000000
+  %80 = and i1 %78, %79
+  br i1 %80, label %b10, label %b11
 
-b6:
-  %49 = phi float [ %48, %b5 ], [ %54, %b7 ]
-  %50 = phi i16 [ 0, %b5 ], [ %55, %b7 ]
-  %51 = icmp ult i16 %50, 4
-  br i1 %51, label %b7, label %b9
-
-b7:
-  %52 = getelementptr inbounds float, ptr %0, i16 %50
-  %53 = load float, ptr %52, !tbaa !2
-  %54 = fadd float %49, %53
-  %55 = add i16 %50, 1
-  br label %b6
-
-b9:
-  %56 = getelementptr i8, ptr @$str31, i16 6
-  call addrspace(1) void @N$PS(ptr %56)
-  %57 = load float, ptr @$f32_40800000, !tbaa !2
-  %58 = fdiv float %49, %57
-  call addrspace(1) void @N$PR4(float %58)
-  %59 = getelementptr i8, ptr @$str33, i16 6
-  call addrspace(1) void @N$PS(ptr %59)
-  %60 = load float, ptr %40, !tbaa !2
-  call addrspace(1) void @N$PR4(float %60)
-  %61 = getelementptr i8, ptr @$str34, i16 6
-  call addrspace(1) void @N$PS(ptr %61)
-  %62 = load float, ptr @$f32_00000000, !tbaa !2
-  %63 = fmul float %49, %62
-  call addrspace(1) void @N$PR4(float %63)
-  call addrspace(1) void @N$PN()
-  %64 = load ptr, ptr %6, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %64)
-  %65 = load ptr, ptr %14, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %65)
-  %66 = load ptr, ptr %22, !tbaa !2
-  call addrspace(1) void @N$BDRP(ptr %66)
+b10:
+  %81 = fptosi float %77 to i32
+  %82 = sitofp i32 %81 to float
+  %83 = fdiv float %82, 1.000000e+02
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str40, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR4(float %83)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str41, i16 6))
+  tail call cc 1005 addrspace(1) void @N$PR4(float 2.150000e+01)
+  tail call cc 1005 addrspace(1) void @N$PS(ptr getelementptr inbounds nuw (i8, ptr @$str42, i16 6))
+  %84 = fmul float %74, 0.000000e+00
+  tail call cc 1005 addrspace(1) void @N$PR4(float %84)
+  tail call cc 1005 addrspace(1) void @N$PN()
+  tail call cc 1005 addrspace(1) void @N$BDRP(ptr getelementptr inbounds nuw (i8, ptr @$str15, i16 6))
+  tail call cc 1005 addrspace(1) void @N$BDRP(ptr getelementptr inbounds nuw (i8, ptr @$str19, i16 6))
+  tail call cc 1005 addrspace(1) void @N$BDRP(ptr getelementptr inbounds nuw (i8, ptr @$str23, i16 6))
   ret i16 0
+
+b11:
+  tail call cc 1005 addrspace(1) void @N$ECNV()
+  unreachable
 }
 
-declare void @N$PS(ptr) addrspace(1)
+declare cc 1005 void @N$ECNV() addrspace(1) noreturn memory(inaccessiblemem: readwrite)
 
-declare void @N$PR8(double) addrspace(1)
+declare cc 1005 void @N$PS(ptr) addrspace(1)
 
-declare void @N$PN() addrspace(1)
+declare cc 1005 void @N$PR8(double) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PR4(float) addrspace(1)
+declare cc 1005 void @N$PR4(float) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$BDRP(ptr) addrspace(1)
+declare cc 1005 void @N$BDRP(ptr) addrspace(1)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

@@ -563,6 +563,28 @@ pub fn implies_at_offset(
     left: &Scev,
     right: &Scev,
 ) -> bool {
+    offset_implies(guard, predicate, left, right, true)
+}
+
+/// [`implies_at_offset`] for a guard whose sides the caller has read as a
+/// root and a constant through `nsw` sums (`n - 1 >= 0` as `n` and -1): its
+/// constants are the guard's own.
+pub fn implies_at_rooted_offset(
+    guard: &Guard,
+    predicate: IntPredicate,
+    left: &Scev,
+    right: &Scev,
+) -> bool {
+    offset_implies(guard, predicate, left, right, false)
+}
+
+fn offset_implies(
+    guard: &Guard,
+    predicate: IntPredicate,
+    left: &Scev,
+    right: &Scev,
+    pure_only: bool,
+) -> bool {
     // `a < b` or `a <= b` as `(a, b, strict)`.
     let ordered = |predicate: IntPredicate, left: &Scev, right: &Scev| match predicate {
         IntPredicate::Slt => Some((left.clone(), right.clone(), true)),
@@ -572,7 +594,7 @@ pub fn implies_at_offset(
         _ => None,
     };
     let pure = |one: &Scev| one.terms.is_empty() || one.constant == BigInt::from(0);
-    if !pure(&guard.left) || !pure(&guard.right) {
+    if pure_only && (!pure(&guard.left) || !pure(&guard.right)) {
         return false;
     }
     let (Some((given_a, given_b, given_strict)), Some((asked_a, asked_b, asked_strict))) =
