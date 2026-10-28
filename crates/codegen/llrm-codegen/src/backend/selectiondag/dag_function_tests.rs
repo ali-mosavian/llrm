@@ -730,27 +730,35 @@ fn at_os_a_remainder_by_a_constant_keeps_its_idiv() {
 
 /// `x * 24` at `-Os` was `shl 3` then `imul 3` (two 4-byte instructions at m16)
 /// where the pin keeps the one `imul` (`combineMul`: `hasMinSize` returns
-/// first): bench/mandel.nib m16 -Os, +8 B.
+/// first): bench/mandel.nib m16 -Os, +8 B. The pin declines at `minsize`
+/// only, so at m32 -Os the chain stays: histo's `x * 7` was `imul` (13+ clocks
+/// on a 486) against the pin's `lea; sub`, +25.5% clk, x_dct +60% clk.
 #[test]
-fn at_os_a_multiply_by_a_constant_stays_one_imul() {
-    let module = llrm_mir::parse::module(
-        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
-define i32 @f(i32 %a) {
-  %r = mul i32 %a, 24
+fn at_os_a_multiply_by_a_constant_is_one_imul_at_m16_and_a_chain_at_m32() {
+    let names = |pointer: &str, size: bool, factor: u32| {
+        let module = llrm_mir::parse::module(&format!(
+            "target datalayout = \"e-p:{pointer}:{pointer}-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {{
+  %r = mul i32 %a, {factor}
   ret i32 %r
-}
-",
-    )
-    .expect("parses");
-    let names = |size: bool| {
+}}
+"
+        ))
+        .expect("parses");
         let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
         cpu.size = size;
         let done = selected(&module, "f", &llrm_x86_m32::M32, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect::<Vec<_>>()
     };
     let count = |names: &[String], one: &str| names.iter().filter(|n| *n == one).count();
-    assert_eq!((count(&names(false), "imul"), count(&names(false), "shl")), (0, 1), "speed: lea and shift");
-    assert_eq!((count(&names(true), "imul"), count(&names(true), "shl")), (1, 0), "-Os: {:?}", names(true));
+    let speed = names("32", false, 24);
+    assert_eq!((count(&speed, "imul"), count(&speed, "shl")), (0, 1), "speed: lea and shift");
+    let m16 = names("16", true, 24);
+    assert_eq!((count(&m16, "imul"), count(&m16, "shl")), (1, 0), "m16 -Os: {m16:?}");
+    let m32 = names("32", true, 24);
+    assert_eq!((count(&m32, "imul"), count(&m32, "shl")), (0, 1), "m32 -Os: {m32:?}");
+    let seven = names("32", true, 7);
+    assert_eq!(count(&seven, "imul"), 0, "m32 -Os x*7: {seven:?}");
 }
 
 /// `u8 % 6` at `-Os` with the divide kept was `CannotSelect("UDivRem")` (SD302:
@@ -902,6 +910,16 @@ fn a_proved_move_at_m16_is_inline_string_code() {
     );
 }
 
+/// A forward string move of 3840 bytes (a multiple of four) was followed by
+/// `xor cx, cx; rep movsb`, a copy of zero bytes (scroll.c m16 -Os, +3 B).
+#[test]
+fn a_forward_string_move_of_whole_dwords_has_no_byte_tail() {
+    let up = move_3840_at_m16(", !llrm.forward !0");
+    let names: Vec<_> =
+        up.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    assert!(names.iter().any(|n| n == "movsd") && names.iter().all(|n| n != "movsb"), "{names:?}");
+}
+
 /// A byte argument was extended to the dword register (`mov edx, 12`, 6 bytes
 /// at m16) though the callee truncates it; the old selector writes `dl`
 /// (mandel.nib: 4 bytes a call).
@@ -924,4 +942,77 @@ define void @f() {
     let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
     let registers: Vec<RegId> = call.requires.iter().map(|(_, register)| *register).collect();
     assert!(registers.contains(&RegId::DL) && !registers.contains(&RegId::EDX), "{registers:?}");
+}
+
+/// `bitcast float %f to i32` of an argument was `fld; fstp; and` through a
+/// stack temporary (7 instructions); the pin reads the bits with the integer
+/// load (`(conv (load x))` is `(load (conv*)x)`).
+#[test]
+fn a_float_argument_read_as_bits_is_an_integer_load() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(float %x) {
+  %i = bitcast float %x to i32
+  %a = and i32 %i, 2147483647
+  ret i32 %a
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("fld") || n.starts_with("fst")), "{seen:?}");
+}
+
+/// `(a[i] >> 8) & 255` was `mov; shr; movzx` (x_radix, +5.3% clk at -O3); the
+/// pin reads the byte at `a + 1` with one `movzx`.
+#[test]
+fn a_byte_of_a_loaded_word_is_one_byte_load() {
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(ptr %a, i32 %i) {
+  %p = getelementptr i32, ptr %a, i32 %i
+  %v = load i32, ptr %p
+  %s = lshr i32 %v, 8
+  %m = and i32 %s, 255
+  ret i32 %m
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let seen: Vec<&str> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+    assert!(!seen.iter().any(|n| n.starts_with("sh")), "{seen:?}");
+    assert!(seen.iter().any(|n| n.starts_with("movzx")), "{seen:?}");
+}
+
+/// `llvm.fshl` by a variable was expanded in MIR to `shl`, `shr 1`, `not`,
+/// `and` and `shr` before selection (8 instructions at i32); the pin selects
+/// one `shld` for a word or a dword, and for a byte (`LowerFunnelShift`)
+/// widens to a dword, shifts and takes the high byte.
+#[test]
+fn a_word_or_dword_funnel_shift_is_one_shld_and_a_byte_one_selects() {
+    for (bits, shld) in [(32, 1), (16, 1), (8, 0)] {
+        let ir = format!(
+            "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+declare i{bits} @llvm.fshl.i{bits}(i{bits}, i{bits}, i{bits})
+define i{bits} @f(i{bits} %a, i{bits} %b, i{bits} %y) {{
+b0:
+  %r = call i{bits} @llvm.fshl.i{bits}(i{bits} %a, i{bits} %b, i{bits} %y)
+  ret i{bits} %r
+}}
+"
+        );
+        let mut module = llrm_mir::parse::module(&ir).expect("parses");
+        crate::backend::funnel::expanded(
+            &mut module,
+            |_| true,
+            |bits| crate::backend::funnel::kept_for_isel(crate::backend::shadow::Selector::Dag, &format!("i{bits}")),
+        )
+        .expect("expands");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|e| panic!("i{bits}: {}", e.0));
+        let names: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+        assert_eq!(names.iter().filter(|n| &***n == "shld").count(), shld, "i{bits}: {names:?}");
+    }
 }

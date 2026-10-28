@@ -176,7 +176,11 @@ pub fn machine_with<'a>(
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
-        Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
+        Box::new(crate::backend::machinesink::MachineSink {
+            size: target.size,
+            limit: classes.available.len(),
+            classes: Rc::clone(classes),
+        }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer { size: target.size }),
@@ -209,12 +213,6 @@ pub fn machine_with<'a>(
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
         Box::new(phielim::PhiElimination),
-        // Before any value is placed: the pin's pre-RA scheduler, bottom-up by
-        // pressure.
-        Box::new(crate::backend::machinesched::MachineScheduler {
-            classes: Rc::clone(classes),
-            segments: segments.clone(),
-        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
         Box::new(crate::backend::fixupsetcc::FixupSetCc),
@@ -231,12 +229,21 @@ pub fn machine_with<'a>(
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress {
             lea: match target.dword_address_form() {
+                None if target.address_forms.iter().any(|form| form.index_width == 8) => {
+                    crate::twoaddress::ThreeAddress::Wide
+                }
                 None => crate::twoaddress::ThreeAddress::Off,
                 Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
                 Some(_) => crate::twoaddress::ThreeAddress::All,
             },
         }),
         Box::new(coalesce::Coalescer { size: target.size, ..coalesce::Coalescer::new(None, segments, classes) }),
+        // After TwoAddress and the coalescer, before any value is placed: the
+        // pin's pre-RA scheduler, bottom-up by pressure.
+        Box::new(crate::backend::machinesched::MachineScheduler {
+            classes: Rc::clone(classes),
+            segments: segments.clone(),
+        }),
         Box::new(
             allocate::RegAlloc::new(Some(&pinned), frame.clone(), ProfileOrName::Profile(target), segments, classes)?
                 .with_saved(registers.saved.iter().map(|(whole, _)| *whole).collect()),
