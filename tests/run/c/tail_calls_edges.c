@@ -2,10 +2,10 @@
 /* Calls in tail position that must stay calls, or jump with the callee's pops: a callee that pops its stack
    arguments, a call with more stack arguments than the caller has, a structure passed and returned by value, a
    variadic call, a float result and a call through a pointer. Each result is checked against a host compiler's. */
-typedef char *va_list;
-#define va_start(ap, last) ((ap) = (char *)&(last) + ((sizeof(last) + sizeof(int) - 1) & ~(sizeof(int) - 1)))
-#define va_arg(ap, type) (*(type *)(((ap) += sizeof(int)) - sizeof(int)))
-#define va_end(ap) ((void)0)
+typedef __builtin_va_list va_list;
+#define va_start(ap, last) __builtin_va_start(ap, last)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#define va_end(ap) __builtin_va_end(ap)
 
 extern void report(long value);
 
