@@ -128,6 +128,7 @@ pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
+pub mod allocresult;
 
 pub mod arithmetic;
 pub mod arrival;
@@ -139,7 +140,6 @@ pub mod calleefacts;
 pub mod callregs;
 pub mod cfi;
 pub mod classes;
-pub mod coalesce;
 pub mod combiner;
 pub mod comparefold;
 pub mod compares;
@@ -173,6 +173,7 @@ pub mod funnel;
 pub mod globals;
 pub mod inline_asm;
 pub mod isel;
+pub mod liverows;
 pub mod masks;
 pub mod valuefacts;
 
@@ -344,6 +345,7 @@ pub mod timing;
 pub mod twoaddr;
 pub mod upperzero;
 pub mod verify;
+pub mod widths;
 
 #[cfg(test)]
 mod pricing_tests;

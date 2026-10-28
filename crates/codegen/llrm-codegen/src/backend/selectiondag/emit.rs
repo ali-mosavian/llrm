@@ -1147,6 +1147,7 @@ impl Emitter<'_, '_> {
                     value
                 };
                 let held = self.held_operand(source)?;
+                let held = self.made_again_for_fixed_use(held);
                 self.arguments.push((held, self.argument_register(register, held.width)));
                 Ok(())
             }
@@ -1158,6 +1159,7 @@ impl Emitter<'_, '_> {
                     return Err(EmitError::Unsupported("a virtual register returned".to_owned()));
                 };
                 let held = self.held_operand(node.ops[2])?;
+                let held = self.made_again_for_fixed_use(held);
                 self.returns.push((held, register));
                 Ok(())
             }
@@ -1519,7 +1521,17 @@ impl Emitter<'_, '_> {
                 | "CMOV_RFP64"
                 | "CMOV_RFP80"
         ) {
-            return self.lowered_select(n);
+            return self.lowered_select(n, None);
+        }
+        // The x87 conditional moves (`fcmov`) name their condition in the
+        // opcode; with no `fcmov` in the LIR they are the same diamond.
+        if let Some(cc) = name.strip_prefix("CMOV").and_then(|rest| rest.strip_suffix("_Fp80")).and_then(|cc| {
+            ["B", "NB", "E", "NE", "BE", "NBE", "P", "NP"]
+                .iter()
+                .position(|one| *one == cc)
+                .map(|at| [2, 3, 4, 5, 6, 7, 10, 11][at])
+        }) {
+            return self.lowered_select(n, Some(cc));
         }
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
@@ -1650,6 +1662,7 @@ impl Emitter<'_, '_> {
     fn lowered_select(
         &mut self,
         n: u32,
+        fixed: Option<usize>,
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         let held = |loc: Loc| match loc {
@@ -1658,7 +1671,10 @@ impl Emitter<'_, '_> {
         };
         let when_false = held(self.operand(node.ops[0])?)?;
         let when_true = held(self.operand(node.ops[1])?)?;
-        let cc = self.constant(node.ops[2])? as usize;
+        let cc = match fixed {
+            Some(cc) => cc,
+            None => self.constant(node.ops[2])? as usize,
+        };
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
         // `CreateVirtualRegisters`: a result only exported by a `CopyToReg` is
         // made in that register, so the export emits no copy between this
@@ -2792,7 +2808,13 @@ impl Emitter<'_, '_> {
             // `fnstsw ax; sahf` that put its result in EFLAGS, so those pin
             // pseudos (`FNSTSW16r`, the copy of AH, `SAHF`) emit nothing and
             // `SAHF` is the producer of the flags.
-            _ if name.starts_with("UCOM_Fpr") || name.starts_with("COM_Fpr") => {
+            // `UCOM_FpIr*` (`fucomip`) sets EFLAGS itself: the same compare,
+            // with no status word between it and its user.
+            _ if name.starts_with("UCOM_Fpr")
+                || name.starts_with("COM_Fpr")
+                || name.starts_with("UCOM_FpIr")
+                || name.starts_with("COM_FpIr") =>
+            {
                 let (Loc::Held(left), Loc::Held(right)) = (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
@@ -3010,8 +3032,8 @@ impl Emitter<'_, '_> {
                 let Loc::Held(source) = self.operand(source)? else {
                     return Err(EmitError::Unsupported("SUBREG_TO_REG of a non-value".to_owned()));
                 };
-                let held = self.fresh(source.width);
-                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                let held = self.fresh(width);
+                self.push(Operation::Extend, "movzx", vec![Loc::Held(held)], vec![Loc::Held(source)]);
                 self.values.insert(result, held.value);
                 return Ok(Some(()));
             }
@@ -3936,6 +3958,48 @@ impl Emitter<'_, '_> {
         width: u32,
     ) -> Held {
         self.exported_register(result).unwrap_or_else(|| self.fresh(width))
+    }
+
+    /// DEVIATE SD440 (cites C1, C2 of the coalescer): a constant that a call or
+    /// a return needs in a fixed register, once something read it, is made
+    /// again for that use. The pin
+    /// copies it to the physical register (`$rdi = COPY %0`), which cannot join
+    /// where the call clobbers the register, so `reMaterializeDef` turns the
+    /// copy into the constant. The coalescer here has no physical copies (a
+    /// fixed register is a claim on the instruction), so the constant's one
+    /// value would live across the call in a callee-saved register. Exit:
+    /// physical copies in `CoalescerPair` with `canJoinPhys`.
+    fn made_again_for_fixed_use(
+        &mut self,
+        held: Held,
+    ) -> Held {
+        let Some(block) = self.blocks.last() else { return held };
+        // The first use takes the value as it is; a later one gets its own.
+        let read = block.insns.iter().any(|one| one.uses.contains(&held.value))
+            || self.arguments.iter().chain(&self.returns).any(|(other, _)| other.value == held.value);
+        if !read {
+            return held;
+        }
+        let defined = block.insns.iter().rev().find(|one| one.defines.contains(&held.value)).cloned();
+        let Some(what) = defined.as_ref().and_then(|one| one.what.as_ref()) else { return held };
+        if what.op != Operation::Move || what.name.as_deref() != Some("mov") {
+            return held;
+        }
+        let [Loc::Held(into)] = what.dests.as_slice() else { return held };
+        let source = match what.sources.as_slice() {
+            [Loc::Imm(imm)] => Loc::Imm(imm.clone()),
+            [Loc::Held(from)] => {
+                let again = self.made_again_for_fixed_use(*from);
+                if again.value == from.value {
+                    return held;
+                }
+                Loc::Held(again)
+            }
+            _ => return held,
+        };
+        let fresh = self.fresh(into.width);
+        self.push(Operation::Move, "mov", vec![Loc::Held(fresh)], vec![source]);
+        fresh
     }
 
     fn new_value(&mut self) -> u32 {

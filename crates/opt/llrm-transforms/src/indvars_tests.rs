@@ -990,3 +990,51 @@ exit:
     );
     assert!(!text.contains("%s2 = add"), "the loop is gone: {text}");
 }
+
+/// A counted loop with an add only the exit reads, which `indvars` sinks into
+/// the exit, then `loopdeletion`: the trip counts worked out.
+fn counts_over_a_sink_and_deletion() -> usize {
+    let mut module = parsed(
+        "define i32 @f(i32 %b, i32 %c, ptr %d) {
+entry:
+  %m = and i32 %b, 3
+  %g = icmp ult i32 0, %m
+  br i1 %g, label %ph, label %done
+
+ph:
+  br label %body
+
+body:
+  %i = phi i32 [ 0, %ph ], [ %n, %body ]
+  %v = load volatile i32, ptr %d
+  %t = add i32 %v, 7
+  %n = add nuw nsw i32 %i, 1
+  %e = icmp samesign ult i32 %n, %m
+  br i1 %e, label %body, label %exit
+
+exit:
+  %split = phi i32 [ %t, %body ]
+  br label %done
+
+done:
+  %r = phi i32 [ %split, %exit ], [ %c, %entry ]
+  ret i32 %r
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(IndVars { lftr: true, size: false });
+    manager.add(crate::loopdeletion::LoopDeletion);
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// The edits `indvars` makes after its last step (the sink here, LFTR) made it
+/// forget every loop they touched, and `loopdeletion` after it counted all 128
+/// loops of branches1024 again (0.15 G). The pin forgets a loop only after
+/// `optimizeLoopExits` and `predicateLoopExits`.
+#[test]
+fn the_edits_after_the_last_step_leave_the_trip_counts_standing() {
+    assert_eq!(counts_over_a_sink_and_deletion(), 1);
+}
