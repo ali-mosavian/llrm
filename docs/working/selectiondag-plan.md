@@ -269,9 +269,6 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD306 | sdag-c | `expandABS` leaves out the `FREEZE` of its operand (selection deletes it again; same machine code) | `selectiondag/legalize_dag.rs` |
 | SD307 | sdag-c | the m16 action table is the 32-bit one kept to the old selector's coverage, not derived from the pin (the pin has no 16-bit model); `tests/m16_coverage.rs` lists the functions that must stay selectable | `crates/target/llrm-x86/src/dag/actions.rs` |
 | SD308 | sdag-c | the second half of a split access through a far pointer moves the offset word only (no carry into the selector); a huge pointer crossing a segment would wrap | `selectiondag/legalize_types.rs` |
-| SD317 | sdag-b | an x87 `fld1`/`fldz` is loaded once for its readers in a block until the next call or barrier (the pin: one `LD_F1`, `fadd st(1),st`); the old rule loaded it per reader | `selectiondag/emit.rs` |
-| SD318 | sdag-b | a same-type `fpround` read only by a store of its type in the block is not rounded through a stack temp: the pin folds `store (fp_round x)` into a truncating store (`visitSTORE`) | `selectiondag/builder.rs` |
-| SD320 | sdag-b | `visitBITREVERSE` has no `clmul` fold (no carry-less multiply node here) | `selectiondag/bitreverse_combine.rs` |
 | SD321 | sdag-c | `MatchRotate` matches constant shift amounts only: no `extractShiftForRotate`, disguised rotate, variable amounts (`MatchRotatePosNeg`/`MatchFunnelPosNeg`) or truncated rotate | `selectiondag/match_rotate.rs` |
 | SD252 | sdag-b | `visitIMINMAX` has no FP-to-saturate folds, no `reassociateReduction`, no `vscale` fold and no flip to the opposite signedness (no min/max is legal on this target) | `selectiondag/iminmax_combine.rs` |
 | SD234 | sdag-b | an x87 `fld1`/`fldz` is loaded once for its readers in a block until the next call or barrier (the pin: one `LD_F1`, `fadd st(1),st`); the old rule loaded it per reader | `selectiondag/emit.rs` |
