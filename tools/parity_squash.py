@@ -1080,7 +1080,10 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
     if why := (ensure or ensure_bins)():  # the tools resolve the release binaries and refuse stale ones: the 02:32 batch died on "stale binaries" here, before the build stage ran
         return [why]
     stage("tool-tests")
-    done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+    try:
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+    except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
+        return ["the tool tests ran past 600 s"]
     if done.returncode == 0:
         return []
     lines = (done.stdout + done.stderr).strip().splitlines()
