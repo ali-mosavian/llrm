@@ -1863,3 +1863,16 @@ def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
     assert "wccq" not in ps.bins_command(tmp_path)
     (tmp_path / "llrm-c").write_text("")
     assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+
+
+def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
+    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release" / "llrm-c").write_text("")
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
+    monkeypatch.setattr(ps, "git", lambda *args, **kw: "tree")
+    monkeypatch.setattr(ps, "_BUILT", set())
+    ran = []
+    monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
+    ps._build_release()
+    assert ran and "wccq" in ran[0], ran
