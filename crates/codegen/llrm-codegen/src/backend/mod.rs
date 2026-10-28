@@ -151,6 +151,7 @@ pub mod debuginfo;
 pub mod division;
 pub mod effects;
 pub mod ehprepare;
+pub mod overalign;
 pub mod exactaddress;
 pub mod executed;
 pub use llrm_transforms::expansion;
