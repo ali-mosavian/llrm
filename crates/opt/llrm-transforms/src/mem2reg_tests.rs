@@ -355,3 +355,34 @@ b0:
         vec![llrm_mir::interpret::Val::Int { bits: 0xffeb, width: 16 }]
     );
 }
+
+/// A load whose value is stored back and loaded again in one block: the
+/// second load took the first's value, which the first load's own
+/// replacement then left behind (the `zext` that SROA builds from the
+/// loaded byte of 20000801-1 read an erased load, and ADCE panicked on
+/// it). Each load takes the store's value as it is when the load is
+/// replaced; the first load comes first on the alloca's list of uses once a
+/// pass has rebuilt it.
+#[test]
+fn test_a_load_stored_and_loaded_again_leaves_no_erased_value_behind() {
+    let mut module = module(
+        "define i32 @f(i32 %a) {
+b0:
+  %s = alloca i32
+  store i32 %a, ptr %s
+  %x = load i32, ptr %s
+  store i32 %x, ptr %s
+  %y = load i32, ptr %s
+  %z = add i32 %y, 1
+  ret i32 %z
+}
+",
+    );
+    let function = crate::testing::f(&mut module);
+    let first = function.iter_block(function.layout()[0]).nth(2).expect("the first load");
+    let pointer = function.instruction(first).operands[0];
+    function.set_operand(first, 0, pointer);
+    let after = managed(&mut module, Mem2Reg);
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("add i32 %a, 1"), "{after}");
+}

@@ -368,3 +368,15 @@ fn a_value_minus_its_saturating_sub_is_a_umin() {
         "  %m = call i32 @llvm.usub.sat.i32(i32 %x, i32 %y)\n  %0 = call i32 @llvm.umin.i32(i32 %x, i32 %y)\n  ret i32 %0\n",
     );
 }
+
+/// `narrowMathIfNoOverflow` (`TryToNarrowDeduceFlags`, the end of `visitSub`):
+/// `20 - zext (and X, 15)` cannot wrap in 8 bits. Stayed a 32-bit sub before.
+#[test]
+fn a_constant_minus_an_extended_value_that_cannot_wrap_is_subtracted_narrow() {
+    check(
+        "i32",
+        "i8 %x",
+        "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %r = sub i32 20, %a\n  ret i32 %r\n",
+        "  %m = and i8 %x, 15\n  %0 = sub nuw nsw i8 20, %m\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+    );
+}

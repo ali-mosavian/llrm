@@ -304,7 +304,7 @@ fn shl_of_a_zext_with_zeros_to_shift_out_is_a_zext_of_a_shl() {
         "i32",
         "i8 %x",
         "  %m = and i8 %x, 15\n  %z = zext i8 %m to i32\n  %r = shl i32 %z, 4\n  ret i32 %r\n",
-        "  %0 = shl i8 %x, 4\n  %1 = and i8 %0, -16\n  %2 = zext i8 %1 to i32\n  ret i32 %2\n",
+        "  %0 = shl i8 %x, 4\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
     check(
         "i32",
@@ -430,13 +430,13 @@ fn shl_of_a_masked_value_keeps_the_mask_it_cannot_drop() {
         "i32",
         "i32 %x, i32 %n",
         "  %one = shl i32 1, %n\n  %m = add i32 %one, -1\n  %a = and i32 %x, %m\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
-        "  %one = shl nuw i32 1, %n\n  %m = add i32 %one, -1\n  %a = and i32 %x, %m\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
+        "  %one = shl nuw i32 1, %n\n  %m = add i32 %one, 255\n  %a = and i32 %x, %m\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
     );
     check(
         "i32",
         "i32 %x",
         "  %a = and i32 %x, 255\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
-        "  %0 = shl i32 %x, 24\n  %1 = and i32 %0, -16777216\n  ret i32 %1\n",
+        "  %r = shl i32 %x, 24\n  ret i32 %r\n",
     );
     check(
         "i32",
@@ -957,4 +957,44 @@ b0:
 ",
     );
     assert!(out.contains("ret i16 0"), "{out}");
+}
+
+/// `@f` after the visits alone, the intrinsics the fold calls declared.
+fn combined_declaring(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        &mut declared,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `(bswap (zext X)) >> C` with a shift smaller than the extension is `(zext
+/// (bswap X)) << C'`. Stayed a 32-bit `bswap` before.
+#[test]
+fn a_shifted_bswap_of_a_zext_is_a_narrow_bswap() {
+    let after = combined_declaring(
+        "declare i32 @llvm.bswap.i32(i32)
+
+define i32 @f(i16 %x) {
+b0:
+  %z = zext i16 %x to i32
+  %s = call i32 @llvm.bswap.i32(i32 %z)
+  %r = lshr i32 %s, 8
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("call i16 @llvm.bswap.i16(i16 %x)"), "{after}");
+    assert!(after.contains("shl nuw nsw i32 %1, 8"), "{after}");
 }

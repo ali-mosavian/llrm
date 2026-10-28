@@ -596,7 +596,8 @@ pub fn convention_for(
     }
     // A float leaves in st(0), which no register names.
     let described = entry(arch, calling_convention, variadic);
-    let returns = if types.is_void(result) || matches!(types.get(result), Type::Float(_)) {
+    let answer = lone_float(types, result);
+    let returns = if types.is_void(result) || matches!(types.get(answer), Type::Float(_)) {
         Vec::new()
     } else {
         results(arch, described, size_of(module, layout, result)?)
@@ -622,7 +623,7 @@ pub fn convention_for(
         .and_then(|one| one.float_result_register())
         .filter(|_| {
             matches!(
-                types.get(result),
+                types.get(answer),
                 Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
             )
         })
@@ -631,6 +632,18 @@ pub fn convention_for(
             llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
         });
     Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
+}
+
+/// What a result is answered as: a struct of one float is that float
+/// (`ComputeValueVTs` gives it one leaf, which leaves where a lone float does).
+fn lone_float(
+    types: &llrm_mir::types::Types,
+    ty: TypeId,
+) -> TypeId {
+    match (types.get(ty), types.fields(ty)) {
+        (Type::Struct { .. } | Type::Named(_), Some([only])) if matches!(types.get(*only), Type::Float(_)) => *only,
+        _ => ty,
+    }
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -949,7 +962,7 @@ pub(super) fn size_of(
         (TypeClass::Float, Type::Float(FloatKind::X86Fp80)) => Ok(10),
         // An aggregate of scalars answered in registers is as big as it is in
         // memory.
-        (_, Type::Struct { .. }) => {
+        (_, Type::Struct { .. } | Type::Named(_)) => {
             u32::try_from(layout.store_size(&module.context.types, ty)).map_err(|_| Unselected("a struct".into()))
         }
         _ => width_of(module, layout, ty),
@@ -1442,7 +1455,7 @@ fn lined(
 /// from the MIR instruction it stands before; and each instruction that defines
 /// a value a note names is told so. A variable a note names that no frame cell
 /// holds is a variable of the body, found over the code from the notes.
-fn noted(
+pub(crate) fn noted(
     module: &Module,
     function: &Function,
     name: &str,

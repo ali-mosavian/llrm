@@ -1625,3 +1625,16 @@ b0:
     let body = text.split("define").nth(1).unwrap_or_default();
     assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
 }
+
+/// -Oz walked its calls as -Os: the threshold said `optsize` and never
+/// `minsize`, so a call was held to `OptSizeThreshold` (50), not
+/// `OptMinSizeThreshold` (5). `next` of `div_constants_long` was inlined 40
+/// times and the object was 12% larger than the pin's.
+#[test]
+fn test_minsize_is_walked_as_a_minsize_caller() {
+    use crate::inlinecost::CallerSize;
+    use crate::pipeline::Options;
+    assert_eq!(Options::min_size().inline.caller_size(), CallerSize::MinSize);
+    assert_eq!(Options::size().inline.caller_size(), CallerSize::OptSize);
+    assert_eq!(Options::default().inline.caller_size(), CallerSize::Speed);
+}
