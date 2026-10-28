@@ -1,8 +1,8 @@
-"""Link objects against the Open Watcom C library tools/build-ow-clib.sh built, with Open Watcom's wlink.
+"""Link objects against the Open Watcom C library tools/build-ow-clib.sh built, with the wlink of the tree it was built in (an installed Open Watcom if that has none).
 
     wat_link.py m16|m32 OWDIR EXE OBJECT...
 
-OWDIR is the tree the build ran in; WATCOM names an installed Open Watcom (its wlink and its math libraries).
+OWDIR is the tree the build ran in; WATCOM names an installed Open Watcom, used only when OWDIR has no bwlink or no noemu stubs.
 m16: DOS .EXE, medium model; m32: DOS/32A LE.
 """
 import os
@@ -26,19 +26,29 @@ def llrm_cc(env, root):
     return max(built, key=lambda one: one.stat().st_mtime) if built else root / "target/release/llrm-cc"
 
 
+def toolset(ow, environ, home):
+    """(linker, 16-bit library directories, 32-bit library directories): the linker and the no-emulation stubs of the Open Watcom tree the library was
+    built in (`./build.sh boot` makes bwlink, bld/fpuemu the stubs), else an installed Open Watcom (WATCOM, default ~/dos/devtools/dev/c/watcom)."""
+    own = ow / "build/binbuild/bwlink", [ow / "bld/fpuemu/i86/stubi86"], [ow / "bld/fpuemu/386/stub386"]
+    if own[0].exists() and (own[1][0] / "noemu87.lib").exists() and (own[2][0] / "noemu387.lib").exists():
+        return own
+    watcom = Path(environ.get("WATCOM") or home / "dos/devtools/dev/c/watcom")
+    return watcom / "binl64/wlink", [watcom / "lib286", watcom / "lib286/dos"], [watcom / "lib386"]
+
+
 def main():
     if len(sys.argv) < 5:
         sys.exit(__doc__)
     model, ow, exe, objects = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3]).resolve(), [Path(one).resolve() for one in sys.argv[4:]]
-    watcom = Path(os.environ.get("WATCOM", Path.home() / "dos/devtools/dev/c/watcom"))
+    linker, libs16, libs32 = toolset(ow, os.environ, Path.home())
     clib = ow / "bld/clib"
     if model == "m16":
-        lines = ["format dos", f"libpath {clib}/library/msdos.086/mm", f"libpath {ow}/bld/mathlib/library/msdos.287/mm", f"libpath {watcom}/lib286", f"libpath {watcom}/lib286/dos",
+        lines = ["format dos", f"libpath {clib}/library/msdos.086/mm", f"libpath {ow}/bld/mathlib/library/msdos.287/mm", *(f"libpath {one}" for one in libs16),
                  f"file {clib}/startup/library/msdos.086/mm/cstrt086.obj"]
         libraries = [f"{clib}/library/msdos.086/mm/clibm.lib", f"{ow}/bld/mathlib/library/msdos.287/mm/math87m.lib", "noemu87.lib"]
     elif model == "m32":
         stub = ow / "bld/redist/dos32a/stub32a.exe"
-        lines = ["format os2 le", f"option stub={stub}", f"libpath {clib}/library/msdos.386/ms_r", f"libpath {ow}/bld/mathlib/library/msdos.387/ms_r", f"libpath {watcom}/lib386",
+        lines = ["format os2 le", f"option stub={stub}", f"libpath {clib}/library/msdos.386/ms_r", f"libpath {ow}/bld/mathlib/library/msdos.387/ms_r", *(f"libpath {one}" for one in libs32),
                  f"file {clib}/startup/library/msdos.386/ms_r/cstrt386.obj"]
         libraries = [f"{clib}/library/msdos.386/ms_r/clib3r.lib", f"{ow}/bld/mathlib/library/msdos.387/ms_r/math387r.lib", "noemu387.lib"]
     else:
@@ -52,7 +62,7 @@ def main():
     with tempfile.TemporaryDirectory() as work:
         response = Path(work) / "link.lnk"
         response.write_text("\n".join(lines) + "\n")
-        done = subprocess.run([str(watcom / "binl64/wlink"), f"@{response}"], capture_output=True, text=True, env={**os.environ, "WATCOM": str(watcom)})
+        done = subprocess.run([str(linker), f"@{response}"], capture_output=True, text=True, env=os.environ)
     sys.stdout.write(done.stdout)
     sys.stderr.write(done.stderr)
     sys.exit(done.returncode)
