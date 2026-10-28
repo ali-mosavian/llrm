@@ -881,6 +881,25 @@ entry:
     assert!(names.iter().all(|n| !n.starts_with("fist")), "{names:?}");
 }
 
+/// An address with an index and no base (`4 + 4*x`, a select of 4 and 8) at m64
+/// widened `$noreg` like a value: `LEA64_32r`'s base was an `INSERT_SUBREG` of
+/// nothing and the function was refused ("value N is read and not defined on
+/// every path"; gcc.c-torture 20010422-1). The pin's is `leal 4(,%rax,4)`.
+#[test]
+fn an_m64_lea_with_no_base_has_no_base() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+define i32 @f(i32 %x) {
+entry:
+  %c = icmp ult i32 %x, 5
+  %r = select i1 %c, i32 4, i32 8
+  ret i32 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
 /// A `{ i64, i48 }` result (a packed struct returned in `rax:rdx`) stopped at
 /// `Legalize(Unsupported CopyToReg i48 "promote operand")` (gcc.c-torture
 /// 20131127-1): the member was copied to `rdx` at its own width. The pin
