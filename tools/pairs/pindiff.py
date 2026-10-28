@@ -76,7 +76,13 @@ def clang_flags(machine: str) -> tuple[str, list[str]]:
         return re.sub(r"\{env:(\w+)\}", lambda found: os.environ[found.group(1)], word)
 
     binary = os.environ.get(entry.get("clang_env", ""), "") or os.environ.get("LLRM_PIN_CLANG", "") or str(pin.PINNED_BIN / "clang")
-    return binary, [fill(word) for word in entry["clang"]]
+    words = [fill(word) for word in entry["clang"]]
+    # llrm-cc's m32 default is regcall; ours runs with the pin's (sysv), so the IR must not mark every function regcall.
+    for at in range(len(words) - 1):
+        if words[at:at + 2] == ["-Xclang", "-fdefault-calling-conv=regcall"]:
+            del words[at:at + 2]
+            break
+    return binary, words
 
 
 def pin_text_size(obj: Path) -> int:
@@ -307,7 +313,8 @@ def main(argv: list[str]) -> int:
     version = subprocess.run([args.llc, "--version"], capture_output=True, text=True).stdout.strip()
     md5 = hashlib.md5(Path(args.llc).read_bytes()).hexdigest()[:12]
     pin_version = subprocess.run([str(pin.PINNED_BIN / "llc"), "--version"], capture_output=True, text=True).stdout.splitlines()[:2]
-    print(f"# pindiff {args.machine} -{args.level}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
+    scope = " (backend only: --reopt feeds pin-optimised IR, ours' middle-end size gates do not run)" if args.reopt and args.level == "Os" else ""
+    print(f"# pindiff {args.machine} -{args.level}{scope}: ours {version} md5 {md5}; pin {' '.join(pin_version)}; {pin.header(pin.target(args.machine, args.level == 'Os'))}")
     note = layout_note(pin.target(args.machine).datalayout, pin_llc_datalayout(pin.target(args.machine)))
     if note:
         print(note)
