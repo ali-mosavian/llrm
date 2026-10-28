@@ -33,10 +33,12 @@ fn graphs() -> Vec<(String, Vec<cfg::Block>)> {
 }
 
 /// Functions the optimizer leaves irreducible although their source is not.
-/// Both are the pin's own passes, run as it runs them:
+/// Both are the pin's own passes, run as it runs them; the pin does not keep
+/// loops reducible:
 /// - `entries/@main`: the late SimplifyCFG's `sinkCommonCodeFromPredecessors`
 ///   after a loop peel gives the loop header a second entry (`-fno-unroll-loops`
-///   hides it; the pin's `opt` makes the same split block from the same CFG).
+///   hides it). The pin's `opt` makes the same split block from the same CFG:
+///   `tests/fixtures/pin-simplifycfg/sink_split_irreducible.*.ll`.
 /// - `pipeline/@$state3.next`: DFAJumpThreading on a state machine (on in the
 ///   pin; `LLRM_NO_DFAJUMPTHREADING=1` makes it reducible).
 /// A known function that is reducible fails the test, so the entry goes with
@@ -182,4 +184,20 @@ fn the_loops_of_a_shape_are_those_the_graph_walks_find() {
         }
     }
     assert!(found > 1000, "premise: the corpus holds many loops, {found} compared");
+}
+
+/// The claim above, checked on the pin's own output: its SimplifyCFG sink
+/// leaves `f` with a cycle entered at two nodes.
+#[test]
+fn the_pins_simplifycfg_sink_makes_an_irreducible_loop() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../tests/fixtures/pin-simplifycfg/sink_split_irreducible.pin.ll");
+    let module = crate::testing::parse_corpus_entry("pin-sink", &path);
+    let irreducible = module
+        .functions()
+        .filter(|(_, _, function)| {
+            function.entry().is_some() && loops::irreducible(&cfg::graph(function), None) != BTreeSet::new()
+        })
+        .count();
+    assert_eq!(irreducible, 1);
 }
