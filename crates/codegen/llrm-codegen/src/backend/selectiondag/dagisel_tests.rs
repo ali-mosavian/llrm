@@ -504,3 +504,59 @@ fn walking_a_long_chain_for_a_predecessor_is_linear() {
     assert!(!found);
     assert!(started.elapsed().as_secs() < 2, "{:?} to walk 200,000 nodes", started.elapsed());
 }
+
+/// `hasPredecessorHelper` ignored `TopologicalPrune`, which every caller in the
+/// pin asks for: a search for a node later in the numbering than the worklist's
+/// walked everything before it. `IsLegalToFold`'s walk (a cap of 8192) then
+/// gave up on the store-to-xor folds past ~3000 statements of `equal`, where
+/// the pin keeps folding: 1146 more tied pairs and x2.8 per doubling in
+/// twoaddr, coalesce and regalloc.
+#[test]
+fn a_search_for_a_later_node_does_not_walk_the_earlier_ones() {
+    use llrm_dagisel::dag::{Dag, Visited};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let mut chain = vec![base];
+    for i in 0..1000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        let last = *chain.last().unwrap();
+        chain.push(dag.get_node(ISD::Add, EVT::I32, &[last, k]));
+    }
+    dag.set_root(*chain.last().unwrap());
+    let adapter = DagisAdapter::new(&mut dag);
+
+    let mut visited = Visited::new();
+    let found = adapter.has_predecessor_helper(chain[900].node, &mut visited, &mut vec![chain[500].node], 0);
+    assert!(!found, "a later node is no predecessor of an earlier one");
+    assert_eq!(visited.len(), 0, "the earlier node's operands were walked");
+
+    let mut visited = Visited::new();
+    assert!(adapter.has_predecessor_helper(chain[100].node, &mut visited, &mut vec![chain[900].node], 0));
+}
+
+/// A replacement makes the users of its result unprunable
+/// (`EnforceNodeIdInvariant`): they may now read what the numbering puts after
+/// them.
+#[test]
+fn a_user_of_a_replacement_is_walked_through_not_pruned() {
+    use llrm_dagisel::dag::{Dag, SDValue as PinValue, Visited};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let one = dag.get_constant(1, EVT::I32);
+    let early = dag.get_node(ISD::Add, EVT::I32, &[base, one]);
+    let mut late = early;
+    for i in 2..20u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        late = dag.get_node(ISD::Add, EVT::I32, &[late, k]);
+    }
+    dag.set_root(late);
+    let mut adapter = DagisAdapter::new(&mut dag);
+    // `early` now reads `late`: its user `early + 2` is older in the numbering
+    // than `late`.
+    let user =
+        adapter.dag.nodes().iter().position(|n| n.ops.first().map(|o| o.node) == Some(early.node)).unwrap() as u32;
+    adapter.replace_uses(PinValue { node: early.node, res: 0 }, PinValue { node: late.node, res: 0 });
+    let mut visited = Visited::new();
+    adapter.has_predecessor_helper(late.node, &mut visited, &mut vec![user], 0);
+    assert!(visited.len() > 0, "the user of a replacement was pruned");
+}
