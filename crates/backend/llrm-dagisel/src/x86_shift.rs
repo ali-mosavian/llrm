@@ -26,7 +26,8 @@ pub fn try_shift_amount_mod<D: AddrDag>(
     dag: &mut D,
     node: u32,
 ) -> Option<u32> {
-    const SIZE: u64 = 32;
+    // the shift's width in bits: 64 for a quadword, else 32 (the pin's `Size`)
+    let size: u64 = if dag.value_type(SDValue { node, res: 0 }) == mvt::i64 { 64 } else { 32 };
     let orig = dag.operand(node, 1);
     let mut amount = orig;
     if dag.opcode(amount.node) == isd::TRUNCATE {
@@ -39,14 +40,14 @@ pub fn try_shift_amount_mod<D: AddrDag>(
     let (add0, add1) = (dag.operand(amount.node, 0), dag.operand(amount.node, 1));
     let constant = |dag: &D, v: SDValue| (dag.opcode(v.node) == isd::Constant).then(|| dag.constant(v)).flatten();
     let (add0_c, add1_c) = (constant(dag, add0), constant(dag, add1));
-    let urem = |c: i64| (c as u64) % SIZE;
+    let urem = |c: i64| (c as u64) % size;
 
     let new_amount = if add1_c.is_some_and(|c| urem(c) == 0) {
         // `n + 32`, `n - 32`, `n ^ 32`: the same count modulo 32.
         add0
     } else if opcode != isd::ADD
         && dag.has_one_use(amount)
-        && (add0_c.is_some_and(|c| urem(c) == SIZE - 1) || add1_c.is_some_and(|c| urem(c) == SIZE - 1))
+        && (add0_c.is_some_and(|c| urem(c) == size - 1) || add1_c.is_some_and(|c| urem(c) == size - 1))
     {
         // `31 - n` and `n ^ 31` are `~n` modulo 32.
         if opcode == isd::SUB && add0_c.is_none() {
@@ -71,7 +72,7 @@ pub fn try_shift_amount_mod<D: AddrDag>(
     if dag.value_type(new_amount) != mvt::i8 {
         new_amount = dag.get_node(isd::TRUNCATE, mvt::i8, &[new_amount]);
     }
-    let mask = dag.get_constant((SIZE - 1) as i64, mvt::i8);
+    let mask = dag.get_constant((size - 1) as i64, mvt::i8);
     new_amount = dag.get_node(isd::AND, mvt::i8, &[new_amount, mask]);
 
     let value = dag.operand(node, 0);
