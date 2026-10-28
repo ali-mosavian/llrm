@@ -503,7 +503,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> SDValue {
         let vt = self.dag.value_type(node);
         let x = self.dag.operand(node, 0);
-        // `expandABS` falls back from ABS_MIN_POISON to ABS when it is legal or custom.
+        // `expandABS` falls back from ABS_MIN_POISON to ABS when it is legal or
+        // custom.
         if self.dag.opcode(node) == ISD::AbsMinPoison && self.tli.is_operation_legal_or_custom(ISD::Abs, vt) {
             return self.dag.get_node(ISD::Abs, vt, &[x]);
         }

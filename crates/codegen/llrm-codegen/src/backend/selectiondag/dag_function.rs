@@ -461,8 +461,11 @@ impl super::emit::Conventions for CallConventions<'_> {
                 self.general,
             ));
         }
-        // at m16 a routine also destroys what its contract says: runtime.toml names SI and DI for the routines whose assembly does not state them kept
-        // (B$DDIM), and a value held in SI across one was wrong code. At m32 the whole list over-spilled (jpeg_single +4.5%): the convention's is used.
+        // at m16 a routine also destroys what its contract says: runtime.toml
+        // names SI and DI for the routines whose assembly does not state them
+        // kept (B$DDIM), and a value held in SI across one was wrong
+        // code. At m32 the whole list over-spilled (jpeg_single +4.5%): the
+        // convention's is used.
         let real_mode = llrm_lir::registers::Regs(self.arch.registers()).width_of(self.arch.stack_pointer()) == Some(2);
         if let (true, Some(contracts), Some(Callee::Global(id))) = (real_mode, self.contracts, callee) {
             let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
@@ -968,7 +971,11 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2: arch.scalar_sse(), min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering {
+                cmov: tli.can_use_cmov(),
+                sse2: arch.scalar_sse(),
+                min_size: cpu.min_size || bytes_beat_clocks,
+            },
             &selector,
             &mut hooks,
             &Info { source_order: true },

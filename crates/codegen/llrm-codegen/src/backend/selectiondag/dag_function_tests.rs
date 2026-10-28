@@ -1292,8 +1292,10 @@ define cc 1000 i32 @f(i32 %a) {
     assert!(!call.clobbers.contains(&RegId::ESI) && !call.clobbers.contains(&RegId::EDI), "{:?}", call.clobbers);
 }
 
-/// At m16 a value kept in SI across `B$DDIM` was wrong code: runtime.toml names SI and DI clobbered for it and the call here left them
-/// alone (tests/check/qb/split_frame_address.bas hoisted `lea si, [bp-44]` over two of them, #5838 for m32 had dropped the contract's list for all targets).
+/// At m16 a value kept in SI across `B$DDIM` was wrong code: runtime.toml names
+/// SI and DI clobbered for it and the call here left them alone (tests/check/
+/// qb/split_frame_address.bas hoisted `lea si, [bp-44]` over two of them, #5838
+/// for m32 had dropped the contract's list for all targets).
 #[test]
 fn at_m16_a_runtime_call_destroys_what_its_contract_names() {
     use llrm_lir::registers::RegId;
