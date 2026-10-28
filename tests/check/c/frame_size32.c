@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -Os -march=i486 -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -Os -march=i486 -S -o /dev/stdout
 extern void use(double *);
 double big(double x)
 {

@@ -197,6 +197,15 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_enter
     }
 
+    fn frame_slot_scratch(&self) -> Option<(RegId, RegId)> {
+        let (push, pop) = CALLING.native().frame_slot_scratch.as_ref()?;
+        Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
+    fn frame_wrap_split_size(&self) -> bool {
+        CALLING.native().frame_wrap_split_size
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,
