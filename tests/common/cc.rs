@@ -111,9 +111,6 @@ impl LlrmC {
             .env("LLRM_CC_TARGET", if wide { "x86_32-wat" } else { "x86_16-wat" })
             .args(object.then_some("-c"))
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
-            // `llrm-c` only ever wrote an object; `llrm-cc` links a `.o`
-            // without it
-            .arg("-c")
             .envs(self.environment.iter().map(|(key, value)| (key, value)));
         for key in &self.removed {
             command.env_remove(key);
