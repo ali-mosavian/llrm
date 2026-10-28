@@ -26,7 +26,6 @@ SOURCES = {name: path for name, path in ALL_SOURCES.items() if not name.startswi
 # (program, target) where ours differs from BCOM45 for a bug that is open: it is expected to differ, and a pass fails the
 # test so the entry goes.
 KNOWN: dict[tuple[str, str], str] = {
-    ("eof_binary", qbbuild.REAL): "m16 starts and crashes whenever a program prints to the console and opens a file (PRINT 1 + OPEN/CLOSE), selector-independent; ~/scratch/handoff/qbrt-m16-console-and-file-2026-10-28.md",
     ("scores", qbbuild.FLAT): "#1542: a library for BASIC is not supported at a flat target (llrm-nib refuses it by saying so)",
 }
 
