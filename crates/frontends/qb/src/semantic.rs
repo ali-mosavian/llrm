@@ -3890,7 +3890,21 @@ impl Compiler {
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
                     let Some(target) = target else {
-                        return self.unsupported("GET or PUT without a variable");
+                        // The FIELD buffer is the record: B$GET1/B$PUT1 take
+                        // the channel, B$GET2/B$PUT2 add the record number.
+                        let mut operands = vec![file];
+                        if let Some(position) = position {
+                            let (position, position_type) = self.expression(position)?;
+                            operands.push(self.convert(position, position_type, LONG)?);
+                        }
+                        let routine = match (*write, position.is_some()) {
+                            (false, false) => "B$GET1",
+                            (true, false) => "B$PUT1",
+                            (false, true) => "B$GET2",
+                            (true, true) => "B$PUT2",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), operands);
+                        continue;
                     };
                     let (target, target_type) = self.destination(target)?;
                     let address = self.far_address(target, target_type);

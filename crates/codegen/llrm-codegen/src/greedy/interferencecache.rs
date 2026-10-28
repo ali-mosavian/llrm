@@ -78,6 +78,10 @@ struct Entry {
     prev_pos: SlotIndex,
     reg_units: Vec<RegUnitInfo>,
     blocks: Vec<BlockInterference>,
+    /// `PhysInterference::lane_of` when the blocks were read: a regmask that
+    /// clobbers a value only where a wide read follows is another answer for
+    /// another value.
+    lane: Option<u32>,
 }
 
 impl Entry {
@@ -102,7 +106,7 @@ impl Entry {
             }
             i += 1;
         }
-        i == self.reg_units.len()
+        i == self.reg_units.len() && self.lane == env.matrix.fixed().lane_of(phys)
     }
 
     /// `revalidate`
@@ -117,6 +121,7 @@ impl Entry {
         // Invalidate all iterators.
         self.prev_pos = SlotIndex::default();
         let phys = self.phys_reg.expect("an entry in use");
+        self.lane = env.matrix.fixed().lane_of(phys);
         for (i, unit) in env.matrix.tri().regunits(phys).enumerate() {
             self.reg_units[i].virt_tag = env.matrix.union(unit).map_or(0, |liu| liu.get_tag());
         }
@@ -134,6 +139,7 @@ impl Entry {
         // The unions' contents changed, invalidate cache.
         self.tag += 1;
         self.phys_reg = Some(phys);
+        self.lane = env.matrix.fixed().lane_of(phys);
         self.blocks.resize(num_blocks, BlockInterference::default());
         // Reset iterators.
         self.prev_pos = SlotIndex::default();

@@ -448,13 +448,7 @@ const ROWS: &[Disposition] = &[
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
-    row(
-        Module,
-        "constmerge",
-        Why::Missing,
-        "merging identical constants: -Os m16 on 65 QCport modules through the pin (llc obj sizes, constmerge removed): +58 B of 399336 (0.015%), 2 modules (game/mdl_ai +44, ui/sbar +14); a row of low weight",
-        "w-6, 11-09",
-    ),
+    row(Module, "constmerge", Why::Executed, "constmerge.rs, the last module pass (llvm_order, optimizing)", ""),
     row(
         Module,
         "alloc-token",

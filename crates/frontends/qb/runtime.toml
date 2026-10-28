@@ -1776,6 +1776,62 @@ evidence = '''
 rt/field.asm: `cProc B$FIEL,<PUBLIC,FAR>,<SI>` with two ParmW (Wid, psdStringVar), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''
 
+["B$GET1"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$GET1,<PUBLIC,FAR>` with one ParmW (Channel), so it returns with `ret 2`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$PUT1"]
+cleanup = 2
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$PUT1,<PUBLIC,FAR>` with one ParmW (Channel), so it returns with `ret 2`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$GET2"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$GET2,<PUBLIC,FAR>` with a ParmW channel and a ParmD record number, so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
+["B$PUT2"]
+cleanup = 6
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/dvstmt.asm: `cProc B$PUT2,<PUBLIC,FAR>` with a ParmW channel and a ParmD record number, so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
+
 ["B$PCPY"]
 cleanup = 4
 control = "unknown"
