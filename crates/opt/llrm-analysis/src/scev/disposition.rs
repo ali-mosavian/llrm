@@ -31,6 +31,71 @@ pub enum BlockDisposition {
     ProperlyDominatesBlock,
 }
 
+thread_local! {
+    static EXAMINED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many entries the disposition lookups on this thread have looked at: a
+/// test bounds it by the number of lookups.
+pub fn examined() -> usize {
+    EXAMINED.with(std::cell::Cell::get)
+}
+
+/// What is held of one expression, by loop or block: a short list, searched,
+/// until it is long, and then indexed (LLVM's `SmallVector` is searched
+/// whole, an expression every loop of a function asks about cost a lookup in
+/// the loops: 7 M entries looked at for 81 K lookups in a 128-nest function).
+pub(crate) struct Held<K, D> {
+    all: Vec<(K, D)>,
+    index: Option<llrm_mir::hash::HashMap<K, usize>>,
+}
+
+impl<K, D> Default for Held<K, D> {
+    fn default() -> Self {
+        Self { all: Vec::new(), index: None }
+    }
+}
+
+/// Entries searched before the index is built.
+const SEARCHED: usize = 8;
+
+impl<K: Copy + Eq + std::hash::Hash, D: Copy> Held<K, D> {
+    pub(crate) fn get(
+        &self,
+        key: K,
+    ) -> Option<D> {
+        if let Some(index) = &self.index {
+            EXAMINED.with(|one| one.set(one.get() + 1));
+            return index.get(&key).map(|&at| self.all[at].1);
+        }
+        EXAMINED.with(|one| one.set(one.get() + self.all.len().max(1)));
+        self.all.iter().find(|one| one.0 == key).map(|one| one.1)
+    }
+
+    /// Sets what is held for `key`, or adds it.
+    pub(crate) fn set(
+        &mut self,
+        key: K,
+        d: D,
+    ) {
+        let at = match &self.index {
+            Some(index) => index.get(&key).copied(),
+            None => self.all.iter().position(|one| one.0 == key),
+        };
+        match at {
+            Some(at) => self.all[at].1 = d,
+            None => {
+                self.all.push((key, d));
+                if let Some(index) = &mut self.index {
+                    index.insert(key, self.all.len() - 1);
+                } else if self.all.len() > SEARCHED {
+                    self.index = Some(self.all.iter().enumerate().map(|(at, one)| (one.0, at)).collect());
+                }
+            }
+        }
+    }
+}
+
 /// The loop `header` heads.
 pub(super) fn loop_of<'a>(
     cx: &'a Cx,
@@ -40,19 +105,6 @@ pub(super) fn loop_of<'a>(
 }
 
 impl ScalarEvolution {
-    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L14466
-    /// Sets what is held for `key`, or adds it.
-    fn remember<K: PartialEq, D>(
-        all: &mut Vec<(K, D)>,
-        key: K,
-        d: D,
-    ) {
-        match all.iter_mut().find(|one| one.0 == key) {
-            Some(one) => one.1 = d,
-            None => all.push((key, d)),
-        }
-    }
-
     /// `ScalarEvolution::getLoopDisposition`; `None` is the function body.
     pub fn get_loop_disposition(
         &mut self,
@@ -60,13 +112,13 @@ impl ScalarEvolution {
         s: Scev,
         l: Option<BlockId>,
     ) -> LoopDisposition {
-        if let Some(&(_, found)) = self.loop_dispositions.get(&s).and_then(|all| all.iter().find(|one| one.0 == l)) {
+        if let Some(found) = self.loop_dispositions.get(&s).and_then(|all| all.get(l)) {
             return found;
         }
         // The provisional answer a recursive query sees.
-        Self::remember(self.loop_dispositions.entry(s).or_default(), l, LoopDisposition::Variant);
+        self.loop_dispositions.entry(s).or_default().set(l, LoopDisposition::Variant);
         let d = self.compute_loop_disposition(cx, s, l);
-        Self::remember(self.loop_dispositions.entry(s).or_default(), l, d);
+        self.loop_dispositions.entry(s).or_default().set(l, d);
         d
     }
 
@@ -222,13 +274,13 @@ impl ScalarEvolution {
         s: Scev,
         bb: BlockId,
     ) -> BlockDisposition {
-        if let Some(&(_, found)) = self.block_dispositions.get(&s).and_then(|all| all.iter().find(|one| one.0 == bb)) {
+        if let Some(found) = self.block_dispositions.get(&s).and_then(|all| all.get(bb)) {
             return found;
         }
         // The provisional answer a recursive query sees.
-        Self::remember(self.block_dispositions.entry(s).or_default(), bb, BlockDisposition::DoesNotDominateBlock);
+        self.block_dispositions.entry(s).or_default().set(bb, BlockDisposition::DoesNotDominateBlock);
         let d = self.compute_block_disposition(cx, s, bb);
-        Self::remember(self.block_dispositions.entry(s).or_default(), bb, d);
+        self.block_dispositions.entry(s).or_default().set(bb, d);
         d
     }
 
