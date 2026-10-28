@@ -161,9 +161,13 @@ pub fn fold_load_store_into_mem_operand<D: AddrDag>(
     let Some((load, input_chain)) = found else { return false };
 
     let ptr = dag.operand(load, 1);
-    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode })
-        .select_addr_of(Some(load), ptr)
-    else {
+    let Some(a) = (Matcher {
+        dag,
+        pointer_type: hooks.options.pointer_type(),
+        mode: hooks.options.address_mode,
+        size: hooks.options.opt_for_size,
+    })
+    .select_addr_of(Some(load), ptr) else {
         return false;
     };
     let address = [a.base, a.scale, a.index, a.disp, a.segment];

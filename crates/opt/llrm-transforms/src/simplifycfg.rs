@@ -408,10 +408,24 @@ fn iteratively_simplified(
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block)
-                && block_simplified(options, context, spec, declared, function, block, folded, &headers, &form)
-            {
-                local = true;
+            // `SimplifyCFGOpt::run`: a visit that asked to be repeated is.
+            let mut resimplify = true;
+            while resimplify && function.is_placed(block) {
+                resimplify = false;
+                if block_simplified(
+                    options,
+                    context,
+                    spec,
+                    declared,
+                    function,
+                    block,
+                    folded,
+                    &headers,
+                    &form,
+                    &mut resimplify,
+                ) {
+                    local = true;
+                }
             }
         }
         changed |= local;
@@ -468,6 +482,7 @@ fn block_simplified(
     folded: &mut bool,
     headers: &IdSet<BlockId>,
     form: &LoopForm,
+    resimplify: &mut bool,
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
@@ -499,7 +514,12 @@ fn block_simplified(
     // `simplifyOnce`'s switch on the terminator (SimplifyCFG.cpp#L9368): each
     // arm runs only its own kind's steps, in the pin's order.
     let acted = match terminator_kind(function, block) {
-        Terminator::Conditional => cond_branch_simplified(options, context, spec, function, block, folded, headers),
+        // Each fold of `simplifyCondBranch` returns `requestResimplify()`.
+        Terminator::Conditional => {
+            let acted = cond_branch_simplified(options, context, spec, function, block, folded, headers);
+            *resimplify |= acted;
+            acted
+        }
         // `simplifySwitch`: the shared hoist, then the switch steps.
         Terminator::Switch => {
             function.is_placed(block)

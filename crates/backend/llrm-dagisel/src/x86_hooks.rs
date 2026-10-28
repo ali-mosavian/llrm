@@ -268,8 +268,13 @@ impl X86Hooks {
             return None;
         }
         let ptr = dag.operand(n.node, 1);
-        Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode }
-            .select_addr_of(Some(n.node), ptr)
+        Matcher {
+            dag,
+            pointer_type: self.options.pointer_type(),
+            mode: self.options.address_mode,
+            size: self.options.opt_for_size,
+        }
+        .select_addr_of(Some(n.node), ptr)
     }
 
     /// `hasNoCarryFlagUses` ([L3650][carry]).
@@ -422,7 +427,12 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool {
-        let mut matcher = Matcher { dag, pointer_type: self.options.pointer_type(), mode: self.options.address_mode };
+        let mut matcher = Matcher {
+            dag,
+            pointer_type: self.options.pointer_type(),
+            mode: self.options.address_mode,
+            size: self.options.opt_for_size,
+        };
         let operands = match complex_function(self.options.cpu, pattern) {
             "selectAddr" => matcher.select_addr_of(parent, value),
             "selectLEAAddr" => matcher.select_lea_addr(value),
@@ -477,6 +487,12 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             }
             "getI8Imm(Imm ^ 0x0f, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
             "getI8Imm(Imm ^ 0x03, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
+            // `inv_cond_XFORM`: `GetOppositeBranchCondition` flips the low bit
+            // of a condition code (O/NO, B/AE, E/NE, BE/A, S/NS, P/NP, L/GE,
+            // LE/G are adjacent pairs).
+            c if c.starts_with("CurDAG->getTargetConstant(X86::GetOppositeBranchCondition(CC)") => {
+                dag.target_constant(i64::from((masked as u8) ^ 1), mvt::i8)
+            }
             other => panic!("node transform `{other}` is not translated"),
         }
     }

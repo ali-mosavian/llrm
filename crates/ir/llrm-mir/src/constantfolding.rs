@@ -1362,6 +1362,26 @@ pub fn constant_fold_load_from_const_ptr(
     constant_fold_load_from_const_ptr_at(context, Env { globals, layout }, ptr, ty, 0, width)
 }
 
+/// The load half of `simplifyLoadInst`
+/// ([L7714](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/InstructionSimplify.cpp#L7714))
+/// for an address that is an instruction: `object` is its underlying global,
+/// `offset` how far into it when every step is constant. A uniform initializer
+/// gives its value at any offset.
+pub fn constant_fold_load_from_global_object(
+    context: &Context,
+    layout: &DataLayout,
+    globals: &[GlobalValue],
+    object: ConstantId,
+    offset: Option<i64>,
+    ty: TypeId,
+) -> Option<ConstantId> {
+    let (_, initializer) = definitive_constant_initializer(Env { globals, layout }, context, object)?;
+    if let Some(result) = constant_fold_load_from_uniform_value(context, layout, initializer, ty) {
+        return Some(result);
+    }
+    constant_fold_load_from_const(context, layout, initializer, ty, offset? as u64)
+}
+
 /// `ConstantFoldLoadFromUniformValue`
 /// ([L904](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ConstantFolding.cpp#L904)).
 pub fn constant_fold_load_from_uniform_value(
