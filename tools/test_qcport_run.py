@@ -163,3 +163,12 @@ def test_the_attract_verdict_names_each_run_that_misses_a_demo():
     assert qcport_run.attract_verdict({"borland": [], "llrm": []}) == []
     assert qcport_run.attract_verdict({"borland": [], "llrm": bad}) == [f"llrm: {'; '.join(bad)}"]
     assert qcport_run.attract_verdict({"borland": ["never started: demo1.qdc"], "llrm": []}) == ["borland: never started: demo1.qdc"]
+
+
+def test_a_run_that_logs_a_fault_without_end_cannot_fill_the_disk():
+    """A faulting run looped on CPU exception 6 and wrote a 57 GB dosbox.log before it was stopped."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as raw:
+        src, work = fake_qcport(Path(raw), "head -c 8388608 /dev/zero >> dosbox.log\n")
+        qcport_run.run(work, src, stall=30, cap=30, tick=0.1, file_limit=1 << 20)  # the script writes 8 MiB
+        assert (work / "dosbox.log").stat().st_size <= 1 << 20
