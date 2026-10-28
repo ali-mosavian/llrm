@@ -72,7 +72,7 @@ clang = ["-ffp-contract=off",
   "-target", "i386-unknown-unknown-code16", "-march=i486", "-ffreestanding", "-fpack-struct=1", "-fno-pic",
   "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-U__STDC__", "-Wno-builtin-macro-redefined", "-std=gnu89", "-fborland-extensions", "-include", "{root}/toolchain/clang/borland.h",
 ]
-llc = ["-mabi=regparm3"]
+llc = ["-mabi=regparm3", "-mc-library"]
 object = "omf"
 link = ["python3", "-I", "{root}/tools/dosbatch/link_objects.py", "--entry", "main_", "x86-m16", "{output}", "{objects}"]
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]

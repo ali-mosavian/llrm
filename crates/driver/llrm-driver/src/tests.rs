@@ -1414,3 +1414,26 @@ fn a_sum_with_a_call_result_stays_below_the_call() {
         "an add of the call's eax result sits above the call:\n{listing}"
     );
 }
+
+/// Constant stores to one array interleaved with variable stores to another
+/// stayed word and dword stores: `GatherAllAliases` gave up after 6 chain hops
+/// where the pin allows 18 (`TargetLoweringBase`), so the four constants were
+/// not one quadword store (matmul +560 B at m64).
+#[test]
+fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_store() {
+    let mut text = String::from(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+         target triple = \"x86_64-unknown-linux-gnu\"\n\
+         declare void @use(ptr, ptr)\n@g = global i16 0\n\
+         define void @f() {\n  %x = load i16, ptr @g\n  %a = alloca [4 x i16], align 2\n  %b = alloca [4 x i16], align 2\n",
+    );
+    for (i, value) in [2, 1, 0, 1].iter().enumerate() {
+        text += &format!(
+            "  %a{i} = getelementptr inbounds [4 x i16], ptr %a, i64 0, i64 {i}\n  %b{i} = getelementptr inbounds [4 x i16], ptr %b, i64 0, i64 {i}\n  %x{i} = add i16 %x, {i}\n  store i16 %x{i}, ptr %a{i}\n  store i16 {value}, ptr %b{i}\n"
+        );
+    }
+    text += "  call void @use(ptr %a, ptr %b)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
+}
