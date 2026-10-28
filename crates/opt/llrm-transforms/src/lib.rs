@@ -85,6 +85,7 @@ mod availableexternally_tests;
 pub mod bdce;
 pub mod branchtocommon;
 pub mod calleepop;
+pub mod rpoattrs;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod canonexit;
