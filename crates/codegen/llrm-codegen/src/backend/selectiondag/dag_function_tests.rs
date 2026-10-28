@@ -1210,3 +1210,25 @@ b0:
         assert_eq!(names.iter().filter(|n| &***n == "shld").count(), shld, "i{bits}: {names:?}");
     }
 }
+
+/// `-g` under the DAG default produced no line table: the emitter carried no
+/// source line (9 `.debug_line` rows under the old selector, 0 under the DAG).
+/// Each instruction takes the `!dbg` line of the IR instruction its node was
+/// built for.
+#[test]
+fn a_dbg_line_reaches_the_instructions_selected_from_it() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define i32 @f(i32 %a, i32 %b) {
+  %s = sub i32 %a, %b, !dbg !0
+  %t = mul i32 %s, %b, !dbg !1
+  ret i32 %t, !dbg !1
+}
+!0 = !{i32 7}
+!1 = !{i32 8}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let lines: Vec<u32> = done.body.insns().iter().filter_map(|one| one.line).collect();
+    assert!(lines.contains(&7) && lines.contains(&8), "{lines:?}");
+}
