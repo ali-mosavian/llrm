@@ -45,7 +45,7 @@ def runtime16(work: Path) -> dict[str, Path]:
 
     def make(name: str, source: Path, produce) -> None:
         obj = work / f"{name}.obj"
-        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{name}", obj, lambda: produce(obj))
+        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{qbruntime.c_build_key()}|{name}", obj, lambda: produce(obj))
         made[name] = obj
 
     shared = qbruntime.shared_sources()
@@ -100,7 +100,7 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     # a program that needs hand porting to the flat target (DEF SEG is ignored there) has NAME.flat.bas beside it
     source = flat_source(source) if target == FLAT else source
     extra = ["-march=i486", dosbatch.m_flag(FLAT)] if target == FLAT else []
-    done = dosbatch.subprocess.run([str(dosbatch.BIN / "llrm-qb"), *compile_arguments(source, flags, target, obj)], capture_output=True, text=True)
+    done = dosbatch.subprocess.run(dosbatch.with_isel([str(dosbatch.BIN / "llrm-qb"), *compile_arguments(source, flags, target, obj)]), capture_output=True, text=True)
     if done.returncode != 0 or not obj.exists():
         raise dosbatch.BuildError(f"{source.name} {target}: {(done.stderr or done.stdout).strip()[-400:]}")
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")

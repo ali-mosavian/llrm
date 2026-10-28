@@ -1,4 +1,4 @@
-"""The 70 programs the vsgcc comparison compiles, and the flags llrm-c compiles them with."""
+"""The 70 programs the vsgcc comparison compiles, and the flags llrm-c and llrm-cc compile them with."""
 import sys
 from pathlib import Path
 
@@ -8,6 +8,7 @@ sys.path.insert(0, str(REPO / "tools"))
 import benchlist  # noqa: E402
 NOT_PROGRAMS = {"readme.md", "parity", "huge", "textfill", "grep"}  # 16-bit only, no input, or timed only (run.sh)
 LLRM_FLAGS = ["-m32", "-mabi=sysv", "-march=i486"]  # build.sh's
+CC_FLAGS = ["-mabi=sysv"]  # llrm-cc's: the target is a row, named by llrmbin.c_args(32)
 
 
 def sources() -> dict[str, Path]:
