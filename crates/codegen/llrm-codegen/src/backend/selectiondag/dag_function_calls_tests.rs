@@ -185,6 +185,33 @@ fn a_call_destroys_what_its_conventions_says() {
     );
 }
 
+const VARIADIC_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @w(i32, ...)
+define i32 @main() {
+entry:
+  %a = call cc 1002 i32 (i32, ...) @w(i32 7, i32 8)
+  ret i32 %a
+}
+";
+
+/// A variadic call under watcall passes as cdecl does (`variadic =
+/// \"cdecl32\"`) and destroys what cdecl does. The DAG path used watcall's set
+/// (EAX alone), so a value held in ECX across `printf` or a variadic `sum` was
+/// destroyed: tests/llc/varargs.c printed `1604196 36` for `15 36` at
+/// x86_32-wat.
+#[test]
+fn a_variadic_call_destroys_what_the_variadic_convention_says() {
+    use llrm_target::Target;
+    let module = llrm_mir::parse::module(VARIADIC_CALL).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
+    let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
+    assert!(call.clobbers.contains(&named("ecx")) && call.clobbers.contains(&named("edx")), "{:?}", call.clobbers);
+}
+
 const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @bar(ptr)
 define void @f(ptr %z, ptr byval([20 x i8]) %x, ptr %y) {
@@ -949,7 +976,7 @@ entry:
 /// (`mov dx, ax; shl edx, 16; add edx, ecx; push edx`, 11 bytes) and pushed;
 /// its two words are pushed as they are (`push es; push bx`). The pin keeps
 /// int halves merged (`isMultiStoresCheaperThanBitsMerge`); m16 deviates
-/// (SD312). QCport -Os: 131 stack arguments.
+/// (SD240). QCport -Os: 131 stack arguments.
 #[test]
 fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
@@ -1020,7 +1047,7 @@ entry:
 }
 ";
 
-const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @g = global i16 0
 declare void @h(ptr addrspace(2), ptr)
 define void @f(ptr %p) {
@@ -1031,7 +1058,7 @@ entry:
 }
 ";
 
-const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 declare void @g(ptr byval([40 x i8]) %p)
 define void @f(ptr %q) minsize {
 entry:
@@ -1074,7 +1101,7 @@ fn a_pushed_segment_of_a_global_is_an_immediate() {
     assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
 }
 
-const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
 @\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
 @\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
 @$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c\"\\04\\00\", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c\"DONE\" }>
@@ -1134,4 +1161,32 @@ fn a_forty_byte_byval_argument_is_a_string_move() {
         .unwrap_or_else(|e| panic!("{}", e.0));
     let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
     assert!(ops.iter().any(|name| name.starts_with("movs")), "{ops:?}");
+}
+
+const M16_UDIV_TEN: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define cc 1005 i64 @f(i64 %x) addrspace(1) {
+entry:
+  %q = udiv i64 %x, 10
+  ret i64 %q
+}
+";
+
+/// `x / 10` on an `i64` was always the `$div64` routine; the pin
+/// (`expandDIVREMByConstant`) multiplies by the magic number at speed and
+/// keeps the call at `-Os`.
+#[test]
+fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
+    let module = llrm_mir::parse::module(M16_UDIV_TEN).expect("parses");
+    let calls = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .insns()
+            .iter()
+            .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
+            .count()
+    };
+    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+    assert_eq!(calls(true), 1, "-Os: the divide routine");
 }

@@ -259,6 +259,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerconstantintrinsics;
 pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;
@@ -287,6 +288,7 @@ pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;

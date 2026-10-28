@@ -15,6 +15,7 @@ fn eval(
         ISD::Constant => dag.constant(v).unwrap() as u32,
         ISD::And => arg(0) & arg(1),
         ISD::BSwap => arg(0).swap_bytes(),
+        ISD::BitReverse => arg(0).reverse_bits(),
         ISD::Shl => arg(0).checked_shl(arg(1)).unwrap_or(0),
         ISD::Srl => arg(0).checked_shr(arg(1)).unwrap_or(0),
         ISD::Sra => ((arg(0) as i32) >> arg(1).min(31)) as u32,
@@ -104,4 +105,24 @@ fn a_bswap_of_one_byte_is_a_shift_and_of_a_shift_is_the_inverse_shift() {
         dag.get_node(ISD::BSwap, EVT::I32, &[up])
     });
     assert_eq!((dag.opcode(root), dag.opcode(dag.operand(root, 0))), (ISD::Srl, ISD::BSwap));
+}
+
+/// `visitBITREVERSE` did not exist: `bitreverse (bitreverse x)` and the shift
+/// of a reversed value reversed back stayed three nodes (the pin: `x`,
+/// `shl x, y` / `lshr x, y`).
+#[test]
+fn a_bitreverse_of_a_bitreverse_is_the_value_and_of_a_reversed_shift_the_opposite_shift() {
+    let (dag, root) = combined(|dag, x| {
+        let once = dag.get_node(ISD::BitReverse, EVT::I32, &[x]);
+        dag.get_node(ISD::BitReverse, EVT::I32, &[once])
+    });
+    assert_eq!(dag.opcode(root), ISD::Register);
+    for (op, want) in [(ISD::Srl, ISD::Shl), (ISD::Shl, ISD::Srl)] {
+        let (dag, root) = combined(|dag, x| {
+            let once = dag.get_node(ISD::BitReverse, EVT::I32, &[x]);
+            let moved = shift(dag, op, once, 3);
+            dag.get_node(ISD::BitReverse, EVT::I32, &[moved])
+        });
+        assert_eq!((dag.opcode(root), dag.opcode(dag.operand(root, 0))), (want, ISD::Register));
+    }
 }
