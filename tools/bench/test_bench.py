@@ -310,6 +310,18 @@ class OwnFramesTests(unittest.TestCase):
         self.assertNotIn("--runtime-frames", command)
         self.assertNotIn("--own-frames", command)
 
+    def test_the_basic_build_passes_the_selector_the_run_asks_for(self):
+        """`LLRM_ISEL=old` left llrm-qb's command line alone, so an A/B of the selectors on QB compared the default with itself (123 identical rows)."""
+        import os
+        import tempfile
+        from unittest import mock
+
+        variant = next(one for one in bench.variants(bench.BENCH / "fib") if one.language == "bq16")
+        with tempfile.TemporaryDirectory() as where, mock.patch.object(bench.subprocess, "run") as run, mock.patch.dict(os.environ, {"LLRM_ISEL": "old"}):
+            run.return_value = mock.Mock(returncode=1, stderr="", stdout="")
+            bench.build(variant, "O2", Path(where), "V000")
+        self.assertIn("--isel=old", run.call_args[0][0])
+
 
 class StartupTests(unittest.TestCase):
     def test_every_language_has_a_startup_program(self):
@@ -434,6 +446,14 @@ def test_a_flat_programs_count_is_net_of_the_empty_startup_program(tmp_path):
     counts = bench.measure_all(["parity/sum_three"], ["O2"], tmp_path)[("parity/sum_three", "bq32", "O2")]
     assert "error" not in counts, counts
     assert counts["instructions"] < 5000, counts
+
+
+def test_a_real_mode_basic_program_runs_in_the_emulator_with_its_output_checked(tmp_path):
+    """Every bq16 program died in the emulator ("int 0x5", KeyError 426 from an INT 21h write) while test_bench stayed green: the neighbouring test runs bq32 only.
+    measure() checks the output against the program's expected lines, so a count is a program that printed them."""
+    counts = bench.measure_all(["parity/sum_three"], ["O2"], tmp_path)[("parity/sum_three", "bq16", "O2")]
+    assert "error" not in counts, counts
+    assert 0 < counts["instructions"] < 1000, counts
 
 
 def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
