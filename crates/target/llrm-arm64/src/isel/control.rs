@@ -256,7 +256,7 @@ impl Selector<'_> {
         Ok(Test::Flags(self.condition(operand)?))
     }
 
-    fn is_zero_constant(
+    pub(super) fn is_zero_constant(
         &self,
         operand: Operand,
     ) -> bool {

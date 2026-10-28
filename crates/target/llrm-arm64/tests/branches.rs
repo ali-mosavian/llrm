@@ -24,3 +24,16 @@ fn an_or_of_zero_tests_is_two_compare_branches() {
     let either = asm.split("_both:").next().unwrap();
     assert_eq!(either.matches("cbz").count(), 2, "{either}");
 }
+
+/// `br (select i1 a, b, false)` and `(select i1 a, true, b)` are LLVM's logical `and` and `or`
+/// (`m_LogicalAnd`/`m_LogicalOr`), what clang emits for `&&`/`||`; they made a bit (`cset`, `csel`,
+/// `tst`) where clang branches on each comparison: QB `cn_pos` 42 instructions against 33.
+#[test]
+fn a_logical_and_or_or_of_comparisons_is_a_chain_of_branches() {
+    let asm = driver::assembly(include_str!("data/logical_and_or_of_compares.ll"), Platform::Darwin, true)
+        .expect("the functions lower");
+    for set in ["cset", "csel", "csinc", "tst\t"] {
+        assert!(!asm.contains(set), "{set} left in\n{asm}");
+    }
+    assert_eq!(asm.matches("cbz").count() + asm.matches("cbnz").count(), 4, "{asm}");
+}

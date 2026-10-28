@@ -3,7 +3,8 @@
 //! (`SelectionDAGBuilder::FindMergedConditions`, same-operator chains).
 //!
 //! The comparisons and the `or`/`and`s joining them are selected where the
-//! branch is. A mix of `or` and `and` is not a chain: it needs a block per
+//! branch is. `select a, b, false` and `select a, true, b`, LLVM's logical
+//! `and` and `or` (`m_LogicalAnd`, `m_LogicalOr`), join like the instructions. A mix of `or` and `and` is not a chain: it needs a block per
 //! subtree, and stays a value.
 
 use llrm_mir::dense::IdSet;
@@ -72,19 +73,49 @@ impl Selector<'_> {
         self.leaves_of(inst, op == BinaryOp::Or, &mut leaves).then_some(Chain { or: op == BinaryOp::Or, leaves })
     }
 
-    /// `value` as an i1 `or`/`and` with one use, `reader`, in the same block.
+    /// `value` as an i1 `or`/`and`, or a logical one, with one use, `reader`,
+    /// in the same block.
     fn joiner(
         &self,
         value: ValueId,
         reader: InstId,
     ) -> Option<(BinaryOp, InstId)> {
         let inst = super::value_def(self.function, value)?;
-        let instruction = self.function.instruction(inst);
-        let Opcode::Binary(op @ (BinaryOp::Or | BinaryOp::And)) = instruction.opcode else { return None };
+        let (op, _) = self.joined(inst)?;
         (self.use_count(value) == 1
-            && self.types().int_bits(instruction.ty) == Some(1)
+            && self.types().int_bits(self.function.instruction(inst).ty) == Some(1)
             && self.function.parent(inst) == self.function.parent(reader))
         .then_some((op, inst))
+    }
+
+    /// What `inst` joins and how: an `or`/`and`, or a `select` whose false arm
+    /// is `false` (`and` of its condition and true arm) or whose true arm is
+    /// `true` (`or` of its condition and false arm).
+    fn joined(
+        &self,
+        inst: InstId,
+    ) -> Option<(BinaryOp, [Operand; 2])> {
+        let instruction = self.function.instruction(inst);
+        match (&instruction.opcode, instruction.operands.as_slice()) {
+            (Opcode::Binary(op @ (BinaryOp::Or | BinaryOp::And)), &[a, b]) => Some((*op, [a, b])),
+            (Opcode::Select, &[condition, on_true, on_false]) if self.is_zero_constant(on_false) => {
+                Some((BinaryOp::And, [condition, on_true]))
+            }
+            (Opcode::Select, &[condition, on_true, on_false]) if self.is_true_constant(on_true) => {
+                Some((BinaryOp::Or, [condition, on_false]))
+            }
+            _ => None,
+        }
+    }
+
+    fn is_true_constant(
+        &self,
+        operand: Operand,
+    ) -> bool {
+        matches!(
+            operand,
+            Operand::Constant(id) if matches!(self.module.context.get(id).kind, llrm_mir::ConstantKind::Int(1))
+        )
     }
 
     fn leaves_of(
@@ -94,8 +125,9 @@ impl Selector<'_> {
         leaves: &mut Vec<ValueId>,
     ) -> bool {
         let operator = if or { BinaryOp::Or } else { BinaryOp::And };
-        for operand in &self.function.instruction(joiner).operands {
-            let Operand::Value(value) = *operand else { return false };
+        let Some((_, operands)) = self.joined(joiner) else { return false };
+        for operand in operands {
+            let Operand::Value(value) = operand else { return false };
             if let Some((op, inner)) = self.joiner(value, joiner) {
                 if op != operator || !self.leaves_of(inner, or, leaves) {
                     return false;
@@ -124,9 +156,9 @@ impl Selector<'_> {
     ) {
         into.push(value);
         let Some(inst) = super::value_def(self.function, value) else { return };
-        if let Opcode::Binary(_) = self.function.instruction(inst).opcode {
-            for operand in &self.function.instruction(inst).operands {
-                if let Operand::Value(inner) = *operand {
+        if let Some((_, operands)) = self.joined(inst) {
+            for operand in operands {
+                if let Operand::Value(inner) = operand {
                     self.collect(inner, or, into);
                 }
             }
