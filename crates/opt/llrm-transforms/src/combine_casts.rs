@@ -1196,8 +1196,42 @@ pub fn visit_trunc(
         }
     }
 
-    // DEVIATE 4: trunc (select(icmp_ult(A, DestTy_umax+1), A, sext(icmp_sgt(A,
-    // 0)))) --> trunc (smin(smax(0, A), DestTy_umax))
+    // trunc (select(icmp_ult(A, DestTy_umax+1), A, sext(icmp_sgt(A, 0)))) -->
+    // trunc (smin(smax(0, A), DestTy_umax))
+    if src_w.is_power_of_two() && dest_w.is_power_of_two() {
+        let clamp = {
+            let q = query(c, Some(inst));
+            (|| {
+                let (_, _, cond, taken, otherwise) = pattern::select(&q, src)?;
+                let (_, _, ult, a, upper) = pattern::icmp(&q, cond)?;
+                let (_, _, ext) = pattern::cast(&q, otherwise, CastOp::SExt)?;
+                let (_, _, sgt, a2, zero) = pattern::icmp(&q, ext)?;
+                let one_use = shared::has_one_use(c, src)
+                    && shared::has_one_use(c, cond)
+                    && shared::has_one_use(c, otherwise)
+                    && shared::has_one_use(c, ext);
+                (one_use
+                    && ult.pred == IntPredicate::Ult
+                    && sgt.pred == IntPredicate::Sgt
+                    && taken == a
+                    && a2 == a
+                    && pattern::zero(&q, zero))
+                .then_some(())?;
+                let (upper, _) = q.int_constant(upper)?;
+                Some((a, upper))
+            })()
+        };
+        if let Some((a, upper)) = clamp {
+            let truncated_max = mask(dest_w);
+            if upper != 0 && upper - 1 == truncated_max {
+                let zero = c.int(src_ty, 0);
+                let smax = c.create_intrinsic(inst, "smax", src_ty, &[zero, a]);
+                let max = c.int(src_ty, truncated_max);
+                let smin = c.create_intrinsic(inst, "smin", src_ty, &[smax, max]);
+                return c.replace_with_new(inst, Opcode::Cast(CastOp::Trunc), dest_ty, vec![smin], Flags::default());
+            }
+        }
+    }
     // DEVIATE 1: foldVecTruncToExtElt, foldVecExtTruncToExtElt.
     // trunc (ctlz_i32(zext(A), B) --> add(ctlz_i16(A, B), C)
     let narrow_ctlz = {

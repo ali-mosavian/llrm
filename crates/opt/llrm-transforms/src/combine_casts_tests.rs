@@ -551,3 +551,30 @@ b0:
     assert!(out.contains("call i4 @llvm.scmp.i4.i32(i32 %x, i32 %y)"), "{out}");
     assert!(out.contains("call i32 @llvm.scmp.i32.i32(i32 %x, i32 %y)"), "{out}");
 }
+
+/// `trunc (select (icmp ult A, 256), A, sext (icmp sgt A, 0))` is `trunc
+/// (smin (smax (0, A), 255))`. Stayed a compare, a select and a truncate.
+#[test]
+fn a_truncated_saturation_select_is_a_smax_and_a_smin() {
+    let text = "define i8 @f(i32 %a) {
+b0:
+  %lt = icmp ult i32 %a, 256
+  %gt = icmp sgt i32 %a, 0
+  %s = sext i1 %gt to i32
+  %sel = select i1 %lt, i32 %a, i32 %s
+  %r = trunc i32 %sel to i8
+  ret i8 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i32 @llvm.smax.i32(i32 0, i32 %a)"), "{out}");
+    assert!(out.contains("call i32 @llvm.smin.i32(i32 %0, i32 255)"), "{out}");
+}
