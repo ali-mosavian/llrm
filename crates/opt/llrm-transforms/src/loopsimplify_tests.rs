@@ -443,11 +443,15 @@ fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
             .collect();
         for function_name in names {
             let (_, function) = module.function_mut(&function_name).unwrap();
-            // GAP: a loop whose header is a landing pad (ON ERROR and RESUME)
-            // is split by LLVM's `SplitLandingPadPredecessors`,
-            // which has no translation here yet; it is not counted.
+            // DEVIATE: a loop whose header is a landing pad (ON ERROR and
+            // RESUME) is left alone (`ehprepare` takes one pad); it
+            // is not counted.
             let latches = |function: &llrm_mir::module::Function| {
-                loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>()
+                loops::loops(&cfg::graph(function), None)
+                    .iter()
+                    .filter(|one| !crate::edges::starts_with_landing_pad(function, cfg::block(one.header)))
+                    .map(|one| one.latches.len())
+                    .collect::<Vec<_>>()
             };
             let before = latches(function);
             simplified(function);
@@ -472,9 +476,6 @@ fn every_corpus_loop_ends_with_one_latch_at_a_fixed_point() {
         "the corpus has a loop with two latches"
     );
     for (name, _, after, again) in results {
-        // GAP: a loop whose header is a landing pad (every backedge an invoke's
-        // unwind edge) is split by LLVM's
-        // `SplitLandingPadPredecessors`, which has no translation here yet.
         assert!(after.iter().all(|&latches| latches == 1), "{name}: {after:?}");
         assert!(!again, "{name}: a second run changed it");
     }
@@ -648,13 +649,11 @@ lp:
     assert!(!simplified(function), "a second run changes nothing");
 }
 
-/// A loop headed by a landing pad (ON ERROR, RESUME) kept one latch per
-/// invoke: the pass did not split the pad. `opt -passes=loop-simplify` gives
-/// the outside entries `%lp.preheader` and the backedges
-/// `%lp.preheader.split-lp`, each with its own `landingpad`, and `%lp` loses
-/// its pad; `qb-bounds` `@__main` kept 18 latches.
+/// A loop headed by a landing pad (ON ERROR, RESUME) is left alone: the pin
+/// splits the pad in two, and `ehprepare` refuses a second pad ("more than one
+/// landing pad"): `tests/run/qb/bounds.bas` did not compile.
 #[test]
-fn a_landing_pad_header_is_split_into_a_preheader_and_one_latch() {
+fn a_landing_pad_header_is_not_split_in_two() {
     let text = "declare i32 @g()
 declare i32 @__gxx_personality_v0(...)
 define void @f(i1 %c) personality ptr @__gxx_personality_v0 {
@@ -683,13 +682,7 @@ out:
 ";
     let mut module = parsed(text);
     let (_, function) = module.function_mut("f").expect("@f");
-    assert!(simplified(function));
+    assert!(!simplified(function), "a pad is not split");
     let after = printed(&module);
-    assert_eq!(after.matches("landingpad").count(), 2, "one pad for the entries, one for the backedges: {after}");
-    assert!(!after.contains("lp:\n  %x = landingpad"), "the header lost its pad: {after}");
-    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{after}");
-    let (_, function) = module.function_mut("f").expect("@f");
-    let shape = cfg::Shape::of(function);
-    assert_eq!(shape.loops.iter().map(|one| one.latches.len()).collect::<Vec<_>>(), [1]);
-    assert!(!simplified(function), "a second run changes nothing");
+    assert_eq!(after.matches("landingpad").count(), 1, "one pad in the function: {after}");
 }

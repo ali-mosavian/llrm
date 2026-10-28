@@ -203,7 +203,14 @@ fn groupable(
     let Some(entry) = function.entry().map(cfg::id) else { return false };
     let destination = cfg::block(target);
     let reaching: BTreeSet<i64> = function.predecessors(destination).into_iter().map(cfg::id).collect();
-    if sources.is_empty() || !sources.is_subset(&reaching) || target == entry {
+    // DEVIATE: LLVM splits a landing pad in two
+    // (`SplitLandingPadPredecessors`); `ehprepare` takes one pad per
+    // function, so a pad is left as it is.
+    if sources.is_empty()
+        || !sources.is_subset(&reaching)
+        || target == entry
+        || edges::starts_with_landing_pad(function, destination)
+    {
         return false;
     }
     for &parent in sources {
@@ -248,12 +255,6 @@ pub fn grouped(
         return None;
     }
     let destination = cfg::block(target);
-    // A landing pad takes no bridge of its own: LLVM's `SplitBlockPredecessors`
-    // splits it in two.
-    if edges::starts_with_landing_pad(function, destination) {
-        let parents: Vec<BlockId> = sources.iter().map(|&one| cfg::block(one)).collect();
-        return Some(edges::split_block_predecessors(function, destination, &parents));
-    }
     let phis = edges::phis(function, destination);
     let incoming = |function: &Function, phi| {
         function.instruction(phi).operands.chunks(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>()
@@ -488,9 +489,7 @@ fn _simplified(
         if outside.len() != 1 || function.successors(cfg::block(parent)) != [cfg::block(original.header)] {
             plan.push((original.header, outside));
         }
-        // A landing pad header is split with its outside entries: the other
-        // edges go to one block.
-        if original.latches.len() != 1 && !edges::starts_with_landing_pad(function, cfg::block(original.header)) {
+        if original.latches.len() != 1 {
             plan.push((original.header, original.latches.clone()));
         }
         for target in _exits(function, &original) {
@@ -515,8 +514,6 @@ fn _simplified(
             function.predecessors(header).into_iter().partition(|&one| !original.body.contains(&cfg::id(one)));
         let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         for (target, sources) in plan {
-            let split_pad = edges::starts_with_landing_pad(function, cfg::block(target));
-            let before: Vec<i64> = function.predecessors(cfg::block(target)).into_iter().map(cfg::id).collect();
             let Some(bridge) = grouped(function, target, &sources) else {
                 unreachable!("groupable said it could be made");
             };
@@ -529,16 +526,7 @@ fn _simplified(
                     function.move_block_after(bridge, last).expect("placed blocks");
                 }
             }
-            bridges.push((cfg::id(bridge), target, sources.clone()));
-            // Where a landing pad was split, the other edges go to a block of
-            // their own.
-            if split_pad {
-                let others = function.predecessors(cfg::block(target)).into_iter().find(|&one| one != bridge);
-                if let Some(other) = others {
-                    let rest: BTreeSet<i64> = before.iter().copied().filter(|one| !sources.contains(one)).collect();
-                    bridges.push((cfg::id(other), target, rest));
-                }
-            }
+            bridges.push((cfg::id(bridge), target, sources));
         }
         changed = true;
         for loop_ in &mut shape.loops {
