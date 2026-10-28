@@ -287,6 +287,13 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             || flag == "--help"
         {
             passthrough = true;
+        } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
+            && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
+        {
+            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // `stack` checks SP on entry; `bounds` checks nothing in IR, which
+            // carries no subscripts.
+            build.llc.push(flag.to_owned());
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {
@@ -320,6 +327,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 build.clang.push("-funsigned-char".to_owned());
             }
             build.llc.push(flag.to_owned());
+            if flag == "-mabi=watcom" {
+                build.clang.push("-funsigned-char".to_owned());
+            }
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
             build.llc.push(flag.to_owned());

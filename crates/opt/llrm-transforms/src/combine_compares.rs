@@ -21,6 +21,13 @@
 //! the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 //! `dyn_castNegVal` select fold.
 //!
+//! OPEN: two shapes the pin's first InstCombine folds and `visit_icmp` leaves,
+//! the producing fold unidentified (not `foldICmpAndConstConst`,
+//! `foldICmpWithLowBitMaskedVal`, InstSimplify's and-add or
+//! `getDemandedBitsLHSMask`; a known-bits or range fold in the icmp visitor is
+//! the lead). `(a & -4) == C` folds at C = 0 and signmin only
+//! (`a s< -32764` at i16); `((b + M) & M) u< b` is `b != 0` for M = 3, 7.
+//!
 //! DEVIATE 1 (permanent): `samesign` is not a flag of MIR's `icmp`; the folds
 //! that read or set it are left out (the unsigned-to-`samesign` step of
 //! `foldICmpUsingKnownBits`; the signed-to-unsigned step is made, which is what

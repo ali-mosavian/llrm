@@ -1166,6 +1166,66 @@ fn a_forty_byte_byval_argument_is_a_string_move() {
     assert!(ops.iter().any(|name| name.starts_with("movs")), "{ops:?}");
 }
 
+/// A direct call of a private function that took part in `CalleeFacts` was
+/// taken to destroy the whole convention, not what the callee wrote: `main`
+/// kept a value in CX across `lsum_`, which wrote CX and saved nothing, and
+/// `varargs` printed 4324 for 15 under DOSBox at m16.
+#[test]
+fn a_call_of_a_private_function_destroys_what_it_wrote() {
+    use llrm_lir::registers::RegId;
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define internal i16 @leaf(i16 %a) {
+entry:
+  ret i16 %a
+}
+define i16 @f(i16 %x) {
+entry:
+  %r = call i16 @leaf(i16 %x)
+  ret i16 %r
+}
+";
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
+    let frame = llrm_target::FrameRegisters {
+        pointer: RegId::BP,
+        stack: RegId::SP,
+        saved: vec![],
+        slot: 2,
+        align: 2,
+        optional: false,
+        enter: false,
+        free: false,
+        wrap_split_size: false,
+        slot_scratch: None,
+    };
+    let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    facts.record("leaf", &leaf.body, &frame);
+    let written = facts.written("leaf").expect("leaf takes part");
+    assert!(!written.whole.contains(&RegId::ECX), "the leaf writes no CX: {:?}", written.whole);
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: Some(&facts),
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let call = done.body.insns().iter().find(|i| i.call.is_some()).cloned().expect("a call");
+    let lost: Vec<RegId> = call.clobbers.iter().map(|r| crate::model::ir::root(*r)).collect();
+    assert!(!lost.contains(&RegId::ECX), "a call of leaf destroys {lost:?}, leaf wrote {:?}", written.whole);
+}
+
 const M16_UDIV_TEN: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1005 i64 @f(i64 %x) addrspace(1) {
 entry:

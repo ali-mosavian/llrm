@@ -60,7 +60,15 @@ mkdir -p $d/real; cat > $d/real/gh <<'S'
 echo "5001 UNKNOWN a h1"; echo "5002 UNKNOWN b h2"
 S
 chmod +x $d/real/gh
+# Regression: each of the pre-flight's 160 fetches ran `git maintenance run --auto` (reflog expire in state D): build-queue took 10 min at 23:47 and the pass started 25 min late.
+realgit=$(command -v git); cat > $d/real/git <<S
+#!/bin/sh
+echo "\$*" >> $d/gitlog
+exec $realgit "\$@"
+S
+chmod +x $d/real/git
 realq=$(PREFLIGHT_REPO=$d/o PATH=$d/real:$PATH PRIORITY=/dev/null WAITS=/dev/null "$here/build-queue.sh" 2>$d/err5 | tr '\n' ' ')
+grep " fetch " $d/gitlog | grep -qv "maintenance.auto=false" && { echo "FAIL: a pre-flight fetch ran auto maintenance: $(grep " fetch " $d/gitlog | grep -v maintenance.auto=false | head -2)"; exit 1; }
 echo "$realq" | grep -qw 5001 && { echo "FAIL: a PR that conflicts on real git was queued: $(cat $d/err5)"; exit 1; }
 echo "$realq" | grep -qw 5002 || { echo "FAIL: a PR that merges cleanly on real git was dropped: $(cat $d/err5)"; exit 1; }
 [ "$out" = "$want" ] && echo PASS || { echo "FAIL"; echo " got: $out"; echo "want: $want"; exit 1; }

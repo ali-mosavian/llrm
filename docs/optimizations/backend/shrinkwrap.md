@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:d24d8421986cf467d0a80e5381905cc44f0e1f89721c2cb706177cbeb4e3bc3b -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:3014d7772f33bc2aa20bfd16ad320a3eabafc0e6ce9eeaae0d0ed2f4c64ea053 -->
 
 # shrinkwrap
 
@@ -101,6 +101,14 @@ paths that need nothing skip it; masm makes no new block. The epilogue goes
 at the end of each block that was to get the split block: before its jump to
 the restore, or where it falls into it. A block that reaches the restore any
 other way refuses the placement (`saverestore`'s DEVIATE 2).
+
+DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
+epilogue on an edge, or that does not end in a return, is refused; the
+registers stay saved at the entry. The pin wraps those and duplicates the
+`ret` into each early exit, which costs a byte per exit, and the branch that
+skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
+smaller). Exit: the placement is made as the pin does once jumps are sized
+after the epilogue is placed.
 
 ## See also
 LLVM's

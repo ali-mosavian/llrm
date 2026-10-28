@@ -158,6 +158,7 @@ use llrm_mir::footprint::Footprint;
 use llrm_mir::module::{BlockId, Function, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+use llrm_support::hash::HashMap;
 
 use crate::edges;
 
@@ -374,16 +375,15 @@ fn visit_order(
 ) -> Vec<i64> {
     let Some(entry) = function.entry() else { return Vec::new() };
     let program: Vec<i64> = loops::reverse_postorder(&cfg::graph(function), cfg::id(entry));
-    let places: std::collections::HashMap<i64, usize> =
-        program.iter().enumerate().map(|(at, &block)| (block, at)).collect();
+    let places: HashMap<i64, usize> = program.iter().enumerate().map(|(at, &block)| (block, at)).collect();
     let place = |header: i64| places.get(&header).copied().unwrap_or(usize::MAX);
     // A loop's parent is the smallest other loop holding its header: the
     // loops from the largest down each claim their blocks, so the owner of a
     // header when its loop comes up is its parent.
     let mut by_size: Vec<&loops::Loop> = loops.iter().collect();
     by_size.sort_by_key(|loop_| std::cmp::Reverse(loop_.body.len()));
-    let mut owner: std::collections::HashMap<i64, i64> = Default::default();
-    let mut parents: std::collections::HashMap<i64, Option<i64>> = Default::default();
+    let mut owner: HashMap<i64, i64> = Default::default();
+    let mut parents: HashMap<i64, Option<i64>> = Default::default();
     for loop_ in by_size {
         parents.insert(loop_.header, owner.get(&loop_.header).copied());
         for &block in &loop_.body {
