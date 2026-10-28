@@ -205,7 +205,8 @@ pub fn physical(
                 Some(effect) => {
                     // A register with some lane defined is read whole: its
                     // other lanes are the consumer's to ignore (a short
-                    // argument is read as the dword that holds it).
+                    // argument is read as the register that holds it: at m64 a
+                    // word argument is read as the quadword).
                     let touched: Lanes = effect
                         .reads
                         .iter()
