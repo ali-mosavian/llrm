@@ -1784,7 +1784,7 @@ pub const PER_LEVEL: i64 = 10;
 
 /// `float(PER_LEVEL ** depth)`.
 pub fn level(depth: u32) -> f64 {
-    PER_LEVEL.pow(depth) as f64
+    (PER_LEVEL as f64).powi(depth as i32)
 }
 
 /// Added to the size before dividing. LLVM's `25 * InstrDist`.
@@ -1868,5 +1868,14 @@ mod tests {
             }
         }
         assert!(found.is_empty(), "slot arithmetic outside the numbering: {found:?}");
+    }
+
+    /// A block 40 loops deep: `10i64.pow(40)` panicked in a debug build and
+    /// wrapped in a release one, so spill placement weighed it as a random
+    /// number.
+    #[test]
+    fn test_a_level_deeper_than_an_i64_holds_is_still_larger() {
+        assert_eq!(super::level(3), 1000.0);
+        assert!(super::level(40) > super::level(18));
     }
 }

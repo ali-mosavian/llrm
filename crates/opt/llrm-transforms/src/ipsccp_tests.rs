@@ -487,3 +487,50 @@ fn test_another_caller_leaves_the_parameter_unbounded() {
     assert!(header(&text, "place").contains("@place(i16 %row,"), "{text}");
     assert!(body(&text, "place").contains("icmp ult i16 %row, 12"), "{text}");
 }
+
+/// A pointer parameter replaced by the address of a global: what the body
+/// wrote through it as `argmem` it now writes to a global, so `memory(argmem:
+/// write)` no longer says where (`ReplacedPointerArg`).
+#[test]
+fn a_pointer_parameter_made_a_constant_address_unsplits_the_memory_attribute() {
+    let text = ipsccp(
+        "@g = global i16 0
+
+define internal void @set(ptr %p) memory(argmem: write) {
+b:
+  store i16 1, ptr %p
+  ret void
+}
+
+define void @top() {
+b:
+  call void @set(ptr @g)
+  ret void
+}
+",
+    );
+    assert!(!header(&text, "set").contains("argmem: write"), "{text}");
+}
+
+/// An integer parameter made a constant moves no access between argument
+/// memory and the rest: unsplitting the attribute anyway changed it, the next
+/// stamp narrowed it back and re-ran the body's pipeline (three more runs and
+/// 3.4% more instructions on QCport's `console` at -Os).
+#[test]
+fn an_integer_parameter_made_a_constant_leaves_the_memory_attribute_alone() {
+    let text = ipsccp(
+        "define internal void @set(ptr %p, i16 %n) memory(argmem: write) {
+b:
+  store i16 %n, ptr %p
+  ret void
+}
+
+define void @top(ptr %q) {
+b:
+  call void @set(ptr %q, i16 7)
+  ret void
+}
+",
+    );
+    assert!(header(&text, "set").contains("memory(argmem: write)"), "{text}");
+}
