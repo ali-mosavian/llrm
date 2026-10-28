@@ -277,10 +277,7 @@ fn is_loop_dead(
 ) -> bool {
     let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
     let dead = is_loop_dead_with(run, analyzed, lp, exiting_blocks, exit_block, changed, preheader, &mut se);
-    // The expressions stand while this left the function as it was.
-    if !*changed {
-        run.scev = se;
-    }
+    run.scev = se;
     dead
 }
 
@@ -829,9 +826,7 @@ fn break_backedge_if_not_taken(
 ) -> Result {
     let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
     let result = break_backedge_with(run, analyzed, lp, &mut se);
-    if result == Result::Unmodified {
-        run.scev = se;
-    }
+    run.scev = se;
     result
 }
 
@@ -946,6 +941,7 @@ fn delete_loops_with(
         }
         let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
         let alone = lp.get_parent_loop().is_none() && lp.get_sub_loops().next().is_none();
+        let mark = run.function.mark();
         let mut result = delete_loop_if_dead(run, &analyzed, lp);
         // If we can prove the backedge isn't taken, just break it and be done.
         // This leaves the loop structure in place which means it can handle
@@ -960,8 +956,16 @@ fn delete_loops_with(
             continue;
         }
         changed = true;
-        // The function is not as the expressions left it.
-        run.scev = ScalarEvolution::new();
+        // What the edits reached is forgotten; the other loops keep their
+        // counts.
+        match run.function.touched_since(mark) {
+            Some(touched) => {
+                let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+                se.forget_touched(&cx_of(run, &analyzed), &touched);
+                run.scev = se;
+            }
+            None => run.scev = ScalarEvolution::new(),
+        }
         // LD4: a deleted loop with no loop around or inside it leaves the
         // other loops' analyses as they were.
         if !(deleted && alone) {
@@ -1008,12 +1012,8 @@ impl FunctionPass for LoopDeletion {
         let loops = analyses.get::<Loops>(run.context, run.layout, run.function);
         let analyzed = Analyzed::held(&run, tree, loops);
         let changed = delete_loops_with(&mut run, analyzed);
-        if changed {
-            PreservedAnalyses::none()
-        } else {
-            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
-            PreservedAnalyses::all()
-        }
+        held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+        if changed { PreservedAnalyses::none().preserve::<Scevs>() } else { PreservedAnalyses::all() }
     }
 }
 
