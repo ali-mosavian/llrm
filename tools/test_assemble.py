@@ -600,5 +600,5 @@ def test_assemble_prints_one_progress_line_per_candidate(tmp_path, capsys):
     sh(repo, "checkout", "-q", "main")
     ps.assemble(["1", "2", "3"], heads, base="main", cwd=repo, limit=16)
     lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith("assemble:")]
-    assert [line.split(" (")[0] for line in lines] == ["assemble: #1 kept", "assemble: #2 waits (conflict)", "assemble: #3 kept"], lines
+    assert [line.split(" (")[0] for line in lines] == ["assemble: #1 kept", "assemble: #2 waits", "assemble: #3 kept"], lines
     assert "(2/16 kept," in lines[-1], lines
