@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollpass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollpass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:2800480677ee23adbb638700a7bca0dca95f91d22e20d0c6e19dde7d81a68eab -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:f67654875dfc727d3c653b04a210c63068c3c9cfff5efa804130a2c77b39be47 -->
 
 # loopunrollpass
 
@@ -37,6 +37,13 @@ unrolled by [`crate::loopunroll::unroll_loop_blocks`](loopunroll.md).
 - U8 `simplifyLoopAfterUnroll` simplifies without a dominator tree or
   assumptions.
 - U9 Blocks an unroll merges away are erased once, when the pass ends.
+- U1 At `optsize` a loop of at most the target's few trips is unrolled under
+  the target's bar (`Tti::unroll_size_few_trips`; m16: 3 trips, 30) where
+  the pin's `OptSizeThreshold` is 0 on x86. float_in_place_update.c at -Os
+  m16: 132 bytes to 14 (main 76); the corpus of 258 programs at m16 -Os
+  changes in no other. logical_value.c (main 25, here 155), split_loops.c
+  and int64_division.c need the cost analysis held to a bar too, which grew
+  matmul.nib 390 to 562 bytes: open.
 
 ## Example
 A loop of four trips becomes four copies; the induction variable's
@@ -56,3 +63,6 @@ with no `phi`, no `icmp` and no backedge.
 [`computeUnrollCount`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1016),
 [`analyzeLoopUnrollCost`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L336),
 [`LoopFullUnrollPass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1640).
+
+## Used by
+Named by `loopunrollandjam`, `pipeline`.

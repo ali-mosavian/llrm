@@ -4,7 +4,7 @@
 use crate::inferspace::InferAddressSpaces;
 use crate::testing::{Tuned, managed, managed_on, parsed};
 
-const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-n8:16:32\"\n\n@g = global [64 x i16] zeroinitializer\ndeclare void @sink(ptr addrspace(1))\n\n";
+const HEAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"\n\n@g = global [64 x i16] zeroinitializer\ndeclare void @sink(ptr addrspace(1))\n\n";
 
 fn run(text: &str) -> String {
     let mut module = parsed(&format!("{HEAD}{text}"));
@@ -172,4 +172,31 @@ b0:
 }
 ");
     assert!(after.contains("load i16, ptr addrspace(1)"), "{after}");
+}
+
+/// lru.c at -Os m16 kept `pushw DGROUP; pop es; mov di, offset _cache; ...
+/// es:[bx+di+20]` (921 B against main's 722): a field of the forwarded cache is
+/// a constant step of a constant cast of the global, and only the cast itself
+/// was read as the global.
+#[test]
+fn a_load_through_a_constant_step_of_a_constant_cast_is_a_near_load() {
+    let after = run("define i16 @f(i16 %i) {
+b0:
+  %a = getelementptr inbounds i8, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)), i16 20), i16 %i
+  %v = load i16, ptr addrspace(1) %a
+  ret i16 %v
+}
+");
+    assert!(!after.contains("load i16, ptr addrspace(1)"), "{after}");
+}
+
+#[test]
+fn a_store_through_a_constant_step_of_a_constant_cast_is_a_near_store() {
+    let after = run("define void @f() {
+b0:
+  store i32 8, ptr addrspace(1) getelementptr inbounds nuw (i8, ptr addrspace(1) addrspacecast (ptr @g to ptr addrspace(1)), i16 16)
+  ret void
+}
+");
+    assert!(!after.contains("store i32 8, ptr addrspace(1)"), "{after}");
 }

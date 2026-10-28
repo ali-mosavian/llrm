@@ -370,6 +370,15 @@ pub fn contribution(
     one: &crate::model::lir::Insn,
     items: &mut Vec<Item>,
 ) {
+    // A value an instruction takes from or leaves in an xmm register is held
+    // in one: LLVM gives the vreg copied from a physical register that
+    // register's class. Its only reads may be copies, which name no class.
+    for (held, register) in one.requires.iter().chain(&one.delivers) {
+        if regs.in_class(*register, llrm_lir::registers::class::XMM) {
+            let defining = one.delivers.iter().any(|(other, _)| other.value == held.value);
+            items.push(Item::Restrict { value: held.value, kind: Kind::Xmm, role: Role::Xmm, defining });
+        }
+    }
     let Some(what) = &one.what else {
         return;
     };
@@ -641,6 +650,7 @@ impl Scan {
             |value: u32| self.counts.get(&value).is_some_and(|c| c.numeric > 0),
         );
         _through_webs(body, &selecting, &numeric, &selectors, selector_bytes(segments), false, &mut out);
+        _through_xmm_copies(body, registers, &mut out);
         out
     }
 }
@@ -650,6 +660,53 @@ thread_local! {
     /// for the test that fixes how many one allocation makes.
     #[cfg(test)]
     pub(crate) static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A set of register numbers as bits: `collected` inserts one for most
+/// operands of the body, which a `BTreeSet` made 2.8 M Ir of d_faces.
+#[derive(Default)]
+pub(crate) struct Bits(Vec<u64>);
+
+impl Bits {
+    pub(crate) fn insert(
+        &mut self,
+        value: u32,
+    ) {
+        let word = value as usize / 64;
+        if word >= self.0.len() {
+            self.0.resize(word + 1, 0);
+        }
+        self.0[word] |= 1 << (value % 64);
+    }
+
+    pub(crate) fn contains(
+        &self,
+        value: u32,
+    ) -> bool {
+        self.0.get(value as usize / 64).is_some_and(|word| word >> (value % 64) & 1 == 1)
+    }
+
+    /// The members `other` lacks, ascending as a `BTreeSet` difference is.
+    pub(crate) fn without<'a>(
+        &'a self,
+        other: &'a Bits,
+    ) -> impl Iterator<Item = u32> + 'a {
+        self.0
+            .iter()
+            .enumerate()
+            .flat_map(
+                move |(at, &word)| {
+                    let mut left = word & !other.0.get(at).copied().unwrap_or(0);
+                    std::iter::from_fn(move || {
+                        (left != 0).then(|| {
+                            let bit = left.trailing_zeros();
+                            left &= left - 1;
+                            at as u32 * 64 + bit
+                        })
+                    })
+                },
+            )
+    }
 }
 
 fn collected(
@@ -665,8 +722,8 @@ fn collected(
     SCANS.with(|one| one.set(one.get() + 1));
     let regs = body.regs();
     let mut out: Classes = IndexMap::default();
-    let mut selecting: BTreeSet<u32> = BTreeSet::new();
-    let mut numeric: BTreeSet<u32> = BTreeSet::new();
+    let mut selecting = Bits::default();
+    let mut numeric = Bits::default();
     let mut word_pairs: Vec<(u32, u32)> = Vec::new();
     // Where each pair is read, for the caller that asks for the reads.
     let mut pair_sites: Vec<(usize, usize, u32, u32)> = Vec::new();
@@ -706,8 +763,8 @@ fn collected(
     }
     drop(_scan);
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
-    for value in selecting.difference(&numeric) {
-        _restrict(&mut out, *value, &selectors);
+    for value in selecting.without(&numeric) {
+        _restrict(&mut out, value, &selectors);
     }
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         if let Some(what) = &one.what {
@@ -744,15 +801,68 @@ fn collected(
     llrm_support::debug::timed("classes webs", || {
         _through_webs(
             body,
-            &|value| selecting.contains(&value),
-            &|value| numeric.contains(&value),
+            &|value| selecting.contains(value),
+            &|value| numeric.contains(value),
             &selectors,
             selector_bytes(segments),
             optimistic,
             &mut out,
         )
     });
+    _through_xmm_copies(body, registers, &mut out);
     out
+}
+
+/// A plain `mov` of one value to another is one register class
+/// (`COPY` between vregs of one class): a value only copied to or from an
+/// xmm-confined one is held in an xmm register too. The allocator's copies
+/// around a value pinned in `xmm0` (a `double` call result passed on to the
+/// return) are such moves, and took a general register for it. A `movd` or
+/// `movq` between classes has its own name.
+fn _through_xmm_copies(
+    body: &LirBody,
+    registers: &RegisterClasses,
+    out: &mut Classes,
+) {
+    if registers.xmm_set.is_empty() {
+        return;
+    }
+    let mut web: IndexMap<u32, u32> = IndexMap::default();
+    fn find(
+        web: &mut IndexMap<u32, u32>,
+        value: u32,
+    ) -> u32 {
+        let up = *web.entry(value).or_insert(value);
+        if up == value {
+            return value;
+        }
+        let top = find(web, up);
+        web.insert(value, top);
+        top
+    }
+    for one in body.blocks.iter().flat_map(|block| &block.insns) {
+        let Some(what) = &one.what else { continue };
+        if let (Operation::Move, Some("mov"), [Loc::Held(into)], [Loc::Held(from)], None) =
+            (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice(), one.group)
+        {
+            if into.value != from.value {
+                let (a, b) = (find(&mut web, into.value), find(&mut web, from.value));
+                web.insert(a, b);
+            }
+        }
+    }
+    let mut members: IndexMap<u32, Vec<u32>> = IndexMap::default();
+    for value in web.keys().copied().collect::<Vec<_>>() {
+        let top = find(&mut web, value);
+        members.entry(top).or_default().push(value);
+    }
+    for list in members.values() {
+        if list.iter().any(|value| out.get(value).is_some_and(|class| *class == registers.xmm_set)) {
+            for value in list {
+                out.entry(*value).or_insert_with(|| registers.xmm_set.clone());
+            }
+        }
+    }
 }
 
 /// A phi's result and arguments, and the two sides of a phi edge's copy, are
@@ -1172,6 +1282,25 @@ mod tests {
     use super::*;
     use crate::model::ir::{Addr, Held, Mem, Semantics};
     use crate::model::lir::{Insn, LirBlock, Phi};
+
+    /// `Bits` replaced two `BTreeSet<u32>`: the difference must come out
+    /// ascending and across word boundaries, or `_restrict` meets the values
+    /// in another order and `out` is built in another order.
+    #[test]
+    fn bits_give_the_ascending_difference_a_btree_set_gave() {
+        let (mut selecting, mut numeric) = (Bits::default(), Bits::default());
+        let (mut a, mut b) = (BTreeSet::new(), BTreeSet::new());
+        for value in [200u32, 3, 64, 63, 65, 130, 7, 1000, 64] {
+            selecting.insert(value);
+            a.insert(value);
+        }
+        for value in [3u32, 65, 999, 1000] {
+            numeric.insert(value);
+            b.insert(value);
+        }
+        assert_eq!(selecting.without(&numeric).collect::<Vec<_>>(), a.difference(&b).copied().collect::<Vec<_>>());
+        assert!(selecting.contains(1000) && !selecting.contains(999) && !selecting.contains(5000));
+    }
 
     /// A far pointer's segment that a loop reads only through its header phi:
     /// FADETOCOLOR's selectors had no class of their own after SsaSpill and

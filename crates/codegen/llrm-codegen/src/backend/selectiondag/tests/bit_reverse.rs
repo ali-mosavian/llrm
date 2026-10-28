@@ -5,17 +5,19 @@
 use super::super::legalize_dag::DagLegalizer;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
+use crate::testing::m16_ir;
 
 fn module(bits: u32) -> String {
-    format!(
-        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+    m16_ir(&format!(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i{bits} @llvm.bitreverse.i{bits}(i{bits})
 define i{bits} @rev(i{bits} %x) {{
   %r = call i{bits} @llvm.bitreverse.i{bits}(i{bits} %x)
   ret i{bits} %r
 }}
 "
-    )
+    ))
+    .to_owned()
 }
 
 /// Every width the targets hold selects, at m16 and m32.
@@ -72,7 +74,9 @@ fn the_expansion_reverses_the_bits() {
         let x = dag.get_register(vt, 5);
         let node = dag.get_node(ISD::BitReverse, vt, &[x]);
         dag.set_root(node);
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+            .run()
+            .expect("legalizes");
         let root = dag.get_root();
         let m = super::super::fold::mask(bits);
         for x in [0u128, 1, 2, 0x80, 0xA5, 0x1234, 0xDEAD_BEEF, m, m / 3, 12345 & m] {

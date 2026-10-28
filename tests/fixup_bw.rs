@@ -1,7 +1,7 @@
 //! A byte or word load whose register's other bytes are dead is the zero
 //! extending dword load, as `X86FixupBWInsts` makes it.
 
-use std::process::Command;
+mod common;
 
 fn asm(
     source: &str,
@@ -9,12 +9,8 @@ fn asm(
 ) -> Vec<String> {
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(scratch.path())
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(scratch.path()).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(scratch.path().join("a.s")).unwrap().lines().map(|one| one.trim().to_owned()).collect()
 }
@@ -45,4 +41,18 @@ fn test_a_byte_or_word_copy_is_the_dword_copy_when_the_rest_is_dead() {
 fn test_a_byte_load_stays_when_the_code_is_for_size() {
     let text = asm("char g8(char *p) { return *p; }\n", &["-m32", "-mabi=sysv", "-march=i486", "-Os"]);
     assert!(text.contains(&"mov al, byte ptr [eax]".to_owned()), "{text:?}");
+}
+
+/// A word loaded into the register a loop then reads as a dword stayed `mov ax,
+/// [m]`: the rest of EAX is live (the loop reads it) though nothing defined it.
+/// The pin's `MOV16rm` carries `implicit-def $eax` there and becomes the
+/// `movzx` (quicksort, +0.8% clk).
+#[test]
+fn test_a_word_load_read_wider_by_a_loop_is_the_zero_extending_load() {
+    let text = asm(
+        "unsigned short f(unsigned short *p, int n) {\n unsigned short x = *p;\n int i;\n for (i = 0; i < n; i++) x = x * 25173 + 13849;\n return x;\n}\n",
+        &M32,
+    );
+    assert!(text.contains(&"movzx eax, word ptr [eax]".to_owned()), "{text:?}");
+    assert!(!text.iter().any(|one| one.starts_with("mov ax,")), "{text:?}");
 }

@@ -24,9 +24,9 @@
 //! The emitter (D1b), which builds LIR `Semantics` from the form.
 //!
 //! # See also
-//! `llrm_instr::Form`; the pin's `X86GenInstrInfo.inc` for the names.
+//! `llrm_target::instr::Form`; the pin's `X86GenInstrInfo.inc` for the names.
 
-use llrm_instr::Form;
+use llrm_target::instr::Form;
 
 /// Why an opcode has no single form.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,20 +54,39 @@ pub enum Unmapped {
 /// `x86.instr`'s forms, by mnemonic.
 pub struct OpcodeMap {
     forms: Vec<Form>,
+    /// [`Self::scalar_sse`], asked per operand width: found once.
+    scalar_sse: bool,
     /// The answer for each name asked: every machine node of a function asks,
     /// and a name has one answer.
     asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
+    /// [`memory_bytes`] for each name asked, parsed once.
+    sized: std::sync::Mutex<llrm_support::hash::HashMap<String, Option<u32>>>,
 }
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
-        OpcodeMap { forms, asked: Default::default() }
+        let scalar_sse = forms.iter().any(|form| form.name == "addsd");
+        OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
     }
 
     /// Whether this target does scalar floating point in xmm registers (it has
     /// `addsd`): a floating value is then 4 or 8 bytes, not the x87's 10.
     pub fn scalar_sse(&self) -> bool {
-        self.forms.iter().any(|form| form.name == "addsd")
+        self.scalar_sse
+    }
+
+    /// [`memory_bytes`] of `name`, memoized: every machine node asks.
+    pub fn memory_bytes(
+        &self,
+        name: &str,
+    ) -> Option<u32> {
+        let mut sized = self.sized.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(&answer) = sized.get(name) {
+            return answer;
+        }
+        let answer = memory_bytes(name);
+        sized.insert(name.to_owned(), answer);
+        answer
     }
 
     pub fn forms(&self) -> &[Form] {
@@ -119,6 +138,11 @@ impl OpcodeMap {
         let name = name.strip_suffix("_alt").unwrap_or(name);
         // A target with no SSE forms (the 32-bit one) keeps these as vector
         // opcodes below.
+        // A move between a general and an SSE register: the pin's names for
+        // the direction, the form is the one with that encoding.
+        if let Some(iced) = gpr_xmm_move(name) {
+            return self.forms.iter().position(|f| f.iced.as_deref() == Some(iced)).ok_or(Unmapped::NoForm);
+        }
         if let Some((mnemonic, width, result, letters)) =
             sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
         {
@@ -175,6 +199,18 @@ impl OpcodeMap {
             _ => Err(Unmapped::Ambiguous(found)),
         }
     }
+}
+
+/// `MOVSDto64rr`: `movq r64, xmm`; the iced name of the form each pin name
+/// of a move between a general and an SSE register selects.
+fn gpr_xmm_move(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "MOVSDto64rr" => "Movq_rm64_xmm",
+        "MOV64toSDrr" => "Movq_xmm_rm64",
+        "MOVSS2DIrr" => "Movd_rm32_xmm",
+        "MOVDI2SSrr" => "Movd_xmm_rm32",
+        _ => return None,
+    })
 }
 
 /// The scalar SSE instructions the pin names `ADDSDrr`, `MOVSSrm`, `XORPSrr`,
@@ -243,6 +279,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 /// `MOVSX32rm16`) the size after the letters, the source's. `None` if the
 /// name has no width.
 pub fn memory_bytes(name: &str) -> Option<u32> {
+    // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
+    let name = name.strip_suffix("_NOREX").unwrap_or(name);
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the
@@ -290,7 +328,7 @@ fn split(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
     while let Some(c) = tail.chars().next() {
         match c {
             'r' | 'm' | 'i' => letters.push(c),
-            'C' if tail.starts_with("CL") => {
+            'C' if tail[1..].starts_with('L') => {
                 letters.push('r');
                 tail = &tail[1..];
             }
@@ -317,6 +355,6 @@ fn admits(
     }
     let (dests, sources) = letters.split_at(form.dests.len());
     // `r` also names an xmm register in the pin's names (`ADDSDrr`).
-    let allows = |l: char, o: &llrm_instr::Operand| o.allows(l) || l == 'r' && o.allows('x');
+    let allows = |l: char, o: &llrm_target::instr::Operand| o.allows(l) || l == 'r' && o.allows('x');
     dests.iter().zip(&form.dests).all(|(&l, d)| allows(l, d)) && sources.iter().zip(&untied).all(|(&l, s)| allows(l, s))
 }

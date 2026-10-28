@@ -31,6 +31,12 @@ pub enum Intrinsic {
         op: BinaryOp,
         signed: bool,
     },
+    /// `llvm.{s,u}{add,sub}.sat`: the result clamped to the type's range
+    /// rather than wrapped.
+    Saturating {
+        op: BinaryOp,
+        signed: bool,
+    },
     /// `llvm.{s,u}{max,min}`.
     MinMax {
         signed: bool,
@@ -40,6 +46,17 @@ pub enum Intrinsic {
     /// fraction bits as the third argument says.
     Fixed {
         divide: bool,
+    },
+    /// `llvm.umul.fix` and `llvm.{s,u}mul.fix.sat`: as `smul.fix`, unsigned
+    /// or clamped to the range rather than wrapped.
+    FixedMul {
+        signed: bool,
+        saturating: bool,
+    },
+    /// `llvm.{s,u}shl.sat`: the first argument shifted left by the second,
+    /// clamped to the range rather than wrapped.
+    ShiftSat {
+        signed: bool,
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
@@ -63,6 +80,8 @@ pub enum Intrinsic {
         signed: bool,
     },
     FMulAdd,
+    /// `llvm.copysign`: the first argument with the second's sign.
+    CopySign,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
@@ -84,6 +103,17 @@ pub enum Intrinsic {
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
+    /// `llvm.is.constant`: whether its argument is a constant once the
+    /// optimizer is done, which `lower-constant-intrinsics` decides and
+    /// removes (LowerConstantIntrinsics.cpp); no code runs it. Only the
+    /// integer overload is known here.
+    IsConstant,
+    /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
+    /// needed where the target has no prefetch instruction.
+    Prefetch,
+    /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
+    /// code runs it.
+    FakeUse,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
@@ -290,6 +320,15 @@ pub enum FloatFunction {
     Exp,
     /// Rounds to an integral float as the rounding mode says.
     Rint,
+    Floor,
+    Ceil,
+    Trunc,
+    /// Halfway cases away from zero.
+    Round,
+    /// Halfway cases to even.
+    RoundEven,
+    /// As `Rint`, without raising inexact.
+    NearbyInt,
 }
 
 impl FloatFunction {
@@ -307,7 +346,11 @@ impl FloatFunction {
             Self::Exp2 => x.exp2(),
             Self::Log => x.ln(),
             Self::Exp => x.exp(),
-            Self::Rint => x.round_ties_even(),
+            Self::Rint | Self::RoundEven | Self::NearbyInt => x.round_ties_even(),
+            Self::Floor => x.floor(),
+            Self::Ceil => x.ceil(),
+            Self::Trunc => x.trunc(),
+            Self::Round => x.round(),
         }
     }
 }
@@ -377,6 +420,29 @@ const fn overflow(
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
+const fn fixed_mul(
+    name: &'static str,
+    signed: bool,
+    saturating: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::FixedMul { signed, saturating }, Slot::Any(0), FIXED, Kind::Int)
+}
+
+const fn shift_sat(
+    name: &'static str,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::ShiftSat { signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
+const fn saturating(
+    name: &'static str,
+    op: BinaryOp,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::Saturating { op, signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
 const FLOAT: &[Slot] = &[Slot::Any(0)];
 
 const fn unary(
@@ -427,13 +493,17 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 52] = [
+const TABLE: [Spec; 71] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
     overflow("llvm.usub.with.overflow", BinaryOp::Sub, false),
     overflow("llvm.smul.with.overflow", BinaryOp::Mul, true),
     overflow("llvm.umul.with.overflow", BinaryOp::Mul, false),
+    saturating("llvm.sadd.sat", BinaryOp::Add, true),
+    saturating("llvm.uadd.sat", BinaryOp::Add, false),
+    saturating("llvm.ssub.sat", BinaryOp::Sub, true),
+    saturating("llvm.usub.sat", BinaryOp::Sub, false),
     min_max("llvm.smax", true, true),
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
@@ -449,6 +519,11 @@ const TABLE: [Spec; 52] = [
     compare("llvm.scmp", true),
     compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
+    fixed_mul("llvm.umul.fix", false, false),
+    fixed_mul("llvm.smul.fix.sat", true, true),
+    fixed_mul("llvm.umul.fix.sat", false, true),
+    shift_sat("llvm.sshl.sat", true),
+    shift_sat("llvm.ushl.sat", false),
     Spec {
         name: "llvm.sdiv.fix",
         intrinsic: Intrinsic::Fixed { divide: true },
@@ -464,6 +539,7 @@ const TABLE: [Spec; 52] = [
         &[Slot::Any(0), Slot::Any(0), Slot::Any(0)],
         Kind::Float,
     ),
+    arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),
@@ -474,6 +550,12 @@ const TABLE: [Spec; 52] = [
     unary("llvm.log", FloatFunction::Log),
     unary("llvm.exp", FloatFunction::Exp),
     unary("llvm.rint", FloatFunction::Rint),
+    unary("llvm.floor", FloatFunction::Floor),
+    unary("llvm.ceil", FloatFunction::Ceil),
+    unary("llvm.trunc", FloatFunction::Trunc),
+    unary("llvm.round", FloatFunction::Round),
+    unary("llvm.roundeven", FloatFunction::RoundEven),
+    unary("llvm.nearbyint", FloatFunction::NearbyInt),
     Spec {
         name: "llvm.lrint",
         intrinsic: Intrinsic::LRint,
@@ -523,11 +605,35 @@ const TABLE: [Spec; 52] = [
         own: None,
     },
     Spec {
+        name: "llvm.is.constant",
+        intrinsic: Intrinsic::IsConstant,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
         name: "llvm.assume",
         intrinsic: Intrinsic::Assume,
         overloads: &[],
         returns: Slot::Void,
         parameters: &[Slot::Int(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.prefetch",
+        intrinsic: Intrinsic::Prefetch,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0), Slot::Int(32), Slot::Int(32), Slot::Int(32)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.fake.use",
+        intrinsic: Intrinsic::FakeUse,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
         own: None,
     },
     Spec {
@@ -828,6 +934,14 @@ impl Intrinsic {
                 return Err("Intrinsic has incorrect argument type!".to_owned());
             }
             return Ok(());
+        }
+        // `void (...)`: any values, kept live for a debugger.
+        if self == Intrinsic::FakeUse {
+            return if types.is_void(*returns) {
+                Ok(())
+            } else {
+                Err("Intrinsic has incorrect return type!".to_owned())
+            };
         }
         if self == Intrinsic::Code {
             let (_, places) = code(name).ok_or("Inline code's name does not parse!")?;

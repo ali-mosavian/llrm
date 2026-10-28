@@ -176,10 +176,10 @@ impl BaseIndexOffset {
                 Some(off)
             }
             (NodeData::Global { .. }, _) => None,
-            (NodeData::PoolIndex(a), NodeData::PoolIndex(b)) => {
-                (dag.constant_pool.get(a as usize) == dag.constant_pool.get(b as usize)).then_some(off)
-            }
-            (NodeData::PoolIndex(_), _) => None,
+            (NodeData::PoolIndex(a, at), NodeData::PoolIndex(b, bt)) => (dag.constant_pool.get(a as usize)
+                == dag.constant_pool.get(b as usize))
+            .then_some(off + i64::from(bt) - i64::from(at)),
+            (NodeData::PoolIndex(..), _) => None,
             (NodeData::FrameIndex(a), NodeData::FrameIndex(b)) => {
                 // Equal frame indices: the offsets compare directly. Two
                 // fixed objects have known places; an alloca's is not.
@@ -212,7 +212,7 @@ pub fn compute_aliasing(
     let object = |value: SDValue| match dag.node(value).data {
         NodeData::FrameIndex(index) => Some(Object::Frame { id: i64::from(index), fixed: dag.fixed_offsets.contains_key(&index) }),
         NodeData::Global { symbol, .. } => Some(Object::Global(symbol)),
-        NodeData::PoolIndex(_) => Some(Object::Pool),
+        NodeData::PoolIndex(..) => Some(Object::Pool),
         _ => None,
     };
     match alias_of(ptr0.equal_base_index(&ptr1, dag), object(base0).as_ref(), bytes0, object(base1).as_ref(), bytes1) {

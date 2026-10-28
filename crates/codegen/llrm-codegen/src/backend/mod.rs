@@ -77,14 +77,14 @@
 //! `spillplacement`, `slots` and `postings` for live-range splitting and
 //! spilling, and consults `constrain`, `classes`,
 //! `registerinfo` and `datagroup` for what each value may be assigned.
-//! `peephole` calls the sub-passes `regthrash`, `machinecp`, `copysink`,
+//! `peephole` calls the sub-passes `machinecp`, `copysink`,
 //! `postrasink`, `storecombine`, `sharedstores`,
 //! `exactaddress`, `machinedce` and `upperzero`, and the rule
 //! groups of `peep`.
 //!
 //! The analyses the phases share: `liveness` and `lanes` (register and flag
-//! lanes), `live`, `liveunion` and `neighbours` (intervals, per-register
-//! holders and interference for the allocator), `overlap` (memory operands),
+//! lanes), `live` and `neighbours` (intervals and interference for
+//! the allocator), `overlap` (memory operands),
 //! `lifetimes` and `slots` (frame-slot sharing), `executed` and `timing`
 //! (what a candidate costs) and `effects` (what an instruction reads and
 //! writes). `needs` lets the peephole skip a sub-pass with nothing to act on.
@@ -153,7 +153,7 @@ pub mod effects;
 pub mod ehprepare;
 pub mod exactaddress;
 pub mod executed;
-pub mod expansion;
+pub use llrm_transforms::expansion;
 pub mod farcall;
 pub mod farload;
 pub mod floatalloc;
@@ -170,7 +170,6 @@ pub mod framelowering;
 pub mod frameobjects;
 pub mod funnel;
 pub mod globals;
-pub mod hintwalk;
 pub mod inline_asm;
 pub mod isel;
 pub mod valuefacts;
@@ -189,6 +188,7 @@ pub mod selectors {
 pub mod booleans;
 pub mod callframe;
 pub mod cmpsub;
+pub mod deadmi;
 pub mod earlytaildup;
 pub mod edges;
 pub mod fixupbw;
@@ -205,12 +205,14 @@ pub mod latecleanup;
 pub mod layout;
 pub mod leaopt;
 pub mod legalize;
+pub mod libmcalls;
+#[cfg(test)]
+mod libmcalls_tests;
 pub mod lifetimes;
 pub mod lirtext;
 pub mod live;
 pub mod liveness;
 pub mod liverangeshrink;
-pub mod liveunion;
 pub mod loopslots;
 pub mod lower_int64;
 pub mod machinecp;
@@ -229,7 +231,6 @@ pub mod mirprint;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
-pub mod neighbours;
 pub mod objbuild;
 pub mod optimizephis;
 pub mod overlap;
@@ -242,6 +243,7 @@ pub mod phielim;
 pub mod postings;
 pub mod postrasink;
 pub mod precse;
+pub mod prezeroed;
 pub mod prologue;
 pub mod pushfold;
 pub mod regpressure;

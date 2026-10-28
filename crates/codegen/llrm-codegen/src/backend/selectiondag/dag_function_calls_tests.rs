@@ -4,6 +4,7 @@
 use super::dag_function::selected;
 use super::dag_function_tests::{FAR_CALL, M16_STACK_ARGS, Stub, names, select_with_contracts, verdicts};
 use crate::model::ir::{Loc, Operation};
+use crate::testing::m16_ir;
 
 const CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare i32 @bar(i32, i32)
@@ -50,7 +51,7 @@ fn a_call_is_a_sequence_around_a_call_instruction() {
     assert!(!names.iter().any(|n| n == "sub"), "{names:?}");
 }
 
-/// Source order is the m32 default (`SchedInfo::source_order`): it builds
+/// Source order is the default (`SchedInfo::source_order`): it builds
 /// `s = a + 1` before the call, as the IR has it, with or without
 /// `LLRM_SRC_ORDER`. Before it was the default the call sequence opened the
 /// block.
@@ -71,7 +72,7 @@ fn source_order_keeps_the_ir_order_around_a_call() {
             .collect();
         names.iter().position(|n| n == "call_frame_setup").unwrap()
     };
-    assert!(order(false) > 0, "the m32 default is source order");
+    assert!(order(false) > 0, "the default is source order");
     assert!(order(true) > 0);
 }
 
@@ -128,7 +129,7 @@ fn a_call_names_the_registers_it_takes_arguments_in() {
     assert!(call.requires.iter().all(|(held, _)| call.uses.contains(&held.value)));
 }
 
-const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_SUM: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1005 i16 @f(i16 %a, i16 %b) addrspace(1) {
 entry:
   %s = add i16 %a, %b
@@ -183,6 +184,33 @@ fn a_call_destroys_what_its_conventions_says() {
         "{:?}",
         calls[1].clobbers
     );
+}
+
+const VARIADIC_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @w(i32, ...)
+define i32 @main() {
+entry:
+  %a = call cc 1002 i32 (i32, ...) @w(i32 7, i32 8)
+  ret i32 %a
+}
+";
+
+/// A variadic call under watcall passes as cdecl does (`variadic =
+/// \"cdecl32\"`) and destroys what cdecl does. The DAG path used watcall's set
+/// (EAX alone), so a value held in ECX across `printf` or a variadic `sum` was
+/// destroyed: tests/llc/varargs.c printed `1604196 36` for `15 36` at
+/// x86_32-wat.
+#[test]
+fn a_variadic_call_destroys_what_the_variadic_convention_says() {
+    use llrm_target::Target;
+    let module = llrm_mir::parse::module(VARIADIC_CALL).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
+    let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
+    assert!(call.clobbers.contains(&named("ecx")) && call.clobbers.contains(&named("edx")), "{:?}", call.clobbers);
 }
 
 const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
@@ -257,7 +285,7 @@ fn va_start_finds_the_first_variadic_argument() {
     assert!(why.is_none(), "{why:?}");
 }
 
-const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_DIRECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16)
 define cc 1005 i16 @f(i16 %a) addrspace(1) {
 entry:
@@ -315,7 +343,7 @@ fn an_m16_call_pushes_its_stack_arguments() {
 /// `LLRM_ISEL_REAL`).
 #[test]
 fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
-    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(FAR_CALL)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let high: Vec<_> = done
@@ -491,7 +519,7 @@ fn a_runtime_call_answering_in_registers_says_so() {
     assert_eq!(verdicts(false), [Ok(super::builder::RuntimeAnswer::Registers)]);
 }
 
-const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const QB_PAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
   invoke cc 1000 addrspace(1) void @llrm.qb.B$CEND() to label %next unwind label %landing
@@ -526,7 +554,7 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
 }
 
-const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const INLINE_CODE: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {
 entry:
@@ -541,7 +569,7 @@ entry:
 /// node and refused "opcode 30013" (QCport's `__emit__`, 3 functions).
 #[test]
 fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
-    let module = llrm_mir::parse::module(INLINE_CODE).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(INLINE_CODE)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.inline.len(), 1, "{:?}", done.inline);
@@ -552,7 +580,7 @@ fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
     assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
 }
 
-const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const BYVAL_ODD: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
 entry:
@@ -567,12 +595,12 @@ entry:
 /// argument area the stores do not cover at m16" (byval_struct -O0).
 #[test]
 fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
-    let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(BYVAL_ODD)).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
 
-const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const PAD_READS_THE_ENTRY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 @g = internal global i16 0
 define cc 1000 void @f(i16 %x) addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
@@ -600,7 +628,7 @@ fn a_landing_pad_reading_an_entry_value_is_refused() {
 }
 
 const RUNTIME_CALL_MORE_ARGS_THAN_DECLARED: &str =
-    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f(i16 %a) addrspace(1) {
 entry:
   call cc 1000 addrspace(1) void (i16, i16, i16) @llrm.qb.B$RDIM(i16 %a, i16 1, i16 2)
@@ -621,6 +649,8 @@ fn a_runtime_call_pops_every_argument_it_is_given() {
         abi: &Stub { flags: false },
         segments: &crate::backend::target::BASIC,
         runtime: true,
+        frame_zeroed: false,
+        facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
@@ -687,7 +717,7 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
 
-const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const PORTS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i8 @llrm.ia16.in.i8(i16)
 declare void @llrm.ia16.out.i8(i16, i8)
 define i8 @f(i16 %p) {
@@ -703,7 +733,7 @@ entry:
 /// refused them ("intrinsic call llrm.ia16.out.i8": palette_using_pds71).
 #[test]
 fn port_writes_and_reads_stay_in_order() {
-    let module = llrm_mir::parse::module(PORTS).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(PORTS)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -716,7 +746,7 @@ fn port_writes_and_reads_stay_in_order() {
     assert_eq!(names, ["out", "in"]);
 }
 
-const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const INVOKE_RESULT_READ_BELOW: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) personality ptr addrspace(1) @llrm.qb.personality {
 entry:
   %0 = invoke cc 1000 addrspace(1) ptr @llrm.qb.B$FCHR(i16 65) to label %next unwind label %landing
@@ -764,7 +794,7 @@ fn a_fixed_point_divide_is_selected() {
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
 
-const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 
 @_inbuf = global [512 x i8] zeroinitializer
 @_inpos = global [2 x i8] zeroinitializer
@@ -815,7 +845,7 @@ declare i32 @LL$READ(i16, ptr addrspace(1), i16) addrspace(1)
 /// found unneeded), where the int is AX. jpeg_single: +379 bytes at m16.
 #[test]
 fn a_long_result_truncated_to_an_int_does_not_read_dx() {
-    let done = select_with_contracts(TRUNCATED_LONG_RESULT).unwrap_or_else(|why| panic!("{why}"));
+    let done = select_with_contracts(m16_ir(TRUNCATED_LONG_RESULT)).unwrap_or_else(|why| panic!("{why}"));
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     for wide in ["shl", "or"] {
@@ -823,7 +853,7 @@ fn a_long_result_truncated_to_an_int_does_not_read_dx() {
     }
 }
 
-const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const WORD_ARGUMENTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 void @g(i16, i16, i16)
 define cc 1005 void @f(i16 %p) {
   %q = add i16 %p, 100
@@ -877,7 +907,7 @@ fn a_call_of_a_constant_expression_calls_its_value() {
 #[test]
 fn a_call_of_a_basic_routine_keeps_si_and_di() {
     use llrm_lir::registers::RegId;
-    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 define cc 1000 void @f() addrspace(1) {
 entry:
   call cc 1000 addrspace(1) void @user(i16 1)
@@ -908,8 +938,13 @@ declare cc 1000 void @user(i16) addrspace(1)
         }
     }
     let module = llrm_mir::parse::module(IR).expect("parses");
-    let contracts =
-        super::dag_function::RuntimeContracts { abi: &Keeps, segments: &crate::backend::target::BASIC, runtime: false };
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Keeps,
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: None,
+    };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
         &module,
@@ -929,7 +964,8 @@ declare cc 1000 void @user(i16) addrspace(1)
     assert!(high.contains(&RegId::ESI) && high.contains(&RegId::EDI), "{high:?}");
 }
 
-const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+const M16_FAR_POINTER_AS_LONG_ARGUMENT: &str =
+    "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1005 i16 @g(i16, i16, i16, i32, i32) addrspace(1)
 define cc 1005 i16 @f(i16 %file, ptr addrspace(1) %p) addrspace(1) {
 entry:
@@ -943,7 +979,7 @@ entry:
 /// (`mov dx, ax; shl edx, 16; add edx, ecx; push edx`, 11 bytes) and pushed;
 /// its two words are pushed as they are (`push es; push bx`). The pin keeps
 /// int halves merged (`isMultiStoresCheaperThanBitsMerge`); m16 deviates
-/// (SD312). QCport -Os: 131 stack arguments.
+/// (SD240). QCport -Os: 131 stack arguments.
 #[test]
 fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     let module = llrm_mir::parse::module(M16_FAR_POINTER_AS_LONG_ARGUMENT).expect("parses");
@@ -954,7 +990,7 @@ fn a_far_pointer_pushed_as_a_long_is_two_word_pushes() {
     assert!(!names.contains(&"shl"), "no merge of the halves: {names:?}");
 }
 
-const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"
+const WATCALL_FROM_M16: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"
 declare cc 1002 i16 @w(i16)
 define i16 @f(i16 %a) {
 entry:
@@ -999,4 +1035,241 @@ declare void @llrm.qb.B$PER4(float) nocallback
         &super::dag_function_tests::Stub { flags: false },
     );
     assert_eq!(verdicts.values().copied().collect::<Vec<_>>(), [Ok(super::builder::RuntimeAnswer::Registers)]);
+}
+
+const SELECT_BEFORE_CALL: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @g(i16)
+declare void @h(i16)
+define void @f(i16 %a) {
+entry:
+  %c = icmp eq i16 %a, 1
+  %s = select i1 %c, i16 99, i16 7
+  call void @g(i16 233)
+  call void @h(i16 %s)
+  ret void
+}
+";
+
+const PUSH_SEGMENT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+@g = global i16 0
+declare void @h(ptr addrspace(2), ptr)
+define void @f(ptr %p) {
+entry:
+  %s = addrspacecast ptr %p to ptr addrspace(2)
+  call void @h(ptr addrspace(2) %s, ptr %p)
+  ret void
+}
+";
+
+const BYVAL_FORTY: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare void @g(ptr byval([40 x i8]) %p)
+define void @f(ptr %q) minsize {
+entry:
+  call void @g(ptr byval([40 x i8]) %q)
+  ret void
+}
+";
+
+/// A select the IR has before a call is made before it at m16, as the pin's
+/// source-order queue has it: the select's branches fell inside the first
+/// call's frame, so its argument store was no longer a push and `jumps` grew
+/// by 28 B.
+#[test]
+fn a_select_before_a_call_stays_above_the_call_frame() {
+    let module = llrm_mir::parse::module(SELECT_BEFORE_CALL).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    let call = names.iter().position(|n| n == "call").expect("a call");
+    assert_eq!(names[call - 1], "push", "the argument is pushed: {names:?}");
+}
+
+/// The segment of a global is pushed as an immediate (`push DGROUP`, 3 bytes);
+/// the DAG path moved it to a register and pushed that (4 bytes, 205 times in
+/// the QB corpus). Pin: `X86CallFrameOptimization` folds a `MOV32ri` of one
+/// use.
+#[test]
+fn a_pushed_segment_of_a_global_is_an_immediate() {
+    let module = llrm_mir::parse::module(m16_ir(PUSH_SEGMENT)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let pushes: Vec<_> =
+        insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("push")).collect();
+    assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
+}
+
+const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+@\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
+@\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
+@$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c\"\\04\\00\", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c\"DONE\" }>
+define cc 1000 void @f() addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" norecurse {
+b1:
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI4(ptr addrspace(1) addrspacecast (ptr @\"INPUTVALUE&\" to ptr addrspace(1)))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI2(ptr addrspace(1) addrspacecast (ptr @\"BRANCHCHOICE%\" to ptr addrspace(1)))
+  %0 = load i32, ptr @\"INPUTVALUE&\"
+  %1 = add i32 %0, 1
+  store i32 %1, ptr @\"INPUTVALUE&\"
+  %2 = load i16, ptr @\"BRANCHCHOICE%\"
+  %3 = icmp eq i16 %2, 0
+  %4 = mul i32 %1, %1
+  %5 = select i1 %3, i32 -1, i32 1
+  %6 = add i32 %5, %4
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %6)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %4)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI4(ptr addrspace(1) addrspacecast (ptr @\"INPUTVALUE&\" to ptr addrspace(1)))
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$RDI2(ptr addrspace(1) addrspacecast (ptr @\"BRANCHCHOICE%\" to ptr addrspace(1)))
+  %7 = load i32, ptr @\"INPUTVALUE&\"
+  %8 = add i32 %7, 1
+  store i32 %8, ptr @\"INPUTVALUE&\"
+  %9 = load i16, ptr @\"BRANCHCHOICE%\"
+  %10 = icmp eq i16 %9, 0
+  %11 = mul i32 %8, %8
+  %12 = select i1 %10, i32 -1, i32 1
+  %13 = add i32 %12, %11
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %13)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %11)
+  tail call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string4)
+  ret void
+}
+declare cc 1000 void @llrm.qb.B$RDI4(ptr addrspace(1)) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$RDI2(ptr addrspace(1)) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PSI4(i32) addrspace(1) nocallback
+declare cc 1000 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
+";
+
+/// One segment pushed by two calls with a select between them: the second
+/// push is in a block after the select's arms, so the first block saw one read
+/// and pushed the immediate, removing the `mov` the second push read
+/// (`value 1 is read and not defined on every path`): `qb/gvnjn.bas` and
+/// `gvnphi.bas` stopped compiling at -O2 m16.
+#[test]
+fn a_segment_pushed_by_two_calls_around_a_select_is_still_defined() {
+    select_with_contracts(m16_ir(CONSTANT_PUSHED_AROUND_A_SELECT)).unwrap_or_else(|e| panic!("{e}"));
+}
+
+/// A 40-byte byval copy is past the store limit (4 at -Os, 8 otherwise), so the
+/// pin's `emitConstantSizeRepmov` makes it a `rep movs`: ten dword stores were
+/// 28 bytes more in `byval_struct.c` (249 against the old selector's 193).
+#[test]
+fn a_forty_byte_byval_argument_is_a_string_move() {
+    let module = llrm_mir::parse::module(m16_ir(BYVAL_FORTY)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
+    assert!(ops.iter().any(|name| name.starts_with("movs")), "{ops:?}");
+}
+
+/// A direct call of a private function that took part in `CalleeFacts` was
+/// taken to destroy the whole convention, not what the callee wrote: `main`
+/// kept a value in CX across `lsum_`, which wrote CX and saved nothing, and
+/// `varargs` printed 4324 for 15 under DOSBox at m16.
+#[test]
+fn a_call_of_a_private_function_destroys_what_it_wrote() {
+    use llrm_lir::registers::RegId;
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define internal i16 @leaf(i16 %a) {
+entry:
+  ret i16 %a
+}
+define i16 @f(i16 %x) {
+entry:
+  %r = call i16 @leaf(i16 %x)
+  ret i16 %r
+}
+";
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
+    let frame = llrm_target::FrameRegisters {
+        pointer: RegId::BP,
+        stack: RegId::SP,
+        saved: vec![],
+        slot: 2,
+        align: 2,
+        optional: false,
+        enter: false,
+        free: false,
+        wrap_split_size: false,
+        slot_scratch: None,
+    };
+    let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    facts.record("leaf", &leaf.body, &frame);
+    let written = facts.written("leaf").expect("leaf takes part");
+    assert!(!written.whole.contains(&RegId::ECX), "the leaf writes no CX: {:?}", written.whole);
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: Some(&facts),
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let call = done.body.insns().iter().find(|i| i.call.is_some()).cloned().expect("a call");
+    let lost: Vec<RegId> = call.clobbers.iter().map(|r| crate::model::ir::root(*r)).collect();
+    assert!(!lost.contains(&RegId::ECX), "a call of leaf destroys {lost:?}, leaf wrote {:?}", written.whole);
+}
+
+const M16_UDIV_TEN: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define cc 1005 i64 @f(i64 %x) addrspace(1) {
+entry:
+  %q = udiv i64 %x, 10
+  ret i64 %q
+}
+";
+
+/// `x / 10` on an `i64` was always the `$div64` routine; the pin
+/// (`expandDIVREMByConstant`) multiplies by the magic number at speed and
+/// keeps the call at `-Os`.
+#[test]
+fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
+    let module = llrm_mir::parse::module(M16_UDIV_TEN).expect("parses");
+    let calls = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .insns()
+            .iter()
+            .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
+            .count()
+    };
+    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+    assert_eq!(calls(true), 1, "-Os: the divide routine");
+}
+
+/// An indirect call with no stack arguments said nothing of what its callee
+/// pops (`LowerCallFrame` says it only where a call frame was set up), so the
+/// frame reader (`masm`) refused the function once the allocator gave the frame
+/// register to a value: "the frame register was given to a value and the frame
+/// cannot be addressed through the stack pointer" (QB runtime `B$VIEW` at m32
+/// `-Os`, which broke the runtime build).
+#[test]
+fn an_indirect_call_with_no_arguments_says_it_pops_none() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define void @f(ptr %fp) {
+  call void %fp()
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.body.call_pops.values().copied().collect::<Vec<_>>(), vec![0], "{:?}", done.body.call_pops);
 }

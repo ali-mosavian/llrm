@@ -110,7 +110,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
     let target = BuilderTarget::m32();
     let machine = llrm_x86_m32::M32;
-    let map = OpcodeMap::new(llrm_instr::parse(&machine.forms_text(), machine.dialect()).expect("x86.instr"));
+    let map = OpcodeMap::new(llrm_target::instr::parse(&machine.forms_text(), machine.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let selector = Selector::new(TABLE);
@@ -125,10 +125,13 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
+        strings: None,
+        registers: llrm_target::Target::registers(&machine),
         globals: &NoGlobals,
         block_at: &HashMap::default(),
         frame: &frame,
         address_mode: llrm_dagisel::x86_addr::AddrMode::Flat32,
+        opt_size: false,
         call_alignment: 1,
         map: &map,
         names: &names,
@@ -142,7 +145,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         let emitted = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false },
+            &mut X86Lowering { cmov: false, sse2: false, min_size: false },
             &selector,
             &mut hooks(),
             &Info,
@@ -198,8 +201,13 @@ fn the_combiner_runs_between_the_legalizers() {
         build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block)
             .expect("builds");
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
-    super::dag_select::legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
-        .expect("legalizes");
+    super::dag_select::legalized(
+        &mut built.dag,
+        &tli,
+        &mut X86Lowering { cmov: false, sse2: false, min_size: false },
+        &machine,
+    )
+    .expect("legalizes");
     let root = built.dag.get_root();
     let mut seen = llrm_support::hash::HashSet::default();
     let mut work = vec![root.node];

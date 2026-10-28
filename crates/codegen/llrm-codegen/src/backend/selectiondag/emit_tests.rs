@@ -85,7 +85,7 @@ fn context_in(
     f: impl FnOnce(&EmitContext<'_>),
 ) {
     let target = llrm_x86_m32::M32;
-    let map = OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
+    let map = OpcodeMap::new(llrm_target::instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let no_blocks = HashMap::default();
     f(&EmitContext {
@@ -94,10 +94,13 @@ fn context_in(
         conventions: &super::emit::NoConventions,
         constants: &super::emit::NoConstants,
         stack_pointer: RegId::SP,
+        strings: None,
+        registers: llrm_target::Target::registers(&target),
         globals: &NoGlobals,
         block_at: &no_blocks,
         frame: &NoFrame,
         address_mode: mode,
+        opt_size: false,
         call_alignment: 1,
         map: &map,
         names: &names,
@@ -312,5 +315,29 @@ fn a_lea_of_a_constant_and_a_scaled_index_at_m16_shifts_the_index() {
         let emitted = emit(&dag, &units, ctx).expect("emits");
         let names: Vec<_> = emitted.blocks[0].insns.iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
         assert_eq!(names.iter().map(|n| &**n).collect::<Vec<_>>(), ["shl", "lea", "mov"]);
+    });
+}
+
+/// `r3 = r1 + r2` on the x87 stack through `ADD_Fp64` and a copy: the add
+/// defines r3 itself, as `CreateVirtualRegisters` has it. Made apart with a
+/// `mov` after it, a loop's old-value copy stayed where the pin coalesces it
+/// (`recfloat` -O2 m32: 10 instructions a trip against the pin's 9).
+#[test]
+fn an_x87_add_copied_to_a_virtual_register_defines_it() {
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let entry = dag.entry_node();
+    let a_reg = dag.get_register(EVT::Simple(MVT::F64), 10);
+    let b_reg = dag.get_register(EVT::Simple(MVT::F64), 11);
+    let a = dag.get_node_multi(ISD::CopyFromReg, &[EVT::Simple(MVT::F64), EVT::OTHER], &[entry, a_reg]);
+    let b = dag.get_node_multi(ISD::CopyFromReg, &[EVT::Simple(MVT::F64), EVT::OTHER], &[entry, b_reg]);
+    let sum = machine(&mut dag, "ADD_Fp64", &[EVT::Simple(MVT::F64)], &[a, b]);
+    let out = dag.get_register(EVT::Simple(MVT::F64), 12);
+    let root = dag.get_node_multi(ISD::CopyToReg, &[EVT::OTHER], &[entry, out, sum]);
+    context(|ctx| {
+        let units = schedule(&dag, root, &Info);
+        let blocks = emit(&dag, &units, ctx).expect("emits").blocks;
+        let lines = text(&blocks[0].insns);
+        assert_eq!(blocks[0].insns.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("fadd"), "{lines:?}");
     });
 }

@@ -81,6 +81,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SMulO => pin::SMULO,
         UAddOCarry => pin::UADDO_CARRY,
         USubOCarry => pin::USUBO_CARRY,
+        SetCCCarry => u16::MAX,
         SAddSat => pin::SADDSAT,
         UAddSat => pin::UADDSAT,
         SSubSat => pin::SSUBSAT,
@@ -139,6 +140,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SCmp => pin::SCMP,
         UCmp => pin::UCMP,
         SMulFix => pin::SMULFIX,
+        // Expanded before selection, so no pattern names them.
+        UMulFix | SMulFixSat | UMulFixSat | SShlSat | UShlSat => u16::MAX,
         SDivFix => pin::SDIVFIX,
         StackSave => pin::STACKSAVE,
         StackRestore => pin::STACKRESTORE,
@@ -350,6 +353,46 @@ impl<'a> DagisAdapter<'a> {
         users
     }
 
+    /// The weight of the reads of `node`'s results by live nodes (`weight` of
+    /// each read), each user's once, summed until `count_to`
+    /// (`hasNUsesOfValue`'s walk). A user the use list names twice is read
+    /// once; users that weigh nothing are not remembered, so the repeat test
+    /// scans at most `count_to` of them.
+    fn reads_of(
+        &self,
+        node: u32,
+        res: Option<u8>,
+        count_to: usize,
+        weight: impl Fn(SDValue) -> usize,
+    ) -> usize {
+        // The questions stop at one to three reads: eight users fit the stack.
+        let (mut readers, mut count) = ([0u32; 8], 0);
+        let candidates = self.dag.use_candidates(node);
+        let mut reads = 0;
+        for (at, &user) in candidates.iter().enumerate() {
+            if self.dead.contains(&user)
+                || readers[..count].contains(&user)
+                || (count == readers.len() && candidates[..at].contains(&user))
+            {
+                continue;
+            }
+            let before = reads;
+            for op in &self.dag.nodes()[user as usize].ops {
+                if op.node == node && res.is_none_or(|r| op.res == r) {
+                    reads += weight(*op);
+                }
+            }
+            if reads > before && count < readers.len() {
+                readers[count] = user;
+                count += 1;
+            }
+            if reads >= count_to {
+                break;
+            }
+        }
+        reads
+    }
+
     fn live_users(
         &self,
         value: PinValue,
@@ -363,15 +406,6 @@ impl<'a> DagisAdapter<'a> {
             }
         }
         out
-    }
-
-    fn live_node_users(
-        &self,
-        node: u32,
-    ) -> impl Iterator<Item = SDValue> + '_ {
-        self.live_user_nodes(node)
-            .into_iter()
-            .flat_map(move |user| self.dag.nodes()[user as usize].ops.iter().copied().filter(move |op| op.node == node))
     }
 
     fn remove(
@@ -449,7 +483,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
         limit: usize,
     ) -> usize {
-        self.live_node_users(node).filter(|u| self.dag.value_type(*u) != EVT::OTHER).take(limit + 1).count()
+        self.reads_of(node, None, limit + 1, |op| usize::from(self.dag.value_type(op) != EVT::OTHER))
     }
     fn use_empty(
         &self,
@@ -461,7 +495,7 @@ impl Dag for DagisAdapter<'_> {
         &self,
         node: u32,
     ) -> bool {
-        self.live_node_users(node).count() == 1
+        self.reads_of(node, None, 2, |_| 1) == 1
     }
     fn users(
         &self,
@@ -477,7 +511,18 @@ impl Dag for DagisAdapter<'_> {
         if self.dag.nodes()[node as usize].values[last] != EVT::GLUE {
             return None;
         }
-        self.live_users(PinValue::new(node, last as u8)).first().map(|u| u.0)
+        self.dag
+            .use_candidates(node)
+            .iter()
+            .copied()
+            .filter(|user| {
+                !self.dead.contains(user)
+                    && self.dag.nodes()[*user as usize]
+                        .ops
+                        .iter()
+                        .any(|op| op.node == node && usize::from(op.res) == last)
+            })
+            .min()
     }
     fn is_only_user_of(
         &self,
@@ -498,24 +543,7 @@ impl Dag for DagisAdapter<'_> {
         value: PinValue,
         n: usize,
     ) -> bool {
-        // each read of the value by a live node, counted up to `n + 1`; a
-        // user the list names twice is read once
-        let candidates = self.dag.use_candidates(value.node);
-        let mut reads = 0;
-        for (at, &user) in candidates.iter().enumerate() {
-            if self.dead.contains(&user) || candidates[..at].contains(&user) {
-                continue;
-            }
-            reads += self.dag.nodes()[user as usize]
-                .ops
-                .iter()
-                .filter(|op| op.node == value.node && op.res == value.res)
-                .count();
-            if reads > n {
-                return false;
-            }
-        }
-        reads == n
+        self.reads_of(value.node, Some(value.res), n + 1, |_| 1) == n
     }
     fn constant(
         &self,
@@ -556,6 +584,17 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
     ) -> Option<Vec<MemRef>> {
         matches!(self.dag.nodes()[node as usize].data, NodeData::Mem(_)).then(|| vec![node])
+    }
+    fn is_call_argument_store(
+        &self,
+        node: u32,
+    ) -> bool {
+        let node = &self.dag.nodes()[node as usize];
+        node.opcode == ISD::Store
+            && matches!(
+                node.data,
+                NodeData::Mem(info) if matches!(info.base, super::dag::MemBase::CallArgument(_))
+            )
     }
     fn load_ext_type(
         &self,
@@ -832,11 +871,11 @@ impl Dag for DagisAdapter<'_> {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut llrm_dagisel::dag::Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool {
-        if visited.contains(&node) {
+        if visited.contains(node) {
             return true;
         }
         while let Some(m) = worklist.pop() {
@@ -847,8 +886,7 @@ impl Dag for DagisAdapter<'_> {
                 return true;
             }
             for op in &self.dag.nodes()[m as usize].ops {
-                if !visited.contains(&op.node) {
-                    visited.push(op.node);
+                if visited.insert(op.node) {
                     worklist.push(op.node);
                 }
             }
@@ -917,14 +955,14 @@ impl AddrDag for DagisAdapter<'_> {
             NodeData::Symbol(id) => {
                 Some(Wrapped { symbol: Symbol { kind: SymbolKind::External, id }, offset: 0, flags: 0 })
             }
-            NodeData::PoolIndex(index) => {
+            NodeData::PoolIndex(index, offset) => {
                 // The alignment `getTargetConstantPool` is given: the entry's
                 // type size, by `ExpandConstantFP` (SD203).
                 let (_, vt) = self.dag.constant_pool[index as usize];
                 let align = (vt.size_in_bits() / 8).next_power_of_two().clamp(1, 16);
                 Some(Wrapped {
                     symbol: Symbol { kind: SymbolKind::ConstantPool { align }, id: index },
-                    offset: 0,
+                    offset: i64::from(offset),
                     flags: 0,
                 })
             }
@@ -935,12 +973,18 @@ impl AddrDag for DagisAdapter<'_> {
         &self,
         value: PinValue,
     ) -> bool {
-        self.live_users(value)
+        self.dag
+            .use_candidates(value.node)
             .iter()
             .any(
-                |&(user, at)| {
+                |&user| {
                     let node = &self.dag.nodes()[user as usize];
-                    node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1)
+                    !self.dead.contains(&user)
+                        && node.ops.iter().enumerate().any(|(at, op)| {
+                            op.node == value.node
+                                && op.res == value.res
+                                && (node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1))
+                        })
                 },
             )
     }
@@ -1003,10 +1047,7 @@ impl AddrDag for DagisAdapter<'_> {
                 (ISD::TargetGlobalAddress, NodeData::Global { symbol: symbol.id, offset: i64::from(disp) })
             }
             SymbolKind::External => (ISD::ExternalSymbol, NodeData::Symbol(symbol.id)),
-            SymbolKind::ConstantPool { .. } => {
-                assert_eq!(disp, 0, "a constant pool entry plus a displacement is not in our DAG");
-                (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id))
-            }
+            SymbolKind::ConstantPool { .. } => (ISD::TargetConstantPool, NodeData::PoolIndex(symbol.id, disp)),
             other => panic!("{other:?} symbols are not in our DAG"),
         };
         theirs(self.dag.intern(opcode, &[EVT::I32], &[], SDNodeFlags::default(), data))

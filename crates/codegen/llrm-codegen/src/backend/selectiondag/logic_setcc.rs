@@ -248,15 +248,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(folded) = self.or_of_ands(node) {
             return Some(folded);
         }
-        let c1 = c1?;
-        if self.dag.opcode(n0) == ISD::Or {
-            // `reassociateOps`: `(or (or x, c0), c1)` is `(or x, c0 | c1)`.
-            let (x, inner) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
-            if self.dag.constant(inner).is_some() && !self.dag.is_opaque(inner) {
-                let both = self.dag.get_node(ISD::Or, vt, &[inner, n1]);
-                return Some(self.dag.get_node(ISD::Or, vt, &[x, both]));
-            }
+        if let Some(reassociated) = self.reassociate_ops(ISD::Or, n0, n1) {
+            return Some(reassociated);
         }
+        if let Some(rotated) = self.match_rotate(n0, n1) {
+            return Some(rotated);
+        }
+        let c1 = c1?;
         // `(or (and x, c0), c1)` with `c0` and `c1` sharing a bit is
         // `(and (or x, c1), c0 | c1)`.
         if self.dag.opcode(n0) == ISD::And && self.dag.use_count(n0.node) == 1 {

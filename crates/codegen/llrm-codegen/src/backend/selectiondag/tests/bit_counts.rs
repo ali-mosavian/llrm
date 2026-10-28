@@ -6,6 +6,7 @@ use super::super::legalize_dag::DagLegalizer;
 use super::super::x86_lowering::{X86Lowering, cond, x86isd};
 use super::*;
 use crate::backend::selectiondag::{MemBase, MemInfo};
+use crate::testing::m16_ir;
 
 fn load(
     dag: &mut SelectionDAG,
@@ -40,7 +41,9 @@ fn legalized_by(
     let x = load(&mut dag, vt);
     let count = dag.get_node(op, vt, &[x]);
     dag.set_root(count);
-    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -118,7 +121,9 @@ fn abs_without_cmov_is_xor_with_the_sign_then_subtract_it() {
     let abs = dag.get_node(ISD::Abs, EVT::I32, &[x]);
     dag.set_root(abs);
     let tli = TargetLowering::x86_32(Features { cmov: false, ..Features::default() }, MVT::I32);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
 
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::Sub);
@@ -142,7 +147,8 @@ fn cttz_of_a_word_at_m16_is_promoted_like_m32() {
 /// of the sentinel bit and a `bsf`. `ctlz` and `bswap` select too.
 #[test]
 fn bit_scans_and_bswap_select_at_m16() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"
+    let text = m16_ir(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i16 @llvm.cttz.i16(i16, i1)
 declare i32 @llvm.ctlz.i32(i32, i1)
 declare i32 @llvm.bswap.i32(i32)
@@ -158,7 +164,8 @@ define i32 @bs(i32 %x) {
   %r = call i32 @llvm.bswap.i32(i32 %x)
   ret i32 %r
 }
-";
+",
+    );
     let module = llrm_mir::parse::module(text).expect("parses");
     for (function, wanted, most) in [("ct", "bsf", 6), ("cl", "bsr", 8), ("bs", "bswap", 4)] {
         let done = crate::backend::selectiondag::dag_function::selected(

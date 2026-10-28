@@ -69,6 +69,11 @@ pub enum Event {
     LirRenameAsks,
     /// The asks that moved a value, so the instruction was rebuilt.
     LirRenameRebuilds,
+    /// An instruction replaced in its block (`LiveIntervals::rewrite_instr`).
+    LirRewrites,
+    /// A register's operand list edited, an instruction's operands taken out
+    /// or put in (`LiveIntervals::remove_operands`, `add_operands`).
+    LirOperandListEdits,
     /// A SCEV expression made for a value (`create_scev_iter`).
     ScevNodes,
     /// A phi `exitsink` looked at as a candidate.
@@ -87,11 +92,13 @@ pub enum Event {
     Positions,
     /// A `UniqueSCEVs` key made to own its operands (a node was made).
     ScevKeysOwned,
+    /// Every copy of a `Context`.
+    ContextClones,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 29] = [
+const NAMES: [&str; 32] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -113,6 +120,8 @@ const NAMES: [&str; 29] = [
     "lsr_rewritten",
     "lir_rename_asks",
     "lir_rename_rebuilds",
+    "lir_rewrites",
+    "lir_operand_list_edits",
     "scev_nodes",
     "exitsink_phis",
     "loop_exit_scans",
@@ -121,6 +130,7 @@ const NAMES: [&str; 29] = [
     "lvi_predecessor_lists",
     "positions",
     "scev_keys_owned",
+    "context_clones",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -137,7 +147,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 29] = const { [const { Cell::new(0) }; 29] };
+    static EVENTS: [Cell<u64>; 32] = const { [const { Cell::new(0) }; 32] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

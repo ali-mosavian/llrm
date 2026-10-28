@@ -1,4 +1,3 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
 
 define internal i32 @bench_sieve() addrspace(1) memory(none) nounwind norecurse {
 b1:

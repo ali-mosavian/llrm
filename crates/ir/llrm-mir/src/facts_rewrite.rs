@@ -133,6 +133,8 @@ impl Fact {
             | Fact::WriteOnly
             | Fact::NoReturn
             | Fact::NoUnwind
+            | Fact::NoFree
+            | Fact::NoSync
             | Fact::WillReturn
             | Fact::NoCallback
             | Fact::Cold
@@ -545,6 +547,13 @@ mod tests {
             // product; the interval is worked out afresh when asked and kept
             // by no pass. It grants no flag.
             "fixednarrow.rs",
+            // InstCombineCompares.cpp's `foldICmpBinOp` reads the `nuw`/`nsw`
+            // of the two operands of a compare (`NoOp0WrapProblem`) to cancel
+            // a common operand, and for `(X + C1) cmp (Y + C2)` gives the
+            // single add it builds the flag the operand it came from had (
+            // `Op0HasNUW`/`Op0HasNSW`, L5552): a flag no instruction in the
+            // compare's operands lacked, on a value only the compare reads.
+            "combine_icmp_binop.rs",
         ];
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let reads =

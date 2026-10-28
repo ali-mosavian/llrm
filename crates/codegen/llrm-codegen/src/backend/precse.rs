@@ -25,8 +25,10 @@
 //! (`PerformTrivialCopyPropagation`); a commutative operation is then asked
 //! with its sources swapped if the first form is still not there.
 //!
-//! An operation that sets flags is shared only where nothing after it in its
-//! block reads them (the pin's `hasLivePhysRegDefUses`: EFLAGS).
+//! An operation that sets flags is shared where nothing after it in its block
+//! reads them, or where the flags it would set are the shared one's still
+//! (`PhysRegDefsReach`: the same block or the sole predecessor, no flag write
+//! or call between, five instructions at most).
 //!
 //! An invariant load (a load of a constant global the module defines,
 //! `isDereferenceableInvariantLoad`; selection marks it `Insn::invariant`) is
@@ -227,6 +229,8 @@ struct Walk<'a> {
     /// `expression -> (value, block, instruction)`.
     table: HashMap<Semantics, (u32, usize)>,
     regs: llrm_lir::registers::Regs,
+    /// Each block's predecessors, as block numbers.
+    preds: Vec<Vec<usize>>,
 }
 
 impl Walk<'_> {
@@ -356,7 +360,51 @@ impl Walk<'_> {
             .get(&id)
             .and_then(|&block| self.body.blocks[block].insns.iter().find(|one| one.id() == id))
             .and_then(|one| one.what.as_ref())
-            .is_some_and(|what| what.op == Operation::Move)
+            .is_some_and(|what| {
+                what.op == Operation::Move
+                    && matches!(
+                        (what.dests.as_slice(), what.sources.as_slice()),
+                        ([Loc::Held(_)], [Loc::Held(_)])
+                    )
+            })
+    }
+
+    /// `PhysRegDefsReach`: the flags the instruction that defines `value` in
+    /// `shared` set are still there at the instruction `index` of `block`,
+    /// which is in `shared` or has it as its only predecessor, within
+    /// `LookAheadLimit` instructions that neither write the flags nor call.
+    fn flags_reach(
+        &self,
+        value: u32,
+        shared: usize,
+        block: usize,
+        index: usize,
+    ) -> bool {
+        const LOOK_AHEAD_LIMIT: usize = 5;
+        let first = &self.body.blocks[shared].insns;
+        let Some(def) = first.iter().position(|one| one.defines.first() == Some(&value)) else { return false };
+        let (rest, until) = if shared == block {
+            (&first[def + 1..index], None)
+        } else if self.preds[block] == [shared] {
+            (&first[def + 1..], Some(&self.body.blocks[block].insns[..index]))
+        } else {
+            return false;
+        };
+        let mut left = LOOK_AHEAD_LIMIT;
+        for one in rest.iter().chain(until.into_iter().flatten()) {
+            if self.removed.contains(&one.id()) || one.is_meta() {
+                continue;
+            }
+            if left == 0 {
+                return false;
+            }
+            let calls = one.call.is_some() || one.what.as_ref().is_some_and(|what| what.op == Operation::Call);
+            if calls || (!is_terminator(one) && sets_flags(self.regs, self.body.bits, one)) {
+                return false;
+            }
+            left -= 1;
+        }
+        true
     }
 
     /// Whether the flags `one` sets are read before anything sets them again,
@@ -374,10 +422,10 @@ impl Walk<'_> {
 /// instruction names lanes past the six of EFLAGS (its status word, which
 /// `fnstsw; sahf` moves there): it counts as reading and writing all six.
 pub(crate) fn flag_lanes(lanes: &crate::backend::lanes::Lanes) -> crate::backend::lanes::Lanes {
-    use iced_x86::RflagsBits as F;
-    let six = (F::OF | F::SF | F::ZF | F::CF | F::PF) as u32;
+    use llrm_lir::flag::Flag;
+    let six = Flag::READ.bits();
     let mask = lanes.mask() as u32;
-    let beyond = mask & !(six | F::AF as u32) != 0;
+    let beyond = mask & !(six | Flag::AF.bits()) != 0;
     crate::backend::lanes::Lanes::flags(if beyond { six } else { mask & six })
 }
 
@@ -695,7 +743,14 @@ pub fn shared(
             }
         }
     }
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); body.blocks.len()];
+    for (from, block) in body.blocks.iter().enumerate() {
+        for to in block.succ.iter().filter_map(|at| by_at.get(at)) {
+            preds[*to].push(from);
+        }
+    }
     let mut walk = Walk {
+        preds,
         body,
         block_of,
         readers,
@@ -750,7 +805,10 @@ pub fn shared(
             };
             // An operation that sets flags is shared where nothing reads them.
             let sets_flags = sets_flags(regs, body.bits, one);
-            if sets_flags && walk.flags_read_after(number, index) {
+            if sets_flags
+                && walk.flags_read_after(number, index)
+                && !walk.flags_reach(shared_value, shared_block, number, index)
+            {
                 walk.table.insert(key.clone(), (one.defines[0], number));
                 mine.push(key);
                 continue;
@@ -1066,5 +1124,109 @@ mod tests {
         assert_eq!(zeros(&shared(&next, &RegisterClasses::m16())), 1, "the next block reads the first");
         let far = build(2);
         assert_eq!(zeros(&shared(&far, &RegisterClasses::m16())), 2, "two edges away stays two");
+    }
+
+    /// A store of a constant is not a copy: heuristic 2 took any `mov` that
+    /// reads the value for one, so the segment constant a hoisted poke loads
+    /// twice (`pop es`, `pop fs`) stayed two values (qb textfill's Fill loop).
+    #[test]
+    fn test_a_constant_only_stores_read_is_made_once() {
+        let make = |at: i64, result: u32| {
+            let imm = Loc::Imm(llrm_lir::Imm { value: 47104, width: 2, address: None });
+            insn(at, Operation::Move, "mov", vec![held(result)], vec![imm], vec![result], vec![])
+        };
+        let store = |at: i64, value: u32, disp: i64| {
+            let cell = Loc::Mem(llrm_lir::Mem::new(Some(llrm_lir::Addr::new(llrm_lir::Space::Frame, disp)), 2));
+            insn(at, Operation::Move, "mov", vec![cell], vec![held(value)], vec![], vec![value])
+        };
+        let mut body = LirBody::new(
+            "stores",
+            0,
+            vec![LirBlock::new(0, vec![make(0, 10), make(1, 11), store(2, 10, 4), store(3, 11, 6)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let constants = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.uses.is_empty() && !one.defines.is_empty())
+                .count()
+        };
+        assert_eq!(constants(&body), 2, "the premise: two constants");
+        assert_eq!(constants(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// Two blocks: `first` ends in a branch on the flags of `sub v1, v2`;
+    /// `second` follows it (its only predecessor when `lone`) and compares the
+    /// same operands before its own branch.
+    fn compare_twice(
+        between: Vec<Arc<Insn>>,
+        lone: bool,
+    ) -> LirBody {
+        let first = LirBlock {
+            succ: if lone { vec![1, 2] } else { vec![1, 3] }.into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Binary, "sub", vec![held(3)], vec![held(1), held(2)], vec![3], vec![1, 2]),
+                    insn(1, Operation::Branch, "jl", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let mut insns = between;
+        insns.push(insn(4, Operation::Binary, "sub", vec![held(4)], vec![held(1), held(2)], vec![4], vec![1, 2]));
+        insns.push(insn(5, Operation::Branch, "jle", vec![], vec![], vec![], vec![]));
+        let second = LirBlock { succ: vec![2].into(), ..LirBlock::new(1, insns) };
+        let third = LirBlock::new(2, vec![insn(6, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        // with a second way into `second`: block 3, reached from the first
+        let side = LirBlock { succ: vec![1].into(), ..LirBlock::new(3, vec![]) };
+        let blocks = if lone {
+            vec![first.into(), second.into(), third.into()]
+        } else {
+            vec![first.into(), second.into(), third.into(), side.into()]
+        };
+        let mut body = LirBody::new("twice", 0, blocks, IndexMap::default(), IndexMap::default());
+        body.inputs = [1, 2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        body
+    }
+
+    fn subs(body: &LirBody) -> usize {
+        body.blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("sub"))
+            .count()
+    }
+
+    /// The pin's `PhysRegDefsReach`: the compare in the only successor of a
+    /// block that made the same flags is the first one's, and `jle` reads
+    /// them. x_binsearch -O2: `a[mid] < key` then `a[mid] > key` kept two
+    /// compares, so the load had two readers and `cmp [m], r` was not made
+    /// (+9.5% executed instructions).
+    #[test]
+    fn test_a_compare_repeated_in_the_sole_successor_reads_the_first_flags() {
+        let body = compare_twice(vec![], true);
+        assert_eq!(subs(&body), 2, "the premise: two compares");
+        assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// Something that writes the flags between the two compares breaks the
+    /// reach.
+    #[test]
+    fn test_a_flag_write_between_the_two_compares_keeps_both() {
+        let between =
+            vec![insn(7, Operation::Binary, "add", vec![held(9)], vec![held(1), held(5)], vec![9], vec![1, 5])];
+        let body = compare_twice(between, true);
+        assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 2);
+    }
+
+    /// A block with a second way in is not the sole successor.
+    #[test]
+    fn test_a_block_with_two_predecessors_keeps_its_compare() {
+        let body = compare_twice(vec![], false);
+        assert_eq!(subs(&shared(&body, &RegisterClasses::m16())), 2);
     }
 }

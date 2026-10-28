@@ -258,6 +258,7 @@ impl LiveIntervals {
         &mut self,
         one: &Insn,
     ) {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         let instr = one.id();
         for &value in one.defines.iter().chain(&one.uses).chain(&one.undefs) {
             // A value named twice finds its slots gone the second time.
@@ -690,6 +691,7 @@ impl LiveIntervals {
             None => self.indexes.get_mbb_end_idx(block),
         };
         let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, late);
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&insn);
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
@@ -707,6 +709,7 @@ impl LiveIntervals {
         let prev = self.indexes.get_instruction_index(after);
         let next = self.indexes.get_index_after(block, &self.blocks[block], pos - 1);
         let index = self.indexes.insert_machine_instr_in_maps(insn.id(), block, &prev, &next, false);
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&insn);
         self.insns.insert(insn.id(), Arc::clone(&insn));
         self.blocks[block].insert(pos, insn);
@@ -722,11 +725,13 @@ impl LiveIntervals {
         old: InstrKey,
         new: Arc<Insn>,
     ) -> SlotIndex {
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirRewrites);
         let pos = self.position_of(block, old);
         let before = Arc::clone(&self.blocks[block][pos]);
         self.remove_operands(&before);
         self.insns.remove(&old);
         let index = self.indexes.replace_machine_instr_in_maps(old, new.id());
+        llrm_mir::counts::bump(llrm_mir::counts::Event::LirOperandListEdits);
         self.add_operands(&new);
         self.insns.insert(new.id(), Arc::clone(&new));
         self.blocks[block][pos] = new;
@@ -1171,7 +1176,7 @@ impl LiveIntervals {
             let again = fresh.compute_virt_reg_interval(reg);
             let now = shape(&fresh, &again);
             if was != now {
-                if llrm_support::env_set("LLRM_AFRESH_DUMP") {
+                if llrm_support::env_flag!("LLRM_AFRESH_DUMP") {
                     eprintln!(
                         "  held interval of v{reg}: {:?}",
                         self.intervals[&reg].segments.iter().map(|g| (g.start, g.end)).collect::<Vec<_>>()
@@ -1346,6 +1351,21 @@ mod tests {
         lis.interval(1);
         let edited = body(&[Arc::clone(&insns[0]), Arc::clone(&insns[1]), Arc::clone(&insns[2]), late]);
         assert_eq!(lis.assert_intervals_equal_afresh(&edited), 1);
+    }
+
+    /// D-SE7's cost is a number: an instruction replaced in its block and the
+    /// operand lists it edits are counted (`LLRM_DEBUG=counts`: d_faces -O2 has
+    /// 2,387 rewrites and 6,006 operand-list edits), as the renames that
+    /// rebuild an instruction are (`lir_rename_rebuilds`).
+    #[test]
+    fn test_a_rewrite_counts_itself_and_the_operand_lists_it_edits() {
+        use llrm_mir::counts::{Event, get};
+        let insns = [insn(&[1], &[]), insn(&[2], &[1]), insn(&[], &[2])];
+        let mut lis = LiveIntervals::new(&body(&insns));
+        let (rewrites, edits) = (get(Event::LirRewrites), get(Event::LirOperandListEdits));
+        lis.rewrite_instr(0, insns[1].id(), insn(&[2], &[1]));
+        assert_eq!(get(Event::LirRewrites) - rewrites, 1);
+        assert_eq!(get(Event::LirOperandListEdits) - edits, 2, "the old operands out, the new in");
     }
 
     /// A dead copy that was the last read of `%1` goes, and `%1` ends at its

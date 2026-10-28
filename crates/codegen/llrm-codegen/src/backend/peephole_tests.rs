@@ -380,6 +380,74 @@ fn test_word_push_pair_joins_tuned_for_size_only_where_the_dword_is_no_longer() 
     }
 }
 
+/// `mov cx, 8; push cx` with `cx` dead after the push is `push 8`: the dag
+/// pushed each constant of a QB runtime call through a register, 15 bytes
+/// where the old selector's pushes were 8 (nbody.bas, +309 B under dag).
+#[test]
+fn test_a_constant_made_only_to_be_pushed_is_the_pushes_immediate() {
+    let cx = rl(RegId::CX, 2);
+    let made = plain(0, Operation::Move, "mov", vec![cx.clone()], vec![im(8, 2)], None);
+    let pushed = plain(1, Operation::Push, "push", vec![], vec![cx], None);
+    let finish = Arc::new(Insn {
+        reads_complete: true,
+        ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
+    });
+    let input = body("argument", 0, vec![block(0, vec![made, pushed, finish], vec![]).into()]);
+
+    let result = fused(rules(), &input).insns();
+
+    let whats: Vec<_> = result.iter().filter_map(|one| one.what.as_ref()).collect();
+    assert!(whats.iter().all(|what| what.name.as_deref() != Some("mov")), "{whats:?}");
+    let push = whats.iter().find(|what| what.op == Operation::Push).expect("the push stays");
+    assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { value: 8, .. })]), "{push:?}");
+}
+
+/// `mov eax, 0; push ax`: a zero made wide and pushed narrow stayed a register
+/// (`xor ax, ax; push ax`, 3 bytes against 2 for `push 0`; cmpord.bas: 24 of
+/// them, 559 `xor` over the corpus under dag).
+#[test]
+fn test_a_wide_constant_pushed_narrow_is_the_pushes_immediate() {
+    let eax = rl(RegId::AX, 4);
+    let made = plain(0, Operation::Move, "mov", vec![eax], vec![im(0, 4)], None);
+    let pushed = plain(1, Operation::Push, "push", vec![], vec![rl(RegId::AX, 2)], None);
+    let finish = Arc::new(Insn {
+        reads_complete: true,
+        ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
+    });
+    let input = body("argument", 0, vec![block(0, vec![made, pushed, finish], vec![]).into()]);
+
+    let result = fused(rules(), &input).insns();
+
+    let whats: Vec<_> = result.iter().filter_map(|one| one.what.as_ref()).collect();
+    assert!(whats.iter().all(|what| what.name.as_deref() != Some("mov")), "{whats:?}");
+    let push = whats.iter().find(|what| what.op == Operation::Push).expect("the push stays");
+    assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { value: 0, .. })]), "{push:?}");
+}
+
+/// `mov ax, DGROUP; push ax`: a segment address made only to be pushed stayed
+/// a register (4 bytes against 3 for `pushw DGROUP`; gvnjn.bas, and every
+/// runtime call that takes a far pointer: two per call under dag).
+#[test]
+fn test_a_segment_made_only_to_be_pushed_is_the_pushes_immediate() {
+    let segment =
+        Loc::Imm(Imm { value: 0, width: 2, address: Some(Addr { index: 1, ..Addr::new(Space::Segment, 0) }) });
+    let ax = rl(RegId::AX, 2);
+    let made = plain(0, Operation::Move, "mov", vec![ax.clone()], vec![segment], None);
+    let pushed = plain(1, Operation::Push, "push", vec![], vec![ax], None);
+    let finish = Arc::new(Insn {
+        reads_complete: true,
+        ..insn(2, None, Some(sem(Operation::Return, "retf", vec![], vec![])), vec![], vec![])
+    });
+    let input = body("argument", 0, vec![block(0, vec![made, pushed, finish], vec![]).into()]);
+
+    let result = fused(rules(), &input).insns();
+
+    let whats: Vec<_> = result.iter().filter_map(|one| one.what.as_ref()).collect();
+    assert!(whats.iter().all(|what| what.name.as_deref() != Some("mov")), "{whats:?}");
+    let push = whats.iter().find(|what| what.op == Operation::Push).expect("the push stays");
+    assert!(matches!(push.sources.as_slice(), [Loc::Imm(Imm { address: Some(_), .. })]), "{push:?}");
+}
+
 #[test]
 fn test_constant_push_pair_preserves_stack_bytes() {
     for (high, low) in [(0x43F3i64, 0xC000i64), (-1, -2), (0, 0), (0x8000, 0x7FFF)] {
@@ -806,8 +874,8 @@ fn test_scaled_lea_does_not_require_another_shift() {
                 };
                 assert_eq!(names(&result), expected, "{amount} {following} {width}");
                 if following == "cmp" {
-                    let emitted =
-                        crate::frontends::bc::declen::decode(&code(result[0].what.as_ref().unwrap()), 0).unwrap().insn;
+                    let bytes = code(result[0].what.as_ref().unwrap());
+                    let emitted = iced_x86::Decoder::with_ip(16, &bytes, 0, iced_x86::DecoderOptions::NONE).decode();
                     assert_eq!(emitted.memory_index_scale(), 1 << amount);
                 }
             }
@@ -3222,6 +3290,105 @@ fn test_selected_move_shift_high_extract_uses_the_same_double_shift() {
     assert_eq!(result[0].what, Some(sem(Operation::Funnel, "shld", vec![high.clone()], vec![high, source, im(16, 1)])));
     assert_eq!(result[0].defines, [3]);
     assert_eq!(result[0].uses, [1]);
+}
+
+#[test]
+fn test_a_move_shift_high_extract_is_found_past_an_unrelated_instruction() {
+    // regparm3_matrix_4 (m16 -Os): a recolored allocation put the spill store
+    // of the return value between `mov esi, eax` and `shr esi, 16`, and the
+    // shift stayed (`mov` + `shr` for one `shld`, +8 bytes).
+    let (source, high) = (rl(RegId::ECX, 4), rl(RegId::EDX, 4));
+    let parts = vec![
+        Arc::new(insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])),
+            vec![3],
+            vec![1],
+        )),
+        Arc::new(insn(
+            11,
+            Some((11, 11)),
+            Some(sem(Operation::Move, "mov", vec![rl(RegId::EBX, 4)], vec![source.clone()])),
+            vec![5],
+            vec![1],
+        )),
+        Arc::new(insn(
+            12,
+            Some((12, 12)),
+            Some(sem(Operation::Binary, "shr", vec![high.clone()], vec![high.clone(), im(16, 1)])),
+            vec![3],
+            vec![3],
+        )),
+        Arc::new(Insn {
+            reads_complete: true,
+            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            ..insn(
+                13,
+                Some((13, 13)),
+                Some(sem(
+                    Operation::Return,
+                    "retf",
+                    vec![],
+                    vec![rl(RegId::AX, 2), rl(RegId::DX, 2), rl(RegId::BX, 2)],
+                )),
+                vec![],
+                vec![4, 3, 5],
+            )
+        }),
+    ];
+    let input = body("c-return-high-apart", 10, vec![block(10, parts, vec![]).into()]);
+
+    let result = high_extracts(&input, "386").unwrap().insns();
+
+    assert_eq!(names(&result), ["mov", "shld", "retf"]);
+}
+
+#[test]
+fn test_a_move_shift_high_extract_is_found_through_a_coalescing_anchor() {
+    // regparm3_matrix_4 (m16 -Os): `mov esi, eax` defined a split piece that an
+    // anchor (no operation) handed to the value the shift is tied to, and
+    // the pair stayed.
+    let (source, high) = (rl(RegId::ECX, 4), rl(RegId::EDX, 4));
+    let parts = vec![
+        Arc::new(insn(
+            10,
+            Some((10, 10)),
+            Some(sem(Operation::Move, "mov", vec![high.clone()], vec![source.clone()])),
+            vec![7],
+            vec![1],
+        )),
+        Arc::new(insn(11, Some((11, 11)), Some(sem(Operation::Nothing, "", vec![], vec![])), vec![3], vec![7])),
+        Arc::new(insn(
+            12,
+            Some((12, 12)),
+            Some(sem(Operation::Binary, "shr", vec![high.clone()], vec![high.clone(), im(16, 1)])),
+            vec![3],
+            vec![3],
+        )),
+        Arc::new(Insn {
+            reads_complete: true,
+            requires: vec![(Held { value: 4, width: 2 }, RegId::AX), (Held { value: 3, width: 2 }, RegId::DX)],
+            ..insn(
+                13,
+                Some((13, 13)),
+                Some(sem(Operation::Return, "retf", vec![], vec![rl(RegId::AX, 2), rl(RegId::DX, 2)])),
+                vec![],
+                vec![4, 3],
+            )
+        }),
+    ];
+    let input = body("c-return-high-anchored", 10, vec![block(10, parts, vec![]).into()]);
+
+    let result = high_extracts(&input, "386").unwrap().insns();
+
+    assert!(
+        result.iter().any(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shld"))),
+        "{result:?}"
+    );
+    assert!(!result.iter().any(|one| one.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("shr"))));
+    // The anchor's use still has a definition.
+    assert!(result.iter().any(|one| one.defines.contains(&7)));
 }
 
 #[test]

@@ -60,8 +60,7 @@ flowchart TB
     x86["<b>llrm-x86</b>"]:::mid
   end
   subgraph g_bcg["BC ROUTE"]
-    bc["<b>llrm-x86-bc</b>"]:::data
-    bcm["<b>llrm-x86-bcmachine</b>"]:::data
+    bc["<b>llrm-bcobj</b>"]:::data
     qbrt["<b>llrm-qbruntime</b>"]:::data
   end
   core["<b>llrm-codegen</b>"]:::out
@@ -76,8 +75,7 @@ flowchart TB
   m16 --> x86
   m32 --> x86
   bc --> m16
-  bc --> bcm
-  bcm --> qbrt
+  bc --> qbrt
   style g_fe fill:#2563eb12,stroke:#2563eb,stroke-width:1.6px,stroke-dasharray:7 5,color:#2563eb
   style g_tg fill:#47556912,stroke:#475569,stroke-width:1.6px,stroke-dasharray:7 5,color:#475569
   style g_bcg fill:#7c3aed12,stroke:#7c3aed,stroke-width:1.6px,stroke-dasharray:7 5,color:#7c3aed
@@ -101,12 +99,11 @@ flowchart TB
   tgt["<b>llrm-target</b>"]:::mid
   lir["<b>llrm-lir</b>"]:::mid
   x86["<b>llrm-x86</b>"]:::mid
-  bcm["<b>llrm-x86-bcmachine</b>"]:::data
+  bcm["<b>llrm-bcobj</b>"]:::data
   qbrt["<b>llrm-qbruntime</b>"]:::data
   sup["<b>llrm-support</b>"]:::mid
   core --> tr
   core --> x86
-  core --> bcm
   tr --> an
   an --> mir
   an --> sup
@@ -131,7 +128,7 @@ flowchart TB
   core["<b>llrm-codegen</b>"]:::out
   lir["<b>llrm-lir</b>"]:::mid
   omf["<b>llrm-omf</b>"]:::data
-  dwarf["<b>llrm-debuginfo</b>"]:::mid
+  dwarf["<b>llrm-dwarf</b>"]:::mid
   obj["<b>llrm-object</b>"]:::mid
   elf["<b>llrm-elf</b>"]:::mid
   e32["<b>llrm-elf32</b>"]:::mid
@@ -219,7 +216,7 @@ See [targets](../machine/targets.md) for adding one.
 | `llrm-elf` | The ELF relocatable container, for a machine that names its relocation types |
 | `llrm-elf32`, `llrm-elf64` | The ELF writer for i386, for x86-64 |
 | `llrm-macho` | The Mach-O relocatable writer, for x86-64 |
-| `llrm-debuginfo` | The DWARF writer: `.debug_info`, `.debug_abbrev`, `.debug_line`, `.debug_str`, `.debug_aranges` |
+| `llrm-dwarf` | The DWARF writer: `.debug_info`, `.debug_abbrev`, `.debug_line`, `.debug_str`, `.debug_aranges` |
 
 See [the object model](../formats/object-model.md).
 
@@ -237,8 +234,7 @@ See [the object model](../formats/object-model.md).
 
 | Crate | Purpose |
 |---|---|
-| `llrm-x86-bcmachine` | The machine layer for BC objects: x86 decode into machine IR, blocks, extents, stack facts and per-site runtime contracts |
-| `llrm-x86-bc` | The BC object frontend: machine code raised onto MIR |
+| `llrm-bcobj` | The BC object frontend: x86 decode into machine IR, blocks, extents, stack facts, per-site runtime contracts, and the lift of a BC object onto MIR |
 | `llrm-bcdriver` | `llrm-omf`'s driver: BC objects raised, optimized, selected and written afresh |
 
 See [BC objects](../frontends/bc.md).

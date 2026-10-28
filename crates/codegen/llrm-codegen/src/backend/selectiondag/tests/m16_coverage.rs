@@ -18,13 +18,14 @@ use super::super::dag_select::{do_instruction_selection, legalized};
 use super::super::function_lowering::FunctionLoweringInfo;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
+use crate::testing::m16_ir;
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n";
+const LAYOUT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n";
 
 /// Builds, legalizes and selects each block of the first function; the error
 /// names the stage.
 fn selects(body: &str) -> Result<(), String> {
-    let text = format!("{LAYOUT}@g = global i16 5\n{body}");
+    let text = format!("{layout}@g = global i16 5\n{body}", layout = m16_ir(LAYOUT));
     let module = llrm_mir::parse::module(&text).map_err(|e| format!("parse: {e}"))?;
     let layout = module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap());
     let machine = llrm_x86_m16::M16;
@@ -45,7 +46,7 @@ fn selects(body: &str) -> Result<(), String> {
         let mut built =
             build_block(&module, function, &layout, &BuilderTarget::m16(), &machine, &convention, &mut info, block)
                 .map_err(|r| format!("builder: {}", r.0))?;
-        legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false }, &machine)
+        legalized(&mut built.dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, &machine)
             .map_err(|r| format!("{r:?}"))?;
         do_instruction_selection(&mut built.dag, &selector, &mut hooks).map_err(|r| format!("{r:?}"))?;
     }

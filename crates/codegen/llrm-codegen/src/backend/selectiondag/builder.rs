@@ -89,6 +89,15 @@ pub struct BuilderTarget {
     pub opt_size: bool,
     /// The build is for the least size (`-Oz`, the pin's `minsize`).
     pub min_size: bool,
+    /// At size, the most stores a constant memset is inline for; 0 where the
+    /// pin's limit stands. Real mode: a dword store is 4 bytes (prefix, opcode,
+    /// ModRM, disp8) against 13 for the fill (`lea di`, `mov es,ss`, `mov cx`,
+    /// `rep stos`, the zero) that also takes ax, cx and di from the code
+    /// around it, so four.
+    pub memset_stores_size: usize,
+    /// The same for the load and store pairs of a constant memcpy: a dword
+    /// pair is 8 bytes against about 16 for `rep movs`, so two.
+    pub memcpy_moves_size: usize,
     /// For a program whose ABI gives its runtime routines contracts: whether
     /// the convention models each call of a `llrm.qb.` routine, by call. A call
     /// not listed, or listed with a reason, is refused.
@@ -159,6 +168,24 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with its size limit of memcpy pairs.
+    pub fn with_memcpy_moves_size(
+        mut self,
+        moves: usize,
+    ) -> BuilderTarget {
+        self.memcpy_moves_size = moves;
+        self
+    }
+
+    /// This target with its size limit of memset stores.
+    pub fn with_memset_stores_size(
+        mut self,
+        stores: usize,
+    ) -> BuilderTarget {
+        self.memset_stores_size = stores;
+        self
+    }
+
     /// This target with a stack alignment, whatever the target's is.
     pub fn with_stack_alignment(
         mut self,
@@ -208,6 +235,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
+            memset_stores_size: 0,
+            memcpy_moves_size: 0,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -236,6 +265,8 @@ impl BuilderTarget {
             jump_tables: true,
             opt_size: false,
             min_size: false,
+            memset_stores_size: 0,
+            memcpy_moves_size: 0,
             tail_calls: false,
             tti: None,
             runtime_calls: None,
@@ -378,17 +409,31 @@ impl<'a> Builder<'a> {
         next_synthetic: u32,
         synthetic_name: Option<String>,
     ) -> Builder<'a> {
-        let mut dag = SelectionDAG::new(target.dag);
+        let fp_extended = function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::Attribute::Str(name, Some(value))
+                        if name == llrm_mir::constantfolding::FP_EVAL && value == llrm_mir::constantfolding::FP_EVAL_EXTENDED
+                ),
+            );
+        let mut dag = SelectionDAG::new(DagConfig { fp_extended, ..target.dag });
         let tables = info
             .tables
             .get_or_insert_with(|| {
-                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for the
-                // globals the IR marks local, an ELF target's only ones
+                // `isOffsetFoldingLegal`: `shouldAssumeDSOLocal` holds for
+                // every symbol under the static relocation
+                // model, which these targets (DOS objects, no
+                // PIC) always use.
                 super::function_lowering::Tables {
                     global_names: std::rc::Rc::new(
                         module.globals.iter().map(|global| global.name.as_deref().unwrap_or("").to_string()).collect(),
                     ),
-                    local_symbols: std::rc::Rc::new(
+                    local_symbols: std::rc::Rc::new(if target.dag.dso_local_symbols {
+                        vec![true; module.globals.len()]
+                    } else {
                         module
                             .globals
                             .iter()
@@ -398,8 +443,8 @@ impl<'a> Builder<'a> {
                                     llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
                                 )
                             })
-                            .collect(),
-                    ),
+                            .collect()
+                    }),
                     block_names: std::rc::Rc::new(
                         (0..function.block_capacity())
                             .map(|at| {
@@ -713,20 +758,6 @@ impl Builder<'_> {
         }
     }
 
-    /// The word register of a dword one: `EAX` -> `AX`.
-    fn word_register(reg: llrm_lir::registers::RegId) -> Option<llrm_lir::registers::RegId> {
-        use llrm_lir::registers::RegId;
-        Some(match reg {
-            RegId::EAX => RegId::AX,
-            RegId::EBX => RegId::BX,
-            RegId::ECX => RegId::CX,
-            RegId::EDX => RegId::DX,
-            RegId::ESI => RegId::SI,
-            RegId::EDI => RegId::DI,
-            _ => return None,
-        })
-    }
-
     /// `LowerArguments` with X86's `LowerFormalArguments` over the target's
     /// `Convention`: a stack parameter is a load from a fixed object (indices
     /// -1, -2, ... in parameter order), a register parameter the copy of a
@@ -771,10 +802,7 @@ impl Builder<'_> {
                         fixed += 1;
                         self.dag
                             .fixed_offsets
-                            .insert(
-                                -fixed,
-                                offset + part as i64 * i64::from(self.target.dag.pointer.size_in_bits() / 8),
-                            );
+                            .insert(-fixed, offset + part as i64 * i64::from(part_vt.size_in_bits() / 8));
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         // The fixed object is a whole stack slot
                         // (`CreateFixedObject`),
@@ -854,7 +882,7 @@ impl Builder<'_> {
     /// argument registers the named parameters did not take are stored in the
     /// register save area (one 8-byte slot each, in order) that `va_start`
     /// names. The vector registers' half of the area (48..176) is left
-    /// unwritten until floating point is selected at m64 (DEVIATE SD313: a
+    /// unwritten until floating point is selected at m64 (DEVIATE SD238: a
     /// `double` passed to such a function is not read back).
     fn save_variadic_registers(&mut self) -> Result<(), Refused> {
         let calling = self.arch.calling();
@@ -1243,7 +1271,7 @@ impl Builder<'_> {
                             mem_vt: vt,
                             align: 1,
                             volatile: false,
-                            base: MemBase::Unknown,
+                            base: MemBase::CallArgument((displacement - first + index as i64 * part_bytes) as i32),
                             ext: None,
                             space: 0,
                         };
@@ -1262,9 +1290,8 @@ impl Builder<'_> {
                     let offset = self.dag.get_constant((displacement - first) as u128, self.target.dag.pointer);
                     let address = self.dag.get_node(ISD::Add, self.target.dag.pointer, &[sp, offset]);
                     let _size = self.dag.get_constant(u128::from(size), self.target.dag.pointer);
-                    let copy = self
-                        .inline_memcpy(chain, address, *value, size, usize::MAX, align, align)?
-                        .ok_or(Refused("byval copy"))?;
+                    let copy =
+                        self.always_inline_memcpy(chain, address, *value, size, align)?.ok_or(Refused("byval copy"))?;
                     stores.push(copy);
                 }
                 Parameter::Registers(regs) if regs.len() == pieces.len() => {
@@ -1278,10 +1305,21 @@ impl Builder<'_> {
                         // required in a dword register is a dword to the
                         // allocator.
                         let word = (vt == EVT::I16 && self.target.dag.pointer == EVT::I16)
-                            .then(|| Self::word_register(reg))
+                            .then(|| self.arch.registers().view(self.arch.registers().root(reg), 16))
                             .flatten();
                         if let Some(word) = word {
                             copies.push((word, piece));
+                            continue;
+                        }
+                        // and a byte one in the byte register (`DL`, not
+                        // `EDX`): the callee truncates
+                        // it, so extending it is a 6-byte
+                        // `mov edx, 12` for a 2-byte `mov dl, 12`
+                        let byte = (vt == EVT::I8 && self.target.dag.pointer == EVT::I16)
+                            .then(|| self.arch.registers().view(self.arch.registers().root(reg), 8))
+                            .flatten();
+                        if let Some(byte) = byte {
+                            copies.push((byte, piece));
                             continue;
                         }
                         let piece = if vt.is_integer() && vt.size_in_bits() < width {
@@ -1383,6 +1421,13 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
+        if let (true, Some(xmm)) = (vt.is_floating_point(), plan.float_result) {
+            // X86's `LowerCallResult` with SSE: a `float` or `double` is read
+            // from the vector register the convention names
+            let copy = self.dag.get_copy_from_phys_reg(chain, xmm, vt, glue);
+            self.dag.set_root(SDValue { node: copy.node, res: 1 });
+            return Ok(Some(SDValue { node: copy.node, res: 0 }));
+        }
         if vt.is_floating_point() {
             // X86's `LowerCallResult`: the value is popped from st(0), which
             // the allocator knows as `FP0`
@@ -1453,7 +1498,13 @@ impl Builder<'_> {
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
-            if vt.is_floating_point() {
+            if let (true, Some(xmm)) = (vt.is_floating_point(), self.convention.float_result) {
+                // `LowerReturn` with SSE: copied to the vector register
+                let copy = self.dag.get_copy_to_phys_reg(chain, xmm, value, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(vt, xmm));
+            } else if vt.is_floating_point() {
                 // x87 returns in st(0), which no register names: the value is
                 // RET_GLUE's operand
                 ops.push(value);
@@ -1548,11 +1599,12 @@ impl Builder<'_> {
                 Ok(self.dag.get_node(ISD::BuildPair, vt, &[zero, zero]))
             }
             ConstantKind::Int(bits) => Ok(self.dag.get_constant(*bits, vt)),
-            // MIR holds an `x86_fp80` constant as the double nearest its value;
-            // the DAG's is the 80-bit encoding.
+            // MIR holds an `x86_fp80` constant a double holds exactly as that
+            // double; the DAG's is the 80-bit encoding.
             ConstantKind::Float(bits) if vt == EVT::Simple(MVT::F80) => {
                 Ok(self.dag.get_constant_fp(f80_from_double_bits(*bits), vt))
             }
+            ConstantKind::Float80(bits) => Ok(self.dag.get_constant_fp(*bits, vt)),
             ConstantKind::Float(bits) => Ok(self.dag.get_constant_fp(u128::from(*bits), vt)),
             ConstantKind::Null | ConstantKind::Zero if vt.is_floating_point() => Ok(self.dag.get_constant_fp(0, vt)),
             ConstantKind::Null | ConstantKind::Zero => Ok(self.dag.get_constant(0, vt)),
@@ -1708,7 +1760,12 @@ impl Builder<'_> {
         self.current = Some(inst);
         // `++SDNodeOrder`: what the nodes built for this instruction carry.
         self.dag.cur_order += 1;
-        if self.prelowered.contains(&inst) {
+        let at = self.dag.cur_order as usize;
+        if self.dag.lines.len() <= at {
+            self.dag.lines.resize(at + 1, 0);
+        }
+        self.dag.lines[at] = crate::backend::isel::dbg_line(self.module, self.function, inst).unwrap_or(0);
+        if self.prelowered.contains(&inst) || self.info.prezeroed.contains(&inst) {
             return Ok(());
         }
         let instruction = self.function.instruction(inst).clone();
@@ -1814,7 +1871,9 @@ impl Builder<'_> {
         let result = if self.is_pointer_cast(op, instruction)? {
             self.pointer_cast(op, instruction.operands[0], operand, instruction.ty)?
         } else if op == CastOp::FPRound {
-            self.round_through_memory(operand, dest)
+            // A store of the type rounds it: no slot first (the old selector's
+            // single `fstp`).
+            if self.read_only_by_stores(instruction) { operand } else { self.round_through_memory(operand, dest) }
         } else {
             let converted = self.cast_value(op, operand, dest, flags_of(instruction.flags))?;
             // an integer wider than the float's mantissa is rounded to its type
@@ -1832,6 +1891,26 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether every reader of `instruction`'s value stores it: a store's
+    /// value, or a call's argument (passed on the stack, so stored, at the
+    /// argument's own type).
+    fn read_only_by_stores(
+        &self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = instruction.result else { return false };
+        let users = self.function.users(result);
+        !users.is_empty()
+            && users.iter().all(|one| {
+                let user = self.function.instruction(one.user);
+                match user.opcode {
+                    Opcode::Store { .. } => one.index == 0,
+                    Opcode::Call(_) => (one.index as usize) + 1 < user.operands.len(),
+                    _ => false,
+                }
+            })
     }
 
     /// `fpround`: the value stored to a stack slot of its own type and loaded

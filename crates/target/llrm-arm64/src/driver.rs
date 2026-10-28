@@ -84,7 +84,11 @@ pub fn program(
 ) -> Result<Program, String> {
     let (_, text) = without_triple(text);
     let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
-    let module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    llrm_mir::parse::upgrade_lifetimes(&mut module);
+    // Atomics are calls the mid-end moves nothing across; the selector makes
+    // them instructions.
+    llrm_mir::atomic::hidden(&mut module)?;
     match module.datalayout.as_deref() {
         Some(stated) if stated == platform.datalayout() => {}
         Some(stated) => {
@@ -266,10 +270,22 @@ pub fn object_file(
     name: &str,
     level: impl Into<Level>,
 ) -> Result<Vec<u8>, String> {
+    use llrm_target::object::Format;
     let object = object(text, platform, name, level)?;
+    use llrm_object::ObjectTarget;
+    let objects = crate::mc::Arm64Objects;
+    let macho = || objects.write_object("macho", &object).map_err(|error| error.to_string());
+    let elf = || objects.write_object("elf", &object).map_err(|error| error.to_string());
+    if let Some(dir) = llrm_target::object::all_writers_dir() {
+        for (format, written) in [(Format::MachO, macho()), (Format::Elf, elf())] {
+            if let Ok(written) = written {
+                llrm_target::object::record_writer(&dir, format, &written);
+            }
+        }
+    }
     match platform {
-        Platform::Darwin => llrm_macho::write(&object).map_err(|error| error.to_string()),
-        Platform::Linux => llrm_elf_arm64::write(&object).map_err(|error| error.to_string()),
+        Platform::Darwin => macho(),
+        Platform::Linux => elf(),
     }
 }
 

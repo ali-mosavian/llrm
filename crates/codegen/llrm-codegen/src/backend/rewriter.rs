@@ -74,6 +74,7 @@ pub fn rewrite(
     }
     let body = _dead_insertions(body);
     let held = &got.r#where;
+    let undef_super = _undef_supers(&body);
     let failed: RefCell<Option<Unplaced>> = RefCell::new(None);
     let blocks = body
         .blocks
@@ -84,6 +85,9 @@ pub fn rewrite(
                 &block.insns,
                 |one| _discardable_identity(one),
                 Some(|one: &Arc<Insn>| match _placed_for_rewrite(one, held, classes) {
+                    Ok(placed) if undef_super.contains(&ranges::key(one)) => {
+                        Arc::new(Insn { undef_super: true, ..(*placed).clone() })
+                    }
                     Ok(placed) => placed,
                     Err(error) => {
                         failed.borrow_mut().get_or_insert(error);
@@ -110,6 +114,54 @@ pub fn rewrite(
         ordered: body.ordered,
         ..body.with_blocks(blocks)
     })
+}
+
+/// The instructions that define a narrower part of a value than the value is
+/// read at while the value is not live before them: what `VirtRegRewriter`
+/// gives an `implicit-def` of the super register and no implicit use, which
+/// `X86FixupBWInsts::getSuperRegDestIfDead` reads as "the rest is undefined".
+/// DEVIATE W1 above has no sub-register operands, so the widths of the value's
+/// operands stand in for the sub-register indices.
+fn _undef_supers(body: &LirBody) -> BTreeSet<usize> {
+    let mut widest: IndexMap<u32, u32> = IndexMap::default();
+    let held_places = |one: &Insn| {
+        one.what
+            .iter()
+            .flat_map(|what| what.dests.iter().chain(&what.sources))
+            .filter_map(|place| match place {
+                Loc::Held(held) => Some(*held),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    for block in &body.blocks {
+        for one in block.insns.iter() {
+            for held in held_places(one) {
+                let width = u32::from(held.width);
+                widest.entry(held.value).and_modify(|most| *most = (*most).max(width)).or_insert(width);
+            }
+        }
+    }
+    let index = ranges::indexed_shared(body);
+    let live = ranges::intervals_shared(body, Some(&index));
+    let mut found = BTreeSet::new();
+    for block in &body.blocks {
+        for (position, one) in block.insns.iter().enumerate() {
+            let Some(what) = &one.what else { continue };
+            let slot = index.slot(block, position);
+            for place in &what.dests {
+                let Loc::Held(held) = place else { continue };
+                let narrower = u32::from(held.width) < widest.get(&held.value).copied().unwrap_or(0);
+                let live_before = live
+                    .get(&held.value)
+                    .is_some_and(|value| value.segments.iter().any(|run| run.start <= slot && slot < run.end));
+                if narrower && !live_before && !one.uses.contains(&held.value) {
+                    found.insert(ranges::key(one));
+                }
+            }
+        }
+    }
+    found
 }
 
 /// Delete unused allocator copies before physical identity loses their use
@@ -239,13 +291,30 @@ pub(crate) fn _placed(
     let Some(what) = &one.what else {
         return Ok(Arc::clone(one));
     };
-    // A value read as undef has no register of its own: any one will do
+    // A value read as undef reads nothing, so the register it was given does
+    // not matter: it takes the one the instruction defines (`sbb r, r`, any
+    // tied read undef: `Expand2AddrUndef`), else any register of the class
     // (`VirtRegRewriter` gives an undef operand the first of its class).
     let undef_held;
-    let held = if one.undefs.iter().any(|value| !held.contains_key(value)) {
+    let ignored = |value: &u32| !one.uses.contains(value);
+    let held = if one.undefs.iter().any(|value| ignored(value)) {
         let mut more = held.clone();
-        for value in &one.undefs {
-            more.entry(*value).or_insert(classes.available[0]);
+        let own = one.defines.iter().find_map(|value| held.get(value)).copied();
+        for value in one.undefs.iter().filter(|value| ignored(value)) {
+            // The register must have a form at the width the read names: esi
+            // has no byte.
+            let width = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .find_map(
+                    |place| match place {
+                        Loc::Held(read) if read.value == *value => Some(u32::from(read.width) * 8),
+                        _ => None,
+                    },
+                );
+            let fits = |register: &RegId| width.is_none_or(|bits| regs.view(regs.root(*register), bits).is_some());
+            more.insert(*value, own.filter(fits).or_else(|| held.get(value).copied()).unwrap_or(classes.available[0]));
         }
         undef_held = more;
         &undef_held
@@ -352,6 +421,9 @@ fn _register_of(
     // and its operands become st(i).
     if regs.in_class(*register, llrm_lir::registers::class::RFP) {
         return Ok(Loc::Reg(Reg { register: *register, width: value.width }));
+    }
+    if value.width == 1 && regs.bytes(*register) == Some(1) {
+        return Ok(Loc::Reg(Reg { register: *register, width: 1 }));
     }
     Ok(Loc::Reg(Reg { register: regs.named(*register, i64::from(value.width)), width: value.width }))
 }

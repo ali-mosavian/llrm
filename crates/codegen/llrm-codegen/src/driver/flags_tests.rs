@@ -94,7 +94,8 @@ fn each_level_selects_gcc_s_passes() {
     assert_eq!(pipeline(&["-Og"]), Options { loopidioms: false, rounds: 4, ..pipeline(&["-O1"]) });
     assert_eq!(pipeline(&["-O1"]).rounds, 2);
     assert_eq!(pipeline(&[]), pipeline(&["-O2"]));
-    // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676).
+    // `-fipa-cp-clone` is gcc's -O3 (opts.cc:676); the pin's default<O3> has no
+    // IPA-CP cloning, so -O3 leaves it off (recchop 1380 lines).
     assert_eq!(
         (
             pipeline(&["-O2"]).inline.cp_clone,
@@ -102,7 +103,7 @@ fn each_level_selects_gcc_s_passes() {
             pipeline(&["-O3", "-fno-ipa-cp-clone"]).inline.cp_clone,
             pipeline(&["-O2", "-fipa-cp-clone"]).inline.cp_clone
         ),
-        (false, true, false, true)
+        (false, false, false, true)
     );
     assert_eq!(
         (pipeline(&["-O1"]).inline.limit, pipeline(&["-O2"]).inline.limit, pipeline(&["-O3"]).inline.limit),
@@ -149,7 +150,7 @@ fn test_no_inline_functions_leaves_called_once_on_as_gcc_does() {
 fn a_pass_option_overrides_the_level_wherever_it_stands() {
     let options = pipeline(&["-fno-unroll-loops", "-O3", "-funswitch-loops", "-fno-inline-functions", "-fno-gcse"]);
     assert!(!options.unroll && options.unswitch && !options.forward && !options.drop_loads);
-    assert_eq!(options.inline, Threshold { cp_clone: true, ..Threshold::new(0) });
+    assert_eq!(options.inline, Threshold::new(0));
     assert_eq!(pipeline(&["-O2", "-fno-peel-loops", "-fpeel-loops"]).peel, true);
     assert_eq!(pipeline(&["-O2", "-fno-inline-functions", "-finline-functions"]).inline, Threshold::default());
     let error = parsed(&["-fno-vectorize"]).unwrap_err();
@@ -279,6 +280,35 @@ fn test_stack_usage_options_reach_the_driver() {
     assert!(Flags::default().take(&["-Wstack-usage=lots".to_owned()], &mut 0).is_err());
 }
 
+/// `--memory-model=real16|flat32|flat64` is the long form of `-m16|-m32|-m64`.
+#[test]
+fn the_memory_model_has_a_long_form_for_each_m_flag() {
+    for (model, mode) in [("real16", 16), ("flat32", 32), ("flat64", 64)] {
+        assert_eq!(parsed(&[&format!("--memory-model={model}")]).unwrap().mode(), Some(mode));
+        assert_eq!(parsed(&["--memory-model", model]).unwrap().mode(), Some(mode));
+    }
+    assert!(parsed(&["--memory-model=huge"]).unwrap_err().contains("expected real16, flat32 or flat64"));
+    assert!(parsed(&["--memory-model"]).is_err());
+}
+
+/// Two spellings of different models were taken silently, the last one winning.
+#[test]
+fn two_memory_models_that_differ_are_refused_and_equal_ones_are_not() {
+    assert!(parsed(&["-m16", "--memory-model=flat32"]).unwrap_err().contains("conflicts with -m16"));
+    assert!(parsed(&["--memory-model=flat64", "-m32"]).unwrap_err().contains("conflicts with -m64"));
+    assert_eq!(parsed(&["-m32", "--memory-model=flat32"]).unwrap().mode(), Some(32));
+}
+
+/// `-mcmodel=` names real mode's code model; absent, the target's own applies.
+#[test]
+fn mcmodel_names_one_of_three_code_models() {
+    assert_eq!(parsed(&[]).unwrap().code_model(), None);
+    for model in ["small", "medium", "large"] {
+        assert_eq!(parsed(&["-m16", &format!("-mcmodel={model}")]).unwrap().code_model(), Some(model));
+    }
+    assert!(parsed(&["-mcmodel=huge"]).unwrap_err().contains("expected small, medium or large"));
+}
+
 #[test]
 fn clocks_per_byte_limits_the_growth_an_inline_may_buy() {
     assert_eq!(pipeline(&[]).limits.milliclocks_per_byte, 16_000);
@@ -366,15 +396,19 @@ fn test_no_inline_names_each_function_and_is_not_the_inline_functions_pass() {
     assert!(parsed(&["-fno-inline-functions"]).unwrap().no_inline.is_empty());
 }
 
-/// `--isel=` takes `old` (the default) and `dag`, inline or as the next
-/// argument; anything else is an error.
+/// `--isel=` takes `dag`, `old` and `shadow`, inline or as the next argument;
+/// anything else is an error. With none, a target gets the DAG selector where
+/// it selects (16- and 32-bit x86) and the old one elsewhere.
 #[test]
 fn test_isel_names_the_selector() {
-    assert_eq!(parsed(&[]).unwrap().isel, Selector::Old);
-    assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Selector::Dag);
-    assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Selector::Shadow);
-    assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Selector::Old);
+    assert_eq!(parsed(&[]).unwrap().isel, None);
+    assert_eq!(parsed(&["--isel=dag"]).unwrap().isel, Some(Selector::Dag));
+    assert_eq!(parsed(&["--isel=shadow"]).unwrap().isel, Some(Selector::Shadow));
+    assert_eq!(parsed(&["--isel", "old"]).unwrap().isel, Some(Selector::Old));
     assert!(parsed(&["--isel=fast"]).unwrap_err().contains("unknown --isel=fast"));
+    assert_eq!(Selector::for_target(&llrm_x86_m16::M16), Selector::Dag);
+    assert_eq!(Selector::for_target(&llrm_x86_m32::M32), Selector::Dag);
+    assert_eq!(Selector::for_target(&llrm_x86_m64::M64), Selector::Old);
 }
 
 /// `-fallocation-routes` chose between the allocator alone and a second route

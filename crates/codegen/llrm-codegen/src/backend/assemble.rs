@@ -93,10 +93,6 @@ use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
 
-/// A far object of more bytes than this is laid down in 64K segments.
-const HUGE_PIECE: i64 = 0xFFFF;
-const HUGE_PIECE_BYTES: i64 = 0x10000;
-
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
 pub trait Abi {
@@ -172,6 +168,9 @@ pub fn assembled_by(
     libcalls: &[(String, u32, String)],
 ) -> Result<masm::Module, String> {
     let cpu = crate::backend::cpu::profile(cpu)?;
+    // A far object of more bytes than a segment holds is laid down in
+    // segments, which a huge pointer steps through.
+    let segment_bytes = arch.layout().segment_bytes().map_or(i64::MAX, |bytes| bytes as i64);
     let module = &*timed("mir near code", || crate::backend::nearcode::placed(module, &arch.layout().spaces.roles));
     let mut names =
         timed("global names", || globals::names(module, &arch.layout().spaces.roles, &|name| abi.linked(name)))?;
@@ -216,20 +215,50 @@ pub fn assembled_by(
             done.insert(id, made);
         }
     }
+    let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
+    // DEVIATE SD231: a routine one site calls is pasted there, as the old
+    // selector does: its procedure, call and return cost more than it saves.
+    // The pin has no such routine (a libcall in the library).
+    let mut sites: IndexMap<String, usize> = IndexMap::default();
+    for made in done.values() {
+        for (at, callee) in &made.calls {
+            if callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
+                && made.inline.contains_key(at)
+                && made.inline_symbols.get(at).is_none_or(Vec::is_empty)
+            {
+                *sites.entry(callee.clone()).or_default() += 1;
+            }
+        }
+    }
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         let name = global.name.as_deref().unwrap_or_default();
         match &global.kind {
+            GlobalKind::Variable(_) if globals::is_compiler_only(name) => {}
             GlobalKind::Variable(variable) if variable.initializer.is_some() => {
                 // A far or huge object lies outside DGROUP, in a segment of the
                 // module's own.
-                let datums = globals::datums(module, id, &names)?;
-                if let Some(section) = module.sections.get(name) {
+                let mut datums = globals::datums(module, id, &names)?;
+                // The constructor table is aligned by `datums`.
+                if name != globals::CONSTRUCTORS
+                    && let Some(to) = globals::alignment(
+                        module,
+                        layout.as_ref(),
+                        variable,
+                        module.sections.contains_key(name),
+                        arch.layout().segment_bytes().is_some(),
+                    )
+                {
+                    datums.insert(0, masm::Datum::Align(masm::Align { to }));
+                }
+                if name == globals::CONSTRUCTORS {
+                    sectioned.entry(globals::INIT_SEGMENT.to_owned()).or_default().extend(datums);
+                } else if let Some(section) = module.sections.get(name) {
                     // `#pragma data_seg`: a segment of the program's own
                     // naming.
                     sectioned.entry(section.clone()).or_default().extend(datums);
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE)
-                    && masm::data_size(&datums, 0) > HUGE_PIECE
+                    && masm::data_size(&datums, 0) >= segment_bytes
                 {
                     // Past 64K: consecutive segments of 64K, which a huge
                     // pointer steps through.
@@ -261,6 +290,7 @@ pub fn assembled_by(
                         if !matches!(selector, Selector::Old)
                             && callee.starts_with(llrm_target::routines::DIVIDE_PREFIX)
                             && inline_symbols.get(at).is_none_or(Vec::is_empty)
+                            && sites.get(callee).is_some_and(|&count| count > 1)
                         {
                             let routine = format!("${callee}");
                             shared.entry(routine.clone()).or_insert_with(|| code.clone());
@@ -408,8 +438,10 @@ pub fn assembled_by(
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
+        // A 16-byte one is a bitwise SSE instruction's memory operand, which
+        // must be aligned.
         if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: 8 }));
+            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
@@ -478,7 +510,7 @@ pub fn assembled_by(
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     for (name, datums) in huge_objects {
-        let pieces = masm::split_data(datums, HUGE_PIECE_BYTES).map_err(|why| format!("@{name}: {why}"))?;
+        let pieces = masm::split_data(datums, segment_bytes).map_err(|why| format!("@{name}: {why}"))?;
         for (at, piece) in pieces.into_iter().enumerate() {
             huge_segments.push((format!("{far_segment}_{}${at}", name.trim_start_matches('_')), piece));
         }
@@ -707,6 +739,19 @@ fn machined_once(
     MACHINED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Machinings);
     let (first, frame) = timed("candidate first frame", || cheaper(&first_stage, name, pool, target))?;
+    // `PrologEpilogInserter` orders the frame objects by use density
+    // (`X86FrameLowering::orderFrameObjects`); taken over the layouts below
+    // where it brings fewer operands past a one-byte displacement than they do.
+    let far = far_frame(&first.body);
+    let ordered = if far > 0 {
+        crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
+    } else {
+        None
+    };
+    let best = |chosen: Machined| match ordered {
+        Some(ordered) if far_frame(&ordered.body) < far_frame(&chosen.body) => ordered,
+        _ => chosen,
+    };
     let spilled = frame.floor + first.reserve;
     // The allocas move down by the hole: a multiple of the stack alignment, or
     // an 8-aligned array lands at 4 mod 8 (nbody -O2: 18,404 operands). Shared
@@ -715,9 +760,8 @@ fn machined_once(
     // did not (reserve 286 against 288).
     let spilled =
         if frame.align > 1 { (spilled + frame.align - 1).div_euclid(frame.align) * frame.align } else { spilled };
-    let far = far_frame(&first.body);
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
-        return Ok(first);
+        return Ok(best(first));
     }
     // The second layout is made from the first run's frame, not by running the
     // backend again; `LLRM_CHECK_FRAME=1` runs it again beside, and the two
@@ -737,10 +781,10 @@ fn machined_once(
             None => panic!("@{name} (hole {spilled}): the frame could not be laid again"),
         }
     }
-    Ok(match laid {
+    Ok(best(match laid {
         Some((second, _)) if far_frame(&second.body) < far => second,
         _ => first,
-    })
+    }))
 }
 
 /// `phased`, with the spiller; and, where the spiller changed the body, without
@@ -910,6 +954,34 @@ impl Staged {
     }
 }
 
+/// Whether `name` calls a function `llrm_mir::atomic::hidden` made.
+fn calls_atomic(
+    module: &Module,
+    name: &str,
+) -> bool {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+    let Some(global) = module.named(name) else { return false };
+    let GlobalKind::Function(function) = &module.global(global).kind else { return false };
+    function
+        .layout()
+        .iter()
+        .any(
+            |&block| function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        let instruction = function.instruction(inst);
+                        matches!(instruction.opcode, Opcode::Call(_))
+                            && matches!(
+                                instruction.operands.last(),
+                                Some(&Operand::Constant(callee)) if matches!(module.context.get(callee).kind, llrm_mir::context::ConstantKind::Global(one) if module.global(one).name.owned().is_some_and(|name| llrm_mir::atomic::decode(&name).is_some()))
+                            )
+                    },
+                ),
+        )
+}
+
 /// `name` selected with `hole` bytes left above the allocas, and its frame
 /// made.
 fn staged(
@@ -927,12 +999,17 @@ fn staged(
         abi,
         segments: target.segments,
         runtime: abi.runtime_contracts(),
+        frame_zeroed: zeroed,
+        facts: Some(target.facts),
     });
     let dag = match target.selector {
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
         // selector for the rest -- to bisect a wrong result to a function
-        Selector::Dag | Selector::Shadow if !shadow::only(name) => None,
+        // DEVIATE SD253: the DAG has no atomic nodes yet; a function calling a
+        // hidden atomic (`llrm_mir::atomic::hidden`) is selected by the old
+        // selector.
+        Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
             crate::backend::selectiondag::dag_function::selected_in_pool(
                 module,
@@ -987,10 +1064,32 @@ fn staged(
             )
         })
     };
-    let Selected { body, convention, calls, inline, inline_places, inline_symbols, far, pops, depth, extents, landing } =
-        selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let Selected {
+        body,
+        convention,
+        calls,
+        inline,
+        inline_places,
+        inline_symbols,
+        far,
+        pops,
+        depth,
+        extents,
+        temporaries,
+        landing,
+    } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
+    // a caller that does not exist.
+    let entry = module
+        .named(name)
+        .and_then(|id| module.global(id).function())
+        .and_then(|function| target.arch.calling().by_number(function.calling_convention));
+    if target.facts.uncalled(name) && entry.is_some_and(|one| one.entry_clobbers_all.iter().any(|entry| entry == name))
+    {
+        registers.saved.clear();
+    }
     registers.align = target.facts.stack_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
@@ -1047,6 +1146,18 @@ fn staged(
     frame.hole = hole;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
+    // DEVIATE D14: the pin gives each rounding store and reload its own
+    // `CreateStackTemporary` and no lifetime marker, so neither StackColoring
+    // nor StackSlotColoring shares them; here they are spill slots, which
+    // `slots_colored` shares.
+    if temporaries > 0 && frame.native.is_none() {
+        frame.floor = -depth;
+    }
+    for (at, (disp, size)) in frame.extents.split_off(frame.extents.len() - temporaries).into_iter().enumerate() {
+        frame.slots.insert(frame::SlotKey::Named("temporary".to_owned(), at as i64), disp);
+        frame.scratch.insert(disp);
+        frame.capacities.insert(disp, size.max(frame::WORD));
+    }
     Ok(Staged {
         body,
         frame,
@@ -1080,7 +1191,7 @@ fn phased(
     let pinned = body.pins.clone();
     let mut in_ssa = true;
     let preserved: std::collections::BTreeSet<RegId> =
-        registers.saved.iter().map(|(whole, _)| whole.full_register()).collect();
+        registers.saved.iter().map(|(whole, _)| classes.registers.root(*whole)).collect();
     let mut allocated = false;
     for mut phase in flow::machine_with(
         &pinned,

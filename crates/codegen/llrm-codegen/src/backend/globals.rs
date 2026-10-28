@@ -88,8 +88,9 @@ pub fn space(
 
 /// Each global's assembler name, keyed as an `Addr` names it: its name as
 /// `linked` mangles it, as LLVM's Mangler does. An internal global's name
-/// is free, so one no assembler takes becomes `G$n`; an external one must
-/// be a symbol once mangled. An intrinsic has none.
+/// is free, so one no assembler takes becomes `G$n`, as does an external one
+/// defined here (a frontend names it for the object); an imported one must be
+/// a symbol once mangled. An intrinsic has none.
 /// The group index naming a far variable's segment, `seg name`.
 pub fn segment_of(global: GlobalId) -> i64 {
     SEGMENTS + i64::from(global.0)
@@ -107,13 +108,15 @@ pub fn names(
     for (at, global) in module.globals.iter().enumerate() {
         let id = GlobalId(at as u32);
         // An intrinsic is lowered where it is called, never linked.
-        if global.name.as_deref().is_some_and(llrm_mir::intrinsics::is_reserved) {
+        if global.name.as_deref().is_some_and(|name| {
+            (llrm_mir::intrinsics::is_reserved(name) && !is_list(name)) || llrm_mir::atomic::decode(name).is_some()
+        }) {
             continue;
         }
         let name = linked(global.name.as_deref().unwrap_or_default());
         let symbol = if is_symbol(&name) {
             name
-        } else if global.linkage == llrm_mir::Linkage::External {
+        } else if global.linkage == llrm_mir::Linkage::External && space(module, id) == Space::External {
             return Err(format!("@{name} is no assembler symbol"));
         } else {
             format!("G${at}")
@@ -133,6 +136,22 @@ pub fn segment_name(
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Option<((Space, i64), String)> {
     (module.global(id).address_space != spaces.near).then(|| ((Space::Group, segment_of(id)), format!("seg {symbol}")))
+}
+
+/// The constructor list: laid out as the loader's init-function pointers.
+pub const CONSTRUCTORS: &str = "llvm.global_ctors";
+
+/// The segment the constructor list is laid out in.
+pub const INIT_SEGMENT: &str = ".init_array";
+
+/// `llvm.used` and `llvm.compiler.used` are for the compiler and the linker
+/// only; LLVM lays neither out.
+pub fn is_compiler_only(name: &str) -> bool {
+    matches!(name, "llvm.used" | "llvm.compiler.used")
+}
+
+fn is_list(name: &str) -> bool {
+    name == CONSTRUCTORS
 }
 
 fn is_symbol(name: &str) -> bool {
@@ -167,6 +186,34 @@ pub fn far_pointer(
     }
 }
 
+/// The alignment a variable is emitted at: `AsmPrinter::getGVAlignment` on the
+/// module's data layout, none where that is a byte. DEVIATE E1: MIR has no
+/// section attribute; a global the frontend placed in a named segment counts
+/// as one in a section (`in_section`). DEVIATE E2: where data lives in 64K
+/// segments (`segmented`), an initialized global over 16 bytes is not raised to
+/// 16 (`DataLayout::getPreferredAlign`, DataLayout.cpp#L1175): the object's
+/// segment would become paragraph aligned, up to 15 dead bytes of the scarce
+/// DGROUP per object (QB runtime `input.c`: +32 B, `dgroup_nearly_full`).
+pub fn alignment(
+    module: &Module,
+    layout: Option<&llrm_mir::datalayout::DataLayout>,
+    variable: &llrm_mir::module::GlobalVariable,
+    in_section: bool,
+    segmented: bool,
+) -> Option<i64> {
+    // A module with no data layout states its own alignments only.
+    let Some(layout) = layout else { return variable.align.map(|to| to as i64) };
+    let to = layout.global_align(
+        &module.context.types,
+        variable.ty,
+        variable.align,
+        in_section,
+        variable.initializer.is_some(),
+        !segmented,
+    );
+    (to > 1).then_some(to as i64)
+}
+
 /// A defined variable's data: its label, then its initializer's bytes and
 /// relocations.
 pub fn datums(
@@ -181,8 +228,54 @@ pub fn datums(
     let layout = DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     let name = names[&(Space::Segment, i64::from(global.0))].clone();
     let mut out = vec![Datum::Label(Label { name })];
+    if module.global(global).name.as_deref() == Some(CONSTRUCTORS) {
+        constructors(module, &layout, initializer, names, &mut out)?;
+        return Ok(out);
+    }
     Initializer { module, layout: &layout, names, out: &mut out }.constant(initializer)?;
     Ok(out)
+}
+
+/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function,
+/// ptr data }` entries, lowest priority first and in order within one, as
+/// `AsmPrinter::emitXXStructorList` sorts them; an entry without a function is
+/// dropped.
+fn constructors(
+    module: &Module,
+    layout: &DataLayout,
+    list: ConstantId,
+    names: &IndexMap<(Space, i64), String>,
+    out: &mut Vec<Datum>,
+) -> Result<(), String> {
+    let context = &module.context;
+    let bytes = layout.pointer(0).bits / 8;
+    if bytes < 4 {
+        return Err("llvm.global_ctors: the 16-bit DOS start-up runs no constructor table".to_owned());
+    }
+    out.insert(0, Datum::Align(crate::backend::masm::Align { to: i64::from(bytes) }));
+    let entries = match &context.get(list).kind {
+        ConstantKind::Aggregate(entries) => entries.clone(),
+        _ => Vec::new(),
+    };
+    let mut found = Vec::new();
+    for entry in entries {
+        let ConstantKind::Aggregate(fields) = &context.get(entry).kind else { continue };
+        let [priority, function, ..] = fields[..] else { return Err("a malformed llvm.global_ctors entry".to_owned()) };
+        let ConstantKind::Int(priority) = context.get(priority).kind else {
+            return Err("a malformed llvm.global_ctors priority".to_owned());
+        };
+        if absolute(module, layout, function) == Some(0) {
+            continue;
+        }
+        let (global, offset) = target(module, layout, function)?;
+        found.push((priority, global, offset));
+    }
+    found.sort_by_key(|(priority, ..)| *priority);
+    for (_, global, offset) in found {
+        let name = names[&(space(module, global), i64::from(global.0))].clone();
+        out.push(Datum::Pointer(Pointer { name, offset, far: false, bytes }));
+    }
+    Ok(())
 }
 
 struct Initializer<'a> {
@@ -229,6 +322,7 @@ impl Initializer<'_> {
                 Type::Float(FloatKind::X86Fp80) => self.bytes(&llrm_mir::types::x87_extended(*bits)),
                 _ => self.bytes(&bits.to_le_bytes()[..size]),
             },
+            ConstantKind::Float80(bits) => self.bytes(&llrm_mir::types::x87_image(*bits)),
             // An undef initializer is any bytes: zero. A poison one is a hole
             // of a switch lookup table (the pin's holes are `poison` too),
             // which the guard never indexes. `emitGlobalConstantImpl` writes
@@ -251,8 +345,14 @@ impl Initializer<'_> {
                     self.bytes(&vec![0; (total - at) as usize]);
                 }
                 _ => {
+                    // An element takes its alloc size: an `x86_fp80` is 10
+                    // bytes stored and 12 apart at f80:32.
                     for member in members.clone() {
                         self.constant(member)?;
+                        let types = &self.module.context.types;
+                        let ty = self.module.context.get(member).ty;
+                        let padding = self.layout.alloc_size(types, ty) - self.layout.store_size(types, ty);
+                        self.bytes(&vec![0; padding as usize]);
                     }
                 }
             },
@@ -270,6 +370,14 @@ impl Initializer<'_> {
         let context = &self.module.context;
         let constant = context.get(id);
         let datum = match (&constant.kind, context.types.get(constant.ty)) {
+            // A pointer made of an integer (`(Video far *)0xA0000000`, a video
+            // segment): its image, no relocation.
+            (_, Type::Pointer(_)) if absolute(self.module, self.layout, id).is_some() => {
+                let at = absolute(self.module, self.layout, id).unwrap_or(0);
+                let size = self.layout.store_size(&context.types, constant.ty) as usize;
+                self.bytes(&at.to_le_bytes()[..size]);
+                return Ok(());
+            }
             (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
                 Datum::Pointer(Pointer {
@@ -337,6 +445,21 @@ pub fn absolute(
             }
             _ => None,
         },
+        // A far address read through a near pointer is its offset: the low
+        // bits, as the cast of a variable is.
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }) => {
+            let (Type::Pointer(from), Type::Pointer(to)) =
+                (context.types.get(context.get(*value).ty), context.types.get(context.get(id).ty))
+            else {
+                return None;
+            };
+            let (from_bits, to_bits) = (layout.pointer(*from).bits, layout.pointer(*to).bits);
+            if to_bits >= from_bits || layout.has_unstable_representation(*from) {
+                return None;
+            }
+            let bits = absolute(module, layout, *value)? as u64 & ((1u64 << to_bits) - 1);
+            Some(llrm_mir::context::signed(u128::from(bits), to_bits) as i64)
+        }
         // An offset from a huge pointer's bits is not their sum: the carry past
         // the offset goes into the selector, which the caller that knows the
         // stride adds.

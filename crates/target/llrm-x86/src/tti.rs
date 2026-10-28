@@ -77,6 +77,13 @@ pub struct RealMode {
     /// instructions, not bytes); 16-bit code names it so a size row never
     /// grows.
     pub inline_size_guard: bool,
+    /// What an instruction that touches a float takes in code, in percent of
+    /// its `CodeSize` units: x87 moves each operand through the register
+    /// stack (`qmove`: the model tied where the code grew 2 bytes).
+    pub float_code_size_percent: i64,
+    /// (trips, bar): an `optsize` loop of at most that many trips is fully
+    /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
+    pub unroll_size_few_trips: (u32, u32),
 }
 
 impl RealMode {
@@ -473,6 +480,11 @@ impl Tti for X86 {
         "X86"
     }
 
+    fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
+        let real = self.real_mode.as_ref().filter(|real| real.unroll_size_few_trips.0 != 0)?;
+        Some(real.unroll_size_few_trips)
+    }
+
     /// SZ1: an inline that stays must not grow the code, where the target
     /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
@@ -486,6 +498,10 @@ impl Tti for X86 {
     /// 14-instruction loop of `idioms.bas` out of ten sites.
     fn call_code_size_percent(&self) -> i64 {
         150
+    }
+
+    fn float_code_size_percent(&self) -> i64 {
+        self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
     }
 
     fn is_type_legal(
@@ -825,9 +841,37 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
     }
 
+    /// `lea` forms `base + index + displacement` in one instruction.
+    fn address_form_adds_offsets(&self) -> bool {
+        true
+    }
+
     /// Real mode forms a scaled index with an address-size prefix.
+    fn lsr_drops_spilling_solution(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
     fn scaled_index_insns(&self) -> u32 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
+    }
+
+    /// i8 and i16 extending loads are legal, and free when the result
+    /// legalizes to as many registers as the loaded type does.
+    fn ext_load_free(
+        &self,
+        op: CastKind,
+        dst: Ty,
+        src: Ty,
+    ) -> bool {
+        matches!(op, CastKind::ZExt | CastKind::SExt)
+            && matches!(
+                (src, dst),
+                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+            )
+            && matches!(
+                (legalized(src, self.native()), legalized(dst, self.native())),
+                (Some((one, _)), Some((same, _))) if one == same
+            )
     }
 
     /// `X86TTIImpl::getCastInstrCost`, scalars:

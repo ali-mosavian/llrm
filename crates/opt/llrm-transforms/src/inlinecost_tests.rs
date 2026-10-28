@@ -26,6 +26,8 @@ fn x86_real() -> llrm_x86::tti::X86 {
                 scaled_index_insns: 0,
                 huge_space: None,
                 inline_size_guard: true,
+                float_code_size_percent: 100,
+                unroll_size_few_trips: (0, 0),
             },
         )
 }
@@ -545,6 +547,20 @@ fn test_an_inline_hint_raises_the_budget_by_llvms_ratio_and_not_for_size() {
     assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::MinSize).1, 5);
 }
 
+/// An `optsize` caller still raises an `inlinehint` callee to the hint
+/// threshold (`OptSizeHintThreshold` = `HintThreshold`, InlineCost.cpp:3394;
+/// opt: threshold 487 hinted, 75 not). `Threshold::for_size` once stated 1.
+#[test]
+fn test_an_inline_hint_still_raises_the_budget_at_an_optsize_caller() {
+    let text = |attrs: &str| {
+        format!(
+            "{GLOBAL}define internal i32 @callee(i32 %x) {attrs} {{\nb0:\n  %a = load i32, ptr @g\n  ret i32 %a\n}}\n\ndefine i32 @f(i32 %y) {{\nb0:\n  %r = call i32 @callee(i32 %y)\n  ret i32 %r\n}}\n"
+        )
+    };
+    assert_eq!(priced(&text(""), 0, false, CallerSize::OptSize).1, 75);
+    assert_eq!(priced(&text("inlinehint"), 0, false, CallerSize::OptSize).1, 487);
+}
+
 /// intrinsics_errors_qb45.bas m32 -O1: the module handler registers the error
 /// handler of the frame that runs it (`onerror(true)`); inlined into a
 /// procedure's pad, the registration belonged to a frame that returns, and the
@@ -656,4 +672,30 @@ b0:
         }
     };
     assert_eq!(price(false) - price(true), 15000);
+}
+
+/// The extension of a simple load is free on x86 (an extending load:
+/// `BasicTTIImplBase::getCastInstrCost`, BasicTTIImpl.h:1298-1311), where the
+/// cast alone costs an instruction: scroll's `sext (load i16)` made the callee
+/// 125 against the pin's 120 (`opt`: cost=-15025 for this callee at i386).
+#[test]
+fn test_a_sext_of_a_load_is_free_on_x86() {
+    let text = "@h = global i16 0
+
+define internal i32 @callee() {
+b0:
+  %a = load i16, ptr @h
+  %b = sext i16 %a to i32
+  ret i32 %b
+}
+
+define i32 @f() {
+b0:
+  %r = call i32 @callee()
+  ret i32 %r
+}
+";
+    let flat = llrm_x86::tti::X86::of_cpu("i486").unwrap();
+    let (cost, _) = priced_with(text, 0, true, CallerSize::Speed, Some(&flat));
+    assert_eq!(cost, -15025, "the pin prices this callee at -15025");
 }

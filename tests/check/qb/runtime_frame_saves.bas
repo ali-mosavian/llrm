@@ -2,10 +2,11 @@
 ' B$ENRA saves SI and DI and B$EXSA restores them. Shrink-wrapping moved the procedure's own
 ' saves past its first runtime call, and the native shell no longer stripped:
 ' "LOADQBINSIDE: native frame prefix changed shape" (deedlines' TSC.BAS).
+' The DAG selector's `push si`/`push di` are call arguments, not saves; the saves are pops.
 ' CHECK-LABEL: LOADQBINSIDE proc
 ' CHECK: call far ptr B$ENRA
-' CHECK-NOT: push si
-' CHECK-NOT: push di
+' CHECK-NOT: pop si
+' CHECK-NOT: pop di
 ' CHECK: LOADQBINSIDE endp
 DECLARE SUB loadqbinside ()
 DIM SHARED sp%(10000)

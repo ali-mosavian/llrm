@@ -14,7 +14,7 @@ flowchart LR
   fe["<b>Frontends</b><br/><small>llrm-c, llrm-nib, llrm-qb:<br/>HIR debug Builder</small>"]:::src
   mir["<b>MIR</b><br/><small>!types !functions !globals<br/>#35;dbg_declare<br/>#35;dbg_value/_piece/_gone<br/>lines</small>"]:::mid
   be["<b>Backend</b><br/><small>debuginfo::described<br/>(types, procedures)<br/>valuetrack (ranges)<br/>cfi (frame rows)<br/>debuginfo::laid_out<br/>-#gt; debug::Info</small>"]:::opt
-  dw["<b>llrm-debuginfo</b><br/><small>.debug_*<br/>ELF, Mach-O,<br/>OMF (-gdwarf)</small>"]:::out
+  dw["<b>llrm-dwarf</b><br/><small>.debug_*<br/>ELF, Mach-O,<br/>OMF (-gdwarf)</small>"]:::out
   co["<b>llrm-coff</b><br/><small>C13<br/>COFF</small>"]:::out
   om["<b>llrm-omf</b><br/><small>CV4 / TD<br/>OMF</small>"]:::out
   fe --> mir
@@ -64,7 +64,7 @@ frame, which call frame information gives at every address. A format that finds 
 
 | writer | `LOCATION_RANGES` | `CFA_LOCATIONS` |
 |---|---|---|
-| `llrm-debuginfo` | yes | yes |
+| `llrm-dwarf` | yes | yes |
 | `llrm-coff` (C13) | yes | no |
 | `llrm-omf` (CV4, Turbo Debugger) | no | no |
 
@@ -100,6 +100,15 @@ per scope (CodeView 4, Turbo Debugger) says a variable only where one place hold
 cell, or one register the code keeps it in from its first value to the end of the body. A variable in
 several places is left out, and no store is added to make it sayable. `tools/g-identical.sh` and the tests `g_leaves_the_code_of_the_bench_programs_alone` and
 `g_leaves_the_code_of_the_basic_and_nib_bench_programs_alone` (`tests/dwarf.rs`) hold the rule.
+
+## Clang's debug nodes in MIR
+
+The MIR parser and printer carry what clang writes for `-g`, unchanged: specialized nodes (`!DILocation(line: 3, column: 5, scope: !10)`,
+`DISubprogram`, `DILocalVariable`, `DIBasicType`, `DIDerivedType`, `DICompositeType`, `DIEnumerator`, `DISubrange`, `DIGlobalVariableExpression`,
+`DIExpression`...; `Module.special` names each node's kind and fields, its operands are the values in order, flag sets such as `A | B` are
+words), `#dbg_declare(ptr %x, !var, !DIExpression(), !loc)` records (`DebugRecord.expression`, `.location`), and `!dbg !N` on a `define` or a
+variable (`Function.metadata`, `Module.global_metadata`). Nothing reads them yet: turning them into the model above is the next step
+(the import and the writer are the following steps). Test: `crates/ir/llrm-mir/tests/di_roundtrip.rs`.
 
 ## Flags
 
@@ -178,7 +187,7 @@ No gap by construction: BASIC's CodeView dialect has no register record (QB loca
 | `tests/cv4.rs` | LINK `/CO` and CVPACK take an llrm object and CodeView, driven under DOSBox-X, shows variables, enums, constants, register variables and block scopes; Nib too |
 | `tests/turbo.rs` | `TLINK /v` and `TDUMP` agree with Turbo C++ on the module table; Turbo Debugger shows the same watch values |
 | `tests/objwriters.rs` | LLVM tools read every bench COFF object and its CodeView; `lld-link` makes a PDB |
-| `crates/mc/llrm-debuginfo/src/tests.rs` | unit headers, relocations, line table, frame rows, `llvm-dwarfdump --verify` per class and version |
+| `crates/mc/llrm-dwarf/src/tests.rs` | unit headers, relocations, line table, frame rows, `llvm-dwarfdump --verify` per class and version |
 | `tools/dwarf-coverage.sh llrm-c` | per level, how many source variables have a location and what share of their scope bytes it covers, against gcc |
 | `tools/debug-matrix.py` | the matrix of #1338; every OMF DWARF cell is valid under `jwlink` and `wdump` (which reads DWARF 2 and 3 only, so OMF cells use `-gdwarf-2`; 32-bit `-gdwarf 4`/`5` crashes `wdump`) |
 | the emulator fork's symbol tests ([`tests/symbols/qb`](https://github.com/ali-mosavian/dosbox-x/blob/main/tests/symbols/qb/README.md)) | QuickBASIC images at `-m16` and `-m32` (under DOS/32A, linked with `jwlink`) read in the debugger with `-gcodeview` and `-gdwarf`: locals, and by-reference parameters read through their pointers |

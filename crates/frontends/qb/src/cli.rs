@@ -4,7 +4,7 @@
 //! ```text
 //! llrm-qb SOURCE [--dialect D] [--runtime R] [--array-order O] [--dump-hir PATH]
 //!         [--huge-arrays] [--alternate-math]
-//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--include DIR]... [--dump DIR] [OPTIONS]
+//!         [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] [--include DIR]... [--dump DIR] [OPTIONS]
 //! ```
 //!
 //! OPTIONS are gcc's, as `llrm_codegen::driver::flags` takes them;
@@ -26,7 +26,7 @@ use super::qbstages;
 fn usage() -> String {
     format!(
         "usage: llrm-qb [-h] [--dialect DIALECT] [--runtime RUNTIME] [--array-order {{column-major,row-major}}] [--dump-hir DUMP_HIR] \
-[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] \
+[--huge-arrays] [--alternate-math] [--mbf] [--whole-program] [--array-merging] [--runtime-frames] [--error-lines] [--bc-codeview] [--run-time-module] \
 [--include INCLUDE] [--dump DUMP] {} source",
         flags::USAGE
     )
@@ -103,6 +103,7 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
             "--runtime-frames" => frontend.runtime_frames = true,
             "--error-lines" => frontend.error_lines = true,
             "--bc-codeview" => frontend.bc_codeview = true,
+            "--run-time-module" => frontend.run_time_module = true,
             "--include" => frontend.includes.push(PathBuf::from(value("--include")?)),
             "--dump" => dump = Some(PathBuf::from(value("--dump")?)),
             "--arm64" => {
@@ -145,6 +146,12 @@ pub(super) fn parse_args(argv: &[String]) -> Result<Arguments, String> {
     Ok(Arguments { source, frontend, dump_hir, flags, dump, codegen, arm64 })
 }
 
+/// Whether the object format is a host's: an ELF or Mach-O object, whatever
+/// the target or its pointer width. An OMF object, or none, is the PC's.
+fn is_hosted(object_format: &str) -> bool {
+    object_format != "omf" && !object_format.is_empty()
+}
+
 pub fn main(argv: &[String]) -> i32 {
     let args = match parse_args(argv) {
         Ok(args) => args,
@@ -173,10 +180,8 @@ pub fn main(argv: &[String]) -> i32 {
         }
         let args = Arguments { codegen, ..args };
         // a host (an ELF or Mach-O object) has no memory at the PC's low
-        // addresses (arm64's own bridge, arm64.rs, makes C calls of the
-        // runtime's)
-        program.promises.hosted =
-            args.arm64.is_none() && args.codegen.object_format != "omf" && !args.codegen.object_format.is_empty();
+        // addresses: the object format states it, whatever the pointer width
+        program.promises.hosted = is_hosted(&args.codegen.object_format);
         if program.runtime.calls_natively() {
             // the `-mabi=` family's convention, else the target's default
             let native = args.codegen.arch.calling().chosen(args.codegen.abi.as_deref())?;
@@ -214,7 +219,16 @@ pub fn main(argv: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_args;
+    use super::{is_hosted, parse_args};
+
+    /// `--arm64` and a 64-bit pointer once decided hosting (`arm64.is_none()`,
+    /// `bits == 64`): an arm64 Mach-O object ran the PC-memory path of a
+    /// bare-metal target. The object format decides, and only it.
+    #[test]
+    fn an_elf_or_macho_object_is_hosted_and_an_omf_or_no_object_is_not() {
+        assert!(is_hosted("elf64") && is_hosted("macho") && is_hosted("elf"));
+        assert!(!is_hosted("omf") && !is_hosted(""));
+    }
 
     fn runtime(argv: &[&str]) -> String {
         let argv: Vec<String> = argv.iter().map(|one| one.to_string()).collect();

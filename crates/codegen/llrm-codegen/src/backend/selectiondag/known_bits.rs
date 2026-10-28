@@ -20,6 +20,7 @@
 use super::dag::{BooleanContents, SDValue, SelectionDAG};
 use super::fold::mask;
 use super::isd::ISD;
+use super::x86_lowering::x86isd;
 
 /// `MaxRecursionDepth`.
 const MAX_DEPTH: u32 = 6;
@@ -84,12 +85,16 @@ fn walk(
         return KnownBits::unknown(width);
     }
     let operand = |at: usize| walk(dag, dag.operand(value, at), depth + 1);
-    match dag.opcode(value) {
+    let opcode = dag.opcode(value);
+    match opcode {
         ISD::SetCC if value.res == 0 => {
             // A compare is 0 or 1 where the target's boolean contents say so.
             let zero_or_one = dag.config().boolean_contents == BooleanContents::ZeroOrOne && width > 1;
             KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
         }
+        // `X86TargetLowering::computeKnownBitsForTargetNode`:
+        // `Known.Zero.setBitsFrom(1)`.
+        op if op == x86isd::SETCC && value.res == 0 => KnownBits { zero: all & !1, one: 0, width },
         ISD::And => {
             let (rhs, lhs) = (operand(1), operand(0));
             KnownBits { zero: lhs.zero | rhs.zero, one: lhs.one & rhs.one, width }
@@ -145,6 +150,13 @@ fn walk(
             }
             _ => KnownBits::unknown(width),
         },
+        // `computeKnownBits` of a `ZEXTLOAD`: the bits above the memory type.
+        ISD::Load if value.res == 0 => match &dag.node(value).data {
+            super::dag::NodeData::Mem(info) if info.ext == Some(super::actions::LoadExt::ZExtLoad) => {
+                KnownBits { zero: all & !mask(info.mem_vt.size_in_bits()), one: 0, width }
+            }
+            _ => KnownBits::unknown(width),
+        },
         ISD::AnyExtend => {
             let inner = operand(0);
             KnownBits { zero: inner.zero, one: inner.one, width }
@@ -160,6 +172,14 @@ fn walk(
             }
             _ => KnownBits::unknown(width),
         },
+        ISD::BSwap | ISD::BitReverse => {
+            let inner = operand(0);
+            let flip = |v: u128| {
+                let flipped = if opcode == ISD::BSwap { v.swap_bytes() } else { v.reverse_bits() };
+                flipped >> (128 - width)
+            };
+            KnownBits { zero: flip(inner.zero), one: flip(inner.one), width }
+        }
         _ => KnownBits::unknown(width),
     }
 }
@@ -190,6 +210,18 @@ pub fn num_sign_bits(
         // extension makes and what the operand has.
         let made = width - inner.size_in_bits() + 1;
         return made.max(num_sign_bits(dag, dag.operand(value, 0)));
+    }
+    // `ComputeNumSignBits` of a `SEXTLOAD` (`VTBits - MemBits + 1`) and a
+    // `ZEXTLOAD` (`VTBits - MemBits`).
+    if dag.opcode(value) == ISD::Load
+        && value.res == 0
+        && let super::dag::NodeData::Mem(info) = &dag.node(value).data
+    {
+        match info.ext {
+            Some(super::actions::LoadExt::SExtLoad) => return width - info.mem_vt.size_in_bits() + 1,
+            Some(super::actions::LoadExt::ZExtLoad) => return width - info.mem_vt.size_in_bits(),
+            _ => {}
+        }
     }
     let known = known_bits(dag, value);
     let sign = 1u128 << (width - 1);

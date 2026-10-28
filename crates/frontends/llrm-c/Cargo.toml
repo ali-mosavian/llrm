@@ -39,3 +39,5 @@ llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 regex = { workspace = true }
 llrm-codegen = { workspace = true, features = ["testing"] }
+# The lib tests compile `.c` files, which needs the feature; the root enabled it by unification while llrm-c was a root dependency.
+llrm-c = { path = ".", features = ["toolchain"] }

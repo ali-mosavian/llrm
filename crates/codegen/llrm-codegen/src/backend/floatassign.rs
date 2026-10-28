@@ -1,121 +1,41 @@
-//! Decides which floating values hold one of the eight flat x87 registers and
-//! which live in memory, and makes every spill, restore and memory operand
-//! explicit.
+//! Makes the floating code ready for register allocation: x87 integer
+//! conversions and compares go through memory, and loads of one cell are one
+//! value.
 //!
 //! # How it works
-//! This is pass one of x87 allocation, as IRA and LRA are for any register
-//! class in gcc; [`crate::backend::floatalloc`] is pass two (stack form) and
-//! decides nothing.
+//! Runs before `RegAlloc` as `FloatPrep` (`prepared`); the allocator then gives
+//! each floating value a flat x87 register and [`crate::backend::fpstack`]
+//! turns those into stack form. This pass chooses no register.
 //!
-//! First the body is made ready. An integer a `fild` reads from a register or
-//! an immediate goes through a frame cell (a constant through the constant
-//! pool). A float-to-integer store lands in an owned cell, with `wait` around
-//! it in a BASIC module, and the integer is read back only if something reads
-//! it. Later loads of a cell nothing wrote since are given the first load's
-//! value (`_aliased`).
-//!
-//! Then each value is split into allocnos, per register stretch: from a
-//! definition, a restore or a block entry to the value's death, a boundary
-//! (`floatregions::boundary`) or a block exit. The border of a block is decided
-//! per value from the edge bundles, as LLVM's SpillPlacement does (`_stacked`):
-//! a value is on the stack at a border where it is read before the stack is
-//! next emptied. Stretches that meet at a border join into one allocno. Values
-//! joined by copies share one spill cell where their lives do not overlap
-//! (`_shared_cells`), so a copy between two spilled values is no instruction.
-//!
-//! Each allocno is priced in the register form against the memory form,
-//! weighted by block frequency and the CPU's x87 timings. A read in memory is a
-//! memory operand where x87 has the form and it costs no more than a reload
-//! (`Plan::fused`), else a `fld` first. A value that is a load of a cell
-//! nothing writes before its last reader (`_homes`) is read again from that
-//! cell rather than kept or stored, as gcc's REG_EQUIV memory. Those costing
-//! more in a register start in memory.
-//!
-//! The result is then rewritten (`Plan::rewritten`) and checked against the
-//! stack's depth (`_crowded`): at the first step with more live values than
-//! `float_stack`, the allocno read furthest ahead among those at that point is
-//! moved to memory (Belady, as LRA), and the body is rewritten again. Only the
-//! steps the new victim reaches are rewritten (a step is kept by which of the
-//! roots it touches are spilled), and a block's steps and the floats live after
-//! each, which no spill changes, are worked out once. The allocnos holding a
-//! register at a point are found by the point.
-//!
-//! ```mermaid
-//! %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
-//! flowchart TB
-//!   classDef mid fill:#475569,stroke:#334155,stroke-width:2px,color:#ffffff,rx:12px,ry:12px
-//!   linkStyle default stroke:#64748b,stroke-width:2.2px
-//!   a["<b>floating LIR</b><br/><small>values, 10-byte</small>"]:::mid
-//!   b["<b>allocnos</b><br/><small>one per register stretch,<br/>joined at borders</small>"]:::mid
-//!   c["<b>rewritten</b><br/><small>fstp after defs,<br/>fld before reads</small>"]:::mid
-//!   d["<b>_crowded: more than</b><br/><small>eight live at a step?</small>"]:::mid
-//!   e["<b>spill the allocno</b><br/><small>read furthest ahead<br/>(none left: error)</small>"]:::mid
-//!   f["<b>explicit LIR</b><br/><small>at most eight live<br/>at any step</small>"]:::mid
-//!   a -->|"_integer_loads,<br/>_integer_stores,<br/>_aliased"| b
-//!   b -->|"priced: register vs memory<br/>start spilled where<br/>memory wins"| c
-//!   c --> d
-//!   d -->|"yes"| e
-//!   e --> c
-//!   d -->|"no"| f
-//! ```
-//!
-//! *Assigning x87 stack slots*
+//! An integer a `fild` reads from a register or an immediate goes through a
+//! frame cell (a constant through the constant pool, 0 and 1 as `fldz`/`fld1`).
+//! A float-to-integer store lands in an owned cell, with `wait` around it in a
+//! BASIC module, and the integer is read back only if something reads it.
+//! Later loads of a cell nothing wrote since are given the first load's value
+//! (`_aliased_by`). Instructions that must keep their order on the stack are
+//! sequenced (`_sequenced`), and a compare, which `fnstsw` answers in AX, is
+//! marked as clobbering it (`_compares_clobber`).
 //!
 //! A spilled value takes a ten-byte frame cell in extended format, so no
 //! precision is lost.
 //!
 //! # Example
-//! `keep(a, b)` multiplies two doubles, calls `show` with the product and adds
-//! `a` to it. `a` is live in an x87 register across the call, which leaves the
-//! stack empty, so it is stored before the call and loaded back after it.
-//!
-//! Before (after `FloatFold`):
-//!
-//! ```lir
-//! keep: 12 instructions
-//!   block 0x0000
-//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
-//!     0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
-//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
-//!     ; ...
-//!     0x0007  [None] := fstp v5  ; inserted
-//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-//!     0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
-//! ```
-//!
-//! After (`FloatAssign`):
-//!
-//! ```lir
-//! keep: 14 instructions
-//!   block 0x0000
-//!     0x0000  v1 := fld [[bp+0x8]]  ; inserted
-//!     0x0002  v3 := fmul v1, [[bp+0x10]]  ; inserted
-//!     0x0003  [[bp-0x10]] := fstp v3  ; inserted
-//!     ; ...
-//!     0x0007  [None] := fstp v5  ; inserted
-//!     0x0007  [[bp-0x18]] := fstp v1  ; inserted
-//!     0x0007  call   ; inserted; delivers v6@EAX; clobbers EAX,ST0
-//!     0x0009  v1 := fld [[bp-0x18]]  ; inserted
-//!     0x0009  v8 := fadd v1, [[bp-0x10]]  ; inserted
-//! ```
-//!
-//! From `ISEL_DUMP=1` of the nib function `keep(a: f64, b: f64)` with `-m32
-//! -O0`.
+//! `fild st, [bp+6]` of a word held in a register becomes a store of the
+//! register to a frame cell and a `fild` of the cell; `fild 1` becomes `fld1`.
 //!
 //! # Runs
-//! Machine phase after `floatfold` and `phielim`, before `floatalloc`, once per
+//! Machine phase after `floatfold` and `phielim`, before `RegAlloc`, once per
 //! function; a no-op when the body has no floating value. Not gated by an -O
 //! level.
 //!
 //! # Needs
-//! `live`, `spillplacement::bundles`, [`crate::backend::frame`] for cells,
-//! `constpool` for float constants, and the CPU profile's x87 costs.
+//! `live_among`, [`crate::backend::frame`] for cells, `constpool` for float
+//! constants.
 //!
 //! # See also
-//! `docs/optimizations/floating-pop-reuse.md`.
+//! [`crate::backend::fpstack`], `docs/optimizations/floating-pop-reuse.md`.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, VecDeque};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -123,29 +43,19 @@ use llrm_lir::registers::RegId;
 
 use crate::backend::allocate::{Live, live_among};
 use crate::backend::constpool::{self, Pool};
-use crate::backend::cpu::Profile;
-use crate::backend::floatalloc::{
-    _compare_name, _float_copy, _floating, _loads_memory, _memory_name, _terminators, _two_values, cell_of, inserted,
-    name_is, semantics, unlowered, width_of,
-};
-use crate::backend::floatregions::{Raised, boundary};
+use crate::backend::floatalloc::{_loads_memory, inserted, name_is, semantics, unlowered, width_of};
+use crate::backend::floatregions::Raised;
 use crate::backend::frame::Frame;
 use crate::backend::overlap;
-use crate::backend::parcopy;
-use crate::backend::select;
-use crate::backend::spillplacement::{self, Border, Constraint};
 use crate::model::ir::{Addr, Held, Imm, Loc, Mem, Operation, Semantics, Space};
-use crate::model::lir::{Insn, LirBlock, LirBody};
+use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{HashSet, IndexMap, IndexSet};
 
-// Rounds `assigned` took to settle, and blocks written over all of them.
+// The values `prepared` asked liveness of.
 #[cfg(test)]
 thread_local! {
-    static ROUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static SHAPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    pub(crate) static ROWS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// x87 reads integers from memory, for named values and physical stack slots.
@@ -253,7 +163,7 @@ fn _integer_stores(
                     ),
             )
     };
-    if !body.insns().iter().any(converts) {
+    if !body.iter_insns().any(converts) {
         return Ok(body.clone());
     }
     let mut integer_readers: HashSet<u32> = body.pins.keys().copied().collect();
@@ -270,7 +180,7 @@ fn _integer_stores(
         }
     }
     let unknown_readers =
-        body.insns().iter().any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier));
+        body.iter_insns().any(|one| one.what.as_ref().is_none_or(|what| what.op == Operation::Barrier));
     let mut blocks = Vec::new();
     for block in &body.blocks {
         let mut insns = Vec::new();
@@ -391,99 +301,6 @@ fn _may_write(
     one.defines.iter().any(|value| address.contains(value))
 }
 
-/// Whether the instruction can raise anything but a load's invalid operand.
-///
-/// Loads are left out: two reads that can each raise only invalid operation
-/// raise the same thing in either order.
-fn _may_raise(one: &Insn) -> bool {
-    let Some(what) = &one.what else {
-        return true;
-    };
-    match what.op {
-        Operation::FloatArith | Operation::FloatArithPop | Operation::FloatUnary | Operation::Divide => true,
-        Operation::FloatStore => {
-            let extended = what.dests.iter().all(|dest| matches!(dest, Loc::Mem(dest) if dest.width == 10));
-            !(name_is(what, "fstp") && extended)
-        }
-        Operation::Nothing => name_is(what, "wait"),
-        _ => false,
-    }
-}
-
-/// Whether an x87 store wrote the cell last, so it holds no signalling NaN.
-fn _quiet(
-    sequence: &[Arc<Insn>],
-    position: usize,
-    cell: &Mem,
-) -> bool {
-    for one in sequence[..position].iter().rev() {
-        let what = one.what.as_ref().expect("a region instruction has semantics");
-        if what.op == Operation::FloatStore
-            && (name_is(what, "fstp") || name_is(what, "fst"))
-            && matches!(what.dests.as_slice(), [Loc::Mem(dest)] if dest == cell)
-        {
-            return true;
-        }
-        if _may_write(one, cell) {
-            return false;
-        }
-    }
-    false
-}
-
-/// Whether the load at `position` may be read again by each reader instead of
-/// held on the stack.
-///
-/// GCC's memory equivalence: a value that is a cell nothing writes before its
-/// last reader is that cell. Its first read moves to its first reader, so
-/// nothing that can raise may come between unless the read cannot.
-fn _rereadable(
-    sequence: &[Arc<Insn>],
-    position: usize,
-    reads: &VecDeque<i64>,
-    ordered: bool,
-) -> bool {
-    let load = &sequence[position];
-    if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || reads.is_empty() {
-        return false;
-    }
-    let cell = cell_of(load);
-    if !_stable(cell) {
-        return false;
-    }
-    let what = load.what.as_ref().expect("checked above");
-    // Where no trap is unmasked (not BASIC's runtime) the order of the
-    // exceptions an instruction raises is not observable.
-    let mut quiet = (!ordered || name_is(what, "fild") || cell.width == 10).then_some(true);
-    let last = *reads.back().expect("checked above") as usize;
-    for step in position + 1..last {
-        let one = &sequence[step];
-        if _may_write(one, cell) {
-            return false;
-        }
-        if (step as i64) < reads[0] && _may_raise(one) {
-            if quiet.is_none() {
-                quiet = Some(_quiet(sequence, position, cell));
-            }
-            if quiet != Some(true) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// Map each repeated stable x87 cell read to the first still-current value.
-///
-/// Lowering names every ``fld`` with a fresh SSA value.  That is right at
-/// the MIR/LIR boundary, but loses the fact that two loads of the same stable
-/// cell, with no intervening write, read one x87 value.  Keep that fact here,
-/// where the stack allocator can decide whether retaining the value costs
-/// less than rereading it.  A call, opaque instruction, address redefinition,
-/// or possibly-aliasing store invalidates the remembered cell through
-/// ``_may_write``; this is deliberately the same memory proof used by the
-/// existing memory-operand reuse path.
-/// A value read in a later block keeps its own name: the successor reads it.
 pub(crate) fn _equivalent_loads(
     sequence: &[Arc<Insn>],
     live_out: &llrm_mir::dense::IdSet<u32>,
@@ -524,149 +341,6 @@ pub(crate) fn _equivalent_loads(
     aliases
 }
 
-/// Value -> the value whose spill cell it shares.
-///
-/// Values joined by copies share one cell where their lives do not overlap,
-/// so a copy between two spilled values is no instruction at all: LLVM's
-/// spill-slot coloring, within each copy-joined web.
-fn _shared_cells(
-    body: &LirBody,
-    floating: &HashSet<u32>,
-    live_out: &Live,
-) -> IndexMap<u32, u32> {
-    let mut web: IndexMap<u32, u32> = IndexMap::default();
-    fn find(
-        web: &mut IndexMap<u32, u32>,
-        mut one: u32,
-    ) -> u32 {
-        while let Some(next) = web.get(&one).copied().filter(|next| *next != one) {
-            one = next;
-        }
-        one
-    }
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        if let Some((result, source)) = _float_copy(one) {
-            let (result, source) = (find(&mut web, result), find(&mut web, source));
-            web.insert(result, result);
-            web.insert(source, result);
-        }
-    }
-    let members: Vec<u32> = web.keys().copied().collect();
-    let root: IndexMap<u32, u32> = members.iter().map(|value| (*value, find(&mut web, *value))).collect();
-    // Two members overlap where one is live as the other is defined.
-    let mut overlaps: HashSet<(u32, u32)> = HashSet::default();
-    for block in &body.blocks {
-        let mut alive: BTreeSet<u32> = live_out[&block.at].iter().filter(|value| root.contains_key(value)).collect();
-        for one in block.insns.iter().rev() {
-            for defined in one.defines.iter().filter(|value| root.contains_key(*value)) {
-                for other in alive.iter().filter(|other| *other != defined && root[*other] == root[defined]) {
-                    overlaps.insert((*defined, *other));
-                    overlaps.insert((*other, *defined));
-                }
-            }
-            for value in &one.defines {
-                alive.remove(value);
-            }
-            alive.extend(one.uses.iter().copied().filter(|value| root.contains_key(value) && floating.contains(value)));
-        }
-    }
-    let mut cells: IndexMap<u32, u32> = IndexMap::default();
-    // web -> each cell's owner
-    let mut colors: IndexMap<u32, Vec<u32>> = IndexMap::default();
-    for value in members.iter().copied().collect::<BTreeSet<u32>>() {
-        let owners = colors.entry(root[&value]).or_default();
-        let taken =
-            |owner: &u32| cells.iter().any(|(other, cell)| cell == owner && overlaps.contains(&(value, *other)));
-        let owner = owners.iter().copied().find(|owner| !taken(owner)).unwrap_or(value);
-        if owner == value {
-            owners.push(value);
-        }
-        cells.insert(value, owner);
-    }
-    cells
-}
-
-/// Bundle -> the floating values it holds on the stack, LLVM's SpillPlacement
-/// per value.
-///
-/// A block wants a value on the stack at a border where it reads the value
-/// before the stack is next emptied, or holds it after the stack was last
-/// emptied; memory where a call or barrier comes first. A block the value
-/// passes through links its bundles, or wants memory when it empties the stack.
-fn _stacked(
-    body: &LirBody,
-    floating: &HashSet<u32>,
-    live_in: &Live,
-    live_out: &Live,
-    bundles: &spillplacement::Bundles,
-) -> IndexMap<usize, BTreeSet<u32>> {
-    let regs = body.regs();
-    // Per block: where the stack is first and last emptied, and each value's
-    // first and last event.
-    let mut borders: IndexMap<i64, (Option<usize>, Option<usize>, IndexMap<u32, (usize, usize)>)> = IndexMap::default();
-    for block in &body.blocks {
-        let (mut first, mut last, mut events) = (None, None, IndexMap::<u32, (usize, usize)>::default());
-        for (position, one) in block.insns.iter().enumerate() {
-            let floated = one.what.as_ref().is_some_and(|what| what.sources.iter().chain(&what.dests).any(_floating));
-            if !floated && boundary(regs, one) {
-                first = first.or(Some(position));
-                last = Some(position);
-            }
-            // A copy moves a value between names, in whichever place its source
-            // is: it reads nothing, but the name it defines is made
-            // here, after any call before it (a join's input that a call
-            // returned is not spilled by it).
-            let copy = _float_copy(one).is_some();
-            for value in one.uses.iter().filter(|_| !copy).chain(&one.defines).filter(|value| floating.contains(value))
-            {
-                events.entry(*value).or_insert((position, position)).1 = position;
-            }
-        }
-        borders.insert(block.at, (first, last, events));
-    }
-    let mut placement = spillplacement::Placement::new(body, bundles);
-    let mut stacked: IndexMap<usize, BTreeSet<u32>> = IndexMap::default();
-    let values: BTreeSet<u32> =
-        live_out.values().flat_map(|set| set.iter()).filter(|value| floating.contains(value)).collect();
-    for value in values {
-        let (mut constraints, mut spilled, mut links) = (Vec::new(), Vec::new(), Vec::new());
-        for block in &body.blocks {
-            let (entering, leaving) = (live_in[&block.at].contains(&value), live_out[&block.at].contains(&value));
-            if !entering && !leaving {
-                continue;
-            }
-            let (first, last, events) = &borders[&block.at];
-            let Some((earliest, latest)) = events.get(&value) else {
-                if first.is_some() {
-                    spilled.push(block.at)
-                } else {
-                    links.push(block.at)
-                }
-                continue;
-            };
-            let border = |stacked: bool| if stacked { Border::PrefReg } else { Border::PrefSpill };
-            constraints.push(Constraint {
-                block: block.at,
-                entry: if entering { border(first.is_none_or(|first| *earliest < first)) } else { Border::DontCare },
-                exit: if leaving { border(last.is_none_or(|last| *latest > last)) } else { Border::DontCare },
-                weight: 1.0,
-            });
-        }
-        placement.prepare();
-        placement.add_constraints(&constraints);
-        placement.add_pref_spill(&spilled, false);
-        placement.add_links(&links);
-        placement.scan();
-        placement.iterate();
-        for bundle in placement.finish().iter() {
-            stacked.entry(bundle).or_default().insert(value);
-        }
-    }
-    stacked
-}
-
-/// Where a value is read back from: its own spill cell, or the load it is
-/// equivalent to, GCC's REG_EQUIV memory.
 pub(crate) fn _spill_home(
     value: u32,
     cell: Mem,
@@ -675,32 +349,6 @@ pub(crate) fn _spill_home(
     Arc::new(Insn { widths: vec![(value, 10)], defines: vec![value], ..inserted(0, load) })
 }
 
-/// A cell of the spill format, for pricing forms before any cell is taken.
-fn _probe() -> Mem {
-    Mem { through: RegId::BP, disp_width: 1, ..Mem::new(Some(Addr::new(Space::Frame, -8)), 8) }
-}
-
-/// `home` read again at `at`, defining `value`: LRA's restore.
-fn _restored(
-    home: &Insn,
-    value: u32,
-    at: i64,
-) -> Arc<Insn> {
-    let mut made = home.clone();
-    made.at = at;
-    made.covers = Some((at, at));
-    made.what = Some(Semantics {
-        dests: vec![Loc::Held(Held { value, width: 10 })],
-        ..home.what.clone().expect("a home has semantics")
-    });
-    made.defines = vec![value];
-    made.widths = home.widths.iter().copied().filter(|(one, _)| *one != value).chain([(value, 10)]).collect();
-    made.spread = Vec::new();
-    made.symbol = None;
-    Arc::new(made)
-}
-
-/// `value` written to its spill cell at `at`.
 pub(crate) fn _stored(
     value: u32,
     cell: &Mem,
@@ -725,159 +373,6 @@ fn _vacated(one: &Insn) -> Arc<Insn> {
     Arc::new(made)
 }
 
-fn _held_floats(args: &[Loc]) -> Vec<u32> {
-    let mut out = Vec::new();
-    for arg in args {
-        if let Loc::Held(held) = arg {
-            if held.width == 10 && !out.contains(&held.value) {
-                out.push(held.value);
-            }
-        }
-    }
-    out
-}
-
-/// A store that can keep its source: `fst` exists for m32 and m64.
-fn _keeps_source(what: &Semantics) -> bool {
-    (name_is(what, "fstp") || name_is(what, "fst"))
-        && what.dests.iter().all(|dest| matches!(dest, Loc::Mem(dest) if dest.width == 4 || dest.width == 8))
-}
-
-/// What reading `value` at an instruction costs, `(register, memory)`, with
-/// `survives` saying which floating values are read again after it: the tied
-/// copy a register form needs, and the memory operand or reload otherwise.
-fn _use_costs(
-    what: &Semantics,
-    value: u32,
-    home: &Insn,
-    survives: &dyn Fn(u32) -> bool,
-    cpu: &Profile,
-) -> (f64, f64, bool) {
-    let price = |form: &str| _price(cpu, form);
-    let load = price("x87_load");
-    if let Some((name, left, right)) = _two_values(Some(what)) {
-        let (left, right) = (left.value, right.value);
-        if left == right {
-            return (if survives(value) { load } else { 0.0 }, load, false);
-        }
-        let other = if value == left { right } else { left };
-        let tie = if survives(left) && survives(right) { load } else { 0.0 };
-        let base = match name.as_str() {
-            "fadd" | "fsub" => "x87_add",
-            "fmul" => "x87_mul",
-            _ => "x87_div",
-        };
-        let memory = _memory_name(&name, value == left, home).map_or(f64::INFINITY, |_| {
-            price(&format!("{base}_m")) - price(base) + if survives(other) { load } else { 0.0 }
-        });
-        return (tie, memory.min(load), memory <= load);
-    }
-    let kept = if survives(value) { load } else { 0.0 };
-    match what.op {
-        Operation::Compare
-            if matches!(
-                what.sources.get(1),
-                Some(Loc::Held(held)) if held.value == value
-            ) =>
-        {
-            let fused = select::float_memory(_compare_name(home), cell_of(home), select::At::bits16(0)).is_some();
-            (kept, if fused { 0.0 } else { load }, fused)
-        }
-        Operation::FloatStore if _keeps_source(what) => (0.0, load, false),
-        _ => (kept, load, false),
-    }
-}
-
-/// What an instruction form costs: its table price, and its issue, which
-/// the table's latencies leave out.
-fn _price(
-    cpu: &Profile,
-    form: &str,
-) -> f64 {
-    (cpu.cost(form).unwrap_or(1) + 1) as f64
-}
-
-/// A cell as one comparable place, beside a value's `v{n}`.
-fn _place(cell: &Loc) -> String {
-    parcopy::_named(cell).expect("a cell is a place")
-}
-
-/// `one` reading `fresh` where it read `source`, or writing `fresh` where it
-/// wrote.
-fn _renamed(
-    one: &Insn,
-    source: Option<(u32, u32)>,
-    dest: Option<u32>,
-) -> Arc<Insn> {
-    let mut made = one.clone();
-    let what = made.what.as_mut().expect("a copy has semantics");
-    let held = |value: u32| Loc::Held(Held { value, width: 10 });
-    if let Some((from, to)) = source {
-        what.sources = vec![held(to)];
-        made.uses = made.uses.iter().map(|value| if *value == from { to } else { *value }).collect();
-        made.widths.push((to, 10));
-    }
-    if let Some(to) = dest {
-        what.dests = vec![held(to)];
-        made.defines = vec![to];
-        made.widths.push((to, 10));
-    }
-    made.group = None;
-    Arc::new(made)
-}
-
-/// Each block's positions grouped as they execute: a phi's copies are one step.
-fn _steps(
-    block: &LirBlock,
-    cut: usize,
-) -> Vec<(usize, usize)> {
-    let mut steps = Vec::new();
-    let mut position = 0;
-    while position < cut {
-        let mut last = position;
-        if let (Some(group), Some(_)) = (block.insns[position].group, _float_copy(&block.insns[position])) {
-            while last + 1 < cut
-                && block.insns[last + 1].group == Some(group)
-                && _float_copy(&block.insns[last + 1]).is_some()
-            {
-                last += 1;
-            }
-        }
-        steps.push((position, last));
-        position = last + 1;
-    }
-    steps
-}
-
-/// The floating values live after each step, from the block's own exit.
-fn _live_after(
-    block: &LirBlock,
-    steps: &[(usize, usize)],
-    out: &BTreeSet<u32>,
-    floating: &HashSet<u32>,
-) -> Vec<BTreeSet<u32>> {
-    let mut alive: BTreeSet<u32> = out.clone();
-    let mut after = vec![BTreeSet::new(); steps.len()];
-    for (index, (first, last)) in steps.iter().enumerate().rev() {
-        after[index] = alive.clone();
-        let group = &block.insns[*first..=*last];
-        for one in group {
-            for value in &one.defines {
-                alive.remove(value);
-            }
-        }
-        alive.extend(group.iter().flat_map(|one| one.uses.iter().copied()).filter(|value| floating.contains(value)));
-    }
-    after
-}
-
-/// Later loads of a cell nothing wrote since are its first load's value.
-fn _aliased(body: &LirBody) -> LirBody {
-    _aliased_by(body, &crate::backend::allocate::live_out(body)).0
-}
-
-/// `_aliased` with the body's liveness at block exits given; whether any load
-/// was aliased, else the body is returned as it was.
 fn _aliased_by(
     body: &LirBody,
     live_out: &Live,
@@ -929,257 +424,6 @@ fn _aliased_by(
     (out, changed)
 }
 
-/// The phis' values the optimizer proved are a cell's (`!llrm.home`) where the
-/// body still holds it (`storedhomes`): each is read back from the cell, and a
-/// store of its own is never made.
-fn _stored_homes(
-    body: &LirBody,
-    floating: &HashSet<u32>,
-) -> IndexMap<u32, Arc<Insn>> {
-    crate::backend::storedhomes::held(body, &|value, cell| {
-        floating.contains(&value) && (cell.width == 8 || cell.width == 4)
-    })
-    .into_iter()
-    .map(|(value, cell)| (value, _spill_home(value, cell)))
-    .collect()
-}
-
-/// `body` without the constant loads nothing reads: a value whose copies were
-/// vacated (read back from its home instead) leaves `fld1; fstp st(0)` behind
-/// in stack form. A fixed-address load is no observable exception in MIR,
-/// as a dead one MIR drops.
-fn _without_dead_loads(body: &LirBody) -> LirBody {
-    let mut read: HashSet<u32> = body.pins.keys().copied().collect();
-    for block in &body.blocks {
-        read.extend(block.phis.iter().flat_map(|phi| phi.incoming.iter().map(|(_, value)| *value)));
-        for one in &block.insns {
-            read.extend(&one.uses);
-            read.extend(one.requires.iter().map(|(held, _)| held.value));
-            if let Some(what) = &one.what {
-                read.extend(_held_floats(&what.sources));
-            }
-        }
-    }
-    let dead = |one: &Insn| {
-        one.what
-            .as_ref()
-            .is_some_and(
-                |what| what.op == Operation::FloatLoad
-                    && !one.volatile()
-                    && one.group.is_none()
-                    && matches!(
-                        what.dests.as_slice(),
-                        [Loc::Held(result)] if result.width == 10 && !read.contains(&result.value)
-                    )
-                    && match what.sources.as_slice() {
-                        [] => matches!(what.name.as_deref(), Some("fld1" | "fldz")),
-                        [Loc::Mem(cell)] => cell.base.is_none() && cell.index.is_none() && cell.addr.is_some(),
-                        _ => false,
-                    },
-            )
-    };
-    if !body.blocks.iter().flat_map(|block| &block.insns).any(|one| dead(one)) {
-        return body.clone();
-    }
-    body.with_blocks(
-        body.blocks
-            .iter()
-            .map(|block| block.with_insns(block.insns.iter().filter(|one| !dead(one)).cloned().collect()))
-            .collect(),
-    )
-}
-
-/// Values a block reads from a cell nothing writes before their last
-/// reader: GCC's memory equivalence, read again rather than kept.
-fn _homes(
-    body: &LirBody,
-    floating: &HashSet<u32>,
-    ordered: bool,
-    (live_in, live_out): (&Live, &Live),
-) -> IndexMap<u32, Arc<Insn>> {
-    let mut defined: IndexMap<u32, usize> = IndexMap::default();
-    for one in body.blocks.iter().flat_map(|block| &block.insns) {
-        for value in one.defines.iter().filter(|value| floating.contains(value)) {
-            *defined.entry(*value).or_default() += 1;
-        }
-    }
-    let mut homes = IndexMap::default();
-    for block in &body.blocks {
-        for (position, one) in block.insns.iter().enumerate() {
-            if !_loads_memory(one.what.as_ref()) {
-                continue;
-            }
-            let Some(Loc::Held(result)) = one.what.as_ref().and_then(|what| what.dests.first()) else { continue };
-            if defined.get(&result.value) != Some(&1) {
-                continue;
-            }
-            if live_out[&block.at].contains(&result.value) {
-                if _rereadable_across(body, block, position, result.value, &live_in, ordered) {
-                    homes.insert(result.value, Arc::clone(one));
-                }
-                continue;
-            }
-            let reads: VecDeque<i64> = block.insns[position + 1..]
-                .iter()
-                .enumerate()
-                .filter(|(_, other)| {
-                    other.what.as_ref().is_some_and(|what| _held_floats(&what.sources).contains(&result.value))
-                })
-                .map(|(offset, _)| (position + 1 + offset) as i64)
-                .collect();
-            // A volatile read happens once, where it is: only its one reader,
-            // right after it, may take it.
-            let once = !one.volatile() || reads.iter().eq([position as i64 + 1].iter());
-            if once && _rereadable(&block.insns, position, &reads, ordered) {
-                homes.insert(result.value, Arc::clone(one));
-            }
-        }
-    }
-    homes
-}
-
-/// Whether the load at `position` of `block`, whose value leaves the block,
-/// may be read again wherever the value is read: a cell named by constants
-/// alone, which nothing in the body writes, and which no instruction that
-/// can raise precedes a read of, on any block the value is live in.
-fn _rereadable_across(
-    body: &LirBody,
-    block: &LirBlock,
-    position: usize,
-    value: u32,
-    live_in: &Live,
-    ordered: bool,
-) -> bool {
-    let load = &block.insns[position];
-    if !_loads_memory(load.what.as_ref()) || !load.delivers.is_empty() || load.volatile() {
-        return false;
-    }
-    let cell = cell_of(load);
-    if !_stable(cell) || cell.base.is_some() || cell.index.is_some() || cell.selector.is_some() {
-        return false;
-    }
-    // As the integer spiller asks it: in a sealed body only the frame's own
-    // stores reach an incoming argument's cell.
-    let written =
-        |one: &Insn| crate::backend::bodyfacts::_may_write(one, cell, body.sealed_arguments) && _may_write(one, cell);
-    if body.blocks.iter().flat_map(|one| &one.insns).any(|one| !Arc::ptr_eq(one, load) && written(one)) {
-        return false;
-    }
-    let what = load.what.as_ref().expect("checked above");
-    if !ordered || name_is(what, "fild") || cell.width == 10 {
-        return true;
-    }
-    let reads = |one: &Insn| one.what.as_ref().is_some_and(|what| _held_floats(&what.sources).contains(&value));
-    let quiet_until_read = |insns: &[Arc<Insn>]| insns.iter().take_while(|one| !reads(one)).all(|one| !_may_raise(one));
-    quiet_until_read(&block.insns[position + 1..])
-        && body.blocks.iter().filter(|one| live_in[&one.at].contains(&value)).all(|one| quiet_until_read(&one.insns))
-}
-
-// The values `prepared` asked liveness of.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static ROWS_ASKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-// Blocks `_crowded` looked at, for a test that a round resumes where the last
-// left off.
-#[cfg(test)]
-thread_local! {
-    pub(crate) static CROWDED_BLOCKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// The first instruction before which more floating values hold registers
-/// than there are, counting what each bundle's borders hold.
-fn _crowded(
-    body: &LirBody,
-    floating: &HashSet<u32>,
-    bundles: &spillplacement::Bundles,
-    from: usize,
-) -> Option<(i64, usize)> {
-    let registers = body.float_stack;
-    // Only the floating values are followed, as rows: a set of every live value
-    // of every block was built for each victim spilled (`fjoins` 512: 100 G).
-    let rows = crate::backend::allocate::live_rows_by(body, |value| floating.contains(&value));
-    // A bundle is asked whether more than `registers` floating values are live
-    // across it, by the blocks that enter or leave through it, and stops
-    // counting there: its blocks are not all read for it, and a spilling that
-    // leaves the first blocks within the stack asks of none of the rest.
-    let mut members: IndexMap<usize, Vec<(i64, bool)>> = IndexMap::default();
-    for block in &body.blocks {
-        let (entry, exit) = bundles.of[&block.at];
-        members.entry(entry).or_default().push((block.at, true));
-        members.entry(exit).or_default().push((block.at, false));
-    }
-    let mut asked: IndexMap<usize, bool> = IndexMap::default();
-    let mut crowded = |bundle: usize| -> bool {
-        *asked
-            .entry(bundle)
-            .or_insert_with(
-                || {
-                    let mut held: BTreeSet<u32> = BTreeSet::new();
-                    for &(at, entering) in members.get(&bundle).into_iter().flatten() {
-                        let values: Box<dyn Iterator<Item = u32> + '_> =
-                            if entering { Box::new(rows.entering(at)) } else { Box::new(rows.leaving(at)) };
-                        for value in values {
-                            held.insert(value);
-                            if held.len() > registers {
-                                return true;
-                            }
-                        }
-                    }
-                    false
-                },
-            )
-    };
-    for block in body.blocks.iter().skip(from) {
-        #[cfg(test)]
-        CROWDED_BLOCKS.with(|one| one.set(one.get() + 1));
-        let (entry, exit) = bundles.of[&block.at];
-        let cut = _terminators(block);
-        if crowded(exit) {
-            return Some((block.at, cut));
-        }
-        if crowded(entry) {
-            return Some((block.at, 0));
-        }
-        let steps = _steps(block, cut);
-        let leaving: BTreeSet<u32> = rows.leaving(block.at).collect();
-        let after = _live_after(block, &steps, &leaving, floating);
-        for (index, (first, last)) in steps.iter().copied().enumerate() {
-            let group = &block.insns[first..=last];
-            let made: BTreeSet<u32> = group
-                .iter()
-                .flat_map(|one| one.defines.iter().copied())
-                .filter(|value| floating.contains(value))
-                .collect();
-            // Stack form keeps an operand read again by duplicating it first:
-            // a compare pops what it reads, and a store without `fst` its
-            // source.
-            let duplicated: usize = group
-                .iter()
-                .filter_map(|one| one.what.as_ref())
-                .map(|what| match what.op {
-                    Operation::Compare => {
-                        _held_floats(&what.sources).iter().filter(|value| after[index].contains(value)).count()
-                    }
-                    Operation::FloatStore if !what.dests.is_empty() && !_keeps_source(what) => {
-                        _held_floats(&what.sources).iter().filter(|value| after[index].contains(value)).count()
-                    }
-                    _ => 0,
-                })
-                .sum();
-            // What a step reads is on the stack while it runs: a compare
-            // duplicating one operand still holds the other, which it pops.
-            let read = group.iter().filter_map(|one| one.what.as_ref()).flat_map(|what| _held_floats(&what.sources));
-            let before: BTreeSet<u32> = after[index].difference(&made).copied().chain(read).collect();
-            if after[index].union(&made).count().max(before.len() + duplicated) > registers {
-                return Some((block.at, first));
-            }
-        }
-    }
-    None
-}
-
 pub fn _floating_values(body: &LirBody) -> HashSet<u32> {
     body.blocks
         .iter()
@@ -1205,7 +449,7 @@ pub fn prepared(
     basic_semantics: bool,
 ) -> Result<LirBody, Raised> {
     if _floating_values(body).is_empty()
-        && !body.insns().iter().any(|one| {
+        && !body.iter_insns().any(|one| {
             one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::FloatLoad | Operation::FloatStore))
         })
     {
@@ -1241,7 +485,7 @@ fn _compares_clobber(
                     && what.sources.iter().any(|source| matches!(source, Loc::Held(held) if held.width == 10)),
             )
     };
-    if !body.insns().iter().any(|one| compares(one)) {
+    if !body.iter_insns().any(|one| compares(one)) {
         return body.clone();
     }
     let blocks = body
@@ -1282,7 +526,7 @@ fn _sequenced(body: &LirBody) -> LirBody {
             _ => None,
         }
     };
-    if !body.insns().iter().any(|one| float_copy(one).is_some()) {
+    if !body.iter_insns().any(|one| float_copy(one).is_some()) {
         return body.clone();
     }
     let mut fresh = body.next_value();

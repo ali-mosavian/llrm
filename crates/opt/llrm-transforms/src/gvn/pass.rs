@@ -21,13 +21,6 @@
 //! anything, and its pass manager lets that stand. A pipeline run to a fixed
 //! point here would not end, so the pass answers whether the function changed.
 //!
-//! DEVIATE 15, `simplifyInstruction` is not asked of a phi. Two reasons, each
-//! a measured loss: LLVM forms LCSSA inside its loop pipeline only, and here
-//! `lcssa` and this pass run to one fixed point, which they would never reach;
-//! and a loop's invariant phi simplified to its input lets the loop's
-//! expressions merge with copies outside it, a live range the allocator
-//! spills (x_hanoi2 -O2 +22.8% clocks, quicksort +1.5%; issue 2186).
-//!
 //! DEVIATE 3, `salvageAndRemoveInstruction` removes the instruction: MIR has no
 //! debug-value use list to salvage into, and `salvageKnowledge` reads
 //! operand bundles, which MIR has none of.
@@ -78,6 +71,10 @@ pub struct GvnPass<'a> {
     layout: &'a DataLayout,
     function: &'a mut Function,
     outer: &'a Outer,
+    /// The manager's `ExposedFrames`, taken at entry: removals only shrink
+    /// exposure and GVN makes no allocas. Without it `object_of` walks an
+    /// alloca's uses at every access asked of it.
+    exposed: Option<&'a std::collections::BTreeSet<llrm_mir::module::ValueId>>,
     dt: std::borrow::Cow<'a, DomTree>,
     vn: ValueTable,
     leader_table: LeaderMap,
@@ -116,6 +113,20 @@ pub fn run_impl_cfg(
     pre: bool,
     dominators: Option<&DomTree>,
 ) -> (bool, bool) {
+    run_impl_exposed(context, layout, function, outer, pre, dominators, None)
+}
+
+/// `run_impl_cfg` with the function's exposed frames when the caller holds
+/// them.
+pub fn run_impl_exposed(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    outer: &Outer,
+    pre: bool,
+    dominators: Option<&DomTree>,
+    exposed: Option<&std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+) -> (bool, bool) {
     let tables = TABLES.with(|pool| pool.take()).unwrap_or_else(|| (ValueTable::new(), LeaderMap::default()));
     let mut tables = tables;
     tables.0.translating = pre;
@@ -125,6 +136,7 @@ pub fn run_impl_cfg(
         layout,
         function,
         outer,
+        exposed,
         dt,
         vn: tables.0,
         leader_table: tables.1,
@@ -140,6 +152,14 @@ pub fn run_impl_cfg(
     let computed = pass.run_impl();
     TABLES.with(|pool| pool.set(Some((std::mem::take(&mut pass.vn), std::mem::take(&mut pass.leader_table)))));
     (pass.function.changes_since(mark).map_or(computed, |changes| !changes.is_empty()), pass.cfg_changed)
+}
+
+/// `unit` told the frames the pass holds as exposed, when it holds them.
+pub(super) fn exposing<'b>(
+    unit: llrm_analysis::memory::Unit<'b>,
+    exposed: Option<&'b std::collections::BTreeSet<llrm_mir::module::ValueId>>,
+) -> llrm_analysis::memory::Unit<'b> {
+    exposed.map_or(unit, |set| unit.with_exposed(set))
 }
 
 impl GvnPass<'_> {
@@ -269,7 +289,10 @@ impl GvnPass<'_> {
             self.vn.verify_removed(Operand::Value(result));
         }
         // `MD->removeInstruction(I)`, while it is still in its block.
-        let unit = llrm_analysis::memory::Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        let unit = exposing(
+            llrm_analysis::memory::Unit::within(&*self.context, self.layout, &*self.function, self.outer),
+            self.exposed,
+        );
         self.md.remove_instruction(&unit, inst);
         self.function.erase(inst).expect("an instruction nothing uses");
     }
@@ -775,9 +798,8 @@ impl GvnPass<'_> {
         // redundancies, for example if it determines that %y is equal to %x
         // then the instruction "%z = and i32 %x, %y" becomes "%z = and i32 %x,
         // %x" which we now simplify.
-        // DEVIATE 15: no phi is simplified (issue 2186); DEVIATE 18: no GEP
-        // either, whose offset-zero form the BASIC runtime and the `bq32` bench
-        // cells ran worse without.
+        // DEVIATE 18: no GEP, whose offset-zero form the BASIC runtime and the
+        // `bq32` bench cells ran worse without.
         // `simplifyInstruction` has no arm of MIR's for the other kinds, and
         // building its operands costs.
         let simplified = match self.function.instruction(inst).opcode {
@@ -795,6 +817,7 @@ impl GvnPass<'_> {
                 self.function,
                 inst,
             ),
+            Opcode::Phi => llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst),
             _ => None,
         };
         if let Some(simplified) = simplified {

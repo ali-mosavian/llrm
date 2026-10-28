@@ -4,6 +4,7 @@
 //! clang. Preprocess, dependency and query jobs run clang as is.
 
 mod inline_asm;
+mod lifetimes;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -105,9 +106,27 @@ fn pin() -> &'static str {
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
 
+/// `text` with each `{datalayout:NAME}` replaced by the `datalayout` of
+/// crates/target/llrm-NAME's description.
+fn expanded(text: &str) -> Result<String, String> {
+    let mut out = text.to_owned();
+    while let Some(start) = out.find("{datalayout:") {
+        let end = start + out[start..].find('}').ok_or("targets.toml: unclosed {datalayout:")?;
+        let name = &out[start + "{datalayout:".len()..end];
+        let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+        let description = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+        let table: toml::Table = description.parse().map_err(|error| format!("{path}: {error}"))?;
+        let layout = table.get("datalayout").and_then(toml::Value::as_str).ok_or(format!("{path}: no datalayout"))?;
+        out.replace_range(start..=end, layout);
+    }
+    Ok(out)
+}
+
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
+        target.datalayout = expanded(&target.datalayout)?;
+        target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
         }
@@ -176,6 +195,59 @@ const TAKES_VALUE: &[&str] = &[
     "-arch",
     "-target",
 ];
+/// The backend's own flags (llrm-llc's `Flags`), which clang does not know.
+const LLC_FLAGS: &[&str] = &[
+    "-mstack-is-data",
+    "-mno-stack-is-data",
+    "-mfar-bss",
+    "-mno-far-bss",
+    "-mregcall-default",
+    "-mbss-begin",
+    "-mno-bss-begin",
+    "-fstack-usage",
+    "-ffloat-store",
+    "-fverify-ir",
+    "-fno-float-store",
+];
+const LLC_PREFIXES: &[&str] =
+    &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
+/// The passes `-f[no-]PASS` switches in the backend's pipeline.
+const BACKEND_PASSES: &[&str] = &[
+    "allocation-search",
+    "allocation-search-all",
+    "peel-loops",
+    "inline-functions-called-once",
+    "inline-functions",
+    "strength-reduce",
+    "lsr",
+    "unswitch-loops",
+    "loop-interchange",
+    "loop-unroll-and-jam",
+    "tree-ch",
+    "ipa-cp-clone",
+    "inline-recursive",
+    "gcse",
+    "tree-pre",
+    "tree-switch-conversion",
+    "jump-tables",
+    "tree-dse",
+    "tree-dce",
+    "tree-sink",
+    "llrm-spares",
+    "llrm-homes",
+    "llrm-stable-loads",
+    "tree-sra",
+    "move-loop-invariants",
+    "tree-loop-distribute-patterns",
+    "optimize-sibling-calls",
+];
+
+fn backend_pass(flag: &str) -> Option<&'static str> {
+    let name = flag.strip_prefix("-f")?;
+    let name = name.strip_prefix("no-").unwrap_or(name);
+    BACKEND_PASSES.iter().copied().find(|pass| *pass == name)
+}
+
 const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile"];
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
@@ -217,10 +289,29 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             || flag == "--help"
         {
             passthrough = true;
+        } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
+            && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
+        {
+            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // `stack` checks SP on entry; `bounds` checks nothing in IR, which
+            // carries no subscripts.
+            build.llc.push(flag.to_owned());
         } else if REFUSED.iter().any(|one| flag.starts_with(one)) {
             return Err(format!("{flag}: not translated yet"));
         } else if flag.starts_with("-g") && flag != "-g0" {
-            return Err(format!("{flag}: debug info is not carried yet; use -g0"));
+            // clang writes the debug metadata, the backend the format `flag`
+            // names.
+            if !build.clang.iter().any(|one| one == "-g") {
+                // No `#dbg_assign`: the importer reads `#dbg_value` and
+                // `#dbg_declare` only.
+                build
+                    .clang
+                    .extend(
+                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
+                            .map(str::to_owned),
+                    );
+            }
+            build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {
             build.level = match level {
                 "" => "1".into(),
@@ -228,13 +319,40 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
                 "g" => "1".into(),
                 other => other.to_owned(),
             };
-            build.clang.push(flag.to_owned());
+            // clang has no -Omax: its top level is -O3.
+            build.clang.push(if level == "max" { "-O3".to_owned() } else { flag.to_owned() });
         } else if flag.starts_with("-mabi=") {
             // The backend's convention (clang's own -mabi is for other
-            // targets); it follows the table's.
+            // targets); it follows the table's. Open Watcom's `char` is
+            // unsigned, whatever the target's clang default.
+            if flag == "-mabi=watcom" && !argv.iter().any(|one| one == "-fsigned-char") {
+                build.clang.push("-funsigned-char".to_owned());
+            }
             build.llc.push(flag.to_owned());
+            if flag == "-mabi=watcom" {
+                build.clang.push("-funsigned-char".to_owned());
+            }
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
+            build.llc.push(flag.to_owned());
+        } else if flag.starts_with("-march=") || flag.starts_with("-mtune=") {
+            // The backend prices and selects for the CPU as clang does.
+            build.clang.push(flag.to_owned());
+            build.llc.push(flag.to_owned());
+        } else if let Some(pass) = backend_pass(flag) {
+            // The pipeline's `-f[no-]PASS` switches are the backend's; clang
+            // knows only the inliner's.
+            if pass == "inline-functions" {
+                build.clang.push(flag.to_owned());
+            }
+            build.llc.push(flag.to_owned());
+        } else if LLC_FLAGS.contains(&flag) || LLC_PREFIXES.iter().any(|one| flag.starts_with(one)) {
+            build.llc.push(flag.to_owned());
+        } else if flag == "--dump" {
+            // llrm-c's switch: each backend stage written to the directory.
+            build.llc.push(flag.to_owned());
+            build.llc.push(value(&mut at)?);
+        } else if flag.starts_with("--dump=") {
             build.llc.push(flag.to_owned());
         } else if flag == "-l" || flag == "-L" || flag == "-Xlinker" {
             build.link.push(flag.to_owned());
@@ -473,6 +591,8 @@ fn build(
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
+                let text = lifetimes::upgraded(&text);
+                std::fs::write(&ir, &text).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
                 if printed != expected && layout_facts(printed) != layout_facts(&target.datalayout) {
@@ -528,8 +648,17 @@ fn build(
         let near_code = build.clang.iter().any(|flag| matches!(flag.as_str(), "-mcmodel=small" | "-mcmodel=compact"));
         let mut link = Command::new(&command[0]);
         link.args(&command[1..]);
+        // The link script compiles the float helpers with this same driver,
+        // wherever cargo put it.
+        if let Ok(own) = std::env::current_exe() {
+            link.env("LLRM_CC", own);
+        }
         if near_code {
             link.env("LLRM_NEAR_CODE", "1");
+        }
+        // The recipes' tools build the float support with this driver.
+        if let Ok(me) = std::env::current_exe() {
+            link.env("LLRM_CC_BIN", me);
         }
         match link.status() {
             Ok(status) if status.success() => {}
@@ -544,8 +673,38 @@ fn build(
 }
 
 /// Exit status: the failing tool's, 1 for a refusal of the driver's own.
+/// `--os-layer FIELD -m16|-m32`: what the target's OS layer says of C's runtime
+/// (the tools that assemble the start-up ask; no clang runs).
+pub fn os_layer(argv: &[String]) -> Option<Result<String, String>> {
+    let at = argv.iter().position(|one| one == "--os-layer")?;
+    let field = argv.get(at + 1).ok_or("--os-layer: expected one argument");
+    let mode = argv.iter().find_map(|one| one.strip_prefix("-m").filter(|bits| matches!(*bits, "16" | "32")));
+    Some(field.map_err(String::from).and_then(|field| {
+        let name = format!("x86-m{}", mode.ok_or("--os-layer needs -m16 or -m32")?);
+        let target = llrm_driver::all().into_iter().find(|one| one.name() == name).ok_or("no such target")?;
+        let layer = target.os_layer().ok_or("this target has no OS layer")?;
+        layer.report(&target.runtime("c").ok_or("this target has no C runtime")?, field)
+    }))
+}
+
 pub fn run_main(argv: &[String]) -> i32 {
+    if let Some(told) = os_layer(argv) {
+        return match told {
+            Ok(text) => {
+                println!("{}", text.trim_end());
+                0
+            }
+            Err(why) => {
+                eprintln!("llrm-cc: {why}");
+                2
+            }
+        };
+    }
     let go = || -> Result<(), i32> {
+        llrm_mir::dumpdir::refuse(argv).map_err(|why| {
+            eprintln!("llrm-cc: {why}");
+            2
+        })?;
         let table = targets(TARGETS).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1

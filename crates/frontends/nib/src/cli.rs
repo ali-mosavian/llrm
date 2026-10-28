@@ -350,7 +350,7 @@ mod tests {
         fn forms_text(&self) -> String {
             self.0.forms_text()
         }
-        fn dialect(&self) -> &'static llrm_instr::Dialect {
+        fn dialect(&self) -> &'static llrm_target::instr::Dialect {
             self.0.dialect()
         }
         fn registers_text(&self) -> String {
@@ -377,6 +377,14 @@ mod tests {
             wide_divisor: bool,
         ) -> Result<llrm_target::routines::Divide, String> {
             self.0.divide_routine(signed, wide_divisor)
+        }
+        fn divide_routine_used(
+            &self,
+            signed: bool,
+            wide_divisor: bool,
+            used: llrm_target::routines::Used,
+        ) -> Result<llrm_target::routines::Divide, String> {
+            self.0.divide_routine_used(signed, wide_divisor, used)
         }
         fn float_width(
             &self,

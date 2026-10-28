@@ -12,11 +12,13 @@ use super::isd::ISD;
 use super::mvt::MVT;
 use super::x86_lowering::x86isd;
 use super::x86isd as own;
+use crate::testing::m16_ir;
 
-const LAYOUT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32-ni:2:3\"\n";
+const LAYOUT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"\n";
 
 fn built(body: &str) -> super::dag::SelectionDAG {
-    let module = llrm_mir::parse::module(&format!("{LAYOUT}{body}")).unwrap_or_else(|error| panic!("{error}"));
+    let module = llrm_mir::parse::module(&format!("{layout}{body}", layout = m16_ir(LAYOUT)))
+        .unwrap_or_else(|error| panic!("{error}"));
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let (id, _, function) = module
         .functions()

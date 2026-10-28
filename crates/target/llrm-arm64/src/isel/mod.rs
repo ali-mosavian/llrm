@@ -13,6 +13,7 @@
 //! only a `getelementptr` index reads is part of the addressing mode (`index`).
 
 mod agg;
+mod atomic;
 mod call;
 mod chain;
 mod control;

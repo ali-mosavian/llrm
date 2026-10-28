@@ -62,7 +62,7 @@ use std::collections::BTreeSet;
 use std::fmt;
 
 use llrm_lir::registers::Regs;
-use llrm_object::{Arch, Binding, Definition, Kind, Object, OmfGroup, Reloc, Role, Section, Symbol, Target};
+use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 
 use crate::backend::masm;
@@ -74,15 +74,15 @@ use crate::support::pyrepr::{self, Repr};
 
 /// How an address is relocated: a near offset, a segment's selector, a far
 /// pointer.
-pub const OFFSET: Kind = Kind::Abs { width: 2 };
-pub const BASE: Kind = Kind::SegmentBase;
-pub const POINTER: Kind = Kind::FarPointer;
-pub const OFFSET32: Kind = Kind::Abs { width: 4 };
-pub const OFFSET64: Kind = Kind::Abs { width: 8 };
+pub const OFFSET: Fix = Fix::abs(2);
+pub const BASE: Fix = Fix::SEGMENT_BASE;
+pub const POINTER: Fix = Fix::FAR_POINTER;
+pub const OFFSET32: Fix = Fix::abs(4);
+pub const OFFSET64: Fix = Fix::abs(8);
 
 /// A call's field: relative to its own end.
-fn relative(width: usize) -> Kind {
-    Kind::Branch { width }
+fn relative(width: usize) -> Fix {
+    llrm_x86::mc::fixup::branch(width)
 }
 
 /// The role of a data segment `name` that the object's classes name, and that
@@ -95,6 +95,7 @@ fn data_role(
         "_DATA" => Role::Data,
         "_BSS" | "BSSB" => Role::Bss,
         "CONST" => Role::ROData,
+        crate::backend::globals::INIT_SEGMENT => Role::InitFunctions,
         _ if far_bss => Role::Bss,
         _ => Role::Data,
     }
@@ -195,14 +196,14 @@ impl From<omf::ValueError> for Error {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Fixup {
     pub at: usize,
-    pub kind: Kind,
+    pub kind: Fix,
     pub name: String,
 }
 
 impl Fixup {
     pub fn new(
         at: usize,
-        kind: Kind,
+        kind: Fix,
         name: impl Into<String>,
     ) -> Self {
         Self { at, kind, name: name.into() }
@@ -368,15 +369,15 @@ pub fn pack_into(
 fn pack_field(
     buffer: &mut [u8],
     at: usize,
-    kind: Kind,
+    kind: Fix,
     value: i64,
 ) {
-    if kind.width() == 8 {
+    if kind.kind.width() == 8 {
         buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
-    } else if kind.width() == 4 && kind != POINTER {
+    } else if kind.kind.width() == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
-        pack_into(buffer, at, value & 0xFFFF);
+        pack_into(buffer, at, i64::from(value as u16));
     }
 }
 
@@ -385,11 +386,11 @@ fn pack_field(
 fn field(
     buffer: &[u8],
     at: usize,
-    kind: Kind,
+    kind: Fix,
 ) -> i64 {
-    if kind.width() == 8 {
+    if kind.kind.width() == 8 {
         i64::from_le_bytes(buffer[at..at + 8].try_into().expect("eight bytes"))
-    } else if kind.width() == 4 && kind != POINTER {
+    } else if kind.kind.width() == 4 && kind != POINTER {
         i64::from(i32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
     } else {
         i64::from(i16::from_le_bytes([buffer[at], buffer[at + 1]]))
@@ -517,8 +518,23 @@ pub fn written_in(
 ) -> Result<Vec<u8>, Error> {
     llrm_support::debug::timed("object write", || {
         let object = built_inner(module, source, layout, format)?;
-        serialized(&object, format)
+        let bytes = serialized(&object, format)?;
+        if let Some(dir) = llrm_target::object::all_writers_dir() {
+            for other in Format::ALL {
+                let written = if other == format { Ok(bytes.clone()) } else { serialized(&object, other) };
+                if let Ok(written) = written {
+                    llrm_target::object::record_writer(&dir, other, &written);
+                }
+            }
+        }
+        Ok(bytes)
     })
+}
+
+/// What `format` says of the code it holds, from x86's table (the formats the
+/// layout tests use).
+pub fn asm_info(format: Format) -> llrm_object::AsmInfo {
+    llrm_x86::mc::X86Objects.asm_info(format.name()).unwrap_or_default()
 }
 
 /// `object` as a file of `format`.
@@ -527,28 +543,8 @@ pub fn serialized(
     format: Format,
 ) -> Result<Vec<u8>, Error> {
     match format {
-        Format::Omf => {
-            if let Some(big) =
-                object.sections.iter().find(|section| section.image.len() > 0x10000 && object.arch == Arch::I8086)
-            {
-                return Err(Error::Unsupported(llrm_object::Unsupported(format!(
-                    "segment `{}` is {} bytes: a 16-bit segment holds 65536",
-                    big.name,
-                    big.image.len()
-                ))));
-            }
-            Ok(llrm_omf::write::write(object)?)
-        }
-        Format::Elf if object.arch == Arch::I386 => Ok(llrm_elf32::write(object)?),
-        Format::Elf if object.arch == Arch::X8664 => Ok(llrm_elf64::write(object)?),
-        Format::MachO if object.arch == Arch::X8664 => Ok(llrm_macho::write(object)?),
-        Format::Coff if object.arch == Arch::I386 => Ok(llrm_coff32::write(object)?),
-        Format::Coff if object.arch == Arch::X8664 => Ok(llrm_coff64::write(object)?),
-        Format::Elf | Format::MachO | Format::Coff => Err(Error::Unsupported(llrm_object::Unsupported(format!(
-            "no {} writer for {:?} yet",
-            format.name(),
-            object.arch
-        )))),
+        Format::Omf => Ok(llrm_omf::write::write(object, &llrm_x86::mc::omf::X86Omf)?),
+        other => Ok(llrm_x86::mc::X86Objects.write_object(other.name(), object)?),
     }
 }
 
@@ -663,9 +659,14 @@ pub fn _data(
                         CodeModel::Segmented16 => OFFSET,
                     }
                 };
-                assert_eq!(loc.width(), *bytes as usize, "a {bytes}-byte pointer in a {}-bit object", model.bits());
-                segment.put(&vec![0; loc.width()], &[Fixup::new(0, loc, name.clone())]);
-                let at = segment.image.len() - loc.width();
+                assert_eq!(
+                    loc.kind.width(),
+                    *bytes as usize,
+                    "a {bytes}-byte pointer in a {}-bit object",
+                    model.bits()
+                );
+                segment.put(&vec![0; loc.kind.width()], &[Fixup::new(0, loc, name.clone())]);
+                let at = segment.image.len() - loc.kind.width();
                 if loc == OFFSET64 {
                     pack_field(&mut segment.image, at, loc, *offset);
                 } else {
@@ -693,7 +694,7 @@ pub fn _code(
     sizes: &mut IndexMap<String, usize>,
     format: Format,
 ) -> Result<(), Error> {
-    _code_by(segment, index, module, group, symbols, sizes, format, |procedure, number| {
+    _code_by(segment, index, module, group, symbols, sizes, asm_info(format).pref_align, |procedure, number| {
         masm::listing(procedure, number).map_err(|error| error.0)
     })
 }
@@ -706,7 +707,7 @@ pub fn _code_by(
     group: &[usize],
     symbols: &mut IndexMap<String, (usize, usize)>,
     sizes: &mut IndexMap<String, usize>,
-    format: Format,
+    pref_align: bool,
     listed: impl Fn(&masm::Procedure, usize) -> Result<Vec<masm::Item>, String>,
 ) -> Result<(), Error> {
     let regs = module.registers;
@@ -719,12 +720,10 @@ pub fn _code_by(
         let function = module.padding.function;
         let end = format!("{}$end", procedure.name);
         let aligned = function > 0 && !procedure.size;
-        match format {
-            Format::Elf if aligned => {
-                items.push(Encoded::Prefer { preferred: function, computed: 0, end: end.clone() })
-            }
-            _ if aligned => items.push(Encoded::Align(masm::CodeAlign { log2: function, max_skip: 0 })),
-            _ => {}
+        if aligned && pref_align {
+            items.push(Encoded::Prefer { preferred: function, computed: 0, end: end.clone() });
+        } else if aligned {
+            items.push(Encoded::Align(masm::CodeAlign { log2: function, max_skip: 0 }));
         }
         items.push(Encoded::Label(masm::Label { name: procedure.name.clone() }));
         for item in listed(procedure, number).map_err(Unencodable)? {
@@ -760,7 +759,7 @@ pub fn _code_by(
             }
             Encoded::Align(_) | Encoded::Prefer { .. } => {
                 let pad = _size(item, at as i64, model);
-                segment.put(&nops(pad, usize::from(module.padding.nop), model.segmented()), &[]);
+                segment.put(&llrm_x86::mc::backend::nops(pad, usize::from(module.padding.nop), model.segmented()), &[]);
                 let log2 = match item {
                     Encoded::Align(masm::CodeAlign { log2, .. }) => *log2,
                     Encoded::Prefer { computed, .. } => *computed,
@@ -857,7 +856,7 @@ pub fn _part(
             fixups: vec![Fixup::new(0, OFFSET32, name.clone())],
         }),
         masm::InlinePart::Fixup(kind, name, offset) if kind == "offset" => Ok(Piece {
-            code: ((offset & 0xFFFF) as u16).to_le_bytes().to_vec(),
+            code: (*offset as u16).to_le_bytes().to_vec(),
             fixups: vec![Fixup::new(0, OFFSET, name.clone())],
         }),
         masm::InlinePart::Fixup(kind, name, _) if kind == "segment" => {
@@ -916,9 +915,9 @@ pub fn _encoded(
         let loc = if model == CodeModel::Flat64 {
             let from = code.len() - at;
             if matches!(one, Loc::Imm(_)) && addr.space == Space::External {
-                Kind::GotPcRel { width: 4, from }
+                llrm_x86::mc::fixup::got_pc_rel(from)
             } else {
-                Kind::PcRel { width: 4, from }
+                Fix::pc_rel(4, from)
             }
         } else {
             loc
@@ -975,10 +974,8 @@ pub fn _relaxed(
                 // `relaxPrefAlign`: the body is what lies between the padding
                 // and its end, and the alignment only grows.
                 Encoded::Prefer { preferred, computed, end } => {
-                    let pad = (at as u64).wrapping_neg() as i64 & ((1i64 << *computed) - 1);
-                    let body = labels[end.as_str()] - (at + pad);
-                    let fit = (body.max(1) as u64).next_power_of_two().trailing_zeros() as u8;
-                    let wanted = fit.min(*preferred).max(*computed);
+                    let wanted =
+                        llrm_object::assembler::relax_pref_align(at, *computed, *preferred, labels[end.as_str()]);
                     if wanted != *computed {
                         *computed = wanted;
                         changed = true;
@@ -1110,42 +1107,6 @@ pub fn _size(
     }
 }
 
-/// `X86AsmBackend::writeNopData`
-/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/X86/MCTargetDesc/X86AsmBackend.cpp#L1167-L1223>):
-/// `count` bytes of nops, none longer than `longest`; `sixteen` for 16-bit
-/// mode's forms.
-pub fn nops(
-    count: usize,
-    longest: usize,
-    sixteen: bool,
-) -> Vec<u8> {
-    const NOPS_32: [&[u8]; 10] = [
-        &[0x90],
-        &[0x66, 0x90],
-        &[0x0f, 0x1f, 0x00],
-        &[0x0f, 0x1f, 0x40, 0x00],
-        &[0x0f, 0x1f, 0x44, 0x00, 0x00],
-        &[0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00],
-        &[0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00],
-        &[0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
-        &[0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
-        &[0x66, 0x2e, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
-    ];
-    const NOPS_16: [&[u8]; 4] = [&[0x90], &[0x66, 0x90], &[0x8d, 0x74, 0x00], &[0x8d, 0xb4, 0x00, 0x00]];
-    let table: &[&[u8]] = if sixteen { &NOPS_16 } else { &NOPS_32 };
-    let longest = if sixteen { longest.min(4) } else { longest }.max(1);
-    let (mut left, mut out) = (count, Vec::with_capacity(count));
-    while left != 0 {
-        let this = left.min(longest);
-        // A nop longer than the table's longest has 0x66 prefixes.
-        let prefixes = this.saturating_sub(10);
-        out.extend(std::iter::repeat_n(0x66, prefixes));
-        out.extend_from_slice(table[this - prefixes - 1]);
-        left -= this;
-    }
-    out
-}
-
 pub fn _jump(
     name: &str,
     target: i64,
@@ -1240,21 +1201,21 @@ pub fn object_of(
             let target = _target(&one.name);
             let target = if target == "DGROUP" { Target::OmfGroup(0) } else { Target::Symbol(index[target]) };
             let addend = if one.kind == BASE { 0 } else { field(&image, one.at, one.kind) };
-            relocs.push(Reloc { at: one.at, kind: one.kind, target, addend });
+            relocs.push(Reloc::new(one.at, one.kind, target, addend));
         }
         for one in &relocs {
-            if one.kind != BASE {
-                pack_field(&mut image, one.at, one.kind, 0);
+            if one.fix() != BASE {
+                pack_field(&mut image, one.at, one.fix(), 0);
             }
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });
     }
     Ok(Object {
         name: source.to_owned(),
-        arch: match model {
-            CodeModel::Flat64 => Arch::X8664,
-            CodeModel::Flat32 => Arch::I386,
-            CodeModel::Segmented16 => Arch::I8086,
+        bits: match model {
+            CodeModel::Flat64 => 64u8,
+            CodeModel::Flat32 => 32u8,
+            CodeModel::Segmented16 => 16u8,
         },
         sections,
         symbols: table,
@@ -1711,21 +1672,6 @@ mod tests {
         );
     }
 
-    /// `X86AsmBackend::writeNopData`: no `nopl` on a 486 or P5, so a pad is
-    /// that many `nop`s; with it the longest single no-operation (10 bytes,
-    /// then the rest); 16-bit mode has four forms.
-    #[test]
-    fn test_padding_is_the_nops_writenopdata_writes() {
-        assert_eq!(nops(3, 1, false), [0x90, 0x90, 0x90]);
-        assert_eq!(nops(3, 10, false), [0x0f, 0x1f, 0x00]);
-        assert_eq!(nops(15, 10, false).len(), 15);
-        assert_eq!(&nops(15, 10, false)[10..], [0x0f, 0x1f, 0x44, 0x00, 0x00], "the rest after a 10-byte nop");
-        assert_eq!(nops(11, 11, false)[..2], [0x66, 0x66], "a nop over 10 bytes has 0x66 prefixes");
-        assert_eq!(nops(4, 4, true), [0x8d, 0xb4, 0x00, 0x00]);
-        assert_eq!(nops(5, 4, true), [0x8d, 0xb4, 0x00, 0x00, 0x90]);
-        assert_eq!(nops(0, 1, false), Vec::<u8>::new());
-    }
-
     /// Code was never aligned: every function began where the last ended.
     /// `emitFunctionHeader` aligns to 16 (`.p2align 4`, OMF and COFF); ELF's
     /// `.prefalign` aligns to no more than the body fills, so a 3-byte
@@ -1764,17 +1710,21 @@ mod tests {
                 ..masm::Callee::new("", false)
             })])
         };
-        let offsets = |format: Format, size: bool| {
+        let offsets_with = |pref_align: bool, size: bool| {
             let module = small(size);
             let mut segment = Segment::new("M_TEXT", Role::Text, true);
             let mut symbols = IndexMap::default();
             let mut sizes = IndexMap::default();
-            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, format, body_of).unwrap();
+            _code_by(&mut segment, 0, &module, &[0, 1, 2], &mut symbols, &mut sizes, pref_align, body_of).unwrap();
             // `.size` is the body alone: the padding before a function is no
             // symbol's.
-            assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "{format:?}");
+            assert_eq!(["_f0", "_f1", "_f2"].map(|name| sizes[name]), [3, 3, 3], "pref_align {pref_align}");
             (["_f0", "_f1", "_f2"].map(|name| symbols[name].1), segment.align)
         };
+        let offsets = |format: Format, size: bool| offsets_with(asm_info(format).pref_align, size);
+        // `.prefalign` was `Format::Elf` by name: a format that only says
+        // `pref_align` got `.p2align`.
+        assert_eq!(offsets_with(true, false), ([0, 4, 8], 4), "a format that says pref_align");
         assert_eq!(offsets(Format::Coff, false), ([0, 16, 32], 16), "p2align 4 each");
         assert_eq!(offsets(Format::Elf, false), ([0, 4, 8], 4), "prefalign: a 3-byte body fills 4");
         assert_eq!(offsets(Format::Coff, true), ([0, 3, 6], 1), "no alignment tuned for size");

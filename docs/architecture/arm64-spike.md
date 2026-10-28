@@ -18,11 +18,11 @@ TL;DR: POC, not for feat/parity until decided. Mach-O arm64 (Darwin AAPCS64) fir
 
 ## Status
 
-Works, checked against the pinned `clang -O2` (output and exit status, under `qemu-aarch64` for ELF; 22 programs in `crates/target/llrm-arm64/tests/programs`, run by `tests/run.rs`): integer and float arithmetic of every width, division by constants, pointers and arrays, structs and arrays by value and by `sret`, variadic functions (AAPCS64 register save areas; Darwin stack slots), calls with stack arguments, function pointers, `switch`, variable-length arrays, 5 KB frames, `malloc`ed lists and trees, `qsort` callbacks, global initializers with relocations. Mach-O arm64 and ELF aarch64 objects; the Darwin fixtures disassemble clean under the pinned `llvm-objdump`; `tools/arm64_mac_check.sh` runs them on a Mac.
+Works, checked against the pinned `clang -O2` (output and exit status, under `qemu-aarch64` for ELF; 22 programs in `crates/target/llrm-arm64/tests/programs`, run by `tests/run.rs`): integer and float arithmetic of every width, division by constants, pointers and arrays, structs and arrays by value and by `sret`, variadic functions (AAPCS64 register save areas; Darwin stack slots), calls with stack arguments, function pointers, `switch`, variable-length arrays, 5 KB frames, `malloc`ed lists and trees, `qsort` callbacks, global initializers with relocations. Mach-O arm64 and ELF aarch64 objects; the Darwin fixtures disassemble clean under the pinned `llvm-objdump`; `tools/targets/arm64-mac-check.sh` runs them on a Mac.
 
 Not yet: `__int128` (and i128 in the mid-end's SCEV), vectors, atomics, exceptions, `long double`, TLS, jump tables, `-fPIC` data access on ELF.
 
-Measured with `tools/arm64_compare.py` (modes `whole`, `backend`, `compile`; the program's own code only, runtime excluded):
+Measured with `tools/targets/arm64_compare.py` (modes `whole`, `backend`, `compile`; the program's own code only, runtime excluded):
 
 | comparison | code bytes | instructions executed | note |
 |---|---|---|---|

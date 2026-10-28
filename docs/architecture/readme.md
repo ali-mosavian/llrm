@@ -29,7 +29,7 @@ flowchart TB
   qb["<b>QB, QBasic, PDS, VBDOS</b><br/><small>qbfront parser (llrm-qb)</small>"]:::src
   nib["<b>Nib</b><br/><small>llrm-nib: lexer, parser,<br/>semantics</small>"]:::src
   c["<b>C</b><br/><small>patched Open Watcom front<br/>end (llrm-c translate)</small>"]:::src
-  bc["<b>BC .OBJ (side input)</b><br/><small>llrm-x86-bc:<br/>decode and lift</small>"]:::src
+  bc["<b>BC .OBJ (side input)</b><br/><small>llrm-bcobj:<br/>decode and lift</small>"]:::src
   hir["<b>HIR</b><br/><small>llrm-hir: model, verify,<br/>JSON codec</small>"]:::mid
   mir["<b>MIR</b><br/><small>llrm-mir</small>"]:::mid
   opt["<b>Optimized MIR</b><br/><small>llrm-transforms: module<br/>steps, per-body fixed point</small>"]:::opt
@@ -56,7 +56,7 @@ flowchart TB
 | `llrm-qb` | `qbfront` parses and resolves each dialect | HIR, emitted by `llrm_hir::mir::emit` |
 | `llrm-nib` | `crates/frontends/nib/src/` | the same HIR path |
 | `llrm-c` | a patched Open Watcom front end records its code-generator calls (`toolchain/owshim/`) | HIR from `crates/frontends/llrm-c/src/translate.rs` |
-| `llrm-omf` | objects QuickBASIC's BC wrote (a side input, [BC objects](../frontends/bc.md)) | `llrm-x86-bc` lifts their machine code; `llrm-bcdriver` compiles it afresh |
+| `llrm-omf` | objects QuickBASIC's BC wrote (a side input, [BC objects](../frontends/bc.md)) | `llrm-bcobj` lifts their machine code; `llrm-bcdriver` compiles it afresh |
 
 [`driver::compiled`](https://github.com/ali-mosavian/llrm/blob/c341bd6e3de058142c6652d399b8dfeb444eff9b/crates/backend/llrm-core/src/driver/mod.rs#L125)
 runs the HIR route: emit, optimize, then
@@ -85,7 +85,7 @@ flowchart TB
   tr["<b>llrm-transforms</b>"]:::mid
   tgt["<b>llrm-target</b><br/><small>llrm-lir</small>"]:::mid
   x86["<b>llrm-x86</b>"]:::mid
-  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-debuginfo</small>"]:::out
+  wr["<b>Writers: llrm-omf,</b><br/><small>llrm-elf*, llrm-coff*,<br/>llrm-macho, llrm-dwarf</small>"]:::out
   an["<b>llrm-analysis</b>"]:::mid
   obj["<b>llrm-object</b>"]:::mid
   mir["<b>llrm-mir</b><br/><small>(no dependencies)</small>"]:::mid
@@ -119,7 +119,7 @@ Three edges carry the architecture:
 ## BC objects (side input)
 
 `llrm-omf` takes objects QuickBASIC's BC already compiled, lifts each
-procedure's machine code to MIR (`llrm-x86-bc`, on `llrm-x86-bcmachine`'s
+procedure's machine code to MIR (`llrm-bcobj`, on `llrm-bcobj`'s
 decoder) and sends it through the same optimizer and backend; it writes a new
 object, not a patched one. Runtime calls carry contracts from `runtime.toml`.
 See [BC objects](../frontends/bc.md).

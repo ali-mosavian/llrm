@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memsetpattern.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memsetpattern.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memsetpattern.rs sha256:bc08bd5a2d3c3f860cee725a6dc68f7afd24db8c13b57402d0cebb0f001f511c -->
+<!-- src: crates/opt/llrm-transforms/src/memsetpattern.rs sha256:4cd35c9ea6f87136997f10537202f11b06e1260e5c28d17e7a823914a7721778 -->
 
 # memsetpattern
 
@@ -25,9 +25,8 @@ main-body:  %i = phi [0, pre], [%j, main-body]
 ```
 
 ## Runs
-Once per module before selection: in `llrm-codegen`'s `driver::optimized` for
-`--isel=dag` (the old selector lowers the intrinsic itself), and in the arm64
-driver.
+Once per module in `driver::optimized`, for `--isel=dag`: the old selector
+lowers the intrinsic itself.
 
 ## See also
 LLVM's `createMemSetPatternLoop`

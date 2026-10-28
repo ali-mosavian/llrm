@@ -212,6 +212,7 @@ impl FunctionPass for Merge {
     ) -> PreservedAnalyses {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
+        let bytes = analyses.outer().target().size_costs();
         let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
                 unit.context,
@@ -219,6 +220,7 @@ impl FunctionPass for Merge {
                 analyses.outer().callees(),
                 unit.function,
                 analyses.outer(),
+                self.size.then(|| (&mut *unit.declared, &bytes)),
             );
         let constants = crate::mergestores::merged_constants(
             unit.context,
@@ -284,6 +286,15 @@ pub fn filled_with(
     standing: &mut llrm_analysis::memory::Standing,
     wanted: &dyn Fn(&Loop) -> bool,
 ) -> bool {
+    // `"no-builtins"` turns every library function off in the pin's TLI.
+    if function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::opcode::Attribute::Str(key, _) if key == "no-builtins"
+        )
+    }) {
+        return false;
+    }
     let costs = if size { outer.target().size_costs() } else { outer.target().costs() };
     let bytes = outer.target().size_costs();
     let mut changed = false;
@@ -512,6 +523,26 @@ fn _fill(
             return None;
         }
         copy.how = _overlap(unit, copy.load, effect, from, to, &proof, &bytes, descending)?;
+    }
+    // DEVIATE, for `loopidiom`: a fill, copy or move through a huge pointer
+    // is a routine laid down at the site (`isel/huge.rs`), which a loop of a
+    // few instructions undercuts under -Os (fillw -Os 86 -> 176 bytes, copyw
+    // 321 -> 470, against main).
+    let routine = if matches!(stored, Stored::Fill(_)) { bytes_costs.huge_fill } else { bytes_costs.huge_copy };
+    if size
+        && routine > 0
+        && unit.layout.carries(unit.space(pointer)?)
+        && trip_cost(
+            unit.context,
+            unit.layout,
+            unit.function,
+            callees,
+            std::iter::once(&header).chain(&chain),
+            bytes_costs,
+            true,
+        ) <= routine
+    {
+        return None;
     }
     // A pattern is `rep stosw` or `stosd`: priced, as a short loop beats its
     // setup.

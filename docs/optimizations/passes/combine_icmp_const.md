@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:daaf5fcb429c4c3ce67e7044bdd758c10a3e1741440405bed1caf99049b59103 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:f81d9c236b5710a7fa365fe6765fba720bd44bbe1cddb30ad413d9a1451fbcdd -->
 
 # combine_icmp_const
 
@@ -20,10 +20,10 @@ MIRROR: the order of the folds and each condition.
 
 OWED, each at its place as a `// OWED:` comment: the other opcodes of
 `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
-`foldICmpMulConstant`, `foldICmpShlConstant`, `foldICmpShrConstant`,
+`foldICmpShlConstant`, `foldICmpShrConstant`,
 `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
-),
-the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
+`foldICmpSubConstant`),
+`foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
 truncate, intrinsic and `extractvalue` arms of `foldICmpInstWithConstant`.
 
 DEVIATE 1: the load from an indexed global fold

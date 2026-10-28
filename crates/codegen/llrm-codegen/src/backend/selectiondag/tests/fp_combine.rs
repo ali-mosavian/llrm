@@ -157,3 +157,69 @@ fn a_reassociable_add_of_a_multiple_and_its_base_is_one_multiply() {
     let add = dag.get_node(ISD::FAdd, F64, &[mul, x]);
     assert_eq!(combined(&mut dag, add), add);
 }
+
+/// `visitFNEG` and `visitFABS` did not exist: `-(2.0)`, `-(-x)` and `abs(-2.0)`
+/// stayed as nodes (an x87 `fchs`/`fabs` of a constant load).
+#[test]
+fn a_negated_constant_or_negation_and_an_abs_of_a_constant_fold() {
+    let mut dag = dag();
+    let two = double(&mut dag, 2.0);
+    let neg = dag.get_node(ISD::FNeg, F64, &[two]);
+    let root = combined(&mut dag, neg);
+    assert_eq!(bits(&dag, root), Some((-2.0f64).to_bits().into()));
+    let x = load(&mut dag, F64, 1);
+    let inner = dag.get_node(ISD::FNeg, F64, &[x]);
+    let outer = dag.get_node(ISD::FNeg, F64, &[inner]);
+    assert_eq!(combined(&mut dag, outer), x);
+    let minus_two = double(&mut dag, -2.0);
+    let abs = dag.get_node(ISD::FAbs, F64, &[minus_two]);
+    let root = combined(&mut dag, abs);
+    assert_eq!(bits(&dag, root), Some(2.0f64.to_bits().into()));
+}
+
+/// `visitFP_ROUND`, `visitFP_EXTEND` and the int conversions did not exist:
+/// `(float)(double)f` stayed a widen and a narrow, and `(double)3` a runtime
+/// conversion.
+#[test]
+fn a_round_of_an_extend_and_conversions_of_constants_fold() {
+    let mut dag = dag();
+    let f = load(&mut dag, F32, 1);
+    let wide = dag.get_node(ISD::FpExtend, F64, &[f]);
+    let zero = dag.get_constant_with(0, EVT::I32, true, false);
+    let narrow = dag.get_node(ISD::FpRound, F32, &[wide, zero]);
+    assert_eq!(combined(&mut dag, narrow), f);
+    let c = double(&mut dag, 0.1);
+    let round = dag.get_node(ISD::FpRound, F32, &[c, zero]);
+    let root = combined(&mut dag, round);
+    assert_eq!(bits(&dag, root), Some(u128::from(0.1f32.to_bits())));
+    let three = dag.get_constant(3, EVT::I32);
+    let conv = dag.get_node(ISD::SIntToFp, F64, &[three]);
+    let root = combined(&mut dag, conv);
+    assert_eq!(bits(&dag, root), Some(3.0f64.to_bits().into()));
+    let x = double(&mut dag, -2.75);
+    let conv = dag.get_node(ISD::FpToSInt, EVT::I32, &[x]);
+    let root = combined(&mut dag, conv);
+    assert_eq!(dag.node(root).data, NodeData::Const { bits: u128::from((-2i32) as u32), opaque: false });
+}
+
+/// `visitFDIV` did not exist: `x / 2.0` stayed a divide (x87 `fdiv`) instead of
+/// `x * 0.5`; `x / 3.0` is inexact and only folds with `arcp`.
+#[test]
+fn a_divide_by_a_constant_is_a_multiply_when_the_reciprocal_is_exact_or_arcp() {
+    let mut dag = dag();
+    let x = load(&mut dag, F64, 1);
+    let two = double(&mut dag, 2.0);
+    let div = dag.get_node(ISD::FDiv, F64, &[x, two]);
+    let root = combined(&mut dag, div);
+    assert_eq!((dag.opcode(root), dag.operand(root, 0)), (ISD::FMul, x));
+    assert_eq!(bits(&dag, dag.operand(root, 1)), Some(0.5f64.to_bits().into()));
+    let three = double(&mut dag, 3.0);
+    let div = dag.get_node(ISD::FDiv, F64, &[x, three]);
+    let root = combined(&mut dag, div);
+    assert_eq!(dag.opcode(root), ISD::FDiv);
+    let y = load(&mut dag, F64, 2);
+    let div = dag.get_node_flags(ISD::FDiv, F64, &[y, three], SDNodeFlags::ALLOW_RECIPROCAL);
+    let root = combined(&mut dag, div);
+    assert_eq!(dag.opcode(root), ISD::FMul);
+    assert_eq!(bits(&dag, dag.operand(root, 1)), Some((1.0f64 / 3.0).to_bits().into()));
+}

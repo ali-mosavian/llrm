@@ -22,7 +22,9 @@ fn legalized_add(tli: &TargetLowering) -> (SelectionDAG, SDValue) {
     let sum = dag.get_node(ISD::Add, EVT::I64, &[a, b]);
     dag.set_root(sum);
     TypeLegalizer::new(&mut dag, tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -47,7 +49,9 @@ fn an_i64_select_is_a_cmov() {
     let select = dag.get_node(ISD::Select, EVT::I64, &[c, a, b]);
     dag.set_root(select);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::CMOV, EVT::I64));
 }
@@ -72,7 +76,9 @@ fn legalized_float_op(
     let node = dag.get_node(op, vt, &[x]);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     (dag, root)
 }
@@ -90,7 +96,10 @@ fn fneg_and_fabs_of_a_float_are_sign_mask_logic() {
     ] {
         let (dag, root) = legalized_float_op(op, inner, f64v);
         assert_eq!((dag.opcode(root), dag.value_type(root)), (want, f64v), "{op:?}");
-        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))), "{op:?}: mask");
+        // The mask is in both lanes of the 16 bytes, as the pin's vector
+        // constant.
+        let splat = mask | mask << 64;
+        assert!(dag.constant_pool.contains(&(splat, EVT::Simple(MVT::I128))), "{op:?}: mask");
     }
 }
 
@@ -135,11 +144,14 @@ fn fcopysign_of_a_float_is_two_masks_and_an_or() {
     let node = dag.get_node(ISD::FCopySign, f32v, &[m, s]);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (x86isd::FOR, f32v));
     for mask in [(1u128 << 31) - 1, 1 << 31] {
-        assert!(dag.constant_pool.contains(&(mask, EVT::Simple(MVT::I128))));
+        let splat = mask * 0x0000_0001_0000_0001_0000_0001_0000_0001;
+        assert!(dag.constant_pool.contains(&(splat, EVT::Simple(MVT::I128))));
     }
 }
 
@@ -153,7 +165,9 @@ fn an_f32_to_f64_extend_survives_legalization() {
     let node = dag.get_node(ISD::FpExtend, EVT::Simple(MVT::F64), &[x]);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::FpExtend);
 }
@@ -176,7 +190,9 @@ fn int_to_float_at_sse2_is_a_register_convert() {
         let node = dag.get_node(op, f64v, &[x]);
         dag.set_root(node);
         TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true, min_size: false })
+            .run()
+            .expect("legalizes");
         let root = dag.get_root();
         let from = dag.value_type(dag.operand(root, 0));
         assert_eq!((dag.opcode(root), from), (ISD::SIntToFp, shown), "{op:?} {src:?}");
@@ -200,7 +216,9 @@ fn float_to_int_at_sse2_is_a_register_convert() {
         let node = dag.get_node(op, dst, &[x]);
         dag.set_root(node);
         TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+        DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true, min_size: false })
+            .run()
+            .expect("legalizes");
         let root = dag.get_root();
         let convert = if dag.opcode(root) == ISD::Truncate { dag.operand(root, 0) } else { root };
         assert_eq!((dag.opcode(convert), dag.value_type(convert)), (ISD::FpToSInt, shown), "{op:?} {dst:?}");
@@ -219,7 +237,9 @@ fn a_float_compare_at_sse2_is_fcmp_and_setcc() {
     let node = dag.get_setcc(EVT::I8, a, b, CondCode::SetOLt);
     dag.set_root(node);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     let flags = dag.operand(root, 1);
     assert_eq!((dag.opcode(root), dag.opcode(flags)), (x86isd::SETCC, x86isd::FCMP));
@@ -236,7 +256,9 @@ fn a_float_constant_at_sse2_is_a_pool_load() {
     let one_and_a_half = dag.get_constant_fp(0x3FF8_0000_0000_0000, f64v);
     dag.set_root(one_and_a_half);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: true, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, f64v));
     assert_eq!(dag.constant_pool, vec![(0x3FF8_0000_0000_0000, f64v)], "an f64 entry, not an f32 one");
@@ -256,7 +278,9 @@ fn a_dynamic_alloca_moves_the_stack_pointer() {
     let alloca = dag.get_node_multi(ISD::DynamicStackAlloc, &[EVT::I64, EVT::OTHER], &[chain, size, align]);
     dag.set_root(SDValue { node: alloca.node, res: 1 });
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let merged = dag.get_root();
     assert_eq!(dag.opcode(merged), ISD::MergeValues);
     let end = dag.operand(merged, 1);
@@ -279,8 +303,24 @@ fn stacksave_and_stackrestore_copy_the_stack_pointer() {
     let restore = dag.get_node(ISD::StackRestore, EVT::OTHER, &[SDValue { node: saved.node, res: 1 }, saved]);
     dag.set_root(restore);
     TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false }).run().expect("legalizes");
+    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: true, sse2: false, min_size: false })
+        .run()
+        .expect("legalizes");
     let root = dag.get_root();
     assert_eq!(dag.opcode(root), ISD::CopyToReg);
     assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::CopyFromReg);
+}
+
+/// An `undef` of `i1` (a phi's or select's unknown flag) was refused in the
+/// type legalizer ("promote result"): QCport's render/sc.c did not compile
+/// under `--isel=dag`. The pin's `PromoteIntRes_UNDEF` makes an undef of the
+/// promoted type.
+#[test]
+fn an_i1_undef_is_promoted() {
+    let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let flag = dag.get_undef(EVT::Simple(MVT::I1));
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I32, &[flag]);
+    dag.set_root(wide);
+    TypeLegalizer::new(&mut dag, &tli).run().expect("types legalize");
 }

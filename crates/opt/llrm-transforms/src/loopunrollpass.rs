@@ -32,6 +32,13 @@
 //! - U8 `simplifyLoopAfterUnroll` simplifies without a dominator tree or
 //!   assumptions.
 //! - U9 Blocks an unroll merges away are erased once, when the pass ends.
+//! - U1 At `optsize` a loop of at most the target's few trips is unrolled under
+//!   the target's bar (`Tti::unroll_size_few_trips`; m16: 3 trips, 30) where
+//!   the pin's `OptSizeThreshold` is 0 on x86. float_in_place_update.c at -Os
+//!   m16: 132 bytes to 14 (main 76); the corpus of 258 programs at m16 -Os
+//!   changes in no other. logical_value.c (main 25, here 155), split_loops.c
+//!   and int64_division.c need the cost analysis held to a bar too, which grew
+//!   matmul.nib 390 to 562 bytes: open.
 //!
 //! # Example
 //! A loop of four trips becomes four copies; the induction variable's
@@ -875,7 +882,17 @@ fn should_full_unroll(
     // When computing the unrolled size, note that BEInsns are not replicated
     // like the rest of the loop body.
     let unrolled_size = uce.unrolled_loop_size(up, full_unroll_trip_count);
-    if unrolled_size < u64::from(up.threshold) {
+    // DEVIATE U1: a loop of few trips is held to the target's `optsize` bar
+    // (the pin's is `OptSizeThreshold`, 0 on x86).
+    let few = if run.options.opt_size {
+        run.tti
+            .unroll_size_few_trips()
+            .filter(|&(trips, _)| full_unroll_trip_count <= trips)
+            .map_or(up.threshold, |(_, bar)| up.threshold.max(bar))
+    } else {
+        up.threshold
+    };
+    if unrolled_size < u64::from(few) {
         return Some(full_unroll_trip_count);
     }
 
@@ -1600,6 +1617,10 @@ pub fn unroll_loops(run: &mut Run) -> bool {
     // holds.
     let mut work: std::collections::VecDeque<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    // `LoopFullUnrollPass` hands `addSiblingLoops` every sibling the unroll
+    // left that was not there before, the unrolled loop's own first iteration
+    // among them: they are new to the loop passes after it.
+    let mut revisited: Vec<BlockId> = Vec::new();
     let mut changed = simplified || closed;
     if changed {
         run.scev = ScalarEvolution::new();
@@ -1633,9 +1654,8 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         changed = true;
         run.scev = ScalarEvolution::new();
         if peeled {
-            // `PartiallyUnrolled`: the loop is looked at again, as
-            // `revisitCurrentLoop` does; its analyses and its nest are made
-            // again (the cloned iterations are loops' blocks of its parent).
+            // `PartiallyUnrolled`: its analyses and its nest are made again
+            // (the cloned iterations are loops' blocks of its parent).
             // `peelLoop` ends in `simplifyLoop`: the exits the copies share
             // are dedicated again (here for the whole function, U6).
             crate::loopsimplify::simplified(run.function);
@@ -1654,7 +1674,15 @@ pub fn unroll_loops(run: &mut Run) -> bool {
             let after = unrolled_blocks(run, capacity, &body);
             simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
             analyzed = Analyzed::of(run);
-            work.push_front(header);
+            // `LoopFullUnrollPass` does not revisit the loop it peeled (only
+            // `LoopUnrollPass` does); the loops the peeled copy holds are
+            // new siblings, visited next.
+            let mut fresh: Vec<BlockId> =
+                siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
+            fresh.reverse();
+            for one in fresh {
+                work.push_front(one);
+            }
             continue;
         }
         // A top-level loop with no loops inside leaves the analyses of the
@@ -1685,22 +1713,36 @@ pub fn unroll_loops(run: &mut Run) -> bool {
         let mut fresh: Vec<BlockId> =
             siblings_of(&analyzed.loops).into_iter().filter(|one| !old.contains(one)).collect();
         fresh.reverse();
-        for one in fresh {
+        for &one in &fresh {
             work.push_front(one);
         }
+        revisited.extend(fresh);
     }
     let emptied = std::mem::take(&mut run.emptied);
     run.function.erase_blocks(&emptied).expect("blocks merged away are empty and unnamed");
     if changed {
         analyzed = Analyzed::of(run);
     }
-    run.created = analyzed
+    let mut created: Vec<BlockId> = analyzed
         .loops
         .get_loops_in_preorder()
         .iter()
         .map(|one| one.get_header())
         .filter(|header| !at_first.contains(header))
         .collect();
+    for header in revisited {
+        let Some(found) = analyzed.loops.get_loop_for(header).filter(|one| one.get_header() == header) else {
+            continue;
+        };
+        let mut nest = vec![found];
+        while let Some(one) = nest.pop() {
+            if !created.contains(&one.get_header()) {
+                created.push(one.get_header());
+            }
+            nest.extend(one.get_sub_loops());
+        }
+    }
+    run.created = created;
     changed
 }
 

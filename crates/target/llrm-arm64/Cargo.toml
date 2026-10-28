@@ -14,7 +14,9 @@ llrm-codegen = { workspace = true }
 llrm-support = { workspace = true }
 llrm-analysis = { workspace = true }
 llrm-macho = { workspace = true }
-llrm-elf-arm64 = { workspace = true }
+llrm-dwarf = { workspace = true }
+llrm-elf = { workspace = true }
+llrm-target = { workspace = true }
 
 [build-dependencies]
 llrm-lir = { workspace = true }
@@ -22,9 +24,7 @@ llrm-target = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-llrm-instr = { workspace = true }
 llrm-iselgen = { workspace = true }
-llrm-target = { workspace = true }
 
 [[bin]]
 name = "llrm-arm64-llc"

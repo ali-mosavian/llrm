@@ -1,6 +1,7 @@
 //! A module's global variables as sections of an object: their bytes, and the
-//! relocations their pointers need. `llvm.global_ctors` becomes the object's init-function
-//! pointers (`__mod_init_func`, `.init_array`); `llvm.used` and `llvm.compiler.used` are not laid out.
+//! relocations their pointers need. `llvm.global_ctors` becomes the object's
+//! init-function pointers (`__mod_init_func`, `.init_array`); `llvm.used` and
+//! `llvm.compiler.used` are not laid out.
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{ConstantId, ConstantKind, GlobalKind, Linkage, Module, Type, TypeId};
@@ -30,15 +31,17 @@ pub struct Placed {
     pub init_functions: bool,
 }
 
-/// The linker's name for the IR name `name`: a leading `\01` marks it already spelled, as LLVM's mangler reads it.
 pub fn symbol_name(
     platform: Platform,
     name: &str,
 ) -> String {
-    match name.strip_prefix('\u{1}') {
-        Some(verbatim) => verbatim.to_owned(),
-        None if platform.underscore() => format!("_{name}"),
-        None => name.to_owned(),
+    // `\01` marks a name to be used as written, with no platform prefix.
+    if let Some(verbatim) = name.strip_prefix('\u{1}') {
+        verbatim.to_owned()
+    } else if platform.underscore() {
+        format!("_{name}")
+    } else {
+        name.to_owned()
     }
 }
 
@@ -96,8 +99,9 @@ pub fn globals(
     Ok(out)
 }
 
-/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function, ptr data }` entries (24
-/// bytes each on a 64-bit target), lowest priority first and in order within one, as `AsmPrinter::emitXXStructorList` sorts
+/// The function pointers of `llvm.global_ctors`' `{ i32 priority, ptr function,
+/// ptr data }` entries (24 bytes each on a 64-bit target), lowest priority
+/// first and in order within one, as `AsmPrinter::emitXXStructorList` sorts
 /// them; an entry without a function is dropped.
 fn constructors(
     bytes: &[u8],

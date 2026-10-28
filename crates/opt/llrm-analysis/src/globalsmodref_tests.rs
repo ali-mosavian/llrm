@@ -1,6 +1,7 @@
 //! What `compute` finds, against `GlobalsModRef.cpp`'s rules.
 
 use super::*;
+use crate::testing::m16_ir;
 use crate::testing::parsed;
 
 fn found(text: &str) -> (Module, GlobalsModRef) {
@@ -426,8 +427,8 @@ b0:
     // Far pointers: arguments cannot point at a slot made after them, one a
     // call captured included; `memset` writes its destination alone.
     let far = |call: &str| {
-        format!(
-            "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32\"
+        m16_ir(&format!(
+            "target datalayout = \"@m16-datalayout@\"
 declare void @cap(ptr)
 declare void @llvm.memcpy.p1.p0.i16(ptr addrspace(1), ptr, i16, i1)
 declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
@@ -445,7 +446,7 @@ b0:
   ret i16 %a
 }}
 "
-        )
+        ))
     };
     ask(
         &far("call void @llvm.memcpy.p1.p0.i16(ptr addrspace(1) %far, ptr %near, i16 8, i1 false)"),

@@ -65,6 +65,15 @@ pub fn negate(
     Some(bits ^ (1u128 << sign))
 }
 
+/// `|x|` (`clearSign`).
+pub fn abs(
+    vt: EVT,
+    bits: u128,
+) -> Option<u128> {
+    let (sign, ..) = layout(vt)?;
+    Some(bits & !(1u128 << sign))
+}
+
 /// The positive integer `value` (`getConstantFP(2.0, ..)`).
 pub fn from_integer(
     vt: EVT,
@@ -123,6 +132,120 @@ pub fn fold(
         }
         _ => None,
     }
+}
+
+/// `bits` of `from` as a value of `to` (`FP_ROUND` and `FP_EXTEND` of a
+/// constant), where both are `f32` or `f64` and the value is not a NaN.
+pub fn convert(
+    from: EVT,
+    to: EVT,
+    bits: u128,
+) -> Option<u128> {
+    let value = match from {
+        EVT::Simple(MVT::F32) => f64::from(f32::from_bits(bits as u32)),
+        EVT::Simple(MVT::F64) => f64::from_bits(bits as u64),
+        _ => return None,
+    };
+    if value.is_nan() {
+        return None;
+    }
+    match to {
+        EVT::Simple(MVT::F32) => Some(u128::from((value as f32).to_bits())),
+        EVT::Simple(MVT::F64) => Some(u128::from(value.to_bits())),
+        _ => None,
+    }
+}
+
+/// The signed integer `value` as a value of `vt` (`SINT_TO_FP` of a constant),
+/// rounded to nearest even.
+pub fn from_signed(
+    vt: EVT,
+    value: i64,
+) -> Option<u128> {
+    match vt {
+        EVT::Simple(MVT::F32) => Some(u128::from((value as f32).to_bits())),
+        EVT::Simple(MVT::F64) => Some((value as f64).to_bits() as u128),
+        _ => None,
+    }
+}
+
+/// `bits` of `vt` truncated to a signed integer of `width` bits, where it
+/// fits (`FP_TO_SINT` of a constant; `APFloat` reports an overflow or a NaN
+/// as invalid and the node stays).
+pub fn to_signed(
+    vt: EVT,
+    bits: u128,
+    width: u32,
+) -> Option<i64> {
+    let value = match vt {
+        EVT::Simple(MVT::F32) => f64::from(f32::from_bits(bits as u32)),
+        EVT::Simple(MVT::F64) => f64::from_bits(bits as u64),
+        _ => return None,
+    };
+    let limit = (width - 1).min(62);
+    let bound = (1i64 << limit) as f64;
+    (value.is_finite() && value.trunc() >= -bound && value.trunc() < bound && width <= 63)
+        .then_some(value.trunc() as i64)
+}
+
+/// [`fold`], but only where the result is exact: what a function that
+/// evaluates at the x87's extended precision may fold (it rounds once, at the
+/// store).
+pub fn fold_exact(
+    opcode: ISD,
+    vt: EVT,
+    a: u128,
+    b: u128,
+) -> Option<u128> {
+    let bits = fold(opcode, vt, a, b)?;
+    let exact = match vt {
+        EVT::Simple(MVT::F32) => {
+            let (x, y) = (f64::from(f32::from_bits(a as u32)), f64::from(f32::from_bits(b as u32)));
+            let r = f64::from(f32::from_bits(bits as u32));
+            let wide = match opcode {
+                ISD::FAdd => x + y,
+                ISD::FSub => x - y,
+                ISD::FMul => x * y,
+                _ => x / y,
+            };
+            r == wide
+        }
+        EVT::Simple(MVT::F64) => {
+            let (x, y) = (f64::from_bits(a as u64), f64::from_bits(b as u64));
+            let r = f64::from_bits(bits as u64);
+            match opcode {
+                ISD::FAdd => (r - x) - y == 0.0 && (r - y) - x == 0.0,
+                ISD::FSub => (r - x) + y == 0.0 && (x - r) - y == 0.0,
+                ISD::FMul => (-x).mul_add(y, r) == 0.0 || x.mul_add(y, -r) == 0.0,
+                _ => (-r).mul_add(y, x) == 0.0,
+            }
+        }
+        _ => false,
+    };
+    exact.then_some(bits)
+}
+
+/// `1.0 / x` when it is a normal finite value; `exact` is `opOK` (a power of
+/// two), otherwise `opInexact`. `None` where `APFloat` reports overflow,
+/// underflow or a denormal, or the type does not fold.
+pub fn reciprocal(
+    vt: EVT,
+    bits: u128,
+) -> Option<(u128, bool)> {
+    let (r, exact_input) = match vt {
+        EVT::Simple(MVT::F32) => {
+            let x = f32::from_bits(bits as u32);
+            let r = 1.0f32 / x;
+            (r.is_normal().then(|| u128::from(r.to_bits()))?, x.is_normal() && bits & 0x7F_FFFF == 0)
+        }
+        EVT::Simple(MVT::F64) => {
+            let x = f64::from_bits(bits as u64);
+            let r = 1.0f64 / x;
+            (r.is_normal().then(|| u128::from(r.to_bits()))?, x.is_normal() && bits & ((1 << 52) - 1) == 0)
+        }
+        _ => return None,
+    };
+    Some((r, exact_input))
 }
 
 /// The quiet NaN `getConstantFP(APFloat::getNaN(..))` makes.

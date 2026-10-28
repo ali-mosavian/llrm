@@ -31,6 +31,15 @@
 //! two layouts decide alike (a frame cell priced by its displacement once made
 //! them differ).
 //!
+//! `ordered` is the other relayout: the pin's
+//! `X86FrameLowering::orderFrameObjects` (the use-density order
+//! `PrologEpilogInserter` asks for at every optimisation level), applied to the
+//! first layout when it has far operands and the order reaches fewer of them.
+//! Objects sort by uses per byte, highest first, ties by alignment and then by
+//! later creation, and are laid from BP downward; a BASIC frame reorders the
+//! selector's slots only, since the runtime zero-fills them and the spill slots
+//! lie outside what it fills.
+//!
 //! It gives up and returns `None`, and the first layout stands, on a frame cell
 //! in no known slot, on inline-code bytes it cannot move, on call-private
 //! ranges that are not what `outside` makes, on a native frame, or on a frame
@@ -87,8 +96,19 @@ pub fn laid_again(
     }
     let (again, homes) = replayed(frame, hole)?;
     let moved = Moves { frame: Some(frame), homes: &homes, hole };
-    let body = moved_body(&first.body, &moved)?;
-    let reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
+    let mut machined = shifted(first, frame, &moved)?;
+    machined.reserve = -std::cmp::min(again.slots.values().copied().min().unwrap_or(0), again.floor);
+    Some((machined, again))
+}
+
+/// `first` with every cell, inline-code displacement and debug home moved by
+/// `moved`; its reserve is the caller's to set.
+fn shifted(
+    first: &Machined,
+    frame: &Frame,
+    moved: &Moves,
+) -> Option<Machined> {
+    let body = moved_body(&first.body, moved)?;
     let mut inline = first.inline.clone();
     for (at, places) in &first.inline_places {
         let bytes = inline.get_mut(at)?;
@@ -97,9 +117,9 @@ pub fn laid_again(
             bytes.get_mut(*offset..*offset + 2)?.copy_from_slice(&(new as u16).to_le_bytes());
         }
     }
-    let machined = Machined {
+    Some(Machined {
         body,
-        reserve,
+        reserve: first.reserve,
         calls: first.calls.clone(),
         inline,
         inline_symbols: first.inline_symbols.clone(),
@@ -123,7 +143,127 @@ pub fn laid_again(
         popped: first.popped,
         registers: first.registers.clone(),
         landing: first.landing,
+    })
+}
+
+/// One stack object for [`order`].
+struct Object {
+    /// Its first byte, which names it (`Addr::slot_home`).
+    home: i64,
+    size: i64,
+    align: i64,
+    /// The frame operands that name it.
+    uses: u64,
+}
+
+/// `X86FrameLowering::orderFrameObjects` for a frame-pointer frame: the indices
+/// of `objects` (in creation order) nearest BP first. The pin sorts ascending
+/// by `uses / size` (compared cross-multiplied, a tie by alignment), stable,
+/// and flips the list for an FP frame.
+fn order(objects: &[Object]) -> Vec<usize> {
+    let mut sorted: Vec<usize> = (0..objects.len()).collect();
+    sorted.sort_by(|&a, &b| {
+        let (a, b) = (&objects[a], &objects[b]);
+        (a.uses * b.size as u64).cmp(&(b.uses * a.size as u64)).then(a.align.cmp(&b.align))
+    });
+    sorted.reverse();
+    sorted
+}
+
+/// The new first byte of each object of `objects`, laid in `placed` order from
+/// `top` (the distance below BP where the first begins), as
+/// `calculateFrameObjectOffsets`: add the size, align, name the offset.
+fn laid(
+    objects: &[Object],
+    placed: &[usize],
+    top: i64,
+) -> Vec<(i64, i64)> {
+    let mut depth = top;
+    placed
+        .iter()
+        .map(|&at| {
+            let one = &objects[at];
+            depth = (depth + one.size + one.align - 1).div_euclid(one.align) * one.align;
+            (one.home, -depth)
+        })
+        .collect()
+}
+
+/// `first` laid out as the pin's `orderFrameObjects` orders its stack objects:
+/// the selector's slots and, where the runtime does not own the frame, the
+/// spill slots, by uses per byte. None where it cannot be moved by its slots
+/// alone, or the order would not fit where the objects are.
+pub fn ordered(
+    first: &Machined,
+    frame: &Frame,
+    basic: bool,
+) -> Option<(Machined, Frame)> {
+    if frame.native.is_some() || frame.hole != 0 {
+        return None;
+    }
+    let reach = frame.align.max(1);
+    let align_of = |home: i64| {
+        let mut align = 1;
+        while align * 2 <= reach && home.rem_euclid(align * 2) == 0 {
+            align *= 2;
+        }
+        align
     };
+    let mut objects: Vec<Object> = Vec::new();
+    let mut extents = frame.extents.clone();
+    extents.sort_by_key(|(start, size)| std::cmp::Reverse(start + size));
+    for (start, size) in extents {
+        objects.push(Object { home: start, size: if size == 0 { 4 } else { size }, align: align_of(start), uses: 0 });
+    }
+    if !basic {
+        let mut spills = std::collections::BTreeSet::new();
+        for home in frame.slots.values() {
+            if spills.insert(*home) {
+                let size = *frame.capacities.get(home)?;
+                objects.push(Object {
+                    home: *home,
+                    size: if size == 0 { 4 } else { size },
+                    align: align_of(*home),
+                    uses: 0,
+                });
+            }
+        }
+    }
+    if objects.len() < 2 {
+        return None;
+    }
+    let index: IndexMap<i64, usize> = objects.iter().enumerate().map(|(at, one)| (one.home, at)).collect();
+    for one in first.body.insns() {
+        let Some(what) = &one.what else { continue };
+        for place in what.dests.iter().chain(&what.sources) {
+            let Some(addr) = place.address().and_then(|at| at.addr) else { continue };
+            if addr.space == Space::Frame
+                && let Some(at) = addr.slot_home().and_then(|home| index.get(&home))
+            {
+                objects[*at].uses += 1;
+            }
+        }
+    }
+    let top = -objects.iter().map(|one| one.home + one.size).max()?;
+    let old_low = objects.iter().map(|one| one.home).min()?;
+    let placed = order(&objects);
+    let mut homes: IndexMap<i64, i64> = laid(&objects, &placed, top.max(0)).into_iter().collect();
+    if homes.values().copied().min()? < old_low || homes.iter().all(|(old, new)| old == new) {
+        return None;
+    }
+    // spill slots the order leaves where they are
+    for home in frame.slots.values() {
+        homes.entry(*home).or_insert(*home);
+    }
+    let mut again = frame.clone();
+    let moved = |home: &i64| homes.get(home).copied().unwrap_or(*home);
+    again.extents = frame.extents.iter().map(|(start, size)| (moved(start), *size)).collect();
+    again.slots = frame.slots.iter().map(|(key, home)| (key.clone(), moved(home))).collect();
+    again.capacities = frame.capacities.iter().map(|(home, size)| (moved(home), *size)).collect();
+    again.stacks = frame.stacks.iter().map(|(home, ranges)| (moved(home), ranges.clone())).collect();
+    let moves = Moves { frame: Some(frame), homes: &homes, hole: 0 };
+    let mut machined = shifted(first, frame, &moves)?;
+    machined.reserve = first.reserve;
     Some((machined, again))
 }
 
@@ -321,6 +461,10 @@ impl Moves<'_> {
         &self,
         private: &[(Addr, u32)],
     ) -> Option<Vec<(Addr, u32)>> {
+        // A call that may reach the whole frame has no private range to move.
+        if private.is_empty() {
+            return Some(Vec::new());
+        }
         let (whole, size) = WHOLE_FRAME;
         let (low, high) = (whole.disp, whole.disp + i64::from(size));
         let mut reach = std::collections::BTreeSet::new();
@@ -348,13 +492,34 @@ impl Moves<'_> {
             return None;
         }
         // An incoming argument's range (from BP up) stays; what the selector
-        // laid out below BP moves.
-        Some(outside(
-            &reach
-                .iter()
-                .map(|(start, end)| if *start >= 0 { (*start, *end) } else { (start - self.hole, end - self.hole) })
-                .collect(),
-        ))
+        // laid out below BP moves, each slot to where it went.
+        let mut moved = std::collections::BTreeSet::new();
+        for (start, end) in &reach {
+            if *start >= 0 {
+                moved.insert((*start, *end));
+                continue;
+            }
+            let Some(frame) =
+                self.frame.filter(|frame| frame.extents.iter().any(|(at, _)| self.homes.contains_key(at)))
+            else {
+                moved.insert((start - self.hole, end - self.hole));
+                continue;
+            };
+            let mut covered = 0;
+            for (at, size) in &frame.extents {
+                let (low, high) = ((*start).max(*at), (*end).min(at + size));
+                if low < high {
+                    let to = self.homes.get(at).copied().unwrap_or(*at);
+                    moved.insert((to + (low - at), to + (high - at)));
+                    covered += high - low;
+                }
+            }
+            // a range outside the selector's slots is no slot to move
+            if covered != end - start {
+                return None;
+            }
+        }
+        Some(outside(&moved))
     }
 
     fn variable(
@@ -475,6 +640,19 @@ mod tests {
         assert_eq!(moves.private(&reach(&[(-40, -8), (4, 12)])), Some(reach(&[(-46, -14), (4, 12)])));
     }
 
+    /// A call that reaches the whole frame (no private range) made the second
+    /// layout give up: dag grep.nib -Os kept every spill below its 1 KiB
+    /// buffer, 56 far operands against the old selector's 5.
+    #[test]
+    fn test_a_call_that_reaches_the_whole_frame_moves_with_the_slots() {
+        use super::Moves;
+        use crate::backend::frame::Frame;
+        let frame = Frame::new(0);
+        let homes = crate::support::hash::IndexMap::default();
+        let moves = Moves { frame: Some(&frame), homes: &homes, hole: 6 };
+        assert_eq!(moves.private(&[]), Some(Vec::new()));
+    }
+
     /// The second layout moved a cell but kept its old slot's tag, so the tags
     /// of the body did not name the slots of its frame: d_faces -Os had ten
     /// cells in no slot (`frame.slots`, `extents`), which a pass that lays
@@ -523,5 +701,111 @@ mod tests {
         let (moved, made) = llrm_support::alloc_count::counted(|| moves.insn(&one));
         assert!(Arc::ptr_eq(&moved.expect("nothing to refuse"), &one));
         assert!(made <= 2, "{made} allocations for an instruction that does not move");
+    }
+
+    /// The body of one block that reads each of `disps` once, tagged with the
+    /// slot it lies in.
+    fn reading(reads: &[(i64, i64)]) -> crate::model::lir::LirBody {
+        use std::sync::Arc;
+
+        use crate::model::lir::{Insn, LirBlock, LirBody};
+        let insns = reads
+            .iter()
+            .enumerate()
+            .map(|(at, (disp, home))| {
+                Arc::new(Insn::new(
+                    at as i64,
+                    None,
+                    Some(load(Addr::new(Space::Frame, *disp).in_slot(*home))),
+                    vec![],
+                    vec![],
+                ))
+            })
+            .collect();
+        LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], Default::default(), Default::default())
+    }
+
+    fn machined(body: crate::model::lir::LirBody) -> crate::backend::assemble::Machined {
+        crate::backend::assemble::Machined {
+            body,
+            reserve: 140,
+            calls: Default::default(),
+            inline: Default::default(),
+            inline_places: Default::default(),
+            inline_symbols: Default::default(),
+            far: Default::default(),
+            pops: Default::default(),
+            popped: 0,
+            registers: llrm_target::FrameRegisters {
+                pointer: RegId::BP,
+                stack: RegId::SP,
+                saved: Vec::new(),
+                slot: 2,
+                align: 2,
+                optional: false,
+                enter: false,
+                wrap_split_size: false,
+                slot_scratch: None,
+                free: false,
+            },
+            landing: None,
+        }
+    }
+
+    fn far_cells(body: &crate::model::lir::LirBody) -> usize {
+        body.insns()
+            .iter()
+            .filter_map(|one| one.what.as_ref())
+            .flat_map(|what| what.sources.iter().chain(&what.dests))
+            .filter_map(|place| place.address().and_then(|at| at.addr))
+            .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&addr.disp))
+            .count()
+    }
+
+    /// Two 46-byte arrays are allocated before a word that is read six times,
+    /// so it lies at `[bp-130]`, a four-byte displacement every time
+    /// (bounds.bas LOCALS, qb m16 -Os: 105 far operands against the old
+    /// selector's 44, +60 bytes). The pin orders the frame objects by uses
+    /// per byte and puts the word at `[bp-2]`.
+    #[test]
+    fn test_a_word_read_often_is_laid_nearer_bp_than_the_arrays() {
+        use super::ordered;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-132);
+        frame.align = 2;
+        frame.extents = vec![(-46, 46), (-92, 46), (-132, 2)];
+        let body =
+            reading(&[(-46, -46), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132), (-132, -132)]);
+        assert_eq!(far_cells(&body), 6, "the premise");
+        let (done, again) = ordered(&machined(body), &frame, true).expect("the order fits");
+        assert_eq!(far_cells(&done.body), 0);
+        let word = again.extents.iter().find(|(_, size)| *size == 2).expect("the word");
+        assert_eq!(word.0, -2);
+    }
+
+    /// An order that would need more room than the objects have is not taken.
+    #[test]
+    fn test_an_order_that_does_not_fit_leaves_the_frame_alone() {
+        use super::ordered;
+        use crate::backend::frame::Frame;
+        let mut frame = Frame::new(-7);
+        frame.align = 4;
+        // laid densest first, byte, word, dword need 8 bytes with the padding;
+        // the three lie in 7
+        frame.extents = vec![(-4, 4), (-6, 2), (-7, 1)];
+        let body = reading(&[(-7, -7), (-7, -7), (-7, -7), (-6, -6), (-6, -6), (-6, -6), (-4, -4)]);
+        assert!(ordered(&machined(body), &frame, true).is_none());
+    }
+
+    /// The pin's comparator: uses per byte, highest first; a tie by alignment,
+    /// then the later object.
+    #[test]
+    fn test_objects_are_ordered_by_uses_per_byte_then_alignment_then_creation() {
+        use super::{Object, order};
+        let one = |size, align, uses| Object { home: 0, size, align, uses };
+        // 3 uses of 2 bytes beat 5 of 8; equal density 1: the wider alignment
+        // first; then the later
+        let objects = [one(8, 2, 5), one(2, 2, 3), one(4, 2, 4), one(4, 4, 4), one(4, 4, 4)];
+        assert_eq!(order(&objects), [1, 4, 3, 2, 0]);
     }
 }

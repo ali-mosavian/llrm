@@ -51,6 +51,10 @@ impl Builder<'_> {
                 let product = self.dag.get_node_flags(ISD::FMul, dest, &[first, second], flags);
                 self.dag.get_node_flags(ISD::FAdd, dest, &[product, third], flags)
             }
+            Intrinsic::CopySign => {
+                let second = self.get_value(instruction.operands[1])?;
+                self.dag.get_node(ISD::FCopySign, dest, &[first, second])
+            }
             Intrinsic::Fixed { divide: false } => {
                 let second = self.get_value(instruction.operands[1])?;
                 let scale = self.get_value(instruction.operands[2])?;
@@ -60,6 +64,30 @@ impl Builder<'_> {
                 let second = self.get_value(instruction.operands[1])?;
                 let scale = self.get_value(instruction.operands[2])?;
                 self.expand_div_fix(first, second, scale)
+            }
+            Intrinsic::FixedMul { signed, saturating } => {
+                let second = self.get_value(instruction.operands[1])?;
+                let scale = self.get_value(instruction.operands[2])?;
+                let code = match (*signed, *saturating) {
+                    (true, _) => ISD::SMulFixSat,
+                    (false, false) => ISD::UMulFix,
+                    (false, true) => ISD::UMulFixSat,
+                };
+                self.dag.get_node(code, dest, &[first, second, scale])
+            }
+            Intrinsic::ShiftSat { signed } => {
+                let second = self.get_value(instruction.operands[1])?;
+                self.dag.get_node(if *signed { ISD::SShlSat } else { ISD::UShlSat }, dest, &[first, second])
+            }
+            Intrinsic::Saturating { op, signed } => {
+                let second = self.get_value(instruction.operands[1])?;
+                let code = match (op, signed) {
+                    (BinaryOp::Add, true) => ISD::SAddSat,
+                    (BinaryOp::Add, false) => ISD::UAddSat,
+                    (_, true) => ISD::SSubSat,
+                    (_, false) => ISD::USubSat,
+                };
+                self.dag.get_node(code, dest, &[first, second])
             }
             Intrinsic::MinMax { signed, max } => {
                 let second = self.get_value(instruction.operands[1])?;
@@ -108,6 +136,13 @@ impl Builder<'_> {
                     FloatFunction::Log => ISD::FLog,
                     FloatFunction::Exp => ISD::FExp,
                     FloatFunction::Rint => ISD::FRint,
+                    // Calls of the C library before selection (`libmcalls`).
+                    FloatFunction::Floor
+                    | FloatFunction::Ceil
+                    | FloatFunction::Trunc
+                    | FloatFunction::Round
+                    | FloatFunction::RoundEven
+                    | FloatFunction::NearbyInt => return Err(Refused("a rounding intrinsic without its library call")),
                 };
                 self.dag.get_node_flags(code, dest, &[first], flags)
             }

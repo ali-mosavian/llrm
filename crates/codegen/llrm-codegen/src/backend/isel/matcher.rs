@@ -122,6 +122,29 @@ pub(crate) fn m16() -> &'static Compiled {
     &crate::backend::selectors::x86_m16::SELECTOR
 }
 
+/// The operand kinds `patterns.isel` names, in the order of
+/// `Selector::kind_slot`.
+pub(super) const KINDS: [&str; 6] = ["value", "block", "int", "poison", "fconst", "const"];
+
+/// Where `name` stands in `domain`, or `u16::MAX` where the target's patterns
+/// never name it: found when a selector is made, not for each instruction.
+pub(super) fn position(
+    domain: &[&str],
+    name: &str,
+) -> u16 {
+    domain.iter().position(|one| *one == name).map_or(u16::MAX, |at| at as u16)
+}
+
+fn known(at: u16) -> u16 {
+    assert_ne!(at, u16::MAX, "a name the generator knows");
+    at
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static OPCODE_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The instruction a pattern matched: its operands, a commutative
 /// opcode's constant taken second.
 pub struct Match<'a> {
@@ -293,16 +316,18 @@ impl Selector<'_, '_, '_> {
         m: &Match,
     ) -> [u16; 2 + 2 * OPERANDS] {
         let instruction = self.function.instruction(m.inst);
-        let position = |domain: &[&str], name: &str| {
-            domain.iter().position(|one| *one == name).expect("a name the generator knows") as u16
-        };
         let mut out = [0; 2 + 2 * OPERANDS];
-        out[0] = position(self.compiled.opcodes, instruction.opcode.mnemonic());
-        out[1] = position(self.compiled.types, self.class(Some(instruction.ty)));
+        out[0] =
+            *self.opcodes.borrow_mut().entry(instruction.opcode.mnemonic().as_ptr() as usize).or_insert_with(|| {
+                #[cfg(test)]
+                OPCODE_SCANS.with(|one| one.set(one.get() + 1));
+                known(position(self.compiled.opcodes, instruction.opcode.mnemonic()))
+            });
+        out[1] = known(self.type_at[TypeClass::of(self.types(), &self.layout, Some(instruction.ty)) as usize]);
         for (index, &operand) in m.ops.iter().take(OPERANDS).enumerate() {
-            out[2 + 2 * index] = position(self.compiled.kinds, self.kind(operand));
-            out[3 + 2 * index] =
-                position(self.compiled.types, self.class(self.function.operand_type(&self.module.context, operand)));
+            out[2 + 2 * index] = known(self.kind_at[self.kind_slot(operand)]);
+            let ty = self.function.operand_type(&self.module.context, operand);
+            out[3 + 2 * index] = known(self.type_at[TypeClass::of(self.types(), &self.layout, ty) as usize]);
         }
         out
     }
@@ -318,14 +343,22 @@ impl Selector<'_, '_, '_> {
         &self,
         operand: Operand,
     ) -> &'static str {
+        KINDS[self.kind_slot(operand)]
+    }
+
+    /// `operand`'s place in `KINDS`.
+    fn kind_slot(
+        &self,
+        operand: Operand,
+    ) -> usize {
         match operand {
-            Operand::Value(_) => "value",
-            Operand::Block(_) => "block",
+            Operand::Value(_) => 0,
+            Operand::Block(_) => 1,
             Operand::Constant(id) => match self.module.context.get(id).kind {
-                ConstantKind::Int(_) | ConstantKind::Null | ConstantKind::Zero => "int",
-                ConstantKind::Poison | ConstantKind::Undef => "poison",
-                ConstantKind::Float(_) => "fconst",
-                _ => "const",
+                ConstantKind::Int(_) | ConstantKind::Null | ConstantKind::Zero => 2,
+                ConstantKind::Poison | ConstantKind::Undef => 3,
+                ConstantKind::Float(_) | ConstantKind::Float80(_) => 4,
+                _ => 5,
             },
         }
     }
@@ -1244,6 +1277,19 @@ impl Selector<'_, '_, '_> {
         self.wide_cast(self.cast(m), m.inst, m.at, out)
     }
 
+    /// A frozen i64 is its halves (LLVM selects `FREEZE` as a copy).
+    pub fn hook_wide_freeze(
+        &mut self,
+        m: &Match,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        let instruction = self.function.instruction(m.inst);
+        let (operand, result) = (instruction.operands[0], instruction.result.expect("a freeze has a result"));
+        let pair = self.wide(operand, m.at, out)?;
+        self.wides.insert(result, pair);
+        Ok(())
+    }
+
     pub fn hook_wide_binary(
         &mut self,
         m: &Match,
@@ -1341,15 +1387,16 @@ impl Selector<'_, '_, '_> {
         let (pointer, size) = (self.pointer(pointer)?, self.size(self.type_of(constant))?);
         let Operand::Constant(id) = constant else { unreachable!("a constant") };
         // Poison is any value: +0.0.
-        let bits = match self.module.context.get(id).kind {
-            ConstantKind::Float(bits) => bits,
-            ConstantKind::Poison | ConstantKind::Undef => 0,
+        let (bits, extended) = match self.module.context.get(id).kind {
+            ConstantKind::Float(bits) => (bits, None),
+            ConstantKind::Float80(bits) => (0, Some(bits)),
+            ConstantKind::Poison | ConstantKind::Undef => (0, None),
             _ => return refuse("a float constant of no bits"),
         };
         // An extended float is its 10 bytes: a dword, a dword and a word, as a
         // global's initializer lays them down.
         if size == 10 {
-            let image = llrm_mir::types::x87_extended(bits);
+            let image = extended.map_or_else(|| llrm_mir::types::x87_extended(bits), llrm_mir::types::x87_image);
             for (by, width) in [(0_usize, 4_u32), (4, 4), (8, 2)] {
                 let value =
                     image[by..by + width as usize].iter().rev().fold(0_i64, |acc, byte| acc << 8 | i64::from(*byte));

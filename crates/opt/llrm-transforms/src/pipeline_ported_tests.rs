@@ -3,6 +3,7 @@
 //! for a pass deleted with #237 (mem2reg, simplifycfg, earlycse, licm, adce,
 //! loop-reduce, ipsccp, indvars, loop-deletion), on the same input.
 
+use llrm_analysis::testing::m16_ir;
 use llrm_mir::module::Module;
 use llrm_mir::program::Program;
 
@@ -246,7 +247,8 @@ b5:
 /// write, leaves the loop; one through a plain pointer stays.
 #[test]
 fn an_invariant_load_leaves_a_loop_from_a_conditional_block() {
-    const TEXT: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32"
+    let text = m16_ir(
+        r#"target datalayout = "@m16-datalayout@"
 define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
 b1:
   br label %b2
@@ -272,8 +274,9 @@ b4:
 b5:
   ret void
 }
-"#;
-    let out = piped(TEXT);
+"#,
+    );
+    let out = piped(text);
     let at = |label: &str| out.find(label).unwrap_or_else(|| panic!("{label} in {out}"));
     let entry = &out[at("b1:")..at("b3:")];
     // `dereferenceable(4)` makes the offset-2 GEP `inbounds nuw`, as the pin
@@ -632,7 +635,8 @@ b1:
 }
 
 /// `(x - 5) * 8 + 3 + 4` is `x * 8 + -33` (the multiply by 8 is the back end's
-/// to shift). (llrm-mir's instcombine, #237)
+/// to shift). Under the `& 255 & 15` the constant is only demanded mod 16, so
+/// it lands as `15` (`opt` agrees). (llrm-mir's instcombine, #237)
 #[test]
 fn a_difference_with_a_constant_is_a_sum_and_the_constants_meet() {
     const TEXT: &str = r#"define i16 @f(i16 %x) {
@@ -647,7 +651,7 @@ b1:
 }
 "#;
     let out = piped(TEXT);
-    assert!(out.contains("add i16 %0, -33"), "{out}");
+    assert!(out.contains("add i16 %0, 15"), "{out}");
     assert_eq!(out.matches("add").count(), 1, "{out}");
 }
 
@@ -801,4 +805,51 @@ b1:
     let out = piped(TEXT);
     assert!(!out.contains("alloca") && !out.contains("memset(") && !out.contains("store"), "{out}");
     assert!(out.contains("ret i16 7"), "{out}");
+}
+
+/// textfill.flat.bas `POKE &HB8000 + i` under `i < 3999`: the 16-bit offset is
+/// `i + 0x8000`, which was left `xor i, -32768` or a flagless `or`, so the old
+/// selector could not fold it into the store (`or bx, -32768` for
+/// `es:[di-28768]`, +20 B at -Os m16). The pin's
+/// `SimplifyDemandedInstructionBits` in `visitXor` and `visitOr` makes it `or
+/// disjoint`, an address add.
+#[test]
+fn a_sign_mask_offset_of_a_value_a_branch_bounds_is_a_disjoint_or() {
+    let after = piped(
+        "declare void @g(i16)
+define i16 @f(i16 %i) {
+b0:
+  %c = icmp ult i16 %i, 3999
+  br i1 %c, label %b5, label %b6
+b5:
+  %s = sext i16 %i to i32
+  %a = add i32 753664, %s
+  %t = trunc i32 %a to i16
+  call void @g(i16 %t)
+  ret i16 %t
+b6:
+  ret i16 0
+}
+",
+    );
+    assert!(after.contains("or disjoint i16 %i, -32768"), "{after}");
+    assert!(!after.contains("xor"), "{after}");
+}
+
+/// A select arm under a compare of another width was rewritten to the
+/// compare's constant on every visit, never equal to it: the combine looped
+/// until memory ran out (jpeg_fixed.nib, `-Os`, 25 GB).
+#[test]
+fn a_select_arm_under_a_compare_of_another_width_does_not_loop() {
+    let after = piped(
+        "define i8 @f(i32 %x, i8 %y) {
+b0:
+  %c = icmp eq i32 %x, 256
+  %s = select i1 %c, i8 0, i8 %y
+  %r = xor i8 %s, 3
+  ret i8 %r
+}
+",
+    );
+    assert!(after.contains("ret"), "{after}");
 }

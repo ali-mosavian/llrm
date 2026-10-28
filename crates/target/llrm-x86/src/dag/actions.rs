@@ -196,7 +196,7 @@ impl TargetLowering {
     /// `isMultiStoresCheaperThanBitsMerge`: the pin says so for a float and
     /// an integer half only.
     ///
-    /// DEVIATE SD312: a target with the far pointer (m16) says so for two
+    /// DEVIATE SD240: a target with the far pointer (m16) says so for two
     /// integer halves too. A far pointer or a `long` stored from its two
     /// words is two word stores, where merging them took `shl; movzx; add`
     /// (QCport -Os: 131 stack arguments built so). Owner w10. Exit: none
@@ -289,12 +289,15 @@ impl TargetLowering {
         use ISD::*;
         for vt in ALL {
             self.set_ops(
-                &[SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat],
+                &[
+                    SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat, SMulFix, UMulFix,
+                    SMulFixSat, UMulFixSat, SShlSat, UShlSat,
+                ],
                 &[vt],
                 Action::Expand,
             );
             self.set_ops(&[SAddO, SSubO, UAddO, USubO, SMulO, UMulO], &[vt], Action::Expand);
-            self.set_ops(&[UAddOCarry, USubOCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
+            self.set_ops(&[UAddOCarry, USubOCarry, SetCCCarry, AddC, AddE, SubC, SubE], &[vt], Action::Expand);
             self.set_ops(&[CtLzZeroPoison, CtTzZeroPoison, CtLs, BitReverse, Parity], &[vt], Action::Expand);
             // A pair that is a legal register type (an i32 at m16) is built by
             // shifts and an or.
@@ -504,7 +507,7 @@ impl TargetLowering {
             }
         }
         // L2757..L2776
-        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry], native, Custom);
+        t.set_ops(&[SAddO, UAddO, SSubO, USubO, SMulO, UMulO, UAddOCarry, USubOCarry, SetCCCarry], native, Custom);
         t
     }
 }

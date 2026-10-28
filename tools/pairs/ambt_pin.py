@@ -48,7 +48,7 @@ def main(prog: str, llrm: str) -> dict:
     libgcc = sh(["gcc", "-m32", "-print-libgcc-file-name"]).stdout.strip()
 
     def link(obj: str, variant: str) -> None:
-        sh(["ld", "-m", emulation, "-static", "-e", "0", "-Ttext=0x10000", f"--just-symbols={work}/stub.elf", "-o", f"{work}/b/{prog}.{variant}.elf", obj, libgcc])
+        sh(["ld", "-m", emulation, "-static", "-e", "0", f"-Ttext={pin.LINK_TEXT_BASE:#x}", f"--just-symbols={work}/stub.elf", "-o", f"{work}/b/{prog}.{variant}.elf", obj, libgcc])
 
     def clocks(variant: str) -> dict:
         done = subprocess.run(["uv", "run", "-q", "--project", str(R / "tools"), "python", str(harness_dir / "harness.py"), prog, variant], capture_output=True, text=True, env=env)

@@ -70,8 +70,8 @@ use llrm_mir::passes::PreservedAnalyses;
 use llrm_mir::program::{Program, ProgramAnalyses, ProgramPass};
 
 use crate::interprocedural::{
-    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting_marked, roots, roots_here,
-    vouched,
+    Liveness, calls_of, declared, function_mut, managers, private, procedures, reporting, reporting_marked, roots,
+    roots_here, vouched,
 };
 
 /// What the interprocedural step does to a body before the Simplify list:
@@ -101,6 +101,25 @@ impl ProgramPass for ModuleIpo {
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules) {
             modules[at].changed(id);
             changed = true;
+        }
+        // `CalledValuePropagationPass`, which follows IPSCCP.
+        for at in 0..count {
+            for id in crate::calledvaluepropagation::propagated(&mut program.modules[at]) {
+                modules[at].changed(id);
+                changed = true;
+            }
+        }
+        // `GlobalOptPass`, which LLVM runs here: a variable is split into the
+        // pieces its loads read, and one a body writes before it reads is that
+        // body's stack slot, while the loads are still there to be seen.
+        for at in 0..count {
+            let ids = reporting(&mut program.modules[at], &mut modules[at], |module| {
+                crate::globalsra::split(module, &program.layout, program.target.spaces())
+            });
+            changed |= !ids.is_empty();
+            for id in ids {
+                modules[at].changed(id);
+            }
         }
         let mut cloning = crate::ipacp::Cloning::default();
         for at in 0..count {
@@ -268,6 +287,14 @@ impl ProgramPass for Walk {
                             Some(&constant),
                             &mut declared,
                         )? > 0;
+                        // A recursive callee's peeled copies spliced here make
+                        // this body one with self-copies too (`SELF_COPIED`).
+                        if spliced && !peeled.is_empty() {
+                            function_mut(module, id)
+                                .1
+                                .attrs
+                                .push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                        }
                         // DEVIATE (recursion): a tree-recursive function waits
                         // for its tail-call elimination
                         // until its copies are made
@@ -299,6 +326,7 @@ impl ProgramPass for Walk {
                         let spliced_body = (!trials.is_empty()
                             && function_mut(module, id).1.walk().count() <= TRIAL_CALLER)
                             .then(|| function_mut(module, id).1.clone());
+                        let mid = calls_of(&module.context, module.global(id).function().expect("a procedure"));
                         (self.simplify)(module, &mut modules[at], id, "walk.");
                         if let (Some(before), Some(tti)) = (spliced_body, tti.as_deref()) {
                             // SZ2: each refused site is inlined into the body
@@ -320,9 +348,18 @@ impl ProgramPass for Walk {
                             for (callee, mut calls) in by_callee {
                                 calls.sort();
                                 let global = module.global(callee);
+                                // The references left once this step's splice
+                                // is counted: a
+                                // site inlined beside the refused ones
+                                // no longer keeps the callee alive.
+                                let count = |calls: &[(GlobalId, i64)]| {
+                                    calls.iter().filter(|(one, _)| *one == callee).map(|(_, n)| *n).sum::<i64>()
+                                };
+                                let left =
+                                    live.references().get(&callee).copied().unwrap_or(0) - count(&was) + count(&mid);
                                 let goes = crate::inlinecost::local_linkage(global.linkage)
                                     && !addressed.contains(&callee)
-                                    && live.references().get(&callee).copied() == Some(calls.len() as i64);
+                                    && left == calls.len() as i64;
                                 if goes {
                                     units.push((calls, body_size(module, &program.layout, tti, callee)));
                                 } else {
@@ -371,7 +408,7 @@ impl ProgramPass for Walk {
                                         credit
                                     );
                                 }
-                                if tried < best + credit {
+                                if tried <= best + credit {
                                     best = tried;
                                     accepted.extend(calls);
                                 } else {
@@ -481,6 +518,13 @@ fn self_calls(
     Some(frequencies)
 }
 
+/// The flag a body that had copies of itself made (D10), or took a recursive
+/// callee's peeled copies, carries from then on:
+/// the simplifier folds the chains of tests those copies make (`n - 1 == 0`,
+/// `n - 2 == 0`, ...) through `algebraic::_offset_compared` whoever else reads
+/// the sum, which the pin does only with one use.
+pub const SELF_COPIED: &str = "llrm-self-copied";
+
 /// DEVIATE (recursion): the copies of a tree-recursive function in itself, as
 /// gcc's `recursive_inlining` makes them, to the limits of [`crate::inline`],
 /// then its tail-call elimination, which the walk left out
@@ -536,6 +580,7 @@ impl SelfInline {
                         body: std::rc::Rc::new(function.clone()),
                         frame: crate::inline::grown(context, &program.layout, function),
                         moved: false,
+                        last_call: false,
                         callee: None,
                         self_calls: None,
                         self_sites: 0,
@@ -561,6 +606,9 @@ impl SelfInline {
                             llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::tailcallelim::DEFERRED
                         ),
                     );
+                if copies > 0 {
+                    function_mut(module, id).1.attrs.push(llrm_mir::opcode::Attribute::Flag(SELF_COPIED.to_owned()));
+                }
                 modules[at].changed(id);
                 modules[at].invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                 (self.simplify)(module, &mut modules[at], id, "self-inline.");
@@ -600,10 +648,12 @@ fn body_size(
     id: GlobalId,
 ) -> i64 {
     let function = module.global(id).function().expect("a body");
+    let float =
+        |ty: llrm_mir::types::TypeId| llrm_mir::tti::Ty::of(&module.context.types, ty).is_some_and(|ty| ty.is_float());
     function
         .walk()
         .map(|(_, inst)| {
-            llrm_mir::instructioncost::instruction_cost(
+            let units = llrm_mir::instructioncost::instruction_cost(
                 tti,
                 &module.context,
                 layout,
@@ -612,7 +662,21 @@ fn body_size(
                 inst,
                 llrm_mir::tti::CostKind::CodeSize,
             )
-            .value
+            .value;
+            let operation = function.instruction(inst);
+            let moves = matches!(
+                operation.opcode,
+                llrm_mir::opcode::Opcode::Load { .. }
+                    | llrm_mir::opcode::Opcode::Store { .. }
+                    | llrm_mir::opcode::Opcode::Call(_)
+            );
+            let touches = !moves
+                && (float(operation.ty)
+                    || operation
+                        .operands
+                        .iter()
+                        .any(|&operand| function.operand_type(&module.context, operand).is_some_and(|ty| float(ty))));
+            if touches { units * tti.float_code_size_percent() / 100 } else { units }
         })
         .sum()
 }

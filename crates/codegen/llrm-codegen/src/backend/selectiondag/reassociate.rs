@@ -1,5 +1,6 @@
-//! `reassociateOps`: a commutative `op` of an `op` and a third value, grouped
-//! so constants meet and a node already built is reused.
+//! `reassociateOps` for add, mul, and, or and xor: a commutative `op` of an
+//! `op` and a third value, grouped so constants meet and a node already built
+//! is reused.
 //!
 //! `(add (add x, 4), y)` is `(add (add x, y), 4)`: the constant moves out where
 //! the matcher folds it into one `lea`. `(add (add x, 4), 5)` is `(add x, 9)`.
@@ -16,6 +17,7 @@
 use super::dag::SDValue;
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
+use super::mvt::EVT;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     fn plain_constant(
@@ -33,6 +35,55 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         n1: SDValue,
     ) -> Option<SDValue> {
         self.reassociate_ops_commutative(opc, n0, n1).or_else(|| self.reassociate_ops_commutative(opc, n1, n0))
+    }
+
+    /// `reassociationCanBreakAddressingModePattern` for `ADD`
+    /// ([L1109](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L1109)):
+    /// whether reassociating `(add n0, n1)` would undo a split of an address
+    /// into a base with an offset that a load or store folds.
+    ///
+    /// DEVIATE SD210: the vscale half, the global-address offset test and
+    /// `hasUniqueMemOperand` are not translated (x86 has no scalable
+    /// addressing here, and every access counts as unique); an offset is legal
+    /// when it fits a signed 32-bit displacement
+    /// (`X86::isOffsetSuitableForCodeModel`, small model). Exit: those. Owner
+    /// sdag-b. Review 2026-12-10.
+    pub(super) fn reassociation_can_break_addressing_mode_pattern(
+        &self,
+        node: SDValue,
+        n0: SDValue,
+        n1: SDValue,
+    ) -> bool {
+        if self.dag.opcode(n0) != ISD::Add {
+            return false;
+        }
+        let legal = |offset: i128| i128::from(i32::MIN) <= offset && offset <= i128::from(i32::MAX);
+        let signed = |value: u128, vt: EVT| {
+            let bits = vt.size_in_bits();
+            let shift = 128 - bits;
+            ((value << shift) as i128) >> shift
+        };
+        let vt = self.dag.value_type(n1);
+        let Some(c2) = self.dag.constant(n1).map(|value| signed(value, vt)) else { return false };
+        let is_memory = |user: u32| matches!(
+            self.dag.opcode(SDValue { node: user, res: 0 }),
+            ISD::Load | ISD::Store
+        );
+        if let Some(c1) = self.dag.constant(self.dag.operand(n0, 1)).map(|value| signed(value, vt)) {
+            if self.dag.use_count(n0.node) == 1 {
+                return false;
+            }
+            for user in self.dag.users(node) {
+                // x[offset2] already not legal: nothing to break; else would
+                // x[offset1 + offset2] still be?
+                if is_memory(user) && legal(c2) && !legal(c1 + c2) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        // `(add (add x, y), c2)` only used by accesses with `x[c2]` legal.
+        self.dag.users(node).all(|user| is_memory(user) && legal(c2))
     }
 
     fn reassociate_ops_commutative(

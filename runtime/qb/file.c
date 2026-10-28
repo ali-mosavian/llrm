@@ -25,6 +25,9 @@ static unsigned os_error(long code)
     }
 }
 
+/* What an emptied string points at. */
+static const byte no_string;
+
 static Fdb *fdb_of(int channel)
 {
     return lh_file(channel);
@@ -84,7 +87,7 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     if (record_length <= 0)
         qb_error(BE_ILLFUN);
     handle = open_file(path, mode);
-    fdb = lh_alloc(sizeof(Fdb), LH_FILE, NULL, channel);
+    fdb = lh_alloc(sizeof(Fdb) + (mode == MD_RANDOM ? record_length : 0), LH_FILE, NULL, channel);
     if (!fdb) {
         llrm_os_close(handle);
         qb_error(BE_MEMORY);
@@ -93,6 +96,7 @@ void B_OPEN(SD *name, short channel, short record_length, unsigned short mode)
     fdb->mode = mode;
     fdb->record_length = record_length;
     fdb->column = 0;
+    fdb->past = 0;
     if (mode == MD_APPEND)
         llrm_os_seek(handle, 0, ORIGIN_END);
 }
@@ -258,11 +262,31 @@ static int get_byte(Fdb *fdb)
     return (byte)buffer[used++];
 }
 
+static int in_buffer(const Fdb *fdb, const SD *variable);
+
+/* The strings FIELD mapped onto the buffer, which is about to go: each becomes empty. */
+static void unfield(Fdb *fdb)
+{
+    SD **at = (SD **)fdb->fielded.ptr;
+    unsigned count = fdb->fielded.len / sizeof(SD *);
+
+    for (; count--; at++)
+        if (in_buffer(fdb, *at)) {
+            (*at)->len = 0;
+            (*at)->ptr = (char *)&no_string;
+        }
+    str_release(&fdb->fielded);
+    fdb->fielded.len = 0;
+}
+
 static void close_fdb(Fdb *fdb)
 {
+    if (fdb->flags & FL_FIELD)
+        unfield(fdb);
     buffer_release();
     llrm_os_close(fdb->handle);
     lh_free(fdb);
+    lh_compact(); /* B$LHDALC_CPCT: no hole is left in the heap */
 }
 
 /* B$CLOS: CLOSE #a, #b ... closes those channels, and a bare CLOSE every file.
@@ -328,6 +352,80 @@ long B_FSEK(short channel)
     return fdb->mode == MD_RANDOM ? at / fdb->record_length + 1 : at + 1;
 }
 
+/* FIELD (QB rt/field.asm): B$FLDP picks the file and B$FIEL carves its record buffer, a string at a time. */
+static Fdb *field_fdb;
+static char *field_pos;
+static unsigned field_left;
+
+void B_FLDP(short channel)
+{
+    Fdb *fdb = fdb_of(channel);
+
+    if (!fdb || fdb->mode != MD_RANDOM)
+        qb_error(BE_FILEMODE);
+    fdb->flags |= FL_FIELD;
+    field_fdb = fdb;
+    field_left = fdb->record_length;
+    field_pos = FDB_BUFFER(fdb);
+}
+
+/* Whether `variable` still names the record buffer: a later assignment gives it a string of its own. */
+static int in_buffer(const Fdb *fdb, const SD *variable)
+{
+    return variable->ptr >= FDB_BUFFER(fdb) && variable->ptr < FDB_BUFFER(fdb) + fdb->record_length;
+}
+
+/* `variable` on the file's list of fielded descriptors, which the entry's mover and CLOSE walk; once is enough. */
+static void field_register(Fdb *fdb, SD *variable)
+{
+    static SD grown;
+    SD **at = (SD **)fdb->fielded.ptr;
+    unsigned count = fdb->fielded.len / sizeof(SD *), i;
+    SD **to;
+
+    for (i = 0; i < count; i++)
+        if (at[i] == variable)
+            return;
+    to = (SD **)str_alloc(&grown, (count + 1) * sizeof(SD *));
+    at = (SD **)fdb->fielded.ptr;
+    for (i = 0; i < count; i++)
+        to[i] = at[i];
+    to[count] = variable;
+    str_adopt(&fdb->fielded, &grown);
+}
+
+void B_FIEL(short width, SD *variable)
+{
+    if (width < 0)
+        qb_error(BE_ILLFUN);
+    if ((unsigned)width > field_left)
+        qb_error(BE_FIELD);
+    field_left -= width;
+    str_release(variable);
+    variable->len = width;
+    variable->ptr = field_pos;
+    if (width) {
+        field_pos += width;
+        field_register(field_fdb, variable);
+    }
+}
+
+/* The file entry moved `delta` bytes up: its fielded strings follow the buffer. */
+static void file_moved(void *data, int delta)
+{
+    Fdb *fdb = data;
+    SD **at = (SD **)fdb->fielded.ptr;
+    unsigned count = fdb->fielded.len / sizeof(SD *);
+
+    if (!count)
+        return;
+    /* called before the data moves, so the buffer is still where the strings are */
+    for (; count--; at++)
+        if (in_buffer(fdb, *at))
+            (*at)->ptr += delta;
+    str_owner_moved(&fdb->fielded, delta);
+}
+
 /* B$FATR: FILEATTR(#channel, field): 1 is the open mode, 2 the DOS handle. */
 long B_FATR(short channel, short field)
 {
@@ -368,6 +466,7 @@ void B_GET3(short channel, qb_data_ptr record, short length)
     got = llrm_os_read(fdb->handle, data, bytes);
     if (got < 0)
         qb_error(os_error(got));
+    fdb->past = (unsigned long)got < bytes;
 }
 
 void B_PUT3(short channel, qb_data_ptr record, short length)
@@ -414,10 +513,62 @@ void B_PUT4(short channel, long record, qb_data_ptr data, short length)
     B_PUT3(channel, data, length);
 }
 
+/* B$GET1, B$PUT1: GET #n and PUT #n move the record buffer FIELD names, at the next record; B$GET2, B$PUT2: at a record
+   number. A record the file ends inside of (BC 4.5, measured) reads as far as there is, the rest of the buffer zeroed. */
+static Fdb *random_fdb(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+
+    if (fdb->mode != MD_RANDOM)
+        qb_error(BE_FILEMODE);
+    return fdb;
+}
+
+void B_GET1(short channel)
+{
+    Fdb *fdb = random_fdb(channel);
+    long got;
+
+    buffer_release();
+    got = llrm_os_read(fdb->handle, (os_data_mut)FDB_BUFFER(fdb), fdb->record_length);
+    if (got < 0)
+        qb_error(os_error(got));
+    for (; (unsigned long)got < fdb->record_length; got++)
+        FDB_BUFFER(fdb)[got] = 0;
+}
+
+void B_PUT1(short channel)
+{
+    Fdb *fdb = random_fdb(channel);
+    long put;
+
+    buffer_release();
+    put = llrm_os_write_file(fdb->handle, (os_data)FDB_BUFFER(fdb), fdb->record_length);
+    if (put < 0)
+        qb_error(os_error(put));
+    if ((unsigned)put != fdb->record_length)
+        qb_error(BE_DISKFULL);
+}
+
+void B_GET2(short channel, long record)
+{
+    position_at(random_fdb(channel), record);
+    B_GET1(channel);
+}
+
+void B_PUT2(short channel, long record)
+{
+    position_at(random_fdb(channel), record);
+    B_PUT1(channel);
+}
+
 /* B$SSEK: SEEK #channel, position. */
 void B_SSEK(short channel, long position)
 {
-    position_at(open_fdb(channel), position);
+    Fdb *fdb = open_fdb(channel);
+
+    position_at(fdb, position);
+    fdb->past = 0;
 }
 
 /* B$FINP: INPUT$(count [, #channel]) (QB rt/inputf.asm): `count` characters from the keyboard (channel 0), not echoed, waiting
@@ -437,6 +588,7 @@ SD *B_FINP(short count, short channel)
         fdb = open_fdb(channel);
         if (fdb->mode == MD_OUTPUT || fdb->mode == MD_APPEND)
             qb_error(BE_PASTEND);
+        fdb->past = 0;
     }
     made = str_tmp(count, &text);
     for (at = 0; at < count; at++) {
@@ -445,8 +597,10 @@ SD *B_FINP(short count, short channel)
 
             if (c < 0) {
                 /* a binary file's short read is the characters there were (QB rt/inputf.asm) */
-                if (fdb->mode == MD_BINARY)
+                if (fdb->mode == MD_BINARY) {
+                    fdb->past = 1;
                     return str_tmp_copy(made, 0, at);
+                }
                 qb_error(BE_PASTEND);
             }
             text[at] = (char)c;
@@ -491,6 +645,9 @@ int B_FEOF(short channel)
             used--;
         return next < 0 || next == END_OF_TEXT ? -1 : 0;
     }
+    /* BINARY: true once a read came up short, as BC does (BCOM45, measured), not at the last byte. */
+    if (fdb->mode == MD_BINARY)
+        return fdb->past ? -1 : 0;
     return B_FLOF(channel) <= llrm_os_seek(fdb->handle, 0, 1) ? -1 : 0;
 }
 
@@ -675,6 +832,7 @@ void file_xinit(void)
 {
     qb_comp_add(&comp);
     lh_on_move(LH_LINE, line_moved);
+    lh_on_move(LH_FILE, file_moved);
 }
 
 #pragma aux B_OPEN "B$OPEN"
@@ -690,6 +848,12 @@ void file_xinit(void)
 #pragma aux B_PUT3 "B$PUT3"
 #pragma aux B_FLOF "B$FLOF"
 #pragma aux B_FATR "B$FATR"
+#pragma aux B_FLDP "B$FLDP"
+#pragma aux B_GET1 "B$GET1"
+#pragma aux B_PUT1 "B$PUT1"
+#pragma aux B_GET2 "B$GET2"
+#pragma aux B_PUT2 "B$PUT2"
+#pragma aux B_FIEL "B$FIEL"
 #pragma aux file_close "@file_close@4"
 #pragma aux B_GET4 "B$GET4"
 #pragma aux B_PUT4 "B$PUT4"

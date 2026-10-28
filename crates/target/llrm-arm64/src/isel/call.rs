@@ -211,6 +211,13 @@ impl Selector<'_> {
         {
             return self.intrinsic(&name, instruction, arguments);
         }
+        if let Operand::Constant(id) = callee_operand
+            && let llrm_mir::ConstantKind::Global(global) = self.module.context.get(id).kind
+            && let Some(name) = self.module.global(global).name.owned()
+            && name.starts_with("llrm.atomic.")
+        {
+            return self.atomic_call(&name, instruction);
+        }
         let (returns, fixed, _) = {
             let (r, p, v) = self.module.signature(info.function_type);
             (r, p.len(), v)

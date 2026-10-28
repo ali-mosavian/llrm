@@ -110,7 +110,7 @@ def test_buildslot_hands_cargo_the_test_cap_unless_the_caller_has_a_runner(tmp_p
 
 
 def test_only_four_builds_hold_a_slot_at_once(tmp_path):
-    """Four slots of unbounded builds ran the host out of memory; with CARGO_BUILD_JOBS=8 four slots fit 32 cores (user, 2026-10-23): a fifth command waits for a free slot."""
+    """Eight slots ran the host at load 83-100 of 32 cores with ~23 sessions building (2026-10-27) and starved the landing runner: four slots by default, a fifth command waits."""
     import time
 
     script = str(Path(__file__).resolve().parent / "buildslot")
@@ -121,3 +121,21 @@ def test_only_four_builds_hold_a_slot_at_once(tmp_path):
         p.wait(timeout=60)
     starts = sorted(float(x) for x in log.read_text().split())
     assert len(starts) == 5 and starts[4] - starts[0] >= 1.8 and starts[3] - starts[0] < 1.0, starts
+
+
+def test_waiters_get_a_slot_in_arrival_order_and_a_priority_ticket_jumps_the_queue(tmp_path):
+    """A dist build holding the shared dist lock waited 44 minutes for a slot while short tests kept taking it: random polling is not a queue."""
+    import time
+
+    script = str(Path(__file__).resolve().parent / "buildslot")
+    log = tmp_path / "order"
+    env = {**os.environ, "BUILDSLOT_DIR": str(tmp_path / "slots"), "BUILDSLOTS": "1", "BUILDSLOT_POLL": "0.1"}
+    holder = subprocess.Popen([script, "sh", "-c", "sleep 1.5"], env=env)
+    time.sleep(0.3)
+    waiters = []
+    for name, extra in (("first", {}), ("second", {}), ("urgent", {"BUILDSLOT_PRIORITY": "0"})):
+        waiters.append(subprocess.Popen([script, "sh", "-c", f"echo {name} >> {log}; sleep 0.2"], env={**env, **extra}))
+        time.sleep(0.2)
+    for p in (holder, *waiters):
+        p.wait(timeout=60)
+    assert log.read_text().split() == ["urgent", "first", "second"], log.read_text()

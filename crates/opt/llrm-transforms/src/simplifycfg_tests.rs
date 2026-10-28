@@ -1080,3 +1080,224 @@ fn test_a_branch_the_dominating_conditions_do_not_imply_keeps_its_compare() {
     let out = printed(&module);
     assert!(out.contains("icmp sgt i32 %n, 5"), "{out}");
 }
+
+/// A ladder of `n` conditional blocks, each reached from the one before and
+/// leaving to a common exit.
+fn ladder(n: usize) -> String {
+    let mut text = String::from("declare i1 @h(i16)\ndefine i16 @f(i16 %x) {\nb0:\n  br label %c0\n");
+    for i in 0..n {
+        text += &format!("c{i}:\n  %v{i} = call i1 @h(i16 {i})\n  br i1 %v{i}, label %c{}, label %e\n", i + 1);
+    }
+    text += &format!("c{n}:\n  ret i16 1\ne:\n  ret i16 0\n}}\n");
+    text
+}
+
+/// A block with one predecessor asked for its predecessor's predecessor by
+/// building a list (`all_predecessors_come_from_same_source`): 4 lists a block
+/// over the pass's two sweeps for 2 (5,723 lists, 1.05 M Ir in d_faces -O2,
+/// beside the pin's 0.05 M). Seen to fail first with the list built (398 for
+/// 100 blocks).
+#[test]
+fn test_a_ladder_of_conditional_blocks_builds_two_predecessor_lists_a_block() {
+    let mut module = parsed(&ladder(100));
+    super::PREDECESSOR_LISTS.with(|lists| lists.set(0));
+    simplify(&mut module);
+    let lists = super::PREDECESSOR_LISTS.with(std::cell::Cell::get);
+    assert!((100..=250).contains(&lists), "100 blocks, {lists} predecessor lists: 4 a block would be 400");
+}
+
+/// The blocks that hold a loop's form up were found for every function with a
+/// loop (each loop's exits scanned: 197 scans, 1.5 M Ir in d_faces -O2, the
+/// pin has none); they are found when a jump alone in a block comes up.
+/// Seen to fail first with the set found at the start of every pass.
+#[test]
+fn test_a_loop_with_no_jump_alone_in_a_block_scans_no_exits() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(
+        "declare i1 @h(i16)
+define i16 @f(i16 %x) {
+b0:
+  %a = add i16 %x, 1
+  br label %b1
+b1:
+  %i = phi i16 [ %a, %b0 ], [ %n, %b1 ]
+  %n = add i16 %i, 1
+  %c = call i1 @h(i16 %n)
+  br i1 %c, label %b1, label %b2
+b2:
+  ret i16 %n
+}
+",
+    );
+    let before = get(Event::LoopExitScans);
+    simplify(&mut module);
+    assert_eq!(get(Event::LoopExitScans) - before, 0);
+}
+
+/// `FindFunctionBackedges`: the targets of back edges only, a join and a
+/// forward edge into a loop are not headers, and a switch's cases are walked.
+#[test]
+fn test_loop_headers_are_the_targets_of_back_edges() {
+    let module = crate::testing::parsed(
+        "define i16 @f(i16 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  switch i16 %x, label %b3 [
+    i16 1, label %b4
+  ]
+
+b3:
+  br i1 %c, label %b3, label %b4
+
+b4:
+  br i1 %c, label %b1, label %b5
+
+b5:
+  ret i16 0
+}
+",
+    );
+    let mut module = module;
+    let (_, function) = module.function_mut("f").expect("@f");
+    let blocks: Vec<_> = function.layout().to_vec();
+    let headers = super::loop_headers(function);
+    let got: Vec<usize> = (0..blocks.len()).filter(|&at| headers.contains(&blocks[at])).collect();
+    assert_eq!(got, [1, 3]);
+}
+
+/// The preheader and the two exits of a rotated shellsort loop, each a jump
+/// alone in a block with one predecessor, stayed through the LLVM-order
+/// pipeline's SimplifyCFG (16 blocks in and out); the pin's, which asks only
+/// the loop headers, leaves 9 (`opt -passes=simplifycfg`).
+#[test]
+fn test_a_jump_holding_a_loops_simple_form_goes_where_the_pin_removes_it() {
+    let text = "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %b18
+
+b18:
+  %p = phi i16 [ 0, %b0 ], [ %next, %b35 ]
+  %c = icmp ult i16 %p, %n
+  br i1 %c, label %b35, label %b23
+
+b23:
+  br label %b24
+
+b24:
+  %q = phi i16 [ %p, %b23 ], [ %r, %b30 ]
+  %r = sub i16 %q, 1
+  %cc = icmp ugt i16 %r, %k
+  br i1 %cc, label %b30, label %b34
+
+b30:
+  %d = icmp ult i16 %r, %n
+  br i1 %d, label %b33, label %b24
+
+b33:
+  %split = phi i16 [ %r, %b30 ]
+  br label %b35
+
+b34:
+  %split1 = phi i16 [ %q, %b24 ]
+  br label %b35
+
+b35:
+  %m = phi i16 [ %split, %b33 ], [ %split1, %b34 ], [ %p, %b18 ]
+  %next = add i16 %p, 1
+  %e = icmp ult i16 %next, 8
+  br i1 %e, label %b18, label %b40
+
+b40:
+  ret i16 %m
+}
+";
+    let off = super::Options { loop_form_kept: false, ..Default::default() };
+    check_with(
+        &off,
+        text,
+        "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %b18
+
+b18:
+  %p = phi i16 [ 0, %b0 ], [ %next, %b35 ]
+  %c = icmp ult i16 %p, %n
+  br i1 %c, label %b35, label %b24
+
+b24:
+  %q = phi i16 [ %r, %b30 ], [ %p, %b18 ]
+  %r = sub i16 %q, 1
+  %cc = icmp ugt i16 %r, %k
+  br i1 %cc, label %b30, label %b35
+
+b30:
+  %d = icmp ult i16 %r, %n
+  br i1 %d, label %b35, label %b24
+
+b35:
+  %m = phi i16 [ %p, %b18 ], [ %r, %b30 ], [ %q, %b24 ]
+  %next = add i16 %p, 1
+  %e = icmp ult i16 %next, 8
+  br i1 %e, label %b18, label %b40
+
+b40:
+  ret i16 %m
+}
+",
+        &[&[3, 0], &[10, 2], &[8, 3], &[6, 1]],
+    );
+}
+
+/// A chain of compare blocks, each with one instruction to speculate, that
+/// all leave to the same block: the pin folds each into the first one by one
+/// (`requestResimplify` repeats the visit that folded, which deletes the block
+/// it emptied). Ours moved on with the emptied block still a predecessor of the
+/// next, so its bonus instruction counted twice and the chain stopped at pairs:
+/// three `br i1` stayed where the pin leaves none (a QCport save-game test).
+#[test]
+fn test_a_chain_of_compare_blocks_folds_into_the_first_one_by_one() {
+    let text = "define i16 @f(i16 %x) {
+b0:
+  %c = icmp ne i16 %x, 0
+  br i1 %c, label %b1, label %bx
+
+b1:
+  %t1 = add i16 %x, 1
+  %e1 = icmp ne i16 %t1, 4
+  br i1 %e1, label %b2, label %bx
+
+b2:
+  %t2 = add i16 %x, 2
+  %e2 = icmp ne i16 %t2, 7
+  br i1 %e2, label %b3, label %bx
+
+b3:
+  %t3 = add i16 %x, 3
+  %e3 = icmp ne i16 %t3, 9
+  br i1 %e3, label %b4, label %bx
+
+b4:
+  %t4 = add i16 %x, 4
+  %e4 = icmp ne i16 %t4, 11
+  br i1 %e4, label %b5, label %bx
+
+b5:
+  ret i16 1
+
+bx:
+  ret i16 0
+}
+";
+    let inputs: &[&[i128]] = &[&[0], &[1], &[3], &[5], &[7], &[9], &[100]];
+    let mut module = parsed(text);
+    let before = results(&module, inputs);
+    simplify(&mut module);
+    let after = printed(&module);
+    assert!(!after.contains("br i1"), "{after}");
+    assert_eq!(results(&module, inputs), before);
+}

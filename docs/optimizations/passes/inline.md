@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:c89f99dda649b08f23613a479de2206138fc2cbb589a01233bf0f892fb2ceb87 -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:a80b9a4f1647968fdfc8064c40080c1e4fe05824eb347f3b3f5d0d76d0f7cc68 -->
 
 # inline
 
@@ -49,16 +49,11 @@ returns, it is not recursive, not `noinline`, and does not call
 `setjmp`-like functions); whether it is copied at a site is
 `inlinecost::decide`'s, the walk's ([`crate::walk`](walk.md)).
 
-A static alloca of the callee goes to the caller's entry; one whose count
-is an argument folds to a constant in the copy, as `CloneAndPruneFunctionInto`
-simplifies it, and is static too. Any other (a variable count) stays where it
-is, and the copy is bracketed by `llvm.stacksave` and, before each return,
-`llvm.stackrestore`.
-
 A copy is allowed (`fits_with`) only where
 
 - the call's function type is the callee's and the callee is not variadic;
-- no body that allocates is copied into a recursive caller;
+- no body that allocates is copied into a recursive caller, except the last
+  call of a private callee;
 - a parameter the callee `releases` is passed an object the caller owns.
 
 Which sites are copied is `inlinecost::decide`'s (the walk's).

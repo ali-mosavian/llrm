@@ -123,9 +123,13 @@ pub fn select_fist16<D: AddrDag>(
         mvt::f80 => crate::x86_llrm::IST16_OPCODES[2],
         _ => return false,
     };
-    let Some(a) = (Matcher { dag, pointer_type: hooks.options.pointer_type(), mode: hooks.options.address_mode })
-        .select_addr_of(Some(node), ptr)
-    else {
+    let Some(a) = (Matcher {
+        dag,
+        pointer_type: hooks.options.pointer_type(),
+        mode: hooks.options.address_mode,
+        size: hooks.options.opt_for_size,
+    })
+    .select_addr_of(Some(node), ptr) else {
         return false;
     };
     let ops = [a.base, a.scale, a.index, a.disp, a.segment, value, chain];

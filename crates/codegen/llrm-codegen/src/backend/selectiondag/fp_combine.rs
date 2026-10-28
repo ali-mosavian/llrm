@@ -1,10 +1,12 @@
-//! `visitFADD`, `visitFSUB` and `visitFMUL`, with `simplifyFPBinop`,
-//! `canIgnoreSignBitOfZero` and the `fneg` part of
+//! `visitFADD`, `visitFSUB`, `visitFMUL` and `visitFDIV`, with
+//! `simplifyFPBinop`, `canIgnoreSignBitOfZero` and the `fneg` part of
 //! `TargetLowering::getNegatedExpression`.
 //!
 //! DEVIATE FP2: no vector forms, no `foldBinOpIntoSelect`, no FMA fusion
 //! (`visit*ForFMACombine`: the targets have no FMA), no
-//! `combineFMulOrFDivWithIntPow2`, no `fmul` of a signed select, and
+//! `combineFMulOrFDivWithIntPow2`, no `fmul` of a signed select, no
+//! `combineRepeatedFPDivisors`, rsqrt or reciprocal estimates in `visitFDIV`
+//! (x87 has none), and
 //! `getNegatedExpression` knows `fneg`, constants, `fadd`, `fsub`, `fmul` and
 //! `fdiv` only (not `fma`, `fp_extend`, `fp_round`, `select`).
 //! `isKnownNeverLogicalZero` is "a non-zero constant". Exit: those. Owner
@@ -39,12 +41,12 @@ enum Cost {
 const MAX_DEPTH: u32 = 6;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
-    fn legal_operations(&self) -> bool {
+    pub(super) fn legal_operations(&self) -> bool {
         self.level >= CombineLevel::AfterLegalizeVectorOps
     }
 
     /// `isOperationLegalOrCustom(op, vt)`; false without a table.
-    fn fp_op_legal_or_custom(
+    pub(super) fn fp_op_legal_or_custom(
         &self,
         op: ISD,
         vt: EVT,
@@ -52,7 +54,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(op, vt))
     }
 
-    fn fp_op_legal(
+    pub(super) fn fp_op_legal(
         &self,
         op: ISD,
         vt: EVT,
@@ -449,6 +451,188 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // fold (fsub A, (fneg B)) -> (fadd A, B)
         let (neg, _) = self.negated_expression(n1, 0)?;
         Some(self.dag.get_node_flags(ISD::FAdd, vt, &[n0, neg], flags))
+    }
+
+    /// `visitFNEG`: a constant, an expression that negates for free, and
+    /// `-(x - y)` as `y - x` where signed zeros do not matter.
+    pub(super) fn visit_fneg(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        let flags = self.dag.node(node).flags;
+        if !vt.is_floating_point() {
+            return None;
+        }
+        if let Some(bits) = self.fp_bits(n0) {
+            return Some(self.dag.get_constant_fp(fp_value::negate(vt, bits)?, vt));
+        }
+        if let Some((negated, _)) = self.negated_expression(n0, 0) {
+            return Some(negated);
+        }
+        (self.dag.opcode(n0) == ISD::FSub
+            && flags.has(SDNodeFlags::NO_SIGNED_ZEROS)
+            && self.dag.use_count(n0.node) == 1)
+            .then(|| {
+                let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                self.dag.get_node_flags(ISD::FSub, vt, &[y, x], flags)
+            })
+    }
+
+    /// `visitFABS`: a constant.
+    pub(super) fn visit_fabs(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        let bits = self.fp_bits(n0).filter(|_| vt.is_floating_point())?;
+        Some(self.dag.get_constant_fp(fp_value::abs(vt, bits)?, vt))
+    }
+
+    /// `visitFDIV`: the reciprocal multiply, `x / sqrt(x)` and `-x / -y`.
+    pub(super) fn visit_fdiv(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        let flags = self.dag.node(node).flags;
+        if !vt.is_floating_point() {
+            return None;
+        }
+        if let Some(r) = self.simplify_fp_binop(ISD::FDiv, n0, n1, flags) {
+            return Some(r);
+        }
+        if let Some(c) = self.dag.fold_constant_fp(ISD::FDiv, vt, n0, n1) {
+            return Some(c);
+        }
+        // fold (fdiv X, c2) -> (fmul X, 1/c2) if there is no loss in
+        // precision, or the loss is acceptable with AllowReciprocal.
+        if let Some((recip, exact)) = self.fp_bits(n1).and_then(|b| fp_value::reciprocal(vt, b)) {
+            let legal_imm = !self.legal_operations()
+                || self.fp_op_legal(ISD::ConstantFP, vt)
+                || matches!(
+                    vt,
+                    EVT::Simple(m) if self.tli.is_some_and(|tli| tli.is_fp_imm_legal(m, recip))
+                );
+            if (exact || flags.has(SDNodeFlags::ALLOW_RECIPROCAL)) && legal_imm {
+                let c = self.dag.get_constant_fp(recip, vt);
+                return Some(self.dag.get_node_flags(ISD::FMul, vt, &[n0, c], flags));
+            }
+        }
+        // fold X/Sqrt(X) -> Sqrt(X)
+        if self.can_ignore_sign_bit_of_zero(node)
+            && flags.has(SDNodeFlags::ALLOW_REASSOC)
+            && self.dag.opcode(n1) == ISD::FSqrt
+            && n0 == self.dag.operand(n1, 0)
+        {
+            return Some(n1);
+        }
+        // (fdiv (fneg X), (fneg Y)) -> (fdiv X, Y)
+        let (neg0, cost0) = self.negated_expression(n0, 0)?;
+        let (neg1, cost1) = self.negated_expression(n1, 0)?;
+        (cost0 == Cost::Cheaper || cost1 == Cost::Cheaper)
+            .then(|| self.dag.get_node_flags(ISD::FDiv, vt, &[neg0, neg1], flags))
+    }
+
+    fn int_const(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        match self.dag.node(value).data {
+            NodeData::Const { bits, .. } => Some(bits),
+            _ => None,
+        }
+    }
+
+    /// `visitFP_ROUND`: a constant, `round(extend x)` and `round(round x)`.
+    pub(super) fn visit_fp_round(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if let Some(bits) = self.fp_bits(n0)
+            && let Some(c) = fp_value::convert(self.dag.value_type(n0), vt, bits)
+        {
+            return Some(self.dag.get_constant_fp(c, vt));
+        }
+        let inner = self.dag.operand(n0, 0);
+        match self.dag.opcode(n0) {
+            // fold (fp_round (fp_extend x)) -> x
+            ISD::FpExtend if self.dag.value_type(inner) == vt => Some(inner),
+            // fold (fp_round (fp_round x)) -> (fp_round x), when the first
+            // truncates exactly, or both allow contraction
+            ISD::FpRound => {
+                let (trunc, inner_trunc) = (self.int_const(n1)? == 1, self.int_const(self.dag.operand(n0, 1))? == 1);
+                let contract = self.dag.node(node).flags.has(SDNodeFlags::ALLOW_CONTRACT)
+                    && self.dag.node(n0).flags.has(SDNodeFlags::ALLOW_CONTRACT);
+                if (self.legal_operations() && !self.fp_op_legal_or_custom(ISD::FpRound, vt))
+                    || !(contract || inner_trunc)
+                {
+                    return None;
+                }
+                let flag =
+                    self.dag.get_constant_with(u128::from(trunc && inner_trunc), self.dag.value_type(n1), true, false);
+                Some(self.dag.get_node(ISD::FpRound, vt, &[inner, flag]))
+            }
+            _ => None,
+        }
+    }
+
+    /// `visitFP_EXTEND`: a constant and `extend(round(x, 1))`.
+    pub(super) fn visit_fp_extend(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        // fp_round(fpextend) is left for the round to fold
+        if self.dag.use_count(node.node) == 1
+            && self
+                .dag
+                .users(node)
+                .next()
+                .is_some_and(|user| self.dag.node(SDValue { node: user, res: 0 }).opcode == ISD::FpRound)
+        {
+            return None;
+        }
+        if let Some(bits) = self.fp_bits(n0)
+            && let Some(c) = fp_value::convert(self.dag.value_type(n0), vt, bits)
+        {
+            return Some(self.dag.get_constant_fp(c, vt));
+        }
+        if self.dag.opcode(n0) == ISD::FpRound && self.int_const(self.dag.operand(n0, 1)) == Some(1) {
+            let (inner, flag) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let in_vt = self.dag.value_type(inner);
+            return Some(if in_vt == vt {
+                inner
+            } else if vt.size_in_bits() < in_vt.size_in_bits() {
+                self.dag.get_node(ISD::FpRound, vt, &[inner, flag])
+            } else {
+                self.dag.get_node(ISD::FpExtend, vt, &[inner])
+            });
+        }
+        None
+    }
+
+    /// `visitSINT_TO_FP` and `visitFP_TO_SINT` of a constant.
+    pub(super) fn visit_fp_int_convert(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        if self.dag.opcode(node) == ISD::SIntToFp {
+            let width = self.dag.value_type(n0).size_in_bits();
+            let bits = self.int_const(n0).filter(|_| width <= 64)?;
+            let value = ((bits << (128 - width)) as i128 >> (128 - width)) as i64;
+            return Some(self.dag.get_constant_fp(fp_value::from_signed(vt, value)?, vt));
+        }
+        let value = fp_value::to_signed(self.dag.value_type(n0), self.fp_bits(n0)?, vt.size_in_bits())?;
+        Some(self.dag.get_constant(value as u128 & super::fold::mask(vt.size_in_bits()), vt))
     }
 
     /// `visitFMUL`.

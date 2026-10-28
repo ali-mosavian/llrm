@@ -1,38 +1,33 @@
 //! The x87 registers FP0..FP6 as the values the stackifier tracks.
 //!
 //! # How it works
-//! Under RFP the allocator leaves each x87 operand in
-//! `FP0`..`FP6` (`Loc::Reg`), as `X86FloatingPoint` finds it. `fpstack` follows
-//! values, not registers, so each definition of a register here is a fresh
-//! value and each read the value last defined. A register live across a block
-//! border keeps one value for the whole function (the border value of its
-//! slot), so the values at both ends of an edge agree; the last definition in a
-//! block of a register live out takes that value.
+//! Under RFP the allocator leaves each x87 operand in `FP0`..`FP6`
+//! (`Loc::Reg`), as `X86FloatingPoint` finds it. The stackifier's identity is a
+//! value number, so each register is one value for the whole function: every
+//! write and read of `FP1` names the same number, and the values at both ends
+//! of an edge agree.
 //!
 //! DEVIATE 1: LLVM reads the registers; the stackifier's identity is a value
-//! number (`fpstack` DEVIATE 1). Exit: `fpstack` follows registers.
+//! number (`fpstack` DEVIATE 1), here the register's own.
 //!
 //! # Runs
 //! At the start of `fpstack::converted`; a body with no x87 register operand
 //! is returned as it is.
 //!
 //! # Example
-//! `fp1 := fld [a]; fp1 := fmul fp1, fp0` with `fp1` live out becomes
-//! `v10 := fld [a]; b1 := fmul v10, b0`, `b1` being `fp1`'s border value.
+//! `fp1 := fld [a]; fp1 := fmul fp1, fp0` becomes
+//! `b1 := fld [a]; b1 := fmul b1, b0`, `b1` being `fp1`'s value.
 //!
 //! # Needs
-//! [`crate::backend::allocate::RFP`].
+//! [`llrm_lir::registers::Regs::rfp_registers`].
 
 use std::collections::VecDeque;
 
-use llrm_lir::registers::{Regs, class};
+use llrm_lir::registers::Regs;
 
-use crate::backend::allocate::RFP;
 use crate::model::ir::{Held, Loc, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashSet, IndexMap};
-
-const SLOTS: usize = RFP.len();
 
 /// Which of `FP0`..`FP6` `place` is.
 pub(super) fn slot_of(
@@ -42,10 +37,7 @@ pub(super) fn slot_of(
     let Loc::Reg(Reg { register, width: 10 }) = place else {
         return None;
     };
-    if !regs.in_class(*register, class::RFP) {
-        return None;
-    }
-    RFP.iter().position(|one| one == register)
+    regs.rfp_registers().iter().position(|one| one == register)
 }
 
 /// The slots `what` reads and the slots it writes, as bit masks.
@@ -108,11 +100,10 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
             .as_ref()
             .is_some_and(|what| what.sources.iter().chain(&what.dests).any(|place| slot_of(regs, place).is_some()))
     };
-    if !body.insns().iter().any(|one| named(one)) {
+    if !body.iter_insns().any(|one| named(one)) {
         return None;
     }
-    let out = live_out(body, regs);
-    let mut fresh = body
+    let fresh = body
         .blocks
         .iter()
         .flat_map(|block| {
@@ -124,27 +115,15 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
         })
         .max()
         .map_or(0, |most| most + 1);
-    let border: [u32; SLOTS] = std::array::from_fn(|at| fresh + at as u32);
-    fresh += SLOTS as u32;
+    let border: Vec<u32> = (0..regs.rfp_registers().len() as u32).map(|at| fresh + at).collect();
     let blocks = body
         .blocks
         .iter()
         .map(|block| {
-            // The last write to each slot: the one that takes the border value
-            // when the slot is live out.
-            let mut last = [usize::MAX; SLOTS];
-            for (position, one) in block.insns.iter().enumerate() {
-                if let Some(what) = &one.what {
-                    let (_, defs) = touched(regs, what);
-                    (0..SLOTS).filter(|at| defs >> at & 1 == 1).for_each(|at| last[at] = position);
-                }
-            }
-            let mut current = border;
             let insns = block
                 .insns
                 .iter()
-                .enumerate()
-                .map(|(position, one)| {
+                .map(|one| {
                     if !named(one) {
                         return std::sync::Arc::clone(one);
                     }
@@ -155,7 +134,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
                         .iter()
                         .map(|place| match slot_of(regs, place) {
                             Some(at) => {
-                                let value = current[at];
+                                let value = border[at];
                                 made.uses.push(value);
                                 made.widths.push((value, 10));
                                 Loc::Held(Held { value, width: 10 })
@@ -168,13 +147,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
                         .iter()
                         .map(|place| match slot_of(regs, place) {
                             Some(at) => {
-                                let value = if last[at] == position && out[&block.at] >> at & 1 == 1 {
-                                    border[at]
-                                } else {
-                                    fresh += 1;
-                                    fresh - 1
-                                };
-                                current[at] = value;
+                                let value = border[at];
                                 made.defines.push(value);
                                 made.widths.push((value, 10));
                                 Loc::Held(Held { value, width: 10 })

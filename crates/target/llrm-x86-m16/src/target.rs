@@ -124,6 +124,12 @@ impl Dos {
 }
 
 impl Machine for Dos {
+    /// Real mode's C: a 16-bit `int` and `size_t`, under C's decorated symbols
+    /// (`_sin@3`).
+    fn library(&self) -> Option<std::rc::Rc<dyn llrm_mir::libfunc::Library>> {
+        Some(std::rc::Rc::new(llrm_mir::libfunc::Cdecl { int_bits: 16, size_t_bits: 16 }))
+    }
+
     /// LLVM prices 16-bit code with the i386 X86 model (`-code16`: the same
     /// subtarget, operand-size prefixes), and every CPU the target accepts
     /// reads the x87 tables as on m32 (`llrm_x86::tti`, T3).
@@ -149,6 +155,8 @@ impl Machine for Dos {
             scaled_index_insns: scaled_index_insns as u32,
             huge_space: crate::spaces().huge,
             inline_size_guard: true,
+            float_code_size_percent: 200,
+            unroll_size_few_trips: (3, 30),
         };
         let layout = crate::layout();
         llrm_x86::tti::X86::described(layout.tti.as_deref()?, layout.llvm_cpu.as_deref()?)
@@ -216,6 +224,13 @@ impl Machine for Dos {
             pieces_clear: self.costs.pieces_clear,
             pieces_set_size: self.costs.pieces_set_size,
             pieces_clear_size: self.costs.pieces_clear_size,
+            huge_fill: llrm_x86::helpers::huge_fill(1).map_or(0, |routine| routine.code.len() as i64),
+            huge_copy: [false, true]
+                .into_iter()
+                .filter_map(|down| llrm_x86::helpers::huge_copy(down).ok())
+                .map(|routine| routine.code.len() as i64)
+                .min()
+                .unwrap_or(0),
             ..DESCRIPTION.size_costs()
         }
     }

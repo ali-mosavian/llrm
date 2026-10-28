@@ -6,12 +6,11 @@
 //! LLVM's `DAGCombiner::visitTokenFactor`
 //! ([L2257](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2257)).
 
-use std::collections::HashSet;
-
 use super::dag::{NodeData, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
 use super::mvt::EVT;
+use crate::support::hash::HashSet;
 
 /// `TokenFactorInlineLimit` (`-combiner-tokenfactor-inline-limit`).
 const INLINE_LIMIT: usize = 2048;
@@ -64,7 +63,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
 
         let mut token_factors = vec![node];
         let mut kept: Vec<SDValue> = Vec::new();
-        let mut seen: HashSet<u32> = HashSet::new();
+        let mut seen: HashSet<u32> = HashSet::default();
         let mut changed = false;
         let mut at = 0;
         while at < token_factors.len() {
@@ -102,8 +101,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         // each operand's chain breadth first until another operand is met.
         let mut work: Vec<(u32, usize)> = kept.iter().enumerate().map(|(i, op)| (op.node, i)).collect();
         let mut op_work: Vec<usize> = vec![1; kept.len()];
-        let mut seen_chains: HashSet<u32> = HashSet::new();
+        let mut seen_chains: HashSet<u32> = HashSet::default();
         let mut pruned = false;
+        // NumLeftToConsider is unsigned in the pin and wraps below zero.
         let mut left = kept.len();
         let mut i = 0;
         while i < work.len() && i < WALK_LIMIT {
@@ -114,7 +114,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             let at_node = SDValue { node: current, res: 0 };
             let next: Option<u32> = match self.dag.opcode(at_node) {
                 ISD::EntryToken => {
-                    left += 1;
+                    left = left.wrapping_add(1);
                     None
                 }
                 ISD::TokenFactor => {
@@ -160,7 +160,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             op_work[number] -= 1;
             if op_work[number] == 0 {
-                left -= 1;
+                left = left.wrapping_sub(1);
             }
             i += 1;
         }
@@ -205,7 +205,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             op_work[number] += op_work[original];
             op_work[original] = 0;
-            *left -= 1;
+            *left = left.wrapping_sub(1);
         }
         if seen_chains.insert(op) {
             op_work[number] += 1;

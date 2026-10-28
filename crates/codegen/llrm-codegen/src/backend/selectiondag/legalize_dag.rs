@@ -74,6 +74,8 @@ pub struct DagLegalizer<'a, H: Hooks> {
     tli: &'a TargetLowering,
     hooks: &'a mut H,
     legalized: HashSet<u32>,
+    /// The topological sweeps `run` made.
+    pub sweeps: u32,
 }
 
 impl<'a, H: Hooks> DagLegalizer<'a, H> {
@@ -83,13 +85,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
         let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
-        DagLegalizer { dag, tli, hooks, legalized }
+        DagLegalizer { dag, tli, hooks, legalized, sweeps: 0 }
     }
 
     /// `SelectionDAG::Legalize`.
     pub fn run(&mut self) -> Result<(), LegalizeError> {
         loop {
             let mut any = false;
+            let nodes = self.dag.nodes().len();
+            self.sweeps += 1;
             for n in self.reverse_topological() {
                 if self.is_dead(n) || !self.legalized.insert(n) {
                     continue;
@@ -98,7 +102,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
             }
-            if !any {
+            // A sweep that built no node leaves nothing new to legalize.
+            if !any || self.dag.nodes().len() == nodes {
                 return Ok(());
             }
         }
@@ -421,6 +426,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
             ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => Some(vec![self.expand_min_max(node)]),
+            ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
+                Some(vec![super::expand_sat::expand_add_sub_sat(self.dag, self.tli, node)])
+            }
             ISD::BuildPair => {
                 // `ExpandNode`: `zext lo | (anyext hi << half)` ([L4318][pin]).
                 //
@@ -447,7 +455,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 };
                 Some(vec![self.dag.get_node(ISD::Truncate, vt, &[low])])
             }
-            ISD::SMulFix => self.expand_fixed_multiply(node).map(|result| vec![result]),
+            ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => {
+                super::expand_fixed::expand_fixed_point_mul(self.dag, self.tli, node).map(|result| vec![result])
+            }
+            ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
+            ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
             ISD::Abs => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
@@ -472,35 +484,6 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             _ => None,
         }
-    }
-
-    /// `expandFixedPointMul` for a signed multiply that does not saturate: the
-    /// two halves of the product (`SMUL_LOHI`, else `MULHS` and `MUL`), then a
-    /// funnel shift right by the scale; no shift at scale 0, the high half
-    /// alone at the full width.
-    fn expand_fixed_multiply(
-        &mut self,
-        node: SDValue,
-    ) -> Option<SDValue> {
-        let vt = self.dag.value_type(node);
-        let (lhs, rhs) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
-        let scale = self.dag.constant(self.dag.operand(node, 2))?;
-        if scale == 0 {
-            return Some(self.dag.get_node(ISD::Mul, vt, &[lhs, rhs]));
-        }
-        let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::SMulLoHi, vt) {
-            let both = self.dag.get_node_multi(ISD::SMulLoHi, &[vt, vt], &[lhs, rhs]);
-            (both, SDValue { node: both.node, res: 1 })
-        } else if self.tli.is_operation_legal_or_custom(ISD::MulHS, vt) {
-            (self.dag.get_node(ISD::Mul, vt, &[lhs, rhs]), self.dag.get_node(ISD::MulHS, vt, &[lhs, rhs]))
-        } else {
-            return None;
-        };
-        if scale == u128::from(vt.size_in_bits()) {
-            return Some(hi);
-        }
-        let amount = self.dag.get_constant(scale, EVT::I8);
-        Some(self.dag.get_node(ISD::FShr, vt, &[hi, lo, amount]))
     }
 
     /// `TargetLowering::expandABS` ([L11308][pin]) for scalars: `smax(x, 0 -
@@ -691,7 +674,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             EVT::Simple(MVT::F64) => 8,
             _ => 4,
         };
-        let NodeData::PoolIndex(entry) = self.dag.node(index).data else { unreachable!("a pool node has its entry") };
+        let NodeData::PoolIndex(entry, _) = self.dag.node(index).data else {
+            unreachable!("a pool node has its entry")
+        };
         let info = MemInfo {
             mem_vt: pool_vt,
             align,

@@ -20,9 +20,8 @@
 //! ```
 //!
 //! # Runs
-//! Once per module before selection: in `llrm-codegen`'s `driver::optimized` for
-//! `--isel=dag` (the old selector lowers the intrinsic itself), and in the arm64
-//! driver.
+//! Once per module in `driver::optimized`, for `--isel=dag`: the old selector
+//! lowers the intrinsic itself.
 //!
 //! # See also
 //! LLVM's `createMemSetPatternLoop`
@@ -34,8 +33,8 @@ use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Module, Operand};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, IntPredicate, Opcode};
-use crate::edges::split_block_at;
 
+use crate::edges::split_block_at;
 use crate::expansion;
 
 /// Every `memset.pattern` call of `module` as a loop.

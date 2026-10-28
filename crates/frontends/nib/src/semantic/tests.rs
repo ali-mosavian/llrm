@@ -390,3 +390,29 @@ fn rejects_assignment_to_a_const() {
         compile_source("const K: i16 = 1\n\nfn main() -> i16:\n    let mut K: i16 = 5\n    K = 2\n    return K\n");
     assert!(shadowed.is_ok(), "{:?}", shadowed.err().map(|one| one.message));
 }
+
+/// `if a && b` made a bool through a place (`$logical`) and branched on its
+/// load; the folded form had one edge per test and the inliner read the guard
+/// of `convert_file` as cold (jpeg_fixed +115 B at m16 -Os). A condition
+/// branches on its operands, as clang does.
+#[test]
+fn a_condition_of_and_or_not_branches_on_its_operands() {
+    for condition in ["a < 1 && b < 2", "a < 1 || b < 2", "!(a < 1 && b < 2)"] {
+        for statement in ["if", "while"] {
+            let json = compile_source(&format!(
+                "fn f(a: i16, b: i16) -> i16:\n    {statement} {condition}:\n        return 1\n    return 0\n"
+            ))
+            .unwrap();
+            assert!(!json.contains("$logical"), "{statement} {condition}: {json}");
+            assert_eq!(json.matches("\"kind\":\"branch\"").count(), 2, "{statement} {condition}: {json}");
+        }
+    }
+}
+
+/// A value of `a && b` outside a condition is still a bool made through a
+/// place.
+#[test]
+fn an_and_that_is_a_value_still_makes_a_bool() {
+    let json = compile_source("fn f(a: i16, b: i16) -> bool:\n    return a < 1 && b < 2\n").unwrap();
+    assert!(json.contains("$logical"), "{json}");
+}

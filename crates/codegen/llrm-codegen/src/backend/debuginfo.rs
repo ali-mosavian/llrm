@@ -102,6 +102,8 @@ pub struct Procedure {
     pub r#type: model::TypeId,
     /// The module's own code, whose variables are the module's.
     pub module: bool,
+    /// Its parameters' names, in the order the source declares them.
+    pub parameters: Vec<String>,
 }
 
 /// A variable in data; `scope` the symbol of the procedure declaring it.
@@ -143,6 +145,9 @@ pub struct Debug {
     /// By each procedure's symbol.
     pub procedures: IndexMap<String, Procedure>,
     pub globals: Vec<Global>,
+    /// The unit's source file where the frontend named one: its name, and the
+    /// MD5 of its text.
+    pub source: Option<(String, Option<Vec<u8>>)>,
 }
 
 fn narrow<T: TryFrom<i64>>(
@@ -283,7 +288,12 @@ pub fn described(
         let Some(at) = symbol(&function.function) else { continue };
         procedures.insert(
             at,
-            Procedure { name: function.name.clone(), r#type: node(function.r#type)?, module: function.module },
+            Procedure {
+                name: function.name.clone(),
+                r#type: node(function.r#type)?,
+                module: function.module,
+                parameters: function.parameters.iter().map(|(_, name, _)| name.clone()).collect(),
+            },
         );
     }
     let mut out = Vec::new();
@@ -335,7 +345,15 @@ pub fn described(
         nodes,
         procedures,
         globals: out,
+        source: di::file(module).map(|(name, md5)| (name, md5.and_then(|hex| unhexed(&hex)))),
     }))
+}
+
+/// The bytes a hex string spells.
+fn unhexed(hex: &str) -> Option<Vec<u8>> {
+    (hex.len() % 2 == 0)
+        .then(|| (0..hex.len()).step_by(2).map(|at| u8::from_str_radix(hex.get(at..at + 2)?, 16).ok()).collect())
+        .flatten()
 }
 
 /// Where one value is, as the model says it.
@@ -451,7 +469,13 @@ pub fn laid_out(
         frame_register: debug.frame_register.clone(),
         return_register: debug.return_register.clone(),
         registers: debug.registers.clone(),
-        files: vec![model::File { name: source.to_owned(), checksum: None }],
+        files: vec![match &debug.source {
+            Some((name, md5)) => model::File {
+                name: name.clone(),
+                checksum: md5.clone().map(|bytes| (llrm_object::debug::ChecksumKind::Md5, bytes)),
+            },
+            None => model::File { name: source.to_owned(), checksum: None },
+        }],
         types: debug.types.clone(),
         ..Info::default()
     };
@@ -515,7 +539,16 @@ pub fn laid_out(
                     .ok()
                 },
             );
-        for one in &procedure.body.variables {
+        // The source's order: a parameter held in two registers is located
+        // after the others, from its declared cell.
+        let mut ordered: Vec<&crate::model::lir::DebugVariable> = procedure.body.variables.iter().collect();
+        if !described.parameters.is_empty() {
+            ordered.sort_by_key(|one| {
+                let at = described.parameters.iter().position(|name| *name == one.name);
+                (!one.parameter, at.unwrap_or(usize::MAX))
+            });
+        }
+        for one in ordered {
             let r#type = type_of(one.r#type)?;
             let kind = if one.parameter { Kind::Parameter } else { Kind::Local };
             let addr = match &one.place {
