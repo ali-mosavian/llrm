@@ -35,9 +35,6 @@
 //! as an expression is not built (MIR holds no binary constant expressions):
 //! the fold is skipped where the constants do not fold to a number.
 //!
-//! DEVIATE 5 (temporary): `narrowMathIfNoOverflow` (`InstructionCombining.cpp`,
-//! shared with `visitAdd`) is left out until `combine_shared` has it.
-//!
 //! DEVIATE 6 (temporary): `Negator::Negate` is not translated; it is taken to
 //! fail, so the two folds that use it are skipped and the step after each
 //! (the `zext`/`sext` multiply by `-1 << C`) is tried where C++ would stop.
@@ -1118,7 +1115,9 @@ pub fn visit_mul(
         return r;
     }
     // DEVIATE 3: ((ashr X, 31) | 1) * X --> abs(X)
-    // DEVIATE 5: narrowMathIfNoOverflow.
+    if let Some(narrowed) = c.narrow_math_if_no_overflow(inst) {
+        return narrowed;
+    }
     // DEVIATE 2: foldBinOpOfSelectAndCastOfSelectCondition.
 
     // (mul Op0 Op1): if Log2(Op0) folds away -> (shl Op1, Log2(Op0)), and if
