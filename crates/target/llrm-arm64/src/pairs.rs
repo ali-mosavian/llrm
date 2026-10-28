@@ -67,7 +67,12 @@ fn is_memory(inst: &Inst) -> bool {
     matches!(
         inst,
         Inst::Load { .. } | Inst::Store { .. } | Inst::LoadPair { .. } | Inst::StorePair { .. }
-    )
+    ) || ordered(inst)
+}
+
+/// An atomic access or a barrier: no access moves across it, whatever it reaches.
+fn ordered(inst: &Inst) -> bool {
+    matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
 }
 
 fn is_store(inst: &Inst) -> bool {

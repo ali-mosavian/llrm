@@ -365,6 +365,48 @@ impl fmt::Display for Inst {
                 }
             }
             Inst::Svc { imm16 } => write!(out, "svc #{imm16}"),
+            Inst::Atomic { op, size, acquire, release, rs, rt, rn } => {
+                let width = if *size == 3 { Width::X } else { Width::W };
+                let suffix = ["b", "h", "", ""][usize::from(*size).min(3)];
+                let order = format!("{}{}", if *acquire { "a" } else { "" }, if *release { "l" } else { "" });
+                let base = gpr(*rn, Width::X, true);
+                match op {
+                    Atomic::Ldar => write!(out, "ldar{suffix} {}, [{base}]", gpr(*rt, width, false)),
+                    Atomic::Ldapr => write!(out, "ldapr{suffix} {}, [{base}]", gpr(*rt, width, false)),
+                    Atomic::Stlr => write!(out, "stlr{suffix} {}, [{base}]", gpr(*rt, width, false)),
+                    Atomic::Cas => {
+                        write!(out, "cas{order}{suffix} {}, {}, [{base}]", gpr(*rs, width, false), gpr(*rt, width, false))
+                    }
+                    other => {
+                        let name = match other {
+                            Atomic::Swp => "swp",
+                            Atomic::Ldadd => "ldadd",
+                            Atomic::Ldclr => "ldclr",
+                            Atomic::Ldeor => "ldeor",
+                            Atomic::Ldset => "ldset",
+                            Atomic::Ldsmax => "ldsmax",
+                            Atomic::Ldsmin => "ldsmin",
+                            _ if *other == Atomic::Ldumax => "ldumax",
+                            _ => "ldumin",
+                        };
+                        write!(
+                            out,
+                            "{name}{order}{suffix} {}, {}, [{base}]",
+                            gpr(*rs, width, false),
+                            gpr(*rt, width, false)
+                        )
+                    }
+                }
+            }
+            Inst::Dmb { barrier } => write!(
+                out,
+                "dmb {}",
+                match barrier {
+                    Barrier::Ish => "ish",
+                    Barrier::IshLd => "ishld",
+                    Barrier::IshSt => "ishst",
+                }
+            ),
             Inst::Brk { imm16 } => write!(out, "brk #{imm16}"),
             Inst::Nop => out.write_str("nop"),
         }
