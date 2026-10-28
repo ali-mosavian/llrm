@@ -1477,3 +1477,17 @@ fn a_pushed_register_before_the_stack_adjustment_is_declared_after_it() {
     let frame = eh_frame_of(&text);
     assert!(frame.windows(4).any(|window| window[0] == 0x0E && window[2..] == [0x83, 0x02]), "{frame:02x?}");
 }
+
+/// The pin declares the offsets of the saved registers last pushed first
+/// (`rbx` at cfa-32, `r14` at -24, `rbp` at -16 after pushes of rbp, r14,
+/// rbx). They were listed in push order, and a pushed `rbp` that was no frame
+/// register got no offset at all.
+#[test]
+fn saved_registers_are_declared_last_pushed_first() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @h(i32 %b)\n  %z = call i32 @g(i32 %x)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %z\n  ret i32 %t\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    let offsets = |window: &[u8]| window[0] & 0xC0 == 0x80 && window[2] & 0xC0 == 0x80 && window[1] > window[3];
+    assert!(frame.windows(4).any(offsets), "{frame:02x?}");
+}

@@ -1502,11 +1502,11 @@ fn built(
         for one in &enter {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
-            // The System V callee-saved registers: rbx and r12 to r15 (rbp is
-            // the frame register's, declared with its push).
+            // The System V callee-saved registers: rbx, rbp and r12 to r15
+            // (the frame register's own push is told apart by its name).
             if one.op == Operation::Push
                 && let Loc::Reg(pushed) = &one.sources[0]
-                && let Some(register) = dwarf(pushed.register).filter(|number| [3, 12, 13, 14, 15].contains(number))
+                && let Some(register) = dwarf(pushed.register).filter(|number| [3, 6, 12, 13, 14, 15].contains(number))
             {
                 // A callee-saved register's own offset is declared after the
                 // whole prologue (`emitCalleeSavedFrameMoves`).
@@ -1516,7 +1516,8 @@ fn built(
                 entry_items.extend(marks);
             }
         }
-        entry_items.extend(pending);
+        // In the reverse of the order they were pushed, as the pin lists them.
+        entry_items.extend(pending.into_iter().rev());
         after_entry = Some(cfi.clone());
     } else {
         entry_items.extend(enter.into_iter().map(Item::Semantics));
