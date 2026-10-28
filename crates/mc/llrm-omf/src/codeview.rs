@@ -394,7 +394,7 @@ mod tests {
     fn a_line_zero_row_is_left_out_of_linnum() {
         let mut made = object(Vec::new(), vec![int(), procedure()]);
         made.debug.as_mut().unwrap().lines.insert(1, Line { section: 0, offset: 2, file: 0, line: 0, column: 0 });
-        let records = omf::parse(&write::write(&made).unwrap()).unwrap();
+        let records = omf::parse(&write::write_generic(&made).unwrap()).unwrap();
         let lines: Vec<(u16, u16)> =
             records.iter().filter(|one| one.r#type == omf::LINNUM).flat_map(|one| omf::lines(one).1).collect();
         assert_eq!(lines, [(3, 0), (4, 4)]);
