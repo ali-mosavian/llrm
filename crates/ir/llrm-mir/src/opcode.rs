@@ -4,6 +4,95 @@ use std::cmp::Ordering;
 
 use crate::types::TypeId;
 
+/// LLVM's `AtomicOrdering` (`unordered` and `not_atomic` aside: a plain access
+/// is a `Load` or a `Store`).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, PartialOrd, Ord)]
+pub enum AtomicOrdering {
+    Unordered,
+    Monotonic,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+impl AtomicOrdering {
+    /// The spelling in the text format.
+    pub fn spelling(self) -> &'static str {
+        match self {
+            Self::Unordered => "unordered",
+            Self::Monotonic => "monotonic",
+            Self::Acquire => "acquire",
+            Self::Release => "release",
+            Self::AcqRel => "acq_rel",
+            Self::SeqCst => "seq_cst",
+        }
+    }
+
+    pub fn named(word: &str) -> Option<Self> {
+        [Self::Unordered, Self::Monotonic, Self::Acquire, Self::Release, Self::AcqRel, Self::SeqCst]
+            .into_iter()
+            .find(|one| one.spelling() == word)
+    }
+}
+
+/// The operation of an `atomicrmw`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RmwOp {
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Nand,
+    Or,
+    Xor,
+    Max,
+    Min,
+    UMax,
+    UMin,
+}
+
+pub const RMW_OPS: [(RmwOp, &str); 11] = [
+    (RmwOp::Xchg, "xchg"),
+    (RmwOp::Add, "add"),
+    (RmwOp::Sub, "sub"),
+    (RmwOp::And, "and"),
+    (RmwOp::Nand, "nand"),
+    (RmwOp::Or, "or"),
+    (RmwOp::Xor, "xor"),
+    (RmwOp::Max, "max"),
+    (RmwOp::Min, "min"),
+    (RmwOp::UMax, "umax"),
+    (RmwOp::UMin, "umin"),
+];
+
+/// Which atomic instruction an [`Opcode::Atomic`] is, and its operands:
+/// `load atomic` (pointer), `store atomic` (value, pointer), `atomicrmw`
+/// (pointer, value), `cmpxchg` (pointer, expected, new; the result is `{ T, i1
+/// }`) and `fence` (none).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum AtomicKind {
+    Load,
+    Store,
+    Rmw(RmwOp),
+    CmpXchg { failure: AtomicOrdering, weak: bool },
+    Fence,
+}
+
+/// What `Opcode::Atomic` carries. LLVM keeps the ordering and the scope on
+/// `LoadInst`, `StoreInst`, `AtomicRMWInst`, `AtomicCmpXchgInst` and
+/// `FenceInst`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct AtomicInfo {
+    pub kind: AtomicKind,
+    /// The success ordering of a `cmpxchg`.
+    pub ordering: AtomicOrdering,
+    /// `syncscope("singlethread")`.
+    pub single_thread: bool,
+    pub volatile: bool,
+    pub align: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum BinaryOp {
     Add,
@@ -561,13 +650,14 @@ pub struct CallInfo {
 }
 
 /// The calling conventions LLVM names, by number; any other is `ccN`.
-pub const CONVENTIONS: [(&str, u32); 11] = [
+pub const CONVENTIONS: [(&str, u32); 12] = [
     ("ccc", 0),
     ("fastcc", 8),
     ("coldcc", 9),
     ("x86_stdcallcc", 64),
     ("x86_fastcallcc", 65),
     ("x86_intrcc", 83),
+    ("x86_regcallcc", REGCALL),
     ("watcallcc", WATCALL),
     ("sysvcc", SYSV),
     ("ia16cc", IA16),
@@ -593,6 +683,8 @@ pub fn argument_class(attrs: &[Attribute]) -> Option<&str> {
         .find_map(
             |one| match one {
                 Attribute::Str(key, Some(value)) if key == ARGUMENT => Some(value.as_str()),
+                // LLVM's own marker for a struct result's address
+                Attribute::Type(name, _) if name == "sret" => Some(RESULT_POINTER),
                 _ => None,
             },
         )
@@ -611,6 +703,8 @@ pub const IA16: u32 = 1004;
 pub const SYSV: u32 = 1003;
 
 /// `watcallcc`: Open Watcom's register convention.
+/// clang's `x86_regcallcc`.
+pub const REGCALL: u32 = 92;
 pub const WATCALL: u32 = 1002;
 
 /// BASIC's own: arguments pushed left to right, popped by the callee.
@@ -646,36 +740,99 @@ pub enum Opcode {
     Cast(CastOp),
     ExtractValue(Vec<u32>),
     InsertValue(Vec<u32>),
-    Alloca { allocated: TypeId, align: Option<u64>, address_space: u32 },
-    Load { align: Option<u64>, volatile: bool },
-    Store { align: Option<u64>, volatile: bool },
-    GetElementPtr { source: TypeId },
+    Alloca {
+        allocated: TypeId,
+        align: Option<u64>,
+        address_space: u32,
+    },
+    Load {
+        align: Option<u64>,
+        volatile: bool,
+    },
+    Store {
+        align: Option<u64>,
+        volatile: bool,
+    },
+    /// An atomic access or a fence.
+    ///
+    /// DEVIATE A1 (no number): LLVM carries the ordering and the scope on
+    /// `LoadInst`, `StoreInst`, `AtomicRMWInst`, `AtomicCmpXchgInst` and
+    /// `FenceInst`; here one opcode does, so `Load` and `Store` (352
+    /// construction sites) keep their fields. Lost: no load or store fold
+    /// sees an atomic one (store-to-load forwarding, merging, SROA of an
+    /// atomic access), which is the safe side. Exit: ordering fields on
+    /// `Load` and `Store`. The pipeline sees calls instead (`atomic::hidden`),
+    /// so no pass classifies an atomic.
+    Atomic(AtomicInfo),
+    GetElementPtr {
+        source: TypeId,
+    },
     ICmp(IntPredicate),
     FCmp(FloatPredicate),
     Phi,
     Select,
     Freeze,
     Call(Box<CallInfo>),
-    LandingPad { cleanup: bool, clauses: Vec<Clause> },
+    LandingPad {
+        cleanup: bool,
+        clauses: Vec<Clause>,
+    },
 }
 
 /// `==` inlined: a compare with a unit variant (`opcode == Opcode::Phi`) is
 /// one discriminant test, where the derived `eq` was a call and the temporary's
 /// drop glue (4% of a diamond-800 compile).
 impl PartialEq for Opcode {
-    #[inline]
+    /// A compare with a unit variant or one that carries a small enum
+    /// (`Binary`, `Cast`, `ICmp`, `FCmp`) is a discriminant test and a byte
+    /// compare in the caller; the variants with vectors and fields compare
+    /// in `eq_fields`. The one `#[inline]` match was a call at most sites:
+    /// 12.3 M Ir (1.4%) of a d_faces compile.
+    #[inline(always)]
     fn eq(
         &self,
         other: &Self,
     ) -> bool {
-        use std::mem::discriminant;
-        if discriminant(self) != discriminant(other) {
-            return false;
-        }
         match (self, other) {
-            (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::Binary(a), Self::Binary(b)) => a == b,
             (Self::Cast(a), Self::Cast(b)) => a == b,
+            (Self::ICmp(a), Self::ICmp(b)) => a == b,
+            (Self::FCmp(a), Self::FCmp(b)) => a == b,
+            _ => {
+                std::mem::discriminant(self) == std::mem::discriminant(other)
+                    && (!self.carries_fields() || self.eq_fields(other))
+            }
+        }
+    }
+}
+
+impl Opcode {
+    /// The variants whose payload is more than a small enum.
+    #[inline(always)]
+    fn carries_fields(&self) -> bool {
+        matches!(
+            self,
+            Self::Invoke(_)
+                | Self::Call(_)
+                | Self::ExtractValue(_)
+                | Self::InsertValue(_)
+                | Self::Alloca { .. }
+                | Self::Load { .. }
+                | Self::Store { .. }
+                | Self::Atomic(_)
+                | Self::GetElementPtr { .. }
+                | Self::LandingPad { .. }
+        )
+    }
+
+    /// The payload compare of two opcodes of one variant.
+    #[inline(never)]
+    fn eq_fields(
+        &self,
+        other: &Self,
+    ) -> bool {
+        match (self, other) {
+            (Self::Invoke(a), Self::Invoke(b)) | (Self::Call(a), Self::Call(b)) => a == b,
             (Self::ExtractValue(a), Self::ExtractValue(b)) | (Self::InsertValue(a), Self::InsertValue(b)) => a == b,
             (
                 Self::Alloca { allocated: a, align: b, address_space: c },
@@ -683,18 +840,15 @@ impl PartialEq for Opcode {
             ) => a == d && b == e && c == f,
             (Self::Load { align: a, volatile: b }, Self::Load { align: c, volatile: d })
             | (Self::Store { align: a, volatile: b }, Self::Store { align: c, volatile: d }) => a == c && b == d,
+            (Self::Atomic(a), Self::Atomic(b)) => a == b,
             (Self::GetElementPtr { source: a }, Self::GetElementPtr { source: b }) => a == b,
-            (Self::ICmp(a), Self::ICmp(b)) => a == b,
-            (Self::FCmp(a), Self::FCmp(b)) => a == b,
             (Self::LandingPad { cleanup: a, clauses: b }, Self::LandingPad { cleanup: c, clauses: d }) => {
                 a == c && b == d
             }
             _ => true,
         }
     }
-}
 
-impl Opcode {
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,
@@ -718,6 +872,13 @@ impl Opcode {
             Self::Alloca { .. } => "alloca",
             Self::Load { .. } => "load",
             Self::Store { .. } => "store",
+            Self::Atomic(info) => match info.kind {
+                AtomicKind::Load => "load",
+                AtomicKind::Store => "store",
+                AtomicKind::Rmw(_) => "atomicrmw",
+                AtomicKind::CmpXchg { .. } => "cmpxchg",
+                AtomicKind::Fence => "fence",
+            },
             Self::GetElementPtr { .. } => "getelementptr",
             Self::ICmp(_) => "icmp",
             Self::FCmp(_) => "fcmp",

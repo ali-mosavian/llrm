@@ -9,7 +9,7 @@ use std::process::Command;
 /// makefiles build into GccUnixD and the build script failed.
 #[test]
 fn test_jwasm_and_jwlink_are_built_beside_llrm() {
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     os_layer_objects(bin, scratch.path());
     assert!(scratch.path().join("start.obj").exists());
@@ -52,7 +52,7 @@ fn os_layer_objects(
 /// could run elsewhere.
 #[test]
 fn test_a_jwlink_exe_runs_under_the_built_dosbox() {
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     std::fs::write(
@@ -209,7 +209,7 @@ fn test_nib_start_leaves_a_kilobyte_frame_room() {
 #[test]
 fn test_c_parity_fixtures_compute_their_expected_values() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let run = |program: &str, args: &[&str]| {
@@ -330,7 +330,7 @@ fn linked_fixture(
     entry: &str,
 ) -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     std::fs::write(dir.join("START.ASM"), format!("{header}.stack 256\nextrn {entry}:far\n.code\nstart: call far ptr {entry}\nmov ax, 4C00h\nint 21h\nend start\n", header = common::header())).unwrap();
@@ -378,7 +378,7 @@ fn test_a_huge_global_past_64k_compiles_and_links_across_two_segments() {
 #[test]
 fn test_loops_over_many_arrays_build_on_a_p5() {
     let scratch = tempfile::tempdir().unwrap();
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc"));
     for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
         let done = Command::new(bin)
@@ -398,7 +398,7 @@ fn test_loops_over_many_arrays_build_on_a_p5() {
 fn test_an_unspillable_range_evicts_a_spillable_holder_at_any_stage() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/fivestreams.c");
-    let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let done = common::cc::llrm_c()
         .args([source.to_str().unwrap(), "-march=pentium", "-O2", "-o", "fivestreams.obj"])
         .current_dir(scratch.path())
         .output()
@@ -417,7 +417,7 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenstreams.c");
     let listing = scratch.path().join("tenstreams.asm");
-    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-c")))
+    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-cc")))
         .args([source.to_str().unwrap(), "-march=i386", "-O2", "-S", "-o", listing.to_str().unwrap()])
         .output()
         .unwrap();
@@ -433,7 +433,7 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
 #[test]
 fn test_a_huge_array_past_64k_reads_and_writes_the_right_elements_on_dos() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-c")).parent().unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc")).parent().unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let dir = scratch.path();
     let routines = [
@@ -515,6 +515,29 @@ fn test_far_and_huge_are_near_with_a_warning_on_m32() {
     assert_eq!(stderr("tests/run/nib/flat_arith.nib", &flat), "");
 }
 
+/// A huge array that is stored and read back made the layout take the far
+/// segment assembly had built for the default one, so every near global was
+/// listed twice (near and in the far segment) and far_near.nib printed 32755
+/// for 36.
+#[test]
+fn test_nib_near_globals_are_listed_once_beside_a_huge_array() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let scratch = tempfile::tempdir().unwrap();
+    let listing = scratch.path().join("p.s");
+    let done = Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+        .arg(root.join("tests/run/nib/far_near.nib"))
+        .args(["-O2", "-march=i486", "-S", "-o", listing.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(done.status.success(), "{}", String::from_utf8_lossy(&done.stderr));
+    let text = std::fs::read_to_string(listing).unwrap();
+    let labels: Vec<&str> = text.lines().filter(|line| line.starts_with("G$")).collect();
+    let mut unique = labels.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(labels.len(), unique.len(), "{text}");
+}
+
 /// C's far and huge are near with a warning where the target has one address
 /// space, and an unmarked pointer is near in every model: `-ml` (default data
 /// pointers far) is not a switch.
@@ -524,7 +547,7 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     let scratch = tempfile::tempdir().unwrap();
     let object = scratch.path().join("p.obj");
     let compile = |extra: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        common::cc::llrm_c()
             .arg(root.join("tests/run/c/huge_array.c"))
             .args(extra)
             .args(["-O2", "-o", object.to_str().unwrap()])
@@ -571,15 +594,19 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
 /// A flat target's block clears and copies are `rep stos`/`rep movs` on dwords
 /// through DS=ES, as m16's are through ES: the lowering took segment operands
 /// and 16-bit counts (a departure row), and a constant fill or copy on m32 was
-/// a loop. Neither sets a segment register here.
+/// a loop. Neither sets a segment register here. A copy above the inline
+/// threshold is the `memcpy` call, as in the pin (`llc -mtriple=i386 -O2`:
+/// 64, 100 and 128 B at align 4 are `rep movsl`; 132 B and 300 B, at align 1
+/// or 4, are `calll memcpy`; X86 `getMaxInlineSizeThreshold` is 128). This test
+/// asserted `rep movsd` for a 300 B copy, which the call replaced.
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("m.c");
-    std::fs::write(&source, "char a[300], b[300];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); return b[5]; }\n").unwrap();
+    std::fs::write(&source, "char a[300], b[300];\nint c[25], d[25];\nvoid clear(void) { unsigned i; for (i = 0; i < 300; i++) a[i] = 0; }\nvoid copy(void) { int i; for (i = 0; i < 25; i++) d[i] = c[i]; }\nvoid copy_big(void) { int i; for (i = 0; i < 300; i++) b[i] = a[i]; }\nint main(void) { clear(); copy(); copy_big(); return b[5] + d[5]; }\n").unwrap();
     let listing = |target: &str| {
         let out = scratch.path().join(format!("{target}.asm"));
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        let done = common::cc::llrm_c()
             .arg(&source)
             .args([&mode(target), "-O2", "-S", "-o", out.to_str().unwrap()])
             .output()
@@ -589,6 +616,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     };
     let flat = listing("x86-m32");
     assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
+    assert!(flat.contains("call memcpy_"), "{flat}");
     assert!(
         !flat.contains("DGROUP")
             && flat.lines().all(|line| !matches!(line.trim(), "pop es" | "push es") && !line.trim().ends_with(", es")),
@@ -744,7 +772,7 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
 fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let scratch = tempfile::tempdir().unwrap();
-    let compiler = env!("CARGO_BIN_EXE_llrm-c");
+    let compiler = env!("CARGO_BIN_EXE_llrm-cc");
     let different = scratch.path().join("llrm-c-os");
     std::fs::write(&different, format!("#!/bin/sh\nexec {compiler} \"$@\" -Os\n")).unwrap();
     std::fs::set_permissions(&different, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
@@ -790,7 +818,7 @@ fn test_llrm_os_h_needs_no_include_path() {
     )
     .unwrap();
     for mode in ["-m16", "-m32"] {
-        let done = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+        let done = common::cc::llrm_c()
             .args([mode, source.to_str().unwrap(), "-o", scratch.path().join("io.obj").to_str().unwrap()])
             .current_dir(scratch.path())
             .output()

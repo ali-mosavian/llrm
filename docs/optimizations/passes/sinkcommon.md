@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:12fb97c6f4dae2cf9c43a5f3f6b9ebc34d1de5957b82e00c6d6a7f5d2a224e88 -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:a92fd3ab16da6d47926a639a5f20402e2580d791e7d7a2c582d451a3e3864142 -->
 
 # sinkcommon
 
@@ -49,3 +49,6 @@ The add both arms end with runs once in the join:
   attribute; the intrinsic cases for variadic parameters, `gcroot` and
   `threadlocal_address` are not in the MIR.
 - D4. No `llvm.experimental.deoptimize`.
+
+## Used by
+Named by `simplifycfg`, `switcharms`.

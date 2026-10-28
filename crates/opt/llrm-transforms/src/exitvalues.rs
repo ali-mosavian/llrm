@@ -55,6 +55,16 @@ pub fn enabled() -> bool {
     !llrm_support::env_flag!("LLRM_NO_SCEV_EXITVALUES")
 }
 
+/// `ReplaceExitVal`: which exit values a rewrite takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Replace {
+    /// `OnlyCheapRepl` (DEVIATE 11).
+    OnlyCheap,
+    /// `UnusedIndVarInLoop`: only an induction phi or its update that nothing
+    /// else in the loop reads (LSR's call, after it has removed the uses).
+    UnusedIndVarInLoop,
+}
+
 /// `RewritePhi`: an exit phi's incoming value to rewrite.
 struct RewritePhi {
     /// `PN`.
@@ -67,6 +77,8 @@ struct RewritePhi {
     point: InstId,
     /// `HighCost`.
     high_cost: bool,
+    /// Under `size`: the expansion costs more code than the loop it replaces.
+    larger_than_loop: bool,
 }
 
 /// `function`'s loops' exit values rewritten (`IndVarSimplify::run`'s call of
@@ -80,7 +92,7 @@ pub fn rewritten(
     outer: &Outer,
 ) -> bool {
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-    rewritten_in(&mut session, context, layout, function, declared, outer)
+    rewritten_in(&mut session, context, layout, function, declared, outer, false)
 }
 
 /// [`rewritten`] over `session`, whose expressions are valid for `function`.
@@ -91,6 +103,7 @@ pub fn rewritten_in(
     function: &mut Function,
     declared: &mut Declared,
     outer: &Outer,
+    size: bool,
 ) -> bool {
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
@@ -115,16 +128,58 @@ pub fn rewritten_in(
         if !simple {
             continue;
         }
-        changed |=
-            rewrite_loop_exit_values(context, layout, function, declared, outer, session, &mut rewriter, &tti, header)
-                > 0;
+        changed |= rewrite_loop_exit_values(
+            context,
+            layout,
+            function,
+            declared,
+            outer,
+            session,
+            &mut rewriter,
+            &tti,
+            size,
+            header,
+            Replace::OnlyCheap,
+        ) > 0;
     }
     changed
 }
 
+/// LSR's call, `rewriteLoopExitValues(L, ..., UnusedIndVarInLoop, ...)`, for
+/// the loop headed by `header`: the number of exit values replaced.
+#[allow(clippy::too_many_arguments)]
+pub fn rewritten_unused_ivs(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+    session: &mut ScevSession,
+    rewriter: &mut Expander,
+    header: BlockId,
+    size: bool,
+) -> usize {
+    let minimum_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "minsize"));
+    let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
+    rewrite_loop_exit_values(
+        context,
+        layout,
+        function,
+        declared,
+        outer,
+        session,
+        rewriter,
+        &tti,
+        size,
+        header,
+        Replace::UnusedIndVarInLoop,
+    )
+}
+
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1876
 /// `rewriteLoopExitValues(L, ...)` for the loop headed by `header`: the number
-/// of exit values replaced. The policy is `OnlyCheapRepl` (DEVIATE 11).
+/// of exit values replaced. The policy is `OnlyCheapRepl` (DEVIATE 11), or
+/// `replace`.
 #[allow(clippy::too_many_arguments)]
 fn rewrite_loop_exit_values(
     context: &mut Context,
@@ -135,8 +190,14 @@ fn rewrite_loop_exit_values(
     session: &mut ScevSession,
     rewriter: &mut Expander,
     tti: &dyn ExpansionTti,
+    size: bool,
     header: BlockId,
+    replace: Replace,
 ) -> usize {
+    // DEVIATE 15 is a 16-bit row: the pin's `rewriteLoopExitValues` reads no
+    // optsize (IndVarSimplify.cpp, LoopUtils.cpp:1876), and the byte sweep
+    // that motivated it is QCport m16 -Os.
+    let size = size && layout.pointer(0).bits < layout.largest_legal_integer();
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let declarations: &Declarations = &outer.globals;
     let mut rewrite_phi_set: Vec<RewritePhi> = Vec::new();
@@ -169,6 +230,14 @@ fn rewrite_loop_exit_values(
                     }
                     // Check that InVal is defined in the loop.
                     if !found.contains_instruction(function, inst) {
+                        continue;
+                    }
+                    // Find exit values which are induction variables in the
+                    // loop, and are unused in the loop, with the only use being
+                    // the exit block PhiNode, and the induction variable update
+                    // binary operator.
+                    if replace == Replace::UnusedIndVarInLoop && !unused_induction(&cx, se, &found, function, phi, inst)
+                    {
                         continue;
                     }
                     // Okay, this instruction has a user outside of the current
@@ -216,6 +285,22 @@ fn rewrite_loop_exit_values(
                         tti,
                         inst,
                     );
+                    // DEVIATE 15: under `size` a loop that can be deleted is
+                    // not rewritten aggressively when its closed form is more
+                    // code than the loop: the expansion's code-size cost
+                    // against the loop's instructions (QCport m16 -Os, a sum
+                    // widened to i64: 35 B as a loop, 107 B as a formula).
+                    let larger_than_loop = size
+                        && high_cost
+                        && rewriter.is_high_cost_expansion(
+                            &cx,
+                            se,
+                            &[exit_value],
+                            header,
+                            loop_size(function, &found),
+                            &MachineCosts { tti: outer.target().tti(), minimum_size: true },
+                            inst,
+                        );
                     // Note that we must not perform expansions until after we
                     // query *all* the costs, because if we perform temporary
                     // expansion inbetween, one that we might not intend to
@@ -229,7 +314,14 @@ fn rewrite_loop_exit_values(
                     } else {
                         inst
                     };
-                    rewrite_phi_set.push(RewritePhi { phi, index, expansion: exit_value, point, high_cost });
+                    rewrite_phi_set.push(RewritePhi {
+                        phi,
+                        index,
+                        expansion: exit_value,
+                        point,
+                        high_cost,
+                        larger_than_loop,
+                    });
                 }
             }
         }
@@ -246,7 +338,7 @@ fn rewrite_loop_exit_values(
     for rewrite in &rewrite_phi_set {
         // Only do the rewrite when the ExitValue can be expanded cheaply. If
         // LoopCanBeDel is true, rewrite exit value aggressively.
-        if !can_be_deleted && rewrite.high_cost {
+        if (!can_be_deleted && rewrite.high_cost) || rewrite.larger_than_loop {
             continue;
         }
         rewriter.set_insert_point(rewrite.point);
@@ -279,6 +371,78 @@ fn rewrite_loop_exit_values(
     // that the rewriter doesn't trip over it later.
     rewriter.clear_insert_point();
     replaced
+}
+
+/// `checkIsIndPhi`: `phi` is an induction phi of `l`.
+fn is_ind_phi(
+    cx: &llrm_analysis::scev::Cx,
+    se: &mut llrm_analysis::scev::ScalarEvolution,
+    l: &Loop,
+    phi: InstId,
+) -> Option<llrm_analysis::ivdescriptors::InductionDescriptor> {
+    if cx.function.instruction(phi).opcode != Opcode::Phi || l.get_loop_preheader(cx.function).is_none() {
+        return None;
+    }
+    if cx.function.parent(phi) != Some(l.get_header()) {
+        return None;
+    }
+    llrm_analysis::ivdescriptors::is_induction_phi(cx, se, phi, l.clone())
+}
+
+/// The `UnusedIndVarInLoop` test of `rewriteLoopExitValues` for `inst`, the
+/// value exit phi `pn` reads: an induction phi, or the update of one, that
+/// nothing else in the loop reads.
+fn unused_induction(
+    cx: &llrm_analysis::scev::Cx,
+    se: &mut llrm_analysis::scev::ScalarEvolution,
+    l: &Loop,
+    function: &Function,
+    pn: InstId,
+    inst: InstId,
+) -> bool {
+    let Some(result) = function.instruction(inst).result else { return false };
+    let users: Vec<InstId> = function.users(result).into_iter().map(|user| user.user).collect();
+    if function.instruction(inst).opcode == Opcode::Phi {
+        let Some(id) = is_ind_phi(cx, se, l, inst) else { return false };
+        // The only users are phis and the induction variable's update.
+        return !users
+            .iter()
+            .any(
+                |&user| match function.instruction(user).opcode {
+                    Opcode::Phi => false,
+                    Opcode::Binary(_) => Some(user) != id.induction_bin_op,
+                    _ => true,
+                },
+            );
+    }
+    // Not an induction phi: an update with an induction phi user.
+    if !matches!(function.instruction(inst).opcode, Opcode::Binary(_)) {
+        return false;
+    }
+    let mut id = None;
+    for &user in &users {
+        if user != pn {
+            if function.instruction(user).opcode != Opcode::Phi {
+                return false;
+            }
+            match is_ind_phi(cx, se, l, user) {
+                Some(found) => id = Some(found),
+                None => return false,
+            }
+        }
+    }
+    // `ID` is the last induction phi checked: with none, the update is not
+    // the induction's.
+    id.is_some_and(|id| id.induction_bin_op == Some(inst))
+}
+
+/// The instructions of `l` that are code: not a phi or a terminator, which are
+/// registers and the branch the loop keeps.
+fn loop_size(
+    function: &Function,
+    l: &Loop,
+) -> u32 {
+    l.get_blocks().iter().flat_map(|&block| function.iter_block(block)).count() as u32
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L1770

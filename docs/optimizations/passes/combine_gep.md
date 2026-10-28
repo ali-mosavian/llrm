@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_gep.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_gep.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_gep.rs sha256:b38ff5b2adaad342dbf045bafecc00b42aafeb0c38707a095ec8f4e8c01b42ee -->
+<!-- src: crates/opt/llrm-transforms/src/combine_gep.rs sha256:a2dc99adee4a8deb8f1f5abadd689ae2d6e32a3239baf3135b6cf64a72706fcb -->
 
 # combine_gep
 
@@ -36,3 +36,6 @@ derived `inbounds`/`nuw` (:3641-3680), `foldSelectGEP` and the `srem` form.
 ```text
 %p = getelementptr [4 x i32], ptr %b, i64 0, i64 1      %p = getelementptr i8, ptr %b, i64 4
 ```
+
+## Used by
+Named by `combine_compares`, `combine_gep_index`, `combine_gep_merge`, `combine_gep_phi`.

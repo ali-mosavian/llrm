@@ -1,6 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -Os -march=i486 -S -o /dev/stdout
-// Tuned for size the frame register stays where the cells it names cost less than the stack pointer: [esp+d] is a byte longer than [ebp+d].
-// Seven cells addressed through esp took 21 bytes more than the `push ebp; mov ebp, esp; leave` they saved (bench/nbody -Os +12%).
+// RUN: llrm-cc %s -m32 -mabi=sysv -Os -march=i486 -S -o /dev/stdout
 extern void use(double *);
 double big(double x)
 {
@@ -11,6 +9,7 @@ double big(double x)
     return a[0] + a[11] + a[5] + a[7] + a[3];
 }
 // CHECK-LABEL: _big proc
-// CHECK: push ebp
-// CHECK: leave
+// The pin (none-elf llc, optsize) keeps no frame register here: `sub esp` and `add esp` cost less than `push ebp; mov ebp, esp; leave`.
+// CHECK-NOT: push ebp
+// CHECK-NOT: leave
 // CHECK: _big endp

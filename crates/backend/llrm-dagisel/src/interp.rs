@@ -1,50 +1,60 @@
 //! `SelectCodeCommon`: walks the matcher table over one DAG node.
 //!
 //! # How it works
-//! A translation of [`SelectCodeCommon`][common] over [`Matcher`] items. `Scope` pushes a
-//! [`MatchScope`]; a failed check pops back to the last scope's next alternative, restoring the
-//! node stack, the recorded nodes, the matched memory operands, and the input chain and glue.
-//! `IsPredicateKnownToFail` ([L3103][known]) skips alternatives without pushing a scope.
-//! A match ends in `MorphNodeTo` (the root node becomes the machine node) or `CompleteMatch`.
+//! A translation of [`SelectCodeCommon`][common] over [`Matcher`] items.
+//! `Scope` pushes a [`MatchScope`]; a failed check pops back to the last
+//! scope's next alternative, restoring the node stack, the recorded nodes, the
+//! matched memory operands, and the input chain and glue.
+//! `IsPredicateKnownToFail` ([L3103][known]) skips alternatives without pushing
+//! a scope. A match ends in `MorphNodeTo` (the root node becomes the machine
+//! node) or `CompleteMatch`.
 //!
 //! Numbered deviations from the pin (reason / owner / exit / review):
-//! - **SD20** Jumps count items, not bytes, and `ByHwMode` operands are resolved to a type when
-//!   the table is generated. Reason: the table is decoded once; the hardware mode is fixed per
-//!   target. Owner sdag-c. Exit: none. Review 2026-12-10.
-//! - **SD21** `mayRaiseFPException`/`NoFPExcept` are not carried. Reason: MIR has no strict FP.
-//!   Owner sdag-c. Exit: when the builder lowers constrained FP. Review 2026-12-10.
-//! - **SD22** The `MatchStateUpdater` is not installed around complex patterns; a complex pattern
-//!   that CSEs a node while matching is a C1 question. Owner sdag-c. Exit: C1. Review 2026-12-10.
-//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` never match: no vectors before 32-bit
-//!   parity. Owner sdag-c. Exit: vector MIR. Review 2026-12-10.
+//! - **SD20** Jumps count items, not bytes, and `ByHwMode` operands are
+//!   resolved to a type when the table is generated. Reason: the table is
+//!   decoded once; the hardware mode is fixed per target. Owner sdag-c. Exit:
+//!   none. Review 2026-12-10.
+//! - **SD21** `mayRaiseFPException`/`NoFPExcept` are not carried. Reason: MIR
+//!   has no strict FP. Owner sdag-c. Exit: when the builder lowers constrained
+//!   FP. Review 2026-12-10.
+//! - **SD22** The `MatchStateUpdater` is not installed around complex patterns;
+//!   a complex pattern that CSEs a node while matching is a C1 question. Owner
+//!   sdag-c. Exit: C1. Review 2026-12-10.
+//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` never match: no vectors
+//!   before 32-bit parity. Owner sdag-c. Exit: vector MIR. Review 2026-12-10.
 //!
 //! # Used by
 //! `X86DAGToDAG` (C1) and the shadow harness.
 //!
-//! [common]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
-//! [known]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3103
+//! [common]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
+//! [known]:
+//! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3103
 
 use crate::dag::{Dag, Hooks, MemRef, SDValue};
-use crate::generated::ids::{isd, mvt};
-use crate::matcher::{opfl, Emit, Matcher, Opcode, Slice, Table, Vt};
+use crate::generated::ids::{isd, mvt, target_opcode};
+use crate::matcher::{Emit, Matcher, Opcode, Slice, Table, Vt, opfl};
 
 /// How a node left the interpreter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// The node is selected, or needs no selection (`EntryToken`, `Register`, ...).
+    /// The node is selected, or needs no selection (`EntryToken`, `Register`,
+    /// ...).
     Selected,
     /// No alternative matched (`CannotYetSelect`).
     CannotSelect,
 }
 
-/// The table and the `OpcodeOffset` index the pin builds on the first selection.
+/// The table and the `OpcodeOffset` index the pin builds on the first
+/// selection.
 pub struct Selector {
     table: Table,
     /// Item index of each opcode's case body, 0 when the table has none.
     opcode_offset: Vec<u32>,
 }
 
-/// `MatchScope`. The node stack at the scope is kept in [`Scratch::saved_stacks`].
+/// `MatchScope`. The node stack at the scope is kept in
+/// [`Scratch::saved_stacks`].
 struct MatchScope {
     fail_index: u32,
     saved_stack: usize,
@@ -58,7 +68,8 @@ struct MatchScope {
 
 type Recorded = Vec<(SDValue, Option<u32>)>;
 
-/// The buffers one selection fills, kept between selections so each node reuses them.
+/// The buffers one selection fills, kept between selections so each node reuses
+/// them.
 #[derive(Default)]
 pub struct Scratch {
     node_stack: Vec<SDValue>,
@@ -67,6 +78,20 @@ pub struct Scratch {
     recorded: Recorded,
     matched_mem_refs: Vec<MemRef>,
     chain_nodes_matched: Vec<Option<u32>>,
+}
+
+thread_local! {
+    /// The buffers the last [`Selector::select`] on this thread left.
+    static KEPT: std::cell::Cell<Option<Box<Scratch>>> = const { std::cell::Cell::new(None) };
+}
+
+/// The capacity the buffers kept for the next selection hold.
+#[cfg(test)]
+pub(crate) fn kept_capacity() -> usize {
+    let kept = KEPT.take();
+    let capacity = kept.as_ref().map_or(0, |one| one.node_stack.capacity() + one.match_scopes.capacity());
+    KEPT.set(kept);
+    capacity
 }
 
 impl Selector {
@@ -89,14 +114,29 @@ impl Selector {
         Selector { table, opcode_offset }
     }
 
-    fn operands(&self, slice: Slice) -> &[u16] {
+    fn operands(
+        &self,
+        slice: Slice,
+    ) -> &[u16] {
         &self.table.operands[slice.start as usize..slice.start as usize + slice.len as usize]
     }
 
-    /// Selects `node_to_match`. Nodes that are selected already or never need it return `Selected`
-    /// untouched; the pin's `Select_*` special cases (inline asm, `UNDEF`, ...) are the caller's.
-    pub fn select<D: Dag, H: Hooks<D>>(&self, dag: &mut D, hooks: &mut H, node_to_match: u32) -> Outcome {
-        self.select_with(&mut Scratch::default(), dag, hooks, node_to_match)
+    /// Selects `node_to_match`. Nodes that are selected already or never need
+    /// it return `Selected` untouched; the pin's `Select_*` special cases
+    /// (inline asm, `UNDEF`, ...) are the caller's.
+    pub fn select<D: Dag, H: Hooks<D>>(
+        &self,
+        dag: &mut D,
+        hooks: &mut H,
+        node_to_match: u32,
+    ) -> Outcome {
+        // The buffers are the thread's, taken for the selection and put back:
+        // a fresh set per node cost five allocations and their growth each
+        // (d_faces -O2: 5,336 selections).
+        let mut scratch = KEPT.take().unwrap_or_default();
+        let outcome = self.select_with(&mut scratch, dag, hooks, node_to_match);
+        KEPT.set(Some(scratch));
+        outcome
     }
 
     /// [`Selector::select`] with the caller's buffers.
@@ -108,6 +148,9 @@ impl Selector {
         node_to_match: u32,
     ) -> Outcome {
         if needs_no_selection(dag.opcode(node_to_match)) {
+            return Outcome::Selected;
+        }
+        if select_special(dag, node_to_match) {
             return Outcome::Selected;
         }
         let Scratch { node_stack, match_scopes, saved_stacks, recorded, matched_mem_refs, chain_nodes_matched } =
@@ -238,12 +281,10 @@ impl Selector {
                 | Matcher::CheckChild2CondCode(_)
                 | Matcher::CheckValueType(_)
                 | Matcher::CheckAndImm(_)
-                | Matcher::CheckOrImm(_) => {
-                    match self.eval_check(dag, hooks, item, n, recorded) {
-                        Some(true) => continue,
-                        _ => false,
-                    }
-                }
+                | Matcher::CheckOrImm(_) => match self.eval_check(dag, hooks, item, n, recorded) {
+                    Some(true) => continue,
+                    _ => false,
+                },
                 Matcher::CheckComplexPat { pattern, record } => {
                     let (value, parent) = recorded[record as usize];
                     if hooks.check_complex_pattern(dag, node_to_match, parent, value, pattern, recorded) {
@@ -339,7 +380,8 @@ impl Selector {
                     for &record in self.operands(records) {
                         let value = recorded[record as usize].0;
                         chain_nodes_matched.push(Some(value.node));
-                        // A chained node that is not the root must not have other users.
+                        // A chained node that is not the root must not have
+                        // other users.
                         if value.node != node_to_match && !dag.has_one_use(value) {
                             chain_nodes_matched.clear();
                             failed = true;
@@ -438,7 +480,8 @@ impl Selector {
         }
     }
 
-    /// `IsPredicateKnownToFail`: the index to go on at, and whether the check at `at` failed.
+    /// `IsPredicateKnownToFail`: the index to go on at, and whether the check
+    /// at `at` failed.
     fn known_to_fail<D: Dag, H: Hooks<D>>(
         &self,
         dag: &D,
@@ -470,7 +513,8 @@ impl Selector {
         }
     }
 
-    /// The checks that read the current node and nothing else; `None` for any other item.
+    /// The checks that read the current node and nothing else; `None` for any
+    /// other item.
     fn eval_check<D: Dag, H: Hooks<D>>(
         &self,
         dag: &D,
@@ -483,7 +527,8 @@ impl Selector {
             let have = dag.value_type(value);
             have == vt || (vt == mvt::iPTR && have == hooks.pointer_type())
         };
-        let child = |index: u8| (usize::from(index) < dag.num_operands(n.node)).then(|| dag.operand(n.node, index as usize));
+        let child =
+            |index: u8| (usize::from(index) < dag.num_operands(n.node)).then(|| dag.operand(n.node, index as usize));
         Some(match item {
             Matcher::CheckSame(record) => n == recorded[record as usize].0,
             Matcher::CheckChildSame { child: index, record } => {
@@ -500,26 +545,27 @@ impl Selector {
             }
             Matcher::CheckCondCode(code) => dag.cond_code(n) == Some(code),
             Matcher::CheckChild2CondCode(code) => child(2).is_some_and(|c| dag.cond_code(c) == Some(code)),
-            Matcher::CheckValueType(vt) => dag.value_type_node(n).is_some_and(|have| {
-                have == vt || (vt == mvt::iPTR && have == hooks.pointer_type())
-            }),
+            Matcher::CheckValueType(vt) => dag
+                .value_type_node(n)
+                .is_some_and(|have| have == vt || (vt == mvt::iPTR && have == hooks.pointer_type())),
             Matcher::CheckAndImm(desired) => {
                 dag.opcode(n.node) == isd::AND
-                    && dag.constant(dag.operand(n.node, 1)).is_some_and(|rhs| {
-                        hooks.check_and_mask(dag, dag.operand(n.node, 0), rhs, desired as i64)
-                    })
+                    && dag
+                        .constant(dag.operand(n.node, 1))
+                        .is_some_and(|rhs| hooks.check_and_mask(dag, dag.operand(n.node, 0), rhs, desired as i64))
             }
             Matcher::CheckOrImm(desired) => {
                 dag.opcode(n.node) == isd::OR
-                    && dag.constant(dag.operand(n.node, 1)).is_some_and(|rhs| {
-                        hooks.check_or_mask(dag, dag.operand(n.node, 0), rhs, desired as i64)
-                    })
+                    && dag
+                        .constant(dag.operand(n.node, 1))
+                        .is_some_and(|rhs| hooks.check_or_mask(dag, dag.operand(n.node, 0), rhs, desired as i64))
             }
             _ => return None,
         })
     }
 
-    /// `OPC_EmitNode` and `OPC_MorphNodeTo`. `Some` when a morph ended the match.
+    /// `OPC_EmitNode` and `OPC_MorphNodeTo`. `Some` when a morph ended the
+    /// match.
     #[allow(clippy::too_many_arguments)]
     fn emit_node<D: Dag, H: Hooks<D>>(
         &self,
@@ -624,10 +670,12 @@ impl Selector {
         None
     }
 
-    /// `SelectionDAGISel::MorphNode` ([L2896][morph]): morph in place and move the chain and glue
-    /// uses of the old node to the new one's last results.
+    /// `SelectionDAGISel::MorphNode` ([L2896][morph]): morph in place and move
+    /// the chain and glue uses of the old node to the new one's last
+    /// results.
     ///
-    /// [morph]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L2896
+    /// [morph]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L2896
     fn morph_node<D: Dag>(
         &self,
         dag: &mut D,
@@ -674,7 +722,8 @@ impl Selector {
 
 /// Nodes the pin's `SelectCodeCommon` leaves as they are ([L3351][common]).
 ///
-/// [common]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
+/// [common]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3351
 fn needs_no_selection(opcode: Opcode) -> bool {
     matches!(
         opcode,
@@ -706,8 +755,47 @@ fn needs_no_selection(opcode: Opcode) -> bool {
     )
 }
 
+/// The nodes `SelectCodeCommon` makes machine nodes of before the table
+/// ([L3362][special]): `UNDEF`, `FREEZE` and the fences, and the asserts, which
+/// only mark a value. `false` for the rest.
+///
+/// [special]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L3362
+fn select_special<D: Dag>(
+    dag: &mut D,
+    node: u32,
+) -> bool {
+    let result = SDValue::new(node, 0);
+    let operand = |dag: &D| dag.operand(node, 0);
+    let (opcode, ops): (u16, Vec<SDValue>) = match dag.opcode(node) {
+        // Assertions say something about a value and are not code: its users
+        // read the operand.
+        isd::AssertSext | isd::AssertZext | isd::AssertAlign | isd::AssertNoFPClass => {
+            let source = operand(dag);
+            dag.replace_uses(result, source);
+            dag.remove_dead_node(node);
+            return true;
+        }
+        isd::UNDEF | isd::POISON => (target_opcode::IMPLICIT_DEF, Vec::new()),
+        isd::FREEZE => (target_opcode::COPY, vec![operand(dag)]),
+        isd::ARITH_FENCE => (target_opcode::ARITH_FENCE, vec![operand(dag)]),
+        isd::MEMBARRIER => (target_opcode::MEMBARRIER, vec![operand(dag)]),
+        _ => return false,
+    };
+    // `SelectNodeTo(N, Opc, VT, Ops)`: the node becomes the machine node.
+    let vt = dag.value_type(result);
+    let (selected, _) = dag.morph_node_to(node, opcode, &[vt], &ops);
+    if selected != node {
+        dag.replace_node(node, selected);
+    }
+    true
+}
+
 /// `SignExtend64(Val, MVT(VT).getFixedSizeInBits())`.
-fn sign_extend(value: i64, vt: Vt) -> i64 {
+fn sign_extend(
+    value: i64,
+    vt: Vt,
+) -> i64 {
     let bits = if vt == mvt::i8 {
         8
     } else if vt == mvt::i16 {
@@ -721,10 +809,11 @@ fn sign_extend(value: i64, vt: Vt) -> i64 {
     (value << shift) >> shift
 }
 
-/// `HandleMergeInputChains` ([L2834][merge]): the chain the new nodes take as input, or `None`
-/// when merging the matched nodes' chains would make a cycle.
+/// `HandleMergeInputChains` ([L2834][merge]): the chain the new nodes take as
+/// input, or `None` when merging the matched nodes' chains would make a cycle.
 ///
-/// [merge]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L2834
+/// [merge]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L2834
 fn handle_merge_input_chains<D: Dag>(
     dag: &mut D,
     chain_nodes_matched: &[Option<u32>],
@@ -736,15 +825,20 @@ fn handle_merge_input_chains<D: Dag>(
         return Some(dag.operand(matched[0], 0));
     }
 
-    let mut visited: Vec<u32> = Vec::new();
+    let mut visited = crate::dag::Visited::new();
     let mut worklist: Vec<u32> = Vec::new();
     let mut input_chains: Vec<SDValue> = Vec::new();
 
-    fn add_chains<D: Dag>(dag: &D, v: SDValue, visited: &mut Vec<u32>, chains: &mut Vec<SDValue>) {
-        if dag.value_type(v) != mvt::Other || dag.opcode(v.node) == isd::EntryToken || visited.contains(&v.node) {
+    fn add_chains<D: Dag>(
+        dag: &D,
+        v: SDValue,
+        visited: &mut crate::dag::Visited,
+        chains: &mut Vec<SDValue>,
+    ) {
+        if dag.value_type(v) != mvt::Other || dag.opcode(v.node) == isd::EntryToken || visited.contains(v.node) {
             return;
         }
-        visited.push(v.node);
+        visited.insert(v.node);
         if dag.opcode(v.node) == isd::TokenFactor {
             for i in 0..dag.num_operands(v.node) {
                 add_chains(dag, dag.operand(v.node, i), visited, chains);
@@ -756,7 +850,7 @@ fn handle_merge_input_chains<D: Dag>(
 
     for &n in &matched {
         worklist.push(n);
-        visited.push(n);
+        visited.insert(n);
     }
     while let Some(n) = worklist.pop() {
         add_chains(dag, dag.operand(n, 0), &mut visited, &mut input_chains);
@@ -770,7 +864,8 @@ fn handle_merge_input_chains<D: Dag>(
     for &v in &input_chains {
         // A token factor would defeat a glue the chain node also produces.
         let last = SDValue::new(v.node, (dag.num_values(v.node) - 1) as u8);
-        if input_chains.len() != 1 && dag.value_type(last) == mvt::Glue && input_glue.is_some_and(|g| g.node == v.node) {
+        if input_chains.len() != 1 && dag.value_type(last) == mvt::Glue && input_glue.is_some_and(|g| g.node == v.node)
+        {
             return None;
         }
         worklist.push(v.node);
@@ -787,10 +882,11 @@ fn handle_merge_input_chains<D: Dag>(
     Some(dag.token_factor(&input_chains))
 }
 
-/// `UpdateChains` ([L2767][update]): the matched nodes' chain results now come from the input
-/// chain the new nodes ended with.
+/// `UpdateChains` ([L2767][update]): the matched nodes' chain results now come
+/// from the input chain the new nodes ended with.
 ///
-/// [update]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L2767
+/// [update]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGISel.cpp#L2767
 fn update_chains<D: Dag>(
     dag: &mut D,
     node_to_match: u32,

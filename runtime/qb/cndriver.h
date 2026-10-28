@@ -25,6 +25,9 @@ typedef struct Driver {
 /* The drivers of the screen, set by the initializers of cntext.c and cngfx.c
    when a program has them linked, else 0 and everything goes to standard
    output. */
+/* The bell (BEEP, and character 7 written). */
+void cn_bell(void);
+
 extern const Driver *cn_text_driver;
 extern const Driver *cn_gfx_driver;
 

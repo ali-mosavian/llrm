@@ -108,6 +108,56 @@ fn a_memset_overwritten_by_a_store_goes() {
     assert!(!after.contains("llvm.memset.p0.i16(ptr @g"), "{after}");
 }
 
+/// bench/scroll at -O3: the blank bottom row became `memset.pattern` (the loop
+/// idiom, which the pin does not form) and the `memmove` that follows covers
+/// it. The pin's unrolled stores were deleted; the fill stayed, `rep stosw`
+/// per pass (+5.5% clocks).
+#[test]
+fn a_memset_pattern_overwritten_by_a_memmove_goes() {
+    let after = eliminated(
+        "@g = global [2000 x i16] zeroinitializer
+declare void @llvm.experimental.memset.pattern.p0.i16.i32(ptr, i16, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+
+define void @f() {
+b0:
+  %row = getelementptr inbounds i8, ptr @g, i32 3840
+  call void @llvm.experimental.memset.pattern.p0.i16.i32(ptr %row, i16 1824, i32 80, i1 false)
+  %dst = getelementptr inbounds i8, ptr @g, i32 160
+  call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr @g, i32 3840, i1 false)
+  ret void
+}
+",
+        &[&[]],
+    );
+    assert!(!after.contains("call void @llvm.experimental.memset.pattern"), "{after}");
+    assert!(after.contains("call void @llvm.memmove"), "{after}");
+}
+
+/// A copy that reads the fill it covers needs it: the source is the blank row.
+#[test]
+fn a_memset_pattern_read_by_the_covering_memmove_stays() {
+    let after = eliminated(
+        "@g = global [2000 x i16] zeroinitializer
+declare void @llvm.experimental.memset.pattern.p0.i16.i32(ptr, i16, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+
+define void @f() {
+b0:
+  %row = getelementptr inbounds i8, ptr @g, i32 3840
+  call void @llvm.experimental.memset.pattern.p0.i16.i32(ptr %row, i16 1824, i32 80, i1 false)
+  %src = getelementptr inbounds i8, ptr @g, i32 3000
+  call void @llvm.memmove.p0.p0.i32(ptr @g, ptr %src, i32 1000, i1 false)
+  %dst = getelementptr inbounds i8, ptr @g, i32 160
+  call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr %row, i32 3840, i1 false)
+  ret void
+}
+",
+        &[&[]],
+    );
+    assert!(after.contains("call void @llvm.experimental.memset.pattern"), "{after}");
+}
+
 /// A chain of overwrites costs in proportion to its length.
 #[test]
 fn a_long_chain_of_overwrites_is_linear() {
@@ -252,4 +302,164 @@ fn the_stores_of_one_array_cost_in_proportion_to_their_number() {
     };
     let (small, large) = (work(100), work(400));
     assert!(large as f64 <= 5.0 * small as f64, "{small} steps for 100 cells, {large} for 400");
+}
+
+/// `getUnderlyingObject` of two pointers that strip to one value is one object,
+/// whatever the value is (a loaded pointer here): a store inside the bytes a
+/// later store covers is dead. The object was taken from annotated provenance,
+/// which a loaded pointer has none of, so the small store stayed.
+#[test]
+fn a_store_inside_a_later_wider_one_through_a_loaded_pointer_goes() {
+    let mut module = parsed(&format!(
+        "{DOS}define void @f(ptr %pp) {{\nb0:\n  %p = load ptr, ptr %pp\n  %q = getelementptr i8, ptr %p, i16 2\n  store i16 1, ptr %q\n  store i32 2, ptr %p\n  ret void\n}}\n"
+    ));
+    let after = managed(&mut module, DeadStoreElimination);
+    assert!(!after.contains("store i16 1"), "{after}");
+}
+
+/// DSE took the manager's annotated accesses, deriving every reference's
+/// provenance for a body (3.7 M Ir in d_faces) to learn what a store writes.
+/// It asks the unit lazily now: a run derives no annotations.
+#[test]
+fn a_run_derives_no_annotations() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(DeadStoreElimination);
+    let (_, before) = llrm_mir::counts::analysed("annotated");
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let (_, after) = llrm_mir::counts::analysed("annotated");
+    assert!(!crate::testing::printed(&module).contains("store i16 1"), "premise: the store goes");
+    assert_eq!(after - before, 0, "DSE derived the annotations");
+}
+
+/// DSE forked the whole body (and cloned the context) to read it while the
+/// removals waited: one fork, 1.74 M Ir, for each run over a body with a
+/// store.
+#[test]
+fn a_run_forks_no_body() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::FunctionForks);
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+    assert_eq!(get(Event::FunctionForks), before, "dse forked the body");
+}
+
+/// A pass that asks for MemorySSA, without editing.
+struct AsksMssa;
+
+impl llrm_mir::passes::FunctionPass for AsksMssa {
+    fn name(&self) -> &'static str {
+        "asks-mssa"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// DSE built its own MemorySSA (0.77 M Ir, 2 builds in d_faces) beside the
+/// one the manager held: it reads the held graph now (a hit, not a build).
+#[test]
+fn the_graph_the_manager_holds_is_the_one_dse_reads() {
+    let mut module = parsed(&format!(
+        "{DOS}@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    ));
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add_boxed(Box::new(AsksMssa));
+    manager.add_boxed(Box::new(DeadStoreElimination));
+    let before = llrm_mir::counts::analysed("mssa");
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    let after = llrm_mir::counts::analysed("mssa");
+    assert_eq!((after.0 - before.0, after.1 - before.1), (1, 1), "DSE did not read the held graph (hits, misses)");
+}
+
+/// `cycle_of` scanned every loop's body for each pair of stores it was asked
+/// about (0.84 M Ir in d_faces' `loop_independent`); the map made once must
+/// name the smallest loop of each block, as the scan did.
+#[test]
+fn the_innermost_loop_of_a_block_is_the_smallest_that_holds_it() {
+    let module = parsed(&format!(
+        "{DOS}define i32 @f(i32 %n) {{\nb0:\n  br label %o\no:\n  %i = phi i32 [0, %b0], [%j, %olatch]\n  br label %n1\nn1:\n  %k = phi i32 [0, %o], [%k2, %n1]\n  %k2 = add i32 %k, 1\n  %c = icmp slt i32 %k2, %n\n  br i1 %c, label %n1, label %olatch\nolatch:\n  %j = add i32 %i, 1\n  %d = icmp slt i32 %j, %n\n  br i1 %d, label %o, label %x\nx:\n  ret i32 %j\n}}\n"
+    ));
+    let (_, _, function) = module.functions().next().expect("a function");
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let found = super::innermost_headers(&shape.loops);
+    for &block in function.layout() {
+        let scan = shape
+            .loops
+            .iter()
+            .filter(|one| one.body.contains(&llrm_analysis::cfg::id(block)))
+            .min_by_key(|one| one.body.len())
+            .map(|one| one.header);
+        assert_eq!(found.get(&block).copied(), scan, "{block:?}");
+    }
+    assert_eq!(shape.loops.len(), 2);
+}
+
+/// `may_write` and `may_read` derived a load's or store's whole list to learn
+/// it is not empty (`loc_for_write` 0.78 M Ir in d_faces, 609 lists): a body of
+/// loads and stores derives none.
+#[test]
+fn asking_whether_a_load_or_store_writes_derives_no_list() {
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    let after = eliminated(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {\nb0:\n  store i16 1, ptr @g\n  store i16 %x, ptr @g\n  %r = load i16, ptr @g\n  ret i16 %r\n}\n",
+        &[&[7]],
+    );
+    assert!(!after.contains("store i16 1"), "{after}");
+    assert_eq!(llrm_analysis::memoryssa::lazy_lists(), before, "lists derived for loads and stores");
+}
+
+/// A store's place was worked out again at every ask (603 times for about a
+/// hundred stores on d_faces). A chain of n stores works out at most one place
+/// for each of its instructions.
+#[test]
+fn a_place_is_worked_out_once_for_each_instruction() {
+    let stores: String = (0..50).map(|k| format!("  store i16 {k}, ptr @g\n")).collect();
+    let body = format!(
+        "@g = global i16 0\n\ndefine i16 @f(i16 %x) {{\nb0:\n{stores}  %r = load i16, ptr @g\n  ret i16 %r\n}}\n"
+    );
+    let before = super::locations();
+    eliminated(&body, &[&[1]]);
+    let made = super::locations() - before;
+    assert!(made <= 52, "{made} places worked out for 52 instructions");
+}
+
+/// `n` locals, each stored twice (the first store is dead) and read once.
+fn locals(n: usize) -> String {
+    let mut text = String::from("define i32 @f() {\nb0:\n");
+    for k in 0..n {
+        text += &format!("  %p{k} = alloca i32\n  store i32 1, ptr %p{k}\n  store i32 2, ptr %p{k}\n");
+    }
+    text += "  %s0 = add i32 0, 0\n";
+    for k in 0..n {
+        text += &format!("  %v{k} = load i32, ptr %p{k}\n  %s{} = add i32 %s{k}, %v{k}\n", k + 1);
+    }
+    text + &format!("  ret i32 %s{n}\n}}\n")
+}
+
+/// `object_of` walked an alloca's uses at every access asked of it, since the
+/// pass did not hand it the exposed frames: matmul -O2 made 27,548 walks and
+/// 1.9 M tree inserts in a third of the pass. The walks are the frames', not
+/// the accesses'.
+#[test]
+fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
+    let scans = |n: usize| {
+        let mut module = parsed(&locals(n));
+        let before = llrm_analysis::frameescape::scans();
+        managed(&mut module, DeadStoreElimination);
+        llrm_analysis::frameescape::scans() - before
+    };
+    let (small, large) = (scans(8), scans(64));
+    assert!(large <= 64 + 8 && small <= 8 + 8, "8 locals: {small} walks, 64 locals: {large}");
 }

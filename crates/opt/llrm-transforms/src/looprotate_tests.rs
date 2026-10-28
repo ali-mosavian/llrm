@@ -206,3 +206,143 @@ declare i16 @late(i16)
     let known = module.functions().position(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f") + 1;
     assert!(rotate_function_knowing(&mut module, "f", &tti, options, known).expect("rotates"), "{}", printed(&module));
 }
+
+/// The block that splits a loop's exit edge stands right before the exit
+/// (`ExitSplit->moveBefore(Exit)`, LoopRotationUtils.cpp:788), not after the
+/// loop block the edge leaves.
+#[test]
+fn test_the_block_that_splits_a_loop_exit_stands_before_the_exit() {
+    let mut module = parsed(
+        "define i16 @f(i16 %n, i1 %c) {
+entry:
+  br label %oh
+
+oh:
+  %i = phi i16 [ 0, %entry ], [ %in, %ol ]
+  %og = icmp slt i16 %i, %n
+  br i1 %og, label %ih, label %exit
+
+ih:
+  %j = phi i16 [ 0, %oh ], [ %jn, %ib ]
+  %jg = icmp slt i16 %j, %n
+  br i1 %jg, label %ib, label %exit
+
+ib:
+  %jn = add i16 %j, 1
+  br i1 %c, label %ih, label %ol
+
+ol:
+  %in = add i16 %i, 1
+  br label %oh
+
+exit:
+  ret i16 %n
+}
+",
+    );
+    assert!(rotated(&mut module));
+    let function = module.function_mut("f").expect("@f").1;
+    let order: Vec<String> =
+        function.layout().iter().map(|&one| function.block(one).name.clone().unwrap_or("new".into())).collect();
+    assert_eq!(
+        order,
+        ["entry", "new", "new", "ih", "ib", "ol", "new", "new", "new", "exit"],
+        "{}",
+        llrm_mir::print::module(&module)
+    );
+}
+
+/// quicksort's tail-recursion loop holds a loop that starts at the outer
+/// test's own operands. LLVM rotates the inner loop first, so the copy of its
+/// test sits behind the outer test and folds to true; outside in, the copy
+/// stayed as a fourth `icmp slt`, which `decide@809` cleaned up and the pin
+/// never builds (+48 B on quicksort once that pass is gone).
+#[test]
+fn test_an_inner_loop_is_rotated_before_the_loop_around_it() {
+    let mut module = parsed(
+        "define void @f(i32 %lo, i32 %hi, ptr %a) {
+entry:
+  br label %outer
+
+outer:
+  %l = phi i32 [ %lo, %entry ], [ %next, %olatch ]
+  %c = icmp slt i32 %l, %hi
+  br i1 %c, label %pre, label %exit
+
+pre:
+  br label %inner
+
+inner:
+  %j = phi i32 [ %l, %pre ], [ %j2, %ibody ]
+  %c2 = icmp slt i32 %j, %hi
+  br i1 %c2, label %ibody, label %olatch
+
+ibody:
+  %p = getelementptr i32, ptr %a, i32 %j
+  store i32 %j, ptr %p
+  %j2 = add i32 %j, 1
+  br label %inner
+
+olatch:
+  %next = add i32 %j, 1
+  br label %outer
+
+exit:
+  ret void
+}
+",
+    );
+    assert!(rotated(&mut module));
+    let out = printed(&module);
+    assert_eq!(out.matches("icmp slt").count(), 3, "{out}");
+}
+
+/// observed.c's `mix` at -O2 -g lost the debug record of its parameter `n`,
+/// which stands before the preheader's branch into the loop: the rotation
+/// erased that branch and its records with it, and gdb read `n` as optimised
+/// out where it is in a register throughout.
+#[test]
+fn test_the_debug_records_before_the_preheaders_branch_survive_rotation() {
+    let mut module = parsed(
+        "define i16 @f(i16 %x, i16 %n) {
+b0:
+  #dbg_value(i16 %n, !1)
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b2 ]
+  %acc = phi i16 [ 0, %b0 ], [ %s, %b2 ]
+  %go = icmp slt i16 %i, 4
+  br i1 %go, label %b2, label %b3
+
+b2:
+  %m = mul i16 %i, %n
+  %s = add i16 %m, %acc
+  %next = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = add i16 %acc, %n
+  ret i16 %r
+}
+
+!1 = !{!\"f\", !\"n\", !2, i64 0, i64 1, i64 0}
+!2 = !{!\"int\"}
+",
+    );
+    assert!(rotated(&mut module));
+    let text = printed(&module);
+    assert!(text.contains("#dbg_value(i16 %n"), "{text}");
+}
+
+/// -Os cut the header limit to 4 on every target; the byte sweep that showed it
+/// to be smaller was m16 only. m32 keeps the pin's 16 (`hasMinSize` alone
+/// lowers it), so a five-instruction header is copied there at -Os.
+#[test]
+fn test_the_size_header_limit_is_m16_only() {
+    use llrm_mir::target::Neutral;
+    assert_eq!(super::header_limit(true, true, &Neutral), 16);
+    assert_eq!(super::header_limit(true, true, &llrm_x86_m16::Dos::default()), 4);
+    assert_eq!(super::header_limit(true, false, &llrm_x86_m16::Dos::default()), 16);
+    assert_eq!(super::header_limit(false, true, &llrm_x86_m16::Dos::default()), 0);
+}

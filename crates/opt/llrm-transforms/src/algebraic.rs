@@ -229,6 +229,10 @@ pub fn simplified_in(
     analyses: &mut Analyses,
     size: bool,
 ) -> bool {
+    // The `size` rows are 16-bit rows: the pin's CVP turns a non-negative
+    // `sdiv` by any constant into `udiv` whatever the optsize, and no pin fold
+    // reads it for an address.
+    let size = size && layout.pointer(0).bits < layout.largest_legal_integer();
     // A number proved before stays proved: every rewrite keeps each
     // surviving value's meaning, and none divides by a value.
     let divided_by_values = function
@@ -1999,7 +2003,7 @@ fn _unsigned_divisions(
             lvi.get_constant_range_at_use(&mut env, Use { user: inst, index: 0 }, false).is_all_non_negative()
         })
         .collect();
-    let held = Ranges::of(context, layout, function, analyses, true);
+    let held = Ranges::of(context, layout, function, analyses);
     let unit = held.unit(context, layout, function, outer);
     let scev = LazyScevView::new(analyses);
     let made: Vec<(InstId, BinaryOp)> = candidates

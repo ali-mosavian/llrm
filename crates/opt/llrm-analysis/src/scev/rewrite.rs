@@ -156,6 +156,11 @@ impl ScalarEvolution {
         // The address type of a pointer is its index type here (the offset
         // arithmetic wraps at it): `DL.getAddressType`.
         let Ty::Ptr(space) = self.type_of(op) else { unreachable!() };
+        // DEVIATE: a huge pointer's offset carries into its selector, so its
+        // bits are no address to subtract.
+        if cx.layout.has_unstable_representation(space) {
+            return self.get_could_not_compute();
+        }
         let ty = Ty::Int(cx.layout.pointer(space).index_bits);
 
         // Use the rewriter to sink the cast down to SCEVUnknown leaves. The
@@ -163,16 +168,17 @@ impl ScalarEvolution {
         let mut memo = HashMap::default();
         let int_op = self.sink_cast(cx, op, ty, &mut memo, &mut |se, u| {
             let Kind::Unknown(_) = se.node(u).kind else { unreachable!("an unknown") };
+            let one = [Use::of(u)];
             let key = super::Key {
                 tag: Type::PtrToAddr,
-                ops: vec![Use::of(u)],
+                ops: std::borrow::Cow::Borrowed(&one),
                 ty: Some(ty),
                 constant: None,
                 value: None,
                 header: None,
             };
             let size = se.compute_expression_size(&[Use::of(u)]);
-            se.intern(key, Kind::PtrToAddr(Use::of(u)), Some(ty), size)
+            se.intern(key, || Kind::PtrToAddr(Use::of(u)), Some(ty), size)
         });
         debug_assert!(
             self.type_of(int_op).is_integer(),

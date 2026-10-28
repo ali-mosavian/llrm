@@ -4,7 +4,7 @@
 //! L653). The user's decision of 2026-10-10, recorded in
 //! docs/reference/levels.md; -Og keeps the loops.
 
-use std::process::Command;
+mod common;
 
 /// bench/scroll's four row loops: up a row, blank the last, down a row, copy to
 /// a back buffer.
@@ -19,7 +19,7 @@ fn listing(flags: &[&str]) -> String {
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), SCROLL).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(directory)
         .args(["-m32", "-mabi=sysv", "-march=i486"])
         .args(flags)
@@ -34,7 +34,8 @@ fn listing(flags: &[&str]) -> String {
 /// instructions a trip in four loops where clang calls memmove and memcpy.
 #[test]
 fn o1_forms_memmoves_and_a_memset_from_scrolls_loops_and_og_does_not() {
-    let moves = |text: &str| text.matches("rep movs").count();
+    // A copy is an inline `rep movs` or a call, as clang's (memmove, memcpy).
+    let moves = |text: &str| text.matches("rep movs").count() + text.matches("call _mem").count();
     let o1 = listing(&["-O1"]);
     assert!(moves(&o1) >= 3 && o1.contains("rep stos"), "-O1 left scroll's loops as loops:\n{o1}");
     let og = listing(&["-Og"]);

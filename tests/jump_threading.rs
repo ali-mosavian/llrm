@@ -1,6 +1,6 @@
 //! A state machine's dispatch.
 
-use std::process::Command;
+mod common;
 
 fn listing(
     source: &str,
@@ -9,12 +9,8 @@ fn listing(
     let scratch = tempfile::tempdir().unwrap();
     let directory = scratch.path();
     std::fs::write(directory.join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
-        .current_dir(directory)
-        .args(flags)
-        .args(["-S", "-o", "a.s", "a.c"])
-        .output()
-        .unwrap();
+    let output =
+        common::cc::llrm_c().current_dir(directory).args(flags).args(["-S", "-o", "a.s", "a.c"]).output().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     std::fs::read_to_string(directory.join("a.s")).unwrap()
 }
@@ -24,11 +20,14 @@ const MACHINE: &str = "int f(int n)\n{\n    int s = 0, i, acc = 0;\n    for (i =
 /// `switch (state)` in a loop whose cases each set the next state was a compare
 /// of the state on every trip (x_switch: gcc -O2 alone threads it, 2.3x of the
 /// clocks of everyone else's): each case now jumps to the next one's code, and
-/// no compare of the state is left (the one `cmp` is the copied guard `n > 0`).
+/// no compare of the state is left. The pin keeps `cmp esi, 2; cmp esi, 1` on
+/// every trip; ours has only the loop's bound compares (`cmp edx, ecx`, a
+/// register against a register, however many copies the unrolling leaves).
 #[test]
 fn a_state_machine_loop_has_no_dispatch_left() {
     let text = listing(MACHINE, &["-m32", "-mabi=sysv", "-O2", "-march=i486"]);
-    assert!(text.matches("cmp ").count() <= 1, "{text}");
+    let dispatch = text.lines().map(str::trim).filter(|line| line.starts_with("cmp ") && !line.contains(", e")).count();
+    assert_eq!(dispatch, 0, "{text}");
 }
 
 /// Tuned for size the dispatch stays: the copies are code.

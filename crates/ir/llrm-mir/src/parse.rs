@@ -11,12 +11,13 @@ use crate::intrinsics;
 use crate::lexer::{Name, ParseError, Token, lex};
 use crate::module::{
     Block, BlockId, DebugRecord, DebugWhat, Function, GlobalKind, GlobalValue, GlobalVariable, InstId, Instruction,
-    LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, UnnamedAddr, ValueData, ValueDef,
-    ValueId,
+    LINKAGE, Linkage, MetadataId, MetadataNode, MetadataOperand, Module, Operand, Special, UnnamedAddr, ValueData,
+    ValueDef, ValueId,
 };
 use crate::opcode::{
-    Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause, FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags,
-    INT_ATTRIBUTES, INT_PREDICATE, Opcode, TARGET_FLAG_ATTRIBUTES, TYPE_ATTRIBUTES, Tail, spelled,
+    AtomicInfo, AtomicKind, AtomicOrdering, Attribute, BINARY, BinaryOp, CAST, CallInfo, CastOp, Clause,
+    FLAG_ATTRIBUTES, FLOAT_PREDICATE, Flags, INT_ATTRIBUTES, INT_PREDICATE, Opcode, RMW_OPS, TARGET_FLAG_ATTRIBUTES,
+    TYPE_ATTRIBUTES, Tail, spelled,
 };
 use crate::types::{FloatKind, StructBody, Type, TypeId};
 
@@ -56,7 +57,7 @@ struct Local {
     pending_values: HashMap<ValueId, usize>,
     pending_blocks: HashMap<BlockId, usize>,
     /// Records read, to stand before the next instruction.
-    pending_records: Vec<(MetadataId, DebugWhat)>,
+    pending_records: Vec<(MetadataId, DebugWhat, Option<MetadataId>, Option<MetadataId>)>,
     next_slot: u32,
 }
 
@@ -375,10 +376,20 @@ impl Parser {
         for (_, list) in &mut self.module.named_metadata {
             list.iter_mut().for_each(map);
         }
+        for list in self.module.global_metadata.values_mut() {
+            list.iter_mut().for_each(|(_, id)| map(id));
+        }
+        self.module.special = std::mem::take(&mut self.module.special)
+            .into_iter()
+            .map(|(id, special)| (new[id.0 as usize], special))
+            .collect();
         for global in &mut self.module.globals {
             if let GlobalKind::Function(function) = &mut global.kind {
+                function.metadata.iter_mut().for_each(|(_, id)| map(id));
                 for record in &mut function.debug_records {
                     map(&mut record.variable);
+                    record.expression.iter_mut().for_each(map);
+                    record.location.iter_mut().for_each(map);
                 }
                 for instruction in &mut function.instructions {
                     instruction.metadata.iter_mut().for_each(|(_, id)| map(id));
@@ -488,10 +499,21 @@ impl Parser {
         };
         let mut align = None;
         while self.eat_punct(',') {
-            if self.eat_word("align") {
+            if let Token::MetadataName(kind) = self.peek().clone() {
+                let Token::MetadataId(number) = self.peek_at(1).clone() else {
+                    return self.fail("a variable's attachment is `!kind !N`");
+                };
+                self.next();
+                self.next();
+                let node = self.metadata_id(number);
+                self.module.global_metadata.entry(id.0).or_default().push((kind, node));
+            } else if self.eat_word("align") {
                 align = Some(self.unsigned()?);
             } else if self.eat_word("section") {
-                return self.fail("sections are outside MIR's subset of LLVM");
+                let section = self.string()?;
+                if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
+                    self.module.sections.insert(name, section);
+                }
             } else {
                 return self.fail(format!("unexpected {} after a global", self.describe()));
             }
@@ -510,9 +532,13 @@ impl Parser {
     /// Whether a constant starts here, rather than the next statement.
     fn starts_constant(&self) -> bool {
         match self.peek() {
-            Token::Int { .. } | Token::Float(_) | Token::HexFloat(_) | Token::Bytes(_) | Token::Global(_) => {
-                !matches!(self.peek_at(1), Token::Punct('='))
-            }
+            Token::Int { .. }
+            | Token::Float(..)
+            | Token::FloatBits { .. }
+            | Token::HexFloat(_)
+            | Token::Float80(_)
+            | Token::Bytes(_)
+            | Token::Global(_) => !matches!(self.peek_at(1), Token::Punct('=')),
             Token::Punct('[' | '{' | '<') => true,
             Token::Word(word) => {
                 ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
@@ -528,6 +554,15 @@ impl Parser {
         define: bool,
     ) -> Parsed<()> {
         self.next();
+        // `declare !dbg !36 i32 @f(...)`: clang's attachments stand before the
+        // linkage; a `define`'s stand after the attributes.
+        let mut early = Vec::new();
+        while let Token::MetadataName(kind) = self.peek().clone() {
+            let Token::MetadataId(number) = self.peek_at(1).clone() else { break };
+            self.next();
+            self.next();
+            early.push((kind, self.metadata_id(number)));
+        }
         let linkage = self.linkage();
         let calling_convention = self.calling_convention()?;
         let return_attrs = self.attributes(false)?;
@@ -584,10 +619,24 @@ impl Parser {
         let unnamed_addr = self.unnamed_addr();
         let address_space = self.address_space()?;
         local.function.attrs = self.attributes(true)?;
+        if self.eat_word("section") {
+            let section = self.string()?;
+            if let Some(name) = self.module.globals[id.0 as usize].name.owned() {
+                self.module.sections.insert(name, section);
+            }
+        }
         if self.eat_word("personality") {
             let ty = self.ty()?;
             local.function.personality = Some(self.constant(ty)?);
         }
+        while let Token::MetadataName(kind) = self.peek().clone() {
+            let Token::MetadataId(number) = self.peek_at(1).clone() else { break };
+            self.next();
+            self.next();
+            let node = self.metadata_id(number);
+            local.function.metadata.push((kind, node));
+        }
+        local.function.metadata.splice(0..0, early);
         local.function.ty = self.module.context.types.intern(Type::Function { returns, parameters, variadic });
         if let Some(name) = self.module.globals[id.0 as usize].name.as_deref() {
             intrinsics::declare(&mut local.function, &self.module.context.types, name);
@@ -896,7 +945,30 @@ impl Parser {
                 }
                 ConstantKind::Int(u128::from(word == "true"))
             }
-            Token::Float(value) => self.float(&shape, value, line)?,
+            Token::Float(value, narrow) => match shape {
+                Type::Float(FloatKind::Float) => ConstantKind::Float(u64::from(narrow.to_bits())),
+                _ => self.float(&shape, value, line)?,
+            },
+            Token::FloatBits { bits, digits } => match shape {
+                Type::Float(FloatKind::Float) if digits == 8 => ConstantKind::Float(bits as u64),
+                Type::Float(FloatKind::Double) if digits == 16 => ConstantKind::Float(bits as u64),
+                Type::Float(FloatKind::X86Fp80) if digits == 20 => ConstantKind::Float(x86_fp80_to_f64(bits).to_bits()),
+                Type::Float(kind) => {
+                    let (name, width) = match kind {
+                        FloatKind::Float => ("float", 8),
+                        FloatKind::Double => ("double", 16),
+                        FloatKind::X86Fp80 => ("x86_fp80", 20),
+                    };
+                    return self.fail_on(line, format!("f0x{bits:0digits$X} is not a {name}'s {width} hex digits"));
+                }
+                _ => return self.fail_on(line, "a floating constant given a non-floating type"),
+            },
+            Token::Float80(bits) => match shape {
+                Type::Float(FloatKind::X86Fp80) => {
+                    crate::fp80::kind(&crate::apfloat::ApFloat::from_bits(crate::apfloat::X87_DOUBLE_EXTENDED, bits))
+                }
+                _ => return self.fail_on(line, "`0xK` is an x86_fp80"),
+            },
             Token::HexFloat(bits) => self.float(&shape, f64::from_bits(bits), line)?,
             Token::Word(word) if word == "null" => {
                 if !matches!(shape, Type::Pointer(_)) {
@@ -1072,9 +1144,80 @@ impl Parser {
         if !self.defined_metadata.insert(id) {
             return self.fail(format!("!{number} is defined twice"));
         }
+        if self.special_ahead() {
+            let (special, operands) = self.special_node()?;
+            self.module.metadata[id.0 as usize] = MetadataNode { distinct, operands };
+            self.module.special.insert(id, special);
+            return Ok(());
+        }
         let operands = self.metadata_tuple()?;
         self.module.metadata[id.0 as usize] = MetadataNode { distinct, operands };
         Ok(())
+    }
+
+    /// `!Kind(`: specialized metadata (`!DILocation(line: 3, scope: !10)`).
+    fn special_ahead(&self) -> bool {
+        matches!(self.peek(), Token::MetadataName(_)) && matches!(self.peek_at(1), Token::Punct('('))
+    }
+
+    /// `!Kind(field: value, ...)`: the node's kind and field names, and its
+    /// values in order. A value is a node, a string, an integer, a nested
+    /// node, or a word and the `|`-joined words after it (a flag set).
+    fn special_node(&mut self) -> Parsed<(Special, Vec<MetadataOperand>)> {
+        let Token::MetadataName(kind) = self.next() else { unreachable!("special_ahead checked") };
+        self.expect_punct('(')?;
+        let (mut fields, mut operands) = (Vec::new(), Vec::new());
+        while !self.eat_punct(')') {
+            if !operands.is_empty() {
+                self.expect_punct(',')?;
+            }
+            let field = match self.peek().clone() {
+                Token::Label(Name::Named(field)) => {
+                    self.next();
+                    field
+                }
+                _ => String::new(),
+            };
+            fields.push(field);
+            operands.push(self.special_value()?);
+        }
+        Ok((Special { kind, fields }, operands))
+    }
+
+    fn special_value(&mut self) -> Parsed<MetadataOperand> {
+        match self.peek().clone() {
+            Token::MetadataId(number) => {
+                self.next();
+                Ok(MetadataOperand::Node(self.metadata_id(number)))
+            }
+            Token::Str(_) => Ok(MetadataOperand::String(self.string()?)),
+            Token::Int { negative, magnitude } => {
+                self.next();
+                let value = if negative { -(magnitude as i128) } else { magnitude as i128 };
+                let i64 = self.module.context.types.int(64);
+                Ok(MetadataOperand::Constant(self.module.context.int(i64, value)))
+            }
+            Token::Word(word) => {
+                self.next();
+                let mut text = word;
+                while self.eat_punct('|') {
+                    text.push_str(" | ");
+                    text.push_str(&self.word()?);
+                }
+                Ok(MetadataOperand::Ident(text))
+            }
+            Token::Exclaim | Token::MetadataName(_) => self.metadata_operand(),
+            _ => self.fail(format!("a value of a specialized node, found {}", self.describe())),
+        }
+    }
+
+    /// A debug record's expression or location: `!N` or a node written in
+    /// place.
+    fn record_node(&mut self) -> Parsed<MetadataId> {
+        match self.metadata_operand()? {
+            MetadataOperand::Node(id) => Ok(id),
+            _ => self.fail("a debug record names a node, `!N` or `!DIExpression()`"),
+        }
     }
 
     /// `!{...}`.
@@ -1103,6 +1246,14 @@ impl Parser {
             Token::MetadataId(number) => {
                 self.next();
                 Ok(MetadataOperand::Node(self.metadata_id(number)))
+            }
+            Token::MetadataName(_) if self.special_ahead() => {
+                let (special, operands) = self.special_node()?;
+                let id = MetadataId(self.module.metadata.len() as u32);
+                self.module.metadata.push(MetadataNode { distinct: false, operands });
+                self.module.special.insert(id, special);
+                self.defined_metadata.insert(id);
+                Ok(MetadataOperand::Node(id))
             }
             Token::Exclaim if matches!(self.peek_at(1), Token::Str(_)) => {
                 self.next();
@@ -1415,6 +1566,28 @@ impl Parser {
         flags
     }
 
+    /// An atomic ordering word.
+    fn ordering(&mut self) -> Parsed<AtomicOrdering> {
+        match self.next() {
+            Token::Word(word) => match AtomicOrdering::named(&word) {
+                Some(ordering) => Ok(ordering),
+                None => self.fail("an atomic ordering"),
+            },
+            _ => self.fail("an atomic ordering"),
+        }
+    }
+
+    /// `syncscope("singlethread")`, if there, and the ordering after it.
+    fn scope_and_ordering(&mut self) -> Parsed<(bool, AtomicOrdering)> {
+        let mut single_thread = false;
+        if self.eat_word("syncscope") {
+            self.expect_punct('(')?;
+            single_thread = self.string()? == "singlethread";
+            self.expect_punct(')')?;
+        }
+        Ok((single_thread, self.ordering()?))
+    }
+
     fn align(&mut self) -> Parsed<Option<u64>> {
         if self.is_punct(',') && self.peek_at(1) == &Token::Word("align".to_owned()) {
             self.next();
@@ -1473,8 +1646,17 @@ impl Parser {
             }
             other => other,
         };
+        // clang's `, !DIExpression(), !loc` after a declare or value's
+        // variable.
+        let (mut expression, mut location) = (None, None);
+        if matches!(what, DebugWhat::Declare(_) | DebugWhat::Value(_)) && self.eat_punct(',') {
+            expression = Some(self.record_node()?);
+            if self.eat_punct(',') {
+                location = Some(self.record_node()?);
+            }
+        }
         self.expect_punct(')')?;
-        local.pending_records.push((variable, what));
+        local.pending_records.push((variable, what, expression, location));
         Ok(())
     }
 
@@ -1702,20 +1884,80 @@ impl Parser {
                     (Opcode::Alloca { allocated, align, address_space }, ty, operands)
                 }
                 "load" => {
+                    let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
                     let ty = self.ty()?;
                     self.expect_punct(',')?;
                     let (_, pointer) = self.typed_value(local)?;
-                    let align = self.align()?;
-                    (Opcode::Load { align, volatile }, ty, vec![pointer])
+                    if atomic {
+                        let (single_thread, ordering) = self.scope_and_ordering()?;
+                        let align = self.align()?;
+                        let info = AtomicInfo { kind: AtomicKind::Load, ordering, single_thread, volatile, align };
+                        (Opcode::Atomic(info), ty, vec![pointer])
+                    } else {
+                        let align = self.align()?;
+                        (Opcode::Load { align, volatile }, ty, vec![pointer])
+                    }
                 }
                 "store" => {
+                    let atomic = self.eat_word("atomic");
                     let volatile = self.eat_word("volatile");
                     let (_, value) = self.typed_value(local)?;
                     self.expect_punct(',')?;
                     let (_, pointer) = self.typed_value(local)?;
+                    if atomic {
+                        let (single_thread, ordering) = self.scope_and_ordering()?;
+                        let align = self.align()?;
+                        let info = AtomicInfo { kind: AtomicKind::Store, ordering, single_thread, volatile, align };
+                        (Opcode::Atomic(info), void, vec![value, pointer])
+                    } else {
+                        let align = self.align()?;
+                        (Opcode::Store { align, volatile }, void, vec![value, pointer])
+                    }
+                }
+                "atomicrmw" => {
+                    let volatile = self.eat_word("volatile");
+                    let op = match self.next() {
+                        Token::Word(word) => RMW_OPS.iter().find(|(_, name)| *name == word).map(|(op, _)| *op),
+                        _ => None,
+                    };
+                    let Some(op) = op else { return self.fail("an atomicrmw operation") };
+                    let (_, pointer) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (ty, value) = self.typed_value(local)?;
+                    let (single_thread, ordering) = self.scope_and_ordering()?;
                     let align = self.align()?;
-                    (Opcode::Store { align, volatile }, void, vec![value, pointer])
+                    let info = AtomicInfo { kind: AtomicKind::Rmw(op), ordering, single_thread, volatile, align };
+                    (Opcode::Atomic(info), ty, vec![pointer, value])
+                }
+                "cmpxchg" => {
+                    let weak = self.eat_word("weak");
+                    let volatile = self.eat_word("volatile");
+                    let (_, pointer) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (ty, expected) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    let (_, new) = self.typed_value(local)?;
+                    let (single_thread, ordering) = self.scope_and_ordering()?;
+                    let failure = self.ordering()?;
+                    let align = self.align()?;
+                    let flag = self.module.context.types.int(1);
+                    let result =
+                        self.module.context.types.intern(Type::Struct { fields: vec![ty, flag], packed: false });
+                    let info = AtomicInfo {
+                        kind: AtomicKind::CmpXchg { failure, weak },
+                        ordering,
+                        single_thread,
+                        volatile,
+                        align,
+                    };
+                    (Opcode::Atomic(info), result, vec![pointer, expected, new])
+                }
+                "fence" => {
+                    let (single_thread, ordering) = self.scope_and_ordering()?;
+                    let info =
+                        AtomicInfo { kind: AtomicKind::Fence, ordering, single_thread, volatile: false, align: None };
+                    (Opcode::Atomic(info), void, Vec::new())
                 }
                 "getelementptr" => {
                     self.gep_flags(&mut flags);
@@ -1821,8 +2063,8 @@ impl Parser {
             Some(value)
         };
         local.function.instructions.push(Instruction { opcode, ty, operands, flags, result, metadata, link: (0, 0) });
-        for (variable, what) in std::mem::take(&mut local.pending_records) {
-            local.function.debug_records.push(DebugRecord { before: id, variable, what });
+        for (variable, what, expression, location) in std::mem::take(&mut local.pending_records) {
+            local.function.debug_records.push(DebugRecord { before: id, variable, what, expression, location });
         }
         if let Some(value) = result {
             self.name_value(local, value, result_name, line)?;
@@ -1843,4 +2085,26 @@ pub fn display(name: &Name) -> String {
         Name::Named(text) => crate::print::quoted(text),
         Name::Numbered(number) => number.to_string(),
     }
+}
+
+/// The double nearest an x87 extended value (16 bits of sign and exponent, then
+/// the 64-bit significand with its integer bit explicit). The significand
+/// rounds to 53 bits once and the scaling is exact, so a result below the
+/// double normals is rounded twice.
+fn x86_fp80_to_f64(bits: u128) -> f64 {
+    let negative = bits >> 79 & 1 == 1;
+    let exponent = (bits >> 64 & 0x7FFF) as i32;
+    let significand = bits as u64;
+    let magnitude = match exponent {
+        0x7FFF if significand << 1 == 0 => f64::INFINITY,
+        0x7FFF => f64::NAN,
+        _ => {
+            // value = significand * 2^(exponent - 16383 - 63); a denormal has
+            // exponent 1's scale.
+            let scale = exponent.max(1) - 16383 - 63;
+            let (half, rest) = (scale / 2, scale - scale / 2);
+            significand as f64 * 2f64.powi(half) * 2f64.powi(rest)
+        }
+    };
+    if negative { -magnitude } else { magnitude }
 }

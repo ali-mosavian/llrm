@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/predicateinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/predicateinfo.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/predicateinfo.rs sha256:46ebd6cb7a1fd23b2d0a553f17dc56d097c3eac6bc022c9c38668bd02b769f42 -->
+<!-- src: crates/opt/llrm-transforms/src/predicateinfo.rs sha256:d2b638753936ff8f10bdeb73b9f281114111b3b08f273c0674f255febd734959 -->
 
 # predicateinfo
 
@@ -45,3 +45,6 @@ A use the branch dominates reads a copy that carries the predicate:
 
 ## See also
 - Used by: [`crate::sccp`](sccp.md)
+
+## Used by
+Named by `ipsccp`, `sccp`, `sccpsolver`.

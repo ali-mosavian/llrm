@@ -19,7 +19,7 @@ fn seen(
 ) -> Option<Seen> {
     Some(Seen { insn: decoded(code, at) })
 }
-use iced_x86::{Mnemonic, OpKind};
+use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind};
 
 fn decoded(
     code: &[u8],
@@ -942,4 +942,159 @@ fn test_every_instruction_form_is_found_by_its_name() {
     assert_eq!(super::_code("NOT_A_FORM"), None);
     assert_eq!(super::_code(""), None);
     assert_eq!(super::_code("mov_r32_rm32"), None, "names are in capitals");
+}
+
+/// `_assemble` reads the field offsets from the encoder; decoding the bytes it
+/// had just written found the same ones (0.7 M Ir of a 15 M emit on d_faces).
+/// The two agree on a displacement alone, an immediate alone, both, and
+/// neither, in 16- and 32-bit code.
+#[test]
+fn test_assemble_locates_the_fields_where_a_decoder_does() {
+    use iced_x86::{MemoryOperand, Register};
+    for bits in [16, 32] {
+        let (base, ax) = if bits == 16 { (Register::BX, Register::AX) } else { (Register::EBX, Register::EAX) };
+        let mem = |disp: i64| MemoryOperand::with_base_displ(base, disp);
+        let made = [
+            Instruction::with2(Code::Mov_r16_rm16, Register::AX, mem(0x1234)).unwrap(),
+            Instruction::with2(Code::Mov_rm16_imm16, mem(8), 5u32).unwrap(),
+            Instruction::with2(Code::Add_AX_imm16, Register::AX, 1000u32).unwrap(),
+            Instruction::with2(Code::Mov_r16_rm16, Register::AX, Register::CX).unwrap(),
+            Instruction::with2(Code::Mov_rm16_imm16, mem(0x400), 0x7777u32).unwrap(),
+        ];
+        let _ = ax;
+        for insn in made {
+            let at = At { bits, ip: 0 };
+            let found = _assemble(&insn, at, false).expect("encodes");
+            let mut decoder = Decoder::with_ip(bits, &found.code, 0, DecoderOptions::NONE);
+            let decoded = decoder.decode();
+            let offsets = decoder.get_constant_offsets(&decoded);
+            assert_eq!(found.displacement_at.is_some(), offsets.has_displacement(), "{bits}-bit {:?}", insn.code());
+            assert_eq!(found.immediate_at.is_some(), offsets.has_immediate(), "{bits}-bit {:?}", insn.code());
+            if offsets.has_displacement() {
+                assert_eq!(found.displacement_at, Some(offsets.displacement_offset()), "{bits}-bit {:?}", insn.code());
+            }
+            if offsets.has_immediate() {
+                assert_eq!(found.immediate_at, Some(offsets.immediate_offset()), "{bits}-bit {:?}", insn.code());
+            }
+        }
+    }
+}
+
+/// `code_of!` hashes a name from its pieces, as `_code` hashes it built: the
+/// 9,750 `format!` writes of the encoders were 1.8 M Ir of an emit. Every
+/// piece kind (text, upper-cased text, numbers) gives the Code the built
+/// string gave, for every width the encoders use.
+#[test]
+fn test_code_of_finds_the_code_its_built_name_finds() {
+    for name in ["add", "mov", "sub", "xchg", "imul", "nothing"] {
+        for width in [1usize, 2, 4, 8] {
+            let bits = width * 8;
+            assert_eq!(
+                code_of!(Upper(name), "_R", bits, "_RM", bits),
+                _code(&format!("{}_R{bits}_RM{bits}", name.to_uppercase())),
+                "{name} {bits}"
+            );
+            assert_eq!(
+                code_of!("MOV_RM", bits, "_IMM", (bits).min(32)),
+                _code(&format!("MOV_RM{bits}_IMM{}", bits.min(32))),
+                "mov {bits}"
+            );
+            assert_eq!(code_of!("PUSH_R", bits as u32), _code(&format!("PUSH_R{}", bits)), "push {bits}");
+        }
+    }
+    assert!(code_of!("MOV_R", 16u32, "_IMM", 16u32).is_some());
+    assert!(code_of!("NO_SUCH_R", 16u32).is_none());
+    assert_eq!(code_of!("MOV_R", -1i64), _code("MOV_R-1"));
+}
+
+/// A `lea` of a frame place and an index kept the register and dropped the
+/// place's displacement: `lea ebx,[esp+edx*4+12]` encoded `[esp+edx*4]`, and
+/// bench/bintree under `--isel=dag` wrote its children into the wrong nodes.
+#[test]
+fn test_a_lea_of_a_place_and_an_index_keeps_the_places_displacement() {
+    let address = ir::AddressRef {
+        through: RegId::ESP,
+        index_through: RegId::EDX,
+        scale: 4,
+        ..ir::AddressRef::new(Some(at(Space::Frame, 12, RegId::None, RegId::None)))
+    };
+    let lea = sem(Operation::Address, Some("lea"), vec![rg(RegId::EBX, 4)], vec![Loc::Address(address)], None, false);
+    let code = hex(&made(emitted(&lea)).code);
+    assert!(code.ends_with("8d5c940c"), "{code}");
+}
+
+/// `bt` and `btc` of two registers encode (the pin's BT32rr and BTC16rr had no
+/// form: QCport functions that test or flip a variable bit were refused).
+#[test]
+fn test_bt_and_btc_of_registers_encode() {
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "660fa3c8");
+    let btc = sem(
+        Operation::Binary,
+        Some("btc"),
+        vec![rg(RegId::EAX, 4)],
+        vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+        None,
+        false,
+    );
+    assert_eq!(hex(&made(emitted(&btc)).code), "660fbbc8");
+}
+
+/// `bts` and `btr` of two registers encode as `btc` does (the pin's BTS16rr
+/// and BTR16rr had no form: `x |= 1 << n` in QCport's `r_walk` was refused).
+#[test]
+fn test_bts_and_btr_of_registers_encode() {
+    for (name, bytes) in [("bts", "660fabc8"), ("btr", "660fb3c8")] {
+        let what = sem(
+            Operation::Binary,
+            Some(name),
+            vec![rg(RegId::EAX, 4)],
+            vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+            None,
+            false,
+        );
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name}");
+    }
+}
+
+/// `bsf`, `bsr` and `bswap` encode (the pin's BSF32rr had no form: `cttz` and
+/// `ctlz` of a word, which the pin makes `bsf` and `bsr`, were refused).
+#[test]
+fn test_bsf_bsr_and_bswap_encode() {
+    for (name, repeat, bytes) in [("bsf", false, "660fbcc1"), ("bsf", true, "66f30fbcc1"), ("bsr", false, "660fbdc1")] {
+        let what = Semantics {
+            repeat,
+            ..sem(
+                Operation::Binary,
+                Some(name),
+                vec![rg(RegId::EAX, 4)],
+                vec![rg(RegId::EAX, 4), rg(RegId::ECX, 4)],
+                None,
+                false,
+            )
+        };
+        assert_eq!(hex(&made(emitted(&what)).code), bytes, "{name} repeat={repeat}");
+    }
+    let swap = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::EAX, 4)], vec![rg(RegId::EAX, 4)], None, false);
+    assert_eq!(hex(&made(emitted(&swap)).code), "660fc8");
+    // BSWAP of a word is undefined and the pin never emits it
+    let word = sem(Operation::Unary, Some("bswap"), vec![rg(RegId::AX, 2)], vec![rg(RegId::AX, 2)], None, false);
+    assert!(emitted(&word).is_none());
+}
+
+/// A jump through a register (an indirect sibling call after its epilogue) had
+/// no encoding: `--isel=dag` with sibling calls on stopped the object build.
+#[test]
+fn test_a_jump_through_a_register_is_jmp_rm() {
+    let what =
+        Semantics { indirect: true, ..sem(Operation::Jump, Some("jmp"), vec![], vec![rg(RegId::AX, 2)], None, false) };
+    assert_eq!(hex(&made(emitted(&what)).code), "ffe0");
+}
+
+/// `bt reg, imm8` encodes (the pin's BT32ri8 had no form: a `0 - (crc & 1)`
+/// chain was refused).
+#[test]
+fn test_bt_of_a_register_and_an_immediate_encodes() {
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![rg(RegId::EDX, 4), imm(1, 1)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "660fbae201");
 }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:0d61f8b284561b9e4bab9d98d1af769fdc0c3a96315b663ce49b36c30c7f63cc -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6a9b3b58ed21fe7fa39b42a8282ded19457315d10cd161a0e66c8792ab639e81 -->
 
 # pipeline
 
@@ -37,7 +37,7 @@ flowchart TB
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>addresssink sink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -78,8 +78,8 @@ choose a loop's counters again; `rotate{proven}` is last of the loop
 passes; `hoist`
 runs again to lift what a rotated loop (run at least once) may now leave;
 `gepoffset` follows it because it would move a constant `gep` out of its
-loop; `addresssink` follows the last `gvn`, which makes the phis it sinks;
-`sink` follows `addresssink`, once the passes that move work up have run.
+loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
+`sink` follows `cgpaddr`, once the passes that move work up have run.
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
@@ -88,7 +88,7 @@ each stage (`NN-stage.ll`) and, for each body, each changed step of the
 fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 
 ## Runs
-Options are `Options`; `Level::options` in llrm-core's `driver/flags.rs`
+Options are `Options`; `Level::options` in llrm-codegen's `driver/flags.rs`
 maps `-O0`, `-O1`, `-O2`, `-O3`, `-Omax`, `-Os`, `-Oz`, `-Og` to
 `Options::none`, `basic`, `standard`, `speed`, `aggressive`, `size`,
 `min_size` (`-Og`: `basic` without `loopidioms`). `-f` flags set single
@@ -107,23 +107,23 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `addresssink` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
-| `ipa_ranges` | argument ranges in the interprocedural step |
 | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
 `hoist`, `algebraic`, `loopidioms`, `lsr`, `window` and
-`calleepop` in bytes; `loop_intervals` lets alias and branch decisions use
-the intervals of counted loops. `limits` are the copy budgets of the
-unroller.
+`calleepop` in bytes. `limits` are the copy budgets of the unroller.
 
 ## Needs
-`Summaries`, `GlobalsAA`, `Callbacks` and `ProgramSummaries` are required
+`Summaries`, `GlobalsAA` and `ProgramSummaries` are required
 up front, and frozen at the end of D so the passes of E read them without
-recomputing after each edit.
+recomputing after each edit. In LLVM's order `GlobalsAA` and
+`GlobalsModRefAnalysis` are made before the walk and again at the end of D
+alone (`RequireAnalysisPass`, `RecomputeGlobalsAAPass`), read cached
+between.
 
 ## See also
 gcc's pass lists, `passes.def`; LLVM's `PassBuilderPipelines.cpp`.

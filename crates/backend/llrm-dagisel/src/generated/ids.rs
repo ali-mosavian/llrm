@@ -8,50 +8,72 @@ use crate::matcher::Vt;
 
 pub mod isd {
     pub const ABS: u16 = 196;
+    pub const ABS_MIN_POISON: u16 = 197;
     pub const ADD: u16 = 59;
+    pub const ADDC: u16 = 71;
+    pub const ADDE: u16 = 73;
     pub const AND: u16 = 193;
     pub const ANNOTATION_LABEL: u16 = 328;
     pub const ANY_EXTEND: u16 = 229;
+    pub const ARITH_FENCE: u16 = 353;
     pub const ATOMIC_LOAD: u16 = 356;
     pub const ATOMIC_LOAD_ADD: u16 = 361;
     pub const ATOMIC_STORE: u16 = 357;
     pub const ATOMIC_SWAP: u16 = 360;
     pub const AVGCEILU: u16 = 184;
     pub const AssertAlign: u16 = 5;
+    pub const AssertNoFPClass: u16 = 6;
     pub const AssertSext: u16 = 3;
     pub const AssertZext: u16 = 4;
     pub const BITCAST: u16 = 248;
     pub const BITREVERSE: u16 = 214;
     pub const BR: u16 = 319;
+    pub const BRCOND: u16 = 323;
     pub const BRIND: u16 = 320;
+    pub const BR_CC: u16 = 324;
+    pub const BR_JT: u16 = 321;
     pub const BSWAP: u16 = 210;
+    pub const BUILD_PAIR: u16 = 57;
     pub const BUILD_VECTOR: u16 = 162;
     pub const BUILTIN_OP_END: u16 = 475;
     pub const BasicBlock: u16 = 7;
+    pub const BlockAddress: u16 = 20;
     pub const CALLSEQ_END: u16 = 334;
     pub const CALLSEQ_START: u16 = 333;
     pub const CATCHRET: u16 = 329;
     pub const CLEANUPRET: u16 = 330;
     pub const CONCAT_VECTORS: u16 = 165;
     pub const CONDCODE: u16 = 9;
+    pub const CTLS: u16 = 218;
     pub const CTLZ: u16 = 212;
+    pub const CTLZ_ZERO_POISON: u16 = 217;
     pub const CTPOP: u16 = 213;
     pub const CTTZ: u16 = 211;
     pub const CTTZ_ZERO_POISON: u16 = 216;
     pub const Constant: u16 = 12;
     pub const ConstantFP: u16 = 13;
+    pub const ConstantPool: u16 = 18;
     pub const CopyFromReg: u16 = 52;
     pub const CopyToReg: u16 = 51;
     pub const DEACTIVATION_SYMBOL: u16 = 474;
     pub const DEBUGTRAP: u16 = 350;
     pub const DELETED_NODE: u16 = 0;
+    pub const DYNAMIC_STACKALLOC: u16 = 318;
     pub const EH_LABEL: u16 = 327;
     pub const EXTRACT_SUBVECTOR: u16 = 167;
     pub const EXTRACT_VECTOR_ELT: u16 = 164;
     pub const EntryToken: u16 = 1;
+    pub const ExternalSymbol: u16 = 19;
     pub const FABS: u16 = 261;
     pub const FADD: u16 = 99;
+    pub const FATAN: u16 = 269;
+    pub const FCOPYSIGN: u16 = 158;
+    pub const FCOS: u16 = 265;
     pub const FDIV: u16 = 102;
+    pub const FEXP: u16 = 281;
+    pub const FEXP2: u16 = 282;
+    pub const FLOG: u16 = 278;
+    pub const FLOG2: u16 = 279;
     pub const FMA: u16 = 155;
     pub const FMUL: u16 = 101;
     pub const FNEG: u16 = 260;
@@ -62,17 +84,22 @@ pub mod isd {
     pub const FP_TO_UINT: u16 = 241;
     pub const FP_TO_UINT_SAT: u16 = 243;
     pub const FREEZE: u16 = 55;
+    pub const FREM: u16 = 103;
+    pub const FRINT: u16 = 286;
     pub const FSHL: u16 = 203;
     pub const FSHR: u16 = 204;
+    pub const FSIN: u16 = 264;
     pub const FSQRT: u16 = 262;
     pub const FSUB: u16 = 100;
     pub const FrameIndex: u16 = 16;
+    pub const GlobalAddress: u16 = 14;
     pub const HANDLENODE: u16 = 346;
     pub const INSERT_SUBVECTOR: u16 = 166;
     pub const INSERT_VECTOR_ELT: u16 = 163;
     pub const INTRINSIC_VOID: u16 = 50;
     pub const INTRINSIC_WO_CHAIN: u16 = 48;
     pub const INTRINSIC_W_CHAIN: u16 = 49;
+    pub const JumpTable: u16 = 17;
     pub const LIFETIME_END: u16 = 389;
     pub const LIFETIME_START: u16 = 388;
     pub const LLRINT: u16 = 294;
@@ -81,12 +108,15 @@ pub mod isd {
     pub const LRINT: u16 = 293;
     pub const MCSymbol: u16 = 46;
     pub const MDNODE_SDNODE: u16 = 342;
+    pub const MEMBARRIER: u16 = 354;
+    pub const MERGE_VALUES: u16 = 58;
     pub const MLOAD: u16 = 384;
     pub const MSTORE: u16 = 385;
     pub const MUL: u16 = 61;
     pub const MULHS: u16 = 180;
     pub const MULHU: u16 = 179;
     pub const OR: u16 = 194;
+    pub const PARITY: u16 = 215;
     pub const PDEP: u16 = 209;
     pub const PEXT: u16 = 208;
     pub const POISON: u16 = 54;
@@ -94,13 +124,20 @@ pub mod isd {
     pub const PSEUDO_FMAX: u16 = 304;
     pub const PSEUDO_FMIN: u16 = 303;
     pub const PSEUDO_PROBE: u16 = 395;
+    pub const PTRADD: u16 = 422;
     pub const ROTL: u16 = 201;
     pub const ROTR: u16 = 202;
     pub const Register: u16 = 10;
     pub const RegisterMask: u16 = 11;
+    pub const SADDO: u16 = 79;
     pub const SADDSAT: u16 = 85;
     pub const SCALAR_TO_VECTOR: u16 = 174;
+    pub const SCMP: u16 = 191;
+    pub const SDIV: u16 = 62;
+    pub const SDIVFIX: u16 = 95;
     pub const SDIVREM: u16 = 68;
+    pub const SELECT: u16 = 219;
+    pub const SELECT_CC: u16 = 221;
     pub const SETCC: u16 = 222;
     pub const SETGT: u16 = 18;
     pub const SHL: u16 = 198;
@@ -110,9 +147,17 @@ pub mod isd {
     pub const SINT_TO_FP: u16 = 234;
     pub const SMAX: u16 = 188;
     pub const SMIN: u16 = 187;
+    pub const SMULFIX: u16 = 91;
+    pub const SMULO: u16 = 83;
+    pub const SMUL_LOHI: u16 = 66;
     pub const SRA: u16 = 199;
+    pub const SRCVALUE: u16 = 341;
+    pub const SREM: u16 = 64;
     pub const SRL: u16 = 200;
+    pub const SSUBO: u16 = 81;
     pub const SSUBSAT: u16 = 87;
+    pub const STACKRESTORE: u16 = 332;
+    pub const STACKSAVE: u16 = 331;
     pub const STORE: u16 = 317;
     pub const STRICT_FADD: u16 = 104;
     pub const STRICT_FDIV: u16 = 107;
@@ -129,6 +174,8 @@ pub mod isd {
     pub const STRICT_SINT_TO_FP: u16 = 148;
     pub const STRICT_UINT_TO_FP: u16 = 149;
     pub const SUB: u16 = 60;
+    pub const SUBC: u16 = 72;
+    pub const SUBE: u16 = 74;
     pub const TRAP: u16 = 349;
     pub const TRUNCATE: u16 = 230;
     pub const TargetBlockAddress: u16 = 45;
@@ -141,13 +188,27 @@ pub mod isd {
     pub const TargetGlobalTLSAddress: u16 = 40;
     pub const TargetJumpTable: u16 = 42;
     pub const TokenFactor: u16 = 2;
+    pub const UADDO: u16 = 80;
+    pub const UADDO_CARRY: u16 = 75;
     pub const UADDSAT: u16 = 86;
     pub const UBSANTRAP: u16 = 351;
+    pub const UCMP: u16 = 192;
+    pub const UDIV: u16 = 63;
+    pub const UDIVREM: u16 = 69;
     pub const UINT_TO_FP: u16 = 235;
     pub const UMAX: u16 = 190;
     pub const UMIN: u16 = 189;
+    pub const UMULO: u16 = 84;
+    pub const UMUL_LOHI: u16 = 67;
     pub const UNDEF: u16 = 53;
+    pub const UREM: u16 = 65;
+    pub const USUBO: u16 = 82;
+    pub const USUBO_CARRY: u16 = 76;
     pub const USUBSAT: u16 = 88;
+    pub const VACOPY: u16 = 336;
+    pub const VAEND: u16 = 337;
+    pub const VALUETYPE: u16 = 8;
+    pub const VASTART: u16 = 338;
     pub const VECTOR_COMPRESS: u16 = 178;
     pub const VSELECT: u16 = 220;
     pub const XOR: u16 = 195;
@@ -343,6 +404,16 @@ pub mod x86isd {
     pub const LCMPXCHG16_DAG: u16 = 659;
     pub const LCMPXCHG8_DAG: u16 = 660;
     pub const LCMPXCHG_DAG: u16 = 661;
+    pub const LDS: u16 = 24577;
+    pub const LES: u16 = 24576;
+    pub const LLRM_ASM: u16 = 24578;
+    pub const LLRM_CALL_FLAGS: u16 = 24585;
+    pub const LLRM_CODE: u16 = 24582;
+    pub const LLRM_FARCALL: u16 = 24584;
+    pub const LLRM_PORT: u16 = 24586;
+    pub const LLRM_PTRDIFF: u16 = 24583;
+    pub const LLRM_TC_RETURN: u16 = 24587;
+    pub const LLRM_WINDOW: u16 = 24581;
     pub const LOR: u16 = 662;
     pub const LSUB: u16 = 663;
     pub const LWPINS: u16 = 664;
@@ -392,6 +463,7 @@ pub mod x86isd {
     pub const PINSRW: u16 = 708;
     pub const PMULDQ: u16 = 709;
     pub const PMULUDQ: u16 = 710;
+    pub const POP_FROM_X87_REG: u16 = 957;
     pub const PROBED_ALLOCA: u16 = 711;
     pub const PSADBW: u16 = 712;
     pub const PSHUFB: u16 = 713;
@@ -418,9 +490,11 @@ pub mod x86isd {
     pub const SCALEFS: u16 = 734;
     pub const SCALEFS_RND: u16 = 735;
     pub const SCALEF_RND: u16 = 736;
+    pub const SEGMENT_OF: u16 = 24580;
     pub const SEG_ALLOCA: u16 = 737;
     pub const SELECTS: u16 = 738;
     pub const SETCC: u16 = 739;
+    pub const SETCC_CARRY: u16 = 740;
     pub const SHUF128: u16 = 741;
     pub const SHUFP: u16 = 742;
     pub const SINT_TO_FP_RND: u16 = 743;
@@ -456,6 +530,7 @@ pub mod x86isd {
     pub const UCOMI: u16 = 773;
     pub const UCOMX: u16 = 774;
     pub const UINT_TO_FP_RND: u16 = 775;
+    pub const UMUL: u16 = 776;
     pub const UMWAIT: u16 = 777;
     pub const UNPCKH: u16 = 778;
     pub const UNPCKL: u16 = 779;
@@ -638,6 +713,257 @@ pub mod x86isd {
     pub const XTEST: u16 = 956;
 }
 
+pub mod x86 {
+    pub const ADC16mi: u16 = 465;
+    pub const ADC16mr: u16 = 471;
+    pub const ADC32mi: u16 = 490;
+    pub const ADC32mr: u16 = 496;
+    pub const ADC8mi: u16 = 540;
+    pub const ADC8mr: u16 = 544;
+    pub const ADD16mi: u16 = 573;
+    pub const ADD16mr: u16 = 583;
+    pub const ADD32mi: u16 = 614;
+    pub const ADD32mr: u16 = 624;
+    pub const ADD8mi: u16 = 696;
+    pub const ADD8mr: u16 = 702;
+    pub const AH: u16 = 1;
+    pub const AL: u16 = 2;
+    pub const AND16mi: u16 = 804;
+    pub const AND16mr: u16 = 814;
+    pub const AND32mi: u16 = 845;
+    pub const AND32mr: u16 = 855;
+    pub const AND8mi: u16 = 927;
+    pub const AND8mr: u16 = 933;
+    pub const AX: u16 = 3;
+    pub const CDQ: u16 = 1202;
+    pub const CL: u16 = 11;
+    pub const CQO: u16 = 1396;
+    pub const CS: u16 = 12;
+    pub const CWD: u16 = 1506;
+    pub const CX: u16 = 13;
+    pub const DEC16m: u16 = 1511;
+    pub const DEC32m: u16 = 1522;
+    pub const DEC8m: u16 = 1543;
+    pub const DIV16m: u16 = 1553;
+    pub const DIV16r: u16 = 1556;
+    pub const DIV32m: u16 = 1559;
+    pub const DIV32r: u16 = 1562;
+    pub const DIV64m: u16 = 1565;
+    pub const DIV64r: u16 = 1568;
+    pub const DIV8m: u16 = 1571;
+    pub const DIV8r: u16 = 1574;
+    pub const DS: u16 = 20;
+    pub const DX: u16 = 21;
+    pub const EAX: u16 = 22;
+    pub const EDX: u16 = 27;
+    pub const EFLAGS: u16 = 28;
+    pub const ES: u16 = 31;
+    pub const FNSTSW16r: u16 = 1706;
+    pub const FS: u16 = 36;
+    pub const GS: u16 = 38;
+    pub const IDIV16m: u16 = 1757;
+    pub const IDIV16r: u16 = 1760;
+    pub const IDIV32m: u16 = 1763;
+    pub const IDIV32r: u16 = 1766;
+    pub const IDIV64m: u16 = 1769;
+    pub const IDIV64r: u16 = 1772;
+    pub const IDIV8m: u16 = 1775;
+    pub const IDIV8r: u16 = 1778;
+    pub const IMUL32m: u16 = 1821;
+    pub const IMUL32r: u16 = 1824;
+    pub const IMUL64m: u16 = 1849;
+    pub const IMUL64r: u16 = 1852;
+    pub const IMUL8m: u16 = 1877;
+    pub const IMUL8r: u16 = 1880;
+    pub const INC16m: u16 = 1901;
+    pub const INC32m: u16 = 1912;
+    pub const INC8m: u16 = 1933;
+    pub const MOV32r0: u16 = 386;
+    pub const MOVSX16rm8: u16 = 2735;
+    pub const MOVSX16rr8: u16 = 2738;
+    pub const MOVSX32rr8_NOREX: u16 = 2746;
+    pub const MOVZX16rm8: u16 = 2763;
+    pub const MOVZX16rr8: u16 = 2765;
+    pub const MOVZX32rr8_NOREX: u16 = 2771;
+    pub const MUL16m: u16 = 2778;
+    pub const MUL16r: u16 = 2781;
+    pub const MUL32m: u16 = 2784;
+    pub const MUL32r: u16 = 2787;
+    pub const MUL64m: u16 = 2790;
+    pub const MUL64r: u16 = 2793;
+    pub const MUL8m: u16 = 2796;
+    pub const MUL8r: u16 = 2799;
+    pub const NEG16m: u16 = 2849;
+    pub const NEG16r: u16 = 2854;
+    pub const NEG32m: u16 = 2859;
+    pub const NEG32r: u16 = 2864;
+    pub const NEG8m: u16 = 2879;
+    pub const NEG8r: u16 = 2884;
+    pub const OR16mi: u16 = 2921;
+    pub const OR16mr: u16 = 2931;
+    pub const OR32mi: u16 = 2962;
+    pub const OR32mr: u16 = 2973;
+    pub const OR8mi: u16 = 3045;
+    pub const OR8mr: u16 = 3051;
+    pub const RAX: u16 = 51;
+    pub const RDX: u16 = 56;
+    pub const RIP: u16 = 58;
+    pub const SAHF: u16 = 4033;
+    pub const SBB16mi: u16 = 4165;
+    pub const SBB16mr: u16 = 4171;
+    pub const SBB32mi: u16 = 4190;
+    pub const SBB32mr: u16 = 4196;
+    pub const SBB32rr: u16 = 4208;
+    pub const SBB8mi: u16 = 4240;
+    pub const SBB8mr: u16 = 4244;
+    pub const SS: u16 = 68;
+    pub const SUB16mi: u16 = 4744;
+    pub const SUB16mr: u16 = 4754;
+    pub const SUB32mi: u16 = 4785;
+    pub const SUB32mr: u16 = 4795;
+    pub const SUB8mi: u16 = 4867;
+    pub const SUB8mr: u16 = 4873;
+    pub const TEST16mi: u16 = 5007;
+    pub const TEST16ri: u16 = 5009;
+    pub const TEST32mi: u16 = 5012;
+    pub const TEST32ri: u16 = 5014;
+    pub const TEST8mi: u16 = 5022;
+    pub const TEST8ri: u16 = 5024;
+    pub const UCOM_Fpr32: u16 = 5096;
+    pub const UCOM_Fpr64: u16 = 5097;
+    pub const UCOM_Fpr80: u16 = 5098;
+    pub const XOR16mi: u16 = 22586;
+    pub const XOR16mr: u16 = 22596;
+    pub const XOR32mi: u16 = 22627;
+    pub const XOR32mr: u16 = 22637;
+    pub const XOR8mi: u16 = 22709;
+    pub const XOR8mr: u16 = 22715;
+    pub const sub_16bit: u16 = 4;
+    pub const sub_32bit: u16 = 6;
+    pub const sub_8bit: u16 = 1;
+    pub const sub_8bit_hi: u16 = 2;
+    /// The extras that are instructions, by number.
+    pub const NAMES: &[(u16, &str)] = &[
+        (386, "MOV32r0"),
+        (465, "ADC16mi"),
+        (471, "ADC16mr"),
+        (490, "ADC32mi"),
+        (496, "ADC32mr"),
+        (540, "ADC8mi"),
+        (544, "ADC8mr"),
+        (573, "ADD16mi"),
+        (583, "ADD16mr"),
+        (614, "ADD32mi"),
+        (624, "ADD32mr"),
+        (696, "ADD8mi"),
+        (702, "ADD8mr"),
+        (804, "AND16mi"),
+        (814, "AND16mr"),
+        (845, "AND32mi"),
+        (855, "AND32mr"),
+        (927, "AND8mi"),
+        (933, "AND8mr"),
+        (1202, "CDQ"),
+        (1396, "CQO"),
+        (1506, "CWD"),
+        (1511, "DEC16m"),
+        (1522, "DEC32m"),
+        (1543, "DEC8m"),
+        (1553, "DIV16m"),
+        (1556, "DIV16r"),
+        (1559, "DIV32m"),
+        (1562, "DIV32r"),
+        (1565, "DIV64m"),
+        (1568, "DIV64r"),
+        (1571, "DIV8m"),
+        (1574, "DIV8r"),
+        (1706, "FNSTSW16r"),
+        (1757, "IDIV16m"),
+        (1760, "IDIV16r"),
+        (1763, "IDIV32m"),
+        (1766, "IDIV32r"),
+        (1769, "IDIV64m"),
+        (1772, "IDIV64r"),
+        (1775, "IDIV8m"),
+        (1778, "IDIV8r"),
+        (1821, "IMUL32m"),
+        (1824, "IMUL32r"),
+        (1849, "IMUL64m"),
+        (1852, "IMUL64r"),
+        (1877, "IMUL8m"),
+        (1880, "IMUL8r"),
+        (1901, "INC16m"),
+        (1912, "INC32m"),
+        (1933, "INC8m"),
+        (2735, "MOVSX16rm8"),
+        (2738, "MOVSX16rr8"),
+        (2746, "MOVSX32rr8_NOREX"),
+        (2763, "MOVZX16rm8"),
+        (2765, "MOVZX16rr8"),
+        (2771, "MOVZX32rr8_NOREX"),
+        (2778, "MUL16m"),
+        (2781, "MUL16r"),
+        (2784, "MUL32m"),
+        (2787, "MUL32r"),
+        (2790, "MUL64m"),
+        (2793, "MUL64r"),
+        (2796, "MUL8m"),
+        (2799, "MUL8r"),
+        (2849, "NEG16m"),
+        (2854, "NEG16r"),
+        (2859, "NEG32m"),
+        (2864, "NEG32r"),
+        (2879, "NEG8m"),
+        (2884, "NEG8r"),
+        (2921, "OR16mi"),
+        (2931, "OR16mr"),
+        (2962, "OR32mi"),
+        (2973, "OR32mr"),
+        (3045, "OR8mi"),
+        (3051, "OR8mr"),
+        (4033, "SAHF"),
+        (4165, "SBB16mi"),
+        (4171, "SBB16mr"),
+        (4190, "SBB32mi"),
+        (4196, "SBB32mr"),
+        (4208, "SBB32rr"),
+        (4240, "SBB8mi"),
+        (4244, "SBB8mr"),
+        (4744, "SUB16mi"),
+        (4754, "SUB16mr"),
+        (4785, "SUB32mi"),
+        (4795, "SUB32mr"),
+        (4867, "SUB8mi"),
+        (4873, "SUB8mr"),
+        (5007, "TEST16mi"),
+        (5009, "TEST16ri"),
+        (5012, "TEST32mi"),
+        (5014, "TEST32ri"),
+        (5022, "TEST8mi"),
+        (5024, "TEST8ri"),
+        (5096, "UCOM_Fpr32"),
+        (5097, "UCOM_Fpr64"),
+        (5098, "UCOM_Fpr80"),
+        (22586, "XOR16mi"),
+        (22596, "XOR16mr"),
+        (22627, "XOR32mi"),
+        (22637, "XOR32mr"),
+        (22709, "XOR8mi"),
+        (22715, "XOR8mr"),
+    ];
+}
+
+pub mod target_opcode {
+    pub const ARITH_FENCE: u16 = 26;
+    pub const COPY: u16 = 20;
+    pub const COPY_TO_REGCLASS: u16 = 13;
+    pub const EXTRACT_SUBREG: u16 = 8;
+    pub const IMPLICIT_DEF: u16 = 10;
+    pub const INSERT_SUBREG: u16 = 9;
+    pub const MEMBARRIER: u16 = 45;
+    pub const SUBREG_TO_REG: u16 = 12;
+}
+
 pub mod mvt {
     use super::Vt;
     pub const Glue: Vt = Vt(252);
@@ -677,4 +1003,505 @@ pub mod mvt {
     pub const v8i16: Vt = Vt(62);
     pub const v8i32: Vt = Vt(79);
     pub const v8i64: Vt = Vt(99);
+}
+
+/// The pin's number of the `X86ISD::<name>` node.
+pub fn x86isd_id(name: &str) -> Option<u16> {
+    Some(match name {
+        "AADD" => 475,
+        "AAND" => 476,
+        "ADC" => 477,
+        "ADD" => 478,
+        "ADDSUB" => 479,
+        "ADOX" => 480,
+        "AESDEC128KL" => 481,
+        "AESDEC256KL" => 482,
+        "AESENC128KL" => 483,
+        "AESENC256KL" => 484,
+        "AND" => 485,
+        "ANDNP" => 486,
+        "AOR" => 487,
+        "AXOR" => 488,
+        "BEXTR" => 489,
+        "BEXTRI" => 490,
+        "BLENDI" => 491,
+        "BLENDV" => 492,
+        "BRCOND" => 493,
+        "BRCOND_SELF" => 494,
+        "BSF" => 495,
+        "BSR" => 496,
+        "BT" => 497,
+        "BTC" => 498,
+        "BTR" => 499,
+        "BTS" => 500,
+        "BZHI" => 501,
+        "CALL" => 502,
+        "CALL_GLOBALADDR" => 503,
+        "CALL_RVMARKER" => 504,
+        "CCMP" => 505,
+        "CLOAD" => 506,
+        "CMOV" => 507,
+        "CMP" => 508,
+        "CMPCCXADD" => 509,
+        "CMPM" => 510,
+        "CMPMM" => 511,
+        "CMPMM_SAE" => 512,
+        "CMPP" => 513,
+        "COMI" => 514,
+        "COMPRESS" => 515,
+        "COMX" => 516,
+        "CONFLICT" => 517,
+        "CSTORE" => 518,
+        "CTEST" => 519,
+        "CVTNEPS2BF16" => 520,
+        "CVTP2IBS" => 521,
+        "CVTP2IBS_RND" => 522,
+        "CVTP2IUBS" => 523,
+        "CVTP2IUBS_RND" => 524,
+        "CVTP2SI" => 525,
+        "CVTP2SI_RND" => 526,
+        "CVTP2UI" => 527,
+        "CVTP2UI_RND" => 528,
+        "CVTPH2PS" => 529,
+        "CVTPH2PS_SAE" => 530,
+        "CVTPS2PH" => 531,
+        "CVTPS2PH_SAE" => 532,
+        "CVTS2SI" => 533,
+        "CVTS2SI_RND" => 534,
+        "CVTS2UI" => 535,
+        "CVTS2UI_RND" => 536,
+        "CVTSI2P" => 537,
+        "CVTTP2IBS" => 538,
+        "CVTTP2IBS_SAE" => 539,
+        "CVTTP2IUBS" => 540,
+        "CVTTP2IUBS_SAE" => 541,
+        "CVTTP2SI" => 542,
+        "CVTTP2SIS" => 543,
+        "CVTTP2SIS_SAE" => 544,
+        "CVTTP2SI_SAE" => 545,
+        "CVTTP2UI" => 546,
+        "CVTTP2UIS" => 547,
+        "CVTTP2UIS_SAE" => 548,
+        "CVTTP2UI_SAE" => 549,
+        "CVTTS2SI" => 550,
+        "CVTTS2SIS" => 551,
+        "CVTTS2SIS_SAE" => 552,
+        "CVTTS2SI_SAE" => 553,
+        "CVTTS2UI" => 554,
+        "CVTTS2UIS" => 555,
+        "CVTTS2UIS_SAE" => 556,
+        "CVTTS2UI_SAE" => 557,
+        "CVTUI2P" => 558,
+        "DBPSADBW" => 559,
+        "DPBF16PS" => 560,
+        "DPFP16PS" => 561,
+        "DYN_ALLOCA" => 562,
+        "EH_RETURN" => 563,
+        "EH_SJLJ_LONGJMP" => 564,
+        "EH_SJLJ_SETJMP" => 565,
+        "EH_SJLJ_SETUP_DISPATCH" => 566,
+        "ENQCMD" => 567,
+        "ENQCMDS" => 568,
+        "EXPAND" => 569,
+        "EXTRQI" => 570,
+        "FADDS" => 571,
+        "FADDS_RND" => 572,
+        "FADD_RND" => 573,
+        "FAND" => 574,
+        "FANDN" => 575,
+        "FCMP" => 576,
+        "FDIVS" => 577,
+        "FDIVS_RND" => 578,
+        "FDIV_RND" => 579,
+        "FGETEXP" => 580,
+        "FGETEXPS" => 581,
+        "FGETEXPS_SAE" => 582,
+        "FGETEXP_SAE" => 583,
+        "FHADD" => 584,
+        "FHSUB" => 585,
+        "FILD" => 586,
+        "FIST" => 587,
+        "FLD" => 588,
+        "FLDCW16m" => 589,
+        "FLDENVm" => 590,
+        "FMADDSUB" => 591,
+        "FMADDSUB_RND" => 592,
+        "FMADD_RND" => 593,
+        "FMAXC" => 594,
+        "FMAXS" => 595,
+        "FMAXS_SAE" => 596,
+        "FMAX_SAE" => 597,
+        "FMINC" => 598,
+        "FMINS" => 599,
+        "FMINS_SAE" => 600,
+        "FMIN_SAE" => 601,
+        "FMSUB" => 602,
+        "FMSUBADD" => 603,
+        "FMSUBADD_RND" => 604,
+        "FMSUB_RND" => 605,
+        "FMULS" => 606,
+        "FMULS_RND" => 607,
+        "FMUL_RND" => 608,
+        "FNMADD" => 609,
+        "FNMADD_RND" => 610,
+        "FNMSUB" => 611,
+        "FNMSUB_RND" => 612,
+        "FNSTCW16m" => 613,
+        "FNSTENVm" => 614,
+        "FOR" => 615,
+        "FP80_ADD" => 616,
+        "FP_TO_INT_IN_MEM" => 617,
+        "FP_TO_SINT_SAT" => 618,
+        "FP_TO_UINT_SAT" => 619,
+        "FRCP" => 620,
+        "FRSQRT" => 621,
+        "FSETCC" => 622,
+        "FSETCCM" => 623,
+        "FSETCCM_SAE" => 624,
+        "FSHL" => 625,
+        "FSHR" => 626,
+        "FSQRTS" => 627,
+        "FSQRTS_RND" => 628,
+        "FSQRT_RND" => 629,
+        "FST" => 630,
+        "FSUBS" => 631,
+        "FSUBS_RND" => 632,
+        "FSUB_RND" => 633,
+        "FXOR" => 634,
+        "GF2P8AFFINEINVQB" => 635,
+        "GF2P8AFFINEQB" => 636,
+        "GF2P8MULB" => 637,
+        "HADD" => 638,
+        "HADDS" => 639,
+        "HSUB" => 640,
+        "HSUBS" => 641,
+        "IMP_CALL" => 642,
+        "INSERTPS" => 643,
+        "INSERTQI" => 644,
+        "IRET" => 645,
+        "KADD" => 646,
+        "KORTEST" => 647,
+        "KSHIFTL" => 648,
+        "KSHIFTR" => 649,
+        "KTEST" => 650,
+        "LADD" => 651,
+        "LAND" => 652,
+        "LBTC" => 653,
+        "LBTC_RM" => 654,
+        "LBTR" => 655,
+        "LBTR_RM" => 656,
+        "LBTS" => 657,
+        "LBTS_RM" => 658,
+        "LCMPXCHG16_DAG" => 659,
+        "LCMPXCHG8_DAG" => 660,
+        "LCMPXCHG_DAG" => 661,
+        "LDS" => 24577,
+        "LES" => 24576,
+        "LLRM_ASM" => 24578,
+        "LLRM_CALL_FLAGS" => 24585,
+        "LLRM_CODE" => 24582,
+        "LLRM_FARCALL" => 24584,
+        "LLRM_PORT" => 24586,
+        "LLRM_PTRDIFF" => 24583,
+        "LLRM_TC_RETURN" => 24587,
+        "LLRM_WINDOW" => 24581,
+        "LOR" => 662,
+        "LSUB" => 663,
+        "LWPINS" => 664,
+        "LXOR" => 665,
+        "MCVTNEPS2BF16" => 666,
+        "MCVTP2SI" => 667,
+        "MCVTP2UI" => 668,
+        "MCVTPS2PH" => 669,
+        "MCVTPS2PH_SAE" => 670,
+        "MCVTSI2P" => 671,
+        "MCVTTP2SI" => 672,
+        "MCVTTP2SIS" => 673,
+        "MCVTTP2UI" => 674,
+        "MCVTTP2UIS" => 675,
+        "MCVTUI2P" => 676,
+        "MFENCE" => 677,
+        "MMX_MOVD2W" => 678,
+        "MMX_MOVW2D" => 679,
+        "MOVDDUP" => 680,
+        "MOVDQ2Q" => 681,
+        "MOVHLPS" => 682,
+        "MOVLHPS" => 683,
+        "MOVMSK" => 684,
+        "MOVQ2DQ" => 685,
+        "MOVSD" => 686,
+        "MOVSH" => 687,
+        "MOVSHDUP" => 688,
+        "MOVSLDUP" => 689,
+        "MOVSS" => 690,
+        "MPSADBW" => 691,
+        "MULHRS" => 692,
+        "MULTISHIFT" => 693,
+        "MUL_IMM" => 694,
+        "NT_BRIND" => 695,
+        "NT_CALL" => 696,
+        "OR" => 697,
+        "PACKSS" => 698,
+        "PACKUS" => 699,
+        "PALIGNR" => 700,
+        "PCLMULQDQ" => 701,
+        "PCMPEQ" => 702,
+        "PCMPGT" => 703,
+        "PEXTRB" => 704,
+        "PEXTRW" => 705,
+        "PHMINPOS" => 706,
+        "PINSRB" => 707,
+        "PINSRW" => 708,
+        "PMULDQ" => 709,
+        "PMULUDQ" => 710,
+        "POP_FROM_X87_REG" => 957,
+        "PROBED_ALLOCA" => 711,
+        "PSADBW" => 712,
+        "PSHUFB" => 713,
+        "PSHUFD" => 714,
+        "PSHUFHW" => 715,
+        "PSHUFLW" => 716,
+        "PTEST" => 717,
+        "RCP14" => 718,
+        "RCP14S" => 719,
+        "RDPKRU" => 720,
+        "RDRAND" => 721,
+        "RDSEED" => 722,
+        "REP_MOVS" => 723,
+        "REP_STOS" => 724,
+        "RET_GLUE" => 725,
+        "RSQRT14" => 726,
+        "RSQRT14S" => 727,
+        "SBB" => 728,
+        "SCALAR_SINT_TO_FP" => 729,
+        "SCALAR_SINT_TO_FP_RND" => 730,
+        "SCALAR_UINT_TO_FP" => 731,
+        "SCALAR_UINT_TO_FP_RND" => 732,
+        "SCALEF" => 733,
+        "SCALEFS" => 734,
+        "SCALEFS_RND" => 735,
+        "SCALEF_RND" => 736,
+        "SEGMENT_OF" => 24580,
+        "SEG_ALLOCA" => 737,
+        "SELECTS" => 738,
+        "SETCC" => 739,
+        "SETCC_CARRY" => 740,
+        "SHUF128" => 741,
+        "SHUFP" => 742,
+        "SINT_TO_FP_RND" => 743,
+        "SMUL" => 744,
+        "STRICT_CMPM" => 745,
+        "STRICT_CMPP" => 746,
+        "STRICT_CVTPH2PS" => 747,
+        "STRICT_CVTPS2PH" => 748,
+        "STRICT_CVTSI2P" => 749,
+        "STRICT_CVTTP2SI" => 750,
+        "STRICT_CVTTP2UI" => 751,
+        "STRICT_CVTUI2P" => 752,
+        "STRICT_FCMP" => 753,
+        "STRICT_FCMPS" => 754,
+        "STRICT_FMSUB" => 755,
+        "STRICT_FNMADD" => 756,
+        "STRICT_FNMSUB" => 757,
+        "STRICT_FP80_ADD" => 758,
+        "STRICT_VFPEXT" => 759,
+        "STRICT_VFPROUND" => 760,
+        "STRICT_VRNDSCALE" => 761,
+        "SUB" => 762,
+        "SUBV_BROADCAST_LOAD" => 763,
+        "TC_RETURN" => 764,
+        "TC_RETURN_GLOBALADDR" => 765,
+        "TESTP" => 766,
+        "TESTUI" => 767,
+        "TLSADDR" => 768,
+        "TLSBASEADDR" => 769,
+        "TLSCALL" => 770,
+        "TLSDESC" => 771,
+        "TPAUSE" => 772,
+        "UCOMI" => 773,
+        "UCOMX" => 774,
+        "UINT_TO_FP_RND" => 775,
+        "UMUL" => 776,
+        "UMWAIT" => 777,
+        "UNPCKH" => 778,
+        "UNPCKL" => 779,
+        "VAARG_64" => 780,
+        "VAARG_X32" => 781,
+        "VALIGN" => 782,
+        "VASTART_SAVE_XMM_REGS" => 783,
+        "VBMACOR" => 784,
+        "VBMACXOR" => 785,
+        "VBROADCAST" => 786,
+        "VBROADCASTM" => 787,
+        "VBROADCAST_LOAD" => 788,
+        "VCVT2PH2BF8" => 789,
+        "VCVT2PH2BF8S" => 790,
+        "VCVT2PH2HF8" => 791,
+        "VCVT2PH2HF8S" => 792,
+        "VCVTBF82PS" => 793,
+        "VCVTBIASPH2BF8" => 794,
+        "VCVTBIASPH2BF8S" => 795,
+        "VCVTBIASPH2HF8" => 796,
+        "VCVTBIASPH2HF8S" => 797,
+        "VCVTBIASPS2BF8" => 798,
+        "VCVTBIASPS2BF8S" => 799,
+        "VCVTBIASPS2HF8" => 800,
+        "VCVTBIASPS2HF8S" => 801,
+        "VCVTHF82PH" => 802,
+        "VCVTHF82PS" => 803,
+        "VCVTPH2BF8" => 804,
+        "VCVTPH2BF8S" => 805,
+        "VCVTPH2HF8" => 806,
+        "VCVTPH2HF8S" => 807,
+        "VCVTPS2BF8" => 808,
+        "VCVTPS2BF8S" => 809,
+        "VCVTPS2HF8" => 810,
+        "VCVTPS2HF8S" => 811,
+        "VCVTROPS2HF8" => 812,
+        "VCVTROPS2HF8S" => 813,
+        "VEXTRACT_STORE" => 814,
+        "VFCMADDC" => 815,
+        "VFCMADDCSH" => 816,
+        "VFCMADDCSH_RND" => 817,
+        "VFCMADDC_RND" => 818,
+        "VFCMULC" => 819,
+        "VFCMULCSH" => 820,
+        "VFCMULCSH_RND" => 821,
+        "VFCMULC_RND" => 822,
+        "VFIXUPIMM" => 823,
+        "VFIXUPIMMS" => 824,
+        "VFIXUPIMMS_SAE" => 825,
+        "VFIXUPIMM_SAE" => 826,
+        "VFMADDC" => 827,
+        "VFMADDCSH" => 828,
+        "VFMADDCSH_RND" => 829,
+        "VFMADDC_RND" => 830,
+        "VFMULC" => 831,
+        "VFMULCSH" => 832,
+        "VFMULCSH_RND" => 833,
+        "VFMULC_RND" => 834,
+        "VFPCLASS" => 835,
+        "VFPCLASSS" => 836,
+        "VFPEXT" => 837,
+        "VFPEXTS" => 838,
+        "VFPEXTS_SAE" => 839,
+        "VFPEXT_SAE" => 840,
+        "VFPROUND" => 841,
+        "VFPROUND2" => 842,
+        "VFPROUND2_RND" => 843,
+        "VFPROUNDS" => 844,
+        "VFPROUNDS_RND" => 845,
+        "VFPROUND_RND" => 846,
+        "VGETMANT" => 847,
+        "VGETMANTS" => 848,
+        "VGETMANTS_SAE" => 849,
+        "VGETMANT_SAE" => 850,
+        "VMCVTBIASPH2BF8" => 851,
+        "VMCVTBIASPH2BF8S" => 852,
+        "VMCVTBIASPH2HF8" => 853,
+        "VMCVTBIASPH2HF8S" => 854,
+        "VMCVTBIASPS2BF8" => 855,
+        "VMCVTBIASPS2BF8S" => 856,
+        "VMCVTBIASPS2HF8" => 857,
+        "VMCVTBIASPS2HF8S" => 858,
+        "VMCVTPH2BF8" => 859,
+        "VMCVTPH2BF8S" => 860,
+        "VMCVTPH2HF8" => 861,
+        "VMCVTPH2HF8S" => 862,
+        "VMCVTPS2BF8" => 863,
+        "VMCVTPS2BF8S" => 864,
+        "VMCVTPS2HF8" => 865,
+        "VMCVTPS2HF8S" => 866,
+        "VMCVTROPS2HF8" => 867,
+        "VMCVTROPS2HF8S" => 868,
+        "VMFPROUND" => 869,
+        "VMINMAX" => 870,
+        "VMINMAXS" => 871,
+        "VMINMAXS_SAE" => 872,
+        "VMINMAX_SAE" => 873,
+        "VMTRUNC" => 874,
+        "VMTRUNCS" => 875,
+        "VMTRUNCSS" => 876,
+        "VMTRUNCSTORES" => 877,
+        "VMTRUNCSTORESS" => 878,
+        "VMTRUNCSTOREUS" => 879,
+        "VMTRUNCUS" => 880,
+        "VP2INTERSECT" => 881,
+        "VPCOM" => 882,
+        "VPCOMU" => 883,
+        "VPDPBSSD" => 884,
+        "VPDPBSSDS" => 885,
+        "VPDPBSUD" => 886,
+        "VPDPBSUDS" => 887,
+        "VPDPBUSD" => 888,
+        "VPDPBUSDS" => 889,
+        "VPDPBUUD" => 890,
+        "VPDPBUUDS" => 891,
+        "VPDPWSSD" => 892,
+        "VPDPWSSDS" => 893,
+        "VPDPWSUD" => 894,
+        "VPDPWSUDS" => 895,
+        "VPDPWUSD" => 896,
+        "VPDPWUSDS" => 897,
+        "VPDPWUUD" => 898,
+        "VPDPWUUDS" => 899,
+        "VPERM2X128" => 900,
+        "VPERMI" => 901,
+        "VPERMIL2" => 902,
+        "VPERMILPI" => 903,
+        "VPERMILPV" => 904,
+        "VPERMV" => 905,
+        "VPERMV3" => 906,
+        "VPMADD52H" => 907,
+        "VPMADD52L" => 908,
+        "VPMADDUBSW" => 909,
+        "VPMADDWD" => 910,
+        "VPPERM" => 911,
+        "VPSHA" => 912,
+        "VPSHL" => 913,
+        "VPSHUFBITQMB" => 914,
+        "VPTERNLOG" => 915,
+        "VRANGE" => 916,
+        "VRANGES" => 917,
+        "VRANGES_SAE" => 918,
+        "VRANGE_SAE" => 919,
+        "VREDUCE" => 920,
+        "VREDUCES" => 921,
+        "VREDUCES_SAE" => 922,
+        "VREDUCE_SAE" => 923,
+        "VRNDSCALE" => 924,
+        "VRNDSCALES" => 925,
+        "VRNDSCALES_SAE" => 926,
+        "VRNDSCALE_SAE" => 927,
+        "VROTLI" => 928,
+        "VROTRI" => 929,
+        "VSHL" => 930,
+        "VSHLD" => 931,
+        "VSHLDQ" => 932,
+        "VSHLI" => 933,
+        "VSHLV" => 934,
+        "VSHRD" => 935,
+        "VSRA" => 936,
+        "VSRAI" => 937,
+        "VSRAV" => 938,
+        "VSRL" => 939,
+        "VSRLDQ" => 940,
+        "VSRLI" => 941,
+        "VSRLV" => 942,
+        "VTRUNC" => 943,
+        "VTRUNCS" => 944,
+        "VTRUNCSS" => 945,
+        "VTRUNCSTORES" => 946,
+        "VTRUNCSTORESS" => 947,
+        "VTRUNCSTOREUS" => 948,
+        "VTRUNCUS" => 949,
+        "VZEXT_LOAD" => 950,
+        "VZEXT_MOVL" => 951,
+        "WRPKRU" => 952,
+        "Wrapper" => 953,
+        "WrapperRIP" => 954,
+        "XOR" => 955,
+        "XTEST" => 956,
+        _ => return None,
+    })
 }

@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/backend/llrm-core/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/backend/llrm-core/src/backend/needs.rs); edit the header, not this file.
-<!-- src: crates/backend/llrm-core/src/backend/needs.rs sha256:7abebec42dd767606c7054982bece48cfc69810f24fad8dffe059cbfdfb7ce60 -->
+> Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/needs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/needs.rs); edit the header, not this file.
+<!-- src: crates/codegen/llrm-codegen/src/backend/needs.rs sha256:3bf97306127da388cc21a23c9db012062463c27cb5621704b090500dbdae3909 -->
 
 # needs
 
@@ -13,14 +13,12 @@ the body has all of them. The shape is that of the MIR passes' `Depends`,
 for the machine passes.
 
 ```text
-  COPY        register-to-register mov       regthrash, machinecp
-  INSERTED    inserted instruction defining  secondary_bases
+  COPY        register-to-register mov       machinecp
   UNHELD      cell read via a reg32          upperzero
   EXACT_CELL  a cell lowering proved exact   exactaddress
-  BASED       a cell addressed via a value   secondary_bases
 ```
 
-A bit is the sub-pass's own candidate test (`regthrash::_plain_copy`,
+A bit is the sub-pass's own candidate test (
 `upperzero::unheld`, `exactaddress::cell_of`), so "can this pass match" has
 one definition. `Contents` keeps the bits of each block for as long as the
 block is the same list of instructions (`Insns::same_as`), so a pass that

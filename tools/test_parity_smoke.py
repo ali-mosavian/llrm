@@ -1,6 +1,7 @@
 """The per-merge tests of feat/parity: the selection fits 10 s of CPU however many crates a merge touches, an overrun or a failed step fails it, and the last line says which."""
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -330,7 +331,7 @@ def test_a_header_change_without_the_docs_sync_is_refused_with_the_page_named():
         def __init__(self, out, code):
             self.stdout, self.stderr, self.returncode = out, "", code
 
-    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
+    stale = "1 problem(s)\ngenerated docs are out of date; run python3 tools/docs/docsbuild/build.py --sync\n  docs/optimizations/backend/jumps.md\n  docs/optimizations/passes/readme.md\n"
     failed = ps.docs_failures(run=lambda command: Done(stale, 1))
     assert any("docs/optimizations/backend/jumps.md" in name for name in failed) and all("--sync" in why for why in failed.values()), failed
     assert ps.docs_failures(run=lambda command: Done("ok\n", 0)) == {}
@@ -396,12 +397,12 @@ def test_every_failing_qcport_module_is_listed_not_the_first(tmp_path, monkeypat
 
 
 def test_a_pr_touching_the_qb_frontend_x86_isel_or_the_runtime_spec_runs_every_tests_run_group():
-    for path in ("crates/frontends/llrm-qb/src/compile.rs", "crates/frontends/qbfront/src/semantic.rs", "crates/frontends/llrm-qbruntime/src/runtime.toml", "runtime/qb/strconv.c",
-                 "crates/target/llrm-x86/src/select.rs", "crates/backend/llrm-core/src/backend/isel.rs"):
+    for path in ("crates/frontends/qb/src/compile.rs", "crates/frontends/qb/src/semantic.rs", "crates/frontends/qb/runtime.toml", "runtime/qb/strconv.c",
+                 "crates/target/llrm-x86/src/select.rs", "crates/codegen/llrm-codegen/src/backend/isel.rs"):
         assert ps.runs_whole_groups([path]), path
     for path in ("crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md", "tools/gate/gate.py", "crates/frontends/llrm-c/src/lib.rs"):
         assert not ps.runs_whole_groups([path]), path
-    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qbfront/src/lexer.rs"])
+    assert ps.runs_whole_groups(["docs/arch.md", "crates/frontends/qb/src/lexer.rs"])
 
 
 def test_a_planted_qb_output_diff_in_a_group_goes_red_and_refuses_the_merge():
@@ -477,17 +478,17 @@ def test_a_planted_qbrt_difference_is_a_failing_name_and_a_program_that_did_not_
     assert ps.qbrt_failures("/bins", run=lambda *a, **k: Silent()) == {"qbrt-did-not-finish"}
 
 
-def test_a_transforms_only_pr_runs_the_lib_tests_of_llrm_core_and_a_red_one_is_a_new_name():
-    """Five llrm-core isel tests were red on parity for days: a PR touching llrm-transforms never ran llrm-core's lib tests. The closure comes from cargo metadata, not a list."""
+def test_a_transforms_only_pr_runs_the_lib_tests_of_llrm_codegen_and_a_red_one_is_a_new_name():
+    """Five llrm-codegen isel tests were red on parity for days: a PR touching llrm-transforms never ran llrm-codegen's lib tests. The closure comes from cargo metadata, not a list."""
     import parity_squash as sq
 
     packages, graph = ps.workspace_graph()
     touched = ps.touched_packages(["crates/opt/llrm-transforms/src/gvn.rs", "docs/arch.md"], packages)
     assert touched == {"llrm-transforms"}
     closure = ps.dependants(touched, graph)
-    assert {"llrm-transforms", "llrm-core", "llrm-c", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
-    head = {"unit llrm-core::backend::isel_tests::test_old_red"}
-    merged = head | {"unit llrm-core::backend::isel_tests::test_made_red_by_transforms"}
+    assert {"llrm-transforms", "llrm-codegen", "llrm-c", "llrm-qb"} <= closure and "llrm-support" not in closure, sorted(closure)
+    head = {"unit llrm-codegen::backend::isel_tests::test_old_red"}
+    merged = head | {"unit llrm-codegen::backend::isel_tests::test_made_red_by_transforms"}
     why = sq.subset_refusals(head, merged, fixes=False)
     assert why and "test_made_red_by_transforms" in why[0] and "test_old_red" not in why[0].split(", which")[0], why
 
@@ -504,8 +505,44 @@ def test_dependants_lib_failures_name_each_failing_test_per_package():
         ran.append(command[-3:])
         return Done()
 
-    assert ps.dependants_lib_failures({"llrm-core"}, run=run) == {"unit llrm-core::backend::isel_tests::test_x"}
-    assert ran == [["-p", "llrm-core", "--lib"]]
+    assert ps.dependants_lib_failures({"llrm-codegen"}, run=run) == {"unit llrm-codegen::backend::isel_tests::test_x"}
+    assert ran == [["-p", "llrm-codegen", "--lib"]]
+
+
+def test_a_crate_that_did_not_run_shows_why_in_its_refusal():
+    """#4269 was refused twice for `unit <crate>::did-not-run` and the log held nothing else: the compile error (or the crash's exit and last lines) of the crate's test run is kept."""
+
+    def failing(stderr, code):
+        class Done:
+            returncode = code
+            stdout = ""
+
+        Done.stderr = stderr
+        return lambda command, **kwargs: Done()
+
+    ps.CAUSES.clear()
+    broken = "   Compiling llrm-codegen\nerror[E0432]: unresolved import `crate::nothing`\n --> src/lib.rs:1:5\nerror: could not compile `llrm-codegen` (lib test)\n"
+    assert ps.dependants_lib_failures({"llrm-codegen"}, run=failing(broken, 101)) == {"unit llrm-codegen::did-not-run"}
+    assert "unresolved import `crate::nothing`" in ps.causes_of({"unit llrm-codegen::did-not-run"})
+    ps.CAUSES.clear()
+    crashed = "running 3 tests\nerror: test failed, to rerun pass `-p llrm-codegen --lib`\n\nCaused by:\n  process didn't exit successfully (signal: 11, SIGSEGV)\n"
+    ps.dependants_lib_failures({"llrm-codegen"}, run=failing(crashed, 101))
+    assert "SIGSEGV" in ps.causes_of({"unit llrm-codegen::did-not-run"})
+    assert ps.causes_of({"unit llrm-codegen::some_test"}) == ""
+
+
+def test_a_listed_test_that_passes_is_reported(monkeypatch):
+    """tools/xfail.toml still listed 17 tests after they passed or were gone, and PRs landed: the header says a listed test that passes fails the gate."""
+    import xfail
+
+    monkeypatch.setattr(xfail, "load", lambda *a, **k: {"unit llrm-nib::test_debug::fixed": {"issue": 1}, "unit llrm-nib::test_debug::still_red": {"issue": 1}})
+
+    class Done:
+        returncode = 101
+        stdout = "test test_debug::fixed ... ok\ntest test_debug::still_red ... FAILED\nfailures:\n\nfailures:\n    test_debug::still_red\n\ntest result: FAILED. 1 passed; 1 failed\n"
+        stderr = ""
+
+    assert ps.dependants_lib_failures({"llrm-nib"}, run=lambda command, **kwargs: Done()) == {"xpass unit llrm-nib::test_debug::fixed"}
 
 
 def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
@@ -515,10 +552,40 @@ def test_every_integration_target_is_mapped_and_an_unmapped_one_is_refused():
     assert len(mapping) >= 116 and ps.unmapped_targets(mapping) == [], ps.unmapped_targets(mapping)
     assert ps.unmapped_targets({**mapping, "a_new_target_nobody_mapped": set()}) == ["a_new_target_nobody_mapped"]
     assert "loop_rotation" in ps.integration_targets_for(["crates/opt/llrm-transforms/src/gvn.rs"], {"llrm-transforms"}, mapping)
-    nib_only = ps.integration_targets_for(["crates/frontends/llrm-nib/src/x.rs"], {"llrm-nib"}, mapping)
+    nib_only = ps.integration_targets_for(["crates/frontends/nib/src/x.rs"], {"llrm-nib"}, mapping)
     assert "loop_rotation" not in nib_only and set(ps.SCANNERS) <= set(nib_only) and not set(ps.NIGHTLY_ONLY) & set(nib_only)
     assert "docs_links" in ps.integration_targets_for(["docs/arch.md"], set(), mapping)
     assert "header_copy" in ps.integration_targets_for(["tests/header_copy.rs"], set(), mapping)
+
+
+def test_a_target_reaches_the_crates_and_compilers_of_the_helpers_it_uses(tmp_path):
+    """95 targets, after C1 moved them to `common::cc::llrm_c()`, imported no crate in their own text and were all unmapped: the helper's imports are the target's."""
+    (tmp_path / "tests" / "common").mkdir(parents=True)
+    (tmp_path / "tests" / "common" / "mod.rs").write_text("use llrm_driver::all;")
+    (tmp_path / "tests" / "common" / "cc.rs").write_text('env!("CARGO_BIN_EXE_llrm-cc")')
+    (tmp_path / "tests" / "common" / "other.rs").write_text("use llrm_nib::x;")
+    text = ps.with_common("mod common;\nfn t() { common::cc::llrm_c(); }", tmp_path)
+    assert "llrm_driver" in text and "CARGO_BIN_EXE_llrm-cc" in text and "llrm_nib" not in text
+    assert "llrm_driver" in ps.with_common("pub mod common;", tmp_path)
+    assert ps.with_common("fn t() {}", tmp_path) == "fn t() {}"
+
+
+def test_a_runtime_change_runs_the_targets_that_build_the_runtime_with_cc_and_a_docs_change_does_not():
+    """posix_os, qb_dev_interface, qb_sdl and qb_dirty import no crate: unmapped, they ran for no change at all."""
+    mapping = ps.integration_map()
+    runtime = ps.integration_targets_for(["runtime/qb/dev/host/video.c"], set(), mapping)
+    assert {"posix_os", "qb_dev_interface", "qb_sdl", "qb_dirty"} <= set(runtime)
+    assert not {"posix_os", "qb_sdl"} & set(ps.integration_targets_for(["docs/arch.md"], set(), mapping))
+
+
+def test_the_check_target_is_mapped_to_every_compiler_its_run_lines_drive():
+    """tests/check.rs names only llrm-qb (CARGO_BIN_EXE) but runs the tool of each file's RUN line: copy_idioms.c drives llrm-c, and a change to llrm-c ran no check."""
+    mapping = ps.integration_map()
+    packages, _ = ps.workspace_graph()
+    # the crate directories come from the workspace: the re-org moved llrm-qb to crates/frontends/qb and the hard-coded path touched no package
+    for tool, changed in ((tool, f"{packages[tool].relative_to(ps.ROOT)}/src/lib.rs") for tool in ("llrm-c", "llrm-nib", "llrm-qb")):
+        chosen = ps.integration_targets_for([changed], ps.touched_packages([changed], packages), mapping)
+        assert "check" in chosen, f"a change to {tool} does not run tests/check"
 
 
 def test_integration_failures_name_the_red_tests_less_the_listed_ones():
@@ -558,3 +625,110 @@ def test_a_24th_docsbuild_line_is_a_new_name_when_the_head_already_has_23():
     assert why and "new.rs" in why[0], why
     assert sq.subset_refusals(head, set(head), fixes=False) == []
     assert sq.new_names({"ratchet:docs"}, merged) == []  # a head cached before the lines were named covers them
+
+
+def test_llrm_c_lib_tests_run_with_the_toolchain_feature_and_other_crates_without():
+    """`cargo test -p llrm-c --lib` never ran the call-boundary and compile-listing tests (feature `toolchain`): an interrupt handler was refused from 10-19 to 10-23 and 16 listings went red unseen."""
+    assert ps.lib_command("llrm-c") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-c", "--lib", "--features", "toolchain"]
+    assert ps.lib_command("llrm-codegen") == ["cargo", "test", "--no-fail-fast", "-p", "llrm-codegen", "--lib"]
+
+    class Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    ran = []
+
+    def run(command, **kwargs):
+        ran.append(command)
+        return Done()
+
+    ps.dependants_lib_failures({"llrm-c", "llrm-codegen"}, run=run)
+    assert any("--features" in command and "llrm-c" in command for command in ran)
+    assert not any("--features" in command and "llrm-codegen" in command for command in ran)
+
+
+def test_a_selectiondag_change_runs_the_selectiondag_registry():
+    """#3899 landed with tests/selectiondag_registry.rs red (SD403 had no row): the target read no crate, was in neither SCANNERS nor NIGHTLY_ONLY, so no selection
+    of a PR's targets ever named it."""
+    mapping = ps.integration_map()
+    files = ["crates/codegen/llrm-codegen/src/backend/selectiondag/dag_function.rs"]
+    packages, _ = ps.workspace_graph()
+    chosen = ps.integration_targets_for(files, ps.touched_packages(files, packages), mapping)
+    assert "selectiondag_registry" in chosen, chosen
+
+
+def test_a_compile_to_the_null_device_reaches_the_encoder(tmp_path):
+    """The smoke layer compiled with `-o /dev/null`, where llrm-c writes assembly text and never encodes: a program that died in the encoder passed."""
+    compiler = tmp_path / "llrm-c"
+    compiler.write_text("#!/usr/bin/env python3\nimport sys\nout = sys.argv[sys.argv.index('-o') + 1]\nif out.endswith('.obj'):\n    sys.exit('llrm-c: Semantics(op=BINARY)')\n")
+    compiler.chmod(0o755)
+    assert ps.compile_ok([str(compiler), "x.c", "-o", __import__("os").devnull], {}) is not None
+
+
+def test_a_refusal_can_carry_the_first_panic_line_of_a_failed_test():
+    """#4172 was refused three times with the test's name and nothing else; the cause was a `debug_assert_eq!` that fires in the runner's debug profile and not in release."""
+    output = """running 1 test
+test backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector ... FAILED
+
+failures:
+
+---- backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector stdout ----
+
+thread 'backend::selectiondag::tests::legalize_types::the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector' (1924096) panicked at crates/codegen/llrm-codegen/src/backend/selectiondag/legalize_types.rs:173:13:
+assertion `left == right` failed: a node on the worklist is ready
+  left: Processed
+ right: Ready
+"""
+    reasons = ps.panic_reasons(output)
+    assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"
+
+
+def test_a_failing_scanner_names_the_stale_pages_in_its_cause():
+    """docs_in_sync was refused at 01:41, 01:44 and 02:08 as a bare test name; w1 could not tell which page, and the scratch tree passed."""
+    output = """\
+     Running tests/docs_in_sync.rs (target/release/deps/docs_in_sync-abc)
+
+running 1 test
+test test_no_generated_page_is_stale ... FAILED
+
+failures:
+
+---- test_no_generated_page_is_stale stdout ----
+
+thread 'test_no_generated_page_is_stale' (123) panicked at tests/docs_in_sync.rs:24:5:
+run python3 tools/docs/docsbuild/build.py --sync:
+  docs/optimizations/passes/lsr_solve.md
+  docs/optimizations/passes/sinkcast.md
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+"""
+    class Done:
+        returncode = 101
+        stdout = output
+
+    ps.CAUSES.clear()
+    failed = ps.integration_failures(["docs_in_sync"], run=lambda *a, **k: Done)
+    assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
+    cause = ps.causes_of(failed)
+    assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
+
+def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
+    """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""
+    if shutil.which("perf") is None:
+        pytest.skip("no perf")
+    monkeypatch.undo()  # the real Meter: the autouse fixture swaps in a stub
+    with ps.Meter() as counted:
+        code, _ = ps.run_cut([sys.executable, "-c", "while True: pass"], 1.0, tmp_path)
+    assert code is None
+    assert counted.value is not None and counted.value > 100_000_000, counted.value
+
+
+def test_an_unranked_unit_step_runs_one_test_thread(monkeypatch):
+    """An unranked crate runs its whole lib cut by wall time; cargo's thread per core made that 32x the CPU and instructions the wall allowance was charged."""
+    seen = []
+    monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: seen.append(env) or (0, ""))
+    monkeypatch.setattr(ps, "selection", lambda: {"units": {"ranked": {"tests": [["t_a", 0.1]]}}})
+    monkeypatch.setattr(ps.xfail, "load_for", lambda root: {})
+    ps.unit_step("unranked", 5.0)(Path("."))
+    ps.unit_step("ranked", 5.0)(Path("."))
+    assert seen[0]["RUST_TEST_THREADS"] == "1" and seen[1] is None, seen

@@ -15,13 +15,7 @@ Then, outside the phase list, `masm` builds the procedure: the prologue and epil
 
 ## Spill traffic
 
-[`LoopSlots`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/loopslots.rs#L1) runs once spill traffic is final. Allocation spills a value across its whole range, but inside one loop registers may still be free: untouched there, or used only to reload a slot for the next instruction. Each slot the loop reaches moves into one, loaded on entry and stored on exit where the loop writes it and the code after reads it.
-
-* The frame register is one more when the loop reaches no other frame cell: it enters with `push bp; mov bp,[bp+d]` and leaves with `pop bp`. Such a loop may not call, trap or touch x87 state, because the runtime walks the BP chain when it raises an error.
-* A register live through the loop but untouched in it is parked on the stack, pushed on entry and popped on exit.
-* A spill slot's address is never taken, so no pointer reaches a slot this moves.
-
-Tests: [`test_a_dword_slot_parked_in_the_frame_register_is_pushed_and_popped`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/loopslots.rs#L1299), [`test_a_far_pointer_load_keeps_its_slot_in_memory_when_a_loop_holds_the_low_word`](https://github.com/ali-mosavian/llrm/blob/82848d3b75a0dc0b0541d99bbcc5071361710eb9/crates/backend/llrm-core/src/backend/loopslots.rs#L1425).
+`LoopSlots` runs once spill traffic is final and hoists a loop's invariant loads, of a spill slot or a constant (a segment register included), to the loop's entry edges. It used to give a loop's word-wide spill slots registers the loop left free as well; that step is retired (see the header of `loopslots.rs`: neutral at m16 executed instructions, QCport a little smaller).
 
 `spillforward` has already removed the reloads a register holds ([rematerialization-and-forwarding](rematerialization-and-forwarding.md#forwarding)).
 

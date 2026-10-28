@@ -9,8 +9,8 @@ use llrm_mir::opcode::Opcode;
 use super::vncoercion::*;
 use crate::testing::{parsed, printed, results};
 
-const LITTLE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-n8:16:32\"\n\n";
-const BIG: &str = "target datalayout = \"E-p:16:16-i32:16-i64:16-n8:16:32\"\n\n";
+const LITTLE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
+const BIG: &str = "target datalayout = \"E-p:16:16-i32:16-i64:16-f80:16-n8:16:32\"\n\n";
 const MEMSET: &str = "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)\n";
 const MEMCPY: &str = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n";
 

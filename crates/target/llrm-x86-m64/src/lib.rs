@@ -13,7 +13,7 @@ use llrm_target::CostModel;
 use llrm_target::machine::Machine;
 
 /// A Linux user program: flat, no ports.
-pub const LINUX64: &str = include_str!("machines/linux64.toml");
+pub const LINUX64: &str = include_str!("../../../../machine/platform/linux/flat64.toml");
 
 /// The processors flat code is priced for: the columns of `timings.times`.
 pub static CPUS: LazyLock<Vec<&'static str>> = LazyLock::new(|| TIMINGS.cpus());
@@ -52,7 +52,8 @@ static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
 
 /// The CPUs' timings: `timings.times`.
 static TIMINGS: LazyLock<llrm_target::timings::Timings> = LazyLock::new(|| {
-    llrm_target::timings::Timings::parse(include_str!("timings.times")).expect("timings.times parses")
+    llrm_target::timings::Timings::parse_tuned(include_str!("timings.times"), llrm_target::tune::X86)
+        .expect("timings.times parses")
 });
 
 static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
@@ -182,6 +183,15 @@ impl llrm_target::Target for M64 {
         CALLING.native().frame_enter
     }
 
+    fn frame_slot_scratch(&self) -> Option<(RegId, RegId)> {
+        let (push, pop) = CALLING.native().frame_slot_scratch.as_ref()?;
+        Some((llrm_x86::calling::register(push), llrm_x86::calling::register(pop)))
+    }
+
+    fn frame_wrap_split_size(&self) -> bool {
+        CALLING.native().frame_wrap_split_size
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,
@@ -192,8 +202,11 @@ impl llrm_target::Target for M64 {
 
     /// Flat: no segments, one model.
     fn object(&self) -> llrm_target::object::ObjectFormat {
-        llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
-            .expect("x86-64 object.toml parses")
+        static OBJECT: std::sync::LazyLock<llrm_target::object::ObjectFormat> = std::sync::LazyLock::new(|| {
+            llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml"))
+                .expect("x86-64 object.toml parses")
+        });
+        OBJECT.clone()
     }
 
     fn return_address_bytes(
@@ -306,7 +319,7 @@ impl llrm_target::Target for M64 {
                 Some(OPCOSTS.size_costs()),
                 llrm_x86::tti::X86::of_cpu("x86-64")
                     .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>),
-                Some(std::rc::Rc::new(llrm_x86::lowering::X86)),
+                Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: true })),
             )
         }
     }
@@ -321,6 +334,37 @@ impl llrm_target::Target for M64 {
 
 #[cfg(test)]
 mod tests {
+    /// x86-64 described no x87 registers, so an x87 value (a QB `fatan`, a
+    /// `long double`) had no register class and the DAG path refused it.
+    #[test]
+    fn test_the_x87_stack_and_its_seven_rfp_registers_are_described() {
+        use llrm_target::Target;
+        let file = llrm_target::registers::parse(&M64.registers_text()).unwrap();
+        let named = |class: &str| -> Vec<&str> {
+            file.iter().filter(|one| one.is(class)).map(|one| one.name.as_str()).collect()
+        };
+        assert_eq!(named("x87"), ["st0", "st1", "st2", "st3", "st4", "st5", "st6", "st7"]);
+        assert_eq!(named("rfp"), ["mm0", "mm1", "mm2", "mm3", "mm4", "mm5", "mm6"]);
+        assert_eq!(M64.float_stack(), 8);
+    }
+
+    /// `object()` and the runtime tables are parsed once and kept; each must
+    /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
+    /// runtime table cost 3.3 M Ir of every compile).
+    #[test]
+    fn test_cached_tomls_equal_a_fresh_parse() {
+        use llrm_target::Target;
+        let fresh = llrm_target::object::ObjectFormat::parse(include_str!("machines/object.toml")).unwrap();
+        assert_eq!(M64.object(), fresh);
+        assert_eq!(M64.object(), fresh, "a second ask");
+        for language in ["c", "nib"] {
+            let Some(description) = M64.runtime(language) else { continue };
+            let fresh: toml::Table = description.text.parse().unwrap();
+            assert_eq!(*description.table().unwrap(), fresh, "{language}");
+            assert!(std::sync::Arc::ptr_eq(&description.table().unwrap(), &description.table().unwrap()));
+        }
+    }
+
     use llrm_target::Target;
 
     use super::*;
@@ -349,5 +393,22 @@ mod tests {
             layout.datalayout,
             "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
         );
+    }
+
+    /// A `double` argument went to the stack (floats were not placed in
+    /// registers): it must take XMM0-7 beside the integer registers, and a
+    /// ninth leave on the stack.
+    #[test]
+    fn sysv_places_floats_in_xmm_registers_and_returns_one_in_xmm0() {
+        use llrm_target::calling::{Kind, Place};
+        let convention = M64.calling().named("sysv64").unwrap();
+        let mut arguments = vec![Kind::Word, Kind::Float(8), Kind::Float(8), Kind::Word];
+        arguments.extend([Kind::Float(8); 7]);
+        let placement = convention.place(&arguments);
+        let register = |name: &str| Place::Registers(vec![name.to_owned()]);
+        assert_eq!(placement.places[..4], [register("rdi"), register("xmm0"), register("xmm1"), register("rsi")]);
+        assert_eq!(placement.places[10], Place::Stack(0));
+        assert_eq!(convention.float_result_register(), Some("xmm0"));
+        assert!(convention.clobbered.iter().any(|one| one == "xmm15"));
     }
 }

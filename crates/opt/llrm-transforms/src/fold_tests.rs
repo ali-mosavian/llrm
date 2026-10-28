@@ -1,4 +1,4 @@
-//! Adapted from llrm-core's `optimize/transform_tests.rs` (`folded_tests`)
+//! Adapted from llrm-codegen's `optimize/transform_tests.rs` (`folded_tests`)
 //! and the tests of `analysis/consts_tests.rs` that waited for this port,
 //! each body now MIR text run by llrm-mir's interpreter.
 

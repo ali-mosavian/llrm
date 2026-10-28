@@ -121,6 +121,7 @@
 //! LLVM `MemorySSA` and its `ClobberWalker`
 //! (`llvm/lib/Analysis/MemorySSA.cpp`).
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
@@ -202,6 +203,12 @@ pub struct Accesses {
     plain_source: Option<PlainSource>,
     /// The graph's structure, made when first asked.
     graph: GraphCell,
+    /// Nothing above is made up front: a reference and the lists an
+    /// instruction touches are worked out of the unit when first asked
+    /// (`reference_in`, `reads_in`, `writes_in`), as the pin computes a
+    /// `MemoryLocation` when a walk wants one. The graph's clients ask 1.6 %
+    /// of them.
+    lazy: bool,
 }
 
 /// What `PlainAccesses` reads.
@@ -508,8 +515,9 @@ impl Accesses {
         unit: &Unit,
         calls: &Calls,
     ) -> Self {
-        let references =
-            unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))).collect();
+        let mut references =
+            IndexMap::with_capacity_and_hasher(crate::memory::loads_and_stores(unit.function), Default::default());
+        references.extend(unit.function.walk().filter_map(|(_, inst)| unit.reference(inst).map(|one| (inst, one))));
         Self::new(unit, references, |inst| calls.get(&inst).map(|stores| (None, Some(Rc::clone(stores)))))
     }
 
@@ -565,6 +573,9 @@ impl Accesses {
         unit: &Unit,
         inst: InstId,
     ) {
+        if self.lazy {
+            return;
+        }
         if let Some(reference) = unit.reference(inst) {
             self.references.insert(inst, reference);
         }
@@ -598,7 +609,74 @@ impl Accesses {
             source: None,
             plain_source: None,
             graph: GraphCell::default(),
+            lazy: false,
         }
+    }
+
+    /// Accesses that make nothing up front (`lazy`): the references as the unit
+    /// has them, each call writing anything its attributes allow.
+    pub fn lazy() -> Self {
+        Self { lazy: true, ..Self::default() }
+    }
+
+    /// Whether these accesses make nothing up front (`lazy`).
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
+    }
+
+    /// The access `inst` makes, as the unit has it (`Unit::reference`), made
+    /// when asked where these accesses are lazy.
+    pub fn reference_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, MemRef>> {
+        if self.lazy {
+            return unit.reference(inst).map(Cow::Owned);
+        }
+        self.references.get(&inst).map(Cow::Borrowed)
+    }
+
+    /// What `inst` touches, made when asked where these accesses are lazy.
+    fn touched_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Footprint> {
+        Self::touched_by(unit, inst, &|| unit.reference(inst).into_iter().collect::<Rc<[_]>>(), &|_| None)
+    }
+
+    /// [`reads`](Self::reads), asked of the unit where these accesses are lazy.
+    pub fn reads_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((reads, _)) => reads.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.reads(inst).map(Cow::Borrowed)
+    }
+
+    /// [`writes`](Self::writes), asked of the unit where these accesses are
+    /// lazy.
+    pub fn writes_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Option<Cow<'_, [MemRef]>> {
+        if self.lazy {
+            LAZY_LISTS.with(|made| made.set(made.get() + 1));
+            return match self.touched_in(unit, inst) {
+                None => Some(Cow::Borrowed(&[])),
+                Some((_, writes)) => writes.map(|list| Cow::Owned(list.to_vec())),
+            };
+        }
+        self.writes(inst).map(Cow::Borrowed)
     }
 
     /// These accesses with the stores `absolute` names writing nothing a
@@ -640,6 +718,18 @@ impl Accesses {
         inst: InstId,
     ) -> &[MemRef] {
         self.fills.get(&inst).map_or(&[], Vec::as_slice)
+    }
+
+    /// [`fills`](Self::fills), asked of the unit where these accesses are lazy.
+    pub fn fills_in(
+        &self,
+        unit: &Unit,
+        inst: InstId,
+    ) -> Cow<'_, [MemRef]> {
+        if self.lazy {
+            return Cow::Owned(initialized_by(unit, inst));
+        }
+        Cow::Borrowed(self.fills(inst))
     }
 
     /// What `inst` reads; `None` where it may read anything.
@@ -850,6 +940,14 @@ pub fn same_bytes(
 
 thread_local! {
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LAZY_LISTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many read or write lists this thread's lazy accesses have derived for
+/// an instruction (`reads_in`, `writes_in`), for a test that a client asking
+/// only whether a load or store writes derives none.
+pub fn lazy_lists() -> usize {
+    LAZY_LISTS.with(std::cell::Cell::get)
 }
 
 thread_local! {
@@ -1195,7 +1293,21 @@ impl MemorySSA<'_> {
         } else {
             #[cfg(test)]
             MAY_CLOBBERS.with(|asked| asked.set(asked.get() + stores.len()));
-            let found = stores.iter().any(|store| self.may_clobber_cached(cell, store));
+            let found = match self.call_clobbers(site, cell) {
+                Some(asked)
+                    if stores.is_empty()
+                        || !matches!(
+                            self.unit.function.instruction(site).opcode,
+                            Opcode::Store { .. }
+                        ) =>
+                {
+                    asked
+                }
+                // The stack knows no far segments or byte ranges of a store:
+                // either answer apart rules it out.
+                Some(asked) => asked && stores.iter().any(|store| self.may_clobber_cached(cell, store)),
+                None => stores.iter().any(|store| self.may_clobber_cached(cell, store)),
+            };
             assert!(!(missed && found), "LLRM_CHECK_CLOBBERS: objects that cannot meet were found to clobber");
             found
         };
@@ -1217,6 +1329,68 @@ impl MemorySSA<'_> {
         }
         asked[access] = 1 + u8::from(found);
         found
+    }
+
+    /// `changes` for the def at `site`: a call with a pointer-bearing cell is
+    /// the AA stack's to rule out, even where its footprint says anything;
+    /// the writes of the footprint decide the rest.
+    fn site_changes(
+        &self,
+        cell: &MemRef,
+        invariant: bool,
+        site: InstId,
+        slot: usize,
+        access: usize,
+    ) -> bool {
+        if cell.pointer.is_some()
+            && !invariant
+            && !cell.unwritable()
+            && matches!(
+                self.unit.function.instruction(site).opcode,
+                Opcode::Call(_) | Opcode::Invoke(_)
+            )
+        {
+            return self.clobbered(slot, cell, access, site);
+        }
+        changes(cell, invariant, self.written[&site].as_deref(), |_| self.clobbered(slot, cell, access, site))
+    }
+
+    /// Whether the call or store `site` may write `cell`, as the pin's AA
+    /// stack answers `getModRefInfo(Inst, Loc)` (BasicAA, TBAA, GlobalsAA;
+    /// MemorySSA.cpp `instructionClobbersQuery` L320); none for another
+    /// instruction or a cell with no pointer, which the footprint answers.
+    /// The cell carries no TBAA tag, so the store's own tag rules nothing out.
+    fn call_clobbers(
+        &self,
+        site: InstId,
+        cell: &MemRef,
+    ) -> Option<bool> {
+        use crate::aa::{AAQueryInfo, AAResults, LocationSize, MemoryLocation};
+        if !matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Call(_) | Opcode::Invoke(_) | Opcode::Store { .. }
+        ) {
+            return None;
+        }
+        let pointer = cell.pointer?;
+        // A cell cut from its pointer (another offset or width) names bytes
+        // the pointer does not; the footprint answers for it.
+        if matches!(
+            self.unit.function.instruction(site).opcode,
+            Opcode::Store { .. }
+        )
+            && MemRef::at(&self.unit, pointer, cell.width) != *cell
+        {
+            return None;
+        }
+        let location = MemoryLocation::new(pointer, LocationSize::Precise(u64::from(cell.width)));
+        let mut aggregate = crate::aggregate::AggregateAA::new();
+        aggregate.add_aa_result(crate::basicaa::BasicAA::new(&self.unit));
+        aggregate.add_aa_result(crate::typebasedaa::TypeBasedAA::new(&self.unit));
+        if let Some(info) = self.unit.globals_mr {
+            aggregate.add_aa_result(crate::globalsmodref::GlobalsAAResult::new(&self.unit, info));
+        }
+        Some(aggregate.get_mod_ref_info(site, Some(&location), &mut AAQueryInfo::default()).is_mod_set())
     }
 
     /// `may_clobber`, with the offsets of the pointers remembered.
@@ -1526,9 +1700,8 @@ impl MemorySSA<'_> {
                 {
                     continue;
                 }
-                let written = &self.written[&at];
                 let slot = self.slot(memory);
-                if changes(memory, invariant, written.as_deref(), |_| self.clobbered(slot, memory, candidate, at)) {
+                if self.site_changes(memory, invariant, at, slot, candidate) {
                     hit = Some(candidate);
                     break;
                 }
@@ -1540,9 +1713,7 @@ impl MemorySSA<'_> {
                 || nearest.is_none_or(|found| {
                     let at = self.access(found).site.expect("a def has a site");
                     let slot = self.slot(memory);
-                    changes(memory, invariant, self.written[&at].as_deref(), |_| {
-                        self.clobbered(slot, memory, found, at)
-                    })
+                    self.site_changes(memory, invariant, at, slot, found)
                 });
             if confirmed {
                 if let Some(found) = hit.or(nearest) {
@@ -1645,7 +1816,6 @@ impl MemorySSA<'_> {
                         (Some(edge_memory), Some(edge_slot)) if access.block != block => (edge_memory, edge_slot),
                         _ => (memory, slot),
                     };
-                    let written = &self.written[&access.site.expect("a def has a site")];
                     let site = access.site.expect("a def has a site");
                     let fixed_apart = match (
                         self.fixed.get(&site),
@@ -1674,11 +1844,7 @@ impl MemorySSA<'_> {
                             }
                             _ => false,
                         };
-                    if !apart
-                        && changes(queried, invariant, written.as_deref(), |_| {
-                            self.clobbered(queried_slot, queried, current, site)
-                        })
-                    {
+                    if !apart && self.site_changes(queried, invariant, site, queried_slot, current) {
                         ended(table, &mut chain, current);
                         found.insert(current);
                     } else {
@@ -1919,40 +2085,50 @@ impl<'a> Writers<'a> {
 fn initialized_by_calls(unit: &Unit) -> IndexMap<InstId, Vec<MemRef>> {
     let mut out = IndexMap::default();
     for (_, inst) in unit.function.walk() {
-        let op = unit.function.instruction(inst);
-        let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { continue };
-        let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
-            .and_then(|one| unit.globals.get(one.0 as usize))
-            .and_then(GlobalValue::function);
-        let mut fills = Vec::new();
-        for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
-            let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
-            let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
-                attrs
-                    .iter()
-                    .any(
-                        |one| matches!(
-                            one,
-                            llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
-                        ),
-                    )
-            };
-            if byval(&info.argument_attrs[argument]) || byval(declared) {
-                continue;
-            }
-            for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
-                .iter()
-                .chain(llrm_mir::memory::initializes(declared))
-            {
-                let Ok(width) = u32::try_from(high - low) else { continue };
-                let mut one = MemRef::at(unit, operand, width);
-                one.disp += low;
-                fills.push(one);
-            }
-        }
+        let fills = initialized_by(unit, inst);
         if !fills.is_empty() {
             out.insert(inst, fills);
         }
     }
     out
+}
+
+/// The bytes the call `inst` writes through an argument before it reads any
+/// (`initializes`); nothing for another instruction.
+fn initialized_by(
+    unit: &Unit,
+    inst: InstId,
+) -> Vec<MemRef> {
+    let op = unit.function.instruction(inst);
+    let (Opcode::Call(info) | Opcode::Invoke(info)) = &op.opcode else { return Vec::new() };
+    let callee = llrm_mir::memory::callee(unit.context, unit.function, inst)
+        .and_then(|one| unit.globals.get(one.0 as usize))
+        .and_then(GlobalValue::function);
+    let mut fills = Vec::new();
+    for (argument, &operand) in op.operands.iter().enumerate().take(info.argument_attrs.len()) {
+        let declared = callee.and_then(|one| one.parameter_attrs.get(argument)).map_or(&[][..], Vec::as_slice);
+        let byval = |attrs: &[llrm_mir::opcode::Attribute]| {
+            attrs
+                .iter()
+                .any(
+                    |one| matches!(
+                        one,
+                        llrm_mir::opcode::Attribute::Flag(name) | llrm_mir::opcode::Attribute::Type(name, _) if name == "byval"
+                    ),
+                )
+        };
+        if byval(&info.argument_attrs[argument]) || byval(declared) {
+            continue;
+        }
+        for &(low, high) in llrm_mir::memory::initializes(&info.argument_attrs[argument])
+            .iter()
+            .chain(llrm_mir::memory::initializes(declared))
+        {
+            let Ok(width) = u32::try_from(high - low) else { continue };
+            let mut one = MemRef::at(unit, operand, width);
+            one.disp += low;
+            fills.push(one);
+        }
+    }
+    fills
 }

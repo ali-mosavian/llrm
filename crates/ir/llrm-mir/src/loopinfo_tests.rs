@@ -238,3 +238,76 @@ fn test_a_block_added_to_a_loop_is_in_it_and_in_every_loop_around_it() {
         );
     }
 }
+
+fn only_loop<R>(
+    text: &str,
+    f: impl FnOnce(&crate::context::Context, &Function, crate::loopinfo::Loop<'_>) -> R,
+) -> R {
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}\n{text}"));
+    let function = module
+        .functions()
+        .find(|(_, _, function)| !function.is_declaration())
+        .map(|(_, _, function)| function)
+        .expect("a body");
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    let one = info.top_level_loops().next().expect("a loop");
+    f(&module.context, function, one)
+}
+
+const COUNTED: &str = "define i32 @f(i32 %n) {\nb0:\n  br label %h\nh:\n  %i = phi i32 [ 0, %b0 ], [ %j, %h ]\n  %j = add i32 %i, 1\n  %c = icmp ult i32 %j, %n\n  br i1 %c, label %h, label %x\nx:\n  ret i32 %j\n}\n";
+
+/// `Loop::getCanonicalInductionVariable`: the phi from 0 by 1 is found, the
+/// compare at the latch is its `icmp`, and an induction that steps by 2 is not
+/// canonical.
+#[test]
+fn a_loop_from_zero_by_one_has_a_canonical_induction_variable() {
+    only_loop(COUNTED, |context, function, one| {
+        let phi = one.get_canonical_induction_variable(context, function).expect("%i");
+        assert_eq!(function.instruction(phi).opcode, crate::opcode::Opcode::Phi);
+        let cmp = one.get_latch_cmp_inst(function).expect("%c");
+        assert!(matches!(function.instruction(cmp).opcode, crate::opcode::Opcode::ICmp(_)));
+        assert!(one.get_incoming_and_back_edge(function).is_some());
+    });
+    let by_two = COUNTED.replace("%j = add i32 %i, 1", "%j = add i32 %i, 2");
+    only_loop(&by_two, |context, function, one| {
+        assert!(one.get_canonical_induction_variable(context, function).is_none());
+    });
+    let from_one = COUNTED.replace("[ 0, %b0 ]", "[ 1, %b0 ]");
+    only_loop(&from_one, |context, function, one| {
+        assert!(one.get_canonical_induction_variable(context, function).is_none());
+    });
+}
+
+/// A latch that ends in a `ret`-less unconditional branch has no compare.
+#[test]
+fn a_latch_that_branches_unconditionally_has_no_latch_cmp() {
+    let text = "define void @f(i1 %c) {\nb0:\n  br label %h\nh:\n  br i1 %c, label %l, label %x\nl:\n  br label %h\nx:\n  ret void\n}\n";
+    only_loop(text, |_, function, one| assert!(one.get_latch_cmp_inst(function).is_none()));
+}
+
+/// `children` found the terminator again for every edge (`get_exiting_blocks`
+/// cost 4.6x the pin's on d_faces): a switch of four edges took five lookups.
+/// It takes one, and gives the edges of `child` with repeats in operand order.
+#[test]
+fn test_children_find_the_terminator_once_and_are_the_edges_of_child() {
+    use crate::loopinfo::LoopGraph;
+    use crate::module::TERMINATOR_LOOKUPS;
+
+    let mut module = parse::module(
+        "define i32 @f(i32 %x) {\nentry:\n  switch i32 %x, label %b [ i32 0, label %a i32 1, label %b i32 2, label %a ]\na:\n  br label %b\nb:\n  ret i32 0\n}\n",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    let f = module.function_mut("f").expect("@f").1;
+    for &block in f.layout() {
+        let mut cursor = 0;
+        let mut by_child = Vec::new();
+        while let Some(next) = f.child(block, &mut cursor) {
+            by_child.push(next);
+        }
+        assert_eq!(f.children(block).collect::<Vec<_>>(), by_child);
+    }
+    let entry = f.layout()[0];
+    let before = TERMINATOR_LOOKUPS.with(std::cell::Cell::get);
+    assert_eq!(f.children(entry).count(), 4, "default and three cases, repeats kept");
+    assert_eq!(TERMINATOR_LOOKUPS.with(std::cell::Cell::get) - before, 1, "one lookup for four edges");
+}

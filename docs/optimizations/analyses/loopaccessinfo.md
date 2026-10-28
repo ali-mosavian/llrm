@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopaccessinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopaccessinfo.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopaccessinfo.rs sha256:b12111b58a61f051d77fb04b5c25db078a48196a27641f9d2c92213926c98fe5 -->
+<!-- src: crates/opt/llrm-analysis/src/loopaccessinfo.rs sha256:daa6ebe74d965f6e5db1016fe52f46dc7f5d102c329c613173350002c0853f43 -->
 
 # loopaccessinfo
 
@@ -31,3 +31,6 @@ MIR has no `llvm.loop.parallel_accesses` annotation
 (`isAnnotatedParallel` is false), no `llvm.loop.distribute.enable` and no
 debug location on a remark ("Memory location is the same as accessed at"
 is not added), and no vector function database (`VFDatabase`).
+
+## Used by
+Named by `looploadelim`.

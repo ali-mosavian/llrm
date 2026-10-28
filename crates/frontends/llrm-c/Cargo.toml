@@ -8,7 +8,7 @@ description = "The C frontend, through Open Watcom's front end"
 [dependencies]
 llrm-support = { workspace = true }
 llrm-x86 = { workspace = true }
-llrm-core = { workspace = true }
+llrm-codegen = { workspace = true }
 llrm-driver = { workspace = true }
 llrm-mir = { workspace = true }
 llrm-target = { workspace = true }
@@ -38,4 +38,6 @@ llrm-object = { workspace = true }
 llrm-x86-m16 = { workspace = true }
 llrm-x86-m32 = { workspace = true }
 regex = { workspace = true }
-llrm-core = { workspace = true, features = ["testing"] }
+llrm-codegen = { workspace = true, features = ["testing"] }
+# The lib tests compile `.c` files, which needs the feature; the root enabled it by unification while llrm-c was a root dependency.
+llrm-c = { path = ".", features = ["toolchain"] }

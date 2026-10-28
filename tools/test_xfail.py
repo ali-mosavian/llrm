@@ -23,7 +23,7 @@ def unit(monkeypatch):
     monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: LISTED)
 
     def run(code, output):
-        monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd: (code, output))
+        monkeypatch.setattr(ps, "run_cut", lambda command, seconds, cwd, env=None: (code, output))
         return ps.unit_step("crate", 10.0)(Path("."))
 
     return run
@@ -58,3 +58,40 @@ def test_an_entry_without_an_owner_or_issue_or_listed_twice_is_refused(tmp_path)
     with pytest.raises(SystemExit, match="listed twice"):
         xfail.load(path)
     assert xfail.issue_of("run a", {"run a": {"issue": 3}}) == "#3" and xfail.issue_of("run b", {}) is None
+
+
+def run_integration(monkeypatch, output):
+    monkeypatch.setattr(xfail, "load", lambda path=xfail.PATH: {"integration t::t_a": {}})
+    done = type("Done", (), {"stdout": output, "returncode": 0})()
+    return ps.integration_failures(["t"], run=lambda *a, **k: done)
+
+
+def test_a_listed_integration_test_that_passes_is_an_xpass_and_one_that_fails_is_excused(monkeypatch):
+    """Only `integration` ids that fail were excused; one that was fixed stayed listed, silently, because nothing read its pass."""
+    passing = "     Running tests/t.rs (target/release/deps/t-1)\ntest t_a ... ok\ntest t_b ... ok\n"
+    assert run_integration(monkeypatch, passing) == {"xpass integration t::t_a"}
+    failing = "     Running tests/t.rs (target/release/deps/t-1)\ntest t_a ... FAILED\ntest t_b ... ok\n"
+    assert run_integration(monkeypatch, failing) == set()
+
+
+def test_a_pr_that_fixes_a_listed_test_and_deletes_its_row_is_judged_by_its_own_tree_not_the_runners(tmp_path, monkeypatch):
+    """#4681 deleted the row of a test it fixes and was refused as an xpass: the list read was the runner checkout's (parity's), where the row still stood."""
+    runner_list = tmp_path / "runner.toml"
+    runner_list.write_text('[[xfail]]\nid = "unit crate::t_a"\nissue = 7\nowner = "o"\ndate = "2026-10-19"\n[[xfail]]\nid = "integration t::t_a"\nissue = 8\nowner = "o"\ndate = "2026-10-19"\n')
+    monkeypatch.setattr(xfail, "PATH", runner_list)
+    monkeypatch.setattr(xfail.load, "__defaults__", (runner_list,))
+    tree = tmp_path / "tree"
+    (tree / "tools").mkdir(parents=True)
+
+    def lib(root):
+        done = type("Done", (), {"stdout": "test t_a ... ok\ntest result: ok. 1 passed\n", "stderr": "", "returncode": 0})()
+        return ps.dependants_lib_failures({"crate"}, root=root, run=lambda *a, **k: done)
+
+    def integration(root):
+        done = type("Done", (), {"stdout": "     Running tests/t.rs (x)\ntest t_a ... ok\n", "stderr": "", "returncode": 0})()
+        return ps.integration_failures(["t"], root=root, run=lambda *a, **k: done)
+
+    (tree / "tools" / "xfail.toml").write_text("")  # the PR deleted both rows
+    assert lib(tree) == set() and integration(tree) == set()
+    (tree / "tools" / "xfail.toml").write_text(runner_list.read_text())  # the PR fixed the tests and kept the rows
+    assert lib(tree) == {"xpass unit crate::t_a"} and integration(tree) == {"xpass integration t::t_a"}

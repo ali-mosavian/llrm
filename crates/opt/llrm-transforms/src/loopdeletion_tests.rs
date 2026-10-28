@@ -185,6 +185,36 @@ out:
     assert!(after.contains("unreachable"), "the latch no longer jumps back: {after}");
 }
 
+/// `breakLoopBackedge` splits a switch latch's backedge with `SplitEdge`,
+/// which stands the block right after the latch (LoopUtils.cpp:800), not at
+/// the end of the function.
+#[test]
+fn the_block_that_replaces_the_backedge_stands_after_the_latch() {
+    let text = "@g = global i16 0
+
+define i16 @f(i16 %x, i16 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  store i16 %x, ptr @g
+  %c = icmp eq i16 %i, 0
+  br i1 %c, label %out, label %latch
+
+latch:
+  %next = add i16 %i, 1
+  switch i16 %x, label %loop []
+
+out:
+  ret i16 %x
+}
+";
+    let after = deleted(text, INPUTS);
+    let (bridge, out) = (after.find("unreachable").expect("the bridge"), after.find("out:").expect("out"));
+    assert!(bridge < out, "the bridge stands before out: {after}");
+}
+
 /// `n` dead loops in a row cost entries in proportion to `n`.
 fn sequence(n: usize) -> String {
     let mut text = String::from("define i16 @f(i16 %x) mustprogress {\nb0:\n  br label %l0\n\n");
@@ -239,7 +269,7 @@ b3:
     let nodes = |loopdeletion: bool| {
         let mut module = crate::testing::parsed(text);
         let mut manager = llrm_mir::passes::PassManager::default();
-        manager.add(crate::indvars::IndVars { lftr: true });
+        manager.add(crate::indvars::IndVars { lftr: true, size: false });
         if loopdeletion {
             manager.add(super::LoopDeletion);
         }
@@ -250,4 +280,50 @@ b3:
     let (alone, both) = (nodes(false), nodes(true));
     assert!(alone > 0);
     assert_eq!(both, alone, "loopdeletion made {} expressions again", both - alone);
+}
+
+/// observed.c's `mix` at -O2 -g lost the debug record of its parameter `n`,
+/// which stands before the preheader's branch, when its loop was deleted: the
+/// branch was replaced and its records dropped, and gdb read `n` as optimised
+/// out where it is in a register throughout.
+#[test]
+fn the_debug_records_before_the_preheaders_branch_survive_a_deletion() {
+    let text = COUNTER.replace("b0:\n  br label %head", "b0:\n  #dbg_value(i16 %n, !1)\n  br label %head")
+        + "\n!1 = !{!\"f\", !\"n\", !2, i64 0, i64 1, i64 0}\n!2 = !{!\"int\"}\n";
+    let after = deleted(&text, INPUTS);
+    assert!(!after.contains("phi") && after.contains("#dbg_value(i16 %n"), "{after}");
+}
+
+/// `n` guarded counted loops in a row, each storing, so none is deleted.
+fn live_sequence(n: usize) -> String {
+    let mut text = String::from(
+        "@a = global i32 0\n@arr = global [4096 x i32] zeroinitializer\n\ndefine void @f(i32 %n) {\nb0:\n  %g = icmp sgt i32 %n, 0\n  br i1 %g, label %p0, label %end\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("p{}", k + 1) };
+        text += &format!(
+            "p{k}:\n  br label %l{k}\n\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %n{k}, %l{k} ]\n  %m{k} = mul nuw nsw i32 %i{k}, 3\n  %q{k} = and i32 %m{k}, 4095\n  %p{k} = getelementptr inbounds i32, ptr @arr, i32 %q{k}\n  %v{k} = load i32, ptr %p{k}\n  store i32 %v{k}, ptr @a\n  %n{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %x{k}, label %l{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text += "end:\n  ret void\n}\n";
+    text
+}
+
+/// The guards of a loop climb every block above it, and the blocks seen were a
+/// list searched whole at each step: 128 loops in a row cost `loopdeletion`
+/// 32 M instructions in `collect_from_block` where the pin's set costs 9 M, and
+/// the work grew with the cube of the loops. A membership test costs one
+/// probe, whatever the climb has seen.
+#[test]
+fn collecting_loop_guards_probes_each_visited_block_once() {
+    let probes = |n: usize| {
+        let mut module = parsed(&live_sequence(n));
+        let before = llrm_analysis::scev::guards::visits();
+        managed(&mut module, LoopDeletion);
+        let after = llrm_analysis::scev::guards::visits();
+        (after.0 - before.0, after.1 - before.1)
+    };
+    let (inserts, examined) = probes(128);
+    assert!(inserts > 128 * 64, "the climb reaches the earlier loops: {inserts}");
+    assert!(examined <= 2 * inserts, "{examined} elements examined for {inserts} inserts");
 }
