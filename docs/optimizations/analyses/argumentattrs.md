@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/argumentattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/argumentattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:e251085d1a1433035137cf9b0c56fa35780cf2b516da3adec032f26371084cd3 -->
+<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:6ad5d3cab3dadfff06677b6f833f32d4b51a7684e934ea7e16cfdb4b72d591f9 -->
 
 # argumentattrs
 
@@ -21,9 +21,11 @@ loads, stores, and calls by what their `memory(argmem: ...)` and the
 parameter's attributes allow, with a pass to a member of the SCC assumed
 harmless.
 
-DEVIATE A1: MIR has no `nofree` and no `initializes`-free tracking: the
-`IsFree` property is not tracked, so "all accesses" is read and write.
-DEVIATE A2: only `captures(none)` can be stated (see
+A parameter no use can free is `nofree` too (`IsFree`): a write through it
+by a call whose site, callee and parameter do not say `nofree` may free it.
+
+DEVIATE A1: `nofree_obj` has no MIR spelling, so only `nofree` is looked
+for. DEVIATE A2: only `captures(none)` can be stated (see
 [`crate::capturetracking`](capturetracking.md)), so a parameter that would be
 `captures(ret: ...)` stays unstated. Not translated yet:
 `addArgumentAttrsFromCallsites` (nonnull), `returned`; `inferInitializes` is

@@ -144,7 +144,7 @@ use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
     floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
     loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
-    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
+    memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
     trivialunswitch, window,
 };
 
@@ -923,6 +923,13 @@ pub(crate) fn llvm_order(
                 // them.
                 slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
                 sroa("sroa@776"),
+            ]);
+            // Not in the pin's `default<O1>` (a pipeline of its own); `pre` is
+            // off exactly at -O1 and -Og.
+            if applied.options.pre {
+                list.push(slot("mldst-motion@783", Box::new(mldstmotion::MergedLoadStoreMotion)));
+            }
+            list.extend([
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at
                 // -O1 and -Og); rows against clang's -O1 are pending, a loss
