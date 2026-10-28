@@ -209,11 +209,15 @@ fn groupable(
     for &parent in sources {
         let Some(last) = function.terminator(cfg::block(parent)) else { return false };
         if matches!(function.instruction(last).opcode, Opcode::Invoke(_)) {
-            if _normal_destination(function, last) != Operand::Block(destination)
-                || _unwind_destination(function, last) == Operand::Block(destination)
+            if (_normal_destination(function, last) == Operand::Block(destination))
+                == (_unwind_destination(function, last) == Operand::Block(destination))
             {
                 return false;
             }
+            continue;
+        }
+        // `replaceUsesOfWith` takes every case that names the target.
+        if function.instruction(last).opcode == Opcode::Switch {
             continue;
         }
         match function.instruction(last).operands.len() {
@@ -244,6 +248,12 @@ pub fn grouped(
         return None;
     }
     let destination = cfg::block(target);
+    // A landing pad takes no bridge of its own: LLVM's `SplitBlockPredecessors`
+    // splits it in two.
+    if edges::starts_with_landing_pad(function, destination) {
+        let parents: Vec<BlockId> = sources.iter().map(|&one| cfg::block(one)).collect();
+        return Some(edges::split_block_predecessors(function, destination, &parents));
+    }
     let phis = edges::phis(function, destination);
     let incoming = |function: &Function, phi| {
         function.instruction(phi).operands.chunks(2).map(|pair| (pair[0], pair[1])).collect::<Vec<_>>()
@@ -284,6 +294,7 @@ pub fn grouped(
         let last = function.terminator(cfg::block(parent)).expect("checked above");
         if matches!(function.instruction(last).opcode, Opcode::Invoke(_)) {
             let at = function.instruction(last).operands.len() - 3;
+            let at = if _normal_destination(function, last) == Operand::Block(destination) { at } else { at + 1 };
             function.set_operand(last, at, Operand::Block(bridge));
         } else {
             edges::retarget(function, last, destination, bridge);
@@ -477,7 +488,9 @@ fn _simplified(
         if outside.len() != 1 || function.successors(cfg::block(parent)) != [cfg::block(original.header)] {
             plan.push((original.header, outside));
         }
-        if original.latches.len() != 1 {
+        // A landing pad header is split with its outside entries: the other
+        // edges go to one block.
+        if original.latches.len() != 1 && !edges::starts_with_landing_pad(function, cfg::block(original.header)) {
             plan.push((original.header, original.latches.clone()));
         }
         for target in _exits(function, &original) {
@@ -502,6 +515,8 @@ fn _simplified(
             function.predecessors(header).into_iter().partition(|&one| !original.body.contains(&cfg::id(one)));
         let mut bridges: Vec<(i64, i64, BTreeSet<i64>)> = Vec::new();
         for (target, sources) in plan {
+            let split_pad = edges::starts_with_landing_pad(function, cfg::block(target));
+            let before: Vec<i64> = function.predecessors(cfg::block(target)).into_iter().map(cfg::id).collect();
             let Some(bridge) = grouped(function, target, &sources) else {
                 unreachable!("groupable said it could be made");
             };
@@ -514,7 +529,16 @@ fn _simplified(
                     function.move_block_after(bridge, last).expect("placed blocks");
                 }
             }
-            bridges.push((cfg::id(bridge), target, sources));
+            bridges.push((cfg::id(bridge), target, sources.clone()));
+            // Where a landing pad was split, the other edges go to a block of
+            // their own.
+            if split_pad {
+                let others = function.predecessors(cfg::block(target)).into_iter().find(|&one| one != bridge);
+                if let Some(other) = others {
+                    let rest: BTreeSet<i64> = before.iter().copied().filter(|one| !sources.contains(one)).collect();
+                    bridges.push((cfg::id(other), target, rest));
+                }
+            }
         }
         changed = true;
         for loop_ in &mut shape.loops {
@@ -530,16 +554,16 @@ fn _simplified(
 }
 
 /// What `loop_` is once `bridge` stands on the edges from `sources` to
-/// `target`: the block joins it where `target` and every source are in it (it
-/// reaches the latch through `target`, and what reaches it came from inside),
-/// and becomes its only latch where `target` is its header.
+/// `target`: the block joins it where `target` and a source are in it (it
+/// reaches the latch through `target`, and some of what reaches it came from
+/// inside), and becomes its only latch where `target` is its header.
 fn _bridged(
     loop_: &mut loops::Loop,
     bridge: i64,
     target: i64,
     sources: &BTreeSet<i64>,
 ) {
-    if !loop_.body.contains(&target) || !sources.iter().all(|at| loop_.body.contains(at)) {
+    if !loop_.body.contains(&target) || !sources.iter().any(|at| loop_.body.contains(at)) {
         return;
     }
     loop_.body.insert(bridge);
