@@ -9,10 +9,13 @@
 //! such values, each read by the next and by nothing else that could change
 //! it: the `adrp` and the `add` of a global's address are made again together.
 //! A reload of a slot into the scratch register that still holds it (stored or
-//! loaded since, nothing written to it, no call between) is dropped.
+//! loaded since, nothing written to it, no call between) is dropped, and so is
+//! a copy between two registers that already hold one value (`mov x19, x0`
+//! then `mov x0, x19`).
 //!
 //! A 128-bit value (one a `q` access names) is spilled and copied whole
-//! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not keep.
+//! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not
+//! keep.
 //!
 //! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR. This
 //! allocator stands in until the core machine passes run on arm64 LIR (see
@@ -407,8 +410,8 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
             .flatten()
             .find(|candidate| class.contains(candidate) && fits(candidate));
         match hinted.or_else(|| class.iter().copied().find(fits)) {
-            // A new callee-saved register (a save and a restore) for a value one
-            // instruction makes is dearer than making it at each use.
+            // A new callee-saved register (a save and a restore) for a value
+            // one instruction makes is dearer than making it at each use.
             Some(chosen)
                 if pool::callee_saved(chosen)
                     && !used_callee_saved.contains(&chosen)
@@ -464,7 +467,9 @@ fn unused_constants(
         let more: Vec<Reg> = candidates
             .keys()
             .copied()
-            .filter(|register| !made_again.contains_key(register) && !unused.contains(register) && !read.contains(register))
+            .filter(|register| {
+                !made_again.contains_key(register) && !unused.contains(register) && !read.contains(register)
+            })
             .collect();
         if more.is_empty() {
             return unused;
@@ -489,10 +494,16 @@ fn rewrite(
         let mut out = Vec::with_capacity(block.ops.len());
         for mut op in std::mem::take(&mut block.ops) {
             // The one definition of a value made at each use.
-            if op.defs_and_uses().0.iter().any(|register| made_again.contains_key(register) || unused.contains(register)) {
+            if op
+                .defs_and_uses()
+                .0
+                .iter()
+                .any(|register| made_again.contains_key(register) || unused.contains(register))
+            {
                 continue;
             }
-            // A copy of such a value is the definition, aimed at the copy's target.
+            // A copy of such a value is the definition, aimed at the copy's
+            // target.
             if let Op::Copy { dst, src } = &op
                 && let Some(def) = made_again.get(src)
                 && !made_again.contains_key(dst)
@@ -507,7 +518,8 @@ fn rewrite(
                 }
                 continue;
             }
-            // A copy of a register to itself (a coalesced phi) is nothing, spilled or not.
+            // A copy of a register to itself (a coalesced phi) is nothing,
+            // spilled or not.
             if matches!(&op, Op::Copy { dst, src } if dst == src) {
                 continue;
             }
@@ -533,10 +545,14 @@ fn rewrite(
                 let key = register.key();
                 let replacement = if made_again.contains_key(&key) {
                     let Reg::Gpr(_) = key else { unreachable!("a constant is a general register") };
-                    let scratch_reg = *scratch.entry(key).or_insert_with(|| {
-                        next_gpr += 1;
-                        Reg::Gpr(Gpr(pool::GPR_SCRATCH[next_gpr - 1]))
-                    });
+                    let scratch_reg = *scratch
+                        .entry(key)
+                        .or_insert_with(
+                            || {
+                                next_gpr += 1;
+                                Reg::Gpr(Gpr(pool::GPR_SCRATCH[next_gpr - 1]))
+                            },
+                        );
                     if !again.iter().any(|(r, _)| *r == scratch_reg) {
                         again.push((scratch_reg, key));
                     }
@@ -589,13 +605,46 @@ fn rewrite(
                 out.push(spill_access(register, slot, false, quad));
             }
         }
-        block.ops = forward_spills(out, &spill_slots);
+        block.ops = forward_copies(forward_spills(out, &spill_slots));
     }
 }
 
-/// Drops the reload of a spill slot into a register that still holds what was stored to it or loaded from
-/// it since: `str x15, [slot]` then `ldr x15, [slot]` with nothing writing `x15` between. Only the
-/// allocator's own slots, which nothing else writes; a call forgets everything.
+/// Drops a copy between two registers that already hold one value: `mov x19,
+/// x0` then `mov x0, x19` with neither written between. A write to either ends
+/// the pair; a call ends every pair with a caller-saved register. The
+/// allocator's scratch registers are left alone.
+fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
+    let scratch = |register: &Reg| match register {
+        Reg::Gpr(gpr) => pool::GPR_SCRATCH.contains(&gpr.0),
+        Reg::Fpr(fpr) => pool::FPR_SCRATCH.contains(&fpr.0),
+    };
+    let mut equal: Vec<(Reg, Reg)> = Vec::new();
+    let mut out = Vec::with_capacity(ops.len());
+    for op in ops {
+        if let Op::Copy { dst, src } = &op {
+            if equal.iter().any(|&(a, b)| (a, b) == (*dst, *src) || (a, b) == (*src, *dst)) {
+                continue;
+            }
+            equal.retain(|&(a, b)| a != *dst && b != *dst);
+            if !scratch(dst) && !scratch(src) {
+                equal.push((*dst, *src));
+            }
+        } else if matches!(op, Op::Call { .. }) {
+            equal.retain(|&(a, b)| pool::callee_saved(a) && pool::callee_saved(b));
+        } else {
+            for register in op.defs_and_uses().0 {
+                equal.retain(|&(a, b)| a != register && b != register);
+            }
+        }
+        out.push(op);
+    }
+    out
+}
+
+/// Drops the reload of a spill slot into a register that still holds what was
+/// stored to it or loaded from it since: `str x15, [slot]` then `ldr x15,
+/// [slot]` with nothing writing `x15` between. Only the allocator's own slots,
+/// which nothing else writes; a call forgets everything.
 fn forward_spills(
     ops: Vec<Op>,
     spill_slots: &HashSet<u32>,
@@ -649,7 +698,8 @@ fn cheaper_again(
     extra: f64,
 ) -> bool {
     let Some((_, length)) = candidates.get(register) else { return false };
-    let (all, copies) = (uses.all.get(register).copied().unwrap_or(0.0), uses.copies.get(register).copied().unwrap_or(0.0));
+    let (all, copies) =
+        (uses.all.get(register).copied().unwrap_or(0.0), uses.copies.get(register).copied().unwrap_or(0.0));
     let length = f64::from(*length);
     all * length - copies < (weight[register] - all) * length + extra
 }
@@ -763,7 +813,11 @@ fn spill_access(
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
         Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
     };
-    Op::I(if load { Inst::Load { mem, addr, mmo: MemOperand::default() } } else { Inst::Store { mem, addr, mmo: MemOperand::default() } })
+    Op::I(if load {
+        Inst::Load { mem, addr, mmo: MemOperand::default() }
+    } else {
+        Inst::Store { mem, addr, mmo: MemOperand::default() }
+    })
 }
 
 #[cfg(test)]
@@ -799,7 +853,15 @@ mod tests {
             .blocks
             .iter()
             .flat_map(|block| &block.ops)
-            .filter(|op| matches!(op, Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, .. }, .. } | Inst::Store { mem: Memory::Fp { bytes: 8, .. }, .. })))
+            .filter(|op| {
+                matches!(
+                    op,
+                    Op::I(
+                        Inst::Load { mem: Memory::Fp { bytes: 8, .. }, .. }
+                            | Inst::Store { mem: Memory::Fp { bytes: 8, .. }, .. }
+                    )
+                )
+            })
             .count()
     }
 
@@ -825,8 +887,9 @@ mod tests {
             .count()
     }
 
-    /// A spilled value used by the next operation was stored from `x15` and reloaded into `x15` at
-    /// once (`fin_number`, `str x15, [sp, #40]; ldr x15, [sp, #40]`, twice): the register still held it.
+    /// A spilled value used by the next operation was stored from `x15` and
+    /// reloaded into `x15` at once (`fin_number`, `str x15, [sp, #40]; ldr
+    /// x15, [sp, #40]`, twice): the register still held it.
     #[test]
     fn a_spilled_value_used_at_once_is_not_reloaded() {
         let value = Reg::Gpr(Gpr(100));
@@ -836,7 +899,8 @@ mod tests {
         assert_eq!(spill_loads(&function), 0, "{:?}", function.blocks[0].ops);
     }
 
-    /// The register is gone after a call, or once something else is written to it: the reload stays.
+    /// The register is gone after a call, or once something else is written to
+    /// it: the reload stays.
     #[test]
     fn a_spilled_value_is_reloaded_after_a_call() {
         let value = Reg::Gpr(Gpr(100));
@@ -847,7 +911,8 @@ mod tests {
     }
 
     /// A coalesced phi copy of a spilled double to itself was `ldr d29, [slot]`
-    /// then `str d29, [slot]`: two instructions for nothing (`fnbody`, three times).
+    /// then `str d29, [slot]`: two instructions for nothing (`fnbody`, three
+    /// times).
     #[test]
     fn a_spilled_register_copied_to_itself_costs_nothing() {
         let value = Reg::Fpr(Vreg(100));
@@ -857,8 +922,9 @@ mod tests {
         assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 
-    /// A 128-bit value live across a call took `d8`, whose upper half the callee
-    /// may clobber, or was spilled as 8 bytes: its top 64 bits were lost.
+    /// A 128-bit value live across a call took `d8`, whose upper half the
+    /// callee may clobber, or was spilled as 8 bytes: its top 64 bits were
+    /// lost.
     #[test]
     fn a_quad_across_a_call_is_spilled_whole() {
         let mut function = function(vec![load(Vreg(100)), call(), store(Vreg(100))]);
@@ -866,12 +932,16 @@ mod tests {
         allocate(&mut function);
         let ops = &function.blocks[0].ops;
         assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
-        let spills = ops.iter().filter(|op| matches!(op, Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, mem: Memory::Fp { bytes: 16, .. }, .. }) if *slot != 0)).count();
+        let spills = ops.iter().filter(|op| matches!(
+            op,
+            Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, mem: Memory::Fp { bytes: 16, .. }, .. }) if *slot != 0
+        )).count();
         assert_eq!(spills, 1, "{ops:?}");
     }
 
-    /// A `VectorFill` made a 128-bit value that no `q` access named before its store, so it was spilled
-    /// as 8 bytes across a call: the top 64 bits were lost.
+    /// A `VectorFill` made a 128-bit value that no `q` access named before its
+    /// store, so it was spilled as 8 bytes across a call: the top 64 bits
+    /// were lost.
     #[test]
     fn a_vector_fill_across_a_call_is_spilled_whole() {
         let fill = Op::I(Inst::VectorFill { rd: Vreg(100), fill: Fill::Zero });

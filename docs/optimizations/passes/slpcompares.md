@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpcompares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpcompares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpcompares.rs sha256:159c553c54393229321bd4d372d08d15fd2e8fddbda7dc4b758ab48a99c578a5 -->
+<!-- src: crates/opt/llrm-transforms/src/slpcompares.rs sha256:3c1195d91af2cbf19e5964bc705d1dad51f9241378d0b66b023ffd95890a5cfa -->
 
 # slpcompares
 
@@ -32,7 +32,8 @@ MIRROR: the outcome of `SLPVectorizerPass` (`PassBuilderPipelines.cpp`
 l.1455) on an `and` reduction of equalities of consecutive loads, with
 `VectorCombine` and `InstCombine` after it. Chunks of fewer than four
 bytes are not made: the pin's cost model keeps two and three byte chains
-scalar (`two_bytes_stay_bytes` in `llrm-arm64`'s `slp_compares.rs`, measured against the pin).
+scalar (`two_bytes_stay_bytes` in `llrm-arm64`'s `slp_compares.rs`, measured
+against the pin).
 
 DEVIATE 1: no vectors. A chain the pin makes a `<16 x i8>` compare is
 two 8-byte compares here. Exit: vector types in the backend.

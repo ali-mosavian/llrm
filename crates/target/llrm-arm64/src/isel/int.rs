@@ -874,8 +874,10 @@ impl Selector<'_> {
         );
         let want = if signed { Known::Sign } else { Known::Zero };
         let width = width_of(bits);
+        // A 32 or 64-bit compare reads its register as it is: only a narrower
+        // value has garbage above.
         let l = self.gpr_of(left)?;
-        let l = self.extended(G { bits, ..l }, want);
+        let l = if bits >= 32 { G { bits, ..l } } else { self.extended(G { bits, ..l }, want) };
         let right = if let Src::Int { value, .. } = right {
             // The constant is extended as the register is, so the flags agree.
             let constant = if signed { llrm_mir::context::signed(value, bits) as i64 as u64 } else { value as u64 };
@@ -884,7 +886,7 @@ impl Selector<'_> {
             CompareRight::Constant { constant, signed_constant, bits }
         } else {
             let r = self.gpr_of(right)?;
-            CompareRight::Register(self.extended(G { bits, ..r }, want).reg)
+            CompareRight::Register(if bits >= 32 { r.reg } else { self.extended(G { bits, ..r }, want).reg })
         };
         Ok(CompareOperands { predicate, width, left: l.reg, right })
     }
