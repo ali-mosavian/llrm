@@ -30,8 +30,9 @@ use super::dag::{NodeData, Rauw, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
 
-/// `GatherAllAliasesMaxDepth`.
-const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 6;
+/// `GatherAllAliasesMaxDepth`: 18, `TargetLoweringBase`; x86 does not set its
+/// own.
+const GATHER_ALL_ALIASES_MAX_DEPTH: usize = 18;
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
     /// The bytes a load or store moves, and its memory info.

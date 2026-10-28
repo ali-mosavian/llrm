@@ -133,6 +133,7 @@ fn program() -> Object {
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug: None,
     }
 }
@@ -297,6 +298,7 @@ fn arm64_program() -> Object {
         ],
         omf_groups: vec![],
         omf_comdat: vec![],
+        frames: Vec::new(),
         debug: None,
     }
 }
@@ -391,6 +393,7 @@ fn ld64_links_it_with_a_clang_object() {
         ],
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug: None,
     };
     std::fs::write(dir.join("mine.o"), write(&made).unwrap()).unwrap();
