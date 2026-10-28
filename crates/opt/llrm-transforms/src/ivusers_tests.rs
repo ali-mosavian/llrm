@@ -175,3 +175,22 @@ fn test_sorting_the_users_orders_no_more_than_the_users() {
         assert!(users.ordered_instructions() <= 8, "{} instructions ordered", users.ordered_instructions());
     });
 }
+
+/// A carried set that an edit made stale is told from a current one. The
+/// uses of the loop with its exit test on the counter and on the stepped
+/// counter differ in the compare's operand.
+#[test]
+fn a_set_carried_past_an_edit_that_changed_a_use_differs_from_a_fresh_one() {
+    let mut carried = Vec::new();
+    with_users(ARRAY, |_, _, users, _, _| carried = users.uses.clone());
+    let mut again = Vec::new();
+    with_users(ARRAY, |_, _, users, _, _| again = users.uses.clone());
+    assert_eq!(crate::ivusers::difference(&carried, &again), None);
+    let edited = ARRAY.replace("icmp slt i32 %next, %n", "icmp slt i32 %i, %n");
+    let mut stale = Vec::new();
+    with_users(&edited, |_, _, users, _, _| stale = users.uses.clone());
+    let found = crate::ivusers::difference(&carried, &stale).expect("a difference");
+    assert!(found.contains("carried"), "{found}");
+    carried.pop();
+    assert!(crate::ivusers::difference(&carried, &again).is_some());
+}

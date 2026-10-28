@@ -45,6 +45,11 @@ def excess(basic: bool) -> list[str]:
     return [f"-fexcess-precision={environ['SIZES_EXCESS']}"] if basic and environ.get("SIZES_EXCESS") else []
 
 
+def isel() -> list[str]:
+    """`--isel=` of $SIZES_ISEL for every program: unset builds with the compiler's default selector, which on main and until the switch-over is the old one."""
+    return [f"--isel={environ['SIZES_ISEL']}"] if environ.get("SIZES_ISEL") else []
+
+
 def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
     qb, cc, nib = (str(bins / name) for name in ("llrm-qb", "llrm-c", "llrm-nib"))
     out = []
@@ -54,7 +59,7 @@ def programs(bins: Path, demos: bool = True) -> list[tuple[str, list[str]]]:
         out = [(f"demo-{one}", [qb, str(DEMOS / one / "TSC.BAS"), "--dialect", "qb45", "--runtime", "qb45"]) for one in ("qbdemo", "oimad", "deedlines")]
     for files, tool in ((sorted(glob.glob(str(ROOT / "tests/run/qb/*.bas"))), qb), (benchlist.sources(".bas", ROOT / "bench"), qb), (benchlist.sources(".c", ROOT / "bench"), cc),
                         (benchlist.sources(".nib", ROOT / "bench"), nib), (sorted(glob.glob(str(ROOT / "examples/*.nib"))), nib)):
-        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb)]) for file in files]
+        out += [(f"{Path(file).parent.name}/{Path(file).name}", [tool, str(file), *dialect(tool == qb, str(file)), *settings(str(file)), *excess(tool == qb), *isel()]) for file in files]
     return out
 
 

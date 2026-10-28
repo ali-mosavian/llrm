@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fpregs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fpregs.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/fpregs.rs sha256:58136642f0ad7753e57c03430aa043fd1690fe6f1e91822ee8fe426b1947e221 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/fpregs.rs sha256:63a6a2b6fddef68c7b43f1d4bd9a30cdb177570c860a8b96404e8b12ae5b9659 -->
 
 # fpregs
 
@@ -24,4 +24,4 @@ is returned as it is.
 `b1 := fld [a]; b1 := fmul b1, b0`, `b1` being `fp1`'s value.
 
 ## Needs
-[`crate::backend::allocate::RFP`](allocate.md).
+[`llrm_lir::registers::Regs::rfp_registers`](https://github.com/ali-mosavian/llrm/blob/main/crates/ir/llrm-lir/src/registers.rs).

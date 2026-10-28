@@ -294,6 +294,15 @@ fn test_a_bare_literal_address_keeps_two_bytes_however_small_it_is() {
 }
 
 #[test]
+fn test_a_negative_literal_address_is_the_same_word_unsigned() {
+    // `PEEK(&HB8000 + 3998)` at DEF SEG = 0 under dag asked for `es:[-28770]`;
+    // the direct-address field was refused and the program did not compile.
+    let cell = ir::Mem::new(Some(Addr::new(Space::Literal, -28770)), 2);
+    let made = made(arith_mem("add", RegId::BX, &cell, At::bits16(0)));
+    assert_eq!(hex(&made.code), "031e9e8f");
+}
+
+#[test]
 fn test_a_relocated_push_keeps_the_wide_immediate() {
     assert_eq!(hex(&made(push_imm(0, 2, At::bits16(0), true)).code), "680000");
     assert_eq!(hex(&made(push_imm(0, 2, At::bits16(0), false)).code), "6a00");
@@ -479,6 +488,26 @@ fn funnel_of(
 fn test_a_funnel_shift_emits_the_form_its_count_asks_for() {
     for (count, want) in [(imm(16, 1), "660facd010"), (rg(RegId::CL, 1), "660fadd0")] {
         assert_eq!(hex(&made(emitted(&funnel_of(count, "shrd"))).code), want);
+    }
+}
+
+/// A 16-bit `shrd`/`shld` (the `i16` funnel shift, `SHRD16rri8`) had no
+/// encoding, only the 32-bit forms: the object builder stopped with
+/// "Semantics(op=FUNNEL, name='shrd' ...)" on `_Sat _Fract` multiplies.
+#[test]
+fn test_a_word_funnel_shift_emits_the_16_bit_form() {
+    let word = |count: Loc, name: &str| {
+        let low = rg(RegId::AX, 2);
+        sem(Operation::Funnel, Some(name), vec![low.clone()], vec![low, rg(RegId::DX, 2), count], None, false)
+    };
+    for (bits, count, name, want) in [
+        (16, imm(15, 1), "shrd", "0facd00f"),
+        (16, rg(RegId::CL, 1), "shrd", "0fadd0"),
+        (16, imm(15, 1), "shld", "0fa4d00f"),
+        (32, imm(15, 1), "shrd", "660facd00f"),
+    ] {
+        let code = emit_in(bits, &word(count, name), 0, None, false, false, None).expect("a 16-bit funnel shift");
+        assert_eq!(hex(&code.code), want, "{name} at {bits} bits");
     }
 }
 
