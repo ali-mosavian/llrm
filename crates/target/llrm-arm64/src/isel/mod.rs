@@ -401,6 +401,7 @@ impl<'a> Selector<'a> {
                 Ok(Src::Val(Val::Ptr(address)))
             }
             llrm_mir::ConstantExpr::Cast { .. } => refuse("a constant cast"),
+            llrm_mir::ConstantExpr::Binary { .. } => refuse("a constant binary operator"),
         }
     }
 

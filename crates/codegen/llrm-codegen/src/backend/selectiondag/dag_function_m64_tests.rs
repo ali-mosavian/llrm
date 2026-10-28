@@ -900,6 +900,45 @@ entry:
     selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
 }
 
+/// A `{ i64, i48 }` result (a packed struct returned in `rax:rdx`) stopped at
+/// `Legalize(Unsupported CopyToReg i48 "promote operand")` (gcc.c-torture
+/// 20131127-1): the member was copied to `rdx` at its own width. The pin
+/// any-extends it to the register type (`getCopyToParts`).
+#[test]
+fn an_m64_aggregate_result_with_an_odd_member_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+@c = global { i64, i48 } zeroinitializer
+define { i64, i48 } @f() {
+entry:
+  %v = load { i64, i48 }, ptr @c
+  ret { i64, i48 } %v
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
+/// The caller of a `{ i64, i48 }` function read the `i48` from `rdx` at its own
+/// width (`Legalize(Unsupported CopyFromReg i48 "promote result")`, 20131127-1
+/// at -O0): the register is read whole and truncated.
+#[test]
+fn an_m64_call_of_an_aggregate_with_an_odd_member_is_selected() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare { i64, i48 } @g()
+define i64 @f() {
+entry:
+  %v = call { i64, i48 } @g()
+  %b = extractvalue { i64, i48 } %v, 1
+  %z = zext i48 %b to i64
+  ret i64 %z
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+}
+
 /// A `long double` compare at m64 was `Emit(Unmapped("UCOM_FpIr80"))`: the
 /// x86-64 CPUs have `fcomi`, so the table selects its flag-setting form.
 #[test]

@@ -128,6 +128,7 @@ pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
 pub mod allocate;
+
 pub mod arithmetic;
 pub mod arrival;
 pub mod asm;
@@ -172,6 +173,7 @@ pub mod funnel;
 pub mod globals;
 pub mod inline_asm;
 pub mod isel;
+pub mod masks;
 pub mod valuefacts;
 
 /// Every target's peephole rules, as its definition directory is named.
