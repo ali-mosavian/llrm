@@ -403,6 +403,15 @@ mod tests {
             // to set them on the reassociated operation only when both
             // operations had them, and drops the rest.
             "combine_shared.rs",
+            // InstructionCombining.cpp's `narrowMathIfNoOverflow` reads no
+            // flag off its operands; it gives the narrow operation the
+            // `nsw`/`nuw` that `willNotOverflow` proved for it.
+            "combine_narrow.rs",
+            // InstructionCombining.cpp's `EmitGEPOffsets` adds the offsets
+            // with `NW.hasNoUnsignedWrap()` as `nuw` and `NW.isInBounds()` as
+            // `nsw`: the flags of the GEPs it replaces, on the sum made in
+            // their place.
+            "combine_gep_base.rs",
             // InstCombineAddSub.cpp's `visitAdd` and its helpers read an add's
             // and a sub's `nsw`/`nuw` where LLVM does, to give the
             // replacement the flags the operands prove.
