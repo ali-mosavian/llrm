@@ -121,6 +121,11 @@ pub struct Insn {
     /// in `uses`, no live range starts at them, and the allocator gives them
     /// any register of their class.
     pub undefs: Vec<u32>,
+    /// It defines a narrower part of a value than the value is read at, and the
+    /// value is not live before it: the rest of the register is undefined (the
+    /// `implicit-def` `VirtRegRewriter` puts on a sub-register def whose other
+    /// lanes are `undef`).
+    pub undef_super: bool,
     pub clobbers: BTreeSet<RegId>,
     pub clobbers_high: BTreeSet<RegId>,
     pub spread: Vec<(i64, i64)>,
@@ -407,6 +412,19 @@ impl LirBody {
     }
 }
 
+/// The line of one instruction standing for two
+/// (`DILocation::getMergedLocation`): the line both have, none where either has
+/// none, else line 0, which a debugger does not stop at.
+pub fn merged_line(
+    one: Option<u32>,
+    other: Option<u32>,
+) -> Option<u32> {
+    match (one, other) {
+        (Some(a), Some(b)) => Some(if a == b { a } else { 0 }),
+        _ => None,
+    }
+}
+
 impl Insn {
     /// The (written, read) pair this instruction is a plain move of
     /// (`TargetInstrInfo::isCopyInstr`).
@@ -526,6 +544,7 @@ impl Insn {
             defines,
             uses,
             undefs: Vec::new(),
+            undef_super: false,
             clobbers: BTreeSet::new(),
             clobbers_high: BTreeSet::new(),
             spread: Vec::new(),
@@ -1425,6 +1444,12 @@ impl LirBody {
         }
     }
 
+    /// The instructions of every block in order, as `insns` lists them, with
+    /// no list made (a gate that only asks `any` cloned every `Arc`).
+    pub fn iter_insns(&self) -> impl Iterator<Item = &Arc<Insn>> {
+        self.blocks.iter().flat_map(|block| block.insns.iter())
+    }
+
     /// Python `LirBody.insns`.
     #[must_use]
     pub fn insns(&self) -> Vec<Arc<Insn>> {
@@ -1573,6 +1598,28 @@ where
 #[cfg(test)]
 mod tests {
     use llrm_lir::registers::RegId;
+
+    use crate::model::lir::{LirBlock, LirBody};
+
+    /// The float gates asked `body.insns().iter().any(..)`, which cloned every
+    /// `Arc` of the function into a list first (0.31 M Ir of d_faces). The
+    /// iterator names the same instructions in the same order.
+    #[test]
+    fn test_iter_insns_lists_the_instructions_of_every_block_in_order() {
+        let block =
+            |at: i64, count: i64| LirBlock::new(at, (0..count).map(|n| instruction(at * 10 + n, None)).collect());
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![block(0, 2).into(), block(1, 0).into(), block(2, 3).into()],
+            Default::default(),
+            Default::default(),
+        );
+        let listed: Vec<_> = body.insns();
+        let walked: Vec<_> = body.iter_insns().collect();
+        assert_eq!(walked.len(), 5);
+        assert!(listed.iter().zip(&walked).all(|(one, other)| Arc::ptr_eq(one, other)));
+    }
 
     /// A table kept past the instruction it named answered for whatever was
     /// allocated at its address next: the key of an instruction was its

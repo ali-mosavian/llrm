@@ -96,6 +96,9 @@ pub struct CalleeFacts {
     /// a double or an extended real (their 8-byte slots) and every function
     /// that calls one of them directly.
     aligned: BTreeSet<String>,
+    /// The functions no function of the module calls (itself included) and
+    /// whose address is not taken.
+    uncalled: BTreeSet<String>,
 }
 
 /// Whether some function of `module` has a value of type double or x87
@@ -140,8 +143,17 @@ impl CalleeFacts {
             .filter(|&&id| !graph.recursive(id))
             .filter_map(|&id| module.global(id).name.owned())
             .collect();
+        let addressed = llrm_mir::callgraph::addressed(module);
+        let called: BTreeSet<GlobalId> = graph.bottom_up().into_iter().flat_map(|id| graph.callees_of(id)).collect();
+        let uncalled = graph
+            .bottom_up()
+            .into_iter()
+            .filter(|id| !called.contains(id) && !addressed.contains(id))
+            .filter_map(|id| module.global(id).name.owned())
+            .collect();
         (
             Self {
+                uncalled,
                 callees: Some(std::rc::Rc::new(llrm_mir::memory::callees(module))),
                 eligible,
                 written: RefCell::default(),
@@ -149,6 +161,14 @@ impl CalleeFacts {
             },
             graph.bottom_up(),
         )
+    }
+
+    /// Whether nothing in the module calls `name` or takes its address.
+    pub fn uncalled(
+        &self,
+        name: &str,
+    ) -> bool {
+        self.uncalled.contains(name)
     }
 
     /// The bytes the stack pointer is a multiple of when `name` is entered: the
@@ -359,6 +379,7 @@ mod tests {
             optional: false,
             enter: false,
             wrap_split_size: false,
+            slot_scratch: None,
             free: false,
         };
         let facts = CalleeFacts::of(&parsed(LEAF)).0;

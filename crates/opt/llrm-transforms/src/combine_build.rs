@@ -130,6 +130,51 @@ impl Combiner<'_> {
         self.value_of(new)
     }
 
+    /// `Builder.CreateIntrinsic(umul/smul.with.overflow, {a, b})`: the call,
+    /// of the type `{ iN, i1 }`.
+    pub fn create_mul_with_overflow(
+        &mut self,
+        at: InstId,
+        signed: bool,
+        a: Operand,
+        b: Operand,
+    ) -> Operand {
+        let ty = self.type_of(a);
+        let i1 = self.context.types.int(1);
+        let pair = self.context.types.intern(Type::Struct { fields: vec![ty, i1], packed: false });
+        let parameters = vec![ty, ty];
+        let function_type = self.context.types.intern(Type::Function { returns: pair, parameters, variadic: false });
+        let width = self.context.types.int_bits(ty).expect("an integer");
+        let base = if signed { "smul" } else { "umul" };
+        let callee = self.declared.declare(&format!("llvm.{base}.with.overflow.i{width}"), function_type);
+        let pointer = self.context.types.ptr(0);
+        let callee =
+            Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+        let info = CallInfo {
+            function_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); 2],
+            attrs: Vec::new(),
+            tail: Tail::default(),
+        };
+        let new = self.insert_before(at, Opcode::Call(Box::new(info)), pair, vec![a, b, callee], Flags::default());
+        self.value_of(new)
+    }
+
+    /// `Builder.CreateExtractValue(aggregate, {index})` of a member of type
+    /// `ty`.
+    pub fn create_extract_value(
+        &mut self,
+        at: InstId,
+        aggregate: Operand,
+        index: u32,
+        ty: TypeId,
+    ) -> Operand {
+        let new = self.insert_before(at, Opcode::ExtractValue(vec![index]), ty, vec![aggregate], Flags::default());
+        self.value_of(new)
+    }
+
     /// `Builder.CreateAdd(a, b)`.
     pub fn create_add(
         &mut self,

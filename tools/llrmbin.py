@@ -12,6 +12,13 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+STAMPED = ("llrm-c", "llrm-llc")
+
+
+def compiler(found: Path) -> Path:
+    """The C compiler in the binaries directory `found`: llrm-cc where it is built, else llrm-c (until it is deleted).
+    Every tool names it through here."""
+    return found / "llrm-cc" if (found / "llrm-cc").is_file() else found / "llrm-c"
 
 
 def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
@@ -30,14 +37,16 @@ def bin_dir(env: dict | None = None, repo: Path = REPO) -> Path:
 
 
 def stamped(found: Path) -> None:
-    """Prints the commit llrm-c was built from; refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
+    """Prints the commit the binaries were built from (llrm-c's or llrm-llc's stamp); refuses another than LLRM_EXPECT_SHA names. A tree with changes is the gate's own, so it is not refused here."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import stamp
 
     expect = os.environ.get("LLRM_EXPECT_SHA") or None
-    if (found / "llrm-c").is_file():
+    # llrm-cc prints clang's --version; the stamp is the backend's, which is built from the same commit.
+    stamped_one = next((found / name for name in STAMPED if (found / name).is_file()), None)
+    if stamped_one:
         try:
-            stamp.check(found / "llrm-c", expect, allow_dirty=True, label=str(found))
+            stamp.check(stamped_one, expect, allow_dirty=True, label=str(found))
         except SystemExit:
             if expect:
                 raise  # a binary without a stamp is only refused where a sha is named
@@ -148,7 +157,7 @@ def pinned(binary: Path) -> Path:
         _pins.append(tempfile.mkdtemp(prefix="llrm-pin-", dir="/tmp"))
         atexit.register(shutil.rmtree, _pins[0], True)
     key = hashlib.sha256(str(binary).encode()).hexdigest()[:8]
-    room = PINNED_BYTES - len(_pins[0]) - len("/llrm-c") - 1
+    room = PINNED_BYTES - len(_pins[0]) - len("/") - len(binary.name) - 1
     folder = Path(_pins[0]) / (key + "p" * (room - len(key)))
     folder.mkdir(exist_ok=True)
     link = folder / binary.name

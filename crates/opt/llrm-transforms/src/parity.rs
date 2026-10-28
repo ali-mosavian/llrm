@@ -202,6 +202,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
         note: "CLOSED row planets -Os (found 2026-10-20 by w-6, withdrawn the same day): the pin's -Os (O2 plus the optsize attribute) keeps the 4-trip f32 sum over four constant stores to a frame slot, as head does (opt -passes='default<O2>' on that IR with optsize keeps the loop, without it folds); clang folded a C array literal only because its frontend initializes the array from a constant global by memcpy, which the unroll cost reads as a large saving. A frontend-shape difference (Nib/C array literal), not the unroll cost or LFTR (21aadae64 only stopped the -O1 fold, where the pin keeps the loop too)",
     },
     entry("sroa@776", Simplify, "sroa", Translated, "sroa.rs"),
+    entry("mldst-motion@783", Simplify, "mldst-motion", Translated, "mldstmotion.rs"),
     entry("inferspace@787", Simplify, "infer-address-spaces (target)", Old, ""),
     entry("gvn@787", Simplify, "gvn", Translated, ""),
     entry("sccp@792", Simplify, "sccp", Translated, ""),
@@ -339,6 +340,7 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("farcall@1", Backend, "x86 far-call lowering (target)", Old, ""),
     entry("cmpsub@1", Backend, "x86 EmitCmp: SUB shares flags with the difference", Translated, ""),
     entry("optimizephis@1", Backend, "opt-phis (OptimizePHIs.cpp)", Translated, ""),
+    entry("deadmi@1", Backend, "dead-mi-elimination (DeadMachineInstructionElim.cpp)", Translated, ""),
     entry("phiconst@2", Backend, "none (shared phi constants)", Old, ""),
     entry("processimpdefs@2", Backend, "process-implicit-defs (ProcessImplicitDefs.cpp)", Translated, ""),
     entry("ssaspill@3", Backend, "none (spiller route)", Old, ""),
@@ -748,6 +750,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "aggressive-instcombine@678",
     "jumptableswitch@672",
     "constraint-elimination@699",
+    "mldst-motion@783",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:

@@ -26,8 +26,10 @@
 //!
 //! The second half of `getSuperRegDestIfDead` (an implicit-def of the super
 //! register on a `MOV8rm`, `MOV16rm`, `MOV8rr` or `MOV16rr` whose upper bits
-//! were undefined, where the pin's liveness has no sub-register lanes) is N/A:
-//! `dead_after` is per lane, so a dead upper half is already dead.
+//! were undefined) is `Insn::undef_super`, which `rewriter::rewrite` sets on a
+//! narrow definition of a value that is read wider and not live before it: a
+//! 32-bit user of the loaded word reads the upper lanes, which `dead_after`
+//! counts as live though nothing ever defined them.
 //!
 //! DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 //! prefix, so the pin's claim that the size is the same is false there; the
@@ -167,6 +169,7 @@ impl FixupBw {
         regs: Regs,
         dest: Reg,
         dead: &crate::backend::peephole::Lanes,
+        undef_super: bool,
     ) -> Option<Reg> {
         if regs.is_segment(dest.register) {
             return None;
@@ -175,14 +178,13 @@ impl FixupBw {
         if !_lanes(regs, dest.register).iter().all(|lane| lane.1 < dest.width as u32) {
             return None;
         }
-        make::rest_of_root(regs, dest)
-            .is_subset(dead)
-            .then(
-                || {
-                    let Loc::Reg(wide) = make::dword_of(regs, dest) else { unreachable!("a register") };
-                    wide
-                },
-            )
+        // The rest of the register is live afterwards but was not before: the
+        // `implicit-def` of the super register on a `MOV8rm`, `MOV16rm`,
+        // `MOV8rr` or `MOV16rr` with no implicit use (L254).
+        (undef_super || make::rest_of_root(regs, dest).is_subset(dead)).then(|| {
+            let Loc::Reg(wide) = make::dword_of(regs, dest) else { unreachable!("a register") };
+            wide
+        })
     }
 
     /// `tryReplaceLoad`: `mov` from memory to `movzx` into the dword register.
@@ -194,7 +196,7 @@ impl FixupBw {
         dest: Reg,
         dead: &crate::backend::peephole::Lanes,
     ) -> Option<Insn> {
-        let wide = Self::super_reg_dest_if_dead(regs, dest, dead)?;
+        let wide = Self::super_reg_dest_if_dead(regs, dest, dead, one.undef_super)?;
         let new = rebuilt(one, "movzx", Operation::Extend, wide, None);
         (free_fields(one, WIDENING_LOAD) && short_in_real_mode_at(bits, one, &new)).then_some(new)
     }
@@ -209,7 +211,7 @@ impl FixupBw {
         src: Reg,
         dead: &crate::backend::peephole::Lanes,
     ) -> Option<Insn> {
-        let wide = Self::super_reg_dest_if_dead(regs, dest, dead)?;
+        let wide = Self::super_reg_dest_if_dead(regs, dest, dead, one.undef_super)?;
         // The source must be the same part of its register as the destination
         // is of its own: `movb %ah, %al` is not `movl %eax, %eax`.
         if regs.is_segment(src.register) || !_lanes(regs, src.register).iter().all(|lane| lane.1 < src.width as u32) {
@@ -230,7 +232,7 @@ impl FixupBw {
         src: Option<Reg>,
         dead: &crate::backend::peephole::Lanes,
     ) -> Option<Insn> {
-        let wide = Self::super_reg_dest_if_dead(regs, dest, dead)?;
+        let wide = Self::super_reg_dest_if_dead(regs, dest, dead, false)?;
         let name = one.what.as_ref()?.name.clone()?;
         // Don't interfere with the formation of `cbw`, a shorter encoding than
         // even the `movsx` to a dword.

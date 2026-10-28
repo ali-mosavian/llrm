@@ -88,6 +88,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
+    ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
@@ -160,6 +161,9 @@ pub fn machine_with<'a>(
         // On SSA, first: a phi cycle that carries one value is that value (the
         // pin: OptimizePHIs, ahead of MachineCSE).
         Box::new(crate::backend::optimizephis::OptimizePhis),
+        // As the pin has it, straight after selection: what selection built
+        // and nothing reads (a far pointer joined for the string registers).
+        Box::new(crate::backend::deadmi::DeadMachineInstructionElim),
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
@@ -560,6 +564,21 @@ mod tests {
         for later in ["MachineLICM", "MachineCSE", "MachineSink", "PeepholeOptimizer"] {
             assert!(at("MachineCombiner") < at(later), "{later}: {names:?}");
         }
+    }
+
+    /// `llc -O2 -debug-pass` has X86FixupSetCC before the pre-RA scheduler;
+    /// ours ran after it, so the zero a `setcc` needs was placed once the
+    /// order was fixed (x_rle m32: a `lea` in another place).
+    #[test]
+    fn test_fixupsetcc_runs_before_the_machine_scheduler() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        assert!(at("FixupSetCC") < at("MachineScheduler"), "{names:?}");
     }
 
     #[test]

@@ -97,6 +97,36 @@ fn a_spilled_float_is_stored_in_a_dword_cell() {
     assert_eq!(listing.matches("fstp qword").count(), 0, "{listing}");
 }
 
+/// clang keeps a library builtin (`memcpy`) in C's convention whatever
+/// `-fdefault-calling-conv` says, and refused its address in a pointer of the
+/// default convention: memcpy_runtime.c and memfuncs_runtime.c (6 rows) did
+/// not compile at x86_32-wat.
+#[test]
+fn the_address_of_a_library_builtin_fits_a_default_convention_pointer_at_m32() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-wat-bi-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.c"),
+        "extern void *memcpy(void *, const void *, unsigned long);\nstatic void *(*volatile copy)(void *, const void *, unsigned long) = memcpy;\nint f(char *d, char *s) { copy(d, s, 4); return 0; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O1", "-w", "-S", "-o"])
+        .arg(dir.join("a.s"))
+        .arg(dir.join("a.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
 /// The shared start-up called `_main` whatever the frontend: llrm-cc's Watcom
 /// `main_` was left unresolved. `LL_MAIN` names the entry, `_main` by default
 /// (llrm-nib, llrm-qb), `main_` for a program from llrm-cc.
@@ -290,4 +320,173 @@ fn an_m16_program_links_against_watcoms_start_up() {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr)
     );
+}
+
+/// A far pointer initialised from an integer (`(Video far *)0xA0000000`, a
+/// video segment) and written elsewhere: isel refused it, "an address of no
+/// global", and the QB runtime's gfxdev.c did not build at x86_16-wat.
+#[test]
+fn a_far_pointer_initialised_from_an_integer_is_data() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-farint-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("v.c"),
+        "typedef volatile unsigned char far Video;\nstatic Video *screen = (Video far *)0xA0000000UL;\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-Os", "-w", "-c", "-o"])
+        .arg(dir.join("v.o"))
+        .arg(dir.join("v.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// The same on the flat target, a near pointer (`(void *)(0xA000 << 4)`).
+#[test]
+fn a_near_pointer_initialised_from_an_integer_is_data() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-nearint-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("v.c"),
+        "typedef volatile unsigned char Video;\nstatic Video *screen = (Video *)(0xA000UL << 4);\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-Os", "-w", "-c", "-o"])
+        .arg(dir.join("v.o"))
+        .arg(dir.join("v.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// The m16 `main_` pushed and popped bx, cx and dx (6 bytes in 56 programs,
+/// +336 B over llrm-c) for a start-up that discards every register after it
+/// returns. Nothing in the module calls it, so it keeps nothing; one that
+/// something calls keeps Watcom's contract.
+#[test]
+fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-main-clobbers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = "extern long f(long);\nextern void report(long);\nint main(void)\n{\n    long a = f(1), b = f(2), c = f(3);\n    report(a);\n    report(b);\n    report(c);\n    return 0;\n}\n";
+    let again = format!("{body}int again(void) {{ return main(); }}\n");
+    let compile = |name: &str, source: &str| {
+        std::fs::write(dir.join(format!("{name}.c")), source).unwrap();
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", "x86_16-wat")
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+            )
+            .args(["-Os", "-w", "-S", "-o"])
+            .arg(dir.join(format!("{name}.s")))
+            .arg(dir.join(format!("{name}.c")))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+        let listing = std::fs::read_to_string(dir.join(format!("{name}.s"))).unwrap();
+        let from = listing.find("main_ proc").unwrap();
+        listing[from..from + listing[from..].find("main_ endp").unwrap()].to_owned()
+    };
+    let uncalled = compile("uncalled", body);
+    let called = compile("called", &again);
+    let _ = std::fs::remove_dir_all(&dir);
+    let pushes =
+        |text: &str| text.lines().filter(|line| ["push bx", "push cx", "push dx"].contains(&line.trim())).count();
+    assert!(pushes(&called) > 0, "premise: the called main keeps registers\n{called}");
+    assert_eq!(pushes(&uncalled), 0, "{uncalled}");
+}
+
+/// The all-llrm DOS configuration: `x86_16-dos-rp3` is regparm3 (`name@3`,
+/// `main_`) where `x86_16-dos` is cdecl (`_name`), and a program in it links
+/// with the shared start-up. Without the row, QCport-sized comparisons against
+/// llrm-c had cdecl's push/pop cleanup in them (+8.6 KB of +9.8 KB over 65
+/// modules).
+#[test]
+fn the_rp3_dos_row_is_regparm3_and_links() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-rp3-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("g.c"), "int g(int a) { return a + 1; }\nint main(void) { return g(1) - 2; }\n").unwrap();
+    let llc = std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into());
+    let cc = |target: &str, args: &[&str], output: &str| {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", target)
+            .env("LLRM_LLC", &llc)
+            .args(args)
+            .arg(dir.join("g.c"))
+            .arg("-o")
+            .arg(dir.join(output))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{target}: {}", String::from_utf8_lossy(&run.stderr));
+    };
+    cc("x86_16-dos-rp3", &["-O0", "-S"], "rp3.s");
+    cc("x86_16-dos", &["-O0", "-S"], "cdecl.s");
+    cc("x86_16-dos-rp3", &["-O2"], "g.exe");
+    let rp3 = std::fs::read_to_string(dir.join("rp3.s")).unwrap();
+    let cdecl = std::fs::read_to_string(dir.join("cdecl.s")).unwrap();
+    let linked = dir.join("g.exe").exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(rp3.contains("_g@3 proc") && rp3.contains("main_ proc"), "{rp3}");
+    assert!(cdecl.contains("_g proc") && cdecl.contains("_main proc"), "{cdecl}");
+    assert!(linked, "the rp3 program did not link");
+}
+
+/// `int (far *fp)(int) = callee;` with `int far callee(int)` was refused by the
+/// fork's clang ("incompatible function pointer types"): `far` qualified the
+/// result of `callee` instead of its code, and the pointer's `far` was dropped
+/// or made a far pointer to a near function. Every m16 function is far.
+#[test]
+fn a_far_function_pointer_takes_a_far_function() {
+    let Some(fork) = std::env::var_os("LLRM_CLANG_M16") else {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set");
+        return;
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-fp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("p.c"),
+        "int far callee(int x) { return x + 1; }\nint (far *fp)(int) = callee;\nint (*np)(int) = callee;\nint (* far fq)(int) = callee;\nint apply(int (far *f)(int), int v) { return f(v); }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_CLANG_M16", fork)
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O0", "-w", "-c", "-o"])
+        .arg(dir.join("p.o"))
+        .arg(dir.join("p.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }

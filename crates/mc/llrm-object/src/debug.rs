@@ -46,6 +46,32 @@ pub enum Format {
     TurboDebugger,
 }
 
+impl Format {
+    /// Whether the writer says where a value is over a range of code. `None`
+    /// for a format that is the container's pick. CodeView 4, its older
+    /// BASIC dialect and Turbo Debugger's records name one place for a whole
+    /// scope.
+    pub fn location_ranges(self) -> Option<bool> {
+        match self {
+            Format::TurboDebugger => Some(false),
+            Format::Dwarf { .. } => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Whether the writer places a frame cell from the canonical frame address,
+    /// which DWARF's call frame information gives at every address, so `-g`
+    /// keeps no frame register for it. `None` as for
+    /// [`Format::location_ranges`].
+    pub fn cfa_locations(self) -> Option<bool> {
+        match self {
+            Format::TurboDebugger => Some(false),
+            Format::Dwarf { .. } => Some(true),
+            _ => None,
+        }
+    }
+}
+
 /// The source language, which a debugger reads values by.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Language {
@@ -81,8 +107,33 @@ pub enum FrameBase {
     Cfa { bias: i64, far_bias: i64 },
 }
 
+/// What a debug writer needs to know of the machine, so it reads no
+/// [`crate::Arch`]. The target says it (`Info::target`); a made-up one needs no
+/// variant of `Arch`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DebugTarget {
+    /// The width of a near address: a DWARF address, and the size of a
+    /// reference.
+    pub address_bytes: u8,
+    /// Whether an address is a segment and an offset (16-bit real mode).
+    pub segmented: bool,
+    /// CodeView's machine number for `S_COMPILE3`, where the target has one.
+    pub codeview_machine: Option<u16>,
+}
+
+impl DebugTarget {
+    /// What the width of a near offset says; the target adds what it knows
+    /// (`Info::target`).
+    pub fn of(bits: u8) -> Self {
+        Self { address_bytes: bits / 8, segmented: bits == 16, codeview_machine: None }
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
+    /// The machine, where the target says so; unset, [`DebugTarget::of`] the
+    /// object's architecture.
+    pub target: Option<DebugTarget>,
     pub format: Format,
     pub language: Language,
     /// Which CodeView 4 an OMF object carries, where the frontend says.
@@ -108,6 +159,16 @@ pub struct Info {
     /// Variables of the module, in data.
     pub globals: Vec<Variable>,
     pub lines: Vec<Line>,
+}
+
+impl Info {
+    /// The machine this information is written for.
+    pub fn target_of(
+        &self,
+        bits: u8,
+    ) -> DebugTarget {
+        self.target.unwrap_or_else(|| DebugTarget::of(bits))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -463,5 +524,27 @@ mod settled_tests {
         assert_eq!(Location::Frame { disp: 8 }.settled(&scope), Some(&Location::Frame { disp: 8 }));
         let whole = Location::List(vec![(range(0, 32), Location::Register("esi".into()))]);
         assert_eq!(whole.settled(&scope), Some(&Location::Register("esi".into())));
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::Format;
+
+    /// The writers' two capability constants lived in the dwarf and omf crates,
+    /// so codegen named both to ask; the format says it now: DWARF has
+    /// ranges and CFA, Turbo Debugger neither, the rest is the container's
+    /// pick.
+    #[test]
+    fn the_format_says_what_its_writer_can() {
+        assert_eq!(
+            (Format::Dwarf { version: 4 }.location_ranges(), Format::Dwarf { version: 4 }.cfa_locations()),
+            (Some(true), Some(true))
+        );
+        assert_eq!(
+            (Format::TurboDebugger.location_ranges(), Format::TurboDebugger.cfa_locations()),
+            (Some(false), Some(false))
+        );
+        assert_eq!((Format::CodeView.location_ranges(), Format::Default.cfa_locations()), (None, None));
     }
 }

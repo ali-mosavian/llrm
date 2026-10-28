@@ -337,8 +337,12 @@ fn memory_operand(
     // A 16-bit effective address is the sum modulo 64 KB, so a
     // register-relative displacement past a signed word is the same address
     // as its wrap, which is what the two-byte field holds.
-    let displ =
-        if displ_size == 2 && (base != RegId::None || index != RegId::None) { i64::from(displ as i16) } else { displ };
+    // Without a register the word is an absolute offset, held unsigned.
+    let displ = match (displ_size, base != RegId::None || index != RegId::None) {
+        (2, true) => i64::from(displ as i16),
+        (2, false) => i64::from(displ as u16),
+        _ => displ,
+    };
     // iced spells a 32-bit displacement of a 64-bit address as size 8.
     let displ_size = if displ_size == 4 && (base.is_gpr64() || index.is_gpr64()) { 8 } else { displ_size };
     MemoryOperand::new(base.iced(), index.iced(), scale as u32, displ, displ_size, false, overriding(base, seg).iced())
@@ -1655,15 +1659,17 @@ pub fn funnel(
     count: Option<i64>,
     at: At,
 ) -> Option<Emitted> {
-    if !["shld", "shrd"].contains(&name) || width_of(dest) != Some(4) || width_of(other) != Some(4) {
+    let width = width_of(dest).filter(|bytes| matches!(bytes, 2 | 4) && width_of(other) == Some(*bytes))?;
+    if !["shld", "shrd"].contains(&name) {
         return None;
     }
     let opcode = name.to_uppercase();
+    let bits = width * 8;
     let Some(count) = count else {
-        let code = code_of!(opcode, "_RM32_R32_CL")?;
+        let code = code_of!(opcode, "_RM", bits, "_R", bits, "_CL")?;
         return _assemble(&raised(create_reg_reg_reg(code, dest, other, RegId::CL)), at, true);
     };
-    let code = code_of!(opcode, "_RM32_R32_IMM8")?;
+    let code = code_of!(opcode, "_RM", bits, "_R", bits, "_IMM8")?;
     _assemble(&raised(create_reg_reg_i32(code, dest, other, count)), at, true)
 }
 
@@ -2156,8 +2162,24 @@ fn scalar_sse(
     let (dests, sources) = (&what.dests, &what.sources);
     let name = what.name.as_deref()?.trim_end_matches("_x");
     // A copy between xmm registers is `movaps` (`X86InstrInfo::copyPhysReg`);
-    // the allocator names every copy `mov`.
-    let name = if name == "mov" && what.op == Operation::Move { "movaps" } else { name };
+    // the allocator names every copy `mov`. One to or from memory is the
+    // scalar's own move, as a spill of an `FR32`/`FR64` is (`MOVSSmr`,
+    // `MOVSDmr`): `movaps` would touch 16 bytes of a 4 or 8 byte slot.
+    let in_memory = dests
+        .iter()
+        .chain(sources)
+        .find_map(
+            |one| match one {
+                Loc::Mem(cell) => Some(cell.width),
+                _ => None,
+            },
+        );
+    let name = match (name, what.op, in_memory) {
+        ("mov", Operation::Move, Some(4)) => "movss",
+        ("mov", Operation::Move, Some(8)) => "movsd",
+        ("mov", Operation::Move, _) => "movaps",
+        _ => name,
+    };
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),
@@ -2202,6 +2224,15 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMMM", bits(first), "_XMM")?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_mem_reg(code, built, outof.register)), at, relocated)
+        }
+        // movd/movq: between an integer register and an xmm register.
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "movq" | "movd") && !xmm(first) => {
+            let code = code_of!(upper, "_RM", into.width * 8, "_XMM")?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "movq" | "movd") => {
+            let code = code_of!(upper, "_XMM_RM", outof.width * 8)?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
         // cvttsd2si: an integer register from an xmm register or memory.
         (Loc::Reg(into), source) if !xmm(first) => {
@@ -2295,7 +2326,8 @@ pub fn emit_in(
     let op = what.op;
     let seg = |register: RegId| SEGMENTS.contains_key(&register);
 
-    if all().any(|operand| reg_of(operand).is_some_and(RegId::is_xmm)) {
+    // `cvttss2si rax, [slot]` names no xmm register.
+    if name.starts_with("cvtt") || all().any(|operand| reg_of(operand).is_some_and(RegId::is_xmm)) {
         return scalar_sse(what, at);
     }
 

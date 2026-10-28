@@ -21,7 +21,7 @@ b0:
     let mut module = parsed(text);
     let before = results(&module, &[&[]]);
     let layout = llrm_analysis::testing::layout(&module);
-    let changed = super::split(&mut module, &layout);
+    let changed = super::split(&mut module, &layout, llrm_x86_m16::spaces());
     let after = printed(&module);
     assert_eq!(results(&module, &[&[]]), before, "{after}");
     assert!(!changed.is_empty(), "{after}");
@@ -34,7 +34,7 @@ fn splitted(text: &str) -> (String, bool) {
     let mut module = parsed(text);
     let before = results(&module, &[&[]]);
     let layout = llrm_analysis::testing::layout(&module);
-    let changed = !super::split(&mut module, &layout).is_empty();
+    let changed = !super::split(&mut module, &layout, llrm_x86_m16::spaces()).is_empty();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[]]), before, "{after}");
     (after, changed)
