@@ -105,7 +105,7 @@ pub fn is_trivially_re_materializable(
 /// stack object, and `isLoadFromInvariantOrConstantMemory` takes a load of one
 /// (`MachineFrameInfo::isImmutableObjectIndex`): the pin's own rule, which
 /// needs no per-live-range proof. Incoming arguments are the frame cells above
-/// the frame pointer.
+/// the frame pointer. An x87 `fld` of one is such a load too.
 pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
     let incoming = |cell: &crate::model::ir::Mem| {
         cell.addr.is_some_and(|addr| addr.space == Space::Frame && addr.disp > 0)
@@ -158,10 +158,10 @@ pub fn argument_loads(body: &LirBody) -> BTreeSet<u32> {
             };
             let addr = cell.addr?;
             let (from, to) = (addr.disp, addr.disp + i64::from(cell.width));
-            (what.op == Operation::Move
-                && what.name.as_deref() == Some("mov")
+            let integer = what.op == Operation::Move && what.name.as_deref() == Some("mov") && into.width == cell.width;
+            let float = what.op == Operation::FloatLoad && what.name.as_deref() == Some("fld");
+            ((integer || float)
                 && incoming(cell)
-                && into.width == cell.width
                 && one.defines == [into.value]
                 && definitions.get(&into.value) == Some(&1)
                 && !written.iter().any(|(start, end)| *start < to && from < *end))
