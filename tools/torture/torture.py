@@ -37,11 +37,11 @@ BUDGET_MS = 15_000
 COMPILE_SECONDS = 60  # of CPU time, not wall clock: a loaded host runs the same compile slower, not longer
 
 
-def run_within_cpu(command: list[str], seconds: int) -> subprocess.CompletedProcess | None:
+def run_within_cpu(command: list[str], seconds: int, env: dict[str, str] | None = None) -> subprocess.CompletedProcess | None:
     """`command`'s result, or None where it used more than `seconds` of CPU time (the shell's `ulimit -t`, which stops it).
     A wall-clock limit stopped programs that compile in a few seconds whenever the host was busy."""
     try:
-        return cpulimit.run(command, seconds, capture_output=True, text=True)
+        return cpulimit.run(command, seconds, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     except subprocess.TimeoutExpired:
         return None
 
@@ -56,8 +56,8 @@ def programs(names: list[str]) -> list[Path]:
 def cause(text: str) -> str:
     """What a compiler's complaint says with its place and its names taken out: the key failures are counted by."""
     lines = [one.strip() for one in text.strip().splitlines() if one.strip()]
-    # wccq's own: the first of its errors says it
-    line = next((one for one in lines if "Error!" in one), lines[0] if lines else "")
+    # the first error says it: wccq's `Error!`, clang's `error:`, or the driver's own line, not the warnings before them
+    line = next((one for one in lines if "Error!" in one or ": error:" in one or one.startswith(("llrm-cc:", "llrm-llc:"))), lines[0] if lines else "")
     line = re.sub(r"^.*Error!\s*E\d+:\s*", "wccq: ", line)
     line = re.sub(r"^llrm-c:\s*", "", line)
     line = re.sub(r"^\S+\.c:\d+(:\d+)?:\s*", "", line)
@@ -154,7 +154,8 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     if sized is not None:
         compiled = work / f"{stem}.c"
         compiled.write_text(f"#define STACK_SIZE {sized}\n{text}")
-    done = run_within_cpu([str(BIN / "llrm-c"), str(compiled), "-I", str(source.parent), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), LEVELS[level], *program_options(text), "-o", str(obj)], COMPILE_SECONDS)
+    command, row = dosbatch.c_compile(compiled, obj, target, LEVELS[level], Path(), [], ["-I", str(source.parent), "-I", str(HERE / "include"), *program_options(text)])
+    done = run_within_cpu(command, COMPILE_SECONDS, row)
     if done is None:
         return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
     if done.returncode != 0 or not obj.exists():
@@ -224,6 +225,15 @@ def main() -> int:
     return code
 
 
+def build_support(target: str, out: Path) -> subprocess.CompletedProcess:
+    """libc.c, the string and memory routines the programs call, through the same compiler and row as the programs."""
+    import tomllib  # noqa: PLC0415
+
+    have = tomllib.loads((dosbatch.ROOT / "runtime/c" / target / "c.toml").read_text()).get("libcalls", [])
+    command, row = dosbatch.c_compile(HERE / "libc.c", out, target, "-O2", Path(), [], ["-fno-builtin", *(f"-DHAVE_{name.upper()}" for name in have), "-I", str(HERE / "include")])
+    return subprocess.run(command, capture_output=True, text=True, env={**os.environ, **row})
+
+
 def run(args, work: Path) -> int:
     target = dosbatch.linkrecipe.named(args.bits)
     rules = expected()
@@ -235,7 +245,7 @@ def run(args, work: Path) -> int:
         print(f"no programs in {CORPUS} (TORTURE_CORPUS names the gcc.c-torture/execute directory)")
         return 2
     support_obj = work / "libc.obj"
-    done = subprocess.run([str(BIN / "llrm-c"), str(HERE / "libc.c"), "-I", str(HERE / "include"), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), "-O2", "-o", str(support_obj)], capture_output=True, text=True)
+    done = build_support(target, support_obj)
     if done.returncode != 0:
         print("libc.c: " + done.stderr)
         return 2

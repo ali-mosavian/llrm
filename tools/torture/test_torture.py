@@ -1,6 +1,7 @@
 """`uv run --project tools python -m unittest discover -s tools/torture`"""
 
 import shutil
+import tempfile
 import sys
 import unittest
 from unittest import mock
@@ -11,11 +12,33 @@ sys.path.insert(0, str(Path(__file__).parent))
 import torture  # noqa: E402
 
 
+class CompilerTests(unittest.TestCase):
+    def test_the_programs_and_the_support_library_are_built_by_llrm_cc_on_one_row(self):
+        """libc.c was built by llrm-c while the programs' calling convention came from the other front end's rows: on parity it failed (E1034 memcpy "already defined")
+        and the harness stopped before the first program."""
+        seen = []
+        with mock.patch.object(torture.subprocess, "run", lambda command, **kw: seen.append((command, kw.get("env", {}))) or mock.Mock(returncode=0)):
+            torture.build_support("x86-m32", Path("/w/libc.obj"))
+        (command, env), = seen
+        self.assertEqual(Path(command[0]).name, "llrm-cc")
+        self.assertEqual(env["LLRM_CC_TARGET"], "x86_32-wat")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(torture, "run_within_cpu", lambda command, seconds, env=None: seen.append((command, env)) or None):
+            (Path(tmp) / "a.c").write_text("int main(void) { return 0; }\n")
+            torture.build(Path(tmp) / "a.c", "O2", "x86-m32", Path(tmp), Path(tmp) / "libc.obj", "T0", [])
+        command, env = seen[-1]
+        self.assertEqual((Path(command[0]).name, env["LLRM_CC_TARGET"]), ("llrm-cc", "x86_32-wat"))
+
+
 class CauseTests(unittest.TestCase):
     def test_a_front_end_error_is_counted_by_what_it_says_not_where_or_of_what(self):
         text = "llrm-c: wccq failed on /x/y.c:\n/x/y.c(10): Warning! W131: No prototype found for function 'f'\n/x/y.c(12): Error! E1054: Missing operand\n"
         self.assertEqual(torture.cause(text), "wccq: Missing operand")
         self.assertEqual(torture.cause("llrm-c: foo_: place n45 has incomplete extent"), "foo_: place nN has incomplete extent")
+
+    def test_a_clang_error_is_the_cause_not_the_warning_before_it(self):
+        """A warning on the first line was every finding's cause: 920411-1 and 930718-1 counted by their warnings under llrm-cc."""
+        text = "/x/y.c:3:1: warning: a function definition without a prototype is deprecated [-Wdeprecated-non-prototype]\n/x/y.c:9:5: error: call to undeclared function 'f'\n"
+        self.assertEqual(torture.cause(text), "error: call to undeclared function '_'")
 
     def test_a_refusal_is_matched_on_the_cause_and_names_its_reason(self):
         rules = torture.expected()
