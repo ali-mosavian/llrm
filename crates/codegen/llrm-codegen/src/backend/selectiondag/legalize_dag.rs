@@ -421,6 +421,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
             ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => Some(vec![self.expand_min_max(node)]),
+            ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
+                Some(vec![super::expand_sat::expand_add_sub_sat(self.dag, self.tli, node)])
+            }
             ISD::BuildPair => {
                 // `ExpandNode`: `zext lo | (anyext hi << half)` ([L4318][pin]).
                 //

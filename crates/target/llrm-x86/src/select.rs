@@ -2156,8 +2156,24 @@ fn scalar_sse(
     let (dests, sources) = (&what.dests, &what.sources);
     let name = what.name.as_deref()?.trim_end_matches("_x");
     // A copy between xmm registers is `movaps` (`X86InstrInfo::copyPhysReg`);
-    // the allocator names every copy `mov`.
-    let name = if name == "mov" && what.op == Operation::Move { "movaps" } else { name };
+    // the allocator names every copy `mov`. One to or from memory is the
+    // scalar's own move, as a spill of an `FR32`/`FR64` is (`MOVSSmr`,
+    // `MOVSDmr`): `movaps` would touch 16 bytes of a 4 or 8 byte slot.
+    let in_memory = dests
+        .iter()
+        .chain(sources)
+        .find_map(
+            |one| match one {
+                Loc::Mem(cell) => Some(cell.width),
+                _ => None,
+            },
+        );
+    let name = match (name, what.op, in_memory) {
+        ("mov", Operation::Move, Some(4)) => "movss",
+        ("mov", Operation::Move, Some(8)) => "movsd",
+        ("mov", Operation::Move, _) => "movaps",
+        _ => name,
+    };
     let (first, second) = match (dests.len(), sources.len()) {
         (1, 2) => (&dests[0], &sources[1]),
         (1, 1) => (&dests[0], &sources[0]),

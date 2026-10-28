@@ -696,8 +696,9 @@ mod tests {
     /// so no object of the Watcom front end changes.
     #[test]
     fn f80_16_states_what_a_layout_without_f80_already_meant() {
-        let old = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-n8:16:32";
         let new = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32";
+        let old = new.replace("-f80:16", "");
+        let old = old.as_str();
         let (old, new) = (DataLayout::parse(old).unwrap(), DataLayout::parse(new).unwrap());
         use crate::types::FloatKind;
         for kind in [FloatKind::Float, FloatKind::Double, FloatKind::X86Fp80] {
