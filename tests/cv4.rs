@@ -472,3 +472,21 @@ fn nib_in_codeview(
     }
     Some(locals(&session, commands).join("\n"))
 }
+
+/// A lexical block in two pieces (optimised code puts other code between them)
+/// made the whole object unwritable: "CodeView 4: a lexical block in pieces",
+/// so every optimised `-g` OMF compile with a nested scope failed. A format
+/// with no list of ranges writes it over its first byte to its last.
+#[test]
+fn a_block_in_two_pieces_is_written_over_its_hull() {
+    let (mut object, _) = synthetic();
+    let function = &mut object.debug.as_mut().unwrap().functions[0];
+    function.blocks[0].ranges = vec![
+        llrm_object::debug::Range { section: 0, offset: 14, length: 3 },
+        llrm_object::debug::Range { section: 0, offset: 19, length: 3 },
+    ];
+    let written = llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf);
+    let bytes = written.unwrap_or_else(|error| panic!("{error}"));
+    let shape = llrm_codegen::objectfile::cv4info::shape(&llrm_codegen::objectfile::omf::parse(&bytes).unwrap());
+    assert!(shape.iter().any(|one| one.contains("k")), "{shape:#?}");
+}

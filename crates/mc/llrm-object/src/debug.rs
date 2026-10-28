@@ -381,6 +381,22 @@ pub struct Block {
     pub blocks: Vec<Block>,
 }
 
+impl Block {
+    /// The one range from the block's first byte to its last, for a format
+    /// that has no list of ranges: it takes in code between the pieces that is
+    /// not the block's. None where the pieces are in more than one section (or
+    /// there are none).
+    pub fn hull(&self) -> Option<Range> {
+        let first = self.ranges.first()?;
+        if self.ranges.iter().any(|one| one.section != first.section) {
+            return None;
+        }
+        let start = self.ranges.iter().map(|one| one.offset).min()?;
+        let end = self.ranges.iter().map(|one| one.offset + one.length).max()?;
+        Some(Range { section: first.section, offset: start, length: end - start })
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Function {
     /// As the source names it.

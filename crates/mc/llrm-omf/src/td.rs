@@ -441,7 +441,7 @@ impl Builder<'_> {
         out: &mut Vec<Rc<Record>>,
         block: &model::Block,
     ) -> Result<(), Error> {
-        let [range] = block.ranges[..] else { return refused("a block of several ranges is not written yet") };
+        let Some(range) = block.hull() else { return refused("a block of several sections is not written") };
         out.push(self.scope(range.section, range.offset)?);
         let own = settled(&block.variables, &block.ranges);
         let variables: Vec<&model::Variable> = own.iter().collect();
