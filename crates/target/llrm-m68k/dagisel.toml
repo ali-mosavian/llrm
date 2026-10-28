@@ -1,0 +1,49 @@
+# The m68k DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
+[target]
+name = "m68k"
+ns = "M68k::"
+isd = "M68kISD::"
+llvm_dir = "M68k"
+td = "M68k.td"
+cpus = ["m68000", "m68020"]
+ids_includes = [
+  "#define GET_INSTRINFO_ENUM",
+  '#include "M68kGenInstrInfo.inc"',
+  "#define GET_REGINFO_ENUM",
+  '#include "M68kGenRegisterInfo.inc"',
+  '#include "M68kSelectionDAGInfo.h"',
+]
+
+# `Proc<>` feature lists of M68k.td: ISA00 (68000), ISA20 (68020).
+[cpu.m68000]
+features = []
+
+[cpu.m68020]
+features = ["ISA20"]
+
+[atom]
+"Subtarget->atLeastM68020()" = ["ISA20"]
+# Position-dependent code: no PIC yet.
+"TM.isPositionIndependent()" = false
+
+[types]
+dead_prefixes = ["v", "nxv"]
+
+[node_predicate]
+# One name per predicate is enough (`M68kInstrInfo.td`, `TargetSelectionDAG.td`). The first four are
+# llrm-dagisel's; `mx_*` are in `src/dagisel/predicates.rs`.
+unindexedstore = "unindexed_store"
+store = "non_truncating_store"
+load = "non_extending_load"
+unindexedload = "unindexed_load"
+Mxloadi16 = "mx_loadi16"
+Mxloadi32 = "mx_loadi32"
+extloadi8 = "memory_vt_i8"
+extloadi16 = "memory_vt_i16"
+atomic_cmp_swap_i32 = "memory_vt_i32"
+Mximm8_1to8 = "mx_imm_1to8"
+Mxstoreloadi8_safe = "mx_store_load_safe"
+sextload = "sext_load"
+zextload = "zext_load"
+extload = "ext_load"
