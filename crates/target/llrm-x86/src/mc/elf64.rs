@@ -41,8 +41,8 @@ impl Machine for X8664 {
             (fixup::GOT_PCREL_4, _) => (R_X86_64_REX_GOTPCRELX, 4, from),
             (FixupKind::DATA_2, true) => (R_X86_64_PC16, 2, from),
             (FixupKind::DATA_1, true) => (R_X86_64_PC8, 1, from),
-            (FixupKind::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
-            (FixupKind::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
+            (fixup::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
+            (fixup::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF x86-64 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from })
@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn a_segment_selector_is_refused() {
         let mut made = hello();
-        made.sections[0].relocs[0].kind = FixupKind::SEGMENT_BASE;
+        made.sections[0].relocs[0].kind = fixup::SEGMENT_BASE;
         assert!(write(&made).is_err());
     }
 

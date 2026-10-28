@@ -244,7 +244,14 @@ pub fn sections(
         image[one.at..one.at + 2].fill(0);
         relocs.push(Reloc::new(
             one.at,
-            if one.far { Fix::FAR_POINTER } else { Fix::abs(2) },
+            if one.far {
+                let kind = info.target_of(object.bits).far_pointer;
+                Fix::plain(
+                    kind.ok_or_else(|| Error::Unencodable("CodeView: the target names no far pointer fixup".into()))?,
+                )
+            } else {
+                Fix::abs(2)
+            },
             Target::Symbol(symbol),
             i64::from(one.displacement as i16),
         ));

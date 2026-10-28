@@ -75,8 +75,8 @@ use crate::support::pyrepr::{self, Repr};
 /// How an address is relocated: a near offset, a segment's selector, a far
 /// pointer.
 pub const OFFSET: Fix = Fix::abs(2);
-pub const BASE: Fix = Fix::SEGMENT_BASE;
-pub const POINTER: Fix = Fix::FAR_POINTER;
+pub const BASE: Fix = Fix::plain(llrm_x86::mc::fixup::SEGMENT_BASE);
+pub const POINTER: Fix = Fix::plain(llrm_x86::mc::fixup::FAR_POINTER);
 pub const OFFSET32: Fix = Fix::abs(4);
 pub const OFFSET64: Fix = Fix::abs(8);
 

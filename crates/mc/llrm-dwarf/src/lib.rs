@@ -15,7 +15,7 @@ mod types;
 
 pub use buffer::{sleb, uleb};
 use llrm_object::debug::{Format, Info};
-use llrm_object::{DebugSection, Definition, Fix, Object, Reloc, Role, Section, Target, Unsupported};
+use llrm_object::{DebugSection, Definition, Fix, FixupKind, Object, Reloc, Role, Section, Target, Unsupported};
 
 /// The version DWARF is written in when the format does not say.
 pub const DEFAULT_VERSION: u16 = 5;
@@ -92,6 +92,7 @@ pub fn expanded(
         locations: lists.then(|| at(if version >= 5 { ".debug_loclists" } else { ".debug_loc" })),
     };
     let mut out = die::Out::new(version, address as u8, places);
+    out.segment = info.target_of(object.bits).segment_base;
     let line = line::program(object, info, &mut out)?;
     let (info_part, abbrev, locations) = die::unit(object, info, &mut out)?;
     let aranges = die::aranges(object, info, &out)?;
@@ -147,10 +148,22 @@ pub(crate) fn symbol_reloc(
 /// A segment base: the selector of the segment `section` is in, which the
 /// linker places (a 16-bit program's addresses are a segment and an offset).
 pub(crate) fn segment_reloc(
+    kind: FixupKind,
     at: usize,
     section: usize,
 ) -> Reloc {
-    Reloc::new(at, Fix::SEGMENT_BASE, Target::Section(section), 0)
+    Reloc::new(at, Fix::plain(kind), Target::Section(section), 0)
+}
+
+/// The kind of fixup that names a segment's selector: the target's to say.
+pub(crate) fn segment_kind(
+    object: &Object,
+    info: &Info,
+) -> Result<FixupKind, Unsupported> {
+    match info.target_of(object.bits).segment_base {
+        Some(kind) => Ok(kind),
+        None => refused("a segmented address needs the target's segment fixup"),
+    }
 }
 
 pub(crate) fn section_reloc(

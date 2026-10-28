@@ -34,8 +34,8 @@ impl Machine for I386 {
             (fixup::BRANCH_2, true) => (R_386_PC16, 2, 2),
             (FixupKind::DATA_2, true) => (R_386_PC16, 2, from),
             (FixupKind::DATA_1, true) => (R_386_PC8, 1, from),
-            (FixupKind::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
-            (FixupKind::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
+            (fixup::SEGMENT_BASE, _) => return Err(Unsupported("a segment selector has no ELF relocation".into())),
+            (fixup::FAR_POINTER, _) => return Err(Unsupported("a 16:16 far pointer has no ELF relocation".into())),
             other => return Err(Unsupported(format!("ELF i386 has no relocation for {other:?}"))),
         };
         Ok(Relocation { kind, width, from })
@@ -213,8 +213,8 @@ mod tests {
                 vec![symbol("f", Binding::Public, Definition::Undefined)],
             ))
         };
-        assert!(at(Fix::SEGMENT_BASE).is_err());
-        assert!(at(Fix::FAR_POINTER).is_err());
+        assert!(at(Fix::plain(fixup::SEGMENT_BASE)).is_err());
+        assert!(at(Fix::plain(fixup::FAR_POINTER)).is_err());
         let far = Section { near: false, role: Role::Data, ..text(vec![0], vec![]) };
         assert!(write(&object(vec![far], vec![])).unwrap_err().0.contains("selector"));
         let stack = Section { role: Role::Stack, ..text(vec![0], vec![]) };

@@ -30,10 +30,10 @@ impl Machine for X8664 {
             (fixup::BRANCH_4, true) => (REL32, 4, 4, 4),
             (FixupKind::SECREL_2, _) => (SECTION, 2, 0, 0),
             (FixupKind::SECREL_4, _) => (SECREL, 4, 0, 0),
-            (FixupKind::SEGMENT_BASE, _) => {
+            (fixup::SEGMENT_BASE, _) => {
                 return Err(Unsupported("a segment selector has no COFF relocation".into()));
             }
-            (FixupKind::FAR_POINTER, _) => {
+            (fixup::FAR_POINTER, _) => {
                 return Err(Unsupported("a 16:16 far pointer has no COFF relocation".into()));
             }
             other => return Err(Unsupported(format!("COFF x86-64 has no relocation for {other:?}"))),

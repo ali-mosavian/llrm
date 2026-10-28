@@ -464,8 +464,8 @@ fn what_mach_o_cannot_say_is_refused() {
         made.sections[0].relocs[0] = Reloc::new(at, fix, Target::Symbol(3), 0);
         write(&made)
     };
-    assert!(with(Fix::SEGMENT_BASE).is_err());
-    assert!(with(Fix::FAR_POINTER).is_err());
+    assert!(with(Fix::plain(llrm_x86::mc::fixup::SEGMENT_BASE)).is_err());
+    assert!(with(Fix::plain(llrm_x86::mc::fixup::FAR_POINTER)).is_err());
     assert!(with(Fix::pc_rel(4, 7)).is_err());
     let mut far = program();
     far.sections[1].near = false;

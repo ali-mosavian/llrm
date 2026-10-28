@@ -95,15 +95,21 @@ pub struct Out {
     pub places: Places,
     pub strings: Strings,
     pub line_strings: Strings,
+    /// The target's fixup kind for a segment's selector.
+    pub segment: Option<llrm_object::FixupKind>,
 }
 
 impl Out {
+    pub fn segment_kind(&self) -> Result<llrm_object::FixupKind, Unsupported> {
+        self.segment.ok_or_else(|| Unsupported("DWARF: a segmented address needs the target's segment fixup".into()))
+    }
+
     pub fn new(
         version: u16,
         address: u8,
         places: Places,
     ) -> Self {
-        Self { version, address, places, strings: Strings::default(), line_strings: Strings::default() }
+        Self { version, address, places, strings: Strings::default(), line_strings: Strings::default(), segment: None }
     }
 }
 
@@ -315,7 +321,7 @@ fn write(
             Value::ExprSegment { section } => {
                 length(buf, 3, out.version)?;
                 buf.u8(DW_OP_CONST2U);
-                buf.segment(*section);
+                buf.segment(out.segment_kind()?, *section);
             }
         }
     }
@@ -366,7 +372,7 @@ pub fn aranges(
         let (symbol, base) = crate::anchor(object, range.section)?;
         buf.address(address, symbol, range.offset as i64 - base as i64);
         if segmented {
-            buf.segment(range.section);
+            buf.segment(out.segment_kind()?, range.section);
         }
         buf.bytes.extend((range.length as u64).to_le_bytes().iter().take(address));
     }
