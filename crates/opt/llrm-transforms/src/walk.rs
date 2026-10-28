@@ -197,11 +197,7 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
-        let size = if self.inline.single {
-            crate::inlinecost::CallerSize::OptSize
-        } else {
-            crate::inlinecost::CallerSize::Speed
-        };
+        let size = self.inline.caller_size();
         for at in 0..program.modules.len() {
             let wanted: BTreeSet<GlobalId> = procedures(program, at).into_iter().collect();
             let private = private(program, at);
@@ -257,8 +253,7 @@ impl ProgramPass for Walk {
                                 self.inline.limit == 0,
                                 tti.as_deref(),
                                 decided.as_mut(),
-                                (tti.is_some() && size == crate::inlinecost::CallerSize::OptSize)
-                                    .then_some(&mut trials),
+                                (tti.is_some() && size != crate::inlinecost::CallerSize::Speed).then_some(&mut trials),
                             )
                         };
                         let mut declared = declared(&mut modules[at], module);
@@ -458,7 +453,8 @@ impl ProgramPass for Walk {
                     }
                     // What it stated reaches the next body's callees.
                     if stated {
-                        modules[at].invalidate(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                        // Each body stated was reported to `changed`.
+                        modules[at].invalidate_logged(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                     }
                 }
             }

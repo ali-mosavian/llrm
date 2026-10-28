@@ -199,7 +199,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         while self.dag.opcode(self.dag.operand(last, 0)) == ISD::Store {
             let chain = self.dag.operand(last, 0);
             // More than one use: the memory operations cannot be reordered.
-            if self.dag.use_count(chain.node) != 1 {
+            if !self.dag.has_one_use(chain.node) {
                 break;
             }
             let (_, length, chain_info) = self.access(chain)?;

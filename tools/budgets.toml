@@ -13,111 +13,12 @@ floor_minstr = 5.0      # a step is read when its own work at 2N is this much, i
 
 [[debt]]
 kind = "steps"
-axis = "branches"
-name = "mir gvn"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 213.9 -> 503.2 Minstr (x2.35)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "mir decide"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 178.9 -> 419.3 Minstr (x2.34)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "isel"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1877"
-owner = "lir-cleanup"
-why = "measured 112.4 -> 263.4 Minstr (x2.34)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "mir indvars"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 74.9 -> 255.5 Minstr (x3.41)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "regalloc base"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 86.5 -> 216.1 Minstr (x2.50)"
-
-[[debt]]
-kind = "steps"
-axis = "live"
-name = "lir coalesce"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/1877"
-owner = "lir-cleanup"
-why = "measured 18.0 -> 54.8 Minstr (x3.04)"
-
-[[debt]]
-kind = "steps"
-axis = "live"
-name = "facts intervals"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 5.1 -> 16.5 Minstr (x3.24)"
-
-[[debt]]
-kind = "steps"
-axis = "live"
-name = "facts widths"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 3.6 -> 12.7 Minstr (x3.51)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
-name = "mir interprocedural"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 7.8 -> 18.2 Minstr (x2.33)"
-
-[[debt]]
-kind = "steps"
-axis = "chain"
-name = "regalloc base"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 3.8 -> 10.0 Minstr (x2.64)"
-
-[[debt]]
-kind = "steps"
 axis = "cases"
 name = "lir coalesce"
-ratio = 2.6
+ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/2189"
 owner = "lir-cleanup"
-why = "measured 26.8 -> 61.8 Minstr (x2.31)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "lir twoaddr"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 60.3 -> 138.7 Minstr (x2.30)"
+why = "measured 144.7 -> 440.1 Minstr (x3.04)"
 
 [[debt]]
 kind = "steps"
@@ -130,51 +31,6 @@ why = "measured 19.7 -> 59.4 Minstr (x3.02)"
 
 [[debt]]
 kind = "steps"
-axis = "cells"
-name = "regalloc base"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 19.3 -> 56.8 Minstr (x2.94)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "mir dse"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/1875"
-owner = "unrolled-slopes"
-why = "measured 11.5 -> 28.1 Minstr (x2.44)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "regalloc spill"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 8.8 -> 23.6 Minstr (x2.67)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "spill cleanup"
-ratio = 4.5
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 4.3 -> 17.5 Minstr (x4.05)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "mir gvn"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 170.3 -> 426.5 Minstr (x2.50)"
-
-[[debt]]
-kind = "steps"
 axis = "joins"
 name = "lir coalesce"
 ratio = 2.9
@@ -182,214 +38,7 @@ issue = "https://github.com/ali-mosavian/llrm/issues/1877"
 owner = "lir-cleanup"
 why = "measured 51.8 -> 136.0 Minstr (x2.63)"
 
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "split placed"
-ratio = 4.5
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 30.4 -> 122.8 Minstr (x4.03)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "analysis through-memory"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 37.9 -> 108.3 Minstr (x2.86)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "regalloc base"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 28.7 -> 87.0 Minstr (x3.03)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "lir twoaddr"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 28.4 -> 73.4 Minstr (x2.58)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "lir floatassign"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/1877"
-owner = "lir-cleanup"
-why = "measured 169.2 -> 597.4 Minstr (x3.53)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "mir gvn"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/1874"
-owner = "o1-rounds"
-why = "measured 121.0 -> 292.7 Minstr (x2.42)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "lir jumps"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1877"
-owner = "lir-cleanup"
-why = "measured 52.3 -> 123.2 Minstr (x2.36)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "lir floatalloc"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 32.1 -> 75.8 Minstr (x2.36)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
-name = "mir interprocedural"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1947"
-owner = "coordinator (to assign)"
-why = "measured 7.9 -> 18.4 Minstr (x2.33)"
-
-[[debt]]
-kind = "steps"
-axis = "chain-m16"
-name = "regalloc base"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/1876"
-owner = "alloc-slopes"
-why = "measured 5.0 -> 16.2 Minstr (x3.24)"
-
 # Steps the old 2% share filter hid (floor-only reading, #2260): ratio = measured x1.1, rounded up to 0.1.
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "after overlapping"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.1 -> 12.3 Minstr (x2.39)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "after required"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.0 -> 23.6 Minstr (x3.39)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "analysis call-effects"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.4 -> 21.9 Minstr (x2.35)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "analysis dominators"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 25.3 -> 82.9 Minstr (x3.27)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "analysis loop-products"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.9 -> 29.8 Minstr (x3.01)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "analysis pressure"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.6 -> 27.8 Minstr (x2.90)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "analysis registers"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 42.1 -> 102.4 Minstr (x2.43)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "assemble"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.5 -> 19.5 Minstr (x2.60)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "facts fold prices"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.0 -> 5.3 Minstr (x2.65)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "facts hints"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.3 -> 7.8 Minstr (x2.40)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "facts intervals"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 24.7 -> 63.0 Minstr (x2.55)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "facts sibling prices"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.9 -> 16.5 Minstr (x2.38)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "facts slots"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.5 -> 17.9 Minstr (x3.28)"
 
 [[debt]]
 kind = "steps"
@@ -412,499 +61,11 @@ why = "measured 33.6 -> 91.5 Minstr (x2.72)"
 [[debt]]
 kind = "steps"
 axis = "branches"
-name = "mir hoist"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 26.2 -> 93.5 Minstr (x3.57)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
 name = "mir lsr"
 ratio = 3.2
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 18.5 -> 52.2 Minstr (x2.82)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "mir rotate"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.2 -> 15.0 Minstr (x2.87)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "regalloc after rewrite"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 20.5 -> 65.8 Minstr (x3.20)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "regalloc facts"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.0 -> 14.6 Minstr (x2.42)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "regalloc frequency"
-ratio = 4.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.9 -> 27.3 Minstr (x3.98)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "regalloc spill"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 11.4 -> 31.2 Minstr (x2.73)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "regalloc split"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 10.3 -> 33.7 Minstr (x3.27)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "siblings depths"
-ratio = 4.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.9 -> 11.6 Minstr (x3.96)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "spill cleanup"
-ratio = 4.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.8 -> 37.2 Minstr (x3.79)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "spill rewrite"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.6 -> 24.0 Minstr (x3.18)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "split after liveness"
-ratio = 4.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.6 -> 20.4 Minstr (x3.64)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "split carving"
-ratio = 4.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 23.8 -> 88.5 Minstr (x3.72)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "split pays"
-ratio = 4.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.5 -> 12.9 Minstr (x3.72)"
-
-[[debt]]
-kind = "steps"
-axis = "branches"
-name = "split spread"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.6 -> 22.1 Minstr (x2.57)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "analysis dominated-edges"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.0 -> 7.2 Minstr (x2.42)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "analysis exposed-frames"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.1 -> 10.1 Minstr (x2.45)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "intervals walk"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.8 -> 31.9 Minstr (x3.25)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "mir switchlower"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.9 -> 13.5 Minstr (x2.74)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "regalloc after rewrite"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.2 -> 7.6 Minstr (x2.39)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "regalloc evict"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.7 -> 13.4 Minstr (x2.33)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "regalloc facts"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.2 -> 10.0 Minstr (x2.40)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "spill slots shared"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.3 -> 5.6 Minstr (x2.46)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "spill stable loads"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 1.8 -> 6.5 Minstr (x3.53)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "split after liveness"
-ratio = 4.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.5 -> 10.9 Minstr (x4.36)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "split carving"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.5 -> 12.5 Minstr (x3.59)"
-
-[[debt]]
-kind = "steps"
-axis = "cells"
-name = "split local"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.9 -> 9.1 Minstr (x2.32)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "analysis pointer-values"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 15.6 -> 39.1 Minstr (x2.51)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "analysis through-memory"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 11.9 -> 33.2 Minstr (x2.78)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "intervals homes"
-ratio = 4.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.0 -> 7.9 Minstr (x3.94)"
-
-[[debt]]
-kind = "steps"
-axis = "fjoins"
-name = "spill slots shared"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.0 -> 10.5 Minstr (x3.54)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "analysis pointer-values"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 15.9 -> 38.9 Minstr (x2.44)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "facts intervals"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.6 -> 13.5 Minstr (x2.93)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "facts sibling prices"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.0 -> 5.7 Minstr (x2.82)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "facts widths"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.0 -> 5.1 Minstr (x2.52)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "intervals homes"
-ratio = 4.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.1 -> 8.2 Minstr (x3.96)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "intervals walk"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 13.7 -> 45.0 Minstr (x3.28)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "regalloc after rewrite"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 1.9 -> 5.5 Minstr (x2.86)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "regalloc facts"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.9 -> 7.2 Minstr (x2.50)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "regalloc spill"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.6 -> 19.4 Minstr (x2.96)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "regalloc split"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.9 -> 8.4 Minstr (x2.85)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "spill cleanup"
-ratio = 5.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.2 -> 10.3 Minstr (x4.57)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "spill rewrite"
-ratio = 4.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 1.8 -> 7.1 Minstr (x3.88)"
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "split spread"
-ratio = 4.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.2 -> 22.9 Minstr (x3.67)"
-
-[[debt]]
-kind = "steps"
-axis = "live"
-name = "spill cleanup"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.5 -> 8.4 Minstr (x3.33)"
-
-# nest N=32, unrolled N=16 and dips judged at 4N (#2260 follow-up): rows re-derived at the sizes past the regime change.
-
-[[debt]]
-kind = "steps"
-axis = "joins"
-name = "spill slots shared"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.5 -> 10.0 -> 23.6 Minstr at N, 2N, 4N (x2.37 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis counted"
-ratio = 5.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 17.9 -> 86.0 Minstr (x4.80)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis dominators"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.2 -> 13.0 Minstr (x3.12)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis loop-products"
-ratio = 4.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.2 -> 36.3 -> 108.6 Minstr at N, 2N, 4N (x4.44 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis pressure"
-ratio = 4.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.4 -> 32.6 -> 132.0 Minstr at N, 2N, 4N (x4.39 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis registers"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 14.2 -> 37.6 Minstr (x2.65)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis shape"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.3 -> 13.5 Minstr (x3.17)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis through-memory"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.4 -> 18.8 Minstr (x2.54)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "intervals liveness"
-ratio = 7.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.7 -> 23.0 -> 145.4 Minstr at N, 2N, 4N (x6.32 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "intervals walk"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 13.9 -> 24.1 -> 86.9 Minstr at N, 2N, 4N (x3.61 at the 4N doubling)"
 
 [[debt]]
 kind = "steps"
@@ -927,119 +88,11 @@ why = "measured 47.8 -> 133.3 Minstr (x2.79)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "lir loopslots"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 12.3 -> 35.2 -> 94.0 Minstr at N, 2N, 4N (x2.86 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "lir phielim"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.2 -> 20.1 Minstr (x2.46)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "lir twoaddr"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 14.0 -> 43.5 Minstr (x3.11)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "memoryssa structure"
-ratio = 3.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.3 -> 28.1 Minstr (x3.38)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir decide"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 29.6 -> 84.2 Minstr (x2.84)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir dse"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.8 -> 32.6 Minstr (x3.31)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir gvn"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 28.7 -> 78.7 Minstr (x2.75)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir hoist"
-ratio = 4.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 13.2 -> 49.5 Minstr (x3.76)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir indvars"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 31.3 -> 109.0 Minstr (x3.48)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir interprocedural"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 15.7 -> 42.5 Minstr (x2.70)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "mir lcssa"
 ratio = 4.3
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 29.1 -> 112.7 Minstr (x3.87)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir loopmotion"
-ratio = 4.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 16.9 -> 63.3 Minstr (x3.75)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir loopsimplify"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.2 -> 16.6 Minstr (x3.20)"
 
 [[debt]]
 kind = "steps"
@@ -1053,515 +106,11 @@ why = "measured 113.6 -> 465.7 Minstr (x4.10)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "mir rotate"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.5 -> 11.3 Minstr (x2.52)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir trivialunswitch"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 1.8 -> 5.7 Minstr (x3.23)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "mir unroll"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.0 -> 6.0 Minstr (x3.03)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "regalloc after rewrite"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.8 -> 8.9 -> 15.2 Minstr at N, 2N, 4N (x2.35 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "regalloc base"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2260"
 owner = "coordinator (to assign)"
 why = "measured 39.9 -> 102.1 Minstr (x2.56)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "spill cleanup"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.3 -> 8.7 -> 24.0 Minstr at N, 2N, 4N (x2.75 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "spill rewrite"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.3 -> 7.4 -> 17.5 Minstr at N, 2N, 4N (x2.36 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "split carving"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.6 -> 20.9 -> 37.8 Minstr at N, 2N, 4N (x2.43 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "split spread"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.8 -> 11.9 Minstr (x3.10)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "after overlapping"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.9 -> 12.2 Minstr (x2.51)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "after required"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.6 -> 17.2 Minstr (x3.06)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "after wanted"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.7 -> 25.4 Minstr (x3.29)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "analysis assumptions"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.8 -> 12.4 Minstr (x3.24)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "analysis counted"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 16.9 -> 60.0 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "analysis dominators"
-ratio = 3.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.6 -> 15.2 Minstr (x2.69)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "analysis loop-products"
-ratio = 4.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 13.6 -> 50.8 Minstr (x3.74)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "analysis pressure"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 21.7 -> 78.8 Minstr (x3.63)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts fold prices"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.8 -> 8.4 Minstr (x3.01)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts hints"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 4.8 -> 15.8 Minstr (x3.26)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts intervals"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 56.0 -> 194.2 Minstr (x3.47)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts masks"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.8 -> 5.0 -> 13.1 Minstr at N, 2N, 4N (x2.60 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts sibling prices"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 11.4 -> 35.7 Minstr (x3.14)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts slots"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.6 -> 16.5 Minstr (x2.93)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "facts widths"
-ratio = 3.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 24.2 -> 85.6 Minstr (x3.54)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "intervals liveness"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.3 -> 11.1 Minstr (x3.31)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "intervals walk"
-ratio = 5.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 11.7 -> 52.4 Minstr (x4.48)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "isel"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 42.2 -> 105.3 Minstr (x2.50)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "lir loopslots"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.7 -> 13.2 Minstr (x2.32)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "masm return overhead"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 15.5 -> 37.1 Minstr (x2.40)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir decide"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 60.5 -> 150.5 Minstr (x2.49)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir dse"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 65.1 -> 230.9 Minstr (x3.55)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir gvn"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 88.6 -> 224.8 Minstr (x2.54)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir hoist"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 7.9 -> 22.7 Minstr (x2.87)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir indvars"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 33.3 -> 97.7 Minstr (x2.94)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir loopmotion"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.1 -> 23.7 Minstr (x2.61)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir lsr"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 80.8 -> 223.4 Minstr (x2.77)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "mir rotate"
-ratio = 2.8
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.2 -> 8.1 Minstr (x2.51)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc after rewrite"
-ratio = 4.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 12.3 -> 47.0 Minstr (x3.82)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc base"
-ratio = 3.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 60.7 -> 190.5 Minstr (x3.14)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc evict"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 17.7 -> 41.3 Minstr (x2.33)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc facts"
-ratio = 2.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.0 -> 20.4 Minstr (x2.55)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc frequency"
-ratio = 4.9
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.2 -> 17.5 -> 77.3 Minstr at N, 2N, 4N (x4.41 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc recolor"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 13.5 -> 37.3 Minstr (x2.76)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc spill"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 16.9 -> 49.9 Minstr (x2.95)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "regalloc split"
-ratio = 3.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 9.2 -> 27.7 Minstr (x2.99)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "siblings depths"
-ratio = 4.5
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 2.6 -> 6.8 -> 27.5 Minstr at N, 2N, 4N (x4.03 at the 4N doubling)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "siblings interference"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 1.7 -> 5.7 Minstr (x3.34)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "spill cleanup"
-ratio = 4.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.6 -> 24.1 Minstr (x3.67)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "spill rewrite"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.8 -> 19.5 Minstr (x2.85)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "spill siblings"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 3.6 -> 8.6 Minstr (x2.40)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "spill slots shared"
-ratio = 2.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.7 -> 13.7 Minstr (x2.42)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "split after liveness"
-ratio = 3.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 8.1 -> 26.0 Minstr (x3.19)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "split carving"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 36.4 -> 132.1 Minstr (x3.63)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "split pays"
-ratio = 4.3
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 6.0 -> 22.8 Minstr (x3.83)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "split placed"
-ratio = 4.0
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 39.4 -> 140.4 Minstr (x3.56)"
-
-[[debt]]
-kind = "steps"
-axis = "unrolled"
-name = "split spread"
-ratio = 3.7
-issue = "https://github.com/ali-mosavian/llrm/issues/2260"
-owner = "coordinator (to assign)"
-why = "measured 5.4 -> 18.0 Minstr (x3.33)"
-
-[[debt]]
-kind = "steps"
-axis = "equal"
-name = "lir coalesce"
-ratio = 3.63
-issue = "https://github.com/ali-mosavian/llrm/issues/2641"
-owner = "backend-slopes"
-why = "measured 161.5 -> 533.4 Minstr (x3.30)"
 
 [[debt]]
 kind = "steps"
@@ -1571,3 +120,1423 @@ ratio = 3.34
 issue = "https://github.com/ali-mosavian/llrm/issues/2641"
 owner = "backend-slopes"
 why = "measured 118.9 -> 359.9 Minstr (x3.03)"
+
+# Slope debts found red on feat/parity 2026-10-28 (first bad 7b2e735462, the LLVM order on by default, #2369; equal: 97096c07c2, the DAG selector
+# default). Interim: the PR that fixes an axis deletes its rows. Ratios are the measured x with 5% to spare.
+
+[[debt]]
+kind = "events"
+axis = "nest"
+name = "lvi_icmp_patterns"
+ratio = 3.45
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5530 -> 17937 (x3.24)"
+
+[[debt]]
+kind = "events"
+axis = "unrolled"
+name = "lvi_icmp_patterns"
+ratio = 2.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2388 -> 5360 (x2.24)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "dag isel"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 225.6 -> 553.6 Minstr (x2.45)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "mir indvars@738"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 66.2 -> 178.3 Minstr (x2.69): SCEV isBasicBlockEntryGuardedByCond climbs unbounded predecessor chains, as the pin does; a function of N blocks climbs O(N) per query"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "analysis callee-effects"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 21.3 -> 81.9 Minstr (x3.85)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "settled slice"
+ratio = 3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 25.5 -> 71.7 Minstr (x2.82)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "mir stamp"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 18.9 -> 57.7 Minstr (x3.05)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "analysis declarations"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 9.2 -> 34.9 Minstr (x3.81)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "lir combiner"
+ratio = 3.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.6 -> 22.9 Minstr (x3.02)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "lir pushfold"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.0 -> 21.8 Minstr (x3.63)"
+
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "lir loadfold"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.0 -> 21.8 Minstr (x3.64)"
+
+[[debt]]
+kind = "steps"
+axis = "straight"
+name = "lir combiner"
+ratio = 3.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 37.0 -> 124.4 Minstr (x3.36)"
+
+[[debt]]
+kind = "steps"
+axis = "straight"
+name = "lir loadfold"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.4 -> 52.9 Minstr (x3.68)"
+
+[[debt]]
+kind = "steps"
+axis = "straight"
+name = "lir pushfold"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.4 -> 52.9 Minstr (x3.68)"
+
+[[debt]]
+kind = "steps"
+axis = "straight"
+name = "assemble"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 8.1 -> 21.7 Minstr (x2.69)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir coalesce"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 158.6 -> 413.5 Minstr (x2.61)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir indvars@738"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 38.2 -> 97.8 Minstr (x2.56)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir walk"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 30.8 -> 75.0 Minstr (x2.43)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir reassociate@696"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 20.1 -> 47.7 Minstr (x2.37)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "regalloc prepare"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 13.8 -> 34.0 Minstr (x2.47)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir optimizephis"
+ratio = 3.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.5 -> 21.1 Minstr (x3.27)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "lir machinelicm"
+ratio = 3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.4 -> 18.1 Minstr (x2.83)"
+
+[[debt]]
+kind = "steps"
+axis = "branches"
+name = "mir rotate@728"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.3 -> 5.3 Minstr (x2.30)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir combine@677"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 57.3 -> 232.3 Minstr (x4.06)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir walk"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 24.1 -> 63.7 Minstr (x2.64)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir reassociate@696"
+ratio = 4.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 12.5 -> 49.3 Minstr (x3.94)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir constraint-elimination@699"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 11.2 -> 42.7 Minstr (x3.82)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir cvp@669"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.4 -> 28.3 Minstr (x3.84)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir cvp@810"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.2 -> 27.9 Minstr (x3.90)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir sccp@792"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.9 -> 22.6 Minstr (x3.80)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir earlycse@649"
+ratio = 3.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.6 -> 19.9 Minstr (x3.55)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir gvn@787"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.9 -> 14.6 Minstr (x3.74)"
+
+[[debt]]
+kind = "steps"
+axis = "chain"
+name = "mir bdce@797"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.2 -> 8.6 Minstr (x3.87)"
+
+[[debt]]
+kind = "steps"
+axis = "mulconst"
+name = "lir combiner"
+ratio = 3.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.9 -> 51.8 Minstr (x3.47)"
+
+[[debt]]
+kind = "steps"
+axis = "mulconst"
+name = "lir loadfold"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.0 -> 23.0 Minstr (x3.83)"
+
+[[debt]]
+kind = "steps"
+axis = "mulconst"
+name = "lir pushfold"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.0 -> 23.0 Minstr (x3.83)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir indvars@738"
+ratio = 4.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 81.8 -> 321.0 Minstr (x3.92)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir unroll@1476"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 24.5 -> 99.6 Minstr (x4.06)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir loop-instsimplify@715"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.1 -> 57.6 Minstr (x4.09)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "lir machinelicm"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 11.5 -> 43.5 Minstr (x3.79)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir combine@837"
+ratio = 3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 15.0 -> 42.3 -> 96.4 (4N) Minstr (x2.82)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "lir peephole"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 16.0 -> 42.0 Minstr (x2.61)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir loopdeletion"
+ratio = 4.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 9.1 -> 37.9 Minstr (x4.14)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir combine@1499"
+ratio = 3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 12.6 -> 35.0 -> 80.1 (4N) Minstr (x2.77)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir loop-interchange@1631"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 8.4 -> 32.2 Minstr (x3.86)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir unroll@753"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.5 -> 30.4 Minstr (x4.03)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir licm@730"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.8 -> 28.5 Minstr (x3.65)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir lcssa@823"
+ratio = 4.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.5 -> 27.2 Minstr (x4.18)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir rotate@728"
+ratio = 3.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.9 -> 23.4 Minstr (x3.39)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir lcssa@772"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.3 -> 20.6 Minstr (x3.87)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir loop-simplifycfg@716"
+ratio = 5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.2 -> 19.7 Minstr (x4.73)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir cvp@810"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.0 -> 18.3 Minstr (x3.05)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir loopidiom@737"
+ratio = 3.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.0 -> 17.4 Minstr (x3.47)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir cvp@669"
+ratio = 3.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.0 -> 14.9 Minstr (x3.00)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir loopdeletion@749"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.4 -> 13.6 Minstr (x4.01)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir lcssa@764"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.1 -> 11.5 Minstr (x3.68)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "regalloc prepare"
+ratio = 3.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.4 -> 9.9 Minstr (x2.88)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "analysis mssa"
+ratio = 3.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.7 -> 9.4 Minstr (x3.48)"
+
+[[debt]]
+kind = "steps"
+axis = "nest"
+name = "mir canonfreeze"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.0 -> 5.1 Minstr (x2.59)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "mir dse@820"
+ratio = 3.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 43.0 -> 136.9 Minstr (x3.18)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "mir earlycse@649"
+ratio = 3.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 29.5 -> 96.9 Minstr (x3.29)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "lir twoaddr"
+ratio = 3.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 17.5 -> 55.5 Minstr (x3.17)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "mir gvn@787"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 12.5 -> 39.0 Minstr (x3.12)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "mir ipo-early"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.2 -> 18.0 Minstr (x2.51)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "lir combiner"
+ratio = 3.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.8 -> 12.0 Minstr (x3.17)"
+
+[[debt]]
+kind = "steps"
+axis = "cells"
+name = "mir interprocedural"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.8 -> 8.6 Minstr (x3.09)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir cvp@669"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 124.6 -> 322.6 -> 15.2 (4N) Minstr (x2.59)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir decide@1244"
+ratio = 3.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 53.4 -> 189.6 Minstr (x3.55)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir cvp@810"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 40.2 -> 146.1 Minstr (x3.64)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir phielim"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 35.4 -> 130.5 Minstr (x3.69)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir combine@1242"
+ratio = 3.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 33.9 -> 114.3 Minstr (x3.38)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir combine@837"
+ratio = 3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 31.0 -> 87.1 Minstr (x2.81)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir machinesink"
+ratio = 3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 28.2 -> 78.3 Minstr (x2.77)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "regalloc base"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 21.1 -> 57.6 Minstr (x2.73)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir gvn@787"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 22.4 -> 57.6 Minstr (x2.57)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir jumpthreading@809"
+ratio = 3.49
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 29.8 -> 99.1 Minstr (x3.32). Cause (w15, LLRM_DEBUG=counts,time at N=64/128/256/512): DFAJumpThreading@806 threads the state machine and grows the function 32% (jumpthreading@809 runs over 1052/2075/4123 instrs against 799/1566/3102 for @806); @809 then asks LVI about each cloned block's `c < K` and lvi_icmp_patterns reads 11.4K/39.2K/137.4K (x3.4-3.5 per doubling, ~N^1.8, patterns per predecessor list 9.5/16.2/28.3: the work per query grows with the switch's N edges). At N=512 @806 gives up (no growth, 3120 instrs) and @809 falls to 6.4 Minstr: a cliff, not a trend"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir combine@1499"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 15.1 -> 37.6 Minstr (x2.49)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir combine@1464"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.8 -> 37.1 Minstr (x2.50)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir sroa@1179"
+ratio = 2.89
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 7.3 -> 20.1 Minstr (x2.75); N=128/256/512: 7.3 / 20.1 / 62.8 Minstr (x2.7, x3.1), no event counter grows; cause not located"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir combine@1403"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.7 -> 36.8 Minstr (x2.50)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir split returns"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 9.1 -> 23.9 Minstr (x2.64)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir decide@1178"
+ratio = 2.89
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "regalloc apply"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.8 -> 11.5 Minstr (x2.38)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir loop-simplifycfg@716"
+ratio = 3.56
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 1.8 -> 6.2 Minstr (x3.39); N=128/256/512: 16.4 / 38.3 / 59.2 Minstr (x2.3, x1.5); the doubling past 256 is under the limit, cause not located"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "dag isel"
+ratio = 3.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 165.3 -> 492.5 Minstr (x2.98)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir gvn@787"
+ratio = 3.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 132.4 -> 441.8 Minstr (x3.34)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir dse@820"
+ratio = 3.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 71.4 -> 234.2 Minstr (x3.28)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir earlycse@649"
+ratio = 3.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 66.6 -> 216.4 Minstr (x3.25)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir ipo-early"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 25.7 -> 61.7 Minstr (x2.41)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "assemble"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 22.1 -> 54.0 Minstr (x2.44)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir jumps"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 17.8 -> 47.5 Minstr (x2.66)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "object write"
+ratio = 4.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 11.1 -> 44.2 Minstr (x3.96)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir interprocedural"
+ratio = 3.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.9 -> 27.9 Minstr (x3.55)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir split returns"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 6.0 -> 14.3 Minstr (x2.38)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir machinesink"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.8 -> 11.5 Minstr (x2.42)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir infer-alignment@1362"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.6 -> 10.8 Minstr (x2.32)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir infer-alignment@1498"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.6 -> 10.5 Minstr (x2.31)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir phielim"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 8.6 -> 9.7 -> 23.3 (4N) Minstr (x2.41)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "mir merge@818"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.7 -> 8.7 Minstr (x2.35)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir machinecp"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.9 -> 7.3 Minstr (x2.52); ~1% of the compile; the pin runs no liveness solve here, so no fix (coordinator, 10-28)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "lir machinesched"
+ratio = 4.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.9 -> 7.1 -> 32.4 (4N) Minstr (x4.53)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "classes scan"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.5 -> 6.5 Minstr (x2.57)"
+
+[[debt]]
+kind = "steps"
+axis = "joins"
+name = "analysis globals-aa"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.3 -> 6.0 Minstr (x2.61)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "dag isel"
+ratio = 3.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 178.0 -> 569.5 Minstr (x3.20)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir gvn@787"
+ratio = 3.7
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 121.5 -> 416.5 Minstr (x3.43)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir dse@820"
+ratio = 3.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 71.4 -> 234.2 Minstr (x3.28)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir earlycse@649"
+ratio = 3.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 63.1 -> 210.2 Minstr (x3.33)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir coalesce"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 73.1 -> 171.6 Minstr (x2.35)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "assemble"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 29.9 -> 93.9 Minstr (x3.14)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "object write"
+ratio = 3.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 17.8 -> 51.9 Minstr (x2.92)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir ipo-early"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 20.8 -> 51.0 Minstr (x2.46)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir interprocedural"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.1 -> 26.5 Minstr (x3.72)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir phielim"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 8.2 -> 9.8 -> 23.3 (4N) Minstr (x2.38)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir infer-alignment@1362"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.2 -> 9.7 Minstr (x2.31)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "mir infer-alignment@1498"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.1 -> 9.6 Minstr (x2.31)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir machinecp"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.0 -> 7.4 Minstr (x2.47); ~1% of the compile; the pin runs no liveness solve here, so no fix (coordinator, 10-28)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "classes scan"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.1 -> 7.4 Minstr (x2.38)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir machinesched"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.1 -> 6.9 -> 26.3 (4N) Minstr (x3.80)"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "analysis globals-aa"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 1.9 -> 5.2 Minstr (x2.70)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "mir gvn@787"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 14.2 -> 37.5 Minstr (x2.64)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "regalloc prepare"
+ratio = 2.6
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 4.8 -> 11.4 Minstr (x2.40)"
+
+[[debt]]
+kind = "steps"
+axis = "unrolled"
+name = "lir machinelicm"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.1 -> 5.6 Minstr (x2.68)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "dag isel"
+ratio = 3.8
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 1551.8 -> 5526.7 Minstr (x3.56)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "mir gvn@787"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 293.1 -> 681.7 -> 1459.0 (4N) Minstr (x2.33)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "lir peephole"
+ratio = 3.1
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 43.0 -> 123.1 Minstr (x2.86)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "mir reassociate@696"
+ratio = 2.7
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 31.6 -> 81.0 Minstr (x2.56)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "lir machinesched"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 18.7 -> 50.6 Minstr (x2.70)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "regalloc apply"
+ratio = 3.1
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 7.0 -> 20.8 Minstr (x2.95)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "regalloc prepare"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 5.6 -> 17.4 Minstr (x3.10)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "classes scan"
+ratio = 3.3
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 3.2 -> 9.8 Minstr (x3.05)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "lir latecleanup"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 3.6 -> 9.5 Minstr (x2.64)"
+
+[[debt]]
+kind = "steps"
+axis = "equal"
+name = "lir fixupsetcc"
+ratio = 2.9
+issue = "https://github.com/ali-mosavian/llrm/issues/5759"
+owner = "w10 coalescer"
+why = "measured 2.7 -> 7.3 Minstr (x2.69)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir combine@677"
+ratio = 4.3
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 57.3 -> 232.4 Minstr (x4.05)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir walk"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 24.4 -> 64.2 Minstr (x2.63)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir reassociate@696"
+ratio = 4.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 12.5 -> 49.3 Minstr (x3.94)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir constraint-elimination@699"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 11.2 -> 42.7 Minstr (x3.82)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir cvp@810"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.4 -> 28.3 Minstr (x3.83)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir cvp@669"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 7.4 -> 28.3 Minstr (x3.84)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir sccp@792"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.9 -> 22.6 Minstr (x3.80)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir earlycse@649"
+ratio = 3.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.6 -> 19.9 Minstr (x3.55)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir gvn@787"
+ratio = 4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 3.9 -> 14.6 Minstr (x3.74)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir bdce@797"
+ratio = 4.1
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.2 -> 8.6 Minstr (x3.87)"
+
+[[debt]]
+kind = "steps"
+axis = "chain-m16"
+name = "mir merge@818"
+ratio = 3.2
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.1 -> 6.3 Minstr (x2.98)"
+
+[[debt]]
+kind = "steps"
+axis = "live"
+name = "regalloc base"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "greedy region split on N values live across a call; ours x2.3/doubling vs pin x2.9-3.3 (llc greedy minus -regalloc=fast, instructions:u)"
+
+# [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
+# test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
+
+[[window]]
+axis = "cases"
+name = "assemble"
+why = "b74aef4830 (machinelicm keeps a loop phi's constant in the loop) moved the object by 16 bytes and the assembler's relaxation loop takes one more pass past a threshold: 6.25/9.99/17.86 -> 6.25/9.98/31.49 Minstr at N=64/128/256, equal again at 512. A step on the curve that moves with any code-size change, not a slope (w17, 2026-10-28)."
+
+[[window]]
+axis = "joins"
+name = "mir dse@820"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir interprocedural"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir jumpthreading@668"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir cvp@669"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir decide@675"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "object write"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "mir dse@820"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "assemble"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "mir jumpthreading@668"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "mir interprocedural"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "equal"
+name = "lir twoaddr"
+why = "DEBT, not a window move: 97096c07c2 (the DAG selector default on 16- and 32-bit x86, bisected 2026-10-28) made it superlinear. equal, Minstr at N=1024/2048/4096: 50.9/142.7/5699.6 (x40 per doubling at 2N) against 38.1/91.6/201.8 under the old selector (x2.2). Plan: fix lir twoaddr under the DAG selector, then delete this row."
+
+[[window]]
+axis = "equal"
+name = "lir coalesce"
+why = "DEBT, not a window move: 97096c07c2 (the DAG selector default on 16- and 32-bit x86, bisected 2026-10-28) made it superlinear. equal, Minstr at N=1024/2048/4096: 8.7/10.9/64.9 (x6 at 2N) against 13.2/16.5/23.0 under the old selector. Plan: fix with lir twoaddr, then delete this row."
+[[debt]]
+kind = "steps"
+axis = "functions"
+name = "mir walk"
+ratio = 2.42
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 72.6 -> 167.2 Minstr (x2.30); not red on llrm-c IR; at the limit (x2.30), reads differ by host; not profiled"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir peephole"
+ratio = 2.46
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 16.4 -> 38.2 Minstr (x2.34); N=128/256/512: 1.8 / 6.2 / 0.2 Minstr; @716 is a different instance at 512, so not one pass across N; cause not located"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir jumps"
+ratio = 2.42
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w11"
+why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 vs 256: placement::order self x3.6, top_fall_through x3.9, build_chain x3.5 (chain building over one N-way switch; top_fall_through scans a join's preds as the pin does), the rest x2.0-2.6. succ_seen is not it (HashSet: no change). The pin is as superlinear: Branch Probability Basic Block Placement 0.6 -> 0.8 -> 4.9 ms at N=64/128/256 (x6.1 for 128 -> 256, ours x3.6); selectBestSuccessor/hasBetterLayoutPredecessor loop a switch block's successors per candidate in both"
+
+[[debt]]
+kind = "steps"
+axis = "fjoins"
+name = "lir jumps"
+ratio = 2.66
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w11"
+why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53). Callgrind N=64 vs 128: tailmerge seq_from x8.8, item_of x8.6, try_merge x12.6, merged x5.7 (equal-hash groups of long identical predecessor blocks, re-read each round; reading them lazily from the end changed nothing: they match whole). Not like-for-like with the pin: its IR has ~6x the blocks (1542 against 260 at N=128) and its Control Flow Optimizer is flat, so the IR reaching tail merging differs; branchfold rules x2.5"
+
+[[debt]]
+kind = "steps"
+axis = "fanout"
+name = "mir dse@820"
+ratio = 2.74
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); dse alone 326 -> 793 -> 2494 Minstr at N=820/1640/3280 (x2.4, x3.1). No event counter grows; scan limits are the pin's (150/90/5), defs per block under 5000, so the superlinear part is not located"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir machinecp"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w13"
+why = "long-standing quadratic hidden by the 5.0 Minstr floor, exposed by #5802's +20%; 1.231/2.234/5.581/15.07 Minstr at N=64..512; MCP linearization post-FF"

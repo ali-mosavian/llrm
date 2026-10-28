@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_shifts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_shifts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_shifts.rs sha256:a661c8f9e5e49bbf15263bdee52ed15dcd203b1b4dc6ce986b5dd1b35afde035 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_shifts.rs sha256:a168f5e8b419daa9121af53303e9f6a84445e14cc19161962f774667cef5fd1b -->
 
 # combine_shifts
 
@@ -18,14 +18,6 @@ MIRROR: the order of the steps and each condition.
 
 DEVIATE 1: `foldVectorBinop` is not translated: MIR has no vector
 operations.
-
-DEVIATE 2 (temporary): `SimplifyDemandedInstructionBits`
-(`loop-products-slope`) is left out, named where it stood in a `// DEVIATE
-2:` comment.
-
-DEVIATE 3 (temporary): the folds that build an intrinsic call (`bswap`) are
-left out until the Builder can declare an intrinsic (`combine_build`
-DEVIATE 2); each is a `// DEVIATE 3:` comment at its place.
 
 DEVIATE 4: constants are `u128` bits with a width, so a mask built in twice
 the width (`dropRedundantMaskingOfLeftShiftInput`) is not built for a type

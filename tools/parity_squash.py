@@ -9,7 +9,7 @@ Subset rule: the fast set runs on the head (origin/feat/parity, failure set cach
 when the description has a `Fixes red` line; both sets are in the refusal. Every landing appends `<sha> #PR gate-ok <date>` to ~/scratch/coordwork/landed.log; `unlogged` lists feat/parity commits with no line.
 Refused unless: the PR head contains the current origin/feat/parity; the squash deletes no file a docs/*.md still links to, and no file, no test function (`#[test] fn`, `def test_`, unless re-added) and no more than
 LIMIT lines of a file, unless a `Deletes:` or `Reverts:` line of the description names the path (own commits or not: #2443's deleted scev/expand_iv.rs); parity_smoke passes on that exact head.
-PARITY_BIN names the directory of the built release llrm-c, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
+PARITY_BIN names the directory of the built release llrm-cc, llrm-llc, llrm-qb and llrm-nib (parity_smoke needs them); unset, it is the repo target dir's release
 (LLRM_BIN / CARGO_TARGET_DIR as tools/llrmbin.py reads them) when all three are there.
 `--known-red sc=2438` skips ONLY that smoke step (named, with its issue), still runs every other check, and puts one line in the squash's body:
 `Known red: sc (#2438)`.
@@ -61,6 +61,15 @@ def with_merge_driver(env: dict[str, str]) -> None:
 
 
 with_merge_driver(os.environ)
+
+
+def with_pinned_clang(env: dict[str, str], root: Path, by_sha: Path | None = None) -> None:
+    """LLRM_CLANG_M16 is the clang built at the m16 sha of `root`'s toolchain/clang/pin (its second line), found at <by_sha>/<sha>/bin/clang;
+    where no such build is there the variable stays as the runner has it. A batch that bumps the pin changes the clang its tests need."""
+    by_sha = by_sha or Path(env.get("CLANG_BY_SHA") or Path.home() / "scratch/clang-by-sha")
+    lines = (root / "toolchain/clang/pin").read_text().splitlines() if (root / "toolchain/clang/pin").exists() else []
+    if len(lines) > 1 and (clang := by_sha / lines[1].split()[0] / "bin/clang").exists():
+        env["LLRM_CLANG_M16"] = str(clang)
 
 
 RATE_LIMITED = ("API rate limit exceeded", "rate limit exceeded")
@@ -427,7 +436,7 @@ def pr_body(number: str) -> str:
     return done.stdout if done.returncode == 0 else ""
 
 
-BINARIES = ("llrm-c", "llrm-qb", "llrm-nib")
+BINARIES = ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib")
 
 
 def smoke_bins(env: dict | None = None) -> str:
@@ -441,7 +450,7 @@ def smoke_bins(env: dict | None = None) -> str:
     found = llrmbin.bin_dir(env)
     if all((found / name).is_file() for name in BINARIES):
         return str(found)
-    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
+    raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bins`, or set PARITY_BIN to a directory that has them")
 
 
 def bins_command(directory: Path) -> list[str]:
@@ -616,6 +625,13 @@ def format_head(head: str, branch: str, base: str = BASE, cwd: Path = ROOT) -> t
 def error_files(text: str) -> set[str]:
     """The `.rs` paths a build error names (`crates/x/src/y.rs:816:16`)."""
     return set(re.findall(r"[\w./-]+\.rs(?=:\d)", text))
+
+
+def integration_probe(failed_units: set[str], red_on_base: set[str]) -> tuple[set[str], list[str]]:
+    """(the `integration <target>::<test>` names the batch failed and the base passes, their targets). The names stay in the form `integration_failures` returns: stripped of
+    `integration `, `probe & integration_failures(...)` was always empty, no PR was ever red alone or with its half, and the 16:17 batch cleared #5784 (target_facts) in 37 s."""
+    probe = {name for name in failed_units if name.startswith("integration ")} - red_on_base
+    return probe, sorted({name[len("integration ") :].split("::", 1)[0] for name in probe})
 
 
 def build_offenders(group: list[str], merge_alone, check, errors: dict[str, str] | None = None, suspects=None) -> list[str]:
@@ -930,13 +946,16 @@ def timed(took: dict[str, float], name: str, call):
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
-def batch(prs: list, passes, land, refuse, offenders=None) -> None:
+def batch(prs: list, passes, land, refuse, offenders=None, pending=None) -> None:
     """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone. `offenders(prs)`,
-    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once."""
+    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once. `pending` is the list `land` appends to when it does not push
+    (PUSH_MODE): those PRs are not on the base yet, so a later half is tested on top of them; without that two halves that build apart land together and the push fails
+    on the pair (#5784 x #5830, "missing seh", 15:57 and 16:11: every PR passed alone, the set was assembled again each pass)."""
     if not prs:
         return
-    if passes(prs):
+    under = [pr for pr in (pending or ()) if pr not in prs]
+    if passes([*under, *prs]):
         try:
             land.group = list(prs)  # the members that land together: a rescan after a drop covers them once
         except AttributeError:  # a builtin as `land` (tests) has no attributes
@@ -945,17 +964,19 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
             land(pr)
         return
     if len(prs) == 1:
+        if under:
+            print(f"interaction: #{prs[0]} fails on top of {' '.join('#' + pr for pr in under)}")
         refuse(prs[0])
         return
     # A unit the head passes fails on the merged tree: the PRs that fail it alone are dropped by name and the rest are tested once, instead of a smoke per half.
     if offenders and (named := [pr for pr in offenders(prs) if pr in prs]) and len(named) < len(prs):
         for pr in named:
             refuse(pr)
-        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders)
+        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders, pending)
         return
     middle = len(prs) // 2
-    batch(prs[:middle], passes, land, refuse, offenders)
-    batch(prs[middle:], passes, land, refuse, offenders)
+    batch(prs[:middle], passes, land, refuse, offenders, pending)
+    batch(prs[middle:], passes, land, refuse, offenders, pending)
 
 
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
@@ -1084,7 +1105,7 @@ def scanners_for(files: list[str]) -> tuple[str, ...]:
     return ALWAYS_SCANNERS
 
 
-# Tests that launch DOSBox bench programs for minutes each (29 min for one pytest id): the CI gate runs them, a landing batch does not (its cap is 600 s).
+# Tests that launch DOSBox bench programs for minutes each (29 min for one pytest id): the CI gate runs them, a landing batch does not (its cap is TOOLTEST_CAP, 1800 s).
 # Ids are relative to tools/, pytest's rootdir.
 GATE_ONLY_TESTS = ("dosbatch/test_qb32.py::test_bench_program_prints_what_it_should_on_both_targets",)
 
@@ -1110,10 +1131,11 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
     if why := (ensure or ensure_bins)():  # the tools resolve the release binaries and refuse stale ones: the 02:32 batch died on "stale binaries" here, before the build stage ran
         return [why]
     stage("tool-tests")
+    cap = float(os.environ.get("TOOLTEST_CAP") or 1800)  # runner.env: seconds; a test file that runs 10-20 min refused every batch at the old 600
     try:
-        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *[f"--deselect={one}" for one in GATE_ONLY_TESTS], *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *[f"--deselect={one}" for one in GATE_ONLY_TESTS], *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=cap)
     except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
-        return ["the tool tests ran past 600 s"]
+        return [f"the tool tests ran past {cap:g} s"]
     if done.returncode == 0:
         return []
     lines = (done.stdout + done.stderr).strip().splitlines()
@@ -1220,7 +1242,7 @@ def alone_link_failures(files: list[str], cwd: Path, target: Path | None, run=su
     built = run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
     if built.returncode:
         return [f"release: {(built.stdout + built.stderr).strip().splitlines()[-1:] or ['the bins do not build']}"]
-    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+    for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront"):
         (out / "release" / name).touch()  # the runners refuse a binary older than its sources
     done = run([sys.executable, "tools/link_check.py", str(out / "link-check")], cwd=cwd, env={**env, "LLRM_BIN": str(out / "release")}, capture_output=True, text=True, errors="replace")
     return [line for line in done.stdout.splitlines() if line.startswith(("qb ", "c "))]
@@ -1250,8 +1272,17 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
     started = time.time()
     (build or _build_release)()
     red = behavioural.red_programs((run or _run_behavioural)())
-    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s")
+    if red:  # one run is no proof: the same code was 0 wrong at 14:44 and 23 wrong at 14:46 (LLRM_OW missing) and refused #5785
+        print(f"behavioural: {len(red)} wrong; running once more on the same tree{red_env_cause()}")
+        red = [program for program in behavioural.red_programs((run or _run_behavioural)()) if program in red]
+    print(f"behavioural: {len(behavioural.PROGRAMS)} programs, {len(red)} wrong, {time.time() - started:.0f}s{red_env_cause() if red else ''}")
     return red
+
+
+def red_env_cause() -> str:
+    """What a behavioural run needs from the environment and lacks, for the REFUSED line; empty when it has it."""
+    ow = os.environ.get("LLRM_OW")
+    return "" if ow and Path(ow).expanduser().is_dir() else " (LLRM_OW is unset or not a directory: a missing Open Watcom tree, not a miscompile)"
 
 
 def _run_behavioural() -> str:
@@ -1311,8 +1342,8 @@ def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -
     import behavioural  # noqa: PLC0415
 
     backend = [number for number in group if behavioural.touches(files_of(number))]
-    if len(backend) <= 1:
-        return backend
+    if len(backend) <= 1:  # a PR is blamed only after it is run alone: the batch's red may be the environment's
+        return [number for number in backend if alone_red(number)]
     return red_members(backend, red_with, alone_red)
 
 
@@ -1320,7 +1351,7 @@ def _link_programs() -> list[str]:
     import link_check  # noqa: PLC0415
 
     target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
-    for name in ("llrm-c", "llrm-qb", "llrm-nib", "nibfront"):
+    for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib", "nibfront"):
         (target / "release" / name).touch()  # the runners refuse a binary older than its sources
     os.environ["LLRM_BIN"] = str(target / "release")
     return link_check.link_failures(target / "link-check")
@@ -2065,6 +2096,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
+        print(f"members {len(group)}: {' '.join('#' + number for number in group)}")
         gate = docs_gated(merge_one, docs_stale(ROOT))
         kept, out = fast_merge(group, gate)
         docs_synced.update(gate.synced & set(kept))
@@ -2089,6 +2121,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
         def tests_pass() -> bool:
             """The lib tests and scanners on the merged tree; False after printing the refusal and noting the failed units."""
+            with_pinned_clang(os.environ, ROOT)
             # LAND_FAST_TESTS=1: also the lib tests of the crates the batch changes (the user's 10-19 call is no tests; this is the switch for the opposite call)
             if os.environ.get("LAND_FAST_TESTS") == "1":
                 changed = git("diff", "--name-only", BASE, "HEAD").split()
@@ -2156,7 +2189,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
         if red:
-            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}")
+            print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}{red_env_cause()}")
             failed_units.update(f"behavioural {program}" for program in red)
             return False
         return True
@@ -2201,18 +2234,16 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 lambda subset: merge_all(subset) and bool(pre_merge_behavioural(sorted({f for n in subset for f in files_of(n)}))),
             )
             for number in culprits:
-                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
-                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
+                named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}{red_env_cause()}"
+                print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}{red_env_cause()}")
             return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
             # a test the base fails too is no PR's: every PR merged on a red base fails it alone
             clean_checkout(BASE)
-            failed_names = {name[len("integration ") :] for name in failed_units if name.startswith("integration ")}
-            probe = failed_names - parity_smoke_module().integration_failures(sorted(integration))
+            probe, targets = integration_probe(failed_units, parity_smoke_module().integration_failures(sorted(integration)))
             if not probe:
                 return []
-            targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             failure_files = files_named_in(parity_smoke_module().causes_of(failed_units))
@@ -2365,7 +2396,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         try:
-            batch(list(numbers), passes, land, refuse, offending if FAST else None)
+            batch(list(numbers), passes, land, refuse, offending if FAST else None, pending)
             if pending:
                 tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
                 if tip:

@@ -804,6 +804,32 @@ fn test_a_block_made_and_removed_leaves_the_exposed_frames_to_be_updated_not_rer
     assert_eq!(frames, vec![("first", 1), ("replayed", 1)], "{counts:?}");
 }
 
+/// `ExposedFrames::update` read every operand of every edit before it found
+/// nothing to renew: in a function with no alloca, the third run of `cases`
+/// N=256 read 133 K operands for 3.6 K edits (a phi of N arms edited N times)
+/// (`analysis exposed-frames` x3.82 per doubling, though the full scan had been
+/// fixed).
+#[test]
+fn test_exposed_frames_update_reads_no_edit_in_a_function_with_no_alloca() {
+    let mut module = parsed(&format!(
+        "{DOS}define ptr @f(i1 %c, ptr %x, ptr %y) {{\nentry:\n  br i1 %c, label %l, label %r\nl:\n  br label %j\nr:\n  br label %j\nj:\n  %p = phi ptr [ %x, %l ], [ %y, %r ]\n  ret ptr %p\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let (context, f) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(outer);
+    analyses.get::<super::ExposedFrames>(context, &layout, f);
+    let a_value = value(f, "p");
+    let a = f.walk().map(|(_, inst)| inst).find(|&inst| f.instruction(inst).result == Some(a_value)).unwrap();
+    let mut operands = f.instruction(a).operands.to_vec();
+    operands[0] = operands[2];
+    f.set_operands(a, operands);
+    analyses.invalidate(f, &PreservedAnalyses::none());
+    let before = crate::frameescape::reads();
+    assert!(analyses.get::<super::ExposedFrames>(context, &layout, f).is_empty());
+    assert_eq!(crate::frameescape::reads() - before, 0, "operands of the edits read with no alloca to renew");
+}
+
 /// A scalar written in each arm of N joins is reached by up to N stores at
 /// every load after, and the cell of each was decoded again for each load that
 /// store reaches (N^2 decodes over the body; 85 K instructions a load at
@@ -1385,4 +1411,159 @@ fn aa_eval_over_the_corpus() {
         }
     }
     println!("AA_EVAL no={no} may={may} must={must} partial=0 slices_narrowed={narrow}");
+}
+
+/// `Summaries` was worked out for the whole module again after every pass that
+/// changed a body (267 times at `chain(256)`, one per function: `analysis
+/// summaries` 0.69 G of chain512's 34.9 G, 3.9x a doubling), though a summary
+/// is made of a function's declaration and of what `GlobalsAA` and
+/// `GlobalsModRef` hold. While those stand, so does it.
+#[test]
+fn summaries_stand_while_only_bodies_change() {
+    let mut text = String::new();
+    for at in 0..8 {
+        text.push_str(&format!("define i16 @f{at}(i16 %x) {{\nentry:\n  %y = add i16 %x, {at}\n  ret i16 %y\n}}\n\n"));
+    }
+    let mut module = parsed(&text);
+    let mut passes = PassManager::default();
+    passes.require_cached::<GlobalsAA>();
+    passes.require_cached::<super::GlobalsModRefAnalysis>();
+    passes.require::<Summaries>();
+    for _ in 0..4 {
+        // Each pass edits a body and keeps no analysis.
+        passes.add(step(
+            |unit, _| {
+                let function = &mut *unit.function;
+                let add = function
+                    .walk()
+                    .map(|(_, inst)| inst)
+                    .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary(_)))
+                    .unwrap();
+                let operands = function.instruction(add).operands.iter().rev().copied().collect();
+                function.set_operands(add, operands);
+            },
+            PreservedAnalyses::none(),
+        ));
+    }
+    let before = crate::attrsummary::summaries_made();
+    passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
+    let made = crate::attrsummary::summaries_made() - before;
+    assert!(made <= 1, "the summaries of the module were made {made} times for edits to bodies alone");
+}
+
+/// Each function's declaration changed in turn made the summaries of every
+/// function again: `functions` at N=128 spent 40 Minstr in 132 runs, x3.84 for
+/// twice the functions. A summary is of its own declaration, so the cost of the
+/// edits is the functions edited.
+#[test]
+fn a_declaration_change_summarizes_only_that_function_again() {
+    const N: usize = 24;
+    let mut text = String::new();
+    for at in 0..N {
+        text.push_str(&format!("define i16 @f{at}(i16 %x) {{\nentry:\n  ret i16 %x\n}}\n\n"));
+    }
+    let mut module = parsed(&text);
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<Summaries>(&module);
+    // The facts held are those the last run read, as where a pass keeps them.
+    let kept =
+        PreservedAnalyses::none().preserve_module::<GlobalsAA>().preserve_module::<super::GlobalsModRefAnalysis>();
+    let before = (crate::attrsummary::functions_summarized(), crate::attrsummary::brought_up_to_date());
+    // Each function in turn gets an attribute, as a pass over the module does,
+    // and the summaries are asked for after each.
+    for at in 0..N {
+        let id = module.named(&format!("f{at}")).unwrap();
+        module.function_mut(&format!("f{at}")).unwrap().1.attrs.extend(llrm_mir::facts::Fact::NoUnwind.attribute());
+        analyses.body_edited(id, &kept);
+        analyses.get::<Summaries>(&module);
+    }
+    let made = crate::attrsummary::functions_summarized() - before.0;
+    let quick = crate::attrsummary::brought_up_to_date() - before.1;
+    assert!(made <= N, "{made} summaries worked out for {N} functions each changed once");
+    // Not compared function by function, which is N per run: the edit log says
+    // which.
+    assert_eq!(quick, N, "{quick} of {N} runs brought up to date from the log of edits");
+}
+
+/// A summary kept while its declaration stands must not outlive a change in
+/// what its callees do: @entry's declaration is the same when @h comes to write
+/// @g, or stops, so only `GlobalsModRef`'s facts for @entry say its summary
+/// moved. After each edit the summaries are those a run from nothing makes.
+#[test]
+fn a_callee_that_comes_to_write_or_stops_writing_a_global_changes_its_callers_summary() {
+    let text = |body: &str| {
+        format!(
+            "@g = internal global i16 0
+
+define void @entry() {{
+entry:
+  call void @h()
+  ret void
+}}
+
+define internal void @h() {{
+entry:
+{body}  ret void
+}}
+"
+        )
+    };
+    let mut module = parsed(&text(""));
+    let h = module.named("h").unwrap();
+    // The objects of a context are one set, however often it is asked.
+    let objects = crate::memory::ObjectInterner::of(&module.context);
+    assert!(Rc::ptr_eq(&objects, &crate::memory::ObjectInterner::of(&module.context)));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    for (body, writes_g) in [("", false), ("  store i16 1, ptr @g\n", true), ("", false)] {
+        // @h's body is replaced: the same declarations, a store to @g in it or
+        // not.
+        module = parsed(&text(body));
+        analyses.body_edited(h, &PreservedAnalyses::none());
+        let found = analyses.get::<Summaries>(&module);
+        let summaries = Result::as_ref(&*found).expect("summarized");
+        let writes = summaries["entry"].writes.iter().any(|one| one.object.kind == crate::memory::MemoryKind::Global);
+        assert_eq!(writes, writes_g, "@entry writes @g through @h: {body:?}");
+        let fresh = ModuleAnalyses::of(&module, Rc::new(Neutral)).get::<Summaries>(&module);
+        assert_eq!(*found, *fresh, "the summaries after {body:?} are not those of a run from nothing");
+    }
+}
+
+/// A function added since the last run is no edited body of the log, and the
+/// facts a pass keeps (`GlobalsAA` held) do not name it: the summaries are
+/// compared function by function then, and a new function has its own. Kept
+/// from the log alone, the result would lack it.
+#[test]
+fn a_function_added_since_the_last_run_is_summarized() {
+    let text = |extra: &str| format!("define void @a() {{\nentry:\n  ret void\n}}\n{extra}");
+    let mut module = parsed(&text(""));
+    let a = module.named("a").unwrap();
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<Summaries>(&module);
+    module = parsed(&text("\ndefine void @b() {\nentry:\n  ret void\n}\n"));
+    // The facts held are those the last run read, as where a pass keeps them.
+    let kept =
+        PreservedAnalyses::none().preserve_module::<GlobalsAA>().preserve_module::<super::GlobalsModRefAnalysis>();
+    analyses.body_edited(a, &kept);
+    let found = analyses.get::<Summaries>(&module);
+    assert!(Result::as_ref(&*found).unwrap().contains_key("b"), "the function added has no summary");
+}
+
+/// A module pass that changed a callee's attributes says so by `invalidate`,
+/// not by the log of edits: a summary kept from the log alone is stale (the
+/// callee still unknown_write after `memory(none)`).
+#[test]
+fn a_module_pass_that_changes_an_attribute_gives_summaries_that_say_so() {
+    let text = |attrs: &str| format!("define internal void @h() {attrs} {{\nentry:\n  ret void\n}}\n");
+    let mut module = parsed(&text(""));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    let writes_anything = |analyses: &mut ModuleAnalyses, module: &Module| {
+        Result::as_ref(&*analyses.get::<Summaries>(module)).unwrap()["h"].unknown_write
+    };
+    assert!(writes_anything(&mut analyses, &module));
+    module = parsed(&text("memory(none)"));
+    // The facts held are those the last run read, as where the pass keeps them.
+    analyses.invalidate(
+        &PreservedAnalyses::none().preserve_module::<GlobalsAA>().preserve_module::<super::GlobalsModRefAnalysis>(),
+    );
+    assert!(!writes_anything(&mut analyses, &module), "@h is still said to write anything after memory(none)");
 }

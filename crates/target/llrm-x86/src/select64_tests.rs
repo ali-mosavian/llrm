@@ -301,3 +301,46 @@ fn a_float_to_integer_convert_reads_a_frame_cell() {
     let load = sem(Operation::Extend, Some("cvttss2si"), vec![rg(RegId::RAX, 8)], vec![frame(-4, 4)], None, false);
     assert_eq!(bytes(&load), [0xf3, 0x48, 0x0f, 0x2c, 0x45, 0xfc]);
 }
+
+/// `cvtsi2ss` from memory was looked up as `CVTSI2SS_XMM_XMMM32` (the
+/// xmm-source form) and not encoded: `int_compared_with_float.c` and
+/// `wide_frame.c` were refused at m64.
+#[test]
+fn an_integer_to_float_convert_reads_its_source_from_memory() {
+    let from = |width| {
+        let cell = ir::Mem { through: RegId::RDI, ..ir::Mem::new(None, width) };
+        sem(
+            Operation::Extend,
+            Some("cvtsi2ss"),
+            vec![rg(RegId::from(Register::XMM0), 16)],
+            vec![Loc::Mem(cell)],
+            None,
+            false,
+        )
+    };
+    // cvtsi2ss (%rdi),%xmm0 and cvtsi2ssq (%rdi),%xmm0
+    assert_eq!(bytes(&from(4)), [0xf3, 0x0f, 0x2a, 0x07]);
+    assert_eq!(bytes(&from(8)), [0xf3, 0x48, 0x0f, 0x2a, 0x07]);
+}
+
+/// `btc`, `bts` and `btr` of a quadword register and a bit number had no form:
+/// a mask of one high bit at `-Os` (`x ^ 1<<62`) stopped `--isel=dag` on
+/// `BTC64ri8` (sat_builtins.c).
+#[test]
+fn a_quadword_bit_change_of_a_constant_bit_encodes() {
+    for (name, expected) in [
+        ("btc", [0x48, 0x0f, 0xba, 0xff, 0x3e]),
+        ("bts", [0x48, 0x0f, 0xba, 0xef, 0x3e]),
+        ("btr", [0x48, 0x0f, 0xba, 0xf7, 0x3e]),
+    ] {
+        let what = sem(
+            Operation::Binary,
+            Some(name),
+            vec![rg(RegId::RDI, 8)],
+            vec![rg(RegId::RDI, 8), im(62, 1, None)],
+            None,
+            false,
+        );
+        assert_eq!(bytes(&what), expected, "{name}");
+    }
+}
