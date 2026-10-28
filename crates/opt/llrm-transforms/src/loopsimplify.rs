@@ -74,8 +74,9 @@
 //! checked before the first is made, so a refused one leaves the body as it
 //! was. No copy of the function and no graph of it is made. The loops of
 //! the shape are updated for the new blocks rather than found again
-//! (`LLRM_CHECK_SHAPE` compares them with a new shape). A function with an
-//! irreducible loop is left alone.
+//! (`LLRM_CHECK_SHAPE` compares them with a new shape). The loops are the
+//! natural ones, as LoopInfo finds them: an irreducible cycle is no loop, and
+//! its function's natural loops are simplified all the same.
 //!
 //! # Example
 //! Before:
@@ -155,7 +156,7 @@ use llrm_analysis::cfg;
 use llrm_analysis::graph::loops;
 use llrm_mir::edit::Position;
 use llrm_mir::footprint::Footprint;
-use llrm_mir::module::{BlockId, Function, Operand};
+use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{Flags, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_support::hash::HashMap;
@@ -202,11 +203,30 @@ fn groupable(
     let Some(entry) = function.entry().map(cfg::id) else { return false };
     let destination = cfg::block(target);
     let reaching: BTreeSet<i64> = function.predecessors(destination).into_iter().map(cfg::id).collect();
-    if sources.is_empty() || !sources.is_subset(&reaching) || target == entry {
+    // DEVIATE: LLVM splits a landing pad in two
+    // (`SplitLandingPadPredecessors`); `ehprepare` takes one pad per
+    // function, so a pad is left as it is.
+    if sources.is_empty()
+        || !sources.is_subset(&reaching)
+        || target == entry
+        || edges::starts_with_landing_pad(function, destination)
+    {
         return false;
     }
     for &parent in sources {
         let Some(last) = function.terminator(cfg::block(parent)) else { return false };
+        if matches!(function.instruction(last).opcode, Opcode::Invoke(_)) {
+            if (_normal_destination(function, last) == Operand::Block(destination))
+                == (_unwind_destination(function, last) == Operand::Block(destination))
+            {
+                return false;
+            }
+            continue;
+        }
+        // `replaceUsesOfWith` takes every case that names the target.
+        if function.instruction(last).opcode == Opcode::Switch {
+            continue;
+        }
         match function.instruction(last).operands.len() {
             _ if function.instruction(last).opcode != Opcode::Br => return false,
             3 if !edges::conditional(function, cfg::block(parent), destination) => return false,
@@ -273,9 +293,33 @@ pub fn grouped(
     function.insert(jump, Position::End(bridge)).expect("a placed block");
     for &parent in sources {
         let last = function.terminator(cfg::block(parent)).expect("checked above");
-        edges::retarget(function, last, destination, bridge);
+        if matches!(function.instruction(last).opcode, Opcode::Invoke(_)) {
+            let at = function.instruction(last).operands.len() - 3;
+            let at = if _normal_destination(function, last) == Operand::Block(destination) { at } else { at + 1 };
+            function.set_operand(last, at, Operand::Block(bridge));
+        } else {
+            edges::retarget(function, last, destination, bridge);
+        }
     }
     Some(bridge)
+}
+
+/// The normal destination of the invoke `last`; its unwind destination is the
+/// operand after it.
+fn _normal_destination(
+    function: &Function,
+    last: InstId,
+) -> Operand {
+    let operands = &function.instruction(last).operands;
+    operands[operands.len() - 3]
+}
+
+fn _unwind_destination(
+    function: &Function,
+    last: InstId,
+) -> Operand {
+    let operands = &function.instruction(last).operands;
+    operands[operands.len() - 2]
 }
 
 /// Whether `loop_` has a block to group in `function`: its entries from outside
@@ -424,12 +468,7 @@ fn _simplified(
     function: &mut Function,
     mut shape: cfg::Shape,
 ) -> bool {
-    // Only a loop out of the form is worth the irreducibility check: with none,
-    // nothing is grouped whether the body is irreducible or not.
-    if function.entry().is_none()
-        || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_))
-        || shape.dominance.is_irreducible(function)
-    {
+    if function.entry().is_none() || !shape.loops.iter().any(|loop_| _needs_grouping(function, loop_)) {
         return false;
     }
     let mut changed = false;
@@ -503,16 +542,16 @@ fn _simplified(
 }
 
 /// What `loop_` is once `bridge` stands on the edges from `sources` to
-/// `target`: the block joins it where `target` and every source are in it (it
-/// reaches the latch through `target`, and what reaches it came from inside),
-/// and becomes its only latch where `target` is its header.
+/// `target`: the block joins it where `target` and a source are in it (it
+/// reaches the latch through `target`, and some of what reaches it came from
+/// inside), and becomes its only latch where `target` is its header.
 fn _bridged(
     loop_: &mut loops::Loop,
     bridge: i64,
     target: i64,
     sources: &BTreeSet<i64>,
 ) {
-    if !loop_.body.contains(&target) || !sources.iter().all(|at| loop_.body.contains(at)) {
+    if !loop_.body.contains(&target) || !sources.iter().any(|at| loop_.body.contains(at)) {
         return;
     }
     loop_.body.insert(bridge);
