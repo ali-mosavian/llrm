@@ -76,12 +76,7 @@ pub fn expanded(
         buf.u32((buf.at() - 0) as u32);
         let field = buf.at();
         let width = if target.pointer == Pointer::Pcrel4 { 4 } else { 8 };
-        buf.relocs.push(Reloc::new(
-            field,
-            Fix::pc_rel(width, 0),
-            Target::Section(frame.section),
-            frame.offset as i64,
-        ));
+        buf.relocs.push(Reloc::new(field, Fix::pc_rel(width, 0), Target::Section(frame.section), frame.offset as i64));
         buf.bytes.extend(std::iter::repeat_n(0, width));
         buf.bytes.extend((frame.length as u64).to_le_bytes().iter().take(width));
         buf.uleb(0);

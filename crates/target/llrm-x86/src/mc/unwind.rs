@@ -209,6 +209,53 @@ mod tests {
         assert_eq!(written.sections.last().unwrap().image, PIN);
     }
 
+    /// Pin clang's `x86_64-apple-macos11 -O1` of `f` in 62 bytes that keeps
+    /// rbx in a frame of rbp: `__compact_unwind` (one entry, encoding
+    /// 0x01010001) and `__eh_frame` (CIE with 8-byte pc-relative FDE pointers;
+    /// the FDE's is -0x80, the text at 0 and the section at 0x60).
+    #[test]
+    fn the_mach_o_unwind_sections_are_the_pins() {
+        use llrm_object::assembler::Cfi;
+        const COMPACT: [u8; 32] = [
+            0, 0, 0, 0, 0, 0, 0, 0, 0x3E, 0, 0, 0, 0x01, 0x00, 0x01, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0,
+        ];
+        const EH: [u8; 64] = [
+            0x14, 0, 0, 0, 0, 0, 0, 0, 0x01, 0x7A, 0x52, 0, 0x01, 0x78, 0x10, 0x01, 0x10, 0x0C, 0x07, 0x08, 0x90, 0x01,
+            0, 0, 0x24, 0, 0, 0, 0x1C, 0, 0, 0, 0x80, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3E, 0, 0, 0, 0, 0, 0,
+            0, 0x00, 0x41, 0x0E, 0x10, 0x86, 0x02, 0x43, 0x0D, 0x06, 0x45, 0x83, 0x03, 0, 0, 0, 0,
+        ];
+        let frame = Frame {
+            section: 0,
+            offset: 0,
+            length: 0x3E,
+            rows: vec![
+                row(1, 16, &[("rbp", -16)]),
+                FrameRow { cfa_register: "rbp".into(), ..row(4, 16, &[("rbp", -16)]) },
+                FrameRow { cfa_register: "rbp".into(), ..row(9, 16, &[("rbp", -16), ("rbx", -24)]) },
+            ],
+            cfi: vec![
+                Cfi::DefCfaOffset { offset: 16 },
+                Cfi::Offset { register: 6, offset: -16 },
+                Cfi::DefCfaRegister { register: 6 },
+                Cfi::Offset { register: 3, offset: -24 },
+            ],
+        };
+        let mut made = object(vec![frame]);
+        made.sections[0].image = vec![0x90; 0x3E];
+        made.sections[0].spans = vec![[0, 0x3E]];
+        let written = macho_expanded(&made).unwrap();
+        let [_, compact, eh] = &written.sections[..] else { panic!("{} sections", written.sections.len()) };
+        assert_eq!((compact.name.as_str(), compact.image.as_slice()), ("__compact_unwind", &COMPACT[..]));
+        assert_eq!(compact.relocs, vec![Reloc::new(0, Fix::abs(8), Target::Section(0), 0)]);
+        assert_eq!((eh.name.as_str(), eh.image.len()), ("__eh_frame", 64));
+        // The FDE's pointer is a pc-relative reference to the text, which the
+        // Mach-O writer resolves; everything else is the pin's already.
+        let file = X86Objects.write_object("macho", &made).unwrap();
+        assert!(file.windows(COMPACT.len()).any(|bytes| bytes == COMPACT));
+        assert!(file.windows(EH.len()).any(|bytes| bytes == EH));
+    }
+
     #[test]
     fn the_registers_have_system_v_numbers() {
         assert_eq!(

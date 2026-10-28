@@ -262,6 +262,16 @@ pub fn write<W: MachTargetWriter>(
         let mut image = section.image.clone();
         let mut made: Vec<(usize, [u32; 2])> = Vec::new();
         for one in &section.relocs {
+            // The unwind sections name code by its place in the object: a
+            // pc-relative reference from them to a section is resolved here, as
+            // LLVM resolves a difference of two sections' symbols (no entry).
+            if section.role == Role::Unwind && one.pc_rel && matches!(one.target, Target::Section(_)) {
+                let Target::Section(home) = one.target else { unreachable!("matched") };
+                let width = one.width();
+                let value = address[home] as i64 + one.addend - (address[index] + one.at) as i64;
+                image[one.at..one.at + width].copy_from_slice(&value.to_le_bytes()[..width]);
+                continue;
+            }
             let Described { kind, length, pcrel, beyond, addend_in_field } = flavor.relocation(one)?;
             let width = one.width();
             // A section's start is a local symbol at offset 0 of it.
@@ -279,15 +289,6 @@ pub fn write<W: MachTargetWriter>(
                 let offset = u32::try_from(one.addend)
                     .map_err(|_| unsupported(format!("{}: an offset of {} does not fit", section.name, one.addend)))?;
                 image[one.at..one.at + width].copy_from_slice(&u64::from(offset).to_le_bytes()[..width]);
-                continue;
-            }
-            // The unwind sections name code by its place in the object: a
-            // pc-relative reference from them to a section is resolved here, as
-            // LLVM resolves a difference of two sections' symbols (no entry).
-            if section.role == Role::Unwind && pcrel && home.is_some() {
-                let home = home.expect("matched");
-                let value = address[home] as i64 + one.addend - (address[index] + one.at) as i64;
-                image[one.at..one.at + width].copy_from_slice(&value.to_le_bytes()[..width]);
                 continue;
             }
             let (symbolnum, external, field) = match target.and_then(|target| index_of[target]) {
