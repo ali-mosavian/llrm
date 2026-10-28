@@ -526,6 +526,7 @@ pub struct Options {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
+    pub run_time_module: bool,
     /// Every procedure uses the runtime's frame entry and exit.
     pub runtime_frames: bool,
     /// Errors in code without a landing pad, as a module handler's, report
@@ -10871,7 +10872,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -10879,7 +10880,8 @@ impl Compiler {
             } else {
                 "inline"
             },
-            if self.own_frames() { ",\"frames\":\"own\"" } else { "" }
+            if self.own_frames() { ",\"frames\":\"own\"" } else { "" },
+            if self.options.run_time_module { ",\"run_time_module\":true" } else { "" }
         )
         .unwrap();
         out
