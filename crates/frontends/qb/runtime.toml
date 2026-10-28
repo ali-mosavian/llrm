@@ -1831,3 +1831,17 @@ established = false
 evidence = '''
 rt/dvstmt.asm: `cProc B$PUT2,<PUBLIC,FAR>` with a ParmW channel and a ParmD record number, so it returns with `ret 6`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
 '''
+
+["B$PCPY"]
+cleanup = 4
+control = "unknown"
+enters_user_code = true
+raises_error = true
+error_handling = false
+writes = "ANY"
+reads = "ANY"
+clobbers = ["ax", "bp", "bx", "cx", "di", "ds", "dx", "es", "flags", "si", "sp"]
+established = false
+evidence = '''
+rt/grview.asm: `cProc B$PCPY,<PUBLIC,FAR>` with two ParmW (FromPage, ToPage), so it returns with `ret 4`. Only the cleanup is claimed: nothing else of the body was read, so every register and every byte of memory is conceded.
+'''
