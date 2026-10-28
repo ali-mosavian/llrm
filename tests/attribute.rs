@@ -26,7 +26,8 @@ fn compiled(
     (output, listing)
 }
 
-/// The text of `main_` (`_main` at m16, whose default is C's for `main`), the one routine that calls.
+/// The text of `main_` (`_main` at m16, whose default is C's for `main`), the
+/// one routine that calls.
 fn main_of(listing: &str) -> &str {
     let from = listing.find("main_ proc").or_else(|| listing.find("_main proc")).expect("main");
     &listing[from..listing[from..].find("endp").map_or(listing.len(), |at| from + at)]
