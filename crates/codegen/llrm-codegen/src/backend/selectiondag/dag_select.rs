@@ -33,7 +33,8 @@ use llrm_dagisel::x86_select::select_node;
 use llrm_support::hash::HashSet;
 
 use super::actions::TargetLowering;
-use super::dag_combiner::{CombineLevel, DagCombiner};
+use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
+use super::legalize_dag;
 use super::dagisel_adapter::DagisAdapter;
 use super::emit::{EmitContext, EmitState, Emitted, emit_in};
 use super::isd::ISD;
@@ -104,8 +105,23 @@ pub fn legalized(
     lowering: &mut X86Lowering,
     arch: &dyn llrm_target::Target,
 ) -> Result<(), Refusal> {
+    legalized_with(dag, tli, lowering, Some(arch))
+}
+
+/// [`legalized`] for any target's lowering hooks. `arch` is the target whose
+/// inline routines the `i128` divide calls; a target without any passes `None`.
+pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
+    dag: &mut SelectionDAG,
+    tli: &TargetLowering,
+    lowering: &mut L,
+    arch: Option<&dyn llrm_target::Target>,
+) -> Result<(), Refusal> {
     DagCombiner::new(dag, lowering, CombineLevel::BeforeLegalizeTypes).with_tli(tli).run();
-    let types = TypeLegalizer::new(dag, tli).with_target(arch).with_hooks(lowering).run();
+    let mut types = TypeLegalizer::new(dag, tli);
+    if let Some(arch) = arch {
+        types = types.with_target(arch);
+    }
+    let types = types.with_hooks(lowering).run();
     types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     DagCombiner::new(dag, lowering, CombineLevel::AfterLegalizeTypes).with_tli(tli).run();
     let legal = DagLegalizer::new(dag, tli, lowering).run();
@@ -139,6 +155,19 @@ pub(crate) fn do_instruction_selection(
     selector: &Selector,
     hooks: &mut X86Hooks,
 ) -> Result<(), Refusal> {
+    do_instruction_selection_with(dag, selector, hooks, |selector, adapter, hooks, node| {
+        select_node(selector, adapter, hooks, node)
+    })
+}
+
+/// [`do_instruction_selection`] for any target: `select` tries a node by hand
+/// first (the target's `Select` arms), then the matcher table.
+pub(crate) fn do_instruction_selection_with<H>(
+    dag: &mut SelectionDAG,
+    selector: &Selector,
+    hooks: &mut H,
+    select: impl Fn(&Selector, &mut DagisAdapter<'_>, &mut H, u32) -> Outcome,
+) -> Result<(), Refusal> {
     let order = users_first(dag);
     let mut adapter = DagisAdapter::new(dag);
     // Nodes a selection makes (a shift amount rewritten, a mask shrunk) are
@@ -166,7 +195,7 @@ pub(crate) fn do_instruction_selection(
             adapter.mark_selected(node);
         }
         adapter.dag.cur_order = adapter.dag.nodes()[node as usize].order;
-        if select_node(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
+        if select(selector, &mut adapter, hooks, node) == Outcome::CannotSelect {
             return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
         }
         made.extend(before as u32..adapter.dag.nodes().len() as u32);
