@@ -141,14 +141,15 @@ def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypat
     monkeypatch.setattr(dosbatch, "_host", lambda command, env=None: asked.append((command, env)))
     qbruntime._compile_c(Path("a.c"), tmp_path / "a.obj", tmp_path)
     (command, env), = asked
-    assert Path(command[0]).name == "llrm-cc" and "-mbss-begin" in command and env == {"LLRM_CC_TARGET": "x86_16-dos"}, (command, env)
+    assert Path(command[0]).name == "llrm-cc" and "-mbss-begin" in command and env == {"LLRM_CC_TARGET": "x86_16-wat"}, (command, env)
     assert not any(Path(one).name == "llrm-c" for one in command)
+    assert str(tmp_path) not in command, "llrm-c's llrm_os.h (a plain __cdecl, ignored by the fork clang) would shadow the row's"
     assert qb32._stamp(dosbatch.c_frontend()).startswith("llrm-cc")
 
 
 def test_the_real_mode_runtime_objects_are_cached_per_row(monkeypatch, tmp_path):
-    """bq16 programs died on `KeyError: 426` (an INT 21h write to a garbage handle): the runtime's C, built on the Watcom row, took its arguments in registers where the
-    assembly and compiled BASIC push them; the cache key ignored the row, so a rebuilt row still served the old objects."""
+    """bq16 programs died on `KeyError: 426` (an INT 21h write to a garbage handle): the runtime's C was built with llrm-c's llrm_os.h, whose plain `__cdecl` the
+    fork clang ignores, so `LL$WRITE_FILE` got register arguments; the cache key ignored the build, so the old objects were served after the fix."""
     import qb32
     import qbbuild
     import qbruntime
@@ -156,8 +157,7 @@ def test_the_real_mode_runtime_objects_are_cached_per_row(monkeypatch, tmp_path)
     keys = []
     monkeypatch.setattr(qb32, "cached", lambda key, obj, produce: keys.append(key))
     qbbuild.runtime16(tmp_path)
-    assert keys and all(f"|{qbruntime.RUNTIME_ROW}|" in key for key in keys)
-    assert qbruntime.RUNTIME_ROW == "x86_16-dos", "stack arguments: the cdecl row, not the Watcom register-call one"
+    assert keys and all(qbruntime.c_build_key() in key for key in keys) and "-I include" not in qbruntime.c_build_key()
 
 
 def test_a_qb_program_links_the_start_up_that_calls_underscore_main(monkeypatch):
