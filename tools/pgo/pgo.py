@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""A profile-guided build of llrm-c (the shipped, `dist` profile): 15-18% fewer instructions to compile, byte-identical output.
+"""A profile-guided build of llrm-llc, the backend llrm-cc runs (the shipped, `dist` profile): 15-18% fewer instructions to compile, byte-identical output.
 
     pgo.py build --out DIR [--profile-dir DIR] [--siblings DIR] [--exclude NAME ...]
-                   builds llrm-c with the profile in --profile-dir (made first when missing or stale), into DIR/llrm-c
+                   builds llrm-llc with the profile in --profile-dir (made first when missing or stale), into DIR/llrm-llc
     pgo.py stale --profile-dir DIR     exit 0 fresh, 1 stale, 2 none: the policy in docs/working/pgo.md
     pgo.py train BINARY [--exclude NAME ...]    runs the training corpus through an instrumented BINARY
 
@@ -138,14 +138,14 @@ def work_dir(profile_dir: Path) -> Path:
     return profile_dir.parent / (profile_dir.name + "-work")
 
 
-def cargo(root: Path, target: Path, flags: str, binary: str = "llrm-c") -> subprocess.CompletedProcess:
+def cargo(root: Path, target: Path, flags: str, binary: str = "llrm-llc") -> subprocess.CompletedProcess:
     env = {**os.environ, "CARGO_TARGET_DIR": str(target), "RUSTFLAGS": flags}
     # llrm-c is built only with its feature (wccq: the toolchain it compiles with): without, "requires the features: c-legacy".
     features = ["--features", "wccq"] if binary == "llrm-c" else []
     return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", binary, *features], cwd=root, env=env, capture_output=True, text=True)
 
 
-def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-c") -> None:
+def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-llc") -> None:
     """Instrumented build, the corpus through it, merged into profile_dir/profile.profdata."""
     raw, target = work_dir(profile_dir) / "raw", work_dir(profile_dir) / "instrumented"
     shutil.rmtree(raw, ignore_errors=True)
@@ -167,8 +167,8 @@ def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport:
     shutil.rmtree(target, ignore_errors=True)
 
 
-def build(root: Path, out: Path, profile_dir: Path, siblings: Path | None, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-c") -> list[str]:
-    """DIR/llrm-c built with the profile (made first when none or stale); the functions the profile has no data for."""
+def build(root: Path, out: Path, profile_dir: Path, siblings: Path | None, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-llc") -> list[str]:
+    """DIR/BINARY built with the profile (made first when none or stale); the functions the profile has no data for."""
     if stale(profile_dir, root) != 0:
         make_profile(root, profile_dir, exclude, qcport, binary)
     target = work_dir(profile_dir) / "final"
@@ -199,7 +199,7 @@ def parse(argv: list[str] | None = None) -> argparse.Namespace:
         if name == "build":
             one.add_argument("--out", type=Path, required=True)
             one.add_argument("--siblings", type=Path)
-            one.add_argument("--binary", choices=("llrm-c", "llrm-llc"), default="llrm-c", help="the compiler built with the profile; llrm-llc is trained through llrm-cc")
+            one.add_argument("--binary", choices=("llrm-c", "llrm-llc"), default="llrm-llc", help="the compiler built with the profile; llrm-llc is trained through llrm-cc")
         if name == "train":
             one.add_argument("binary", type=Path)
         else:

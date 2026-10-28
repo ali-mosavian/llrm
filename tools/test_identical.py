@@ -141,3 +141,26 @@ def test_a_change_to_one_bench_row_alone_fails_the_check(tmp_path):
     default = ("vsgcc/frames", "-O2", "llrm-qb", ["-O2", "frames.bas", "-o", "OBJ"])
     assert identical.same(bench, old, new, tmp_path)[2] == "different"
     assert identical.same(default, old, new, tmp_path)[2] is None
+
+
+def test_two_llrm_llc_builds_are_compared_through_the_llrm_cc_beside_each(tmp_path):
+    """identical.py ran `llrm-llc -m32 ... x.c -o OBJ` (a C command line to a backend that reads IR) and called every compile failed: the PGO job's
+    identity check had no way to name llrm-llc. Each side must be llrm-cc with LLRM_LLC set to that side's backend and a row for the mode."""
+    import os
+
+    for tag in ("old", "new"):
+        side = tmp_path / tag
+        side.mkdir()
+        (side / "llrm-llc").write_text("#!/bin/sh\n")
+        cc = side / "llrm-cc"
+        cc.write_text(f'#!/bin/sh\nwhile [ "$1" != -o ]; do shift; done\necho "{tag} $LLRM_LLC $LLRM_CC_TARGET" > "$2"\n')
+        for one in (side / "llrm-llc", cc):
+            one.chmod(0o755)
+    src = tmp_path / "x.c"
+    src.write_text("int f(void) { return 0; }\n")
+    work = tmp_path / "w"
+    work.mkdir()
+    name, _, why = identical.same(("p", "-O2", "llrm-c", ["-m32", "-O2", str(src), "-o", "OBJ"]), str(tmp_path / "old/llrm-llc"), str(tmp_path / "new/llrm-llc"), work)
+    assert why == "different"
+    assert (work / "p-O2.old.obj").read_text() == f"old {tmp_path}/old/llrm-llc x86_32-wat\n"
+    assert (work / "p-O2.new.obj").read_text() == f"new {tmp_path}/new/llrm-llc x86_32-wat\n"
