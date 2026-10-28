@@ -148,6 +148,10 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) tli: Option<&'a TargetLowering>,
 }
 
+fn op_is_srl(op: ISD) -> bool {
+    op == ISD::Srl
+}
+
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     pub fn new(
         dag: &'a mut SelectionDAG,
@@ -313,7 +317,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
-            ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
+            ISD::And => self
+                .visit_and(node)
+                .or_else(|| self.reduce_load_width_of(node))
+                .or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
@@ -321,13 +328,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
+            ISD::FpRound => self.visit_fp_round(node),
+            ISD::FpExtend => self.visit_fp_extend(node),
+            ISD::SIntToFp | ISD::FpToSInt => self.visit_fp_int_convert(node),
             ISD::FAbs => self.visit_fabs(node),
             ISD::FDiv => self.visit_fdiv(node),
-            ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
-            ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
+            ISD::Shl | ISD::Srl => self
+                .visit_shift(node)
+                .or_else(|| if op_is_srl(self.dag.opcode(node)) { self.reduce_load_width_of(node) } else { None })
+                .or_else(|| self.simplify_demanded(node)),
+            ISD::Sra => {
+                self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
+            }
             ISD::BSwap => self.visit_bswap(node),
             ISD::CtLz | ISD::CtTz => self.visit_ctlz_cttz(node),
             ISD::CtPop => self.visit_ctpop(node),
+            ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
@@ -335,8 +351,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
+            ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
+            // `visitFunnelShift`, its closing `SimplifyDemandedBits(N)`; the
+            // folds above it are not translated.
+            ISD::FShl | ISD::FShr => self.simplify_demanded(node),
             _ => None,
         }
     }
@@ -724,6 +744,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
             }
         }
+        // fold (xor (shl 1, x), -1) -> (rotl ~1, x): a zero placed in a value
+        // of all ones, which the target clears a bit with (`btr`) when it
+        // meets an `and` (DAGCombiner::visitXOR).
+        let ones = match vt.size_in_bits() {
+            128.. => u128::MAX,
+            bits => (1u128 << bits) - 1,
+        };
+        if vt.is_integer()
+            && self.dag.opcode(n0) == ISD::Shl
+            && self.dag.constant(self.dag.operand(n0, 0)) == Some(1)
+            && self.dag.constant(n1) == Some(ones)
+            && self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::Rotl, vt))
+        {
+            let amount = self.dag.operand(n0, 1);
+            let not_one = self.dag.get_constant(ones - 1, vt);
+            return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1);
         }
@@ -794,6 +831,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
             ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
+            // Narrow a binary operation with a constant operand ahead of the
+            // truncate: `trunc (and y, 31)` is `and (trunc y), 31`, which the
+            // shift patterns then drop as an unneeded mask. Before
+            // legalization only, as the pin does.
+            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor
+                if self.level < CombineLevel::AfterLegalizeVectorOps
+                    && self.dag.use_count(n0.node) == 1
+                    && vt.is_integer()
+                    && {
+                        let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                        l == r || self.dag.constant(l).is_some() || self.dag.constant(r).is_some()
+                    } =>
+            {
+                let (l, r) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+                let narrow_l = self.dag.get_node(ISD::Truncate, vt, &[l]);
+                let narrow_r = self.dag.get_node(ISD::Truncate, vt, &[r]);
+                Some(self.dag.get_node(self.dag.opcode(n0), vt, &[narrow_l, narrow_r]))
+            }
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 let (op, x) = (self.dag.opcode(n0), self.dag.operand(n0, 0));
                 let from = self.dag.value_type(x);
@@ -1132,11 +1187,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// query: a constant moves right, `x + ~x` is -1, constants merge through
     /// a `sub` or an `add`, and an `add` of a negation or of a `sub` of the
     /// other operand is a `sub` or the operand itself.
-    ///
-    /// DEVIATE SD210: an `add` of constants is not reassociated when it feeds
-    /// a memory access (`reassociationCanBreakAddressingModePattern` is not
-    /// translated; the matcher folds the displacement there). Exit: that
-    /// query. Owner sdag-b. Review 2026-12-10.
     fn visit_add(
         &mut self,
         node: SDValue,
@@ -1168,19 +1218,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(self.dag.get_node(ISD::Sub, vt, &[sum, n01]));
                 }
             }
-            // `(add (add x, c0), c1)` is `(add x, c0 + c1)`.
-            if self.dag.opcode(n0) == ISD::Add && plain(self.dag, self.dag.operand(n0, 1)) {
-                let feeds_memory = self
-                    .dag
-                    .users(node)
-                    .any(|user| matches!(
-                        self.dag.opcode(SDValue { node: user, res: 0 }),
-                        ISD::Load | ISD::Store
-                    ));
-                if !feeds_memory {
-                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
-                    return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
-                }
+            // `(add (add x, c0), c1)` is `(add x, c0 + c1)` (`reassociateOps`).
+            if self.dag.opcode(n0) == ISD::Add
+                && plain(self.dag, self.dag.operand(n0, 1))
+                && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+            {
+                let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
             }
         }
         let is_neg =
@@ -1210,14 +1254,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
-        let feeds_memory = self
-            .dag
-            .users(node)
-            .any(|user| matches!(
-                self.dag.opcode(SDValue { node: user, res: 0 }),
-                ISD::Load | ISD::Store
-            ));
-        if !feeds_memory {
+        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
             return self.reassociate_ops(ISD::Add, n0, n1);
         }
         None

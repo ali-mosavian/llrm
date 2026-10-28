@@ -3,6 +3,22 @@
 // convention's variadic_float promotion is for float).
 extern void report(long value);
 
+#ifdef __clang__
+#include <stdarg.h>
+/* clang copies a parameter whose address is taken: the arguments are read through its own va_list. */
+long double sum(int n, ...)
+{
+    va_list ap;
+    long double total = 0;
+    int i;
+
+    va_start(ap, n);
+    for (i = 0; i < n; i++)
+        total += va_arg(ap, long double);
+    va_end(ap);
+    return total;
+}
+#else
 long double sum(int n, ...)
 {
     char *ap = (char *)&n + 4;
@@ -15,6 +31,7 @@ long double sum(int n, ...)
     }
     return total;
 }
+#endif
 
 int main(void)
 {

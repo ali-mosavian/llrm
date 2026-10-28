@@ -352,7 +352,7 @@ def test_a_refusal_after_a_rebuild_names_the_newest_source_the_oldest_binary_and
 
 GENERATOR = """import sys
 from pathlib import Path
-root = Path(__file__).resolve().parents[2]
+root = Path(__file__).resolve().parents[3]
 pages = sorted(p.stem for p in (root / "docs/optimizations/passes").glob("page_*.md"))
 want = "".join(f"- {name}\\n" for name in ["a", *pages])
 index = root / "docs/optimizations/passes/readme.md"
@@ -365,10 +365,10 @@ elif "--check" in sys.argv and index.read_text() != want:
 
 def generated_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
-    (repo / "tools/docsbuild").mkdir(parents=True)
+    (repo / "tools/docs/docsbuild").mkdir(parents=True)
     (repo / "docs/optimizations/passes").mkdir(parents=True)
     sh(repo, "init", "-q", "-b", "main")
-    (repo / "tools/docsbuild/build.py").write_text(GENERATOR)
+    (repo / "tools/docs/docsbuild/build.py").write_text(GENERATOR)
     (repo / "docs/optimizations/passes/readme.md").write_text("- a\n")
     sh(repo, "add", "-A")
     sh(repo, "commit", "-qm", "base")
@@ -1388,8 +1388,8 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys, pathlib\nheader = pathlib.Path('a.rs').read_text().strip()\npage = pathlib.Path('docs/a.md').read_text().strip()\n"
         "if header != page:\n    print('generated docs are out of date')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )
@@ -1408,7 +1408,7 @@ def test_a_docs_refusal_keeps_the_head_the_status_and_the_check_output_of_the_tr
     assert ps.docs_recheck(head, base, tmp_path, {"docs/a.md"}) == "", "a page the base already has stale is not the PR's"
 
 
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('generated docs are out of date')\\nprint('  docs/a.md')\\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     (tmp_path / "stray.txt").write_text("left over")
@@ -1426,8 +1426,8 @@ def test_a_batch_docs_refusal_keeps_each_members_head_and_commit_time(tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
 
     run("init", "-q", "-b", "main")
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
-    (tmp_path / "tools/docsbuild/build.py").write_text("print('  docs/a.md')\n")
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text("print('  docs/a.md')\n")
     run("add", ".")
     run("commit", "-q", "-m", "x")
     head = run("rev-parse", "HEAD")
@@ -1492,20 +1492,20 @@ def test_pr_info_waits_out_a_403_instead_of_crashing_the_batch(monkeypatch):
 
 def test_a_check_failure_that_names_no_page_is_named_by_its_problem_line(tmp_path):
     """b92ef6dd2 and #5119 were refused as 'docsbuild --check failed' while the cause was `no # Example` in a header: the sync cannot fix that, and the reason hid it."""
-    tool = tmp_path / "tools/docsbuild/build.py"
+    tool = tmp_path / "tools/docs/docsbuild/build.py"
     tool.parent.mkdir(parents=True)
     tool.write_text("import sys\nprint('1 problem(s)')\nprint('crates/x/src/a.rs: no # Example')\nsys.exit(1)\n")
     assert ps.docs_stale(tmp_path) == {"docsbuild --check: crates/x/src/a.rs: no # Example"}
 
 
 def _fake_docs_repo(tmp_path):
-    """A repo whose tools/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
+    """A repo whose tools/docs/docsbuild/build.py writes docs/a.md on --sync and calls it stale on --check until it exists."""
     def git(*args, cwd=tmp_path):
         return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True, check=True).stdout.strip()
 
-    (tmp_path / "tools/docsbuild").mkdir(parents=True)
+    (tmp_path / "tools/docs/docsbuild").mkdir(parents=True)
     (tmp_path / "docs").mkdir()
-    (tmp_path / "tools/docsbuild/build.py").write_text(
+    (tmp_path / "tools/docs/docsbuild/build.py").write_text(
         "import sys\nfrom pathlib import Path\npage = Path('docs/a.md')\n"
         "if '--sync' in sys.argv:\n    page.parent.mkdir(exist_ok=True)\n    page.write_text('generated\\n')\nelif not page.exists():\n    print('1 problem(s)')\n    print('  docs/a.md')\n    sys.exit(1)\n"
     )
@@ -1726,7 +1726,7 @@ def test_the_workspace_check_runs_beside_the_scanners_and_a_broken_build_wins():
     import inspect
 
     source = inspect.getsource(ps.merge_batch)
-    assert "beside(timed(took" in source and "check_beside_scanners()" in source
+    assert "check_and_scan(" in source and "overlap_verdict()" in source
     assert "failed_units.clear()" in source[source.find("def build_refused") :][:400]
 
 
@@ -1734,14 +1734,14 @@ def test_the_overlap_falls_back_to_serial_at_a_high_load_and_after_a_slower_run(
     """The host runs at a load near 60: two cargo builds at once could be slower than one after the other. Above OVERLAP_MAX_LOAD the checks run in a row, and an overlapped run
     that took longer than its halves' sum turns the overlap off for an hour."""
     flag = tmp_path / "overlap-off"
-    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag)
-    assert not ps.check_beside_scanners(load=lambda: (61.0, 0, 0), flag=flag)
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
+    assert not ps.check_beside_scanners(load=lambda: (ps.OVERLAP_MAX_LOAD + 1, 0, 0), flag=flag, free=lambda: 64)
     ps.note_overlap(100, 160, flag=flag)
     assert not flag.exists(), "a faster overlap stays on"
     ps.note_overlap(170, 160, flag=flag)
-    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag)
+    assert flag.exists() and not ps.check_beside_scanners(load=lambda: (10.0, 0, 0), flag=flag, free=lambda: 64)
     later = flag.stat().st_mtime + ps.OVERLAP_OFF_SECONDS + 1
-    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag)
+    assert ps.check_beside_scanners(load=lambda: (10.0, 0, 0), now=lambda: later, flag=flag, free=lambda: 64)
 
 
 def test_a_batch_prints_its_stage_times_and_the_gap_after_log_is_pre_squash():
@@ -1780,3 +1780,125 @@ def test_build_script_reruns_runs_when_the_diff_touches_a_build_script_input_and
     ps.landing_scanner_failures(["docs/a.md"], True, on_merged=lambda t: asked.append(list(t)) or set(), on_head=lambda t: set())
     assert "build_script_reruns" in asked[0]
 
+
+def test_the_overlap_says_why_it_is_serial_and_keeps_to_memory_and_the_core_count(tmp_path):
+    """The audit of five landings showed check then scanners: the overlap never engaged (load 78 on 32 cores against a limit of 60) and nothing in the log said so. The limit is 3 x cores,
+    the verdict names its reason, and under 8 GB free (oomd kills sessions) the builds run in a row."""
+    flag = tmp_path / "overlap-off"
+    assert ps.OVERLAP_MAX_LOAD == 3 * (os.cpu_count() or 1) or "OVERLAP_MAX_LOAD" in os.environ
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD, 0, 0), flag=flag, free=lambda: 64) == "", "a load at the limit overlaps"
+    assert ps.overlap_verdict(load=lambda: (ps.OVERLAP_MAX_LOAD + 5, 0, 0), flag=flag, free=lambda: 64).startswith("load ")
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 3.0) == "3 GB free is under 8"
+    assert ps.overlap_verdict(load=lambda: (1.0, 0, 0), flag=flag, free=lambda: 64) == ""
+    import inspect
+
+    assert "check beside scanners: {" in inspect.getsource(ps.merge_batch), "the decision is logged either way"
+
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_each_others(tmp_path, monkeypatch):
+    """sq-5420.log 15:14: `broken` held the scan's True and the build's text was lost (`True[:300]` TypeError); #5420 was refused for a crash, and every later PR whose check failed would have been."""
+    monkeypatch.setenv("LAND_TMP", str(tmp_path))
+    assert ps.check_and_scan(lambda: "error[E0425]: cannot find value", lambda: True) == ("error[E0425]: cannot find value", True)
+    assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
+    assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
+
+def test_every_scanner_is_in_the_default_scan_the_conditional_one_or_nightly():
+    """The SD registry sat red on parity for two hours behind a default scan of four of the fifteen scanners. A scanner added to the full map without a place in the default scan
+    (or the build-input trigger, or NIGHTLY_ONLY) is now a failure here."""
+    smoke = ps.parity_smoke_module()
+    placed = set(ps.ALWAYS_SCANNERS) | {"build_script_reruns"} | set(smoke.NIGHTLY_ONLY)
+    assert set(smoke.SCANNERS) <= placed, sorted(set(smoke.SCANNERS) - placed)
+
+
+def test_a_diff_that_touches_a_tool_runs_that_tools_python_tests_and_a_red_one_refuses_the_batch(tmp_path):
+    """test_assemble.py sat red on parity for hours: landing ran Rust tests only, so a tools/ change never ran the Python tests that guard it."""
+    (tmp_path / "tools").mkdir()
+    for name in ("parity_squash.py", "test_parity_squash.py", "test_other.py", "lonely.py"):
+        (tmp_path / "tools" / name).write_text("")
+    assert ps.tool_tests_for(["tools/parity_squash.py", "tools/test_other.py", "tools/lonely.py", "docs/a.md", "crates/x.rs"], tmp_path) == ["tools/test_other.py", "tools/test_parity_squash.py"]
+    assert ps.tool_tests_for(["docs/a.md"], tmp_path) == []
+    ran = []
+
+    class Done:
+        returncode = 1
+        stdout = "FAILED tools/test_other.py::test_x\n1 failed"
+        stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done(), ensure=lambda: "") == ["FAILED tools/test_other.py::test_x", "1 failed"]
+    assert "tools/test_other.py" in ran[0]
+    assert ps.tool_test_failures(["docs/a.md"], tmp_path, run=lambda *a, **k: ran.append("never")) == [] and "never" not in ran
+
+
+def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(tmp_path):
+    """The 02:32 batch was refused ("stale binaries ... run cargo build --release --bins") by its own tool-tests stage: pytest ran before the build stage had refreshed the release binaries."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+    order = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: order.append("pytest") or Done(), ensure=lambda: order.append("ensure") or "") == []
+    assert order == ["ensure", "pytest"], order
+    order.clear()
+    assert ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda *a, **k: order.append("pytest"), ensure=lambda: "binaries still older than the merged tree") == ["binaries still older than the merged tree"]
+    assert "pytest" not in order
+    import inspect
+
+    assert "tool_test_failures(" in inspect.getsource(ps.merge_batch)
+
+
+
+def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
+    """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
+    assert "wccq" not in ps.bins_command(tmp_path)
+    (tmp_path / "llrm-c").write_text("")
+    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+
+
+def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
+    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release" / "llrm-c").write_text("")
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
+    monkeypatch.setattr(ps, "git", lambda *args, **kw: "tree")
+    monkeypatch.setattr(ps, "_BUILT", set())
+    ran = []
+    monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
+    ps._build_release()
+    assert ran and "wccq" in ran[0], ran
+
+
+def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
+    """Only the last 6 lines of pytest were kept: #5690 was refused five times with "BuildError" and the stderr naming the cause was cut."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    class Done:
+        returncode = 1
+        stdout = "\n".join(["E   dosbatch.BuildError: llrm-qb: the real cause", *["    frame"] * 30, "ERROR tools/x.py::t", "1 error"])
+        stderr = ""
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: Done(), ensure=lambda: "")
+    assert any("the real cause" in line for line in got), got
+
+
+def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
+    """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    def slow(command, **kw):
+        raise ps.subprocess.TimeoutExpired(command, 600)
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=slow, ensure=lambda: "")
+    assert got and "600 s" in got[0], got

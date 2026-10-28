@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m16 -march=i486 -Os -S -o /dev/stdout
+// RUN: llrm-cc %s -m16 -march=i486 -Os -S -o /dev/stdout
 // A spill slot nothing reads keeps no store: huge_copy's loop stored the byte it had just
 // loaded to [bp-2] every trip (the forwarding had dropped the reload), 5.1M clocks.
 // CHECK-LABEL: {{_copy(@3)?}} proc

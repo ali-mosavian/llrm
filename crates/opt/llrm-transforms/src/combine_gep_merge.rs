@@ -19,6 +19,10 @@
 //! %q = getelementptr i32, ptr %p, i64 %i              %r = getelementptr i32, ptr %p, i64 %s
 //! %r = getelementptr i32, ptr %q, i64 1         ==>   (%s = add i64 %i, 1, when that simplifies)
 //! ```
+//!
+//! # Used by
+//! [`combine_gep`](crate::combine_gep), which calls `visit_gep_of_gep` when a
+//! `getelementptr`'s source is one.
 
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, Opcode};

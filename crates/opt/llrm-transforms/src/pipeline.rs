@@ -141,11 +141,11 @@ use crate::interprocedural::Interprocedural;
 use crate::parity::Phase;
 use crate::settled::{self, Settled};
 use crate::{
-    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, dead, deadstore, decide, extload, fixednarrow,
-    floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace, inline, lcssa,
-    loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, loopunrollpass, mem2reg,
-    memcpyopt, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg, switchlower, tailcallelim,
-    trivialunswitch, window,
+    adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
+    fixednarrow, floatloop, fold, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs, inferspace,
+    inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    loopunrollpass, mem2reg, memcpyopt, mldstmotion, ports, promote, rotate, sccp, simpleloopunswitch, simplifycfg,
+    switchlower, tailcallelim, trivialunswitch, window,
 };
 
 /// Which passes run, and the copy budgets: the old `Options`. The default
@@ -411,11 +411,9 @@ impl Options {
         }
     }
 
-    /// -Os: no copy grows the code. Inlining keeps -O2's threshold: the
-    /// threshold bounds a body's size, and what it admits, a body called
-    /// once or one whose copies cost less than the calls they remove,
-    /// shrinks the code here. A lower one would also refuse a constant-site
-    /// clone that folds away.
+    /// -Os: no copy grows the code. The limit stays -O2's 225, but every
+    /// caller is `optsize` (D8), so a call is held to 50, 487 with an
+    /// `inlinehint`, as the pin holds it (audit row 3: mirrored).
     pub fn size() -> Self {
         Self {
             limits: Limits { grows: false, target_percent: 100, ..Limits::default() },
@@ -677,9 +675,22 @@ pub(crate) fn llvm_order(
     // `-fno-jump-tables`: clang's "no-jump-tables" on every function, which
     // stops SimplifyCFG's lookup tables as well as the jump tables.
     let no_jump_tables = !applied.options.jump_tables;
-    let simplify_cfg = |name| slot(name, Box::new(simplifycfg::SimplifyCfg::default()));
+    // Each runs once: nothing undoes a loop's simple form between rounds (D7).
+    let simplify_cfg = |name| {
+        slot(
+            name,
+            Box::new(simplifycfg::SimplifyCfg {
+                options: simplifycfg::Options { loop_form_kept: false, ..Default::default() },
+            }),
+        )
+    };
     let simplify_cfg_with = |name, options: simplifycfg::Options| {
-        slot(name, Box::new(simplifycfg::SimplifyCfg { options: simplifycfg::Options { no_jump_tables, ..options } }))
+        slot(
+            name,
+            Box::new(simplifycfg::SimplifyCfg {
+                options: simplifycfg::Options { no_jump_tables, loop_form_kept: false, ..options },
+            }),
+        )
     };
     let combine = |name| slot(name, Box::new(crate::combine_pass::Combine { enabled: applied.options.combine }));
     let dead = |name| slot(name, Box::new(dead::Dead));
@@ -788,6 +799,20 @@ pub(crate) fn llvm_order(
                     options: loopunrollandjam::JamOptions { on: true, ..Default::default() },
                 }),
             ),
+            // LoopUnrollPass (l.1476) with the full unroll the target allows
+            // (X86 sets no partial or runtime unrolling), then SROA (l.1494)
+            // on the allocas the unroll made constant-indexed. The loops the
+            // early unroll refused are looked at again after the combines.
+            slot(
+                "unroll@1476",
+                Box::new(loopunrollpass::LoopFullUnroll {
+                    opt_level: if applied.options.limits.target_percent >= 200 { 3 } else { 2 },
+                    opt_size: size,
+                    only_when_forced: !applied.options.loop_unrolling,
+                    created: Default::default(),
+                }),
+            ),
+            sroa("sroa@1494"),
             // LICMPass again (l.1508,
             // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Passes/PassBuilderPipelines.cpp#L1508,
             // `AllowSpeculation=true`), in a loop pass manager of its own after
@@ -896,6 +921,13 @@ pub(crate) fn llvm_order(
                 // them.
                 slot("indvars@753", Box::new(indvars::IndVarsOnCreated { created })),
                 sroa("sroa@776"),
+            ]);
+            // Not in the pin's `default<O1>` (a pipeline of its own); `pre` is
+            // off exactly at -O1 and -Og.
+            if applied.options.pre {
+                list.push(slot("mldst-motion@783", Box::new(mldstmotion::MergedLoadStoreMotion)));
+            }
+            list.extend([
                 slot("inferspace@787", Box::new(inferspace::InferAddressSpaces)),
                 // The pin's `default<O1>` has no GVN (`pre` is off exactly at
                 // -O1 and -Og); rows against clang's -O1 are pending, a loss
@@ -1212,6 +1244,11 @@ pub fn recorded(
             jump_tables: applied.options.jump_tables,
             size: applied.options.prefers_size(),
         });
+    }
+    // The pin's last module pass (PassBuilderPipelines.cpp#L1714), after every
+    // body is final.
+    if applied.options.llvm_order && applied.options.optimize {
+        manager.add_program(constmerge::ConstantMerge);
     }
     // Last: what it names are the instructions selection sees.
     if applied.options.spare_loads {

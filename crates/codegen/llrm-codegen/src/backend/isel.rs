@@ -254,6 +254,9 @@ pub struct Convention {
     pub parameters: Vec<Parameter>,
     /// The registers a result leaves in, low part first.
     pub returns: Vec<RegId>,
+    /// The vector register a `float` or `double` result leaves in, where the
+    /// convention has one (SysV: `xmm0`); else it is st(0).
+    pub float_result: Option<RegId>,
     /// The bytes the function pops as it returns.
     pub popped: i64,
     /// The registers its prologue may save: the convention's, but those its
@@ -614,7 +617,19 @@ pub fn convention_for(
         0
     };
     let saved = saved(arch, described, &parameters, &returns);
-    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor, first })
+    let float_result = described
+        .and_then(|one| one.float_result_register())
+        .filter(|_| {
+            matches!(
+                types.get(result),
+                Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
+            )
+        })
+        .map(|name| arch.register_named(name))
+        .filter(|register| {
+            llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
+        });
+    Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -1898,7 +1913,7 @@ impl Selector<'_, '_, '_> {
         let mut homes = IndexMap::<usize, i64>::default();
         // Every alloca whose address is exposed, in one pass: the scan for each
         // asked the whole body of it.
-        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst| self.marker(inst));
+        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst, _| self.marker(inst));
         // An object lies on its type's alignment, or its size's largest power
         // of two where the front end typed it as bytes, at most the stack slot
         // or where the function keeps the stack, which is wider: a local
@@ -3807,7 +3822,11 @@ impl Selector<'_, '_, '_> {
             }
             Pointer::Frame { disp, index: None, .. } => {
                 let address = AddressRef {
-                    through: self.arch.frame_register(),
+                    // `FRAME` names the frame in every
+                    // width: `bodyfacts`, `remat` and `floatassign` find a
+                    // frame cell by it, and the prologue resolves it to the
+                    // target's frame register.
+                    through: llrm_lir::registers::FRAME,
                     disp_width: 2,
                     ..AddressRef::new(Some(Addr::new(Space::Frame, disp)))
                 };
@@ -6060,6 +6079,9 @@ impl Selector<'_, '_, '_> {
         };
         let Some(global) = global else { return self.indirect(inst, convention, *callee, arguments, at, out) };
         let name = global.name.owned().unwrap_or_default();
+        if let Some(info) = llrm_mir::atomic::decode(&name) {
+            return self.atomic_exchange(inst, info, arguments, at, out);
+        }
         if llrm_mir::intrinsics::is_reserved(&name) {
             return match Intrinsic::named(&name) {
                 Some(Intrinsic::MemSet) => self.memset(arguments, at, out),
@@ -7831,6 +7853,50 @@ impl Selector<'_, '_, '_> {
         let Some(block) = function.parent(call) else { return false };
         function.next_in_block(call) == Some(inst)
             && (!self.fused.contains(&inst) || function.next_in_block(inst) == function.terminator(block))
+    }
+
+    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
+    /// `seq_cst` store, as `xchg` with the cell. The machine locks it without
+    /// asking, so every ordering is met.
+    fn atomic_exchange(
+        &mut self,
+        inst: InstId,
+        info: llrm_mir::opcode::AtomicInfo,
+        arguments: &[Operand],
+        at: i64,
+        out: &mut Vec<Arc<Insn>>,
+    ) -> Result<(), Unselected> {
+        use llrm_mir::opcode::{AtomicKind, RmwOp};
+        let function = self.function;
+        let (pointer, value) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Store => (arguments[1], arguments[0]),
+            _ => return refuse(format!("an atomic {:?}", info.kind)),
+        };
+        let ty = function.operand_type(&self.module.context, value).expect("a typed value");
+        let width = self.width(ty)?;
+        let regs = self.regs();
+        let cell = match self.pointer(pointer)? {
+            Pointer::Far { .. } => return refuse("an atomic access through a far pointer"),
+            pointer => Self::memory(regs, pointer, width),
+        };
+        let from = self.held(value, ty, at, out)?;
+        // The old value lands where the new one was read: the instruction is
+        // tied, as an `add` is.
+        let old = match function.instruction(inst).result {
+            Some(result) => Held { value: self.value(result), width },
+            None => Held { value: self.fresh(), width },
+        };
+        let what = semantics(
+            Operation::Exchange,
+            "xchg",
+            vec![Loc::Held(old), Loc::Mem(cell.clone())],
+            vec![Loc::Held(from), Loc::Mem(cell)],
+        );
+        let mut one = insn_of(at, what);
+        one.volatile = true;
+        out.push(Arc::new(one));
+        Ok(())
     }
 
     /// A port read or written: `in` or `out`, a port below 256 immediate,
