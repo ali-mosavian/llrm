@@ -3632,6 +3632,21 @@ fn test_field_is_a_preamble_and_one_call_per_variable() {
     assert!(main.find("B$FLDP") < main.find("B$FIEL"), "{main}");
 }
 
+/// GET and PUT without a record variable were refused ("cannot generate code
+/// for it yet"): they transfer the FIELD buffer, B$GET1/B$PUT1 for the next
+/// record and B$GET2/B$PUT2 for a numbered one.
+#[test]
+fn test_get_and_put_without_a_variable_call_the_buffer_routines() {
+    let text = listing_of(
+        "getputbuffer",
+        "OPEN \"R\" FOR RANDOM AS #1 LEN = 16\r\nFIELD #1, 16 AS n$\r\nGET #1\r\nGET #1, 3\r\nLSET n$ = \"x\"\r\nPUT #1\r\nPUT #1, 4\r\nCLOSE\r\nEND\r\n",
+    );
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    for routine in ["B$GET1", "B$GET2", "B$PUT1", "B$PUT2"] {
+        assert_eq!(main.matches(&format!("call far ptr {routine}")).count(), 1, "{routine}: {main}");
+    }
+}
+
 /// `END n` and `SYSTEM n` (PDS 7.1, VBDOS) were refused ("END with a return
 /// code"). BC pushes the code as a word and calls `B$CENC` (measured in BC 7.1
 /// and VBDOS objects), which never returns.
@@ -3768,6 +3783,33 @@ fn test_a_common_variable_is_still_stored_before_a_chain() {
     let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
     let call = main.find("call far ptr B$SCHN").expect("the call");
     assert!(main[..call].contains("mov word ptr X%, 4"), "x% is stored: {main}");
+}
+
+/// PCOPY was refused ("cannot generate code for it yet"): it is
+/// B$PCPY(from page, to page), two pushed words in QB 4.5.
+#[test]
+fn test_pcopy_calls_the_page_copy_routine() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let out = directory.path().join("pcopypages.asm");
+    let input = written(&directory, "pcopypages.bas", b"SCREEN 7\r\nPCOPY 1, 2\r\nEND\r\n");
+    let argv = [
+        input.to_str().unwrap(),
+        "--dialect",
+        "qb45",
+        "--runtime",
+        "qb45",
+        "-O2",
+        "-march=i486",
+        "-S",
+        "-o",
+        out.to_str().unwrap(),
+    ]
+    .map(str::to_owned);
+    assert_eq!(crate::cli::main(&argv), 0);
+    let text = std::fs::read_to_string(&out).expect("the listing");
+    let main = between(&text, "$QB$MAIN proc", "$QB$MAIN endp");
+    let call = main.find("call far ptr B$PCPY").expect("the call");
+    assert!(main[..call].trim_end().ends_with("pushd 65538"), "pages 1 and 2 are two pushed words: {main}");
 }
 
 /// An object linked with BRUN45.LIB crashed at start ("no stack segment", entry

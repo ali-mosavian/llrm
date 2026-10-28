@@ -49,6 +49,7 @@ mod i1_m16;
 mod int_to_fp;
 mod legalize_dag;
 mod legalize_pending;
+mod legalize_sweeps;
 mod legalize_types;
 mod logic_setcc;
 mod m16_coverage;

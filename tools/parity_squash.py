@@ -1368,6 +1368,47 @@ def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
     return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
 
 
+PUSH_MODE = os.environ.get("PUSH_MODE") == "1"  # runner.env: land a verified batch as one fast-forward push of its merge tip, not one squash per PR
+
+
+def format_tip(cwd: Path = ROOT) -> bool:
+    """tools/fmt.sh and the docs sync on the batch tip, committed when they change anything (the squash path pushes the same to each PR's branch). True when a commit was made."""
+    subprocess.run(["tools/fmt.sh"], cwd=cwd, capture_output=True)
+    subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=cwd, capture_output=True)
+    if not git("status", "--porcelain", "--untracked-files=no", cwd=cwd).strip():
+        return False
+    git("commit", "-qam", "style: fmt and generated docs of the batch", cwd=cwd)
+    return True
+
+
+def verify_tip(cwd: Path = ROOT) -> str:
+    """Why the tip fails the cheap checks (fmt, docs), or "" when it passes: they run on the exact tip that is pushed."""
+    if subprocess.run(["tools/fmt.sh", "--check"], cwd=cwd, capture_output=True).returncode:
+        return "fmt --check fails on the tip"
+    if subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True).returncode:
+        return "docs --check fails on the tip"
+    return ""
+
+
+def push_tip(heads: dict[str, str], cwd: Path = ROOT, base: str = BASE, ref: str = "feat/parity", prepare=format_tip, verify=verify_tip) -> tuple[str, str]:
+    """(tip, ""): the verified PR `heads` merged in order onto `base` (merge commits, the tests-append driver), formatted, checked, and pushed to `ref` as a plain fast-forward (never forced).
+    GitHub marks each PR whose head is in the tip merged. ("", why) when a head does not merge, the tip fails `verify`, or the push is refused: the caller squashes per PR then."""
+    clean_checkout(base, cwd)
+    for number, head in heads.items():
+        git("fetch", "-q", "origin", head, cwd=cwd)
+        if subprocess.run(["git", "merge", "--no-edit", "-q", head], cwd=cwd, capture_output=True).returncode:
+            subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
+            return "", f"#{number} does not merge on the tip"
+    prepare(cwd)
+    if why := verify(cwd):
+        return "", why
+    tip = git("rev-parse", "HEAD", cwd=cwd).strip()
+    done = subprocess.run(["git", "push", "origin", f"{tip}:refs/heads/{ref}"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    if done.returncode:
+        return "", f"push refused: {(done.stderr or done.stdout).strip()[:200]}"
+    return tip, ""
+
+
 def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
     """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
     it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
@@ -2139,6 +2180,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     rescan_check = (lambda *_: "") if os.environ.get("LAND_SKIP_RESCAN") == "1" else make_rescan_check()  # the user's bulk order: the batch scan stands, no rescan after a drop
 
+    pending: list[str] = []
+
     def land(number: str) -> None:
         if number in left_out:
             if left_out[number].startswith("head moved"):
@@ -2159,52 +2202,69 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             refused.append(number)
             late_drops.append(number)
             return
-        sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
-        if not sha:
-            print(f"#{number}: REFUSED: {why}")
-            refused.append(number)
-            late_drops.append(number)
+        if PUSH_MODE:
+            pending.append(number)
             return
-        if sha != infos[number]["headRefOid"]:
-            print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
-            infos[number] = {**infos[number], "headRefOid": sha}
-            for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-                seen = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
-                if seen == sha:
-                    break
-                time.sleep(5)
-        if number in docs_synced:
-            synced_sha, why = sync_docs_head(infos[number]["headRefOid"], infos[number]["headRefName"])
-            if not synced_sha:
+        finish(number)
+
+    def finish(number: str) -> None:
+            sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+            if not sha:
                 print(f"#{number}: REFUSED: {why}")
                 refused.append(number)
                 late_drops.append(number)
                 return
-            if synced_sha != infos[number]["headRefOid"]:
-                print(f"#{number}: generated docs synced with tools/docs/docsbuild/build.py --sync ({synced_sha[:9]})")
-                infos[number] = {**infos[number], "headRefOid": synced_sha}
-                for _ in range(12):
-                    seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
-                    if seen == synced_sha:
+            if sha != infos[number]["headRefOid"]:
+                print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
+                infos[number] = {**infos[number], "headRefOid": sha}
+                for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
+                    seen = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
+                    if seen == sha:
                         break
                     time.sleep(5)
-        landed_ok = squash(number, infos[number], known_red_line(known))
-        if landed_ok is None:
-            held.append(number)
-            late_drops.append(number)
-            return
-        (landed if landed_ok else moved if number in HEAD_MOVED else refused).append(number)
-        if not landed_ok:
-            late_drops.append(number)
-        if landed_ok:
-            git("fetch", "-q", "origin", "feat/parity")
-            log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
+            if number in docs_synced:
+                synced_sha, why = sync_docs_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+                if not synced_sha:
+                    print(f"#{number}: REFUSED: {why}")
+                    refused.append(number)
+                    late_drops.append(number)
+                    return
+                if synced_sha != infos[number]["headRefOid"]:
+                    print(f"#{number}: generated docs synced with tools/docs/docsbuild/build.py --sync ({synced_sha[:9]})")
+                    infos[number] = {**infos[number], "headRefOid": synced_sha}
+                    for _ in range(12):
+                        seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
+                        if seen == synced_sha:
+                            break
+                        time.sleep(5)
+            landed_ok = squash(number, infos[number], known_red_line(known))
+            if landed_ok is None:
+                held.append(number)
+                late_drops.append(number)
+                return
+            (landed if landed_ok else moved if number in HEAD_MOVED else refused).append(number)
+            if not landed_ok:
+                late_drops.append(number)
+            if landed_ok:
+                git("fetch", "-q", "origin", "feat/parity")
+                log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
 
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         try:
             batch(list(numbers), passes, land, refuse, offending if FAST else None)
+            if pending:
+                tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
+                if tip:
+                    print(f"PUSHED: {tip} to feat/parity with {' '.join('#' + n for n in pending)}")
+                    for number in pending:
+                        landed.append(number)
+                        log_landed(tip, number, "gate-ok")
+                else:
+                    print(f"one-push failed ({why}); squashing each PR instead")
+                    for number in pending:
+                        finish(number)
         except BatchTooOld:
             back = [one for one in numbers if one not in landed and one not in refused]
             print(f"batch older than {BATCH_MAX_SECONDS // 60} min: its heads and assembly are stale; back to the queue unlanded: {' '.join('#' + one for one in back) or '-'}")
