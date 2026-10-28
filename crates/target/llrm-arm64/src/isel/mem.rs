@@ -352,7 +352,7 @@ impl Selector<'_> {
     }
 
     /// The bytes an access of type `ty` moves and how it is registered.
-    pub(super) fn access(
+    fn access(
         &self,
         ty: TypeId,
     ) -> Selected<(u8, bool)> {

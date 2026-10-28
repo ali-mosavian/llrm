@@ -5,8 +5,6 @@
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{ConstantId, ConstantKind, GlobalKind, Linkage, Module, Type, TypeId};
 
-use llrm_object::Binding;
-
 use crate::machine::Platform;
 
 /// A pointer in a global's bytes: where, to what, and the addend.
@@ -20,7 +18,7 @@ pub struct DataReloc {
 /// One global's contents.
 pub struct Placed {
     pub name: String,
-    pub binding: Binding,
+    pub public: bool,
     pub bytes: Vec<u8>,
     pub relocs: Vec<DataReloc>,
     pub align: usize,
@@ -30,20 +28,6 @@ pub struct Placed {
     /// Pointers the loader calls before `main`: `llvm.global_ctors` after
     /// [`constructors`]. It has no symbol.
     pub init_functions: bool,
-}
-
-/// How an object exports a global of `linkage`: not at all, or as a definition another may replace.
-pub fn binding_of(linkage: Linkage) -> Binding {
-    match linkage {
-        Linkage::Internal | Linkage::Private => Binding::Local,
-        Linkage::Weak
-        | Linkage::WeakOdr
-        | Linkage::LinkOnce
-        | Linkage::LinkOnceOdr
-        | Linkage::Common
-        | Linkage::ExternWeak => Binding::Weak,
-        _ => Binding::Public,
-    }
 }
 
 /// The linker's name for the IR name `name`: a leading `\01` marks it already spelled, as LLVM's mangler reads it.
@@ -87,7 +71,7 @@ pub fn globals(
         if name == "llvm.global_ctors" {
             let (bytes, relocs) = constructors(&bytes, &relocs);
             out.push(Placed {
-                binding: Binding::Local,
+                public: false,
                 name: String::new(),
                 zero: false,
                 bytes,
@@ -99,7 +83,7 @@ pub fn globals(
             continue;
         }
         out.push(Placed {
-            binding: binding_of(global.linkage),
+            public: !matches!(global.linkage, Linkage::Internal | Linkage::Private),
             name: symbol_name(platform, &name),
             bytes,
             relocs,

@@ -13,7 +13,6 @@
 //! only a `getelementptr` index reads is part of the addressing mode (`index`).
 
 mod agg;
-mod atomic;
 mod call;
 mod chain;
 mod control;
@@ -31,7 +30,6 @@ mod widemul;
 use std::collections::{HashMap, HashSet};
 
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::opcode::AtomicOrdering;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::{
     BlockId, ConstantId, ConstantKind, Function, GlobalId, InstId, Module, Opcode, Operand, Type, TypeId, ValueDef,
@@ -502,27 +500,8 @@ impl<'a> Selector<'a> {
                 self.define(result, value)
             }
             Opcode::Alloca { allocated, align, .. } => self.alloca(inst, &instruction, *allocated, *align),
-            Opcode::Load { ordering, .. }
-                if matches!(
-                    ordering,
-                    AtomicOrdering::Acquire | AtomicOrdering::AcquireRelease | AtomicOrdering::SequentiallyConsistent
-                ) =>
-            {
-                self.ordered_load(&instruction, *ordering)
-            }
-            Opcode::Store { ordering, .. }
-                if matches!(
-                    ordering,
-                    AtomicOrdering::Release | AtomicOrdering::AcquireRelease | AtomicOrdering::SequentiallyConsistent
-                ) =>
-            {
-                self.ordered_store(&instruction)
-            }
             Opcode::Load { .. } => self.load(&instruction),
             Opcode::Store { .. } => self.store(&instruction),
-            Opcode::AtomicRmw { op, ordering, .. } => self.atomic_rmw(&instruction, *op, *ordering),
-            Opcode::CmpXchg { success, .. } => self.cmpxchg(&instruction, *success),
-            Opcode::Fence { ordering } => self.fence(*ordering),
             Opcode::GetElementPtr { source } => self.gep(&instruction, *source),
             Opcode::Call(info) => self.call(inst, &instruction, info),
             // A call, then a branch to the normal block. The unwind edge is
