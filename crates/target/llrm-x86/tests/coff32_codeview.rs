@@ -125,6 +125,7 @@ fn object() -> Object {
             ranges: vec![Range { section: 0, offset: 4, length: 8 }],
             variables: vec![variable("t", 0, Kind::Local, Location::Frame { disp: -56 })],
             blocks: Vec::new(),
+            inlined: None,
         }],
         frame: Vec::new(),
     };

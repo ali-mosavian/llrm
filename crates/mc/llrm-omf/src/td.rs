@@ -933,6 +933,7 @@ mod tests {
                         ranges: vec![Range { section: 0, offset: 8, length: 8 }],
                         variables: vec![variable("y", 0, Kind::Local, Location::Frame { disp: -4 })],
                         blocks: Vec::new(),
+                        inlined: None,
                     },
                 );
         });

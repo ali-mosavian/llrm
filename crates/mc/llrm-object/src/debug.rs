@@ -379,6 +379,19 @@ pub struct Block {
     pub ranges: Vec<Range>,
     pub variables: Vec<Variable>,
     pub blocks: Vec<Block>,
+    /// The call this block is the inlined body of; none for a lexical block.
+    pub inlined: Option<Inlined>,
+}
+
+/// A function's body inlined into another: which function, and the call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Inlined {
+    /// As the source names the callee.
+    pub name: String,
+    /// The call's place (`DW_AT_call_file`, `_line`, `_column`).
+    pub file: FileId,
+    pub line: u32,
+    pub column: u32,
 }
 
 impl Block {

@@ -360,26 +360,52 @@ pub struct Scopes {
     pub parent: IndexMap<u32, u32>,
     /// A location by id: its scope, and the call it was inlined at.
     pub calls: IndexMap<u32, (u32, u32)>,
+    /// A location by id: its line and column.
+    pub places: IndexMap<u32, (u32, u32)>,
+    /// A function (`!DISubprogram`) by id: its name.
+    pub names: IndexMap<u32, String>,
+}
+
+/// One step into a place: a lexical block (by scope id), or the inlined body
+/// of a call (by the call's location id).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+enum Step {
+    Block(u32),
+    Inlined { call: u32, callee: u32 },
 }
 
 impl Scopes {
     fn of(module: &llrm_mir::Module) -> Self {
         let field = |id: MetadataId, name: &str| {
             let at = module.special.get(&id)?.fields.iter().position(|one| one == name)?;
-            match module.metadata.get(id.0 as usize)?.operands.get(at)? {
-                llrm_mir::MetadataOperand::Node(node) => Some(node.0 + 1),
+            module.metadata.get(id.0 as usize)?.operands.get(at)
+        };
+        let node = |id: MetadataId, name: &str| match field(id, name)? {
+            llrm_mir::MetadataOperand::Node(node) => Some(node.0 + 1),
+            _ => None,
+        };
+        let number = |id: MetadataId, name: &str| match field(id, name)? {
+            llrm_mir::MetadataOperand::Constant(value) => match module.context.get(*value).kind {
+                llrm_mir::ConstantKind::Int(number) => u32::try_from(number).ok(),
                 _ => None,
-            }
+            },
+            _ => None,
         };
         let mut scopes = Self::default();
         for (&id, special) in &module.special {
             let key = id.0 + 1;
             match special.kind.as_str() {
                 "DILexicalBlock" | "DILexicalBlockFile" => {
-                    scopes.parent.insert(key, field(id, "scope").unwrap_or(0));
+                    scopes.parent.insert(key, node(id, "scope").unwrap_or(0));
                 }
                 "DILocation" => {
-                    scopes.calls.insert(key, (field(id, "scope").unwrap_or(0), field(id, "inlinedAt").unwrap_or(0)));
+                    scopes.calls.insert(key, (node(id, "scope").unwrap_or(0), node(id, "inlinedAt").unwrap_or(0)));
+                    scopes.places.insert(key, (number(id, "line").unwrap_or(0), number(id, "column").unwrap_or(0)));
+                }
+                "DISubprogram" => {
+                    if let Some(llrm_mir::MetadataOperand::String(name)) = field(id, "name") {
+                        scopes.names.insert(key, name.clone());
+                    }
                 }
                 _ => {}
             }
@@ -387,86 +413,174 @@ impl Scopes {
         scopes
     }
 
-    /// The lexical blocks a place is in, innermost first, as its function
-    /// sees them: a place inlined from another function is in the blocks of
-    /// the call.
-    fn blocks_of(
+    /// The lexical blocks `scope` is in, outermost first.
+    fn chain(
         &self,
-        place: crate::model::lir::SrcLoc,
+        mut scope: u32,
     ) -> Vec<u32> {
-        let (mut scope, mut call) = (place.scope, place.inlined_at);
-        while call != 0 {
-            let Some(&(outer, next)) = self.calls.get(&call) else { break };
-            (scope, call) = (outer, next);
-        }
         let mut chain = Vec::new();
         while let Some(&parent) = self.parent.get(&scope) {
             chain.push(scope);
             scope = parent;
         }
+        chain.reverse();
         chain
+    }
+
+    /// The function a scope is in.
+    fn function_of(
+        &self,
+        mut scope: u32,
+    ) -> u32 {
+        while let Some(&parent) = self.parent.get(&scope) {
+            scope = parent;
+        }
+        scope
+    }
+
+    /// Where a place is, from the function inwards: its lexical blocks, and
+    /// for code inlined from another function the call it was inlined at,
+    /// then the callee's blocks.
+    fn path(
+        &self,
+        place: crate::model::lir::SrcLoc,
+    ) -> Vec<Step> {
+        // The place and the calls that inlined it, innermost first: each
+        // level's scope, and the call that inlined it (none for the function).
+        let mut levels = vec![(place.scope, place.inlined_at)];
+        while let Some(&(_, call)) = levels.last()
+            && call != 0
+            && let Some(&(outer, next)) = self.calls.get(&call)
+        {
+            levels.push((outer, next));
+        }
+        let mut path = Vec::new();
+        for &(scope, call) in levels.iter().rev() {
+            if call != 0 {
+                path.push(Step::Inlined { call, callee: self.function_of(scope) });
+            }
+            path.extend(self.chain(scope).into_iter().map(Step::Block));
+        }
+        path
     }
 }
 
-/// The function's variables split into those of its own scope and the lexical
-/// blocks of `rows` (the code's places, from `start` to `end`) that hold them.
+/// A trie of the steps of the code's places, each with the ranges of code
+/// under it.
+#[derive(Default)]
+struct Steps {
+    step: Option<Step>,
+    ranges: Vec<model::Range>,
+    inside: Vec<Steps>,
+}
+
+impl Steps {
+    fn add(
+        &mut self,
+        path: &[Step],
+        range: model::Range,
+    ) {
+        let Some((&first, rest)) = path.split_first() else { return };
+        let at = match self.inside.iter().position(|one| one.step == Some(first)) {
+            Some(at) => at,
+            None => {
+                self.inside.push(Steps { step: Some(first), ..Steps::default() });
+                self.inside.len() - 1
+            }
+        };
+        let next = &mut self.inside[at];
+        match next.ranges.last_mut() {
+            Some(last) if last.offset + last.length == range.offset => last.length += range.length,
+            _ => next.ranges.push(range),
+        }
+        next.add(rest, range);
+    }
+
+    /// The block of lexical block `id` that is not inside an inlined body.
+    fn find(
+        &mut self,
+        id: u32,
+    ) -> Option<&mut Steps> {
+        for one in &mut self.inside {
+            match one.step {
+                Some(Step::Block(block)) if block == id => return Some(one),
+                Some(Step::Block(_)) => {
+                    if let Some(found) = one.find(id) {
+                        return Some(found);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+}
+
+/// The function's variables split into those of its own scope and the blocks of
+/// `rows` (the code's places, from `start` to `end`) that hold them.
 fn in_blocks(
     scopes: &Scopes,
     rows: &[(crate::model::lir::SrcLoc, usize)],
     (section, start, end): (usize, usize, usize),
     variables: Vec<(Variable, Option<MetadataId>)>,
 ) -> (Vec<Variable>, Vec<model::Block>) {
-    let mut ranges: IndexMap<u32, Vec<model::Range>> = IndexMap::default();
     let inside: Vec<&(crate::model::lir::SrcLoc, usize)> =
         rows.iter().filter(|(_, at)| (start..end).contains(at)).collect();
+    let mut trie = Steps::default();
     for (index, &&(place, at)) in inside.iter().enumerate() {
         let to = inside.get(index + 1).map_or(end, |next| next.1);
-        for block in scopes.blocks_of(place) {
-            let list = ranges.entry(block).or_default();
-            match list.last_mut() {
-                Some(last) if last.offset + last.length == at => last.length += to - at,
-                _ if to > at => list.push(model::Range { section, offset: at, length: to - at }),
-                _ => {}
-            }
+        if to > at {
+            trie.add(&scopes.path(place), model::Range { section, offset: at, length: to - at });
         }
     }
     let mut own = Vec::new();
-    let mut held: IndexMap<u32, Vec<Variable>> = IndexMap::default();
+    let mut held: Vec<(u32, Variable)> = Vec::new();
     for (variable, scope) in variables {
-        match scope.map(|one| one.0 + 1).filter(|id| ranges.contains_key(id)) {
-            Some(id) => held.entry(id).or_default().push(variable),
+        match scope.map(|one| one.0 + 1).filter(|&id| trie.find(id).is_some()) {
+            Some(id) => held.push((id, variable)),
             None => own.push(variable),
         }
     }
-    fn tree(
-        of: u32,
+    fn blocks(
+        of: &Steps,
         scopes: &Scopes,
-        ranges: &IndexMap<u32, Vec<model::Range>>,
-        held: &mut IndexMap<u32, Vec<Variable>>,
+        held: &mut Vec<(u32, Variable)>,
+        top: bool,
     ) -> Vec<model::Block> {
-        let mut children: Vec<u32> =
-            ranges.keys().copied().filter(|id| scopes.parent.get(id).is_some_and(|parent| *parent == of)).collect();
-        children.sort_by_key(|id| ranges[id][0].offset);
-        children
-            .into_iter()
-            .map(|id| model::Block {
-                ranges: ranges[&id].clone(),
-                variables: held.swap_remove(&id).unwrap_or_default(),
-                blocks: tree(id, scopes, ranges, held),
+        let mut made: Vec<model::Block> = of
+            .inside
+            .iter()
+            .map(|one| {
+                let (inlined, variables) = match one.step {
+                    Some(Step::Inlined { call, callee }) => {
+                        let name = scopes.names.get(&callee).cloned().unwrap_or_default();
+                        let (line, column) = scopes.places.get(&call).copied().unwrap_or_default();
+                        (Some(model::Inlined { name, file: 0, line, column }), Vec::new())
+                    }
+                    Some(Step::Block(id)) if top => {
+                        let mut mine = Vec::new();
+                        held.retain(|(scope, variable)| {
+                            if *scope == id {
+                                mine.push(variable.clone());
+                            }
+                            *scope != id
+                        });
+                        (None, mine)
+                    }
+                    _ => (None, Vec::new()),
+                };
+                model::Block {
+                    ranges: one.ranges.clone(),
+                    variables,
+                    blocks: blocks(one, scopes, held, top && !matches!(one.step, Some(Step::Inlined { .. }))),
+                    inlined,
+                }
             })
-            .collect()
+            .collect();
+        made.sort_by_key(|one| one.ranges.first().map_or(0, |range| range.offset));
+        made
     }
-    // The outermost blocks are those whose parent is no block (the function).
-    let mut roots: Vec<u32> = ranges.keys().copied().filter(|id| !ranges.contains_key(&scopes.parent[id])).collect();
-    roots.sort_by_key(|id| ranges[id][0].offset);
-    let blocks = roots
-        .into_iter()
-        .map(|id| model::Block {
-            ranges: ranges[&id].clone(),
-            variables: held.swap_remove(&id).unwrap_or_default(),
-            blocks: tree(id, scopes, &ranges, &mut held),
-        })
-        .collect();
+    let blocks = blocks(&trie, scopes, &mut held, true);
     (own, blocks)
 }
 

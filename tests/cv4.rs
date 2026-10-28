@@ -155,6 +155,7 @@ fn synthetic() -> (llrm_object::Object, String) {
             ranges: vec![Range { section: 0, offset: 14, length: 8 }],
             variables: vec![variable("k", 2, Location::Frame { disp: -4 })],
             blocks: Vec::new(),
+            inlined: None,
         }],
         frame: Vec::new(),
     };

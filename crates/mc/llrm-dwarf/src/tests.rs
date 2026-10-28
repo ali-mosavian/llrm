@@ -662,7 +662,7 @@ fn a_segmented_block_of_two_ranges_is_written_over_its_hull() {
         Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
     let pieces = vec![Range { section: 0, offset: 2, length: 2 }, Range { section: 0, offset: 6, length: 2 }];
     made.debug.as_mut().unwrap().functions[0].blocks =
-        vec![llrm_object::debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new() }];
+        vec![llrm_object::debug::Block { ranges: pieces, variables: Vec::new(), blocks: Vec::new(), inlined: None }];
     let written = expanded(&made, made.debug.as_ref().unwrap());
     assert!(written.is_ok(), "{:?}", written.err().map(|why| why.0));
 }
