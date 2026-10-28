@@ -6,7 +6,7 @@ architecture-index: arm64 isel and peephole gaps against llc, as the table patte
 
 TL;DR: the gaps below are measured against the pinned `llc -O2` on clang's `-O2` IR; each becomes a `.isel` or `.peep` pattern when the generators take an arm64 `.instr` (backend-two PRs 10-23 operand kinds, 10-27 flags). Until then the hand selector in `crate::isel` stands in, and each pattern's test is the oracle for the code it replaces.
 
-Executed instructions against llc: 1.13x on `tests/programs`, 1.21x on `tests/kernels`, 1.63x on the conditions kernel (`tools/arm64_attribute.py`, `tools/arm64_diff.py`).
+Executed instructions against llc: 1.13x on `tests/programs`, 1.21x on `tests/kernels`, 1.63x on the conditions kernel (`tools/targets/arm64_attribute.py`, `tools/targets/arm64_diff.py`).
 
 | Gap | MIR shape | arm64 form | Measured | Test |
 | --- | --- | --- | --- | --- |
