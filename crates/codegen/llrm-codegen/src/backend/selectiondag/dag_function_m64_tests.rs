@@ -1020,6 +1020,25 @@ entry:
     assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.indirect)));
 }
 
+/// `llvm.ptrmask` was no known intrinsic: it was called as a global with no
+/// name and the assembler panicked ("no entry found for key", clang's
+/// `va_arg` of a `long double`, long_double_variadic.c). It is an AND.
+#[test]
+fn an_m64_ptrmask_is_an_and() {
+    let text = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare ptr @llvm.ptrmask.p0.i64(ptr, i64)
+define ptr @f(ptr %p) {
+entry:
+  %r = call ptr @llvm.ptrmask.p0.i64(ptr %p, i64 -16)
+  ret ptr %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    assert!(done.body.insns().iter().any(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("and"))));
+}
+
 /// A store of an `i48` (a packed struct's member) stopped at
 /// `Legalize(Unsupported Store i48 "promote operand")` (gcc.c-torture
 /// 20131127-1 at -O2): the pin stores the promoted value in a dword and a word.

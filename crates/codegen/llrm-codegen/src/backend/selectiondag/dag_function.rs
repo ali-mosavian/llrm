@@ -948,9 +948,9 @@ fn selected_in(
     let mut emitted: Vec<EmitBlock> = Vec::new();
     // What the debug records name: the LIR value of each IR value, and the
     // address each IR instruction's code starts at.
-    let mut noted_values: crate::support::hash::IndexMap<ValueId, u32> = Default::default();
-    let mut noted_wides: crate::support::hash::IndexMap<ValueId, (Held, Held)> = Default::default();
-    let mut noted_ats: crate::support::hash::IndexMap<llrm_mir::module::InstId, i64> = Default::default();
+    let mut noted_values: llrm_mir::dense::IdMap<ValueId, u32> = Default::default();
+    let mut noted_wides: llrm_mir::dense::IdMap<ValueId, (Held, Held)> = Default::default();
+    let mut noted_ats: llrm_mir::dense::IdMap<llrm_mir::module::InstId, i64> = Default::default();
     let mut calls = IndexMap::default();
     let mut pops = IndexMap::default();
     let mut call_pops = IndexMap::default();
@@ -1039,7 +1039,7 @@ fn selected_in(
         }
         for &(id, value) in &built.values {
             if let Some(&made) = done.values.get(&built.dag.resolve(value)) {
-                noted_values.entry(id).or_insert(made);
+                noted_values.get_or_insert_with(id, || made);
             }
             // A value type legalization expanded is its two halves.
             if let Some(&(low, high)) = built.dag.expanded_integers.get(&value)
@@ -1047,7 +1047,8 @@ fn selected_in(
                     (done.values.get(&built.dag.resolve(low)), done.values.get(&built.dag.resolve(high)))
             {
                 let width = built.dag.value_type(low).size_in_bits() / 8;
-                noted_wides.entry(id).or_insert((Held { value: low_made, width }, Held { value: high_made, width }));
+                noted_wides
+                    .get_or_insert_with(id, || (Held { value: low_made, width }, Held { value: high_made, width }));
             }
         }
         emitted.extend(done.blocks);
@@ -1261,7 +1262,7 @@ fn selected_in(
     // or the one that carries it out of its block.
     for (id, &vreg) in info.value_regs.iter() {
         if let Some(&made) = state.vregs.get(&vreg) {
-            noted_values.entry(id).or_insert(made);
+            noted_values.get_or_insert_with(id, || made);
         }
     }
     let mut body =

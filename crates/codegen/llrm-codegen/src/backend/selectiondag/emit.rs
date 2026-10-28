@@ -3036,8 +3036,8 @@ impl Emitter<'_, '_> {
                 let Loc::Held(source) = self.operand(source)? else {
                     return Err(EmitError::Unsupported("SUBREG_TO_REG of a non-value".to_owned()));
                 };
-                let held = self.fresh(source.width);
-                self.push(Operation::Move, "mov", vec![Loc::Held(held)], vec![Loc::Held(source)]);
+                let held = self.fresh(width);
+                self.push(Operation::Extend, "movzx", vec![Loc::Held(held)], vec![Loc::Held(source)]);
                 self.values.insert(result, held.value);
                 return Ok(Some(()));
             }
