@@ -836,7 +836,7 @@ mod tests {
     use llrm_lir::registers::RegId;
 
     use super::{constrained, hoisted};
-    use crate::backend::{allocate, select, target};
+    use crate::backend::{allocresult, select, target};
     use crate::model::ir::{self, Addr, Held, Imm, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
@@ -888,7 +888,7 @@ mod tests {
     fn allocated(
         body: &LirBody,
         pins: &IndexMap<u32, RegId>,
-    ) -> allocate::Assignment {
+    ) -> allocresult::Assignment {
         let mut values = pins.clone();
         let mut spare = [RegId::AX, RegId::BX, RegId::CX, RegId::DX, RegId::SI, RegId::DI].into_iter();
         for one in body.insns() {
@@ -898,7 +898,7 @@ mod tests {
                 }
             }
         }
-        allocate::Assignment {
+        allocresult::Assignment {
             r#where: values,
             spilled: Default::default(),
             cost: 0.0,

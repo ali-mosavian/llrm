@@ -87,7 +87,7 @@
 //! # Provides
 //! One answer to "which registers may this value be in", owned here (#441).
 //! Read by [`crate::backend::ssaspill`], [`crate::backend::allocate`],
-//! [`crate::backend::coalesce`], [`crate::backend::constrain`],
+//! [`crate::coalescer::pass`], [`crate::backend::constrain`],
 //! and `target.rs`.
 //!
 //! # Needs
@@ -102,8 +102,8 @@ use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 
 use crate::analysis::intervals as ranges;
-use crate::backend::allocate::{_clobbered, _masks};
 use crate::backend::classes::RegisterClasses;
+use crate::backend::masks::{_clobbered, _masks};
 use crate::backend::target::{self, Segments};
 use crate::model::ir::{Addr, Held, Loc, Mem, Operation, Semantics, Space};
 use crate::model::lir::{Insn, LirBody};
@@ -175,7 +175,7 @@ pub fn classes_with(
 /// number the body and find both again.
 pub struct Found<'a> {
     pub live: &'a dyn crate::backend::live::Ranges,
-    pub masks: &'a crate::backend::allocate::Masks,
+    pub masks: &'a crate::backend::masks::Masks,
 }
 
 /// `classes`, given the body's intervals and masks.
@@ -1014,7 +1014,7 @@ fn _word_address_roles(
     let word_base = *registers.word_bases.iter().next().expect("one word base");
 
     let base_penalty = |values: &BTreeSet<u32>| -> i64 {
-        let (live, masks): (&dyn crate::backend::live::Ranges, &crate::backend::allocate::Masks) = match found {
+        let (live, masks): (&dyn crate::backend::live::Ranges, &crate::backend::masks::Masks) = match found {
             Some(found) => (found.live, found.masks),
             None => {
                 let (live, masks) = own.get_or_init(|| {
@@ -1181,22 +1181,19 @@ pub fn violations(
     skip: &BTreeSet<u32>,
 ) -> Vec<Violation> {
     let confined = classes_with(body, &BTreeSet::new(), segments, registers, true);
-    let (_, live_out) = crate::backend::allocate::live(body);
-    let general: BTreeSet<RegId> =
-        registers.available.iter().map(|one| crate::backend::allocate::_whole(*one)).collect();
+    let (_, live_out) = crate::backend::liverows::live(body);
+    let general: BTreeSet<RegId> = registers.available.iter().map(|one| crate::backend::masks::_whole(*one)).collect();
     let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
     let files: [(&'static str, &BTreeSet<RegId>); 2] = [("general", &general), ("selector", &selectors)];
     let in_file = |value: u32, file: &BTreeSet<RegId>, general_file: bool| match confined.get(&value) {
-        Some(class) => class.iter().any(|one| file.contains(&crate::backend::allocate::_whole(*one))),
+        Some(class) => class.iter().any(|one| file.contains(&crate::backend::masks::_whole(*one))),
         None => general_file,
     };
     let class_in = |value: u32, file: &BTreeSet<RegId>| -> BTreeSet<RegId> {
         match confined.get(&value) {
-            Some(class) => class
-                .iter()
-                .map(|one| crate::backend::allocate::_whole(*one))
-                .filter(|one| file.contains(one))
-                .collect(),
+            Some(class) => {
+                class.iter().map(|one| crate::backend::masks::_whole(*one)).filter(|one| file.contains(one)).collect()
+            }
             None => file.clone(),
         }
     };

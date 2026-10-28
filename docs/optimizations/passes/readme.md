@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 216 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 217 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -54,6 +54,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_memintrinsics | InstCombine's memory intrinsics: a `memcpy` or `memmove` of 1, 2, 4 or 8 bytes is one integer load and one store. | `combine` (its `visit`, the `Call` opcode). | [combine_memintrinsics](combine_memintrinsics.md) |
 | combine_minmax | InstCombine's min/max intrinsics: the narrowing folds of `InstCombinerImpl::visitCallInst` for `umin`, `umax`, `smin` and `smax` ([InstCombineCalls.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L2261)). | `visit_call` (`combine_memintrinsics`). | [combine_minmax](combine_minmax.md) |
 | combine_muldivrem | InstCombine's `visitMul`, `visitUDiv`, `visitSDiv`, `visitURem`, `visitSRem` and the helpers they call, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul, div and rem slots are flipped. | [combine_muldivrem](combine_muldivrem.md) |
+| combine_narrow | `narrowMathIfNoOverflow`: `bo (ext X), (ext Y)` or `bo (ext X), C` as `ext (bo X, Y)` when the math cannot overflow in the narrow width. | `visitAdd`, `visitSub` (`TryToNarrowDeduceFlags`) and `visitMul`. | [combine_narrow](combine_narrow.md) |
 | combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
 | combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. | Named by `combine`. | [combine_or](combine_or.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |

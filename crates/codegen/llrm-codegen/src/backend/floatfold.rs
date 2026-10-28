@@ -290,10 +290,11 @@ fn _home_of(
     Some(home)
 }
 
-/// A compare of a value with an integer load nothing else reads is `ficom [m]`
-/// where the target prices it below the `fild` and the compare it replaces:
-/// gcc's and clang's `ficomp`. The cell is the right operand, as `fcom st, [m]`
-/// has it.
+/// A compare of a value with a load nothing else reads is `fcom [m]`; with an
+/// integer load, `ficom [m]` where the target prices it below the `fild` and
+/// the compare it replaces: gcc's and clang's `ficomp`. The cell is the right
+/// operand, as `fcom st, [m]` has it. DEVIATE: the pin pushes a float cell
+/// and compares the pair (`fld m; fcomp`), 2 to 8 bytes more.
 fn _compare_with_integer(
     insns: &[Arc<Insn>],
     at: usize,
@@ -307,15 +308,20 @@ fn _compare_with_integer(
     }
     let home = _home_of(insns, at, right.value)?;
     let load = &insns[home];
-    if !name_is(load.what.as_ref()?, "fild") || !matches!(cell_of(load).width, 2 | 4) {
-        return None;
-    }
-    let price = |key: &str| cpu.cost(key).ok();
-    if price("x87_cmp_i")? >= price("x87_load_i")? + price("x87_add")? {
+    let integer = name_is(load.what.as_ref()?, "fild");
+    if integer {
+        if !matches!(cell_of(load).width, 2 | 4) {
+            return None;
+        }
+        let price = |key: &str| cpu.cost(key).ok();
+        if price("x87_cmp_i")? >= price("x87_load_i")? + price("x87_add")? {
+            return None;
+        }
+    } else if !matches!(cell_of(load).width, 4 | 8) {
         return None;
     }
     let mut made = what.clone();
-    made.name = Some("ficom".into());
+    made.name = Some(if integer { "ficom" } else { "fcom" }.into());
     made.sources = vec![Loc::Held(*left), Loc::Mem(cell_of(load).clone())];
     Some((home, right.value, made))
 }
