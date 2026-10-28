@@ -110,7 +110,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).expect("layout"));
     let target = BuilderTarget::m32();
     let machine = llrm_x86_m32::M32;
-    let map = OpcodeMap::new(llrm_instr::parse(&machine.forms_text(), machine.dialect()).expect("x86.instr"));
+    let map = OpcodeMap::new(llrm_target::instr::parse(&machine.forms_text(), machine.dialect()).expect("x86.instr"));
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     let selector = Selector::new(TABLE);

@@ -145,3 +145,37 @@ fn a_sext_in_reg_of_a_rebuilt_pair_reads_only_the_low_half() {
     });
     assert!(!has(&dag, root, ISD::Shl) && !has(&dag, root, ISD::Or), "the high half is still read");
 }
+
+/// `shld eax, edx, cl` kept the `and ecx, 31` the IR had on its count
+/// (x_ll_arith -O2 m32: +1 instruction a trip against the pin): at a
+/// power-of-two width a funnel shift demands only the count's low bits.
+#[test]
+fn a_funnel_shift_count_loses_its_mask_to_the_width() {
+    let mut dag = dag();
+    let (x, y, z) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6), dag.get_register(EVT::I32, 7));
+    let thirty_one = dag.get_constant(31, EVT::I32);
+    let count = dag.get_node(ISD::And, EVT::I32, &[z, thirty_one]);
+    let root = dag.get_node(ISD::FShl, EVT::I32, &[x, y, count]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::FShl);
+    assert_eq!(dag.opcode(dag.operand(root, 2)), ISD::Register, "the count kept its and");
+}
+
+/// `trunc (and x, 31)` stayed wide, so a shift count read the byte through
+/// `and ecx, 31` where the pin's `movzx ecx, byte [m]` does (visitTRUNCATE,
+/// before operations are legal).
+#[test]
+fn a_truncated_and_with_a_constant_is_the_and_of_the_truncation() {
+    let mut dag = dag();
+    let z = dag.get_register(EVT::I32, 7);
+    let thirty_one = dag.get_constant(31, EVT::I32);
+    let wide = dag.get_node(ISD::And, EVT::I32, &[z, thirty_one]);
+    let root = dag.get_node(ISD::Truncate, EVT::I8, &[wide]);
+    dag.set_root(root);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::And, EVT::I8));
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Truncate);
+}

@@ -20,7 +20,6 @@ llrm-elf64 = { workspace = true }
 llrm-macho = { workspace = true }
 llrm-qbruntime = { workspace = true }
 llrm-hir = { workspace = true }
-llrm-instr = { workspace = true }
 llrm-dagisel = { path = "../../backend/llrm-dagisel" }
 llrm-lir = { workspace = true }
 llrm-mir = { workspace = true }

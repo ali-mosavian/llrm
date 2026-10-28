@@ -11,3 +11,9 @@ q=$(mktemp); printf '5\n7\n9\n' > $q
 got=$(pop_open $q 5 7); [ "$got" = 5 ] && [ "$(tr '\n' ' ' < $q)" = "7 9 " ] || { echo "FAIL: pop_open '$got' left '$(tr '\n' ' ' < $q)'"; exit 1; }
 got=$(pop_open $q); [ -z "$got" ] && [ "$(tr '\n' ' ' < $q)" = "7 9 " ] || { echo "FAIL: an empty batch changed the queue"; exit 1; }
 echo PASS pop_open
+
+# Regression: an urgent batch with nothing to land became the literal `feat/parity`; `gh pr ready feat/parity` resolved the branch to main PR #5663 and marked it ready for review (02:38). A name that is not a PR number never passes open_only.
+d=$(mktemp -d); printf '#!/bin/sh\necho OPEN\n' > $d/gh; chmod +x $d/gh
+PATH=$d:$PATH; source "$(dirname "$0")/open-only.sh"
+out=$(open_only feat/parity 5 2>/dev/null | tr '\n' ' ')
+[ "$out" = "5 " ] && echo PASS numeric || { echo "FAIL: a branch name passed open_only: '$out'"; exit 1; }
