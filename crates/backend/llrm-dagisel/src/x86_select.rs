@@ -27,7 +27,7 @@ use crate::interp::{Outcome, Selector};
 use crate::x86_addr::AddrDag;
 use crate::x86_divrem::select_divrem;
 use crate::x86_fcmp::{select_fcmp, select_fist16, select_pop_from_x87, select_setcc_carry};
-use crate::x86_hooks::X86Hooks;
+use crate::x86_hooks::{Cpu, X86Hooks};
 use crate::x86_llrm::{
     FATAN_OPCODE, FCOS_OPCODE, FEXP_OPCODE, FEXP2_OPCODE, FLN_OPCODE, FLOG2_OPCODE, FRINT_OPCODE, FSIN_OPCODE,
     llrm_opcode, select_llrm_node,
@@ -88,7 +88,10 @@ pub fn select_node<D: AddrDag>(
             }
         }
         x86isd::FCMP => {
-            if select_fcmp(dag, node) {
+            // `Subtarget->canUseCMOV()` ends the case ([L6391]): the table's
+            // `UCOMIS*rr` and `UCOM_FpIr*` patterns select the compare. Every
+            // x86-64 CPU has CMOV; the 32-bit ones in the tables do not.
+            if hooks.options.cpu != Cpu::X64 && select_fcmp(dag, node) {
                 return Outcome::Selected;
             }
         }
