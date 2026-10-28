@@ -5,7 +5,7 @@ Owner: w10. Date: 2026-10-27. Frontend: llrm-cc (clang), not llrm-c. These numbe
 ## Method
 
 ```sh
-export LLRM_OW=~/scratch/ow-src LLRM_PIN_CLANG=~/scratch/llvm-build/bin/clang LLRM_CLANG_M16=~/scratch/llvm-build-m16b/bin/clang
+export LLRM_OW=$OW_SRC LLRM_PIN_CLANG=$PIN_BUILD/bin/clang LLRM_CLANG_M16=$PIN_M16_BUILD/bin/clang
 tools/cc_cost.py --dist <dir with llrm-cc> [--programs jpeg_fixed,matmul] [--configs m32-O2,m32-Os,m16-Os]
 ```
 
@@ -42,4 +42,3 @@ tools/cc_cost.py --dist <dir with llrm-cc> [--programs jpeg_fixed,matmul] [--con
 - Earlier versions of this table are withdrawn: the first compared against `clang -cc1 -O2` bytes (other IR); the second built the pin's IR without `-march`, so it targeted pentium4 +sse2 (w12 found it). Both gave different, wrong size columns.
 - An earlier version of this table compared against `clang -cc1 -O2` bytes (crc 243, jpeg "+6.5%"); those numbers came from different IR and are withdrawn.
 - m16 columns are ours only (no pin run), so they cannot carry an ISA mismatch; a future m16 pin column must use the m16 clang build with `-march=i386` explicitly.
-- Raw output: `~/scratch/w10/cc_cost_baseline4.txt` (m32), `cc_cost_baseline3.txt` (m16 time rows).
