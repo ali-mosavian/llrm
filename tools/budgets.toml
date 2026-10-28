@@ -144,15 +144,6 @@ why = "measured 118.9 -> 359.9 Minstr (x3.03)"
 
 [[debt]]
 kind = "events"
-axis = "functions"
-name = "scev_nodes"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 17272 -> 51992 (x3.01)"
-
-[[debt]]
-kind = "events"
 axis = "nest"
 name = "lvi_icmp_patterns"
 ratio = 3.45
@@ -230,7 +221,7 @@ name = "mir indvars@738"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 66.2 -> 178.3 Minstr (x2.69)"
+why = "measured 66.2 -> 178.3 Minstr (x2.69): SCEV isBasicBlockEntryGuardedByCond climbs unbounded predecessor chains, as the pin does; a function of N blocks climbs O(N) per query"
 
 [[debt]]
 kind = "steps"
