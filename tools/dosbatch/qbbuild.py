@@ -45,7 +45,7 @@ def runtime16(work: Path) -> dict[str, Path]:
 
     def make(name: str, source: Path, produce) -> None:
         obj = work / f"{name}.obj"
-        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{name}", obj, lambda: produce(obj))
+        qb32.cached(qb32.runtime_key(source, tree, tools) + f"|{dosbatch.REAL_MODE}|{qbruntime.c_build_key()}|{name}", obj, lambda: produce(obj))
         made[name] = obj
 
     shared = qbruntime.shared_sources()

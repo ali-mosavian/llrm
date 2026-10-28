@@ -448,6 +448,14 @@ def test_a_flat_programs_count_is_net_of_the_empty_startup_program(tmp_path):
     assert counts["instructions"] < 5000, counts
 
 
+def test_a_real_mode_basic_program_runs_in_the_emulator_with_its_output_checked(tmp_path):
+    """Every bq16 program died in the emulator ("int 0x5", KeyError 426 from an INT 21h write) while test_bench stayed green: the neighbouring test runs bq32 only.
+    measure() checks the output against the program's expected lines, so a count is a program that printed them."""
+    counts = bench.measure_all(["parity/sum_three"], ["O2"], tmp_path)[("parity/sum_three", "bq16", "O2")]
+    assert "error" not in counts, counts
+    assert 0 < counts["instructions"] < 1000, counts
+
+
 def test_a_flat_kernels_count_does_not_move_with_work_outside_it(tmp_path):
     """bq32 counted the whole run: DOS/32A's load and the runtime's start-up were in every row (about 41.8k instructions), so work
     outside the kernel moved every row (a function pointer added to the runtime: +165).  What does not move a run: one more
