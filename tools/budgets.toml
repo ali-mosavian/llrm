@@ -1786,7 +1786,7 @@ name = "lir jumps"
 ratio = 2.42
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w11"
-why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 vs 256: placement::order self x3.6, top_fall_through x3.9, build_chain x3.5 (chain building over one N-way switch; top_fall_through scans a join's preds as the pin does), the rest x2.0-2.6. succ_seen is not it (HashSet: no change). Pin ratio not measured"
+why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 vs 256: placement::order self x3.6, top_fall_through x3.9, build_chain x3.5 (chain building over one N-way switch; top_fall_through scans a join's preds as the pin does), the rest x2.0-2.6. succ_seen is not it (HashSet: no change). The pin is as superlinear: Branch Probability Basic Block Placement 0.6 -> 0.8 -> 4.9 ms at N=64/128/256 (x6.1 for 128 -> 256, ours x3.6); selectBestSuccessor/hasBetterLayoutPredecessor loop a switch block's successors per candidate in both"
 
 [[debt]]
 kind = "steps"
@@ -1804,7 +1804,7 @@ name = "lir jumps"
 ratio = 2.66
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w11"
-why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53). Callgrind N=64 vs 128: tailmerge seq_from x8.8, item_of x8.6, try_merge x12.6, merged x5.7 (candidate pairs within equal-hash groups; pin TryTailMergeBlocks is pairwise too, not measured); branchfold rules x2.5"
+why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53). Callgrind N=64 vs 128: tailmerge seq_from x8.8, item_of x8.6, try_merge x12.6, merged x5.7 (equal-hash groups of long identical predecessor blocks, re-read each round; reading them lazily from the end changed nothing: they match whole). Not like-for-like with the pin: its IR has ~6x the blocks (1542 against 260 at N=128) and its Control Flow Optimizer is flat, so the IR reaching tail merging differs; branchfold rules x2.5"
 
 [[debt]]
 kind = "steps"
