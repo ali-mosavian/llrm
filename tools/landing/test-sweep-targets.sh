@@ -14,4 +14,22 @@ echo "$out" | grep -q "big/llrm/target: pruned" || { echo "FAIL: the nested over
 for small in shallow/target flat-target other/llrm/target notcargo/llrm/target; do [ -e $r/$small/debug/deps/libu-aaaaaaaaaaaaaaaa.rlib ] || { echo "FAIL: $small was pruned"; exit 1; }; done
 echo "$out" | grep -q "tgt-big: pruned" || { echo "FAIL: a target not named target (tgt-big, 56 GB in the field) was not pruned: $out"; exit 1; }
 [ "$(echo "$out" | wc -l)" = 2 ] || { echo "FAIL: other than the two over-cap dirs pruned: $out"; exit 1; }
+# a target under the cap that has sat idle for hours is pruned; a busy one of the same size is not (139 GB of idle alone slots, every dir under the 15 GB cap)
+mkt idle/target; mkt busy/target; head -c 100000 /dev/zero > $r/idle/target/debug/deps/filler.bin; head -c 100000 /dev/zero > $r/busy/target/debug/deps/filler.bin
+touch -d "10 hours ago" $r/idle/target/debug/deps/filler.bin $r/idle/target/debug/deps/libu-bbbbbbbbbbbbbbbb.rlib $r/idle/target/.rustc_info.json $r/idle/target/debug/deps $r/idle/target/debug $r/idle/target
+idle=$(SWEEP_ROOTS=$r CAP_KB=100000000 IDLE_CAP_KB=60 IDLE_HOURS=3 "$here/sweep-targets.sh")
+echo "$idle" | grep -q "idle/target: pruned" || { echo "FAIL: an idle target under the cap was not pruned: $idle"; exit 1; }
+echo "$idle" | grep -q "busy/target" && { echo "FAIL: a busy target under the cap was pruned: $idle"; exit 1; }
+# a live build writes deep under target/ while the top dirs sit old: a depth-2 age pruned cool-zhukovsky (15 GB, newest file 15 min old) as 38 h idle
+mkt deep/target; mkdir -p $r/deep/target/release/deps/x; head -c 100000 /dev/zero > $r/deep/target/release/deps/x/fresh.o
+touch -d "10 hours ago" $r/deep/target/debug/deps $r/deep/target/debug $r/deep/target/.rustc_info.json $r/deep/target/release/deps/x $r/deep/target/release/deps $r/deep/target/release $r/deep/target
+deep=$(SWEEP_ROOTS=$r CAP_KB=100000000 IDLE_CAP_KB=60 IDLE_HOURS=3 "$here/sweep-targets.sh")
+echo "$deep" | grep -q "deep/target" && { echo "FAIL: a target with a fresh deep file was pruned as idle: $deep"; exit 1; }
+# a quiet idle target that a process holds open is kept: a running build can sit silent for hours
+mkt held/target; head -c 100000 /dev/zero > $r/held/target/debug/deps/filler.bin
+touch -d "10 hours ago" $r/held/target/debug/deps/*.rlib $r/held/target/debug/deps/filler.bin $r/held/target/.rustc_info.json $r/held/target/debug/deps $r/held/target/debug $r/held/target
+exec 9< $r/held/target/debug/deps/filler.bin
+held=$(SWEEP_ROOTS=$r CAP_KB=100000000 IDLE_CAP_KB=60 IDLE_HOURS=3 "$here/sweep-targets.sh")
+exec 9<&-
+echo "$held" | grep -q "held/target" && { echo "FAIL: an idle target held open was pruned: $held"; exit 1; }
 echo PASS

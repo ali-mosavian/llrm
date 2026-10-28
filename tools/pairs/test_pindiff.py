@@ -215,6 +215,14 @@ def test_a_new_compile_failure_outside_the_known_list_is_unexpected():
     assert [entry.name for entry in sweep.fixed(seen[:1])] == ["x_ll_div", "x_ll_div", "lru"]
 
 
+def test_a_regcall_ir_is_given_the_watcom_abi_not_sysv():
+    """After llrm-cc's m32 default became regcall every m32 row read `no figures`: ours was run with -mabi=sysv ('calling convention 92')."""
+    pindiff = load("pindiff")
+    cfg = pindiff.MACHINES["m32"]
+    assert pindiff.abi_flags(cfg, "define x86_regcallcc i32 @f()") == ["-mabi=watcom", "-mregcall-default"]
+    assert pindiff.abi_flags(cfg, "define i32 @f()") == ["-mabi=sysv"]
+
+
 def test_a_known_failure_that_is_gone_is_reported_not_failed():
     """The sweep exited 1 when #5202 fixed x_ll_div's Freeze crash: the fixing PR could not land until it edited KNOWN in step, and w9/w13
     could not drop the entry at all while crashsweep.py was not on feat/parity (2026-10-27). A fix is reported (`FIXED?`); only a new crash fails."""
@@ -271,3 +279,32 @@ def test_an_os_row_is_not_the_o2_row():
             assert isinstance(pindiff.one(src, "m32", level, llc, work, False), dict)
             asm[level] = (work / "d7.ours.s").read_text()
     assert "imul" in asm["O2"] and "idiv" in asm["Os"], asm
+
+
+def test_drift_lists_only_rows_that_grew_the_most_instructions_first():
+    """crc went 70 -> 129 instructions between two parity commits (2026-10-27) and nothing but a hand diff of two tables showed it; the others here held, shrank or grew only in padding-free bytes."""
+    pindiff = load("pindiff")
+    drift = load("drift")
+
+    def row(name, ins, free):
+        return {"name": name, "ins": ins, "pin_ins": 69, "bytes": free + 4, "free": free, "pin_bytes": 300, "pin_free": 191, "old_bytes": None, "old_free": None}
+
+    before = "\n".join(pindiff.table([row("crc", 70, 189), row("fib", 20, 90), row("gcd", 50, 120), row("sort", 80, 300), row("new_only", 5, 5)][:4], old=False))
+    after = "\n".join(pindiff.table([row("crc", 129, 359), row("fib", 20, 90), row("gcd", 45, 100), row("sort", 80, 320), row("new_only", 9, 9)], old=False))
+    listed = drift.grown(before, after)
+    assert [name for name, *_ in listed] == ["crc", "sort"]
+    assert listed[0][1:3] == (59, 170)
+    assert drift.grown(after, before) == [("gcd", 5, 20, "gcd: ins 45->50 (+5, pin 69), nopad 100->120 (+20, pin 191)")]
+
+
+def test_drift_header_names_the_binary_the_ir_and_the_md5s(tmp_path):
+    """crc read 129 instructions on the pindiff path and 72 on the product's (2026-10-27): the table must say which instrument made it."""
+    drift = load("drift")
+    before, after = tmp_path / "a", tmp_path / "b"
+    before.write_bytes(b"one")
+    after.write_bytes(b"two")
+    lines = drift.header(["aaa", "bbb"], [before, after])
+    assert "llrm-llc" in lines[0] and "NOT llrm-c" in lines[0] and "clang IR" in lines[0]
+    assert lines[1] == "# before: aaa llrm-llc md5 f97c5d29941b"
+    assert lines[2] == "# after: bbb llrm-llc md5 b8a9f715dbb6"
+

@@ -99,6 +99,7 @@ impl Options {
         arch: std::rc::Rc<dyn llrm_target::Target>,
         selection: &'static crate::backend::isel::Compiled,
     ) -> Self {
+        let isel = crate::backend::shadow::Selector::for_target(&*arch);
         Self {
             machine,
             pipeline: Default::default(),
@@ -115,7 +116,7 @@ impl Options {
             spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
-            isel: Default::default(),
+            isel,
             libcalls: Vec::new(),
         }
     }
@@ -458,7 +459,13 @@ pub fn optimized(
     pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
     let applied =
         llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
+    // The pipeline sees an atomic access as a call it cannot move.
+    program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
+    let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
+    let tso = options.arch.name().starts_with("x86");
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program
@@ -517,7 +524,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::funnel::expanded(module, |operation| options.arch.expands(operation)),
+                |module| crate::backend::funnel::expanded(
+                    module,
+                    |operation| options.arch.expands(operation),
+                    |bits| crate::backend::funnel::kept_for_isel(options.isel, &format!("i{bits}")),
+                ),
             )
     })?;
     timed("mir absolute values", || {
