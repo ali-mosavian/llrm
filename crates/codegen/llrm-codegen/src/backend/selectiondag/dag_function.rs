@@ -926,7 +926,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering { cmov: false, sse2: bitness == 64, min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },
