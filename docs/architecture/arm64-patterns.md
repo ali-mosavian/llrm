@@ -22,4 +22,4 @@ Executed instructions against llc: 1.13x on `tests/programs`, 1.21x on `tests/ke
 
 What the generators must express (sent to backend-two): shift kind and amount, extend kind and amount, and condition as operand kinds; `when PRED` on a bound immediate (logical-immediate, shifted 12-bit, bitfield mask); two fused inputs in one pattern (`ccmp`); a `csel`-family result (`Operation::Select`).
 
-`llrm-instr` still names x86 in `REGISTERS`, `CONDITIONS`, the flag table, the `iced` column and the error strings; the arm64 rows wait for those to come from the target.
+`llrm_target::instr` still names x86 in `REGISTERS`, `CONDITIONS`, the flag table, the `iced` column and the error strings; the arm64 rows wait for those to come from the target.

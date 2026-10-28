@@ -46,6 +46,17 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
+/// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
+/// for 1485 under llrm-cc.
+#[test]
+fn the_watcom_abi_makes_char_unsigned() {
+    let unsigned = |args: &str| built(args).clang.iter().any(|one| one == "-funsigned-char");
+    assert!(unsigned("-mabi=watcom -c x.c"));
+    assert!(!unsigned("-mabi=sysv -c x.c"));
+    assert!(!unsigned("-mabi=watcom -fsigned-char -c x.c"));
+}
+
 /// `-g` was refused ("debug info is not carried yet"), so no program could
 /// carry debug info: clang gets `-g`, the backend the flag that names the
 /// format.
@@ -178,4 +189,14 @@ fn every_m16_row_states_the_targets_datalayout() {
 #[test]
 fn og_reaches_the_backend_as_o1_like_clang() {
     assert_eq!(built("-Og -c x.c").level, "1");
+}
+
+#[test]
+fn os_layer_answers_without_llrm_c_or_clang() {
+    // dosbatch asked `llrm-c --os-layer`, which a build without llrm-c lacks:
+    // every C program of the behavioural stage failed to link.
+    let said = os_layer(&words("--os-layer start -m32")).unwrap();
+    assert_eq!(said.unwrap().trim(), "start.asm");
+    assert!(os_layer(&words("-O2 x.c")).is_none());
+    assert!(os_layer(&words("--os-layer start")).unwrap().is_err());
 }
