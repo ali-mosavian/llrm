@@ -664,3 +664,33 @@ b0:
     assert!(after.contains("= addrspacecast ptr %s.sroa.1 to ptr addrspace(1)"), "{after}");
     assert!(!after.contains("memcpy.p1.p1.i16(ptr %"), "{after}");
 }
+
+/// Bytes of one int copied through byte pointers (gcc torture `adce.c`): the
+/// promotion of a split slot took as a load's value an earlier load it had
+/// erased already. The module printed with a use of a value no instruction
+/// defines, and `adce` panicked on "a placed instruction".
+#[test]
+fn test_bytes_copied_inside_an_int_leave_no_use_of_an_erased_load() {
+    let after = sroa(
+        "define i32 @f() {
+b0:
+  %a = alloca i32, align 4
+  store i32 1, ptr %a, align 4
+  %p3 = getelementptr inbounds i8, ptr %a, i32 3
+  %x = load i8, ptr %p3, align 1
+  store i8 1, ptr %p3, align 1
+  %p1 = getelementptr inbounds i8, ptr %a, i32 1
+  store i8 %x, ptr %a, align 1
+  %q3 = getelementptr inbounds i8, ptr %a, i32 3
+  %u = load i8, ptr %q3, align 1
+  %w = load i8, ptr %a, align 1
+  store i8 %w, ptr %q3, align 1
+  %q1 = getelementptr inbounds i8, ptr %a, i32 1
+  store i8 %u, ptr %a, align 1
+  %r = load i32, ptr %a, align 4
+  ret i32 %r
+}
+",
+    );
+    assert!(after.contains("ret i32"), "{after}");
+}
