@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use crate::analysis::frequency::Frequency;
 use crate::analysis::intervals::{self, Indexes, Interval, Place};
-use crate::backend::allocate::{self, WebRows};
+use crate::backend::liverows::{self, WebRows};
 use crate::backend::postings::Postings;
 use crate::model::ir::{self, Held};
 use crate::model::lir::{Insn, LirBody};
@@ -229,10 +229,10 @@ impl Occurrences {
         if body.blocks.iter().any(|block| !block.phis.is_empty()) {
             return None;
         }
-        let rows = allocate::live_rows_among(body, &self.values(), &self.occurrences());
+        let rows = liverows::live_rows_among(body, &self.values(), &self.occurrences());
         if llrm_support::env_flag!("LLRM_CHECK_OCCURRENCES") {
             let wanted: BTreeSet<u32> = self.values().into_iter().collect();
-            let walk = allocate::live_rows_dense(body, |value| wanted.contains(&value));
+            let walk = liverows::live_rows_dense(body, |value| wanted.contains(&value));
             for block in &body.blocks {
                 let (a, b): (Vec<u32>, Vec<u32>) =
                     (walk.entering(block.at).collect(), rows.entering(block.at).collect());
@@ -304,7 +304,7 @@ impl Occurrences {
 pub fn live_among(
     body: &LirBody,
     values: &BTreeSet<u32>,
-) -> Box<dyn allocate::LiveAt> {
+) -> Box<dyn liverows::LiveAt> {
     // Where they occur is read from the postings the body is followed with, not
     // found by a pass over every instruction.
     let found = crate::backend::postings::following(body, |postings| Occurrences::of(postings, values));
@@ -313,7 +313,7 @@ pub fn live_among(
     }
     match found.rows(body) {
         Some(rows) => Box::new(rows),
-        None => Box::new(allocate::live_rows_by(body, |value| values.contains(&value))),
+        None => Box::new(liverows::live_rows_by(body, |value| values.contains(&value))),
     }
 }
 

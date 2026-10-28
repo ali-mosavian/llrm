@@ -32,6 +32,10 @@ pub fn translate(
     let mut declares: Vec<String> = Vec::new();
     let mut at = 0;
     while at < lines.len() {
+        if is_empty_asm(lines[at]) {
+            at += 1;
+            continue;
+        }
         if is_register_asm(lines[at]) {
             let (call, declare) = register_block(lines[at], assemble)?;
             out.push(call);
@@ -48,7 +52,7 @@ pub fn translate(
             continue;
         }
         let mut run = Vec::new();
-        while at < lines.len() && is_asm(lines[at]) {
+        while at < lines.len() && is_asm(lines[at]) && !is_empty_asm(lines[at]) {
             run.push(parse(lines[at])?);
             at += 1;
         }
@@ -176,6 +180,22 @@ fn register_block(
         destination.map_or(String::new(), |one| format!("{one} = "))
     );
     Ok((call, format!("declare {ret} @\"{name}\"({types})")))
+}
+
+/// `asm volatile ("" : : "g" (p) : "memory")`: no instruction, only an
+/// optimisation barrier. It is dropped: the operands need not be memory places,
+/// and what it would have kept alive is the optimiser's to fold (the program's
+/// result does not depend on it).
+fn is_empty_asm(line: &str) -> bool {
+    let Some(at) = line.find(" asm sideeffect ") else { return false };
+    if !is_asm(line) || line.contains(" = call ") {
+        return false;
+    }
+    let mut rest = &line[at + " asm sideeffect ".len()..];
+    for word in ["inteldialect ", "alignstack ", "unwind "] {
+        rest = rest.strip_prefix(word).unwrap_or(rest);
+    }
+    rest.starts_with("\"\",")
 }
 
 fn is_asm(line: &str) -> bool {
@@ -382,6 +402,15 @@ mod tests {
     fn fake(source: &str) -> Result<Vec<u8>, String> {
         assert!(source.contains("[bp+0x7001]") || source.contains("[0x7001]"), "{source}");
         Ok(vec![0x89, 0xa6, 0x01, 0x70, 0xc3])
+    }
+
+    #[test]
+    fn an_empty_asm_with_non_memory_operands_is_dropped() {
+        // pr56866: `asm volatile ("" : : "g" (array))` refused with "an operand
+        // that is not a memory place"
+        let ir = "define i32 @f() {\n  %1 = alloca [4 x i32]\n  call void asm sideeffect \"\", \"imr,~{memory}\"(ptr %1) #1, !srcloc !6\n  ret i32 0\n}\n";
+        let out = translate(ir, &mut fake).unwrap();
+        assert!(!out.contains("asm") && out.contains("ret i32 0"), "{out}");
     }
 
     #[test]
