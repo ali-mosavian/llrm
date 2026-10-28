@@ -270,7 +270,6 @@ fn a_struct_with_an_i48_member_is_returned_loaded_and_stored_at_m64() {
     }
 }
 
-
 /// The verifier read a 64-bit use of a register whose low word the entry
 /// delivers as 64 bits unwritten: `foo(unsigned short)` at m64 was
 /// "floatalloc: foo reads edi before every path writes it" under LLRM_VERIFY,
