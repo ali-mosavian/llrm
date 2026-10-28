@@ -1,0 +1,10 @@
+[package]
+name = "llrm-codeview"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "llrm's CodeView C13 debug-information writer"
+
+[dependencies]
+llrm-object = { workspace = true }
+llrm-support = { workspace = true }

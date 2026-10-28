@@ -1,4 +1,4 @@
-"""llrm-qb is one compiler: with its qbfront linked in, a copy of the binary
+"""llrm-qb is one compiler: with the frontend linked in, a copy of the binary
 compiles BASIC with no cargo and no source tree at hand (#175: it ran `cargo
 run` on the tree it was built in, so a copy compiled with whatever that tree
 held now, or failed when the tree's HIR schema had moved).

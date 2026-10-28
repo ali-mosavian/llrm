@@ -63,7 +63,7 @@ pub fn simplify_form_scans() -> usize {
 }
 
 /// `LoopInfoBase<BlockT, LoopT>`, over blocks `B`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct LoopInfo<B = BlockId> {
     /// `BBMap`: each block's innermost loop, by block number.
     bb_map: Vec<u32>,
@@ -72,6 +72,53 @@ pub struct LoopInfo<B = BlockId> {
     top_level: Vec<LoopId>,
     /// `BlockLayout`.
     layout: Vec<B>,
+}
+
+/// `LoopInfoBase::verify` compares each loop's header, parent and set of
+/// blocks, not the order they were found in: swapping a branch's arms walks the
+/// same CFG in another order, and numbers the loops in another order.
+impl<B: BlockNumber> PartialEq for LoopInfo<B> {
+    fn eq(
+        &self,
+        other: &Self,
+    ) -> bool {
+        self.by_header() == other.by_header()
+    }
+}
+
+impl<B: BlockNumber> LoopInfo<B> {
+    /// Each loop named by its header: its parent's header, its sub-loops'
+    /// headers and its other blocks, sorted; each block's innermost loop's
+    /// header; the top-level loops' headers.
+    #[allow(clippy::type_complexity)]
+    fn by_header(
+        &self
+    ) -> (std::collections::BTreeMap<usize, (Option<usize>, Vec<usize>, Vec<usize>)>, Vec<Option<usize>>, Vec<usize>)
+    {
+        let header = |id: LoopId| {
+            let one = &self.loops[id.0 as usize];
+            self.layout[one.start as usize].number()
+        };
+        let loops = self
+            .loops
+            .iter()
+            .enumerate()
+            .map(|(at, one)| {
+                let mut subs: Vec<usize> = one.sub_loops.iter().map(|&sub| header(sub)).collect();
+                subs.sort_unstable();
+                let mut rest: Vec<usize> = self.layout[one.start as usize + 1..(one.start + one.len) as usize]
+                    .iter()
+                    .map(|&block| block.number())
+                    .collect();
+                rest.sort_unstable();
+                (header(LoopId(at as u32)), (one.parent.map(header), subs, rest))
+            })
+            .collect();
+        let innermost = self.bb_map.iter().map(|&at| (at != u32::MAX).then(|| header(LoopId(at)))).collect();
+        let mut top: Vec<usize> = self.top_level.iter().map(|&one| header(one)).collect();
+        top.sort_unstable();
+        (loops, innermost, top)
+    }
 }
 
 impl<B> Default for LoopInfo<B> {

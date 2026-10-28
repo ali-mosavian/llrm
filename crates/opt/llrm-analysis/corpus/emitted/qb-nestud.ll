@@ -1,240 +1,194 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
 @$data = internal global [0 x i8] zeroinitializer
 @$qb$statementTable = internal constant [0 x i8] zeroinitializer
 @O = internal global [6 x i8] zeroinitializer
-@ARR = internal global [12 x i8] zeroinitializer
+@ARR = internal global [12 x i8] zeroinitializer, align 2
 @ARR$descriptor = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @ARR to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr @ARR, [6 x i8] c"\06\00\02\00\00\00" }>
 @LASTVAR = internal global [4 x i8] zeroinitializer
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string4$payload to ptr addrspace(2))
-@$string4$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string4$payload, i16 4) to i16), [4 x i8] c"\02\00AB" }>
-@$string4$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string4$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string7$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 4) to i16), [4 x i8] c"\02\00CD" }>
-@$string7$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string9$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string9$payload, i16 4) to i16), [4 x i8] c"\02\00EF" }>
-@$string9$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string9$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string11$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string11$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string11$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string11$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string13$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string13$payload, i16 4) to i16), [4 x i8] c"\02\00GH" }>
-@$string13$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string13$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string15$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string15$payload, i16 4) to i16), [4 x i8] c"\02\00IJ" }>
-@$string15$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string15$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string17$payload = internal addrspace(1) constant <{ [2 x i8], i16, [4 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string17$payload, i16 4) to i16), [4 x i8] c"\02\00KL" }>
-@$string17$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string17$payload, i16 2) to i16), ptr @$fslSegment }>
+@$string4 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string4, i16 4), [2 x i8] c"AB" }>
+@$string5 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string5, i16 4), [2 x i8] c"CD" }>
+@$string6 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string6, i16 4), [2 x i8] c"EF" }>
+@$string7 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string7, i16 4), [4 x i8] c"DONE" }>
+@$string8 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string8, i16 4), [2 x i8] c"GH" }>
+@$string9 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string9, i16 4), [2 x i8] c"IJ" }>
+@$string10 = internal constant <{ [2 x i8], ptr, [2 x i8] }> <{ [2 x i8] c"\02\00", ptr getelementptr (i8, ptr @$string10, i16 4), [2 x i8] c"KL" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   store i32 111, ptr @O, !tbaa !2
   %0 = getelementptr inbounds i8, ptr @O, i16 4
   %1 = addrspacecast ptr %0 to ptr addrspace(1)
-  %2 = getelementptr i8, ptr addrspace(1) @$string4$payload, i16 6
-  %3 = addrspacecast ptr addrspace(1) %2 to ptr
-  %4 = ptrtoint ptr %3 to i16
-  %5 = load i16, ptr @$fslSegment, !tbaa !2
-  %6 = inttoptr i16 %5 to ptr addrspace(2)
-  %7 = addrspacecast ptr addrspace(2) %6 to ptr addrspace(1)
-  %8 = getelementptr i8, ptr addrspace(1) %7, i16 %4
-  call cc1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %8, i16 2, ptr addrspace(1) %1, i16 2)
-  %9 = sub i16 0, 0
-  %10 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %9
-  store i32 1, ptr %10, !tbaa !2
-  %11 = sub i16 0, 0
-  %12 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %11
-  %13 = getelementptr inbounds i8, ptr %12, i16 4
-  %14 = addrspacecast ptr %13 to ptr addrspace(1)
-  %15 = getelementptr i8, ptr addrspace(1) @$string7$payload, i16 6
-  %16 = addrspacecast ptr addrspace(1) %15 to ptr
-  %17 = ptrtoint ptr %16 to i16
-  %18 = load i16, ptr @$fslSegment, !tbaa !2
-  %19 = inttoptr i16 %18 to ptr addrspace(2)
-  %20 = addrspacecast ptr addrspace(2) %19 to ptr addrspace(1)
-  %21 = getelementptr i8, ptr addrspace(1) %20, i16 %17
-  call cc1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %21, i16 2, ptr addrspace(1) %14, i16 2)
-  %22 = sub i16 1, 0
-  %23 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %22
-  store i32 2, ptr %23, !tbaa !2
-  %24 = sub i16 1, 0
-  %25 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %24
-  %26 = getelementptr inbounds i8, ptr %25, i16 4
-  %27 = addrspacecast ptr %26 to ptr addrspace(1)
-  %28 = getelementptr i8, ptr addrspace(1) @$string9$payload, i16 6
-  %29 = addrspacecast ptr addrspace(1) %28 to ptr
-  %30 = ptrtoint ptr %29 to i16
-  %31 = load i16, ptr @$fslSegment, !tbaa !2
-  %32 = inttoptr i16 %31 to ptr addrspace(2)
-  %33 = addrspacecast ptr addrspace(2) %32 to ptr addrspace(1)
-  %34 = getelementptr i8, ptr addrspace(1) %33, i16 %30
-  call cc1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %34, i16 2, ptr addrspace(1) %27, i16 2)
-  %35 = load i32, ptr @O, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %35)
-  %36 = getelementptr inbounds i8, ptr @O, i16 4
-  %37 = addrspacecast ptr %36 to ptr addrspace(1)
-  %38 = call cc1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %37, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr %38)
-  %39 = sub i16 0, 0
-  %40 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %39
-  %41 = load i32, ptr %40, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %41)
-  %42 = sub i16 1, 0
-  %43 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %42
-  %44 = load i32, ptr %43, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %44)
-  %45 = sub i16 0, 0
-  %46 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %45
-  %47 = getelementptr inbounds i8, ptr %46, i16 4
-  %48 = addrspacecast ptr %47 to ptr addrspace(1)
-  %49 = call cc1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %48, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr %49)
-  %50 = sub i16 1, 0
-  %51 = getelementptr inbounds [6 x i8], ptr @ARR, i16 %50
-  %52 = getelementptr inbounds i8, ptr %51, i16 4
-  %53 = addrspacecast ptr %52 to ptr addrspace(1)
-  %54 = call cc1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %53, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr %54)
-  call cc1000 addrspace(1) void @INSIDE()
+  %2 = getelementptr i8, ptr @$string4, i16 4
+  %3 = addrspacecast ptr %2 to ptr addrspace(1)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %3, i16 2, ptr addrspace(1) nocapture writeonly initializes((0, 2)) %1, i16 2)
+  %4 = getelementptr inbounds [6 x i8], ptr @ARR, i16 0
+  store i32 1, ptr %4, !tbaa !2
+  %5 = getelementptr inbounds [6 x i8], ptr @ARR, i16 0
+  %6 = getelementptr inbounds i8, ptr %5, i16 4
+  %7 = addrspacecast ptr %6 to ptr addrspace(1)
+  %8 = getelementptr i8, ptr @$string5, i16 4
+  %9 = addrspacecast ptr %8 to ptr addrspace(1)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %9, i16 2, ptr addrspace(1) nocapture writeonly initializes((0, 2)) %7, i16 2)
+  %10 = getelementptr inbounds [6 x i8], ptr @ARR, i16 1
+  store i32 2, ptr %10, !tbaa !2
+  %11 = getelementptr inbounds [6 x i8], ptr @ARR, i16 1
+  %12 = getelementptr inbounds i8, ptr %11, i16 4
+  %13 = addrspacecast ptr %12 to ptr addrspace(1)
+  %14 = getelementptr i8, ptr @$string6, i16 4
+  %15 = addrspacecast ptr %14 to ptr addrspace(1)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %15, i16 2, ptr addrspace(1) nocapture writeonly initializes((0, 2)) %13, i16 2)
+  %16 = load i32, ptr @O, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %16)
+  %17 = getelementptr inbounds i8, ptr @O, i16 4
+  %18 = addrspacecast ptr %17 to ptr addrspace(1)
+  %19 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %18, i16 2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %19)
+  %20 = getelementptr inbounds [6 x i8], ptr @ARR, i16 0
+  %21 = load i32, ptr %20, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %21)
+  %22 = getelementptr inbounds [6 x i8], ptr @ARR, i16 1
+  %23 = load i32, ptr %22, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %23)
+  %24 = getelementptr inbounds [6 x i8], ptr @ARR, i16 0
+  %25 = getelementptr inbounds i8, ptr %24, i16 4
+  %26 = addrspacecast ptr %25 to ptr addrspace(1)
+  %27 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %26, i16 2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %27)
+  %28 = getelementptr inbounds [6 x i8], ptr @ARR, i16 1
+  %29 = getelementptr inbounds i8, ptr %28, i16 4
+  %30 = addrspacecast ptr %29 to ptr addrspace(1)
+  %31 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %30, i16 2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %31)
+  call cc 1000 addrspace(1) void @INSIDE()
   store i32 999, ptr @LASTVAR, !tbaa !2
-  %55 = load i32, ptr @LASTVAR, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %55)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string11$descriptor)
+  %32 = load i32, ptr @LASTVAR, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %32)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string7)
   ret void
 }
 
-define cc1000 void @INSIDE() addrspace(1) {
+define cc 1000 void @INSIDE() addrspace(1) "llrm-fp-eval"="x87-extended" {
 b1:
   %0 = alloca [18 x i8]
   %1 = alloca [6 x i8]
-  call void @llvm.memset.p0.i16(ptr %0, i8 0, i16 18, i1 false)
-  call void @llvm.memset.p0.i16(ptr %1, i8 0, i16 6, i1 false)
-  call cc1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 1, i16 6, i16 257, ptr %0)
+  store i16 0, ptr %1, !tbaa !2
+  %2 = getelementptr inbounds i8, ptr %1, i16 2
+  store i16 0, ptr %2, !tbaa !2
+  %3 = getelementptr inbounds i8, ptr %1, i16 4
+  store i16 0, ptr %3, !tbaa !2
+  store i16 0, ptr %0, !tbaa !2
+  %4 = getelementptr inbounds i8, ptr %0, i16 2
+  store i16 0, ptr %4, !tbaa !2
+  %5 = getelementptr inbounds i8, ptr %0, i16 4
+  store i16 0, ptr %5, !tbaa !2
+  %6 = getelementptr inbounds i8, ptr %0, i16 6
+  store i16 0, ptr %6, !tbaa !2
+  %7 = getelementptr inbounds i8, ptr %0, i16 8
+  store i16 0, ptr %7, !tbaa !2
+  %8 = getelementptr inbounds i8, ptr %0, i16 10
+  store i16 0, ptr %8, !tbaa !2
+  %9 = getelementptr inbounds i8, ptr %0, i16 12
+  store i16 0, ptr %9, !tbaa !2
+  %10 = getelementptr inbounds i8, ptr %0, i16 14
+  store i16 0, ptr %10, !tbaa !2
+  %11 = getelementptr inbounds i8, ptr %0, i16 16
+  store i16 0, ptr %11, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$DDIM(i16 0, i16 1, i16 6, i16 257, ptr %0)
   store i32 333, ptr %1, !tbaa !2
-  %2 = getelementptr inbounds i8, ptr %1, i16 4
-  %3 = addrspacecast ptr %2 to ptr addrspace(1)
-  %4 = getelementptr i8, ptr addrspace(1) @$string13$payload, i16 6
-  %5 = addrspacecast ptr addrspace(1) %4 to ptr
-  %6 = ptrtoint ptr %5 to i16
-  %7 = load i16, ptr @$fslSegment, !tbaa !2
-  %8 = inttoptr i16 %7 to ptr addrspace(2)
-  %9 = addrspacecast ptr addrspace(2) %8 to ptr addrspace(1)
-  %10 = getelementptr i8, ptr addrspace(1) %9, i16 %6
-  call cc1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %10, i16 2, ptr addrspace(1) %3, i16 2)
-  %11 = mul i16 0, 6
-  %12 = getelementptr i8, ptr %0, i16 2
-  %13 = load i16, ptr %12, !tbaa !2
-  %14 = add i16 0, %11
-  %15 = inttoptr i16 %13 to ptr addrspace(2)
-  %16 = addrspacecast ptr addrspace(2) %15 to ptr addrspace(1)
-  %17 = getelementptr i8, ptr addrspace(1) %16, i16 %14
-  store i32 4, ptr addrspace(1) %17, !tbaa !4
-  %18 = mul i16 0, 6
-  %19 = getelementptr i8, ptr %0, i16 2
-  %20 = load i16, ptr %19, !tbaa !2
-  %21 = add i16 0, %18
-  %22 = inttoptr i16 %20 to ptr addrspace(2)
-  %23 = addrspacecast ptr addrspace(2) %22 to ptr addrspace(1)
-  %24 = getelementptr i8, ptr addrspace(1) %23, i16 %21
-  %25 = trunc i32 4 to i16
-  %26 = getelementptr i8, ptr addrspace(1) %24, i16 %25
-  %27 = getelementptr i8, ptr addrspace(1) @$string15$payload, i16 6
-  %28 = addrspacecast ptr addrspace(1) %27 to ptr
-  %29 = ptrtoint ptr %28 to i16
-  %30 = load i16, ptr @$fslSegment, !tbaa !2
+  %12 = getelementptr inbounds i8, ptr %1, i16 4
+  %13 = addrspacecast ptr %12 to ptr addrspace(1)
+  %14 = getelementptr i8, ptr @$string8, i16 4
+  %15 = addrspacecast ptr %14 to ptr addrspace(1)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %15, i16 2, ptr addrspace(1) nocapture writeonly initializes((0, 2)) %13, i16 2)
+  %16 = getelementptr i8, ptr %0, i16 2
+  %17 = load i16, ptr %16, !tbaa !2
+  %18 = inttoptr i16 %17 to ptr addrspace(2)
+  %19 = addrspacecast ptr addrspace(2) %18 to ptr addrspace(1)
+  %20 = getelementptr i8, ptr addrspace(1) %19, i16 0
+  store i32 4, ptr addrspace(1) %20, !tbaa !6
+  %21 = getelementptr i8, ptr %0, i16 2
+  %22 = load i16, ptr %21, !tbaa !2
+  %23 = inttoptr i16 %22 to ptr addrspace(2)
+  %24 = addrspacecast ptr addrspace(2) %23 to ptr addrspace(1)
+  %25 = getelementptr i8, ptr addrspace(1) %24, i16 0
+  %26 = getelementptr i8, ptr addrspace(1) %25, i16 4
+  %27 = getelementptr i8, ptr @$string9, i16 4
+  %28 = addrspacecast ptr %27 to ptr addrspace(1)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %28, i16 2, ptr addrspace(1) nocapture writeonly initializes((0, 2)) %26, i16 2)
+  %29 = getelementptr i8, ptr %0, i16 2
+  %30 = load i16, ptr %29, !tbaa !2
   %31 = inttoptr i16 %30 to ptr addrspace(2)
   %32 = addrspacecast ptr addrspace(2) %31 to ptr addrspace(1)
-  %33 = getelementptr i8, ptr addrspace(1) %32, i16 %29
-  call cc1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %33, i16 2, ptr addrspace(1) %26, i16 2)
-  %34 = mul i16 1, 6
-  %35 = getelementptr i8, ptr %0, i16 2
-  %36 = load i16, ptr %35, !tbaa !2
-  %37 = add i16 0, %34
-  %38 = inttoptr i16 %36 to ptr addrspace(2)
-  %39 = addrspacecast ptr addrspace(2) %38 to ptr addrspace(1)
-  %40 = getelementptr i8, ptr addrspace(1) %39, i16 %37
-  store i32 5, ptr addrspace(1) %40, !tbaa !4
-  %41 = mul i16 1, 6
-  %42 = getelementptr i8, ptr %0, i16 2
-  %43 = load i16, ptr %42, !tbaa !2
-  %44 = add i16 0, %41
-  %45 = inttoptr i16 %43 to ptr addrspace(2)
-  %46 = addrspacecast ptr addrspace(2) %45 to ptr addrspace(1)
-  %47 = getelementptr i8, ptr addrspace(1) %46, i16 %44
-  %48 = trunc i32 4 to i16
-  %49 = getelementptr i8, ptr addrspace(1) %47, i16 %48
-  %50 = getelementptr i8, ptr addrspace(1) @$string17$payload, i16 6
-  %51 = addrspacecast ptr addrspace(1) %50 to ptr
-  %52 = ptrtoint ptr %51 to i16
-  %53 = load i16, ptr @$fslSegment, !tbaa !2
+  %33 = getelementptr i8, ptr addrspace(1) %32, i16 6
+  store i32 5, ptr addrspace(1) %33, !tbaa !6
+  %34 = getelementptr i8, ptr %0, i16 2
+  %35 = load i16, ptr %34, !tbaa !2
+  %36 = inttoptr i16 %35 to ptr addrspace(2)
+  %37 = addrspacecast ptr addrspace(2) %36 to ptr addrspace(1)
+  %38 = getelementptr i8, ptr addrspace(1) %37, i16 6
+  %39 = getelementptr i8, ptr addrspace(1) %38, i16 4
+  %40 = getelementptr i8, ptr @$string10, i16 4
+  %41 = addrspacecast ptr %40 to ptr addrspace(1)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %41, i16 2, ptr addrspace(1) nocapture writeonly initializes((0, 2)) %39, i16 2)
+  %42 = load i32, ptr %1, !tbaa !2
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %42)
+  %43 = getelementptr inbounds i8, ptr %1, i16 4
+  %44 = addrspacecast ptr %43 to ptr addrspace(1)
+  %45 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %44, i16 2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %45)
+  %46 = getelementptr i8, ptr %0, i16 2
+  %47 = load i16, ptr %46, !tbaa !2
+  %48 = inttoptr i16 %47 to ptr addrspace(2)
+  %49 = addrspacecast ptr addrspace(2) %48 to ptr addrspace(1)
+  %50 = getelementptr i8, ptr addrspace(1) %49, i16 0
+  %51 = load i32, ptr addrspace(1) %50, !tbaa !6
+  call cc 1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %51)
+  %52 = getelementptr i8, ptr %0, i16 2
+  %53 = load i16, ptr %52, !tbaa !2
   %54 = inttoptr i16 %53 to ptr addrspace(2)
   %55 = addrspacecast ptr addrspace(2) %54 to ptr addrspace(1)
-  %56 = getelementptr i8, ptr addrspace(1) %55, i16 %52
-  call cc1000 addrspace(1) void @llrm.qb.B$ASSN(ptr addrspace(1) %56, i16 2, ptr addrspace(1) %49, i16 2)
-  %57 = load i32, ptr %1, !tbaa !2
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %57)
-  %58 = getelementptr inbounds i8, ptr %1, i16 4
-  %59 = addrspacecast ptr %58 to ptr addrspace(1)
-  %60 = call cc1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %59, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr %60)
-  %61 = mul i16 0, 6
-  %62 = getelementptr i8, ptr %0, i16 2
-  %63 = load i16, ptr %62, !tbaa !2
-  %64 = add i16 0, %61
-  %65 = inttoptr i16 %63 to ptr addrspace(2)
-  %66 = addrspacecast ptr addrspace(2) %65 to ptr addrspace(1)
-  %67 = getelementptr i8, ptr addrspace(1) %66, i16 %64
-  %68 = load i32, ptr addrspace(1) %67, !tbaa !4
-  call cc1000 addrspace(1) void @llrm.qb.B$PSI4(i32 %68)
-  %69 = mul i16 1, 6
-  %70 = getelementptr i8, ptr %0, i16 2
-  %71 = load i16, ptr %70, !tbaa !2
-  %72 = add i16 0, %69
-  %73 = inttoptr i16 %71 to ptr addrspace(2)
-  %74 = addrspacecast ptr addrspace(2) %73 to ptr addrspace(1)
-  %75 = getelementptr i8, ptr addrspace(1) %74, i16 %72
-  %76 = load i32, ptr addrspace(1) %75, !tbaa !4
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %76)
-  %77 = mul i16 0, 6
-  %78 = getelementptr i8, ptr %0, i16 2
-  %79 = load i16, ptr %78, !tbaa !2
-  %80 = add i16 0, %77
-  %81 = inttoptr i16 %79 to ptr addrspace(2)
-  %82 = addrspacecast ptr addrspace(2) %81 to ptr addrspace(1)
-  %83 = getelementptr i8, ptr addrspace(1) %82, i16 %80
-  %84 = trunc i32 4 to i16
-  %85 = getelementptr i8, ptr addrspace(1) %83, i16 %84
-  %86 = call cc1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %85, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr %86)
-  %87 = mul i16 1, 6
-  %88 = getelementptr i8, ptr %0, i16 2
-  %89 = load i16, ptr %88, !tbaa !2
-  %90 = add i16 0, %87
-  %91 = inttoptr i16 %89 to ptr addrspace(2)
-  %92 = addrspacecast ptr addrspace(2) %91 to ptr addrspace(1)
-  %93 = getelementptr i8, ptr addrspace(1) %92, i16 %90
-  %94 = trunc i32 4 to i16
-  %95 = getelementptr i8, ptr addrspace(1) %93, i16 %94
-  %96 = call cc1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %95, i16 2)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr %96)
-  call cc1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %0)
+  %56 = getelementptr i8, ptr addrspace(1) %55, i16 6
+  %57 = load i32, ptr addrspace(1) %56, !tbaa !6
+  call cc 1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %57)
+  %58 = getelementptr i8, ptr %0, i16 2
+  %59 = load i16, ptr %58, !tbaa !2
+  %60 = inttoptr i16 %59 to ptr addrspace(2)
+  %61 = addrspacecast ptr addrspace(2) %60 to ptr addrspace(1)
+  %62 = getelementptr i8, ptr addrspace(1) %61, i16 0
+  %63 = getelementptr i8, ptr addrspace(1) %62, i16 4
+  %64 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %63, i16 2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %64)
+  %65 = getelementptr i8, ptr %0, i16 2
+  %66 = load i16, ptr %65, !tbaa !2
+  %67 = inttoptr i16 %66 to ptr addrspace(2)
+  %68 = addrspacecast ptr addrspace(2) %67 to ptr addrspace(1)
+  %69 = getelementptr i8, ptr addrspace(1) %68, i16 6
+  %70 = getelementptr i8, ptr addrspace(1) %69, i16 4
+  %71 = call cc 1000 addrspace(1) ptr @llrm.qb.B$LDFS(ptr addrspace(1) %70, i16 2)
+  call cc 1000 addrspace(1) void @llrm.qb.B$PESD(ptr %71)
+  call cc 1000 addrspace(1) void @llrm.qb.B$ERAS(ptr %0)
   ret void
 }
 
-declare cc1000 void @llrm.qb.B$ASSN(ptr addrspace(1), i16, ptr addrspace(1), i16) addrspace(1)
+declare cc 1000 void @llrm.qb.B$ASSN(ptr addrspace(1), i16, ptr addrspace(1), i16) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
 
-declare cc1000 ptr @llrm.qb.B$LDFS(ptr addrspace(1), i16) addrspace(1)
+declare cc 1000 ptr @llrm.qb.B$LDFS(ptr addrspace(1), i16) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$PSI4(i32) addrspace(1)
+declare cc 1000 void @llrm.qb.B$PSI4(i32) addrspace(1)
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1000 void @llrm.qb.B$DDIM(i16, i16, i16, i16, ptr) addrspace(1)
 
-declare cc1000 void @llrm.qb.B$DDIM(i16, i16, i16, i16, ptr) addrspace(1)
-
-declare cc1000 void @llrm.qb.B$ERAS(ptr) addrspace(1)
+declare cc 1000 void @llrm.qb.B$ERAS(ptr) addrspace(1)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}
 !2 = !{!1, !1, i64 0}
 !3 = !{!"allocation", !0, i64 0}
 !4 = !{!3, !3, i64 0}
+!5 = !{!"allocation.0", !3, i64 0}
+!6 = !{!5, !5, i64 0}

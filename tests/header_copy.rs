@@ -32,11 +32,12 @@ fn listing(
 fn test_a_loop_entered_behind_a_folded_guard_steps_and_branches_in_the_pins_four() {
     let text = listing("x_insertion", &["-ftree-ch"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let branch = lines
-        .windows(2)
-        .position(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 1") && pair[1].starts_with("jg "))
-        .map(|at| at + 1)
-        .unwrap_or_else(|| panic!("no `cmp r, 1; jg` ends the inner loop: {text}"));
+    // The pin's `cmp r, 1; jg` or, as now, the step's own flags: `dec; jg`.
+    let branch = (0..lines.len())
+        .find(|&at| {
+            lines[at].starts_with("jg ") && lines[..at].iter().rev().take(3).any(|line| line.starts_with("dec e"))
+        })
+        .unwrap_or_else(|| panic!("no `dec r; ..; jg` ends the inner loop: {text}"));
     let step = lines[..branch].iter().rposition(|line| line.starts_with("dec e")).unwrap();
     assert!(
         branch - step < 4,
@@ -234,9 +235,13 @@ void g(void) { tab[1] = 2000; }
 fn test_a_loop_with_two_tests_that_leave_it_has_both_copied() {
     let text = listing("x_primes", &["-ftree-ch", "-O1"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    let folded = lines
-        .windows(2)
-        .any(|pair| pair[0].starts_with("cmp e") && pair[0].ends_with(", 4") && pair[1].starts_with("jb "));
+    // A `mov` the scheduler puts between the compare and its branch leaves the
+    // flags alone.
+    let folded = (0..lines.len()).any(|at| {
+        lines[at].starts_with("cmp e")
+            && lines[at].ends_with(", 4")
+            && lines[at + 1..].iter().find(|line| !line.starts_with("mov ")).is_some_and(|line| line.starts_with("jb "))
+    });
     assert!(folded, "{text}");
 }
 

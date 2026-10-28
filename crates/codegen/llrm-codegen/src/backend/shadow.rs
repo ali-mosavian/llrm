@@ -58,6 +58,12 @@ impl Selector {
         }
     }
 
+    /// The selector a target gets when `--isel` names none: the DAG path for
+    /// the targets it selects (16- and 32-bit x86), the old one for the rest.
+    pub fn for_target(target: &dyn llrm_target::Target) -> Self {
+        if target.selects_by_dag() { Self::Dag } else { Self::Old }
+    }
+
     /// The selector `--isel=<text>` names.
     pub fn parse(text: &str) -> Result<Self, String> {
         match text {

@@ -5,7 +5,8 @@
 ;; retn: never returns: LL$EXIT with main's result
 ;;
 ;; chng: oct/26 restyled, symbols renamed to LL$ [ali]
-;; obs.: The language's start-up hook runs before `main` when its description names one.
+;; obs.: LL_MAIN names the entry: `_main`, or `main_` for a program from llrm-cc (Watcom's register convention).
+;;       The language's start-up hook runs before `main` when its description names one.
 
 ifdef NEAR_CODE
 .model small
@@ -16,10 +17,13 @@ endif
 ;; No .dosseg: its order puts every segment outside DGROUP before it, and a far one the image does
 ;; not store would then have its zeros stored. The order here is the linker's, by the first
 ;; appearance of each class: code, DGROUP (data, bss, stack), far data, far bss.
+ifndef LL_MAIN
+LL_MAIN textequ <_main>
+endif
 ifdef NEAR_CODE
-extrn _main:near
+extrn LL_MAIN:near
 else
-extrn _main:far
+extrn LL_MAIN:far
 endif
 extrn BSS_LAST:byte
 extrn FBSS_LAST:byte
@@ -120,9 +124,9 @@ ifdef LANG_INIT
                 call    far ptr LANG_INIT
 endif
 ifdef NEAR_CODE
-                call    _main
+                call    LL_MAIN
 else
-                call    far ptr _main
+                call    far ptr LL_MAIN
 endif
                 push    ax
                 call    far ptr LL$EXIT

@@ -25,6 +25,11 @@
 //! the loop is analysed ([`split_phi_edges`]), not in `RewriteForPHI`: the
 //! analyses hold the CFG while they are read. Post-indexed addressing and IV
 //! chains are not ported (see [`crate::lsr_collect`]).
+//!
+//! DEVIATE LU5: an exit compare's limit is an existing narrow value whose
+//! zero-extension is the register the formula names (`narrow_existing`, the
+//! offset-free case: `narrow_original`), not the wide register expanded and
+//! truncated back; lcexit.bas m16 -Os -21 B, one other of 258 programs changes.
 
 use llrm_analysis::scev::expander::{Env as ExpandEnv, Expander};
 use llrm_analysis::scev::expr::{Scev, Ty, Use as ScevUse};
@@ -175,6 +180,46 @@ impl Implement<'_, '_> {
             return None;
         }
         (self.se.get_zero_extend_expr(&cx, ScevUse::of(narrow), wide, 0) == reg).then_some(other)
+    }
+
+    /// DEVIATE LU5: an existing value of the compare's own narrow type whose
+    /// zero-extension is `reg`, one that dominates the compare: the pin expands
+    /// the wide register and truncates it back, a second copy of the limit the
+    /// loop's exit already holds in 16 bits (lcexit.bas m16 -Os, once the add
+    /// and sub arms of foldICmpBinOp made the compare read `iv, umin` and not
+    /// `iv + 1, umin + 1`: the exit value `umin + 1` is not its operand). Exit:
+    /// none.
+    fn narrow_existing(
+        &mut self,
+        lf: &Fixup,
+        reg: Scev,
+        op_ty_id: TypeId,
+    ) -> Option<Operand> {
+        let narrow_ty = self.scev_ty(op_ty_id);
+        let cx = self.env.cx(&*self.context, &*self.function);
+        let wide = self.se.type_of(reg);
+        if wide.is_pointer()
+            || self.se.as_constant(reg).is_some()
+            || self.se.get_type_size_in_bits(&cx, narrow_ty) >= self.se.get_type_size_in_bits(&cx, wide)
+        {
+            return None;
+        }
+        let found: Vec<InstId> = self.function.walk().map(|(_, inst)| inst).collect();
+        for inst in found {
+            let Some(value) = self.function.instruction(inst).result else { continue };
+            let operand = Operand::Value(value);
+            if inst == lf.user || self.function.operand_type(self.context, operand) != Some(op_ty_id) {
+                continue;
+            }
+            let cx = self.env.cx(&*self.context, &*self.function);
+            let narrow = self.se.get_scev(&cx, operand);
+            if self.se.get_zero_extend_expr(&cx, ScevUse::of(narrow), wide, 0) == reg
+                && self.env.tree.instruction_dominates(&*self.function, inst, lf.user)
+            {
+                return Some(operand);
+            }
+        }
+        None
     }
 
     fn unknown(
@@ -435,6 +480,16 @@ impl Implement<'_, '_> {
                 && !f.unfolded_offset.is_non_zero()
             {
                 original = self.narrow_original(lf, reg, op_ty_id);
+                if original.is_some() {
+                    continue;
+                }
+            }
+            if lu.kind == Kind::ICmpZero
+                && f.base_regs.len() == 1
+                && f.base_gv.is_none()
+                && !f.unfolded_offset.is_non_zero()
+            {
+                original = self.narrow_existing(lf, reg, op_ty_id);
                 if original.is_some() {
                     continue;
                 }
