@@ -37,6 +37,7 @@ VSGCC = next((HERE.parent / "crates/target").glob("*/vsgcc"))
 sys.path.insert(0, str(VSGCC))
 import scaling  # noqa: E402
 import scaling_gate  # noqa: E402
+import stamp  # noqa: E402
 
 BUDGETS = tomllib.loads((HERE / "budgets.toml").read_text())
 DEFAULT = BUDGETS["default"]
@@ -161,8 +162,15 @@ def compile_command(axis: str, source_path: Path, object_path: str) -> tuple[lis
     return [str(llrmbin.bin_dir() / "llrm-cc"), *flags, "-O2", "-c", "-o", object_path, str(source_path)], env
 
 
+@cache
+def refuse_incremental(compiler: Path) -> None:
+    """Counts are the cost gate's only from a CARGO_INCREMENTAL=0 build (an incremental one runs ~13% more in the object writer): see tools/stamp.py."""
+    stamp.refuse_incremental(compiler)
+
+
 def run(source: str, axis: str, stage: str) -> str:
     """The compiler's stderr with `stage` on (`counts`, `time` or both) for `source`, compiled as the axis is."""
+    refuse_incremental(llrmbin.bin_dir() / "llrm-cc")
     with tempfile.TemporaryDirectory() as work:
         path = Path(work) / "a.c"
         path.write_text(source)

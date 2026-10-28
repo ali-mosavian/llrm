@@ -149,7 +149,7 @@ impl From<RegId> for Register {
 
 /// The classes a description may give a register, one bit each, in this order.
 /// A name not here is refused where the table is generated.
-pub const CLASSES: [&str; 22] = [
+pub const CLASSES: [&str; 23] = [
     "base",
     "byte",
     "code_segment",
@@ -171,6 +171,7 @@ pub const CLASSES: [&str; 22] = [
     "fpr",
     "zero",
     "xmm",
+    "tail_call",
     "frame_follows",
 ];
 
@@ -207,9 +208,12 @@ pub mod class {
     pub const ZERO: u32 = 1 << 19;
     /// An SSE register: scalar `float` and `double` live in its low lanes.
     pub const XMM: u32 = 1 << 20;
+    /// A register an indirect sibling call may take its callee's address in
+    /// (the pin's `GR32_TC`, `GR64_TC`), in the order it is given out.
+    pub const TAIL_CALL: u32 = 1 << 21;
     /// The register the frame register follows in the allocation order when
     /// the function has no frame pointer and the register is given out.
-    pub const FRAME_FOLLOWS: u32 = 1 << 21;
+    pub const FRAME_FOLLOWS: u32 = 1 << 22;
 }
 
 /// What LIR calls the frame register and the stack pointer, whatever the
