@@ -12,7 +12,7 @@ use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
 use crate::machine::Platform;
 use crate::mc::encode::{FixupKind, encode, resolve};
-use crate::mc::inst::Target;
+use crate::mc::inst::{Inst, Target};
 
 /// One lowered function.
 pub struct Function {
@@ -173,6 +173,7 @@ pub fn object(
     // The code.
     let mut text = Vec::with_capacity(text_size);
     let mut text_relocs = Vec::new();
+    let mut frames = Vec::new();
     for (function, function_offset) in functions.iter().zip(&text_offsets) {
         // Every instruction is a word, so nothing relaxes: the layout only
         // places the blocks' labels.
@@ -184,6 +185,8 @@ pub fn object(
         let placed = place(&mut fragments, &()).map_err(|error| format!("{}: {}", function.symbol, error.0))?;
         let labels: HashMap<String, usize> =
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
+        let insts: Vec<&Inst> = function.blocks.iter().flat_map(|block| block.insts.iter()).collect();
+        frames.push(crate::mc::unwind::frame(0, *function_offset, &insts));
         let mut cursor = *function_offset;
         for block in &function.blocks {
             for inst in &block.insts {
@@ -237,7 +240,7 @@ pub fn object(
         symbols: symbols.list,
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
-        frames: Vec::new(),
+        frames,
         debug: None,
     })
 }

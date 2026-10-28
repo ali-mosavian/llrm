@@ -10,6 +10,7 @@ pub mod immediate;
 pub mod inst;
 pub mod macho;
 mod text;
+pub mod unwind;
 pub mod visit;
 
 #[cfg(test)]
@@ -33,6 +34,15 @@ impl ObjectTarget for Arm64Objects {
                 &expanded
             }
             _ => object,
+        };
+        // `.eh_frame` goes in whether or not `-g` is on, for the frames the
+        // backend declared; Mach-O has compact unwind instead.
+        let unwound;
+        let object = if format == "elf" && !object.frames.is_empty() {
+            unwound = llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?;
+            &unwound
+        } else {
+            object
         };
         match format {
             "macho" => llrm_macho::write(object, &macho::Arm64MachO),
