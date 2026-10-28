@@ -30,8 +30,6 @@
 //! `mod_ref_for_global` says, and `globals_listed` keeps the unknown access
 //! from reaching it. Without a `FunctionInfo` the unknown access reaches it.
 
-use std::rc::Rc;
-
 use llrm_mir::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::Facts;
@@ -44,6 +42,7 @@ use crate::alias::Summary;
 use crate::memory::{Identity, Key, MemoryKind, MemoryObject, ObjectInterner, Slice};
 
 thread_local! {
+    static BROUGHT_UP: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SUMMARIZED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -62,7 +61,13 @@ pub struct Last<'a> {
     pub declared_now: &'a [GlobalValue],
     pub found: &'a crate::globalsmodref::GlobalsModRef,
     pub tracked: &'a std::collections::BTreeSet<GlobalId>,
-    pub made: &'a IndexMap<String, Rc<Summary>>,
+    pub made: &'a mut IndexMap<String, Summary>,
+}
+
+/// How many times this thread has brought the summaries up to date after
+/// edited bodies alone, not compared every function with the last run's.
+pub fn brought_up_to_date() -> usize {
+    BROUGHT_UP.with(std::cell::Cell::get)
 }
 
 /// How many functions' summaries this thread has worked out, for a test that
@@ -81,7 +86,7 @@ pub fn summaries(
     layout: &DataLayout,
     tracked: &std::collections::BTreeSet<GlobalId>,
     found: &crate::globalsmodref::GlobalsModRef,
-) -> IndexMap<String, Rc<Summary>> {
+) -> IndexMap<String, Summary> {
     summaries_reusing(module, layout, tracked, found, None)
 }
 
@@ -95,11 +100,11 @@ pub fn summaries_reusing(
     tracked: &std::collections::BTreeSet<GlobalId>,
     found: &crate::globalsmodref::GlobalsModRef,
     last: Option<Last>,
-) -> IndexMap<String, Rc<Summary>> {
+) -> IndexMap<String, Summary> {
     MADE.with(|made| made.set(made.get() + 1));
     let objects = ObjectInterner::of(&module.context);
     let listable = tracked.iter().all(|&id| found.is_non_address_taken(id));
-    let last = last.filter(|last| {
+    let mut last = last.filter(|last| {
         last.tracked == tracked
             && listable == tracked.iter().all(|&id| last.found.is_non_address_taken(id))
             && tracked.iter().all(|id| last.declared.get(id.0 as usize) == last.declared_now.get(id.0 as usize))
@@ -110,20 +115,49 @@ pub fn summaries_reusing(
         // own attributes (`calls_by_attributes`).
         let Some(name) = global.name.as_ref().filter(|_| !function.is_declaration()) else { continue };
         let kept = last
-            .as_ref()
+            .as_mut()
             .filter(
                 |last| last.declared.get(id.0 as usize) == last.declared_now.get(id.0 as usize)
                     && last.found.function_info(id) == found.function_info(id),
             );
-        if let Some(summary) = kept.and_then(|last| last.made.get(name)) {
-            out.insert(name.clone(), Rc::clone(summary));
+        if let Some(summary) = kept.and_then(|last| last.made.swap_remove(name)) {
+            out.insert(name.clone(), summary);
             continue;
         }
         SUMMARIZED.with(|made| made.set(made.get() + 1));
         let summary = summary_of(module, layout, tracked, found, listable, &objects, id, function);
-        out.insert(name.clone(), Rc::new(summary));
+        out.insert(name.clone(), summary);
     }
     out
+}
+
+/// `made` brought up to date after the bodies `ids` were edited, where nothing
+/// else a summary is of moved: `GlobalsModRef`'s facts, the tracked globals and
+/// the set of functions are those `made` was worked out from.
+pub fn resummarized(
+    module: &Module,
+    layout: &DataLayout,
+    tracked: &std::collections::BTreeSet<GlobalId>,
+    found: &crate::globalsmodref::GlobalsModRef,
+    made: &mut IndexMap<String, Summary>,
+    ids: impl IntoIterator<Item = GlobalId>,
+) {
+    BROUGHT_UP.with(|made| made.set(made.get() + 1));
+    let objects = ObjectInterner::of(&module.context);
+    let listable = tracked.iter().all(|&id| found.is_non_address_taken(id));
+    for id in ids {
+        let global = module.global(id);
+        let Some(name) = global.name.as_ref() else { continue };
+        match global.function().filter(|function| !function.is_declaration()) {
+            Some(function) => {
+                SUMMARIZED.with(|made| made.set(made.get() + 1));
+                made.insert(name.clone(), summary_of(module, layout, tracked, found, listable, &objects, id, function));
+            }
+            None => {
+                made.swap_remove(name);
+            }
+        }
+    }
 }
 
 /// One function's summary.

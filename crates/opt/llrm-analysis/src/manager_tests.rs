@@ -1454,10 +1454,14 @@ fn a_declaration_change_summarizes_only_that_function_again() {
             PreservedAnalyses::none(),
         ));
     }
-    let before = crate::attrsummary::functions_summarized();
+    let before = (crate::attrsummary::functions_summarized(), crate::attrsummary::brought_up_to_date());
     passes.run_module(&mut module, Rc::new(Neutral)).unwrap();
-    let made = crate::attrsummary::functions_summarized() - before;
+    let made = crate::attrsummary::functions_summarized() - before.0;
+    let quick = crate::attrsummary::brought_up_to_date() - before.1;
     assert!(made <= 3 * N, "{made} summaries worked out for {N} functions each changed once");
+    // Not compared function by function, which is N per run: the edit log says
+    // which.
+    assert!(quick >= N - 1, "{quick} of {N} runs brought up to date from the log of edits");
 }
 
 /// A summary kept while its declaration stands must not outlive a change in
@@ -1501,4 +1505,24 @@ entry:
         let fresh = ModuleAnalyses::of(&module, Rc::new(Neutral)).get::<Summaries>(&module);
         assert_eq!(*found, *fresh, "the summaries after {body:?} are not those of a run from nothing");
     }
+}
+
+/// A function added since the last run is no edited body of the log, and the
+/// facts a pass keeps (`GlobalsAA` held) do not name it: the summaries are
+/// compared function by function then, and a new function has its own. Kept
+/// from the log alone, the result would lack it.
+#[test]
+fn a_function_added_since_the_last_run_is_summarized() {
+    let text = |extra: &str| format!("define void @a() {{\nentry:\n  ret void\n}}\n{extra}");
+    let mut module = parsed(&text(""));
+    let a = module.named("a").unwrap();
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    analyses.get::<Summaries>(&module);
+    module = parsed(&text("\ndefine void @b() {\nentry:\n  ret void\n}\n"));
+    // The facts held are those the last run read, as where a pass keeps them.
+    let kept =
+        PreservedAnalyses::none().preserve_module::<GlobalsAA>().preserve_module::<super::GlobalsModRefAnalysis>();
+    analyses.body_edited(a, &kept);
+    let found = analyses.get::<Summaries>(&module);
+    assert!(Result::as_ref(&*found).unwrap().contains_key("b"), "the function added has no summary");
 }

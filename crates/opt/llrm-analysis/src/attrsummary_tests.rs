@@ -13,7 +13,6 @@ fn of(
     summaries(&module, &crate::testing::layout(&module), &tracked, &found)
         .get(name)
         .expect("a defined function")
-        .as_ref()
         .clone()
 }
 

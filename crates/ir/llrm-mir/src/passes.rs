@@ -2161,6 +2161,9 @@ pub struct ModuleAnalyses {
     /// Results dropped, reused when computed again the same, so that an
     /// outer proxy holding them stays the same.
     dropped: HashMap<TypeId, Rc<dyn Any>>,
+    /// The results `take_dropped` handed over, for `why` to tell a result
+    /// brought up to date from one made from nothing.
+    taken: HashSet<TypeId>,
     outer: Option<Rc<Outer>>,
     functions: HashMap<GlobalId, Analyses>,
     /// The bodies reported edited since the declarations were last checked
@@ -2214,6 +2217,7 @@ impl ModuleAnalyses {
             stateless: Vec::new(),
             results: HashMap::default(),
             dropped: HashMap::default(),
+            taken: HashSet::default(),
             outer: None,
             functions: HashMap::default(),
             edited: BTreeSet::new(),
@@ -2313,6 +2317,15 @@ impl ModuleAnalyses {
         }
     }
 
+    /// The result of `M` a pass dropped, handed over to the run that brings it
+    /// up to date: not kept, so that it is the only holder where nothing else
+    /// holds it. A run that does not take it leaves it to be compared.
+    pub fn take_dropped<M: ModuleAnalysis>(&mut self) -> Option<Rc<M::Result>> {
+        let one = self.dropped.remove(&TypeId::of::<M>())?;
+        self.taken.insert(TypeId::of::<M>());
+        Some(one.downcast::<M::Result>().expect("keyed by its type"))
+    }
+
     /// Whether `M` is made only at its points (`PassManager::require_cached`).
     pub fn is_stateless<M: ModuleAnalysis>(&self) -> bool {
         self.stateless.iter().any(|one| one.id == TypeId::of::<M>())
@@ -2371,10 +2384,12 @@ impl ModuleAnalyses {
                         "diff"
                     }
                 }
+                None if self.taken.contains(&kind.id) => "diff",
                 None => "first",
             };
             record("mod", kind.name, class);
         }
+        self.taken.remove(&kind.id);
         let result = self.dropped.remove(&kind.id).filter(|old| (kind.agree)(&**old, &*fresh)).unwrap_or(fresh);
         self.results.insert(kind.id, (kind, Rc::clone(&result)));
         result
