@@ -59,7 +59,8 @@ impl Selector {
     }
 
     /// The selector a target gets when `--isel` names none: the DAG path for
-    /// the targets it selects (16- and 32-bit x86), the old one for the rest.
+    /// the targets it selects (x86 at 16, 32 and 64 bits), the old one for the
+    /// rest.
     pub fn for_target(target: &dyn llrm_target::Target) -> Self {
         if target.selects_by_dag() { Self::Dag } else { Self::Old }
     }

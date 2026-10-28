@@ -153,7 +153,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.dag.node(node).flags.has(SDNodeFlags::NO_SIGNED_ZEROS) {
             return true;
         }
-        if self.dag.use_count(node.node) > 2 {
+        if self.dag.use_count_up_to(node.node, 3) > 2 {
             return false;
         }
         self.dag
@@ -192,7 +192,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(op);
         let opcode = self.dag.opcode(op);
         let flags = self.dag.node(op).flags;
-        if self.dag.use_count(op.node) != 1 && opcode != ISD::ConstantFP {
+        if !self.dag.has_one_use(op.node) && opcode != ISD::ConstantFP {
             return None;
         }
         match opcode {
@@ -210,7 +210,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 let made = self.dag.get_constant_fp(negated, vt);
                 // free to negate a multiply-used constant only if the
                 // negation is already in use
-                if self.dag.use_count(op.node) != 1 && !self.dag.has_users(made) {
+                if !self.dag.has_one_use(op.node) && !self.dag.has_users(made) {
                     return None;
                 }
                 Some((made, Cost::Neutral))
@@ -311,7 +311,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         let is_fmul_neg_two = |this: &Self, value: SDValue| {
-            this.dag.use_count(value.node) == 1
+            this.dag.has_one_use(value.node)
                 && this.dag.opcode(value) == ISD::FMul
                 && this.is_exactly(this.dag.operand(value, 1), 2, true)
         };
@@ -471,9 +471,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some((negated, _)) = self.negated_expression(n0, 0) {
             return Some(negated);
         }
-        (self.dag.opcode(n0) == ISD::FSub
-            && flags.has(SDNodeFlags::NO_SIGNED_ZEROS)
-            && self.dag.use_count(n0.node) == 1)
+        (self.dag.opcode(n0) == ISD::FSub && flags.has(SDNodeFlags::NO_SIGNED_ZEROS) && self.dag.has_one_use(n0.node))
             .then(|| {
                 let (x, y) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
                 self.dag.get_node_flags(ISD::FSub, vt, &[y, x], flags)
@@ -590,7 +588,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let n0 = self.dag.operand(node, 0);
         let vt = self.dag.value_type(node);
         // fp_round(fpextend) is left for the round to fold
-        if self.dag.use_count(node.node) == 1
+        if self.dag.has_one_use(node.node)
             && self
                 .dag
                 .users(node)
@@ -669,7 +667,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
             // fmul (fadd X, X), C -> fmul X, 2.0 * C
             if self.dag.opcode(n0) == ISD::FAdd
-                && self.dag.use_count(n0.node) == 1
+                && self.dag.has_one_use(n0.node)
                 && self.dag.operand(n0, 0) == self.dag.operand(n0, 1)
             {
                 let two = self.fp_constant(2, vt)?;

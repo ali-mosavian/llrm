@@ -254,6 +254,26 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// The verifier read a 64-bit use of a register whose low word the entry
+/// delivers as 64 bits unwritten: `foo(unsigned short)` at m64 was
+/// "floatalloc: foo reads edi before every path writes it" under LLRM_VERIFY,
+/// ~50 torture m64 builds. A register with some lane defined is read whole, and
+/// "whole" is the register, not the view that was read.
+#[test]
+fn a_short_argument_read_as_a_quadword_is_no_undefined_read_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i32 @foo(i16 zeroext %0) {\n\
+                  %2 = alloca i16\n  %3 = alloca i16\n  store i16 %0, ptr %2\n  %4 = load i16, ptr %2\n  %5 = zext i16 %4 to i32\n\
+                  %6 = icmp sgt i32 %5, 32767\n  br i1 %6, label %7, label %11\n7:\n  %8 = load i16, ptr %2\n  %9 = zext i16 %8 to i32\n\
+                  %10 = sub nsw i32 %9, 32768\n  br label %12\n11:\n  br label %12\n12:\n  %13 = phi i32 [ %10, %7 ], [ 0, %11 ]\n\
+                  %14 = trunc i32 %13 to i16\n  store i16 %14, ptr %3\n  %15 = load i16, ptr %3\n  %16 = zext i16 %15 to i32\n  ret i32 %16\n}\n";
+    for isel in ["--isel=old", "--isel=dag"] {
+        let made = crate::llc::compiled(&flags(&["-m64", "-O2", "-fverify-ir", isel]), text, "foo");
+        assert!(made.is_ok(), "{isel}: {:?}", made.err());
+    }
+}
+
 /// `(float)u` read `rdi` whole: the dword move that zeroes its upper half was
 /// taken for a copy and coalesced away, so garbage above `edi` was converted.
 #[test]
@@ -376,7 +396,8 @@ fn a_variadic_call_sets_al_to_the_vector_registers_it_uses() {
                 define i32 @f(ptr %s, i32 %a) {\n  %r = call i32 (ptr, ...) @printf(ptr %s, i32 %a)\n  ret i32 %r\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&[]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    let call = listing.lines().position(|line| line.trim() == "call printf").expect("the call");
+    // a sibling call, as the pin makes it, is a `jmp`
+    let call = listing.lines().position(|line| matches!(line.trim(), "call printf" | "jmp printf")).expect("the call");
     let before: Vec<&str> = listing.lines().take(call).map(str::trim).collect();
     assert!(
         before.iter().any(|line| *line == "mov eax, 0" || *line == "xor eax, eax" || *line == "mov al, 0"),
@@ -485,7 +506,9 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
     let (built, _) = crate::llc::compiled(&flags(&["-O1"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
-    assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
+    // the pin subtracts in a scratch register and moves the result to `rsp`
+    assert!(lines.iter().any(|line| line.starts_with("sub r")), "the run-time size is subtracted\n{listing}");
+    assert!(lines.iter().any(|line| line.starts_with("mov rsp, r")), "the stack pointer is lowered\n{listing}");
     // The pin takes the stack back through the frame register and a pop, not
     // `leave`.
     let at = lines.iter().position(|line| *line == "mov rsp, rbp");
@@ -714,14 +737,15 @@ fn a_zero_used_around_a_call_is_a_xor_at_each_use_under_the_dag_selector() {
 }
 
 /// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only
-/// words and dwords. It is `xor eax, eax`.
+/// words and dwords. It is `xor eax, eax`. Old selector: the DAG route keeps
+/// one zero in `ebx` across the call where the pin rematerializes it.
 #[test]
 fn a_quadword_zero_is_a_dword_xor() {
     let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i64 @g(i64)\n\
                 define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
-    let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=old"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("xor edi, edi") && !listing.contains(", 0\n"), "{listing}");
 }
