@@ -1146,6 +1146,9 @@ impl Emitter<'_, '_> {
                         };
                         Some(Arc::new(Insn::new(last.at, last.covers, Some(compare), vec![], last.uses.clone())))
                     }
+                    // An `add` has no cheaper form: made again with a result of
+                    // its own, as the pin's scheduler clones the unit.
+                    (Operation::Binary, Some("add")) if what.sources.len() == 2 => Some(Arc::clone(last)),
                     _ => None,
                 });
                 if let Some(again) = again {
@@ -1339,10 +1342,12 @@ impl Emitter<'_, '_> {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             for &op in &node.ops {
                 if self.dag.value_type(op).is_floating_point() {
-                    let Loc::Held(value) = self.operand(op)? else {
-                        return Err(EmitError::Unsupported("a floating result that is no register".to_owned()));
-                    };
-                    self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]);
+                    match self.operand(op)? {
+                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
+                        // An xmm result: its `CopyToReg` already put it there.
+                        Loc::Reg(_) => {}
+                        _ => return Err(EmitError::Unsupported("a floating result that is no register".to_owned())),
+                    }
                 }
             }
             // The value is already in its register (`CopyToReg`); the frame
@@ -1596,8 +1601,15 @@ impl Emitter<'_, '_> {
         value: SDValue,
     ) -> bool {
         let ISD::Machine(op) = self.dag.opcode(value) else { return false };
-        instr::desc(op as u16)
-            .is_some_and(|d| usize::from(value.res) >= usize::from(d.num_defs) && d.implicit_defs.contains(&28))
+        // The implicit results follow the explicit ones, in the order the
+        // description lists them: `MUL8r` has AX before EFLAGS, and AX is not
+        // flags.
+        instr::desc(op as u16).is_some_and(|d| {
+            usize::from(value.res)
+                .checked_sub(usize::from(d.num_defs))
+                .and_then(|implicit| d.implicit_defs.get(implicit))
+                .is_some_and(|def| *def == 28)
+        })
     }
 
     /// A word argument is required in the word register: the DAG names the
@@ -1708,6 +1720,9 @@ impl Emitter<'_, '_> {
             // fudge of an unsigned conversion).
             EVT::Simple(MVT::I64) => 8,
             EVT::Simple(MVT::I32) => 4,
+            // The 16-byte mask of `fabs`, `fneg` and `copysign` (the pin's
+            // vector constant): the bitwise SSE instruction reads all of it.
+            EVT::Simple(MVT::I128) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))
@@ -2182,7 +2197,7 @@ impl Emitter<'_, '_> {
             }
             // A sibling call: the frame pass puts the epilogue before this
             // return, which is a jump to the callee (`masm`).
-            "TCRETURNdi" | "TCRETURN_16" => {
+            "TCRETURNdi" | "TCRETURNdi64" | "TCRETURN_16" => {
                 // the pseudo keeps the node's operands: the chain, then the
                 // callee
                 let target = if name == "TCRETURN_16" { node.ops[1] } else { node.ops[0] };

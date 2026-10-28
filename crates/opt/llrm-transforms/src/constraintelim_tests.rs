@@ -1,6 +1,7 @@
 //! `constraint-elimination` on MIR text: what the dominating conditions
 //! decide becomes a constant, and nothing else changes.
 
+use llrm_analysis::testing::m16_ir;
 use llrm_mir::datalayout::DataLayout;
 
 use crate::constraintelim::eliminate_constraints;
@@ -209,7 +210,8 @@ fn the_positions_of_the_instructions_are_not_worked_out_per_check() {
 /// integer. The loop kept its guard.
 #[test]
 fn a_huge_pointer_loop_keeps_its_guard() {
-    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+    let text = m16_ir(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
 
 define i32 @f(ptr addrspace(3) %buf) {
 b0:
@@ -229,7 +231,8 @@ b2:
 b3:
   ret i32 %s
 }
-";
+",
+    );
     let mut module = parsed(text);
     let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
     let declarations = module.declarations();
