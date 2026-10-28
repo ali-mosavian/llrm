@@ -37,13 +37,14 @@ fn rotate_half<H: CombineHooks>(
 }
 
 impl<H: CombineHooks> DagCombiner<'_, H> {
-    /// `hasOperation(op, vt)`.
+    /// `hasOperation(op, vt)`: once operations are legalized only a legal one
+    /// counts, a custom one is not lowered again.
     fn has_operation(
         &self,
         op: ISD,
         vt: EVT,
     ) -> bool {
-        self.fp_op_legal_or_custom(op, vt)
+        if self.legal_operations() { self.fp_op_legal(op, vt) } else { self.fp_op_legal_or_custom(op, vt) }
     }
 
     /// `MatchRotate(LHS, RHS)` for constant shift amounts.

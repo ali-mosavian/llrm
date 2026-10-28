@@ -1161,6 +1161,10 @@ pub fn recorded(
     // GlobalDCE after inlining.
     manager.add_program(globaldce::GlobalDce);
     manager.add_program(availableexternally::EliminateAvailableExternally);
+    // `ReversePostOrderFunctionAttrsPass` (PassBuilderPipelines.cpp:1542).
+    if llvm_order {
+        manager.add_module(crate::rpoattrs::ReversePostOrderFunctionAttrs);
+    }
     // Once the callers that remain are the ones that stay: an internal function
     // they all call directly pops its own arguments.
     if applied.options.wanted("calleepop") {

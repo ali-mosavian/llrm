@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 214 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 215 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -181,6 +181,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | reassociate_tree | Reassociate's expression trees: collect the leaves of a tree of one associative operation with their weights, and write a new leaf list back into the tree's own nodes. | `crate::reassociate` (`ReassociateExpression`) and | [reassociate_tree](reassociate_tree.md) |
 | remidiom | The remainder idiom `x - (x / c) * c` read back as `x % c`, where the target keeps the divide. | After `lsr` and `differences`, in the strength slot | [remidiom](remidiom.md) |
 | rotate | Loop rotation: a loop proven to run at least once is entered at its body, not its test; a loop that is not proven is entered behind a copy of its test (gcc's `-ftree-ch`). | Twice in [`crate::pipeline`](pipeline.md), outside the per-body fixed point. `copy` runs | [rotate](rotate.md) |
+| rpoattrs | LLVM's `ReversePostOrderFunctionAttrsPass`: `norecurse` for an internal function whose every use is a call from a `norecurse` function. | After `available-externally` in the module pipeline | [rpoattrs](rpoattrs.md) |
 | runtimechecks | Runtime memory checks: code that proves, when a loop is entered, that the groups of pointers it accesses do not overlap. | Called by [`crate::loopversioning`](loopversioning.md); the vectorizer will call it too. | [runtimechecks](runtimechecks.md) |
 | sccp | Sparse conditional constant propagation. | Named by `ipsccp`, `pipeline`. | [sccp](sccp.md) |
 | sccpsolver | Sparse conditional constant propagation: the solver. | Named by `ipsccp`, `sccp`. | [sccpsolver](sccpsolver.md) |

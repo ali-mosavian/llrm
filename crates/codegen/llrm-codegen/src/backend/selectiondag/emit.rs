@@ -2837,17 +2837,12 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
-            // An undefined value reads as zero, as the old selector's undef
-            // does.
+            // `ProcessImplicitDefs` turns the reads into undef reads and
+            // erases it, as for the old selector's undef.
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(
-                    Operation::Move,
-                    "mov",
-                    vec![Loc::Held(held)],
-                    vec![Loc::Imm(Imm { value: 0, width, address: None })],
-                );
+                self.push(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
                 return Ok(Some(()));
             }
             // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
@@ -3193,7 +3188,7 @@ impl Emitter<'_, '_> {
                     Arc::get_mut(last)
                         .expect("a fresh instruction")
                         .clobbers
-                        .extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                        .extend(self.ctx.registers.rfp_registers().iter().rev().take(scratch).copied());
                 }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {

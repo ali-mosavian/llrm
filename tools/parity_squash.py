@@ -950,6 +950,27 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
 
 
+def offender_detail(names, members=None, near: bool = False) -> str:
+    """` [offending files: #N path path; ...]` for the files a failing scan names, each under the PRs of the batch whose diff touches it (`members()` -> {PR: files}): the target_facts refusal
+    of sqb-5378 listed three files and no PR, and the owners were found by hand. `near`: a file no PR touches names the PRs that touch its directory (a link panic in greedy/spliteditor.rs
+    was another file's change, #5486's, in the same directory)."""
+    paths = list(dict.fromkeys(re.findall(r"(?<![\w./-])[\w][\w.-]*(?:/[\w.-]+)+\.(?:rs|py|toml|md|sh|json)\b", " ".join(names))))
+    if not paths or not members:
+        return ""
+    touched = members()
+    by_pr = {number: [one for one in paths if one in files] for number, files in touched.items()}
+    parts = [f"#{number} {' '.join(found)}" for number, found in by_pr.items() if found]
+    left = [one for one in paths if not any(one in found for found in by_pr.values())]
+    if near:
+        for one in list(left):
+            folder = one.rsplit("/", 1)[0] + "/"
+            if neighbours := [f"#{number}" for number, files in touched.items() if any(other.startswith(folder) for other in files)]:
+                parts.append(f"{one}: same directory touched by {' '.join(neighbours)}")
+                left.remove(one)
+    parts += [f"no PR of the batch: {' '.join(left)}"] if left else []
+    return f" [offending files: {'; '.join(parts)}]" if parts else ""
+
+
 def docs_detail(names, root: Path = ROOT, base: str = BASE, stale=None, members=None) -> str:
     """` [stale pages: <path> (batch tree <blob>, head <blob>; source <file>, changed by #N #M); ...]` when `docs_in_sync` is among `names`: the refusal said which test failed and owners guessed
     which page (03:03 batch, four refusals). The blobs are the page as the batch tree has it and as the head has it; the source is the file named in the page's `<!-- src: ... -->` line, and
@@ -1251,6 +1272,20 @@ def red_members(members: list[str], red_with, alone_red) -> list[str]:
     """The red `members` by halving, else (an interaction: no half is red) each one merged alone and asked."""
     found = halve_red(members, red_with) if red_with else []
     return found or [number for number in members if alone_red(number)]
+
+
+def named_files(text: str) -> set[str]:
+    """The file paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`, `tools/pairs/dyn.py: 1 copies`)."""
+    return set(re.findall(r"[\w-]+(?:/[\w.-]+)+\.\w+", text))
+
+
+def red_members_suspects_first(members: list[str], suspects: list[str], red_with, alone_red) -> list[str]:
+    """`red_members`, asking the `suspects` (the PRs whose diff touches a file the failure names) first and the rest only when none of them is red: the 06:53 batch walked 37 PRs one by one,
+    80 s each, for a copy in fpregs.rs that one PR touched."""
+    suspects = [number for number in members if number in suspects]
+    if not suspects or len(suspects) == len(members):
+        return red_members(members, red_with, alone_red)
+    return red_members(suspects, red_with, alone_red) or red_members([number for number in members if number not in suspects], red_with, alone_red)
 
 
 def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -> list[str]:
@@ -2020,26 +2055,26 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
                 stage("scanners-early")
                 if new := sorted(landing_scanner_failures(changed, False)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("scanners")
                 if new := sorted(new_scanner_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
             if os.environ.get("LAND_FAST_TESTS") != "1":
                 stage("scanners")  # a cargo test build of the scanner targets: workspace-check's 58% of a batch hid it
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                 failed_units.update(new)
                 blame(new)
                 return False
@@ -2077,7 +2112,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not tests_ok:
             return False
         if unlinked:
-            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
+            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}{offender_detail(unlinked, members_files, near=True)}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
         if red:
@@ -2139,7 +2174,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 return []
             targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
-            return red_members(group, red_with, lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets)))
+            alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            failure_files = named_files(parity_smoke_module().causes_of(failed_units))
+            suspects = [number for number in group if failure_files & set(head_files(infos[number]['headRefOid']))]
+            return red_members_suspects_first(group, suspects, red_with, alone_red)
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:

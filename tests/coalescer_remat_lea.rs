@@ -1,7 +1,7 @@
 //! A copy of an address of registers is the address again
 //! (`reMaterializeTrivialDef`).
 
-use std::process::Command;
+mod common;
 
 /// vsgcc's x_isqrt at -O2: the sum `r + b` is read by the compare and, on the
 /// taken path, by the subtract. The coalescer kept one `lea` and copied it
@@ -27,7 +27,7 @@ fn a_lea_read_on_one_path_only_is_made_again_not_copied() {
 "#;
     let scratch = tempfile::tempdir().unwrap();
     std::fs::write(scratch.path().join("a.c"), source).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_llrm-c"))
+    let output = common::cc::llrm_c()
         .current_dir(scratch.path())
         .args(["-m32", "-mabi=sysv", "-march=i486", "-O2", "--isel=dag", "-S", "-o", "a.s", "a.c"])
         .output()

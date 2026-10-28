@@ -260,6 +260,7 @@ pub type Rows = fn(&str, usize, usize) -> &'static [Row];
 pub struct Cache {
     integers: [std::sync::OnceLock<Vec<RegId>>; 4],
     xmm_bytes: std::sync::OnceLock<u32>,
+    rfp: std::sync::OnceLock<Vec<RegId>>,
 }
 
 impl Cache {
@@ -272,6 +273,7 @@ impl Cache {
                 std::sync::OnceLock::new(),
             ],
             xmm_bytes: std::sync::OnceLock::new(),
+            rfp: std::sync::OnceLock::new(),
         }
     }
 }
@@ -551,6 +553,18 @@ impl Info {
                     found
                 },
             )
+    }
+
+    /// The registers of the RFP class (FP0..FP6, the x87 registers greedy
+    /// allocates), by iced's number: the order they are allocated in.
+    pub fn rfp_registers(&self) -> &[RegId] {
+        self.cache.rfp.get_or_init(|| {
+            let mut found: Vec<RegId> =
+                self.entries().filter(|(_, one)| one.classes & class::RFP != 0).map(|(register, _)| register).collect();
+            found.sort_by_key(|one| one.index());
+            found.dedup();
+            found
+        })
     }
 
     /// Every integer register (the 8, 16 and 32-bit views), wide ones first,
