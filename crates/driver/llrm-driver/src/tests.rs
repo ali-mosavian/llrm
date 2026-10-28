@@ -1166,6 +1166,34 @@ fn the_debug_flavor_asked_for_reaches_the_object() {
     assert_eq!(asked("-gcodeview"), llrm_object::debug::Format::CodeView);
 }
 
+/// Clang's file MD5 reached a `-gdwarf-2` object and the writer refused it
+/// ("a file checksum needs DWARF 5"): no m16 DWARF object came out at all.
+#[test]
+fn a_dwarf_2_object_from_clang_leaves_out_the_files_md5() {
+    let text = include_str!("../../../ir/llrm-mir/tests/clang/dbg.ll")
+        .lines()
+        .map(|line| {
+            if line.starts_with("target datalayout") {
+                "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\""
+                    .to_owned()
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (built, format) =
+        crate::llc::compiled(&flags(&["-m32", "-gdwarf-2", "-fobject-format=elf"]), &text, "dbgfix").unwrap();
+    assert_eq!(built.debug.as_ref().expect("debug info").source.as_ref().map(|(_, md5)| md5.is_none()), Some(true));
+    llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "dbgfix.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+    )
+    .unwrap();
+}
+
 /// A 64-bit variable kept in `esi:edx` is two register pieces, which CodeView
 /// writes as subfields; the writer refused the unit ("a location list holds
 /// only registers and frame cells") and no object came out.
