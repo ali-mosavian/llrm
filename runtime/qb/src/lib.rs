@@ -2039,7 +2039,10 @@ mod tests {
     fn test_every_claim_below_the_worst_case_cites_something() {
         for name in names().into_iter().filter(|name| CONTRACTS[name] != worst(name)) {
             let evidence = &CONTRACTS[&name].evidence;
-            assert!([".asm", ".inc", ".py", "AGENTS.md"].iter().any(|cited| evidence.contains(cited)));
+            assert!(
+                [".asm", ".inc", ".py", "AGENTS.md"].iter().any(|cited| evidence.contains(cited)),
+                "{name}: {evidence:?}"
+            );
         }
     }
 
