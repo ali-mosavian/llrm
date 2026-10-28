@@ -1,6 +1,8 @@
 //! x86-64 (m64): quadword arithmetic, the SysV call sequence, loops over
 //! arrays.
 
+use llrm_target::Target;
+
 use super::dag_function::selected;
 
 /// An m64 sum of two `i64` arguments stopped at emit with
