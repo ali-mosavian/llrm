@@ -322,6 +322,62 @@ fn an_m16_program_links_against_watcoms_start_up() {
     );
 }
 
+/// A far pointer initialised from an integer (`(Video far *)0xA0000000`, a
+/// video segment) and written elsewhere: isel refused it, "an address of no
+/// global", and the QB runtime's gfxdev.c did not build at x86_16-wat.
+#[test]
+fn a_far_pointer_initialised_from_an_integer_is_data() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-farint-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("v.c"),
+        "typedef volatile unsigned char far Video;\nstatic Video *screen = (Video far *)0xA0000000UL;\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-Os", "-w", "-c", "-o"])
+        .arg(dir.join("v.o"))
+        .arg(dir.join("v.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// The same on the flat target, a near pointer (`(void *)(0xA000 << 4)`).
+#[test]
+fn a_near_pointer_initialised_from_an_integer_is_data() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-nearint-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("v.c"),
+        "typedef volatile unsigned char Video;\nstatic Video *screen = (Video *)(0xA000UL << 4);\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-Os", "-w", "-c", "-o"])
+        .arg(dir.join("v.o"))
+        .arg(dir.join("v.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
 /// The m16 `main_` pushed and popped bx, cx and dx (6 bytes in 56 programs,
 /// +336 B over llrm-c) for a start-up that discards every register after it
 /// returns. Nothing in the module calls it, so it keeps nothing; one that

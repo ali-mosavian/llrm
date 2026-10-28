@@ -136,7 +136,8 @@ def _host(command: list[str], env: dict[str, str] | None = None) -> None:
 
 
 def assemble(source: Path, obj: Path, *defines: str) -> None:
-    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", linkrecipe.assembler(REAL_MODE), *(f"-D{one}" for one in defines), f"-Fo{obj}", str(source)])
+    # -Fw: jwasm writes `<source>.err` into the current directory on an error (tools/dosbatch/init.err leaked into the tree); it goes beside the object
+    _host([str(BIN / "jwasm"), "-q", "-c", "-Cp", "-Zg", linkrecipe.assembler(REAL_MODE), *(f"-D{one}" for one in defines), f"-Fo{obj}", f"-Fw{obj.with_suffix('.err')}", str(source)])
 
 
 def ow_root() -> Path:

@@ -596,7 +596,9 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
 /// threshold is the `memcpy` call, as in the pin (`llc -mtriple=i386 -O2`:
 /// 64, 100 and 128 B at align 4 are `rep movsl`; 132 B and 300 B, at align 1
 /// or 4, are `calll memcpy`; X86 `getMaxInlineSizeThreshold` is 128). This test
-/// asserted `rep movsd` for a 300 B copy, which the call replaced.
+/// asserted `rep movsd` for a 300 B copy, which the call replaced. llrm-cc: the
+/// 300 B clear is `call memset` (the pin's llc on the same C), the 100 B copy
+/// `rep movsd`; m16 has no library to call and fills with `rep stosb`.
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
@@ -613,7 +615,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
         std::fs::read_to_string(out).unwrap()
     };
     let flat = listing("x86-m32");
-    assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
+    assert!(flat.contains("call memset_") && flat.contains("rep movsd"), "{flat}");
     assert!(flat.contains("call memcpy_"), "{flat}");
     assert!(
         !flat.contains("DGROUP")
@@ -621,7 +623,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
         "{flat}"
     );
     let real = listing("x86-m16");
-    assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
+    assert!(real.contains("rep stosb") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
 /// A program the repository ships as an example or a benchmark compiles without
