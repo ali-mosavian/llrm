@@ -86,6 +86,10 @@ pub struct Selector<'a> {
     global_uses: HashMap<String, usize>,
     /// The register holding a global's address in a block, by symbol and block.
     global_regs: HashMap<(String, usize), Gpr>,
+    global_pages: HashMap<(String, usize), Gpr>,
+    /// The globals something other than a plain load or store of the symbol itself reads: they need their full
+    /// address in a register anyway, so no access folds the page offset (`isWorthFoldingADDlow`).
+    global_needs_address: HashSet<String>,
     /// A variadic function's register save areas and where its unnamed
     /// arguments begin.
     pub(crate) va: Option<call::VaInfo>,
@@ -142,6 +146,8 @@ impl<'a> Selector<'a> {
             current: 0,
             global_uses: HashMap::new(),
             global_regs: HashMap::new(),
+            global_pages: HashMap::new(),
+            global_needs_address: HashSet::new(),
             va: None,
         }
     }
@@ -163,6 +169,7 @@ impl<'a> Selector<'a> {
     /// Counts the accesses that name each global: a gep's result counts once for each of its readers.
     fn count_global_uses(&mut self) {
         let mut counts: HashMap<String, usize> = HashMap::new();
+        let mut needs_address = HashSet::new();
         for (_, inst) in self.function.walk() {
             let instruction = self.function.instruction(inst);
             for (at, operand) in instruction.operands.iter().enumerate() {
@@ -175,10 +182,16 @@ impl<'a> Selector<'a> {
                     }
                     _ => 1,
                 };
+                let plain = matches!(self.module.context.get(*id).kind, ConstantKind::Global(_))
+                    && matches!((&instruction.opcode, at), (Opcode::Load { .. }, 0) | (Opcode::Store { .. }, 1));
+                if !plain {
+                    needs_address.insert(name.clone());
+                }
                 *counts.entry(name).or_default() += readers;
             }
         }
         self.global_uses = counts;
+        self.global_needs_address = needs_address;
     }
 
     fn finish(self) -> MFunc {

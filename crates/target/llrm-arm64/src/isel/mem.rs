@@ -1,7 +1,8 @@
 //! Memory: frame objects, loads, stores, address arithmetic and globals. A
 //! pointer is kept as an `AddrExpr` until something needs it in a register, so
 //! a load or store takes the base, scaled index and offset into its addressing
-//! mode (`AArch64DAGToDAGISel::SelectAddrModeIndexed` and its relatives).
+//! mode (`AArch64DAGToDAGISel::SelectAddrModeIndexed` and its relatives). A global every reader of which is a
+//! plain load or store of it keeps only its `adrp` page, each access taking `@PAGEOFF` (`isWorthFoldingADDlow`).
 
 use llrm_mir::{CastOp, InstId, Instruction, Opcode, Operand, Type, TypeId};
 
@@ -189,20 +190,44 @@ impl Selector<'_> {
             return Some(*register);
         }
         let target = Target::Symbol { name: name.to_owned(), addend: 0 };
-        let page = self.mf.gpr();
-        self.inst(Inst::Adr { page: true, rd: page, target: target.clone(), got });
-        let register = self.mf.gpr();
-        if got {
+        let register = if got {
+            let page = self.mf.gpr();
+            self.inst(Inst::Adr { page: true, rd: page, target: target.clone(), got });
+            let register = self.mf.gpr();
             self.inst(Inst::Load {
                 mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: register },
                 addr: Addr::PageOffset { base: page, target, got: true },
                 mmo: MemOperand::default(),
             });
+            register
         } else {
+            let page = self.shared_page(name);
+            let register = self.mf.gpr();
             self.inst(Inst::AddPageOffset { rd: register, rn: page, target });
-        }
+            register
+        };
         self.global_regs.insert(key, register);
         Some(register)
+    }
+
+    /// The page of global `name` in a register this block already holds it in, or makes now.
+    fn shared_page(
+        &mut self,
+        name: &str,
+    ) -> Gpr {
+        let key = (name.to_owned(), self.current);
+        if let Some(page) = self.global_pages.get(&key) {
+            return *page;
+        }
+        let page = self.mf.gpr();
+        self.inst(Inst::Adr {
+            page: true,
+            rd: page,
+            target: Target::Symbol { name: name.to_owned(), addend: 0 },
+            got: false,
+        });
+        self.global_pages.insert(key, page);
+        page
     }
 
     fn add_offset_and_index(
@@ -294,6 +319,21 @@ impl Selector<'_> {
         bytes: u8,
     ) -> Selected<Addr> {
         let scale = i64::from(bytes);
+        // The access takes the symbol's page offset itself, so a global accessed again holds only its page
+        // (clang's `adrp x8, _g@PAGE` once, then `ldr w9, [x8, _g@PAGEOFF]`), not the address `add` makes.
+        // Only where no other reader of the symbol needs its address (`isWorthFoldingADDlow`), and at offset 0,
+        // where the page is the symbol's (DEVIATE: the pin folds a GEP offset as well).
+        if let (Base::Global { name, got: false }, None, 0) = (&address.base, address.index, address.offset)
+            && self.global_uses.get(name.as_str()).copied().unwrap_or(0) >= 2
+            && !self.global_needs_address.contains(name.as_str())
+        {
+            let page = self.shared_page(name);
+            return Ok(Addr::PageOffset {
+                base: page,
+                target: Target::Symbol { name: name.clone(), addend: 0 },
+                got: false,
+            });
+        }
         if let (Base::Global { name, got }, None) = (&address.base, address.index) {
             if let Some(shared) = self.shared_global(name, *got) {
                 return self.base_offset(shared, address.offset, scale);
