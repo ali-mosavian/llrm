@@ -220,6 +220,12 @@ fn is_passive(opcode: ISD) -> bool {
             | ISD::ExternalSymbol
             | ISD::FrameIndex
             | ISD::ConstantPool
+            | ISD::TargetConstantPool
+            | ISD::TargetFrameIndex
+            | ISD::TargetExternalSymbolNode
+            | ISD::JumpTable
+            | ISD::TargetJumpTable
+            | ISD::RegisterMask
             | ISD::BasicBlock
             | ISD::EntryToken
     )

@@ -7,50 +7,6 @@
 
 use crate::matcher::{Opcode, Vt};
 
-/// The nodes a walk has seen (the pin's `SmallPtrSet`): a bit per node, so a
-/// membership test is O(1). A `Vec` scanned per test made each walk
-/// quadratic.
-#[derive(Default)]
-pub struct Visited {
-    bits: Vec<u64>,
-    len: usize,
-}
-
-impl Visited {
-    pub fn contains(
-        &self,
-        node: &u32,
-    ) -> bool {
-        self.bits.get(*node as usize / 64).is_some_and(|word| word >> (*node % 64) & 1 != 0)
-    }
-
-    pub fn push(
-        &mut self,
-        node: u32,
-    ) {
-        let at = node as usize / 64;
-        if at >= self.bits.len() {
-            self.bits.resize(at + 1, 0);
-        }
-        let bit = 1u64 << (node % 64);
-        self.len += usize::from(self.bits[at] & bit == 0);
-        self.bits[at] |= bit;
-    }
-
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    pub fn clear(&mut self) {
-        self.bits.clear();
-        self.len = 0;
-    }
-}
-
 /// `SDValue`: result `res` of node `node`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SDValue {
@@ -88,6 +44,64 @@ pub enum FpClass {
 
 /// An opaque `MachineMemOperand`.
 pub type MemRef = u32;
+
+/// `SmallPtrSet<const SDNode *> &Visited` of `hasPredecessorHelper`: the nodes
+/// seen, as one bit per node number so a membership test costs one load (a
+/// list searched per operand made a walk of n nodes cost n squared).
+#[derive(Clone, Debug, Default)]
+pub struct Visited {
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl Visited {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A set holding `node`.
+    pub fn of(node: u32) -> Self {
+        let mut set = Self::new();
+        set.insert(node);
+        set
+    }
+
+    pub fn contains(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.bits.get(node as usize / 64).is_some_and(|word| word >> (node % 64) & 1 != 0)
+    }
+
+    /// Adds `node`; false where it was there (`Visited.insert(N).second`).
+    pub fn insert(
+        &mut self,
+        node: u32,
+    ) -> bool {
+        let at = node as usize / 64;
+        if at >= self.bits.len() {
+            self.bits.resize(at + 1, 0);
+        }
+        let mask = 1_u64 << (node % 64);
+        let new = self.bits[at] & mask == 0;
+        self.bits[at] |= mask;
+        self.count += usize::from(new);
+        new
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.bits.clear();
+        self.count = 0;
+    }
+}
 
 pub trait Dag {
     fn opcode(

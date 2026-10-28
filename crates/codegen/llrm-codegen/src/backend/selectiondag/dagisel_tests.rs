@@ -500,7 +500,7 @@ fn walking_a_long_chain_for_a_predecessor_is_linear() {
     dag.set_root(chain);
     let adapter = DagisAdapter::new(&mut dag);
     let started = std::time::Instant::now();
-    let found = adapter.has_predecessor_helper(u32::MAX, &mut Visited::default(), &mut vec![chain.node], 0);
+    let found = adapter.has_predecessor_helper(u32::MAX, &mut Visited::new(), &mut vec![chain.node], 0);
     assert!(!found);
     assert!(started.elapsed().as_secs() < 2, "{:?} to walk 200,000 nodes", started.elapsed());
 }
