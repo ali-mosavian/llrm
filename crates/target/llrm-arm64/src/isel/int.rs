@@ -684,14 +684,15 @@ impl Selector<'_> {
         self.define(Some(result), Src::Val(Val::Int(G { reg: rd, bits: 1, known: Known::Zero })))
     }
 
-    /// Whether the comparison `value` is read only by the branch or select that
-    /// ends or follows it in its own block, so it is selected there. A float
+    /// Whether the comparison `value` is read only by branches and selects of its own block, each as
+    /// the condition, so it is selected at each of them (`flagcse` drops the repeats the flags
+    /// already hold, as the pin's one `cmp` for the selects and the branch of one test). A float
     /// comparison needing two conditions is a value.
     pub(super) fn fusable(
         &self,
         value: llrm_mir::ValueId,
     ) -> bool {
-        if self.use_count(value) != 1 {
+        if self.use_count(value) == 0 {
             return false;
         }
         if let Some(inst) = super::value_def(self.function, value)
@@ -700,15 +701,19 @@ impl Selector<'_> {
         {
             return false;
         }
-        let Some(user) = self.function.users(value).into_iter().next() else { return false };
-        let reader = self.function.instruction(user.user);
         let own = super::value_def(self.function, value).and_then(|inst| self.function.parent(inst));
-        own == self.function.parent(user.user)
-            && match reader.opcode {
-                llrm_mir::Opcode::Br => reader.operands.len() == 3 && reader.operands[0] == Operand::Value(value),
-                llrm_mir::Opcode::Select => reader.operands[0] == Operand::Value(value),
-                _ => false,
-            }
+        let condition = Operand::Value(value);
+        self.function.users(value).into_iter().all(|user| {
+            let reader = self.function.instruction(user.user);
+            own == self.function.parent(user.user)
+                && match reader.opcode {
+                    llrm_mir::Opcode::Br => reader.operands.len() == 3 && reader.operands[0] == condition,
+                    llrm_mir::Opcode::Select => {
+                        reader.operands[0] == condition && reader.operands[1..].iter().all(|one| *one != condition)
+                    }
+                    _ => false,
+                }
+        })
     }
 
     /// Sets the flags for `a predicate b` and names the condition that holds.

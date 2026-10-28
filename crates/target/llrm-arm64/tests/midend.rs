@@ -527,3 +527,13 @@ fn accesses_at_several_offsets_from_base_plus_index_share_the_sum() {
     let adds = asm.lines().filter(|l| l.trim_start().starts_with("add ")).count();
     assert_eq!(adds, 1, "{asm}");
 }
+
+/// A compare read by two selects and a branch was made a value (`cset`) and each reader tested it
+/// again (`ands w9, #1`): `lh_alloc` of the QB runtime. The pin compares once and the selects and the
+/// branch read the flags.
+#[test]
+fn a_compare_read_by_selects_and_a_branch_is_made_once_and_not_materialized() {
+    let asm = driver::assembly(include_str!("data/select_pair_and_branch.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(!asm.contains("csinc w") && !asm.contains("ands wzr"), "{asm}");
+    assert_eq!(asm.matches("subs xzr, x20, #32").count(), 1, "{asm}");
+}
