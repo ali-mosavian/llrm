@@ -4,3 +4,7 @@ levels = ["-O1", "-O2", "-Os"]
 
 [bench]
 globs = ["bench/*/*.c", "bench/parity/*/*.c"]
+
+# Programs llrm-cc cannot build yet (c-run-tests-llrm-cc-2026-10-28.md): left out of the training of llrm-llc. Each is a gap to close, then remove here.
+[llrm-cc]
+unbuilt = ["es_across_copy", "idioms", "stackdeep", "stackover", "memcpy_runtime", "memfuncs_runtime", "overflow_builtins", "tail_calls_edges"]

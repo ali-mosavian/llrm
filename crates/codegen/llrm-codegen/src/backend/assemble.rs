@@ -438,8 +438,10 @@ pub fn assembled_by(
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
+        // A 16-byte one is a bitwise SSE instruction's memory operand, which
+        // must be aligned.
         if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: 8 }));
+            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
         }
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
@@ -952,6 +954,34 @@ impl Staged {
     }
 }
 
+/// Whether `name` calls a function `llrm_mir::atomic::hidden` made.
+fn calls_atomic(
+    module: &Module,
+    name: &str,
+) -> bool {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::Opcode;
+    let Some(global) = module.named(name) else { return false };
+    let GlobalKind::Function(function) = &module.global(global).kind else { return false };
+    function
+        .layout()
+        .iter()
+        .any(
+            |&block| function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        let instruction = function.instruction(inst);
+                        matches!(instruction.opcode, Opcode::Call(_))
+                            && matches!(
+                                instruction.operands.last(),
+                                Some(&Operand::Constant(callee)) if matches!(module.context.get(callee).kind, llrm_mir::context::ConstantKind::Global(one) if module.global(one).name.owned().is_some_and(|name| llrm_mir::atomic::decode(&name).is_some()))
+                            )
+                    },
+                ),
+        )
+}
+
 /// `name` selected with `hole` bytes left above the allocas, and its frame
 /// made.
 fn staged(
@@ -970,12 +1000,16 @@ fn staged(
         segments: target.segments,
         runtime: abi.runtime_contracts(),
         frame_zeroed: zeroed,
+        facts: Some(target.facts),
     });
     let dag = match target.selector {
         Selector::Old => None,
         // `LLRM_ISEL_ONLY=a,b`: the DAG path for those functions, the old
         // selector for the rest -- to bisect a wrong result to a function
-        Selector::Dag | Selector::Shadow if !shadow::only(name) => None,
+        // DEVIATE SD253: the DAG has no atomic nodes yet; a function calling a
+        // hidden atomic (`llrm_mir::atomic::hidden`) is selected by the old
+        // selector.
+        Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
             crate::backend::selectiondag::dag_function::selected_in_pool(
                 module,

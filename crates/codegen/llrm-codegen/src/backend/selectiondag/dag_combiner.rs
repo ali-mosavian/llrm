@@ -148,6 +148,10 @@ pub struct DagCombiner<'a, H: CombineHooks> {
     pub(super) tli: Option<&'a TargetLowering>,
 }
 
+fn op_is_srl(op: ISD) -> bool {
+    op == ISD::Srl
+}
+
 impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     pub fn new(
         dag: &'a mut SelectionDAG,
@@ -313,7 +317,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::SetCC => self.visit_setcc(node),
             ISD::Xor => self.visit_xor(node).or_else(|| self.simplify_demanded(node)),
             ISD::Mul => self.visit_mul(node),
-            ISD::And => self.visit_and(node).or_else(|| self.simplify_demanded(node)),
+            ISD::And => self
+                .visit_and(node)
+                .or_else(|| self.reduce_load_width_of(node))
+                .or_else(|| self.simplify_demanded(node)),
             ISD::Or => self.visit_or(node).or_else(|| self.simplify_demanded(node)),
             ISD::Add => self.visit_add(node),
             ISD::Sub => self.visit_sub(node),
@@ -321,11 +328,20 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
+            ISD::FpRound => self.visit_fp_round(node),
+            ISD::FpExtend => self.visit_fp_extend(node),
+            ISD::SIntToFp | ISD::FpToSInt => self.visit_fp_int_convert(node),
             ISD::FAbs => self.visit_fabs(node),
             ISD::FDiv => self.visit_fdiv(node),
-            ISD::Shl | ISD::Srl => self.visit_shift(node).or_else(|| self.simplify_demanded(node)),
-            ISD::Sra => self.visit_sra(node).or_else(|| self.visit_shift(node)),
+            ISD::Shl | ISD::Srl => self
+                .visit_shift(node)
+                .or_else(|| if op_is_srl(self.dag.opcode(node)) { self.reduce_load_width_of(node) } else { None })
+                .or_else(|| self.simplify_demanded(node)),
+            ISD::Sra => {
+                self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
+            }
             ISD::BSwap => self.visit_bswap(node),
+            ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
             ISD::BitReverse => self.visit_bitreverse(node),
             ISD::SDiv => self.visit_sdiv(node),
             ISD::UDiv => self.visit_udiv(node),
@@ -333,8 +349,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
                 self.fold_extend_of_cast(node).or_else(|| self.visit_extend(node))
             }
+            ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
+            // `visitFunnelShift`, its closing `SimplifyDemandedBits(N)`; the
+            // folds above it are not translated.
+            ISD::FShl | ISD::FShr => self.simplify_demanded(node),
             _ => None,
         }
     }
@@ -721,6 +741,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 self.add_to_worklist(not_b.node);
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
             }
+        }
+        // fold (xor (shl 1, x), -1) -> (rotl ~1, x): a zero placed in a value
+        // of all ones, which the target clears a bit with (`btr`) when it
+        // meets an `and` (DAGCombiner::visitXOR).
+        let ones = match vt.size_in_bits() {
+            128.. => u128::MAX,
+            bits => (1u128 << bits) - 1,
+        };
+        if vt.is_integer()
+            && self.dag.opcode(n0) == ISD::Shl
+            && self.dag.constant(self.dag.operand(n0, 0)) == Some(1)
+            && self.dag.constant(n1) == Some(ones)
+            && self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::Rotl, vt))
+        {
+            let amount = self.dag.operand(n0, 1);
+            let not_one = self.dag.get_constant(ones - 1, vt);
+            return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
         }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1);

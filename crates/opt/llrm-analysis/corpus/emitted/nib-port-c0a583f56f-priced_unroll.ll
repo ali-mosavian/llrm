@@ -1,6 +1,6 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-define internal i32 @value(i16 %0) addrspace(1) {
+define internal cc 1005 i32 @value(i16 %0) addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
   %1 = alloca i16
   %2 = alloca i16
@@ -24,28 +24,6 @@ b1:
   %20 = alloca i16
   %21 = alloca [256 x i8]
   %22 = alloca i32
-  store i16 0, ptr %1
-  store i16 0, ptr %2
-  store i16 0, ptr %3
-  store i16 0, ptr %4
-  store i16 0, ptr %5
-  store i16 0, ptr %6
-  store i16 0, ptr %7
-  store i16 0, ptr %8
-  store i16 0, ptr %9
-  store i16 0, ptr %10
-  store i16 0, ptr %11
-  call void @llvm.memset.p0.i16(ptr %12, i8 0, i16 256, i1 false)
-  store i32 0, ptr %13
-  store i16 0, ptr %14
-  store i16 0, ptr %15
-  store i16 0, ptr %16
-  store i16 0, ptr %17
-  store i16 0, ptr %18
-  store i16 0, ptr %19
-  store i16 0, ptr %20
-  call void @llvm.memset.p0.i16(ptr %21, i8 0, i16 256, i1 false)
-  store i32 0, ptr %22
   store i32 0, ptr %22, !tbaa !2
   store i16 8, ptr %18, !tbaa !2
   store i16 8, ptr %19, !tbaa !2
@@ -58,9 +36,7 @@ b2:
   %23 = load i16, ptr %17, !tbaa !2
   %24 = load i16, ptr %16, !tbaa !2
   %25 = icmp slt i16 %23, %24
-  %26 = sext i1 %25 to i8
-  %27 = icmp ne i8 %26, 0
-  br i1 %27, label %b3, label %b5
+  br i1 %25, label %b3, label %b5
 
 b3:
   store i16 0, ptr %15, !tbaa !2
@@ -68,9 +44,9 @@ b3:
   br label %b6
 
 b4:
-  %28 = load i16, ptr %17, !tbaa !2
-  %29 = add i16 %28, 1
-  store i16 %29, ptr %17, !tbaa !2
+  %26 = load i16, ptr %17, !tbaa !2
+  %27 = add nsw i16 %26, 1
+  store i16 %27, ptr %17, !tbaa !2
   br label %b2
 
 b5:
@@ -83,41 +59,37 @@ b5:
   br label %b10
 
 b6:
-  %30 = load i16, ptr %15, !tbaa !2
-  %31 = load i16, ptr %14, !tbaa !2
-  %32 = icmp slt i16 %30, %31
-  %33 = sext i1 %32 to i8
-  %34 = icmp ne i8 %33, 0
-  br i1 %34, label %b7, label %b9
+  %28 = load i16, ptr %15, !tbaa !2
+  %29 = load i16, ptr %14, !tbaa !2
+  %30 = icmp slt i16 %28, %29
+  br i1 %30, label %b7, label %b9
 
 b7:
-  %35 = load i16, ptr %17, !tbaa !2
-  %36 = load i16, ptr %15, !tbaa !2
-  %37 = load i32, ptr %22, !tbaa !2
-  %38 = sub i16 %35, 0
-  %39 = sub i16 %36, 0
-  %40 = mul i16 %38, 8
-  %41 = add i16 %40, %39
-  %42 = getelementptr inbounds i32, ptr %21, i16 %41
-  store i32 %37, ptr %42, !tbaa !2
+  %31 = load i16, ptr %17, !tbaa !2
+  %32 = load i16, ptr %15, !tbaa !2
+  %33 = load i32, ptr %22, !tbaa !2
+  %34 = sub i16 %31, 0
+  %35 = sub i16 %32, 0
+  %36 = mul i16 %34, 8
+  %37 = add i16 %36, %35
+  %38 = getelementptr inbounds i32, ptr %21, i16 %37
+  store i32 %33, ptr %38, !tbaa !2
   br label %b8
 
 b8:
-  %43 = load i16, ptr %15, !tbaa !2
-  %44 = add i16 %43, 1
-  store i16 %44, ptr %15, !tbaa !2
+  %39 = load i16, ptr %15, !tbaa !2
+  %40 = add nsw i16 %39, 1
+  store i16 %40, ptr %15, !tbaa !2
   br label %b6
 
 b9:
   br label %b4
 
 b10:
-  %45 = load i16, ptr %8, !tbaa !2
-  %46 = load i16, ptr %7, !tbaa !2
-  %47 = icmp slt i16 %45, %46
-  %48 = sext i1 %47 to i8
-  %49 = icmp ne i8 %48, 0
-  br i1 %49, label %b11, label %b13
+  %41 = load i16, ptr %8, !tbaa !2
+  %42 = load i16, ptr %7, !tbaa !2
+  %43 = icmp slt i16 %41, %42
+  br i1 %43, label %b11, label %b13
 
 b11:
   store i16 0, ptr %6, !tbaa !2
@@ -125,9 +97,9 @@ b11:
   br label %b14
 
 b12:
-  %50 = load i16, ptr %8, !tbaa !2
-  %51 = add i16 %50, 1
-  store i16 %51, ptr %8, !tbaa !2
+  %44 = load i16, ptr %8, !tbaa !2
+  %45 = add nsw i16 %44, 1
+  store i16 %45, ptr %8, !tbaa !2
   br label %b10
 
 b13:
@@ -136,41 +108,37 @@ b13:
   br label %b18
 
 b14:
-  %52 = load i16, ptr %6, !tbaa !2
-  %53 = load i16, ptr %5, !tbaa !2
-  %54 = icmp slt i16 %52, %53
-  %55 = sext i1 %54 to i8
-  %56 = icmp ne i8 %55, 0
-  br i1 %56, label %b15, label %b17
+  %46 = load i16, ptr %6, !tbaa !2
+  %47 = load i16, ptr %5, !tbaa !2
+  %48 = icmp slt i16 %46, %47
+  br i1 %48, label %b15, label %b17
 
 b15:
-  %57 = load i16, ptr %8, !tbaa !2
-  %58 = load i16, ptr %6, !tbaa !2
-  %59 = load i32, ptr %13, !tbaa !2
-  %60 = sub i16 %57, 0
-  %61 = sub i16 %58, 0
-  %62 = mul i16 %60, 8
-  %63 = add i16 %62, %61
-  %64 = getelementptr inbounds i32, ptr %12, i16 %63
-  store i32 %59, ptr %64, !tbaa !2
+  %49 = load i16, ptr %8, !tbaa !2
+  %50 = load i16, ptr %6, !tbaa !2
+  %51 = load i32, ptr %13, !tbaa !2
+  %52 = sub i16 %49, 0
+  %53 = sub i16 %50, 0
+  %54 = mul i16 %52, 8
+  %55 = add i16 %54, %53
+  %56 = getelementptr inbounds i32, ptr %12, i16 %55
+  store i32 %51, ptr %56, !tbaa !2
   br label %b16
 
 b16:
-  %65 = load i16, ptr %6, !tbaa !2
-  %66 = add i16 %65, 1
-  store i16 %66, ptr %6, !tbaa !2
+  %57 = load i16, ptr %6, !tbaa !2
+  %58 = add nsw i16 %57, 1
+  store i16 %58, ptr %6, !tbaa !2
   br label %b14
 
 b17:
   br label %b12
 
 b18:
-  %67 = load i16, ptr %4, !tbaa !2
-  %68 = load i16, ptr %3, !tbaa !2
-  %69 = icmp slt i16 %67, %68
-  %70 = sext i1 %69 to i8
-  %71 = icmp ne i8 %70, 0
-  br i1 %71, label %b19, label %b21
+  %59 = load i16, ptr %4, !tbaa !2
+  %60 = load i16, ptr %3, !tbaa !2
+  %61 = icmp slt i16 %59, %60
+  br i1 %61, label %b19, label %b21
 
 b19:
   store i16 0, ptr %2, !tbaa !2
@@ -178,200 +146,174 @@ b19:
   br label %b22
 
 b20:
-  %72 = load i16, ptr %4, !tbaa !2
-  %73 = add i16 %72, 1
-  store i16 %73, ptr %4, !tbaa !2
+  %62 = load i16, ptr %4, !tbaa !2
+  %63 = add nsw i16 %62, 1
+  store i16 %63, ptr %4, !tbaa !2
   br label %b18
 
 b21:
-  %74 = icmp ult i16 %0, 8
-  %75 = sext i1 %74 to i8
-  %76 = icmp ne i8 %75, 0
-  br i1 %76, label %b41, label %b42
+  %64 = icmp ult i16 %0, 8
+  br i1 %64, label %b41, label %b42
 
 b22:
-  %77 = load i16, ptr %2, !tbaa !2
-  %78 = load i16, ptr %1, !tbaa !2
-  %79 = icmp slt i16 %77, %78
-  %80 = sext i1 %79 to i8
-  %81 = icmp ne i8 %80, 0
-  br i1 %81, label %b23, label %b25
+  %65 = load i16, ptr %2, !tbaa !2
+  %66 = load i16, ptr %1, !tbaa !2
+  %67 = icmp slt i16 %65, %66
+  br i1 %67, label %b23, label %b25
 
 b23:
-  %82 = load i16, ptr %4, !tbaa !2
-  %83 = load i16, ptr %2, !tbaa !2
-  %84 = icmp ult i16 %82, 8
-  %85 = sext i1 %84 to i8
-  %86 = icmp ne i8 %85, 0
-  br i1 %86, label %b26, label %b27
+  %68 = load i16, ptr %4, !tbaa !2
+  %69 = load i16, ptr %2, !tbaa !2
+  %70 = icmp ult i16 %68, 8
+  br i1 %70, label %b26, label %b27
 
 b24:
-  %87 = load i16, ptr %2, !tbaa !2
-  %88 = add i16 %87, 1
-  store i16 %88, ptr %2, !tbaa !2
+  %71 = load i16, ptr %2, !tbaa !2
+  %72 = add nsw i16 %71, 1
+  store i16 %72, ptr %2, !tbaa !2
   br label %b22
 
 b25:
   br label %b20
 
 b26:
-  %89 = icmp ult i16 %83, 8
-  %90 = sext i1 %89 to i8
-  %91 = icmp ne i8 %90, 0
-  br i1 %91, label %b28, label %b29
+  %73 = icmp ult i16 %69, 8
+  br i1 %73, label %b28, label %b29
 
 b27:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b28:
-  %92 = load i16, ptr %4, !tbaa !2
-  %93 = mul i16 %92, 3
-  %94 = load i16, ptr %2, !tbaa !2
-  %95 = add i16 %93, %94
-  %96 = add i16 %95, 1
-  %97 = sext i16 %96 to i32
-  %98 = zext i8 8 to i32
-  %99 = shl i32 %97, %98
-  %100 = sext i32 %99 to i64
-  %101 = sext i32 1024 to i64
-  %102 = shl i64 %100, 8
-  %103 = sdiv i64 %102, %101
-  %104 = trunc i64 %103 to i32
-  %105 = sub i16 %82, 0
-  %106 = sub i16 %83, 0
-  %107 = mul i16 %105, 8
-  %108 = add i16 %107, %106
-  %109 = getelementptr inbounds i32, ptr %21, i16 %108
-  store i32 %104, ptr %109, !tbaa !2
-  %110 = load i16, ptr %4, !tbaa !2
-  %111 = load i16, ptr %2, !tbaa !2
-  %112 = icmp eq i16 %110, %111
-  %113 = sext i1 %112 to i8
-  %114 = icmp ne i8 %113, 0
-  br i1 %114, label %b30, label %b31
+  %74 = load i16, ptr %4, !tbaa !2
+  %75 = mul i16 %74, 3
+  %76 = load i16, ptr %2, !tbaa !2
+  %77 = add i16 %75, %76
+  %78 = add i16 %77, 1
+  %79 = sext i16 %78 to i32
+  %80 = shl i32 %79, 8
+  %81 = sext i32 %80 to i64
+  %82 = shl i64 %81, 8
+  %83 = sdiv i64 %82, 1024
+  %84 = trunc i64 %83 to i32
+  %85 = sub i16 %68, 0
+  %86 = sub i16 %69, 0
+  %87 = mul i16 %85, 8
+  %88 = add i16 %87, %86
+  %89 = getelementptr inbounds i32, ptr %21, i16 %88
+  store i32 %84, ptr %89, !tbaa !2
+  %90 = load i16, ptr %4, !tbaa !2
+  %91 = load i16, ptr %2, !tbaa !2
+  %92 = icmp eq i16 %90, %91
+  br i1 %92, label %b30, label %b31
 
 b29:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b30:
-  %115 = load i16, ptr %4, !tbaa !2
-  %116 = load i16, ptr %2, !tbaa !2
-  %117 = icmp ult i16 %115, 8
-  %118 = sext i1 %117 to i8
-  %119 = icmp ne i8 %118, 0
-  br i1 %119, label %b33, label %b34
+  %93 = load i16, ptr %4, !tbaa !2
+  %94 = load i16, ptr %2, !tbaa !2
+  %95 = icmp ult i16 %93, 8
+  br i1 %95, label %b33, label %b34
 
 b31:
-  %120 = load i16, ptr %4, !tbaa !2
-  %121 = load i16, ptr %2, !tbaa !2
-  %122 = icmp ult i16 %120, 8
-  %123 = sext i1 %122 to i8
-  %124 = icmp ne i8 %123, 0
-  br i1 %124, label %b37, label %b38
+  %96 = load i16, ptr %4, !tbaa !2
+  %97 = load i16, ptr %2, !tbaa !2
+  %98 = icmp ult i16 %96, 8
+  br i1 %98, label %b37, label %b38
 
 b32:
   br label %b24
 
 b33:
-  %125 = icmp ult i16 %116, 8
-  %126 = sext i1 %125 to i8
-  %127 = icmp ne i8 %126, 0
-  br i1 %127, label %b35, label %b36
+  %99 = icmp ult i16 %94, 8
+  br i1 %99, label %b35, label %b36
 
 b34:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b35:
-  %128 = sub i16 %115, 0
-  %129 = sub i16 %116, 0
-  %130 = mul i16 %128, 8
-  %131 = add i16 %130, %129
-  %132 = getelementptr inbounds i32, ptr %12, i16 %131
-  store i32 512, ptr %132, !tbaa !2
+  %100 = sub i16 %93, 0
+  %101 = sub i16 %94, 0
+  %102 = mul i16 %100, 8
+  %103 = add i16 %102, %101
+  %104 = getelementptr inbounds i32, ptr %12, i16 %103
+  store i32 512, ptr %104, !tbaa !2
   br label %b32
 
 b36:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b37:
-  %133 = icmp ult i16 %121, 8
-  %134 = sext i1 %133 to i8
-  %135 = icmp ne i8 %134, 0
-  br i1 %135, label %b39, label %b40
+  %105 = icmp ult i16 %97, 8
+  br i1 %105, label %b39, label %b40
 
 b38:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b39:
-  %136 = load i16, ptr %4, !tbaa !2
-  %137 = load i16, ptr %2, !tbaa !2
-  %138 = add i16 %136, %137
-  %139 = srem i16 %138, 3
-  %140 = sext i16 %139 to i32
-  %141 = zext i8 8 to i32
-  %142 = shl i32 %140, %141
-  %143 = sext i32 %142 to i64
-  %144 = sext i32 512 to i64
-  %145 = shl i64 %143, 8
-  %146 = sdiv i64 %145, %144
-  %147 = trunc i64 %146 to i32
-  %148 = sub i16 %120, 0
-  %149 = sub i16 %121, 0
-  %150 = mul i16 %148, 8
-  %151 = add i16 %150, %149
-  %152 = getelementptr inbounds i32, ptr %12, i16 %151
-  store i32 %147, ptr %152, !tbaa !2
+  %106 = load i16, ptr %4, !tbaa !2
+  %107 = load i16, ptr %2, !tbaa !2
+  %108 = add i16 %106, %107
+  %109 = srem i16 %108, 3
+  %110 = sext i16 %109 to i32
+  %111 = shl i32 %110, 8
+  %112 = sext i32 %111 to i64
+  %113 = shl i64 %112, 8
+  %114 = sdiv i64 %113, 512
+  %115 = trunc i64 %114 to i32
+  %116 = sub i16 %96, 0
+  %117 = sub i16 %97, 0
+  %118 = mul i16 %116, 8
+  %119 = add i16 %118, %117
+  %120 = getelementptr inbounds i32, ptr %12, i16 %119
+  store i32 %115, ptr %120, !tbaa !2
   br label %b32
 
 b40:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b41:
-  %153 = sub i16 %0, 0
-  %154 = sub i16 1, 0
-  %155 = mul i16 %153, 8
-  %156 = add i16 %155, %154
-  %157 = getelementptr inbounds i32, ptr %21, i16 %156
-  %158 = load i32, ptr %157, !tbaa !2
-  %159 = icmp ult i16 %0, 8
-  %160 = sext i1 %159 to i8
-  %161 = icmp ne i8 %160, 0
-  br i1 %161, label %b43, label %b44
+  %121 = sub i16 %0, 0
+  %122 = mul i16 %121, 8
+  %123 = add i16 %122, 1
+  %124 = getelementptr inbounds i32, ptr %21, i16 %123
+  %125 = load i32, ptr %124, !tbaa !2
+  %126 = icmp ult i16 %0, 8
+  br i1 %126, label %b43, label %b44
 
 b42:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 
 b43:
-  %162 = sub i16 %0, 0
-  %163 = sub i16 2, 0
-  %164 = mul i16 %162, 8
-  %165 = add i16 %164, %163
-  %166 = getelementptr inbounds i32, ptr %12, i16 %165
-  %167 = load i32, ptr %166, !tbaa !2
-  %168 = add i32 %158, %167
-  ret i32 %168
+  %127 = sub i16 %0, 0
+  %128 = mul i16 %127, 8
+  %129 = add i16 %128, 2
+  %130 = getelementptr inbounds i32, ptr %12, i16 %129
+  %131 = load i32, ptr %130, !tbaa !2
+  %132 = add i32 %125, %131
+  ret i32 %132
 
 b44:
-  call addrspace(1) void @N$EBND()
+  call cc 1005 addrspace(1) void @N$EBND()
   unreachable
 }
 
-define internal i16 @main() addrspace(1) {
+define internal cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" {
 b1:
-  %0 = call addrspace(1) i32 @value(i16 3)
+  %0 = call cc 1005 addrspace(1) i32 @value(i16 3)
   ret i16 0
 }
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1005 void @N$EBND() addrspace(1) noreturn memory(inaccessiblemem: readwrite)
 
-declare void @N$EBND() addrspace(1)
+declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg) nocallback nofree nosync nounwind willreturn memory(none)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

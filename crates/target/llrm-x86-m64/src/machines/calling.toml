@@ -33,6 +33,9 @@ first_argument_offset = 16
 frame = "rbp"
 frame_optional = true
 frame_wrap_split_size = true
+# A one-slot frame is `push rax` / `pop rcx` (X86FrameLowering emitSPUpdate): rcx carries no result.
+frame_slot_push = "rax"
+frame_slot_pop = "rcx"
 stack = "rsp"
 # Each as (the root its family is rooted at, the register a prologue pushes).
 preserved = [["ebx", "rbx"], ["ebp", "rbp"], ["r12d", "r12"], ["r13d", "r13"], ["r14d", "r14"], ["r15d", "r15"]]

@@ -3,6 +3,7 @@
 //! for a pass deleted with #237 (mem2reg, simplifycfg, earlycse, licm, adce,
 //! loop-reduce, ipsccp, indvars, loop-deletion), on the same input.
 
+use llrm_analysis::testing::m16_ir;
 use llrm_mir::module::Module;
 use llrm_mir::program::Program;
 
@@ -246,7 +247,8 @@ b5:
 /// write, leaves the loop; one through a plain pointer stays.
 #[test]
 fn an_invariant_load_leaves_a_loop_from_a_conditional_block() {
-    const TEXT: &str = r#"target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32"
+    let text = m16_ir(
+        r#"target datalayout = "@m16-datalayout@"
 define void @f(ptr noalias readonly dereferenceable(4) %v, ptr %w, i16 %n, ptr %out) {
 b1:
   br label %b2
@@ -272,8 +274,9 @@ b4:
 b5:
   ret void
 }
-"#;
-    let out = piped(TEXT);
+"#,
+    );
+    let out = piped(text);
     let at = |label: &str| out.find(label).unwrap_or_else(|| panic!("{label} in {out}"));
     let entry = &out[at("b1:")..at("b3:")];
     // `dereferenceable(4)` makes the offset-2 GEP `inbounds nuw`, as the pin
