@@ -322,6 +322,48 @@ fn an_m16_program_links_against_watcoms_start_up() {
     );
 }
 
+/// The m16 `main_` pushed and popped bx, cx and dx (6 bytes in 56 programs,
+/// +336 B over llrm-c) for a start-up that discards every register after it
+/// returns. Nothing in the module calls it, so it keeps nothing; one that
+/// something calls keeps Watcom's contract.
+#[test]
+fn an_uncalled_main_keeps_no_register_and_a_called_one_keeps_watcoms() {
+    if std::env::var_os("LLRM_CLANG_M16").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_CLANG_M16 or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-main-clobbers-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = "extern long f(long);\nextern void report(long);\nint main(void)\n{\n    long a = f(1), b = f(2), c = f(3);\n    report(a);\n    report(b);\n    report(c);\n    return 0;\n}\n";
+    let again = format!("{body}int again(void) {{ return main(); }}\n");
+    let compile = |name: &str, source: &str| {
+        std::fs::write(dir.join(format!("{name}.c")), source).unwrap();
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", "x86_16-wat")
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()),
+            )
+            .args(["-Os", "-w", "-S", "-o"])
+            .arg(dir.join(format!("{name}.s")))
+            .arg(dir.join(format!("{name}.c")))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+        let listing = std::fs::read_to_string(dir.join(format!("{name}.s"))).unwrap();
+        let from = listing.find("main_ proc").unwrap();
+        listing[from..from + listing[from..].find("main_ endp").unwrap()].to_owned()
+    };
+    let uncalled = compile("uncalled", body);
+    let called = compile("called", &again);
+    let _ = std::fs::remove_dir_all(&dir);
+    let pushes =
+        |text: &str| text.lines().filter(|line| ["push bx", "push cx", "push dx"].contains(&line.trim())).count();
+    assert!(pushes(&called) > 0, "premise: the called main keeps registers\n{called}");
+    assert_eq!(pushes(&uncalled), 0, "{uncalled}");
+}
+
 /// The all-llrm DOS configuration: `x86_16-dos-rp3` is regparm3 (`name@3`,
 /// `main_`) where `x86_16-dos` is cdecl (`_name`), and a program in it links
 /// with the shared start-up. Without the row, QCport-sized comparisons against

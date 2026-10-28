@@ -1080,6 +1080,16 @@ fn staged(
     } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
+    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
+    // a caller that does not exist.
+    let entry = module
+        .named(name)
+        .and_then(|id| module.global(id).function())
+        .and_then(|function| target.arch.calling().by_number(function.calling_convention));
+    if target.facts.uncalled(name) && entry.is_some_and(|one| one.entry_clobbers_all.iter().any(|entry| entry == name))
+    {
+        registers.saved.clear();
+    }
     registers.align = target.facts.stack_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
