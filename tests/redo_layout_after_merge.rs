@@ -25,3 +25,35 @@ fn test_a_loop_latch_after_a_tail_merge_is_one_branch_back() {
         assert!(!(branch.starts_with('j') && !branch.starts_with("jmp") && back), "{branch} / {jump}");
     }
 }
+
+/// The runtime of examples/channels.nib at -m32 -O2 with `LLRM_VERIFY=1`: the
+/// layout made again kept the table of frequencies of the merged body, and the
+/// verifier stopped `@N$BRES` ("block 0x2 runs 1.000 times, its predecessors
+/// 0.383"), so channels did not build in the behavioural tier.
+#[test]
+fn test_the_layout_made_again_after_a_tail_merge_leaves_a_table_that_verifies() {
+    let root = env!("CARGO_MANIFEST_DIR");
+    let scratch = tempfile::tempdir().unwrap();
+    let nib = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-nib"))
+            .current_dir(scratch.path())
+            .env("LLRM_VERIFY", "1")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    };
+    nib(&[&format!("{root}/examples/channels.nib"), "-m32", "-O2", "--procedure-segments", "-o", "program.obj"]);
+    let runtime = format!("{root}/crates/frontends/nib/src/runtime/runtime.nib");
+    nib(&[
+        &runtime,
+        "-m32",
+        "-O2",
+        "--procedure-segments",
+        "-Wno-target-width",
+        "--used-by",
+        "program.obj",
+        "-o",
+        "runtime.obj",
+    ]);
+}

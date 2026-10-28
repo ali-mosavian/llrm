@@ -903,6 +903,7 @@ pub fn merged(
             table.shift_remove(at);
         }
         out.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+        super::_forget_moved_inflow(body, &mut out);
     }
     Ok(Some(out))
 }
