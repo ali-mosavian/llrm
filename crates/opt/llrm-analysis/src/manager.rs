@@ -773,6 +773,12 @@ impl Analysis for ExposedFrames {
         function: &Function,
         analyses: &mut Analyses,
     ) -> Option<Self::Result> {
+        // No alloca before or after: no edit can change the empty answer, and
+        // reading the edits costs their operands (a phi of N arms edited N
+        // times is N^2).
+        if previous.is_empty() && !crate::frameescape::has_alloca(function) {
+            return Some(previous.clone());
+        }
         let mut touched = Vec::<ValueId>::new();
         let mut read = |operand: &Operand| {
             if let Operand::Value(value) = operand {
@@ -805,6 +811,7 @@ impl Analysis for ExposedFrames {
                 Change::Substituted { .. } => {}
             }
         }
+        crate::frameescape::count_reads(touched.len());
         let unit = Unit::within(context, layout, function, analyses.outer());
         Some(
             crate::frameescape::exposed_renewed(function, previous.iter().copied(), &touched, |inst, at| {

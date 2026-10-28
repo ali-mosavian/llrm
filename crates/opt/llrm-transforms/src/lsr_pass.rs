@@ -336,7 +336,7 @@ pub fn reduced_held(
         for _ in 0..6 {
             // What the edits since changed is no longer what the expressions
             // say; the rest of them stay, as they do in LLVM.
-            session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+            session.forget_since_keeping(context, layout, &outer.globals, &outer.metadata, function, mark, true);
             mark = function.mark();
             let split;
             {
@@ -462,7 +462,7 @@ pub fn reduced_held(
         // loop's strength reduction, or none, a phi of the loop that an equal
         // or wider one makes (a narrower counter beside the one it truncates)
         // is that one, cast.
-        session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+        session.forget_since_keeping(context, layout, &outer.globals, &outer.metadata, function, mark, true);
         mark = function.mark();
         let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
         let simple = {
@@ -508,7 +508,7 @@ pub fn reduced_held(
             ) > 0
             {
                 changed = true;
-                session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+                session.forget_since_keeping(context, layout, &outer.globals, &outer.metadata, function, mark, true);
                 mark = function.mark();
                 // `DeleteDeadPHIs`.
                 let phis: Vec<_> = function
@@ -523,6 +523,6 @@ pub fn reduced_held(
     if !stable {
         return (changed, None);
     }
-    session.forget_since(context, layout, &outer.globals, &outer.metadata, function, mark);
+    session.forget_since_keeping(context, layout, &outer.globals, &outer.metadata, function, mark, true);
     (changed, Some(session.into_scev()))
 }
