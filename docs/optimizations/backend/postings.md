@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/postings.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/postings.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/postings.rs sha256:d50c4e61d688bb4a8f90faa4aa7cc20768eb002d64e46726391430383f6afc14 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/postings.rs sha256:7d5d2714ca4f15931ae32ec04379812386b21568fc64508bb4fa105b96f246f5 -->
 
 # postings
 
@@ -53,6 +53,6 @@ a test that a rewrite redoes only the blocks it changed.
 None: the index is plumbing that changes no instruction, so there is no LIR
 to show before and after. Read `Postings::of` for what it holds.
 ## Used by
-[`crate::backend::allocate`](allocate.md), [`crate::backend::coalesce`](coalesce.md),
+[`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`,
 `crate::backend::splitkit`, `crate::backend::spiller` and
 [`crate::backend::storedhomes`](storedhomes.md).

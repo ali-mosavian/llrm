@@ -2015,6 +2015,32 @@ def test_format_tip_commits_a_generated_page_that_is_new(tmp_path):
     assert "docs/optimizations/passes/newpass.md" in sh(tmp_path, "ls-files"), "the new page is not in the tip"
 
 
+def test_two_halves_that_build_apart_and_fail_together_name_the_later_pr():
+    """#5784 and #5830 each passed alone and the batch failed with "missing field seh": the second half was tested on a base without the first half's PRs
+    (PUSH_MODE lands nothing until the end), both halves passed, and the push met the pair; the set was assembled again each pass."""
+    pending, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return not {"2", "3"} <= set(group)
+
+    ps.batch(["1", "2", "3", "4"], passes, pending.append, refused.append, pending=pending)
+    assert refused == ["3"]
+    assert pending == ["1", "2", "4"]
+    assert ["1", "2", "3"] in tested
+
+def test_the_integration_probe_names_what_integration_failures_returns():
+    """The 16:17 batch failed `integration target_facts::shared_code_holds_no_copy_of_a_target_fact`; the halving probe held the name without `integration `, so
+    `probe & integration_failures(...)` was empty for every subset and #5784 (red alone) was cleared in 37 s."""
+    import parity_smoke
+
+    output = "     Running tests/target_facts.rs (target/release/deps/target_facts-1)\ntest shared_code_holds_no_copy_of_a_target_fact ... FAILED\n"
+    seen = set(parity_smoke.red_tests(output))
+    probe, targets = ps.integration_probe({"integration target_facts::shared_code_holds_no_copy_of_a_target_fact", "unit llrm::x"}, set())
+    assert probe & seen == seen and targets == ["target_facts"]
+    assert ps.integration_probe({"integration a::t"}, {"integration a::t"}) == (set(), [])
+
+
 def test_a_tool_test_run_past_the_old_cap_is_no_refusal_when_the_cap_is_raised(tmp_path, monkeypatch):
     """The tool-tests cap was a fixed 600 s: a test file that needs 15 minutes refused every batch that touched it ("ran past 600 s"). TOOLTEST_CAP sets it (default 1800)."""
     import subprocess

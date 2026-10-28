@@ -460,7 +460,8 @@ pub fn commutative(what: &Semantics) -> bool {
 
 pub(crate) fn swappable_held(one: &Insn) -> Option<(&Held, &Held, &Held)> {
     let what = one.what.as_ref()?;
-    if !commutative(what)
+    let cmov = what.op == Operation::Select && what.name.as_deref().and_then(super::flagscopy::opposite_cmov).is_some();
+    if !(commutative(what) || cmov)
         || what.dests.len() != 1
         || what.sources.len() != 2
         || one.group.is_some()
@@ -1633,12 +1634,12 @@ mod tests {
             IndexMap::default(),
             IndexMap::default(),
         );
-        let before = crate::backend::allocate::live_rows_walks(&input);
+        let before = crate::backend::liverows::live_rows_walks(&input);
         let got = tied(&input, Default::default());
         let names: Vec<_> =
             got.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
-        assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
+        assert_eq!(crate::backend::liverows::live_rows_walks(&input) - before, 0);
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
         let _ = tied(&input, Default::default());
         assert_eq!(crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get) - built, 0);

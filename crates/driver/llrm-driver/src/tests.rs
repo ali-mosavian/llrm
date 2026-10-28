@@ -254,6 +254,103 @@ fn a_dword_add_that_keeps_its_source_is_a_lea_at_m64() {
     assert!(listing.lines().any(|line| line.trim().starts_with("lea e") && line.contains("+5]")), "{listing}");
 }
 
+/// A `zeroext` argument arrives with its high bits clear, so `x / 10` of an
+/// `unsigned short` multiplies the register as it is; ours `movzx`ed it first
+/// (3 instructions where the pin has 2 at -m64). A `signext` one is its own
+/// `movsx`.
+#[test]
+fn a_zeroext_or_signext_argument_is_not_extended_again_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i16 @d(i16 zeroext %x) {\n  %r = udiv i16 %x, 10\n  ret i16 %r\n}\n\
+                define i32 @s(i8 signext %c) {\n  %r = sext i8 %c to i32\n  ret i32 %r\n}\n";
+    for function in ["d", "s"] {
+        let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, function).unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(!listing.contains("movzx") && !listing.contains("movsx"), "{function}: {listing}");
+    }
+}
+
+/// `x >> (64 - n)` masked the count with 31, the dword's mask: a rotate by
+/// 1..31 of a quadword came out wrong (`rotl64(x, 1)` gave `x` with the top bit
+/// lost) at -m64, 32 of 63 counts.
+#[test]
+fn a_quadword_shift_by_64_minus_n_is_not_masked_to_31_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("and cl, 31"), "{listing}");
+}
+
+/// `(x << n) | (x >> (64 - n))` is one `rol r, cl` in the pin; `MatchRotate`
+/// took constant amounts only, so it stayed shl/neg/shr/or (8 instructions
+/// against 4 at -m64).
+#[test]
+fn a_rotate_by_a_variable_amount_is_one_rotate_at_m64() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @rotl64(i64 %x, i32 %n) {\n  %a = zext nneg i32 %n to i64\n  %l = shl i64 %x, %a\n\
+                  %s = sub nsw i32 64, %n\n  %b = zext nneg i32 %s to i64\n  %r = lshr i64 %x, %b\n  %o = or i64 %r, %l\n  ret i64 %o\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "rotl64").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rol rax, cl"), "{listing}");
+}
+
+/// `x < 0 ? -x : x` is `neg; cmovs` in the pin (`LowerABS`, custom wherever
+/// `canUseCMOV`). The DAG path was built with `cmov: false` at -m64 as well, so
+/// it expanded to `sar; xor; sub`, one instruction more.
+///
+/// C's `abs` is `llvm.abs(x, true)` (ABS_MIN_POISON): it had no legalization
+/// and failed with `CannotSelect("AbsMinPoison")`.
+#[test]
+fn an_abs_is_a_negate_and_a_cmov_at_m64() {
+    for poison in ["false", "true"] {
+        let text = format!(
+            "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+             target triple = \"x86_64-unknown-linux-gnu\"\n\
+             declare i32 @llvm.abs.i32(i32, i1)\n\
+             define i32 @f(i32 %x) {{\n  %r = call i32 @llvm.abs.i32(i32 %x, i1 {poison})\n  ret i32 %r\n}}\n"
+        );
+        let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains("neg ") && listing.contains("cmov") && !listing.contains("sar "), "{listing}");
+    }
+}
+
+/// The pin's TwoAddress commutes a `cmov` (swapping its sources and taking the
+/// opposite condition) so the result reuses the source that dies: `abs` is
+/// `mov eax, edi; neg eax; cmovs eax, edi`. Only add/and/or/xor/imul commuted,
+/// so `abs` was `mov; mov; neg; cmovns`, one copy more.
+#[test]
+fn a_cmov_commutes_so_abs_needs_one_copy() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @llvm.abs.i32(i32, i1)\n\
+                define i32 @f(i32 %x) {\n  %r = call i32 @llvm.abs.i32(i32 %x, i1 true)\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let copies = listing.lines().filter(|line| line.trim_start().starts_with("mov ")).count();
+    assert!(copies == 1 && listing.contains("cmovs"), "{listing}");
+}
+
+/// `add` overflow selecting 0 is `xor; add; cmovno`: the commute lets the
+/// zero stay in the tied register. It was one `mov` more.
+#[test]
+fn an_overflow_select_needs_no_copy() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare {i32, i1} @llvm.sadd.with.overflow.i32(i32, i32)\n\
+                define i32 @f(i32 %a, i32 %b) {\n  %p = call {i32, i1} @llvm.sadd.with.overflow.i32(i32 %a, i32 %b)\n\
+                  %v = extractvalue {i32, i1} %p, 0\n  %o = extractvalue {i32, i1} %p, 1\n\
+                  %r = select i1 %o, i32 0, i32 %v\n  ret i32 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.lines().any(|line| line.trim_start().starts_with("mov ")), "{listing}");
+}
+
 /// A call of a variadic function tells the callee in `al` how many vector
 /// registers carry arguments: SysV AMD64's callee saves them by it. It was
 /// never set, so `printf` read whatever the register held.
@@ -375,7 +472,14 @@ fn an_alloca_with_a_variable_count_lowers_the_stack_pointer() {
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     let lines: Vec<&str> = listing.lines().map(str::trim).collect();
     assert!(lines.iter().any(|line| line.starts_with("sub rsp, r")), "the run-time size is subtracted\n{listing}");
-    assert!(lines.contains(&"push rbp") && lines.contains(&"leave"), "the frame register is kept\n{listing}");
+    // The pin takes the stack back through the frame register and a pop, not
+    // `leave`.
+    let at = lines.iter().position(|line| *line == "mov rsp, rbp");
+    assert!(
+        lines.contains(&"push rbp") && at.is_some_and(|at| lines[at + 1] == "pop rbp"),
+        "the frame register is kept\n{listing}"
+    );
+    assert!(!lines.contains(&"leave"), "{listing}");
 }
 
 /// A constant count above one reserved one element's bytes.
@@ -575,6 +679,24 @@ fn values_live_across_a_call_take_the_callee_saved_registers() {
     let (built, _) = crate::llc::compiled(&flags(&["-O2"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(!listing.contains("[rsp"), "no value goes to the stack\n{listing}");
+}
+
+/// A zero live across a call stayed in a callee-saved register under
+/// `--isel=dag` (`xor ebx, ebx; mov rdi, rbx; call g; mov rax, rbx`): the
+/// allocator did not rematerialize `MOV32r0` where the pin does, a `xor` at
+/// each use (`isTriviallyReMaterializable`).
+#[test]
+fn a_zero_used_around_a_call_is_a_xor_at_each_use_under_the_dag_selector() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i64 @g(i64)\n\
+                define i64 @f() {\n  %r = call i64 @g(i64 0)\n  ret i64 0\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(
+        listing.contains("xor edi, edi") && listing.contains("xor eax, eax") && !listing.contains("rbx"),
+        "{listing}"
+    );
 }
 
 /// A quadword zero stayed `mov rax, 0` (7 bytes): the zero idiom took only
@@ -1601,6 +1723,24 @@ fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_add
     );
 }
 
+/// A frame whose registers are pushed before the locals' space (`saved_first`,
+/// every x86-64 frame with a pushed register) had no `.eh_frame`: the entry
+/// was not declared. The bytes are the pin's for `push rbx; sub rsp, 32 ...
+/// add rsp, 32; pop rbx; ret`.
+#[test]
+fn a_frame_with_pushed_registers_before_its_locals_has_the_pins_eh_frame() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr, i32)\ndeclare i32 @h(i32)\n\
+         define i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [6 x i32]\n  \
+         %x = call i32 @g(ptr %buf, i32 %a)\n  %y = call i32 @h(i32 %x)\n  %z = add i32 %y, %x\n  ret i32 %z\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c07089001000\
+             01c0000001c000000000000002200000000410e10440e3083025b0e10410e0800")
+    );
+}
+
 /// `fptoui double to i64` on a target with no conditional move
 /// (`double_to_uint64.c` at i486 -Os) was two branches before the DAG: the high
 /// word was `mov edx, -2147483648 / xor eax, eax` in the arms and the threshold
@@ -1615,4 +1755,16 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("setbe") && listing.contains("shl edx, 31"), "{listing}");
     assert!(!listing.contains("-2147483648"), "{listing}");
+}
+
+/// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
+/// quadword width (`isel: 0x0004 names 25 at width 8`, the verifier): the
+/// lowering took `RegId::SP` for every pointer width. It is `rsp`.
+#[test]
+fn a_variable_alloca_at_m64_names_the_quadword_stack_pointer() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr)\n\
+                define void @f(i64 %n) {\n  %p = alloca i32, i64 %n, align 16\n  call void @use(ptr %p)\n  ret void\n}\n";
+    crate::llc::compiled(&flags(&["-O1", "--isel=dag", "-fverify-ir"]), text, "f").unwrap();
 }

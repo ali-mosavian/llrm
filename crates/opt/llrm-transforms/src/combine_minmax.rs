@@ -39,7 +39,7 @@ fn mask(bits: u32) -> u128 {
 
 /// `getLosslessUnsignedTrunc` / `getLosslessSignedTrunc`: `value`, of `bits`,
 /// in `small` bits when extending it again gives `value` back.
-fn lossless_trunc(
+pub(crate) fn lossless_trunc(
     value: u128,
     bits: u32,
     small: u32,

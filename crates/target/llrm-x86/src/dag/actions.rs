@@ -90,6 +90,8 @@ pub struct TargetLowering {
     /// `ShouldShrinkFPConstant` is false for `f64`: with SSE2 `cvtss2sd` costs
     /// more than a straight `movsd`.
     keeps_f64_constants: bool,
+    /// `canUseCMOV`: the target has the conditional move.
+    cmov: bool,
 }
 
 impl TargetLowering {
@@ -104,6 +106,7 @@ impl TargetLowering {
             cond_code: HashMap::default(),
             legal_fp_immediates: Vec::new(),
             keeps_f64_constants: false,
+            cmov: false,
         }
     }
 
@@ -248,6 +251,11 @@ impl TargetLowering {
         self.cond_code.get(&(cc, vt)).copied().unwrap_or(Action::Legal)
     }
 
+    /// `Subtarget.canUseCMOV()`.
+    pub fn can_use_cmov(&self) -> bool {
+        self.cmov
+    }
+
     /// `isOperationLegal`.
     pub fn is_operation_legal(
         &self,
@@ -290,8 +298,24 @@ impl TargetLowering {
         for vt in ALL {
             self.set_ops(
                 &[
-                    SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat, SMulFix, UMulFix,
-                    SMulFixSat, UMulFixSat, SShlSat, UShlSat,
+                    SMin,
+                    SMax,
+                    UMin,
+                    UMax,
+                    Abs,
+                    AbsMinPoison,
+                    FShl,
+                    FShr,
+                    SAddSat,
+                    UAddSat,
+                    SSubSat,
+                    USubSat,
+                    SMulFix,
+                    UMulFix,
+                    SMulFixSat,
+                    UMulFixSat,
+                    SShlSat,
+                    UShlSat,
                 ],
                 &[vt],
                 Action::Expand,
@@ -352,6 +376,7 @@ impl TargetLowering {
         use Action::*;
         use ISD::*;
         let mut t = TargetLowering::empty(types);
+        t.cmov = features.cmov;
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
