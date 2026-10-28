@@ -105,9 +105,10 @@ impl Buf {
     /// A 2-byte segment selector of section `section`.
     pub fn segment(
         &mut self,
+        kind: llrm_object::FixupKind,
         section: usize,
     ) {
-        self.relocs.push(crate::segment_reloc(self.bytes.len(), section));
+        self.relocs.push(crate::segment_reloc(kind, self.bytes.len(), section));
         self.u16(0);
     }
 

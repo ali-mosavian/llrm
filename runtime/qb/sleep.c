@@ -11,6 +11,9 @@ static long elapsed(long since)
     return (dev_clock() - since + DAY) % DAY;
 }
 
+#pragma aux B_SLEP "B$SLEP"
+#pragma aux B_BEEP "B$BEEP"
+
 /* B$SLEP: SLEEP seconds, which ends early on a key; 0 waits for a key. */
 void B_SLEP(long seconds)
 {
@@ -33,6 +36,3 @@ void B_BEEP(void)
 {
     cn_putc(7);
 }
-
-#pragma aux B_SLEP "B$SLEP"
-#pragma aux B_BEEP "B$BEEP"

@@ -7,6 +7,8 @@ enum { PRINTER_HANDLE = 4 };
 
 static Fdb printer;
 
+#pragma aux B_LPRT "B$LPRT"
+
 /* B$LPRT: the start of an LPRINT statement. */
 void B_LPRT(void)
 {
@@ -16,5 +18,3 @@ void B_LPRT(void)
     printer.mode = MD_OUTPUT;
     file_print_to(&printer);
 }
-
-#pragma aux B_LPRT "B$LPRT"

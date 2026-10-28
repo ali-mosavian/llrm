@@ -153,10 +153,10 @@ void gfx_line_between(int color, int style, int how)
     }
 }
 
+#pragma aux B_LINE "B$LINE"
+
 /* B$LINE */
 void B_LINE(short color, short style, short how)
 {
     gfx_line_between(color, style, how);
 }
-
-#pragma aux B_LINE "B$LINE"

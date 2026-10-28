@@ -1,4 +1,6 @@
-use llrm_object::debug::{Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable};
+use llrm_object::debug::{
+    DebugOptions, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
+};
 use llrm_object::{Binding, Object, Section, Symbol, Target};
 
 use super::*;
@@ -39,7 +41,7 @@ fn object(
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
-        format,
+        options: DebugOptions { format, ..Default::default() },
         language: llrm_object::debug::Language::C,
         frame_register: "ebp".into(),
         registers: vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],
@@ -526,11 +528,34 @@ fn a_base_type_is_named_as_the_source_spells_it() {
 #[test]
 fn a_target_with_three_byte_addresses_writes_dwarf_with_three_byte_addresses() {
     let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 5 });
-    made.debug.as_mut().unwrap().target =
-        Some(llrm_object::debug::DebugTarget { address_bytes: 3, segmented: false, codeview_machine: None });
+    made.debug.as_mut().unwrap().target = Some(llrm_object::debug::DebugTarget {
+        address_bytes: 3,
+        segmented: false,
+        codeview_machine: None,
+        segment_base: None,
+        far_pointer: None,
+    });
     let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
     let (_, info) = named(&written, ".debug_info");
     assert_eq!(info.image[7], 3, "the unit header's address size");
+}
+
+/// Segment fixups came from constants of the object crate, so a 16-bit target
+/// that named none still got x86's; the target says the kind or the writer
+/// refuses.
+#[test]
+fn a_segmented_address_takes_the_targets_segment_fixup() {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version: 4 });
+    made.bits = 16;
+    let info = made.debug.as_mut().unwrap();
+    info.target = Some(llrm_object::debug::DebugTarget::of(16));
+    let error = expanded(&made, made.debug.as_ref().unwrap()).unwrap_err();
+    assert!(error.0.contains("segment fixup"), "{error:?}");
+    let kind = llrm_object::FixupKind(llrm_object::FixupKind::FIRST_TARGET.0 + 9);
+    made.debug.as_mut().unwrap().target =
+        Some(llrm_object::debug::DebugTarget { segment_base: Some(kind), ..llrm_object::debug::DebugTarget::of(16) });
+    let written = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    assert!(written.sections.iter().flat_map(|one| &one.relocs).any(|one| one.kind == kind));
 }
 
 /// `object` through x86's writer for `format`, which expands its debug
@@ -541,4 +566,85 @@ fn objects(
 ) -> Result<Vec<u8>, llrm_object::Unsupported> {
     use llrm_object::ObjectTarget;
     llrm_x86::mc::X86Objects.write_object(format, object)
+}
+
+/// `f` in two pieces of one section (0..6 and 10..16), and the unit's code the
+/// same: the writer refused it ("function f has 2 ranges: one is written"); it
+/// is `DW_AT_ranges` over a list in `.debug_ranges` (2-4) or `.debug_rnglists`
+/// (5).
+fn split(
+    version: u16,
+    unit: bool,
+) -> Object {
+    let mut made = object(vec![frame("x", 8)], vec![int()], Format::Dwarf { version });
+    let pieces = vec![Range { section: 0, offset: 0, length: 6 }, Range { section: 0, offset: 10, length: 6 }];
+    let info = made.debug.as_mut().unwrap();
+    info.functions[0].ranges = pieces.clone();
+    if unit {
+        info.code = pieces;
+    }
+    made
+}
+
+fn abbreviates(
+    made: &Object,
+    attribute: u8,
+    form: u8,
+) -> bool {
+    named(made, ".debug_abbrev").1.image.windows(2).any(|pair| pair == [attribute, form])
+}
+
+#[test]
+fn a_function_of_two_ranges_has_a_list_in_debug_ranges_before_5() {
+    for version in [2u16, 3, 4] {
+        let made = split(version, false);
+        let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+        let (_, ranges) = named(&made, ".debug_ranges");
+        // Two pairs of addresses and the two zeros that end the list.
+        assert_eq!(ranges.image, vec![0; 24], "version {version}");
+        let addends: Vec<i64> = ranges.relocs.iter().map(|one| one.addend).collect();
+        assert_eq!(addends, [0, 6, 10, 16], "version {version}");
+        let form = if version < 4 { 0x06 } else { 0x17 };
+        assert!(abbreviates(&made, 0x55, form), "DW_AT_ranges, version {version}");
+    }
+}
+
+#[test]
+fn a_function_of_two_ranges_has_a_list_in_debug_rnglists_in_5() {
+    let made = split(5, false);
+    let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+    let (_, lists) = named(&made, ".debug_rnglists");
+    // unit_length, 5, address size, no segments, one list, its offset (from
+    // the offsets), two start_length entries and the end.
+    let mut want = vec![0u8; 0];
+    want.extend(25u32.to_le_bytes());
+    want.extend([5, 0, 4, 0]);
+    want.extend(1u32.to_le_bytes());
+    want.extend(4u32.to_le_bytes());
+    want.extend([0x07, 0, 0, 0, 0, 6, 0x07, 0, 0, 0, 0, 6, 0x00]);
+    assert_eq!(lists.image, want);
+    assert!(abbreviates(&made, 0x55, 0x23), "DW_AT_ranges as DW_FORM_rnglistx");
+    assert!(abbreviates(&made, 0x74, 0x17), "DW_AT_rnglists_base, which DW_FORM_rnglistx counts from");
+}
+
+#[test]
+fn a_unit_of_two_code_ranges_has_ranges_and_a_base_of_zero() {
+    for version in [4u16, 5] {
+        let made = split(version, true);
+        let made = expanded(&made, made.debug.as_ref().unwrap()).unwrap();
+        let (_, info) = named(&made, ".debug_info");
+        assert!(abbreviates(&made, 0x55, if version == 5 { 0x23 } else { 0x17 }), "version {version}");
+        assert!(abbreviates(&made, 0x11, 0x01), "a low_pc beside the ranges, version {version}");
+        assert!(!abbreviates(&made, 0x12, 0x06) || version < 4, "no high_pc on the unit");
+        assert_eq!(abbreviates(&made, 0x74, 0x17), version == 5, "rnglists_base, version {version}");
+        assert!(info.relocs.iter().any(|one| one.at > 0), "version {version}");
+    }
+}
+
+#[test]
+fn a_segmented_function_of_two_ranges_is_refused_by_name() {
+    let mut made = split(4, false);
+    made.bits = 16;
+    let why = expanded(&made, made.debug.as_ref().unwrap()).err().expect("refused");
+    assert!(why.0.contains("segmented"), "{}", why.0);
 }

@@ -32,6 +32,13 @@ static void restore_first(void)
     md_set_restored(data);
 }
 
+#pragma aux B_RSTB "B$RSTB"
+#pragma aux B_RDI2 "B$RDI2"
+#pragma aux B_RDI4 "B$RDI4"
+#pragma aux B_RDR4 "B$RDR4"
+#pragma aux B_RDR8 "B$RDR8"
+#pragma aux B_RDSD "B$RDSD"
+
 /* B$RSTB: RESTORE to the first DATA line whose key is `line` or more (0 is the
    first line). */
 void B_RSTB(unsigned short line)
@@ -138,10 +145,3 @@ void B_RDR8(qb_data_ptr destination)
 {
     read_number(VT_R8, destination);
 }
-
-#pragma aux B_RSTB "B$RSTB"
-#pragma aux B_RDI2 "B$RDI2"
-#pragma aux B_RDI4 "B$RDI4"
-#pragma aux B_RDR4 "B$RDR4"
-#pragma aux B_RDR8 "B$RDR8"
-#pragma aux B_RDSD "B$RDSD"

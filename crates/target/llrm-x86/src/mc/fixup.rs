@@ -1,5 +1,6 @@
 //! x86's fixup kinds (`X86FixupKinds.h`), numbered from `FIRST_TARGET`.
 
+use llrm_object::debug::DebugTarget;
 use llrm_object::{Fix, FixupKind, FixupKindInfo};
 
 /// A call or jump's target, relative to the field's end: the formats that tell
@@ -9,6 +10,18 @@ pub const BRANCH_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 2);
 /// x86-64: the place's offset from the target's global offset table entry
 /// (`R_X86_64_REX_GOTPCRELX`).
 pub const GOT_PCREL_4: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 3);
+
+/// OMF: the selector of the target's segment (OMF's BASE).
+pub const SEGMENT_BASE: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 4);
+/// OMF: a 16:16 pointer, whose offset is the field's first two
+/// bytes (OMF's POINTER).
+pub const FAR_POINTER: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 5);
+
+/// What a debug writer needs of the machine: its width and the kinds that name
+/// a segment (OMF's, which 32-bit objects also carry).
+pub fn debug_target(bits: u8) -> DebugTarget {
+    DebugTarget { segment_base: Some(SEGMENT_BASE), far_pointer: Some(FAR_POINTER), ..DebugTarget::of(bits) }
+}
 
 /// A call or jump's target, `width` bytes relative to the field's end.
 pub const fn branch(width: usize) -> Fix {
@@ -34,6 +47,8 @@ pub fn kind_info(kind: FixupKind) -> FixupKindInfo {
         BRANCH_2 => ("branch_2byte_pcrel", 16),
         BRANCH_4 => ("branch_4byte_pcrel", 32),
         GOT_PCREL_4 => ("reloc_riprel_4byte_gotpcrelx", 32),
+        SEGMENT_BASE => ("segment_base", 16),
+        FAR_POINTER => ("far_pointer", 32),
         generic => return generic.info(),
     };
     FixupKindInfo { name, offset: 0, bits }

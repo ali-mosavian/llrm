@@ -518,6 +518,10 @@ impl Types<'_> {
     }
 }
 
+fn missing_kind(what: &str) -> Error {
+    Error::Unencodable(format!("CodeView 4: the target names no fixup for {what}"))
+}
+
 struct Symbols<'a> {
     object: &'a Object,
     info: &'a Info,
@@ -528,6 +532,14 @@ struct Symbols<'a> {
 }
 
 impl Symbols<'_> {
+    fn segment_kind(&self) -> Result<llrm_object::FixupKind, Error> {
+        self.info.target_of(self.object.bits).segment_base.ok_or_else(|| missing_kind("a segment selector"))
+    }
+
+    fn far_kind(&self) -> Result<llrm_object::FixupKind, Error> {
+        self.info.target_of(self.object.bits).far_pointer.ok_or_else(|| missing_kind("a far pointer"))
+    }
+
     fn record(
         &mut self,
         code: u16,
@@ -549,13 +561,14 @@ impl Symbols<'_> {
         at: usize,
         target: Target,
         addend: i64,
-    ) {
+    ) -> Result<(), Error> {
         if self.wide {
             self.relocs.push(Reloc::new(at, Fix::abs(4), target, addend));
-            self.relocs.push(Reloc::new(at + 4, Fix::SEGMENT_BASE, target, 0));
+            self.relocs.push(Reloc::new(at + 4, Fix::plain(self.segment_kind()?), target, 0));
         } else {
-            self.relocs.push(Reloc::new(at, Fix::FAR_POINTER, target, i64::from(addend as i16)));
+            self.relocs.push(Reloc::new(at, Fix::plain(self.far_kind()?), target, i64::from(addend as i16)));
         }
+        Ok(())
     }
 
     /// The offset and the segment of an address, as zeros the fixups fill.
@@ -610,7 +623,7 @@ impl Symbols<'_> {
             (true, true) => 0x0202,
         };
         let at = self.record(code, &data)?;
-        self.address(at, Target::Symbol(symbol), disp);
+        self.address(at, Target::Symbol(symbol), disp)?;
         Ok(())
     }
 
@@ -718,7 +731,7 @@ impl Symbols<'_> {
         }
         pascal(&mut data, "")?;
         let at = self.record(if self.wide { 0x0207 } else { 0x0107 }, &data)?;
-        self.address(at + 8 + if self.wide { 4 } else { 2 }, Target::Section(range.section), range.offset as i64);
+        self.address(at + 8 + if self.wide { 4 } else { 2 }, Target::Section(range.section), range.offset as i64)?;
         for variable in &block.variables {
             self.variable(types, variable, &block.ranges)?;
         }
@@ -770,7 +783,7 @@ impl Symbols<'_> {
             (true, true) => 0x0205,
         };
         let at = self.record(code, &data)?;
-        self.address(at + address, Target::Section(range.section), range.offset as i64);
+        self.address(at + address, Target::Section(range.section), range.offset as i64)?;
         for variable in &function.variables {
             self.variable(types, variable, &function.ranges)?;
         }
