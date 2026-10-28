@@ -375,7 +375,7 @@ updpalplasma f\r\nIF INKEY$ > \"\" THEN EXIT SUB\r\nNEXT\r\nEND SUB\r\nSUB updpa
 fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
     let body = main_listing(
         "STATIC.BAS",
-        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR x = 0 TO 319\r\nt(x) = s((x * x) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
+        b"DEFINT A-Z\r\nDIM s(1000), t(319)\r\nFOR i = 0 TO 1000\r\ns(i) = i * 3\r\nNEXT\r\nFOR x = 0 TO 319\r\nt(x) = s((x * x) AND 511)\r\nNEXT\r\nPRINT t(5)\r\n",
     );
     assert!(body.contains("S%[e") && !body.contains("shl"), "{body}");
 }
@@ -2352,8 +2352,9 @@ SUB m (xp!, yp!, zp!)\r\nFOR i = 0 TO n - 1\r\nx(i) = x(i) + xp\r\ny(i) = y(i) +
     assert!(!regex::Regex::new(r"\[[a-z]{2}\+[a-z]{2}").unwrap().is_match(&body), "{body}");
 }
 
-/// Float constants load as GCC's do: 1 is `fld1`, and 320 a readonly
-/// single. Each literal was stored to a frame temporary at its use and
+/// Float constants load as GCC's do: a readonly single each (`x - 1` is the
+/// pin's `fadd` of -1.0, InstCombine's canonical form, so `fld1` no longer
+/// appears). Each literal was stored to a frame temporary at its use and
 /// read back by `fild`, as BC does.
 #[test]
 fn test_an_integer_literal_in_a_float_expression_is_a_constant() {
@@ -2361,7 +2362,7 @@ fn test_an_integer_literal_in_a_float_expression_is_a_constant() {
 z = y * 320\r\nPRINT x, y, z\r\nEND SUB\r\n";
     let listing = procedure_listing("CONSTANT.BAS", source.as_bytes(), "F");
     assert!(!listing.contains("fild") && !listing.contains("fiadd"), "{listing}");
-    assert!(listing.contains("fld1") && listing.contains("fadd dword ptr") && !listing.contains("320"), "{listing}");
+    assert!(listing.contains("fadd dword ptr") && !listing.contains("320"), "{listing}");
 }
 
 /// A module through the rich MIR and isel: a string comparison branches on
