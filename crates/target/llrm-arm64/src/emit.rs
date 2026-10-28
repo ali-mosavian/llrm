@@ -186,7 +186,7 @@ pub fn object(
         let labels: HashMap<String, usize> =
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
         let insts: Vec<&Inst> = function.blocks.iter().flat_map(|block| block.insts.iter()).collect();
-        frames.push(crate::mc::unwind::frame(0, *function_offset, &insts));
+        frames.extend(crate::mc::unwind::frame(0, *function_offset, &insts));
         let mut cursor = *function_offset;
         for block in &function.blocks {
             for inst in &block.insts {

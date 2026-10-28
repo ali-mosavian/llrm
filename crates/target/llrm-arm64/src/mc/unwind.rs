@@ -56,18 +56,30 @@ fn give_back_frame_register(
     }
 }
 
+/// Whether `inst` moves the stack pointer by writeback or by a register.
+fn moves_sp_unmodelled(inst: &Inst) -> bool {
+    let writeback = |addr: &Addr| matches!(addr, Addr::Pre { base, .. } | Addr::Post { base, .. } if *base == Gpr::R31);
+    match inst {
+        Inst::Load { addr, .. } | Inst::Store { addr, .. } => writeback(addr),
+        Inst::LoadPair { addr, .. } | Inst::StorePair { addr, .. } => writeback(addr),
+        Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. } => *rd == Gpr::R31,
+        _ => false,
+    }
+}
+
 /// The frame of the function at `start` of section `section` whose
 /// instructions, one word each, are `insts`.
 ///
 /// Rows follow the instructions: `sub sp` moves the frame address, a store of
 /// a register to `[sp, #n]` saves it, `add x29, sp, #n` makes x29 the frame
 /// register, and the epilogue's loads and `add sp` undo them. After a `ret`
-/// the rest of the function is in the state before its epilogue.
+/// the rest of the function is in the state before its epilogue. `None` where
+/// the instructions move the stack pointer in a way the rows cannot say.
 pub fn frame(
     section: usize,
     start: usize,
     insts: &[&Inst],
-) -> Frame {
+) -> Option<Frame> {
     let mut state = FrameRow { offset: 0, ..eh_target().entry };
     let mut rows = vec![state.clone()];
     let mut remembered: Option<FrameRow> = None;
@@ -79,6 +91,11 @@ pub fn frame(
     };
     for (index, inst) in insts.iter().enumerate() {
         let after = (index + 1) * 4;
+        // A move of the stack pointer the rows below do not model (writeback
+        // addressing, a register amount) would leave wrong rows: no frame.
+        if moves_sp_unmodelled(inst) {
+            return None;
+        }
         match inst {
             Inst::AddSubImm { op: AddSub { set_flags: false, subtract }, rd, rn, imm12, shift12, .. }
                 if *rd == Gpr::R31 && *rn == Gpr::R31 && state.cfa_register == "sp" =>
@@ -138,6 +155,7 @@ pub fn frame(
                 }
                 change(&mut state, &mut rows, after);
             }
+            Inst::AddSubImm { rd, .. } if *rd == Gpr::R31 && state.cfa_register == "sp" => return None,
             Inst::Ret { .. } => {
                 if let Some(before) = remembered.take() {
                     state = before;
@@ -149,7 +167,7 @@ pub fn frame(
             _ => {}
         }
     }
-    Frame { section, offset: start, length: insts.len() * 4, rows }
+    Some(Frame { section, offset: start, length: insts.len() * 4, rows })
 }
 
 #[cfg(test)]
@@ -190,7 +208,7 @@ mod tests {
     fn a_frame_record_is_saved_found_and_given_back() {
         let make_fp = Inst::AddSubImm { rd: Gpr::FP, ..add_sp(0) };
         let insts = [sub_sp(32), pair(true, 0), make_fp, pair(false, 0), add_sp(32), Inst::Ret { rn: Gpr::LR }];
-        let frame = frame(0, 0, &insts.iter().collect::<Vec<_>>());
+        let frame = frame(0, 0, &insts.iter().collect::<Vec<_>>()).expect("a frame");
         let row = |offset, register: &str, cfa_offset, saved: &[(&str, i64)]| FrameRow {
             offset,
             cfa_register: register.into(),
@@ -209,6 +227,15 @@ mod tests {
                 row(20, "sp", 0, &[]),
             ]
         );
+    }
+
+    /// `stp x29,x30,[sp,#-16]!` moves the stack pointer by writeback, which the
+    /// rows would have missed: a frame with wrong rows is worse than none.
+    #[test]
+    fn a_writeback_move_of_the_stack_pointer_gives_no_frame() {
+        let reg = |reg| Memory::Int { width: Width::X, bytes: 8, sign: false, reg };
+        let push = Inst::StorePair { first: reg(Gpr::FP), second: reg(Gpr::LR), addr: Addr::Pre { base: Gpr::R31, imm: -16 } };
+        assert!(frame(0, 0, &[&push, &Inst::Ret { rn: Gpr::LR }]).is_none());
     }
 
     #[test]
