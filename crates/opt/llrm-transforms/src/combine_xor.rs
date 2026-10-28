@@ -20,12 +20,7 @@
 //! `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
 //! `foldMaskedAddXorPattern`.
 //!
-//! DEVIATE 3: `foldNot` makes its `not (cmp A, B)` arm for an integer compare
-//! with one use. Owed, in its order: DeMorgan with an inverted operand, the
-//! binary-operator arms (`~(X + C)`, `~(X - Y)`, shifts), the `bitcast` arms,
-//! `sinkNotIntoLogicalOp`, min/max and `is_fpclass`, the select of compares,
-//! `foldNotXor`, `getFreelyInverted`, a `not` of a compare with several uses
-//! (`canFreelyInvertAllUsersOf`, now inline in `combine_compares`), and `fcmp`.
+//! DEVIATE 3: `foldNot` is in `combine_not`.
 //!
 //! # Example
 //! `Y ^ (X | Y)` is `X & ~Y`:
@@ -637,25 +632,6 @@ fn hoist_xor_constant(
     xor_with(c, inst, xor, k)
 }
 
-/// `foldNot` (:5237), its `not (cmp A, B) = !cmp A, B` arm: the compare is
-/// inverted in place and replaces the `xor` (`freelyInvertAllUsersOf` of a
-/// one-use compare is that).
-fn fold_not(
-    c: &mut Combiner,
-    inst: InstId,
-) -> Option<Visit> {
-    let result = Operand::Value(c.function.instruction(inst).result?);
-    let not_op = pattern::not(&query(c, Some(inst)), result)?;
-    let compare = c.definition_of(not_op)?;
-    let Opcode::ICmp(pred) = c.function.instruction(compare).opcode else { return None };
-    if !has_one_use(c, not_op) {
-        return None;
-    }
-    c.function.set_icmp_predicate(compare, pred.inverse());
-    c.add_to_worklist(compare);
-    Some(Visit::Replace(not_op))
-}
-
 /// `InstCombinerImpl::visitXor` (:5458).
 pub fn visit_xor(
     c: &mut Combiner,
@@ -674,7 +650,7 @@ pub fn visit_xor(
         return found;
     }
     // DEVIATE 2: foldXorToXor.
-    if let Some(found) = fold_not(c, inst) {
+    if let Some(found) = crate::combine_not::fold_not(c, inst) {
         return found;
     }
     if let Some(v) = fold_using_distributive_laws(c, inst) {
