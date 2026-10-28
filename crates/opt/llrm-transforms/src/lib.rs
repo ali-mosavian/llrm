@@ -85,7 +85,6 @@ mod availableexternally_tests;
 pub mod bdce;
 pub mod branchtocommon;
 pub mod calleepop;
-pub mod rpoattrs;
 #[cfg(test)]
 mod calleepop_tests;
 pub mod canonexit;
@@ -320,6 +319,7 @@ pub mod reassociate_rank;
 pub mod reassociate_tree;
 pub mod remidiom;
 pub mod rotate;
+pub mod rpoattrs;
 pub mod runtimechecks;
 pub mod sccp;
 pub mod sccpsolver;

@@ -184,9 +184,10 @@ impl Writer<'_> {
                         at(out);
                         Ok(())
                     })?,
-                    // Each piece in a register is a subfield of the variable; a piece
-                    // anywhere else, like a constant, a list or a place in data, has no
-                    // record (LLVM's `CodeViewDebug` skips them too).
+                    // Each piece in a register is a subfield of the variable; a
+                    // piece anywhere else, like a constant, a list or a place
+                    // in data, has no record (LLVM's `CodeViewDebug` skips them
+                    // too).
                     Location::Pieces(parts) => {
                         let mut parent = 0u32;
                         for (size, place) in parts {
