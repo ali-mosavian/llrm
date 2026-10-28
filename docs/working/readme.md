@@ -8,11 +8,14 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [constraint-elimination-plan](constraint-elimination-plan.md) | ConstraintElimination translation: why, the order CE-1 to CE-4 with dates, the oracle |
 | [knownbits-plan](knownbits-plan.md) | ValueTracking known bits (qbq-llrm d_faces): per caller against the pin, twelve dated rows (2026-10-24) |
 | [f3-plan](f3-plan.md) | F3, `translate::program`: profile by bucket, the pin's counterpart, four rows with dates (2026-10-24) |
+| [optimizer-gap-summed](optimizer-gap-summed.md) | Optimizer gap on d_faces -O2: the pin's Ir summed over every call site, ours against it |
+| [scheduler-live-intervals](scheduler-live-intervals.md) | MachineScheduler on the shared LiveIntervals: design note, 16.9 M Ir against the pin's 10.4 M |
 | [pass-table-dist](pass-table-dist.md) | Optimizer passes on dist, ours against the pin: Ir, runs, excess and owners |
 | [presize-plan](presize-plan.md) | Vectors that grow by doubling to a size known up front: sites, growth Ir, capacities (2026-10-24) |
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [alias-stack-plan](alias-stack-plan.md) | Alias stack: module-by-module route to the pin's BasicAA/TBAA/CaptureTracking structure, Ir budget per stage |
 | [count-to-zero-plan](count-to-zero-plan.md) | Count-to-zero cost term in LSR, read from the target cost table: findings and rows AM-CZ-1 (x_bubble m32), AM-CZ-2 (PLASMA m16) |
+| [module-ipo-plan](module-ipo-plan.md) | Module walk and IPO against the pin: what `_sift` lacks in `-print-after-all`, rows by 2026-11-09 |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
 | [scev-predicates-plan](scev-predicates-plan.md) | SCEV predicates (S3 rank 5, DEVIATE 1): plan (2026-10-23) |
@@ -24,6 +27,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [qb-runtime-contract-plan](qb-runtime-contract-plan.md) | The QB runtime's contract in the DAG path: five dated PRs (2026-10-24) |
 | [bench-table-a33fdfff7](bench-table-a33fdfff7.md) | vsgcc bench table at tip a33fdfff7: old and dag selectors against min(gcc, clang) |
 | [flip-packet](flip-packet.md) | The default flip to `--isel=dag`: the five conditions, status and evidence per condition |
+| [greedy-switchover-plan](greedy-switchover-plan.md) | Switching over to the translated greedy allocator: what the old modules still provide (2026-10-22) |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
@@ -62,9 +66,12 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [flip-ambt-rows-8-14](flip-ambt-rows-8-14.md) | Rows 8-14 re-run on tip c76f9a6a5 with the pin's i486 triple: old, dag and pin llc clocks, instructions and code bytes (2026-10-26) |
 | [bsf-bsr-cost-row](bsf-bsr-cost-row.md) | BSF/BSR cost row and the pin's `rep` prefix rule on BSF (2026-10-26) |
 | [combine-forward-load-rows.md](combine-forward-load-rows.md) | m16 -Os growers of the load forwarding in combine (#5008) |
+| [simplifycfg-resimplify-rows.md](simplifycfg-resimplify-rows.md) | QCport growers of SimplifyCFG's repeated block visit (#5662) |
+| [icmp-mul-constant-rows.md](icmp-mul-constant-rows.md) | QCport growers of `foldICmpMulConstant` (#5670) |
 | [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
+| [pin-comparison-checklist](pin-comparison-checklist.md) | Five lines every pin comparison states (input stage, target header, optsize, convention, pre-RA difference), and the internal-function convention as a DEVIATE |
 | [above-main-rows](above-main-rows.md) | Rows above main |
 | [accesses-basicaa-plan](accesses-basicaa-plan.md) | MemorySSA Accesses: BasicAA per query (exit of DEVIATE AN1) |
 | [backend-rows-plan](backend-rows-plan.md) | Backend rows to translate: 82, 34/83, 90, 84, 42 — w-3, plan note 2026-10-22 |

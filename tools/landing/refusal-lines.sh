@@ -10,3 +10,6 @@ batch_refusal_reason() {
   [ -n "$why" ] || why="no REFUSED line; log tail: $(grep -v '^[[:space:]]*$' "$1" | tail -2 | tr '\n' ' ')"
   echo "$why" | cut -c1-400
 }
+
+# landed_state LOG PR: the PR's state, waiting for GitHub to flip it to MERGED when the batch pushed it (PUSHED: line naming it): the label read REFUSED for the two PRs of each push (02:47, 02:51) because the flip lags the push by seconds.
+landed_state() { local s i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do s=$(gh pr view "$2" --repo "${R:-x}" --json state -q .state); [ "$s" = MERGED ] && break; grep -qE "PUSHED: .*#$2( |\$)" "$1" || break; sleep "${PUSH_SETTLE:-5}"; done; echo "$s"; }

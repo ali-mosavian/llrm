@@ -140,6 +140,8 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         SCmp => pin::SCMP,
         UCmp => pin::UCMP,
         SMulFix => pin::SMULFIX,
+        // Expanded before selection, so no pattern names them.
+        UMulFix | SMulFixSat | UMulFixSat | SShlSat | UShlSat => u16::MAX,
         SDivFix => pin::SDIVFIX,
         StackSave => pin::STACKSAVE,
         StackRestore => pin::STACKRESTORE,
@@ -351,6 +353,46 @@ impl<'a> DagisAdapter<'a> {
         users
     }
 
+    /// The weight of the reads of `node`'s results by live nodes (`weight` of
+    /// each read), each user's once, summed until `count_to`
+    /// (`hasNUsesOfValue`'s walk). A user the use list names twice is read
+    /// once; users that weigh nothing are not remembered, so the repeat test
+    /// scans at most `count_to` of them.
+    fn reads_of(
+        &self,
+        node: u32,
+        res: Option<u8>,
+        count_to: usize,
+        weight: impl Fn(SDValue) -> usize,
+    ) -> usize {
+        // The questions stop at one to three reads: eight users fit the stack.
+        let (mut readers, mut count) = ([0u32; 8], 0);
+        let candidates = self.dag.use_candidates(node);
+        let mut reads = 0;
+        for (at, &user) in candidates.iter().enumerate() {
+            if self.dead.contains(&user)
+                || readers[..count].contains(&user)
+                || (count == readers.len() && candidates[..at].contains(&user))
+            {
+                continue;
+            }
+            let before = reads;
+            for op in &self.dag.nodes()[user as usize].ops {
+                if op.node == node && res.is_none_or(|r| op.res == r) {
+                    reads += weight(*op);
+                }
+            }
+            if reads > before && count < readers.len() {
+                readers[count] = user;
+                count += 1;
+            }
+            if reads >= count_to {
+                break;
+            }
+        }
+        reads
+    }
+
     fn live_users(
         &self,
         value: PinValue,
@@ -364,15 +406,6 @@ impl<'a> DagisAdapter<'a> {
             }
         }
         out
-    }
-
-    fn live_node_users(
-        &self,
-        node: u32,
-    ) -> impl Iterator<Item = SDValue> + '_ {
-        self.live_user_nodes(node)
-            .into_iter()
-            .flat_map(move |user| self.dag.nodes()[user as usize].ops.iter().copied().filter(move |op| op.node == node))
     }
 
     fn remove(
@@ -450,7 +483,7 @@ impl Dag for DagisAdapter<'_> {
         node: u32,
         limit: usize,
     ) -> usize {
-        self.live_node_users(node).filter(|u| self.dag.value_type(*u) != EVT::OTHER).take(limit + 1).count()
+        self.reads_of(node, None, limit + 1, |op| usize::from(self.dag.value_type(op) != EVT::OTHER))
     }
     fn use_empty(
         &self,
@@ -462,7 +495,7 @@ impl Dag for DagisAdapter<'_> {
         &self,
         node: u32,
     ) -> bool {
-        self.live_node_users(node).count() == 1
+        self.reads_of(node, None, 2, |_| 1) == 1
     }
     fn users(
         &self,
@@ -478,7 +511,18 @@ impl Dag for DagisAdapter<'_> {
         if self.dag.nodes()[node as usize].values[last] != EVT::GLUE {
             return None;
         }
-        self.live_users(PinValue::new(node, last as u8)).first().map(|u| u.0)
+        self.dag
+            .use_candidates(node)
+            .iter()
+            .copied()
+            .filter(|user| {
+                !self.dead.contains(user)
+                    && self.dag.nodes()[*user as usize]
+                        .ops
+                        .iter()
+                        .any(|op| op.node == node && usize::from(op.res) == last)
+            })
+            .min()
     }
     fn is_only_user_of(
         &self,
@@ -499,24 +543,7 @@ impl Dag for DagisAdapter<'_> {
         value: PinValue,
         n: usize,
     ) -> bool {
-        // each read of the value by a live node, counted up to `n + 1`; a
-        // user the list names twice is read once
-        let candidates = self.dag.use_candidates(value.node);
-        let mut reads = 0;
-        for (at, &user) in candidates.iter().enumerate() {
-            if self.dead.contains(&user) || candidates[..at].contains(&user) {
-                continue;
-            }
-            reads += self.dag.nodes()[user as usize]
-                .ops
-                .iter()
-                .filter(|op| op.node == value.node && op.res == value.res)
-                .count();
-            if reads > n {
-                return false;
-            }
-        }
-        reads == n
+        self.reads_of(value.node, Some(value.res), n + 1, |_| 1) == n
     }
     fn constant(
         &self,
@@ -946,12 +973,18 @@ impl AddrDag for DagisAdapter<'_> {
         &self,
         value: PinValue,
     ) -> bool {
-        self.live_users(value)
+        self.dag
+            .use_candidates(value.node)
             .iter()
             .any(
-                |&(user, at)| {
+                |&user| {
                     let node = &self.dag.nodes()[user as usize];
-                    node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1)
+                    !self.dead.contains(&user)
+                        && node.ops.iter().enumerate().any(|(at, op)| {
+                            op.node == value.node
+                                && op.res == value.res
+                                && (node.opcode == ISD::CopyToReg || (node.opcode == ISD::Store && at == 1))
+                        })
                 },
             )
     }

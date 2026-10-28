@@ -477,6 +477,12 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             }
             "getI8Imm(Imm ^ 0x0f, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
             "getI8Imm(Imm ^ 0x03, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
+            // `inv_cond_XFORM`: `GetOppositeBranchCondition` flips the low bit
+            // of a condition code (O/NO, B/AE, E/NE, BE/A, S/NS, P/NP, L/GE,
+            // LE/G are adjacent pairs).
+            c if c.starts_with("CurDAG->getTargetConstant(X86::GetOppositeBranchCondition(CC)") => {
+                dag.target_constant(i64::from((masked as u8) ^ 1), mvt::i8)
+            }
             other => panic!("node transform `{other}` is not translated"),
         }
     }

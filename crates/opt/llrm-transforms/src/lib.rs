@@ -96,6 +96,7 @@ pub mod cgpbranch;
 pub mod cgpmemalign;
 #[cfg(test)]
 mod cgpmemalign_tests;
+pub mod cgpretdup;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -128,6 +129,7 @@ pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
+pub mod combine_invert;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
 pub mod combine_minmax;
@@ -159,6 +161,7 @@ pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
+pub mod constmerge;
 pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]

@@ -242,6 +242,18 @@ fn a_copy_between_xmm_registers_is_movaps() {
     assert_eq!(bytes(&copy), [0x0f, 0x28, 0xc2]);
 }
 
+/// A spill of a `double` to its 8-byte slot was `movaps`, which writes 16
+/// bytes and faults on a slot that is not 16-aligned. It is `movsd`/`movss`
+/// (`MOVSDmr`, `MOVSSmr`), as the pin's spill of `FR64`/`FR32`.
+#[test]
+fn an_xmm_spill_and_reload_move_the_scalar_not_the_register() {
+    let x = RegId::from(Register::XMM0);
+    let store = sem(Operation::Move, Some("mov"), vec![frame(-8, 8)], vec![rg(x, 16)], None, false);
+    assert_eq!(bytes(&store), [0xf2, 0x0f, 0x11, 0x45, 0xf8]);
+    let load = sem(Operation::Move, Some("mov"), vec![rg(x, 16)], vec![frame(-4, 4)], None, false);
+    assert_eq!(bytes(&load), [0xf3, 0x0f, 0x10, 0x45, 0xfc]);
+}
+
 /// A `double` negated or cleared is `xorps` over a value of 8 bytes: the
 /// encoder looked for `Xorps_xmm_xmmm64` and found no form.
 #[test]

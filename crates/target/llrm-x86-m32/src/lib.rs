@@ -92,6 +92,10 @@ impl llrm_target::Target for M32 {
         &REGISTER_INFO
     }
 
+    fn selects_by_dag(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "x86-m32"
     }
@@ -276,7 +280,7 @@ impl llrm_target::Target for M32 {
         llrm_x86::instructions::joined(include_str!("instructions/x86.instr"))
     }
 
-    fn dialect(&self) -> &'static llrm_instr::Dialect {
+    fn dialect(&self) -> &'static llrm_target::instr::Dialect {
         llrm_x86::instructions::dialect()
     }
 

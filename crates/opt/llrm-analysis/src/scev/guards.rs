@@ -62,7 +62,7 @@ pub fn visits() -> (usize, usize) {
 
 /// A `SmallPtrSet` of blocks.
 #[derive(Default)]
-struct Visited(llrm_mir::hash::HashSet<BlockId>);
+struct Visited(llrm_mir::dense::IdSet<BlockId>);
 
 impl Visited {
     /// Whether `block` was new.
