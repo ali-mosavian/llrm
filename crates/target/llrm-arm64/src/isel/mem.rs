@@ -282,7 +282,7 @@ impl Selector<'_> {
     }
 
     /// The bytes an access of type `ty` moves and how it is registered.
-    fn access(
+    pub(super) fn access(
         &self,
         ty: TypeId,
     ) -> Selected<(u8, bool)> {
@@ -298,7 +298,7 @@ impl Selector<'_> {
         })
     }
 
-    fn pointer_operand(
+    pub(super) fn pointer_operand(
         &mut self,
         operand: Operand,
     ) -> Selected<AddrExpr> {

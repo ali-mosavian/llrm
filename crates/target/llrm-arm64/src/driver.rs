@@ -84,7 +84,10 @@ pub fn program(
 ) -> Result<Program, String> {
     let (_, text) = without_triple(text);
     let text = if platform == Platform::Darwin { without_va_arg(&text) } else { text };
-    let module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    let mut module = llrm_mir::parse::module(&text).map_err(|error| error.to_string())?;
+    // Atomics are calls the mid-end moves nothing across; the selector makes
+    // them instructions.
+    llrm_mir::atomic::hidden(&mut module)?;
     match module.datalayout.as_deref() {
         Some(stated) if stated == platform.datalayout() => {}
         Some(stated) => {
