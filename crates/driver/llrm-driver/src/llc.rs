@@ -359,8 +359,9 @@ pub fn compiled_dumping(
         llrm_codegen::hir::mir::check_stack(&mut module);
     }
     with_default_convention(&mut module, default, flags.regcall_default);
-    llrm_mir::dbgimport::types_and_globals(&mut module);
     decorate(&mut module, bound.target.calling(), default, format.name());
+    // After the rename: the debug info names the symbols the object has.
+    llrm_mir::dbgimport::types_and_globals(&mut module);
     let mut options = options_for(&bound, flags, machine, format.name(), default);
     options.stack_check = flags.sanitize.stack.then(|| llrm_codegen::abi::llvm::stack_check(&*bound.target));
     if let Some(dump) = dump {

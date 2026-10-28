@@ -64,6 +64,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
+| [pin-comparison-checklist](pin-comparison-checklist.md) | Five lines every pin comparison states (input stage, target header, optsize, convention, pre-RA difference), and the internal-function convention as a DEVIATE |
 | [above-main-rows](above-main-rows.md) | Rows above main |
 | [accesses-basicaa-plan](accesses-basicaa-plan.md) | MemorySSA Accesses: BasicAA per query (exit of DEVIATE AN1) |
 | [backend-rows-plan](backend-rows-plan.md) | Backend rows to translate: 82, 34/83, 90, 84, 42 — w-3, plan note 2026-10-22 |

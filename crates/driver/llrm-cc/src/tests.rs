@@ -56,6 +56,17 @@ fn the_stack_check_reaches_the_backend_and_not_clang() {
     assert!(one.clang.iter().all(|flag| !flag.contains("sanitize")), "{:?}", one.clang);
 }
 
+/// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
+/// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
+/// for 1485 under llrm-cc.
+#[test]
+fn the_watcom_abi_makes_char_unsigned() {
+    let unsigned = |args: &str| built(args).clang.iter().any(|one| one == "-funsigned-char");
+    assert!(unsigned("-mabi=watcom -c x.c"));
+    assert!(!unsigned("-mabi=sysv -c x.c"));
+    assert!(!unsigned("-mabi=watcom -fsigned-char -c x.c"));
+}
+
 /// `-g` was refused ("debug info is not carried yet"), so no program could
 /// carry debug info: clang gets `-g`, the backend the flag that names the
 /// format.
