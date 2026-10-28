@@ -73,12 +73,12 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
     let carry_op = if is_sub { sbb } else { adc };
     // Look through a one-use zext.
     let mut y = y;
-    if dag.opcode(y) == ISD::ZeroExtend && dag.use_count(y.node) == 1 {
+    if dag.opcode(y) == ISD::ZeroExtend && dag.has_one_use(y.node) {
         y = dag.operand(y, 0);
     }
-    let (code, flags) = if dag.opcode(y) == x86isd::SETCC && dag.use_count(y.node) == 1 {
+    let (code, flags) = if dag.opcode(y) == x86isd::SETCC && dag.has_one_use(y.node) {
         (dag.constant(dag.operand(y, 0))?, dag.operand(y, 1))
-    } else if dag.opcode(y) == ISD::And && dag.constant(dag.operand(y, 1)) == Some(1) && dag.use_count(y.node) == 1 {
+    } else if dag.opcode(y) == ISD::And && dag.constant(dag.operand(y, 1)) == Some(1) && dag.has_one_use(y.node) {
         let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe)?;
         (code, flags)
     } else {
@@ -95,7 +95,7 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
             // Swap the operands of a SUB, and we have the same pattern as
             // above.
             if dag.opcode(flags) == x86isd::SUB
-                && dag.use_count(flags.node) == 1
+                && dag.has_one_use(flags.node)
                 && flags.res == 1
                 && dag.constant(dag.operand(flags, 1)).is_none()
             {
@@ -120,7 +120,7 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
             return Some(adc_or_sbb(dag, carry_op, vt, x, zero, flags));
         }
         if is_sub_flags && dag.constant(dag.operand(flags, 1)).is_none() {
-            if dag.use_count(flags.node) == 1 {
+            if dag.has_one_use(flags.node) {
                 let swapped = sub_flags(dag, dag.operand(flags, 1), dag.operand(flags, 0));
                 let zero = dag.get_constant(0, vt);
                 return Some(adc_or_sbb(dag, carry_op, vt, x, zero, swapped));
@@ -140,7 +140,7 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
     if code == cond::BE
         && dag.opcode(flags) == x86isd::SUB
         && flags.res == 1
-        && dag.use_count(flags.node) == 1
+        && dag.has_one_use(flags.node)
         && dag.constant(dag.operand(flags, 1)).is_none()
     {
         let swapped = sub_flags(dag, dag.operand(flags, 1), dag.operand(flags, 0));
@@ -152,7 +152,7 @@ pub(super) fn add_or_sub_to_adc_or_sbb(
         return None;
     }
     if dag.opcode(flags) != x86isd::CMP
-        || dag.use_count(flags.node) != 1
+        || !dag.has_one_use(flags.node)
         || !dag.is_null_constant(dag.operand(flags, 1))
         || !dag.value_type(dag.operand(flags, 0)).is_integer()
     {
