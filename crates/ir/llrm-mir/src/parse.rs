@@ -918,6 +918,49 @@ impl Parser {
         Ok(self.module.context.constant(Constant { ty, kind: ConstantKind::Global(id) }))
     }
 
+    /// `add`/`sub (ptrtoint P to iN, iN C)`, the constant expression clang
+    /// writes for `(int)&a + 3`: `ptrtoint (getelementptr i8, P, C)`, the same
+    /// bits (the GEP carries no flags, so it wraps like the add). Any other
+    /// operands of a constant `add`/`sub` are refused.
+    fn address_offset(
+        &mut self,
+        subtract: bool,
+        (left_ty, left): (TypeId, ConstantId),
+        (right_ty, right): (TypeId, ConstantId),
+        ty: TypeId,
+        line: usize,
+    ) -> Parsed<ConstantId> {
+        let context = &self.module.context;
+        let (Type::Int(bits), true) = (context.types.get(ty).clone(), left_ty == ty && right_ty == ty) else {
+            return self.fail_on(line, "a constant add or sub is of one integer type");
+        };
+        let ConstantKind::Int(offset) = context.get(right).kind else {
+            return self.fail_on(line, "a constant add or sub of an address adds an integer constant");
+        };
+        let ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: address }) = context.get(left).kind
+        else {
+            return self.fail_on(line, "a constant add or sub is of a ptrtoint and an integer constant");
+        };
+        let offset = if subtract { offset.wrapping_neg() & mask(bits) } else { offset };
+        let pointer = context.get(address).ty;
+        let index = context.constant(Constant { ty, kind: ConstantKind::Int(offset) });
+        let byte = context.types.int(8);
+        let moved = context.constant(Constant {
+            ty: pointer,
+            kind: ConstantKind::Expr(ConstantExpr::GetElementPtr {
+                source: byte,
+                inbounds: false,
+                nusw: false,
+                nuw: false,
+                operands: vec![address, index],
+            }),
+        });
+        Ok(context.constant(Constant {
+            ty,
+            kind: ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt, value: moved }),
+        }))
+    }
+
     fn constant(
         &mut self,
         ty: TypeId,
@@ -1064,6 +1107,16 @@ impl Parser {
                     return self.fail_on(line, "a constant cast's type is the one it is given as");
                 }
                 ConstantKind::Expr(ConstantExpr::Cast { op, value })
+            }
+            Token::Word(word) if word == "add" || word == "sub" => {
+                self.expect_punct('(')?;
+                let left_ty = self.ty()?;
+                let left = self.constant(left_ty)?;
+                self.expect_punct(',')?;
+                let right_ty = self.ty()?;
+                let right = self.constant(right_ty)?;
+                self.expect_punct(')')?;
+                return self.address_offset(word == "sub", (left_ty, left), (right_ty, right), ty, line);
             }
             _ => {
                 self.at -= 1;

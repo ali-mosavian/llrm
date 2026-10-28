@@ -1262,3 +1262,15 @@ fn a_flags_result_read_other_than_by_a_comparison_is_refused() {
         "{refused:?}"
     );
 }
+
+/// `icmp ne i32 %v, add (i32 ptrtoint (ptr @a to i32), i32 3)`, as clang writes
+/// `(int)&a + 3`, was refused ("expected a constant, found `add`"): gcc torture
+/// `loop-2d` did not compile. It reads as the address moved by 3 bytes.
+#[test]
+fn test_an_add_of_an_address_and_a_constant_is_read_as_the_address_moved() {
+    let printed = round(
+        "@a = global [2 x i32] zeroinitializer\n\
+         define i1 @f(i32 %v) {\nb0:\n  %c = icmp ne i32 %v, add (i32 ptrtoint (ptr @a to i32), i32 3)\n  ret i1 %c\n}\n",
+    );
+    assert!(printed.contains("ptrtoint (ptr getelementptr (i8, ptr @a, i32 3) to i32)"), "{printed}");
+}
