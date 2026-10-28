@@ -1,17 +1,13 @@
-/* The C library routines the torture programs call, over the OS layer: what a program that checks itself needs to run.
-   HAVE_<NAME>: the target's C runtime has it (`libcalls` in its c.toml), and a second definition is a link error. */
+/* The C library routines the torture programs call, over the OS layer: what a program that checks itself needs to run. */
 #include "llrm_os.h"
 
 typedef unsigned size_t_;
 
-void *memcpy(void *to, const void *from, size_t_ n);
-void *memmove(void *to, const void *from, size_t_ n);
-void *memset(void *to, int c, size_t_ n);
-
 void exit(int code) { llrm_os_exit((unsigned char)code); for (;;) {} }
 void abort(void) { llrm_os_exit(134); for (;;) {} }
 
-#ifndef HAVE_MEMCPY
+/* The target's runtime defines these (its c.toml `libcalls`); torture.py passes -DRUNTIME_HAS_NAME for each. */
+#ifndef RUNTIME_HAS_MEMCPY
 void *memcpy(void *to, const void *from, size_t_ n)
 {
     unsigned char *d = to;
@@ -21,7 +17,7 @@ void *memcpy(void *to, const void *from, size_t_ n)
 }
 #endif
 
-#ifndef HAVE_MEMMOVE
+#ifndef RUNTIME_HAS_MEMMOVE
 void *memmove(void *to, const void *from, size_t_ n)
 {
     unsigned char *d = to;
@@ -32,7 +28,7 @@ void *memmove(void *to, const void *from, size_t_ n)
 }
 #endif
 
-#ifndef HAVE_MEMSET
+#ifndef RUNTIME_HAS_MEMSET
 void *memset(void *to, int c, size_t_ n)
 {
     unsigned char *d = to;
@@ -107,3 +103,4 @@ void *malloc(size_t_ n)
 void *calloc(size_t_ n, size_t_ size) { void *p = malloc(n * size); if (p) memset(p, 0, n * size); return p; }
 void free(void *p) { (void)p; }
 void *realloc(void *p, size_t_ n) { void *q = malloc(n); if (q && p) memcpy(q, p, n); return q; }
+
