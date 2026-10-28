@@ -1403,22 +1403,7 @@ impl Builder<'_> {
             if let ([(leaf, _)], true) = (leaves.as_slice(), plan.returns.is_empty()) {
                 let leaf_vt = self.type_of(*leaf)?;
                 if leaf_vt.is_floating_point() {
-                    let piece = if let Some(xmm) = plan.float_result {
-                        let copy = self.dag.get_copy_from_phys_reg(chain, xmm, leaf_vt, glue);
-                        self.dag.set_root(SDValue { node: copy.node, res: 1 });
-                        SDValue { node: copy.node, res: 0 }
-                    } else {
-                        let fp0 = self.dag.get_phys_register(leaf_vt, RegId::MM0);
-                        let pop = self
-                            .dag
-                            .get_node_multi(
-                                super::x86isd::POP_FROM_X87_REG,
-                                &[leaf_vt, EVT::OTHER, EVT::GLUE],
-                                &[chain, fp0, glue],
-                            );
-                        self.dag.set_root(SDValue { node: pop.node, res: 1 });
-                        pop
-                    };
+                    let piece = self.float_call_result(leaf_vt, plan.float_result, chain, glue);
                     return Ok(Some(self.merge(&[piece])));
                 }
             }
@@ -1445,22 +1430,8 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
-        if let (true, Some(xmm)) = (vt.is_floating_point(), plan.float_result) {
-            // X86's `LowerCallResult` with SSE: a `float` or `double` is read
-            // from the vector register the convention names
-            let copy = self.dag.get_copy_from_phys_reg(chain, xmm, vt, glue);
-            self.dag.set_root(SDValue { node: copy.node, res: 1 });
-            return Ok(Some(SDValue { node: copy.node, res: 0 }));
-        }
         if vt.is_floating_point() {
-            // X86's `LowerCallResult`: the value is popped from st(0), which
-            // the allocator knows as `FP0`
-            let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
-            let pop = self
-                .dag
-                .get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
-            self.dag.set_root(SDValue { node: pop.node, res: 1 });
-            return Ok(Some(pop));
+            return Ok(Some(self.float_call_result(vt, plan.float_result, chain, glue)));
         }
         let (part_vt, parts) = self.parts_in(vt, plan.returns.len())?;
         if plan.returns.len() != parts {
@@ -1493,6 +1464,28 @@ impl Builder<'_> {
 
     /// `visitRet` and X86's `LowerReturn`: the value copied to the return
     /// register, then `RET_GLUE chain, popped, register, glue`.
+    /// X86's `LowerCallResult` for a float: read from the vector register the
+    /// convention names, else popped from st(0), which the allocator knows as
+    /// `FP0`.
+    fn float_call_result(
+        &mut self,
+        vt: EVT,
+        xmm: Option<RegId>,
+        chain: SDValue,
+        glue: SDValue,
+    ) -> SDValue {
+        if let Some(xmm) = xmm {
+            let copy = self.dag.get_copy_from_phys_reg(chain, xmm, vt, glue);
+            self.dag.set_root(SDValue { node: copy.node, res: 1 });
+            return SDValue { node: copy.node, res: 0 };
+        }
+        let fp0 = self.dag.get_phys_register(vt, RegId::MM0);
+        let pop =
+            self.dag.get_node_multi(super::x86isd::POP_FROM_X87_REG, &[vt, EVT::OTHER, EVT::GLUE], &[chain, fp0, glue]);
+        self.dag.set_root(SDValue { node: pop.node, res: 1 });
+        pop
+    }
+
     fn visit_ret(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
