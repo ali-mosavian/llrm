@@ -246,7 +246,10 @@ fn _unfolded(
     // The two-operand `imul` commutes like `add`: `IMUL32rm`'s unfold is
     // `IMUL32rr`.
     let commutative = match what.op {
-        Operation::Binary => matches!(what.name.as_deref(), Some("add" | "adc" | "and" | "or" | "xor")),
+        Operation::Binary => matches!(
+            what.name.as_deref(),
+            Some("add" | "adc" | "and" | "or" | "xor")
+        ),
         Operation::Multiply => what.name.as_deref() == Some("imul"),
         _ => false,
     };
