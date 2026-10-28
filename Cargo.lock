@@ -239,8 +239,11 @@ dependencies = [
 name = "llrm-arm64"
 version = "0.1.0"
 dependencies = [
+ "llrm-analysis",
+ "llrm-codegen",
  "llrm-dwarf",
  "llrm-elf",
+ "llrm-env",
  "llrm-iselgen",
  "llrm-lir",
  "llrm-macho",

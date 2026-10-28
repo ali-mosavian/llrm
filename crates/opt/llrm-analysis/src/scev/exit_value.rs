@@ -262,6 +262,85 @@ impl ScalarEvolution {
     }
 }
 
+impl ScalarEvolution {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9919
+    /// `getConstantEvolutionLoopExitValue`: the value `pn`, a phi of the header
+    /// of `l`, has when `l` exits after `bes` backedges, by running the
+    /// loop on constants; none where it cannot be.
+    ///
+    /// DEVIATE: no cache per phi (`ConstantEvolutionLoopExitValue`);
+    /// `getSCEVAtScope` memoizes the result per value and scope.
+    pub(super) fn get_constant_evolution_loop_exit_value(
+        &mut self,
+        cx: &Cx,
+        pn: InstId,
+        bes: u128,
+        l: &Loop,
+    ) -> Option<ConstantId> {
+        // Not going to evaluate it.
+        if bes > u128::from(MAX_BRUTE_FORCE_ITERATIONS) {
+            return None;
+        }
+        let header = l.get_header();
+        let latch = l.get_loop_latch(cx.function)?;
+        let phis = header_phis(cx, header);
+        let mut current: IdMap<InstId, ConstantId> = IdMap::new();
+        for &phi in &phis {
+            if let Some(start) = get_other_incoming_value(cx, phi, latch) {
+                current.insert(phi, start);
+            }
+        }
+        if !current.contains_key(&pn) {
+            return None;
+        }
+        let back_edge_value = incoming_for_block(cx, pn, latch)?;
+        // Execute the loop symbolically to determine the exit value.
+        let iterations = bes as u32;
+        let mut iteration = 0;
+        loop {
+            if iteration == iterations {
+                // Got exit value!
+                return current.get(&pn).copied();
+            }
+            // Compute the value of the PHIs for the next iteration.
+            // `evaluate_expression` adds the non-phi values to
+            // `current`.
+            let mut next: IdMap<InstId, ConstantId> = IdMap::new();
+            let next_phi = evaluate_expression(cx, l, back_edge_value, &mut current)?;
+            next.insert(pn, next_phi);
+            let mut stopped_evolving = Some(&next_phi) == current.get(&pn);
+            // Also evaluate the other phis. We do not get to stop if we find
+            // that all of them are constant evolving.
+            let others: Vec<(InstId, ConstantId)> = phis
+                .iter()
+                .filter(|&&phi| phi != pn)
+                .filter_map(|&phi| current.get(&phi).map(|&value| (phi, value)))
+                .collect();
+            for (phi, previous) in others {
+                let value = match next.get(&phi) {
+                    Some(&done) => Some(done),
+                    None => {
+                        incoming_for_block(cx, phi, latch).and_then(|v| evaluate_expression(cx, l, v, &mut current))
+                    }
+                };
+                if let Some(value) = value {
+                    next.insert(phi, value);
+                }
+                if value != Some(previous) {
+                    stopped_evolving = false;
+                }
+            }
+            // If all the entries of `current` equal those of `next`, the loop
+            // cannot continue to change.
+            if stopped_evolving {
+                return current.get(&pn).copied();
+            }
+            current = next;
+            iteration += 1;
+        }
+    }
+}
+
 /// `MaxBruteForceIterations`: the `cl::opt` default.
 const MAX_BRUTE_FORCE_ITERATIONS: u32 = 100;
 
@@ -324,7 +403,7 @@ fn get_other_incoming_value(
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L9764
 /// `canConstantFold`: an instruction of this kind folds when its operands
 /// are constants.
-fn can_constant_fold(
+pub(super) fn can_constant_fold(
     cx: &Cx,
     inst: InstId,
 ) -> bool {

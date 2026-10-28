@@ -1137,6 +1137,19 @@ pub enum Linkage {
     Appending,
 }
 
+impl Linkage {
+    /// `GlobalValue::isInterposable` by linkage: another definition of the name
+    /// may replace this one at link time, so no pass may rely on its body
+    /// (`weak`, `linkonce`, `common`, `extern_weak`; the `_odr` forms
+    /// promise an equivalent body).
+    pub fn is_interposable(self) -> bool {
+        matches!(
+            self,
+            Linkage::Weak | Linkage::LinkOnce | Linkage::Common | Linkage::ExternWeak
+        )
+    }
+}
+
 pub const LINKAGE: [(Linkage, &str); 10] = [
     (Linkage::Internal, "internal"),
     (Linkage::Private, "private"),

@@ -10,18 +10,60 @@ use crate::mc::inst::*;
 const WINDOW: usize = 8;
 
 /// A plain load or store of one register at `[base, #imm]`.
-struct Access {
-    load: bool,
-    mem: Memory,
-    base: Gpr,
-    imm: i64,
-    bytes: i64,
+pub(crate) struct Access {
+    pub(crate) load: bool,
+    pub(crate) mem: Memory,
+    pub(crate) base: Gpr,
+    pub(crate) imm: i64,
+    pub(crate) bytes: i64,
+    pub(crate) mmo: MemOperand,
 }
 
-fn access(inst: &Inst) -> Option<Access> {
-    let (load, mem, addr) = match inst {
-        Inst::Load { mem, addr } => (true, *mem, addr),
-        Inst::Store { mem, addr } => (false, *mem, addr),
+/// A load or store of any form, as far as ordering it against another goes.
+pub(crate) struct Touch<'a> {
+    store: bool,
+    mmo: &'a MemOperand,
+    bytes: i64,
+    /// `[base, #imm]`, where the address is that.
+    at: Option<(Gpr, i64)>,
+}
+
+pub(crate) fn touch(inst: &Inst) -> Option<Touch<'_>> {
+    let (store, mem, addr, mmo) = match inst {
+        Inst::Load { mem, addr, mmo } => (false, mem, addr, mmo),
+        Inst::Store { mem, addr, mmo } => (true, mem, addr, mmo),
+        _ => return None,
+    };
+    let bytes = match mem {
+        Memory::Int { bytes, .. } | Memory::Fp { bytes, .. } => i64::from(*bytes),
+    };
+    let at = if let Addr::Offset { base, imm } = addr { Some((*base, *imm)) } else { None };
+    Some(Touch { store, mmo, bytes, at })
+}
+
+/// Whether `a` and `b` may swap places: two loads always may; otherwise their
+/// bytes must be provably apart, by object (two globals, two frame objects) or
+/// by offsets from one register nothing has changed.
+pub(crate) fn commutes(
+    a: &Touch<'_>,
+    b: &Touch<'_>,
+) -> bool {
+    if !a.store && !b.store {
+        return true;
+    }
+    if a.mmo.disjoint(a.bytes, b.mmo, b.bytes) {
+        return true;
+    }
+    matches!(
+        (a.at, b.at),
+        (Some((x, i)), Some((y, j))) if x == y && (i + a.bytes <= j || j + b.bytes <= i)
+    )
+}
+
+pub(crate) fn access(inst: &Inst) -> Option<Access> {
+    let (load, mem, addr, mmo) = match inst {
+        Inst::Load { mem, addr, mmo } => (true, *mem, addr, mmo),
+        Inst::Store { mem, addr, mmo } => (false, *mem, addr, mmo),
         _ => return None,
     };
     let Addr::Offset { base, imm } = addr else { return None };
@@ -39,10 +81,14 @@ fn access(inst: &Inst) -> Option<Access> {
     {
         return None;
     }
-    Some(Access { load: load, mem, base: *base, imm: *imm, bytes })
+    Some(Access { load: load, mem, base: *base, imm: *imm, bytes, mmo: mmo.clone() })
 }
 
-fn register(mem: &Memory) -> (bool, u32) {
+pub(crate) fn touch_of(access: &Access) -> Touch<'_> {
+    Touch { store: !access.load, mmo: &access.mmo, bytes: access.bytes, at: Some((access.base, access.imm)) }
+}
+
+pub(crate) fn register(mem: &Memory) -> (bool, u32) {
     match mem {
         Memory::Int { reg, .. } => (false, reg.0),
         Memory::Fp { reg, .. } => (true, reg.0),
@@ -63,7 +109,7 @@ fn defines_or_uses(
     defs.iter().any(hit) || (!defs_only && uses.iter().any(hit))
 }
 
-fn is_memory(inst: &Inst) -> bool {
+pub(crate) fn is_memory(inst: &Inst) -> bool {
     matches!(
         inst,
         Inst::Load { .. } | Inst::Store { .. } | Inst::LoadPair { .. } | Inst::StorePair { .. }
@@ -77,11 +123,7 @@ fn ordered(inst: &Inst) -> bool {
     matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
 }
 
-fn is_store(inst: &Inst) -> bool {
-    matches!(inst, Inst::Store { .. } | Inst::StorePair { .. })
-}
-
-fn leaves_the_block(inst: &Inst) -> bool {
+pub(crate) fn leaves_the_block(inst: &Inst) -> bool {
     matches!(
         inst,
         Inst::Branch { .. }
@@ -113,7 +155,11 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
                     // A load moves up over them: they must not meet its
                     // register. A store moves up: they must not change the
                     // register it stores.
-                    !defines_or_uses(between, float, number, !first.load)
+                    let register_free = !defines_or_uses(between, float, number, !first.load);
+                    // It also passes their memory accesses: they must commute
+                    // with it.
+                    let second_touch = touch_of(&second);
+                    register_free && touch(between).is_none_or(|other| commutes(&second_touch, &other))
                 })
             {
                 insts[i] = Some(pair.inst);
@@ -123,10 +169,9 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
             // Passing `inst` is allowed only when it neither is control flow
             // nor changes the base, a store passes nothing in
             // memory, and a load passes only loads.
-            let stop = leaves_the_block(inst)
-                || defines_or_uses(inst, false, first.base.0, true)
-                || (is_memory(inst) && (is_store(inst) || !first.load))
-                || (is_memory(inst) && first.load && access(inst).is_none());
+            let first_touch = touch_of(&first);
+            let memory_stop = is_memory(inst) && touch(inst).is_none_or(|other| !commutes(&first_touch, &other));
+            let stop = leaves_the_block(inst) || defines_or_uses(inst, false, first.base.0, true) || memory_stop;
             if stop {
                 break;
             }
@@ -135,13 +180,13 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
     insts.into_iter().flatten().collect()
 }
 
-struct Pair {
+pub(crate) struct Pair {
     low: Access,
     inst: Inst,
 }
 
 /// The pair `first` and `second` make, if they are neighbours of one kind.
-fn pair_of(
+pub(crate) fn pair_of(
     first: &Access,
     second: &Access,
 ) -> Option<Pair> {
@@ -152,7 +197,9 @@ fn pair_of(
         && second.bytes == first.bytes
         && std::mem::discriminant(&second.mem) == std::mem::discriminant(&first.mem)
         && (second.imm == first.imm + first.bytes || second.imm == first.imm - first.bytes)
-        && (second_float, second_number) != (first_float, first_number);
+        // Two loads into one register leave the pair undefined; two stores of
+        // one register are `stp q0, q0`.
+        && (!first.load || (second_float, second_number) != (first_float, first_number));
     // A load into the base register would change the address of the other.
     let base_loaded = first.load
         && ((!second_float && second_number == first.base.0) || (!first_float && first_number == first.base.0));
@@ -166,7 +213,17 @@ fn pair_of(
     } else {
         Inst::StorePair { first: low.mem, second: high.mem, addr }
     };
-    Some(Pair { low: Access { load: low.load, mem: low.mem, base: low.base, imm: low.imm, bytes: low.bytes }, inst })
+    Some(Pair {
+        low: Access {
+            load: low.load,
+            mem: low.mem,
+            base: low.base,
+            imm: low.imm,
+            bytes: low.bytes,
+            mmo: low.mmo.clone(),
+        },
+        inst,
+    })
 }
 
 /// `blocks` with their adjacent accesses paired.
@@ -186,6 +243,7 @@ mod tests {
         Inst::Load {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(reg) },
             addr: Addr::Offset { base: Gpr(base), imm },
+            mmo: MemOperand::default(),
         }
     }
 
@@ -197,6 +255,7 @@ mod tests {
         Inst::Store {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(reg) },
             addr: Addr::Offset { base: Gpr(base), imm },
+            mmo: MemOperand::default(),
         }
     }
 
@@ -261,5 +320,39 @@ mod tests {
         };
         let out = folded(vec![store(1, 0, 0), add, store(2, 0, 8)]);
         assert_eq!(out.len(), 2, "{out:?}");
+    }
+
+    fn store_to(
+        reg: u32,
+        base: u32,
+        imm: i64,
+        object: &str,
+        offset: i64,
+    ) -> Inst {
+        Inst::Store {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(reg) },
+            addr: Addr::Offset { base: Gpr(base), imm },
+            mmo: MemOperand { object: MemObject::Global(object.into()), offset: Some(offset) },
+        }
+    }
+
+    /// A store to another global between two stores of one pair does not stop
+    /// them, one to the same bytes does.
+    #[test]
+    fn stores_pair_across_a_store_to_another_object_but_not_to_the_same_bytes() {
+        let other = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 0, "_b", 0), store_to(3, 20, 8, "_a", 8)]);
+        assert!(matches!(other[0], Inst::StorePair { .. }), "{other:?}");
+        let same = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 8, "_a", 8), store_to(3, 20, 8, "_a", 8)]);
+        assert!(!same.iter().any(|inst| matches!(inst, Inst::StorePair { .. })), "{same:?}");
+    }
+
+    /// Stores of one register (a fill, `stp xzr, xzr`) were never paired; loads
+    /// into one register still are not.
+    #[test]
+    fn stores_of_one_register_pair_but_loads_into_one_do_not() {
+        let stores = folded(vec![store(5, 20, 0), store(5, 20, 8)]);
+        assert!(matches!(stores[0], Inst::StorePair { .. }) && stores.len() == 1, "{stores:?}");
+        let loads = folded(vec![load(5, 20, 0), load(5, 20, 8)]);
+        assert!(!loads.iter().any(|inst| matches!(inst, Inst::LoadPair { .. })), "{loads:?}");
     }
 }

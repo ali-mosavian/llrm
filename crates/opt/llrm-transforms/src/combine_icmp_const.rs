@@ -17,9 +17,10 @@
 //! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
 //! `foldICmpShlConstant`, `foldICmpShrConstant`,
 //! `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
-//! `foldICmpSubConstant`),
-//! `foldICmpBinOpEqualityWithConstant`, the truth-table fold, and the select,
-//! truncate, intrinsic and `extractvalue` arms of `foldICmpInstWithConstant`.
+//! ),
+//! the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
+//! truth-table fold, and the select, truncate, intrinsic and `extractvalue`
+//! arms of `foldICmpInstWithConstant`.
 //!
 //! DEVIATE 1: the load from an indexed global fold
 //! (`foldCmpLoadFromIndexedGlobal`) and the floating-point class folds on a
@@ -147,11 +148,257 @@ pub fn fold_icmp_inst_with_constant(
     if let Some((flags, x, y)) = mul {
         return fold_icmp_mul_constant(c, inst, pred, flags, (x, y), value, width);
     }
-    let (flags, x, y) = {
+    let sub = {
         let q = query(c, None);
-        pattern::binary(&q, op0, BinaryOp::Add).map(|(_, add, x, y)| (add.flags, x, y))?
+        pattern::binary(&q, op0, BinaryOp::Sub).map(|(_, sub, x, y)| (sub.flags, x, y))
     };
-    fold_icmp_add_constant(c, inst, pred, op0, flags, (x, y), value, width)
+    if let Some((flags, x, y)) = sub
+        && let Some(visit) = fold_icmp_sub_constant(c, inst, pred, op0, flags, (x, y), value, width)
+    {
+        return Some(visit);
+    }
+    let add = {
+        let q = query(c, None);
+        pattern::binary(&q, op0, BinaryOp::Add).map(|(_, add, x, y)| (add.flags, x, y))
+    };
+    if let Some((flags, x, y)) = add
+        && let Some(visit) = fold_icmp_add_constant(c, inst, pred, op0, flags, (x, y), value, width)
+    {
+        return Some(visit);
+    }
+    fold_icmp_bin_op_equality_with_constant(c, inst, pred, op0, value, width)
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3046
+/// `foldICmpSubConstant`: `icmp (sub X, Y), C`. The `urem` fold and the
+/// multi-use `sub` folds that `X - Y == 0` is guarded for are all here.
+fn fold_icmp_sub_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    sub: Operand,
+    flags: Flags,
+    (x, y): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let ty = c.type_of(sub);
+    let m = mask(width);
+    let equality = is_equality(pred);
+
+    // (X - (X urem D)) is D*(X/D), a multiple of D, so it is u> C exactly when
+    // X u>= D (for C u< D), and u< C exactly when X u< D (for 0 u< C u<=
+    // D).
+    let d = {
+        let q = query(c, None);
+        pattern::binary(&q, y, BinaryOp::URem)
+            .filter(|&(_, _, deferred, _)| deferred == x)
+            .and_then(|(_, _, _, d)| q.int_constant(d))
+            .filter(|&(d, _)| d != 0)
+    };
+    if let Some((d, _)) = d {
+        if pred == IntPredicate::Ugt && value < d {
+            let bound = c.int(ty, d - 1);
+            return Some(new_icmp(c, inst, IntPredicate::Ugt, x, bound));
+        }
+        if pred == IntPredicate::Ult && value != 0 && value <= d {
+            let bound = c.int(ty, d);
+            return Some(new_icmp(c, inst, IntPredicate::Ult, x, bound));
+        }
+    }
+
+    // (SubC - Y) == C) --> Y == (SubC - C)
+    let sub_c = query(c, None).int_constant(x).map(|(v, _)| v);
+    if equality && let Some(sub_c) = sub_c {
+        let bound = c.int(ty, sub_c.wrapping_sub(value) & m);
+        return Some(new_icmp(c, inst, pred, y, bound));
+    }
+
+    // (icmp P (sub nuw|nsw C2, Y), C) -> (icmp swap(P) Y, C2-C)
+    let signed = is_signed(pred);
+    let (has_nsw, has_nuw) = (flags.contains(Flags::NSW), flags.contains(Flags::NUW));
+    if let Some(c2) = sub_c
+        && ((!signed && !equality && has_nuw) || (signed && has_nsw))
+    {
+        let overflows = if signed {
+            let (a, b) = (llrm_mir::context::signed(c2, width), llrm_mir::context::signed(value, width));
+            let (low, high) = (
+                llrm_mir::context::signed(1u128 << (width - 1), width),
+                llrm_mir::context::signed((1u128 << (width - 1)) - 1, width),
+            );
+            a.checked_sub(b).is_none_or(|r| r < low || r > high)
+        } else {
+            c2 < value
+        };
+        if !overflows {
+            let bound = c.int(ty, c2.wrapping_sub(value) & m);
+            return Some(new_icmp(c, inst, pred.swapped(), y, bound));
+        }
+    }
+
+    // X - Y == 0 --> X == Y. Not when the sub feeds a phi: that guards a loop
+    // test's codegen.
+    let feeds_phi = match sub {
+        Operand::Value(result) => {
+            c.function.users(result).iter().any(|u| c.function.instruction(u.user).opcode == Opcode::Phi)
+        }
+        _ => false,
+    };
+    if equality && value == 0 && !feeds_phi {
+        return Some(new_icmp(c, inst, pred, x, y));
+    }
+
+    // The following transforms are only worth it if the only user of the
+    // subtract is the icmp.
+    if !has_one_use(c, sub) {
+        return None;
+    }
+    if has_nsw {
+        let (all_ones, one) = (value == m, value == 1);
+        match pred {
+            IntPredicate::Sgt if all_ones => return Some(new_icmp(c, inst, IntPredicate::Sge, x, y)),
+            IntPredicate::Sgt if value == 0 => return Some(new_icmp(c, inst, IntPredicate::Sgt, x, y)),
+            IntPredicate::Slt if value == 0 => return Some(new_icmp(c, inst, IntPredicate::Slt, x, y)),
+            IntPredicate::Slt if one => return Some(new_icmp(c, inst, IntPredicate::Sle, x, y)),
+            _ => {}
+        }
+    }
+    let c2 = sub_c?;
+    // C2 - Y <u C -> (Y | (C - 1)) == C2  iff (C2 & (C - 1)) == C - 1 and C is
+    // a power of 2
+    if pred == IntPredicate::Ult && value.is_power_of_two() && c2 & (value - 1) == value - 1 {
+        let low = c.int(ty, value - 1);
+        let or = c.create_binop(inst, BinaryOp::Or, y, low, Flags::default());
+        return Some(new_icmp(c, inst, IntPredicate::Eq, or, x));
+    }
+    // C2 - Y >u C -> (Y | C) != C2  iff C2 & C == C and C + 1 is a power of 2
+    if pred == IntPredicate::Ugt
+        && value.wrapping_add(1) & m != 0
+        && (value.wrapping_add(1) & m).is_power_of_two()
+        && c2 & value == value
+    {
+        let cv = c.int(ty, value);
+        let or = c.create_binop(inst, BinaryOp::Or, y, cv, Flags::default());
+        return Some(new_icmp(c, inst, IntPredicate::Ne, or, x));
+    }
+    // Canonicalize any remaining sub to add as: (C2 - Y) > C --> (Y + ~C2) < ~C
+    let not_c2 = c.int(ty, !c2 & m);
+    let mut keep = Flags::default();
+    if has_nuw {
+        keep = keep.union(Flags::NUW);
+    }
+    if has_nsw {
+        keep = keep.union(Flags::NSW);
+    }
+    let add = c.create_binop(inst, BinaryOp::Add, y, not_c2, keep);
+    let bound = c.int(ty, !value & m);
+    Some(new_icmp(c, inst, pred.swapped(), add, bound))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3736
+/// `foldICmpBinOpEqualityWithConstant`: `icmp eq/ne (binop X, Y), C`, the
+/// `srem`, `add`, `xor`, `or` (the all-ones mask), and `udiv`/`sdiv` cases.
+///
+/// OWED: the `or`-of-select case.
+fn fold_icmp_bin_op_equality_with_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    bo: Operand,
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    if !is_equality(pred) {
+        return None;
+    }
+    let m = mask(width);
+    let ty = c.type_of(bo);
+    let (op, bo_inst, x, y) = {
+        let q = query(c, None);
+        let (_, instruction) = q.instruction_of(bo)?;
+        let Opcode::Binary(op) = instruction.opcode else { return None };
+        (op, instruction.flags, instruction.operands[0], instruction.operands[1])
+    };
+    let y_const = query(c, None).int_constant(y).map(|(v, _)| v);
+    match op {
+        // If we have a signed (X % (2^c)) == 0, turn it into an unsigned one.
+        BinaryOp::SRem if value == 0 && has_one_use(c, bo) => {
+            let (d, _) = query(c, None).int_constant(y)?;
+            let signed_d = llrm_mir::context::signed(d, width);
+            if signed_d > 1 && d.is_power_of_two() {
+                let rem = c.create_binop(inst, BinaryOp::URem, x, y, Flags::default());
+                let zero = c.int(ty, 0);
+                return Some(new_icmp(c, inst, pred, rem, zero));
+            }
+            None
+        }
+        BinaryOp::Add => {
+            // (A + C2) == C --> A == (C - C2)
+            if let Some(c2) = y_const {
+                if has_one_use(c, bo) {
+                    let bound = c.int(ty, value.wrapping_sub(c2) & m);
+                    return Some(new_icmp(c, inst, pred, x, bound));
+                }
+                return None;
+            }
+            // Replace ((add A, B) != 0) with (A != -B) if A or B is efficiently
+            // invertible, or if the add has just this one use.
+            if value == 0 {
+                if has_one_use(c, bo) {
+                    // (add nuw A, B) != 0 -> (or A, B) != 0
+                    if bo_inst.contains(Flags::NUW) {
+                        let or = c.create_binop(inst, BinaryOp::Or, x, y, Flags::default());
+                        let zero = c.int(ty, 0);
+                        return Some(new_icmp(c, inst, pred, or, zero));
+                    }
+                    let zero = c.int(ty, 0);
+                    let neg = c.create_binop(inst, BinaryOp::Sub, zero, y, Flags::default());
+                    return Some(new_icmp(c, inst, pred, x, neg));
+                }
+            }
+            None
+        }
+        BinaryOp::Xor => {
+            // For the xor case, we can xor two constants together, eliminating
+            // the explicit xor.
+            if let Some(boc) = y_const {
+                let bound = c.int(ty, (value ^ boc) & m);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+            // Replace ((xor A, B) != 0) with (A != B)
+            (value == 0).then(|| new_icmp(c, inst, pred, x, y))
+        }
+        BinaryOp::Or => {
+            // Replace (X | C) == -1 with (X & ~C) == ~C. This removes the -1
+            // constant.
+            let boc = y_const?;
+            if has_one_use(c, bo) && value == m {
+                let not_boc = c.int(ty, !boc & m);
+                let and = c.create_binop(inst, BinaryOp::And, x, not_boc, Flags::default());
+                return Some(new_icmp(c, inst, pred, and, not_boc));
+            }
+            None
+        }
+        BinaryOp::UDiv | BinaryOp::SDiv => {
+            if bo_inst.contains(Flags::EXACT) {
+                // div exact X, Y eq/ne 0 -> X eq/ne 0; eq/ne 1 -> X eq/ne Y
+                if value == 0 {
+                    let zero = c.int(ty, 0);
+                    return Some(new_icmp(c, inst, pred, x, zero));
+                }
+                if value == 1 {
+                    return Some(new_icmp(c, inst, pred, x, y));
+                }
+            }
+            if op == BinaryOp::UDiv && value == 0 {
+                // (icmp eq/ne (udiv A, B), 0) -> (icmp ugt/ule B, A)
+                let new_pred = if pred == IntPredicate::Ne { IntPredicate::Ule } else { IntPredicate::Ugt };
+                return Some(new_icmp(c, inst, new_pred, y, x));
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// `foldICmpTruncConstant`'s first arm: `icmp pred (trunc nsw X), C` is the

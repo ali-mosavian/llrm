@@ -133,6 +133,18 @@ object = "elf"
 link = ["{root}/tools/targets/arm64-glibc-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
 
+# arm64 macOS, on an Apple-silicon Mac only; headers from SDKROOT (`export SDKROOT=$(xcrun --show-sdk-path)`). Untested.
+[arm64-macos]
+triple = "arm64-apple-macosx"
+datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32"
+clang = ["-ffp-contract=off", "-target", "arm64-apple-macos"]
+llc = []
+llc_program = "llrm-arm64-llc"
+llc_level = true
+object = "macho"
+link = ["clang", "-arch", "arm64", "-o", "{output}", "{objects}"]
+run = []
+
 # 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
 [x86_32-linux]
 triple = "i486-unknown-linux-gnu"

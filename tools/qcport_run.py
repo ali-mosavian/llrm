@@ -13,6 +13,7 @@ import hashlib
 import os
 import re
 import signal
+import resource
 import subprocess
 import sys
 import time
@@ -131,10 +132,15 @@ def progress(directory: Path) -> int:
     return sum(one.stat().st_size for one in directory.iterdir() if one.is_file())
 
 
-def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1.0, arguments: str = ARGUMENTS, over=None) -> str | None:
-    """Run QCport in `directory`; None when it finished (or `over(directory)` said so), else why it was stopped: no progress for `stall` s, or `cap` s in all."""
+# A run that faults loops on the CPU exception and logs it without end: one dosbox.log reached 57 GB.
+FILE_LIMIT = 1 << 30
+
+
+def run(directory: Path, qcport: Path, stall: float, cap: float, tick: float = 1.0, arguments: str = ARGUMENTS, over=None, file_limit: int = FILE_LIMIT) -> str | None:
+    """Run QCport in `directory`; None when it finished (or `over(directory)` said so), else why it was stopped: no progress for `stall` s, or `cap` s in all. No file it writes passes `file_limit` bytes."""
     environment = {**os.environ, "DOSBOX_BIN": os.environ.get("DOSBOX_BIN", str(dosbatch.DOSBOX)), "TIMEOUT": str(int(cap))}
-    child = subprocess.Popen([str(qcport.parent / "tools" / "run.sh"), str(directory), arguments], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    child = subprocess.Popen([str(qcport.parent / "tools" / "run.sh"), str(directory), arguments], env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                             preexec_fn=lambda: resource.setrlimit(resource.RLIMIT_FSIZE, (file_limit, file_limit)))
     start = moved = time.monotonic()
     seen = -1
     while child.poll() is None:

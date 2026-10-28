@@ -50,6 +50,7 @@ pub mod instructioncost;
 pub mod interpret;
 mod intrinsic_attrs;
 pub mod intrinsics;
+pub mod jumpmerge;
 pub mod knownbits;
 pub mod knownfpclass;
 pub mod lazyvalueinfo;

@@ -48,3 +48,23 @@ b0:
     );
     assert!(after.contains("ret i16 1"), "{after}");
 }
+
+/// `llvm.objectsize` stayed in the IR to the backend, which refused it (macOS's
+/// `_FORTIFY_SOURCE` headers leave it): an object of unknown size is all ones,
+/// or zero where the minimum is asked.
+#[test]
+fn objectsize_of_an_unknown_object_is_minus_one_or_zero() {
+    let after = lowered(
+        "declare i64 @llvm.objectsize.i64.p0(ptr, i1, i1, i1)
+define i64 @f(ptr %p) {
+b0:
+  %a = call i64 @llvm.objectsize.i64.p0(ptr %p, i1 false, i1 true, i1 false)
+  %b = call i64 @llvm.objectsize.i64.p0(ptr %p, i1 true, i1 true, i1 false)
+  %s = add i64 %a, %b
+  ret i64 %s
+}
+",
+    );
+    assert!(!after.contains("llvm.objectsize.i64.p0(ptr %"), "{after}");
+    assert!(after.contains("ret i64 -1"), "{after}");
+}

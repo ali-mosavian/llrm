@@ -38,7 +38,7 @@ use crate::combine::{Combiner, Visit};
 use crate::combine_bitorder::{fold_bitwise_logic_with_intrinsics, match_bswap_or_bitreverse};
 use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_funnel::match_funnel_shift;
-use crate::combine_icmp_logic::fold_boolean_and_or;
+use crate::combine_icmp_logic::{fold_boolean_and_or, reassociate_boolean_operands};
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
 };
@@ -290,7 +290,10 @@ pub fn visit_or(
     if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
         return found;
     }
-    fold_boolean_and_or(c, inst, op0, op1, false, false).map_or(Visit::None, Visit::Replace)
+    if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, false, false) {
+        return Visit::Replace(found);
+    }
+    reassociate_boolean_operands(c, inst, (op0, op1), false).map_or(Visit::None, Visit::Replace)
 }
 
 #[cfg(test)]

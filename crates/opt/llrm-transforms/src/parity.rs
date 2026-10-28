@@ -311,6 +311,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "simplifycfg",
         "translated SimplifyCfg at hoistCommonInsts, sinkCommonInsts and no canonical loops runs here; The jam follows at L1474 as at the pin; untranslated: speculateUnpredictables and hoistLoadsStoresWithCondFaulting; criterion: opt -passes=simplifycfg on the same inputs is identical on the rows corpus; exit: those translated (llrm-w-4, 2026-10-30)",
     ),
+    partial(
+        "slp@1455",
+        Late,
+        "slp-vectorizer",
+        "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+    ),
     entry("infer-alignment@1362", Late, "infer-alignment", Translated, ""),
     entry("infer-alignment@1498", Late, "infer-alignment", Translated, ""),
     entry("float2int@1594", Late, "float2int", Translated, ""),
@@ -751,6 +757,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "jumptableswitch@672",
     "constraint-elimination@699",
     "mldst-motion@783",
+    "slp@1455",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:

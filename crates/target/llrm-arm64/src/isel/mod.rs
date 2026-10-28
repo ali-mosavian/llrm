@@ -4,19 +4,33 @@
 //! in reverse post-order and maps each MIR instruction to the cheapest sequence
 //! its operands allow (an immediate form, a folded shift or extend, a fused
 //! compare and branch); a comparison only a branch or select reads is selected
-//! where it is read.
+//! where it is read, and so are the comparisons of an `or`/`and` chain a
+//! branch reads (`chain`: one branch each). A `tail` call that returns its own
+//! value, with its arguments in registers, is a branch after the frame is taken
+//! down (`Op::Return` with a `tail` callee). A constant shift only an
+//! `add`, `sub`, `and`, `or` or `xor` reads is that instruction's shifted
+//! operand (`shifted`), a load only a `sext` reads is a sign-extending load,
+//! and a shift or 32-bit extension only a `getelementptr` index reads is part
+//! of the addressing mode (`index`).
 
 mod agg;
 mod atomic;
 mod call;
+mod chain;
+mod conjunction;
 mod control;
 mod divide;
+mod fixedpoint;
 mod fp;
+mod index;
 mod int;
 mod mem;
+mod memops;
+mod shifted;
 mod val;
+mod widemul;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
@@ -63,8 +77,27 @@ pub struct Selector<'a> {
     uses: IdMap<ValueId, usize>,
     /// Comparisons selected where their reader is.
     pub(crate) fused: IdSet<InstId>,
+    /// The shifts and extensions left to the `getelementptr` that indexes by
+    /// them (also in `fused`).
+    pub(crate) indexed: IdSet<InstId>,
+    /// Branches on chains of comparisons, split into one branch each.
+    pub(crate) chains: chain::Chains,
+    /// Selects and branches on `and`/`or` trees of comparisons, made one `cmp`
+    /// and a `ccmp` each.
+    pub(crate) conjunctions: conjunction::Conjunctions,
     /// The block being filled.
     pub(crate) current: usize,
+    /// How many accesses name each global (by symbol): one that is named more
+    /// than once has its address made once per block (`shared_global`)
+    /// instead of an `adrp` at each access.
+    global_uses: HashMap<String, usize>,
+    /// The register holding a global's address in a block, by symbol and block.
+    global_regs: HashMap<(String, usize), Gpr>,
+    global_pages: HashMap<(String, usize), Gpr>,
+    /// The globals something other than a plain load or store of the symbol
+    /// itself reads: they need their full address in a register anyway, so
+    /// no access folds the page offset (`isWorthFoldingADDlow`).
+    global_needs_address: HashSet<String>,
     /// A variadic function's register save areas and where its unnamed
     /// arguments begin.
     pub(crate) va: Option<call::VaInfo>,
@@ -116,9 +149,62 @@ impl<'a> Selector<'a> {
             index,
             uses,
             fused: IdSet::new(),
+            indexed: IdSet::new(),
+            chains: chain::Chains::default(),
+            conjunctions: conjunction::Conjunctions::default(),
             current: 0,
+            global_uses: HashMap::new(),
+            global_regs: HashMap::new(),
+            global_pages: HashMap::new(),
+            global_needs_address: HashSet::new(),
             va: None,
         }
+    }
+
+    /// The global a constant addresses: itself, or the base of a constant gep.
+    fn global_of_constant(
+        &self,
+        id: ConstantId,
+    ) -> Option<GlobalId> {
+        match &self.module.context.get(id).kind {
+            ConstantKind::Global(global) => Some(*global),
+            ConstantKind::Expr(llrm_mir::ConstantExpr::GetElementPtr { operands, .. }) => {
+                self.global_of_constant(*operands.first()?)
+            }
+            _ => None,
+        }
+    }
+
+    /// Counts the accesses that name each global: a gep's result counts once
+    /// for each of its readers.
+    fn count_global_uses(&mut self) {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        let mut needs_address = HashSet::new();
+        for (_, inst) in self.function.walk() {
+            let instruction = self.function.instruction(inst);
+            for (at, operand) in instruction.operands.iter().enumerate() {
+                let Operand::Constant(id) = operand else { continue };
+                let Some(global) = self.global_of_constant(*id) else { continue };
+                let Ok(name) = self.symbol(global) else { continue };
+                let readers = match (&instruction.opcode, instruction.result) {
+                    (Opcode::GetElementPtr { .. }, Some(result)) if at == 0 => {
+                        self.uses.get(&result).copied().unwrap_or(1).max(1)
+                    }
+                    _ => 1,
+                };
+                let plain = matches!(self.module.context.get(*id).kind, ConstantKind::Global(_))
+                    && matches!(
+                        (&instruction.opcode, at),
+                        (Opcode::Load { .. }, 0) | (Opcode::Store { .. }, 1)
+                    );
+                if !plain {
+                    needs_address.insert(name.clone());
+                }
+                *counts.entry(name).or_default() += readers;
+            }
+        }
+        self.global_uses = counts;
+        self.global_needs_address = needs_address;
     }
 
     fn finish(self) -> MFunc {
@@ -171,6 +257,9 @@ impl<'a> Selector<'a> {
         self.mf.dynamic = self.function.walk().any(|(_, inst)| {
             matches!(self.function.instruction(inst).opcode, Opcode::Alloca { .. }) && !self.is_static_alloca(inst)
         });
+        self.count_global_uses();
+        self.find_chains();
+        self.find_conjunctions();
         self.phi_registers()?;
         self.current = 0;
         self.parameters()?;
@@ -421,6 +510,11 @@ impl<'a> Selector<'a> {
         }
         let instruction = self.function.instruction(inst).clone();
         let result = instruction.result;
+        if result.is_some_and(|result| self.chains.contains(result) || self.conjunctions.contains(result)) {
+            // Selected where the chain's branch, or the select that reads the
+            // tree, is.
+            return Ok(());
+        }
         match &instruction.opcode {
             Opcode::Phi => Ok(()),
             Opcode::Binary(op) => self.binary(*op, &instruction),
@@ -555,10 +649,16 @@ impl<'a> Selector<'a> {
             self.inst(Inst::FpMoveImm { size, rd: reg, imm8 });
             return;
         }
-        // Through an integer register: LLVM loads from a constant pool.
-        let scratch = self.mf.gpr();
+        // Through an integer register (the zero register for 0.0): LLVM loads
+        // from a constant pool.
         let (width, register_bits) = if size == FpSize::S { (Width::W, 32) } else { (Width::X, 64) };
-        self.load_immediate(scratch, register_bits, bits);
+        let scratch = if bits == 0 {
+            Gpr::R31
+        } else {
+            let scratch = self.mf.gpr();
+            self.load_immediate(scratch, register_bits, bits);
+            scratch
+        };
         self.inst(Inst::FpInt { op: FpConvert::Bits { to_fp: true }, width, size, gpr: scratch, fpr: reg });
     }
 
