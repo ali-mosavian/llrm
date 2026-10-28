@@ -98,13 +98,8 @@ b3:
 
 #[test]
 fn test_unsupported_group_is_atomic() {
-    for hazard in ["entry", "missing-source", "opaque", "bad-phi"] {
-        let text = match hazard {
-            // A terminator that is not `br`, as the old opaque operation.
-            "opaque" => TWO_ENTRIES.replace("b5:\n  br label %b1", "b5:\n  switch i16 %s, label %b1 []"),
-            _ => TWO_ENTRIES.to_owned(),
-        };
-        let mut module = parsed(&text);
+    for hazard in ["entry", "missing-source", "bad-phi"] {
+        let mut module = parsed(TWO_ENTRIES);
         let (mut target, mut sources) = (at(&module, "b1"), BTreeSet::from([at(&module, "b5"), at(&module, "b4")]));
         let (_, function) = module.function_mut("f").expect("@f");
         match hazard {
@@ -125,8 +120,9 @@ fn test_unsupported_group_is_atomic() {
 
 #[test]
 fn test_conditional_entry_and_shared_exit_become_dedicated() {
-    for unsupported_exit in [false, true] {
-        let header = match unsupported_exit {
+    // A `switch` is regrouped as a `br` is: every case naming the block moves.
+    for switch in [false, true] {
+        let header = match switch {
             false => "br i1 %d, label %b2, label %b3",
             true => "switch i16 %s, label %b2 [ i16 0, label %b3 ]",
         };
@@ -152,13 +148,10 @@ b3:
         let mut module = parsed(&text);
         let (header_at, exit_at) = (at(&module, "b1"), at(&module, "b3"));
         let (_, function) = module.function_mut("f").expect("@f");
-        let before = function.clone();
         let changed = simplified(function);
-        if unsupported_exit {
-            assert!(!changed);
-            assert_eq!(*function, before);
-            continue;
-        }
+        assert!(changed);
+        assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new());
+        let (_, function) = module.function_mut("f").expect("@f");
         let graph = cfg::graph(function);
         let found = loops::loops(&graph, Some(cfg::id(function.entry().unwrap())));
         assert_eq!(found.len(), 1);
@@ -351,8 +344,13 @@ out:
     assert_eq!(*function, before);
 }
 
+/// The pin's loop-simplify visits the natural loops of a function that also
+/// holds an irreducible cycle (`opt -passes=loop-simplify` on this text gives
+/// `%head` a preheader and a dedicated exit, and leaves the cycle `%a`/`%b`
+/// alone). The pass gave up on the whole function: the QB module `qb-bounds`
+/// kept a loop with 18 latches and `@__main` of `qb-addrm` its reloads.
 #[test]
-fn an_irreducible_cycle_leaves_every_loop_alone() {
+fn a_natural_loop_is_simplified_beside_an_irreducible_cycle() {
     let text = "define void @f(i1 %c, i1 %d) {
 b0:
   br i1 %c, label %head, label %a
@@ -372,9 +370,14 @@ out:
 ";
     let mut module = parsed(text);
     let (_, function) = module.function_mut("f").expect("@f");
-    let before = function.clone();
-    assert!(!simplified(function), "the self loop at %head would otherwise get a preheader");
-    assert_eq!(*function, before);
+    assert!(simplified(function), "the self loop at %head gets a preheader");
+    let after = printed(&module);
+    // %b0 no longer branches to %head: a block of its own does, and it is
+    // %head's only way in from outside.
+    assert!(!after.contains("b0:\n  br i1 %c, label %head,"), "{after}");
+    assert_eq!(after.matches("label %head").count(), 2, "the preheader's branch and the self loop's: {after}");
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(!simplified(function), "a second run changes nothing");
 }
 
 #[test]
@@ -440,8 +443,15 @@ fn corpus_simplified() -> Vec<(String, Vec<usize>, Vec<usize>, bool)> {
             .collect();
         for function_name in names {
             let (_, function) = module.function_mut(&function_name).unwrap();
+            // DEVIATE: a loop whose header is a landing pad (ON ERROR and
+            // RESUME) is left alone (`ehprepare` takes one pad); it
+            // is not counted.
             let latches = |function: &llrm_mir::module::Function| {
-                loops::loops(&cfg::graph(function), None).iter().map(|one| one.latches.len()).collect::<Vec<_>>()
+                loops::loops(&cfg::graph(function), None)
+                    .iter()
+                    .filter(|one| !crate::edges::starts_with_landing_pad(function, cfg::block(one.header)))
+                    .map(|one| one.latches.len())
+                    .collect::<Vec<_>>()
             };
             let before = latches(function);
             simplified(function);
@@ -600,4 +610,79 @@ fn finding_the_parents_of_loops_looks_at_each_block_once_per_loop_around_it() {
     };
     let (a, b) = (probes(32), probes(128));
     assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
+}
+
+/// Two latches that end in `invoke` kept the loop at two latches: the pass only
+/// regrouped `br` edges (`opt -passes=loop-simplify` gives `%head.backedge`).
+/// `qb-bounds` `@__main` kept 18 latches.
+#[test]
+fn invoke_backedges_are_merged_into_one_latch_and_the_unwind_edge_stays() {
+    let text = "declare void @g()
+declare i32 @__gxx_personality_v0(...)
+define void @f(i1 %c, i1 %d) personality ptr @__gxx_personality_v0 {
+b0:
+  br label %head
+
+head:
+  br i1 %c, label %l1, label %l2
+
+l1:
+  invoke void @g() to label %head unwind label %lp
+
+l2:
+  invoke void @g() to label %head unwind label %lp
+
+lp:
+  %x = landingpad { ptr, i32 } cleanup
+  ret void
+}
+";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(simplified(function), "the two invoke latches get one backedge block");
+    let after = printed(&module);
+    assert_eq!(after.matches("to label %head unwind").count(), 0, "{after}");
+    assert_eq!(after.matches("unwind label %lp").count(), 2, "{after}");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let shape = cfg::Shape::of(function);
+    assert_eq!(shape.loops.iter().map(|one| one.latches.len()).collect::<Vec<_>>(), [1]);
+    assert!(!simplified(function), "a second run changes nothing");
+}
+
+/// A loop headed by a landing pad (ON ERROR, RESUME) is left alone: the pin
+/// splits the pad in two, and `ehprepare` refuses a second pad ("more than one
+/// landing pad"): `tests/run/qb/bounds.bas` did not compile.
+#[test]
+fn a_landing_pad_header_is_not_split_in_two() {
+    let text = "declare i32 @g()
+declare i32 @__gxx_personality_v0(...)
+define void @f(i1 %c) personality ptr @__gxx_personality_v0 {
+b0:
+  invoke i32 @g() to label %n1 unwind label %lp
+
+n1:
+  invoke i32 @g() to label %n2 unwind label %lp
+
+n2:
+  ret void
+
+lp:
+  %x = landingpad { ptr, i32 } cleanup
+  br i1 %c, label %a, label %b
+
+a:
+  invoke i32 @g() to label %out unwind label %lp
+
+b:
+  invoke i32 @g() to label %out unwind label %lp
+
+out:
+  ret void
+}
+";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    assert!(!simplified(function), "a pad is not split");
+    let after = printed(&module);
+    assert_eq!(after.matches("landingpad").count(), 1, "one pad in the function: {after}");
 }
