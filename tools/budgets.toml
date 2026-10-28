@@ -1816,6 +1816,24 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 3.2 -> 9.7 Minstr (x3.07)"
 
+[[debt]]
+kind = "steps"
+axis = "live"
+name = "regalloc base"
+ratio = 2.5
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w13 regalloc"
+why = "measured 36.9 -> 87.3 Minstr (x2.37)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "lir optimizephis"
+ratio = 2.4
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 5.2 -> 12.0 Minstr (x2.31)"
+
 # [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
 # test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
 
