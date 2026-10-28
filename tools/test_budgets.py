@@ -39,6 +39,8 @@ import scaling_gate  # noqa: E402
 
 BUDGETS = tomllib.loads((HERE / "budgets.toml").read_text())
 DEFAULT = BUDGETS["default"]
+# Steps accepted as switching inside an axis's window (a threshold flipping between N/2 and 2N), each with its reason.
+WINDOWS = BUDGETS.get("window", [])
 # Programs of one function, where a count of copies, selections or allocations is a count of work done per function.
 # A debt is paid only when its step is clearly under the limit: instruction counts move a few thousandths between commits, and a step at x2.30
 # against 2.3 read paid on one build and over on the next (lir twoaddr, lir coalesce).
@@ -202,7 +204,10 @@ def test_no_step_switches_on_between_the_two_sizes_of_an_axis(axis):
             continue
         if (jump := regime_change(wh, ws, wb)) > REGIME_JUMP:
             switched[name] = round(jump, 2)
-    assert not switched, f"{axis} at N={SIZES[axis]}: exponent N -> 2N exceeds N/2 -> N by: {switched}: a regime change in the window; use a larger N"
+    accepted = {row["name"] for row in WINDOWS if row["axis"] == axis}
+    new = {name: jump for name, jump in switched.items() if name not in accepted}
+    assert not new, f"{axis} at N={SIZES[axis]}: exponent N -> 2N exceeds N/2 -> N by: {new}: a regime change in the window; use a larger N"
+    assert accepted <= set(switched), f"{axis}: [[window]] rows whose step no longer switches in the window, remove them: {sorted(accepted - set(switched))}"
 
 
 def test_the_nest_axis_straddles_the_loop_products_onset():

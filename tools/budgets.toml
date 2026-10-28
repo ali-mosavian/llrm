@@ -1571,3 +1571,61 @@ ratio = 3.34
 issue = "https://github.com/ali-mosavian/llrm/issues/2641"
 owner = "backend-slopes"
 why = "measured 118.9 -> 359.9 Minstr (x3.03)"
+
+# [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
+# test_no_step_switches_on_between_the_two_sizes_of_an_axis). A row goes when its step stops switching.
+
+[[window]]
+axis = "joins"
+name = "mir dse@820"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir interprocedural"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir jumpthreading@668"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir cvp@669"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "joins"
+name = "mir decide@675"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "mir dse@820"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "assemble"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "mir jumpthreading@668"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "fjoins"
+name = "mir interprocedural"
+why = "c4a85dfdd8 (BasicAA: a getelementptr constant expression is a GEPOperator, more precise AA) changed the MIR shape and a threshold flips inside the 32..64 window: work moves between pass instances, not a new superlinear pass. Measured BasicAA queries on joins 4052/14356/39736 before it, 3160/10804/27740 after (N=32/64/128). Slope findings at N=128 and 256: docs/working/joins-window.md."
+
+[[window]]
+axis = "equal"
+name = "lir twoaddr"
+why = "97096c07c2 (the DAG selector is the default on 16- and 32-bit x86) changed the LIR shape and a threshold flips inside the N=1024..2048 window: work moves between instances, not a new superlinear pass. Bisected 10-28: green at 05171a027c, red from that commit."
+
+[[window]]
+axis = "equal"
+name = "lir coalesce"
+why = "97096c07c2 (the DAG selector is the default on 16- and 32-bit x86) changed the LIR shape and a threshold flips inside the N=1024..2048 window: work moves between instances, not a new superlinear pass. Bisected 10-28: green at 05171a027c, red from that commit."
