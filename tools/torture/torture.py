@@ -154,7 +154,7 @@ def build(source: Path, level: str, target: str, work: Path, support: Path, stem
     if sized is not None:
         compiled = work / f"{stem}.c"
         compiled.write_text(f"#define STACK_SIZE {sized}\n{text}")
-    command, row = dosbatch.c_compile(compiled, obj, target, LEVELS[level], Path(), [], ["-I", str(source.parent), "-I", str(HERE / "include"), *program_options(text)])
+    command, row = dosbatch.c_compile(compiled, obj, target, LEVELS[level], Path(), [], ["-std=gnu89", "-I", str(source.parent), "-I", str(HERE / "include"), *program_options(text)])
     done = run_within_cpu(command, COMPILE_SECONDS, row)
     if done is None:
         return "compile", f"did not finish in {COMPILE_SECONDS} s of CPU", None
