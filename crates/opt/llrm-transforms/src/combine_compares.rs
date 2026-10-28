@@ -58,7 +58,9 @@ use llrm_mir::context::{mask, signed};
 use llrm_mir::knownbits::KnownBits;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
-use llrm_mir::simplify::simplify_instruction_in;
+use llrm_mir::simplify::{simplify_icmp_operands, simplify_instruction_in};
+use llrm_mir::valuetracking::context::is_implied_condition_cmp;
+use llrm_mir::valuetracking::pattern::{CmpPredicate, Side};
 use llrm_mir::valuetracking::nonzero::strip_and_accumulate_constant_offsets;
 use llrm_mir::valuetracking::range::{self, SelectOperand, SelectPatternFlavor};
 use llrm_mir::valuetracking::{Query, known, pattern};
@@ -250,9 +252,65 @@ pub fn visit_icmp(
     if let Some(r) = fold_gep_icmp(c, inst, pred.swapped(), op1, op0) {
         return r;
     }
-    // OWED: foldICmpInstWithConstantNotInt, foldICmpCommutative,
+    if let Some(r) = fold_select_icmp(c, inst, pred, op0, op1) {
+        return r;
+    }
+    if let Some(r) = fold_select_icmp(c, inst, pred.swapped(), op1, op0) {
+        return r;
+    }
+    // OWED: foldICmpInstWithConstantNotInt, the rest of foldICmpCommutative,
     // matchSymmetricPair, foldCmpSelectOfConstants and the two-select fold.
     if changed { Visit::Changed } else { Visit::None }
+}
+
+/// `foldSelectICmp`
+/// ([:4497](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L4497)):
+/// `icmp (select c, a, b), rhs` is `select c, (icmp a, rhs), (icmp b, rhs)`
+/// when an arm's compare simplifies, or the select's condition decides it,
+/// and the select has no other user.
+///
+/// DEVIATE: the "global case" (`replacedSelectWithOperand`, a select with
+/// several users) and the `ucmp`/`scmp` arms are not made.
+fn fold_select_icmp(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    select_operand: Operand,
+    rhs: Operand,
+) -> Option<Visit> {
+    let select = c.definition_of(select_operand).filter(|&def| c.function.instruction(def).opcode == Opcode::Select)?;
+    let [condition, on_true, on_false] = c.function.instruction(select).operands[..] else { return None };
+    let i1 = c.context.types.int(1);
+    // Try to fold the comparison into the select arms, which will cause the
+    // select to be converted into a logical and/or.
+    let simplify_op = |c: &Combiner, op: Operand, select_cond_is_true: bool| -> Option<Operand> {
+        if let Some(found) = simplify_icmp_operands(c.context, c.env.layout, c.function, pred, op, rhs) {
+            return Some(found);
+        }
+        let q = query(c, Some(inst));
+        let implied = is_implied_condition_cmp(
+            &q,
+            condition,
+            CmpPredicate::new(pred),
+            Side::of(&q, op),
+            Side::of(&q, rhs),
+            select_cond_is_true,
+            0,
+        )?;
+        Some(c.int(i1, u128::from(implied)))
+    };
+    let on_true_cmp = simplify_op(c, on_true, true);
+    let on_false_cmp = simplify_op(c, on_false, false);
+    // We only want to perform this transformation if it will not lead to
+    // additional code: both sides fold (the icmp becomes a select that
+    // usually simplifies), or this is the select's only user.
+    if !(on_true_cmp.is_some() && on_false_cmp.is_some()) && !(on_true_cmp.or(on_false_cmp).is_some() && has_one_use(c, select_operand))
+    {
+        return None;
+    }
+    let on_true_cmp = on_true_cmp.unwrap_or_else(|| c.create_icmp(inst, pred, on_true, rhs));
+    let on_false_cmp = on_false_cmp.unwrap_or_else(|| c.create_icmp(inst, pred, on_false, rhs));
+    Some(c.replace_with_new(inst, Opcode::Select, i1, vec![condition, on_true_cmp, on_false_cmp], Flags::default()))
 }
 
 /// `foldGEPICmp`
