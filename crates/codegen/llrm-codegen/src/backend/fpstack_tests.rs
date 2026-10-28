@@ -298,6 +298,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
         indirect: false,
         table: vec![],
         repeat: false,
+        pops: None,
     };
     let body = _body(vec![_load(1, &cell), out, _store(&cell, 1)]);
     let converted = converted(&body, &RegisterClasses::of(&llrm_x86_m16::M16)).expect("a value across an out");

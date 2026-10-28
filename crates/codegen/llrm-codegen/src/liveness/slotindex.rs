@@ -845,13 +845,34 @@ impl SlotIndexes {
 
     /// `packIndexes`: renumbers all indexes using the default distance.
     pub fn pack_indexes(&mut self) {
+        // Oracle runs only (`LLRM_PACK_DENSE`): see `pack`.
+        self.pack(llrm_support::env_flag!("LLRM_PACK_DENSE"));
+    }
+
+    /// `packIndexes`; `dense` leaves out the entries an erased instruction left
+    /// empty. The pin parses a MIR with no instruction removed, so a same-MIR
+    /// comparison with it needs them out: on queens `place_` the entries made
+    /// every interval 1.3x longer and its spill weights 3-50% lower than the
+    /// pin's for the same intervals.
+    pub fn pack(
+        &mut self,
+        dense: bool,
+    ) {
+        let boundaries: std::collections::HashSet<EntryId> = self
+            .mbb_ranges
+            .iter()
+            .flat_map(|(start, end)| [start.list_entry(), end.list_entry()])
+            .chain([self.first])
+            .collect();
         ARENA.with(|arena| {
             let arena = arena.borrow_mut();
             let mut at = self.first;
             let mut number = 0u32;
             while at != NONE {
                 arena.index[at as usize].set(number * SlotIndex::INSTR_DIST);
-                number += 1;
+                if !(dense && arena.instr[at as usize].is_none() && !boundaries.contains(&at)) {
+                    number += 1;
+                }
                 at = arena.next[at as usize];
             }
         });
@@ -989,6 +1010,20 @@ mod tests {
 
     /// SlotIndexes::analyze: 16 apart, a blank entry between blocks, a block's
     /// range from its start entry to the blank entry that ends it.
+    /// An erased instruction leaves its entry in the list, as LLVM does, and
+    /// `packIndexes` counts it; the dense packing does not.
+    #[test]
+    fn test_packing_counts_the_entry_an_erased_instruction_left_unless_dense() {
+        let body = body(&[3]);
+        let last = body.blocks[0].insns[2].id();
+        let mut indexes = SlotIndexes::new(&body);
+        indexes.remove_machine_instr_from_maps(body.blocks[0].insns[1].id());
+        indexes.pack(false);
+        assert_eq!(indexes.get_instruction_index(last).get_index(), 48);
+        indexes.pack(true);
+        assert_eq!(indexes.get_instruction_index(last).get_index(), 32);
+    }
+
     #[test]
     fn test_blocks_are_numbered_sixteen_apart_with_a_blank_entry_between() {
         let body = body(&[3, 2]);

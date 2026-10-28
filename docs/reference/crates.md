@@ -128,7 +128,7 @@ flowchart TB
   core["<b>llrm-codegen</b>"]:::out
   lir["<b>llrm-lir</b>"]:::mid
   omf["<b>llrm-omf</b>"]:::data
-  dwarf["<b>llrm-debuginfo</b>"]:::mid
+  dwarf["<b>llrm-dwarf</b>"]:::mid
   obj["<b>llrm-object</b>"]:::mid
   elf["<b>llrm-elf</b>"]:::mid
   e32["<b>llrm-elf32</b>"]:::mid
@@ -216,7 +216,7 @@ See [targets](../machine/targets.md) for adding one.
 | `llrm-elf` | The ELF relocatable container, for a machine that names its relocation types |
 | `llrm-elf32`, `llrm-elf64` | The ELF writer for i386, for x86-64 |
 | `llrm-macho` | The Mach-O relocatable writer, for x86-64 |
-| `llrm-debuginfo` | The DWARF writer: `.debug_info`, `.debug_abbrev`, `.debug_line`, `.debug_str`, `.debug_aranges` |
+| `llrm-dwarf` | The DWARF writer: `.debug_info`, `.debug_abbrev`, `.debug_line`, `.debug_str`, `.debug_aranges` |
 
 See [the object model](../formats/object-model.md).
 

@@ -446,11 +446,13 @@ fn use_queries_agree_with_a_scan_of_the_live_nodes() {
 
 /// `pin_opcode` built a `String` (`x86isd::name` and `format!`) for each target
 /// node, 16 K times on d_faces, and the use queries collected and sorted a
-/// `Vec` of the users on each call. A query answers from the use list without
+/// `Vec` of the users on each call (4 more did, at 512 statements 43 K calls
+/// on a node many read). A query answers from the use list without
 /// an allocation.
 #[test]
 fn pin_opcode_and_the_use_queries_allocate_nothing() {
     use llrm_dagisel::dag::Dag;
+    use llrm_dagisel::x86_addr::AddrDag;
 
     let (_, made) = llrm_support::alloc_count::counted(|| {
         (0..1024u16)
@@ -472,8 +474,33 @@ fn pin_opcode_and_the_use_queries_allocate_nothing() {
             adapter.has_one_use(pin_a),
             adapter.is_only_user_of(twice.node, a.node),
             adapter.use_empty(twice.node),
+            adapter.node_has_one_use(a.node),
+            adapter.count_non_chain_uses(a.node, 3),
+            adapter.glued_user(a.node),
+            adapter.has_materializing_use(pin_a),
         )
     });
-    assert_eq!(answers, (true, true, false, true, true), "premise: the answers are the scan's");
-    assert_eq!(made, 0, "{made} allocations to ask five use questions");
+    assert_eq!(answers, (true, true, false, true, true, false, 2, None, false), "premise: the answers are the scan's");
+    assert_eq!(made, 0, "{made} allocations to ask nine use questions");
+}
+
+/// `hasPredecessorHelper` tested membership by scanning a `Vec`, so a walk
+/// over n nodes took n^2 steps: 3.5 G instructions of dag isel at 512
+/// statements, 21x the work of 128.
+#[test]
+fn walking_a_long_chain_for_a_predecessor_is_linear() {
+    use llrm_dagisel::dag::{Dag, Visited};
+    let mut dag = SelectionDAG::new(DagConfig::default());
+    let base = input(&mut dag, 40);
+    let mut chain = base;
+    for i in 0..200_000u128 {
+        let k = dag.get_constant(i, EVT::I32);
+        chain = dag.get_node(ISD::Add, EVT::I32, &[chain, k]);
+    }
+    dag.set_root(chain);
+    let adapter = DagisAdapter::new(&mut dag);
+    let started = std::time::Instant::now();
+    let found = adapter.has_predecessor_helper(u32::MAX, &mut Visited::new(), &mut vec![chain.node], 0);
+    assert!(!found);
+    assert!(started.elapsed().as_secs() < 2, "{:?} to walk 200,000 nodes", started.elapsed());
 }

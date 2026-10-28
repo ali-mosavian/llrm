@@ -106,7 +106,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
             .as_ref()
             .is_some_and(|what| what.sources.iter().chain(&what.dests).any(|place| slot_of(regs, place).is_some()))
     };
-    if !body.insns().iter().any(|one| named(one)) {
+    if !body.iter_insns().any(|one| named(one)) {
         return None;
     }
     let fresh = body

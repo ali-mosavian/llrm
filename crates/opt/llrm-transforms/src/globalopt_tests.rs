@@ -39,7 +39,7 @@ b0:
     let after = printed(&module);
     assert_eq!(results(&module, &[&[0]]), before, "{after}");
     // @c, folded into its one load, is dead and gone.
-    assert!(!after.contains("@c = internal global") && after.contains("@w = internal global"), "{after}");
+    assert!(!after.contains("@c = internal global") && after.contains("@w = internal unnamed_addr global"), "{after}");
     assert!(!after.contains("load i16, ptr %at") && after.contains("load i16, ptr @w"), "{after}");
 }
 
@@ -228,4 +228,68 @@ b0:
 ",
     );
     assert!(after.contains("store i32 5, ptr @a"), "a store to a variable a live descriptor names went:\n{after}");
+}
+
+fn marked(text: &str) -> String {
+    let mut module = parsed(&format!("{}{}", llrm_analysis::testing::DOS, text));
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default()), |program| {
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add_module(crate::globalopt::GlobalOpt);
+        manager.run(program)
+    })
+    .and_then(|done| done)
+    .unwrap();
+    printed(&module)
+}
+
+/// A static table nothing compares or lets escape stayed `internal constant`:
+/// the pin's GlobalOpt marks it `unnamed_addr`, and without that mark
+/// ConstantMerge merges nothing (QCport's duplicate tables stayed two).
+#[test]
+fn test_a_table_only_loaded_is_marked_unnamed_addr() {
+    let after = marked(
+        "@t = internal constant [2 x i16] [i16 5, i16 12]
+@w = internal global i16 7
+
+define i16 @f(i16 %x) {
+b0:
+  %at = getelementptr i8, ptr @t, i16 2
+  %a = load i16, ptr %at
+  store i16 %a, ptr @w
+  ret i16 %a
+}
+",
+    );
+    assert!(after.contains("@t = internal unnamed_addr constant"), "{after}");
+    assert!(after.contains("@w = internal unnamed_addr global"), "{after}");
+}
+
+/// A compared address, an address passed to a call or stored, an address
+/// another global holds, and an external global are not marked.
+#[test]
+fn test_a_compared_escaping_or_external_global_is_not_marked() {
+    let after = marked(
+        "@cmp = internal constant [2 x i16] [i16 1, i16 2]
+@esc = internal constant [2 x i16] [i16 3, i16 4]
+@sto = internal constant [2 x i16] [i16 5, i16 6]
+@held = internal constant [2 x i16] [i16 7, i16 8]
+@ext = constant [2 x i16] [i16 9, i16 10]
+@holder = constant [1 x ptr] [ptr @held]
+@slot = internal global ptr null
+declare void @take(ptr)
+
+define i1 @f(ptr %p) {
+b0:
+  %c = icmp eq ptr @cmp, %p
+  call void @take(ptr @esc)
+  store ptr @sto, ptr @slot
+  %x = load i16, ptr @ext
+  ret i1 %c
+}
+",
+    );
+    for name in ["cmp", "esc", "sto", "held", "ext"] {
+        let line = after.lines().find(|one| one.starts_with(&format!("@{name} "))).unwrap_or_else(|| panic!("{after}"));
+        assert!(!line.contains("unnamed_addr"), "{line}\n{after}");
+    }
 }
