@@ -1279,6 +1279,32 @@ def pre_merge_behavioural(files: list[str], build=None, run=None) -> list[str]:
     return red
 
 
+def pre_merge_stale(files: list[str], build=None, run=None) -> list[str]:
+    """The finding lines of tools/oracle_sweep.py with `LLRM_CHECK_STALE` alone (every sweep program, -O2, both machines) on the merged tree's release bins, when the batch changes
+    crate source; none, and nothing built or run, otherwise. The sweep ran at the gate only: 798dba289 landed and bintree, fpbench and jpeg_single failed it for ~2989 commits."""
+    if not any(f.startswith("crates/") and f.endswith(".rs") and "_tests" not in f and "/tests/" not in f for f in files):
+        print("stale: skipped (no crate source changed)")
+        return []
+    started = time.time()
+    (build or _build_release)()
+    done = (run or _run_stale)()
+    print(f"stale: {done.stdout.strip().splitlines()[0] if done.stdout.strip() else 'no report'}, {time.time() - started:.0f}s")
+    if done.returncode == 0:
+        return []
+    return [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip() and not line.startswith("wall ")][:8] or [f"oracle_sweep exited {done.returncode} with no output"]
+
+
+def stale_kinds(lines: list[str]) -> set[str]:
+    """The finding kinds of a stale report, counts and example lists dropped: what a batch adds to a base that already fails."""
+    return {line.strip().split(None, 1)[1] for line in lines if line.strip()[:1].isdigit() and " compiles / " not in line and len(line.split(None, 1)) == 2}
+
+
+def _run_stale() -> subprocess.CompletedProcess:
+    target = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "release"
+    command = [sys.executable, "tools/oracle_sweep.py", "--bin", str(target), "--checks", "STALE", "--levels=-O2", "--no-premise"]
+    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, errors="replace", timeout=900)
+
+
 def red_env_cause() -> str:
     """What a behavioural run needs from the environment and lacks, for the REFUSED line; empty when it has it."""
     ow = os.environ.get("LLRM_OW")
@@ -2157,19 +2183,23 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 return False
             return True
 
-        def release_pass() -> tuple[list[str], list[str]]:
-            """The link check, then the behavioural programs unless something does not link: (unlinked, red)."""
+        def release_pass() -> tuple[list[str], list[str], list[str]]:
+            """The link check, then the behavioural programs unless something does not link, then the stale oracle: (unlinked, red, stale)."""
             files = git("diff", "--name-only", BASE, "HEAD").split()
             stage("link")
             if unlinked := new_link_failures(files):
-                return unlinked, []
+                return unlinked, [], []
             stage("behavioural")
-            return [], pre_merge_behavioural(files)
+            red = pre_merge_behavioural(files)
+            if red:
+                return [], red, []
+            stage("stale")
+            return [], [], pre_merge_stale(files)
 
         if OVERLAP:
             if broken := _workspace_check(ROOT):
                 return build_refused(broken)
-            tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
+            tests_ok, (unlinked, red, stale) = beside(release_pass, tests_pass)
         else:
             # the dev-profile check (its own target dir) and the release scanner build share nothing: 60 s + 100 s in a row in sqb-5342
             why_serial = overlap_verdict()
@@ -2181,7 +2211,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 tests_ok = not broken and tests_pass()
             if broken:
                 return build_refused(broken)
-            unlinked, red = release_pass() if tests_ok else ([], [])
+            unlinked, red, stale = release_pass() if tests_ok else ([], [], [])
         if not tests_ok:
             return False
         if unlinked:
@@ -2191,6 +2221,10 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if red:
             print(f"BEHAVIOURAL RED pre-merge: the batch, {' '.join(red)}{red_env_cause()}")
             failed_units.update(f"behavioural {program}" for program in red)
+            return False
+        if stale:
+            print(f"REFUSED: the batch fails LLRM_CHECK_STALE: {' / '.join(stale)[:600]}")
+            failed_units.add("stale oracle")
             return False
         return True
 
@@ -2236,6 +2270,23 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             for number in culprits:
                 named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}{red_env_cause()}"
                 print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}{red_env_cause()}")
+            return culprits
+        if "stale oracle" in failed_units:
+            # a finding the base has too is no PR's: only the kinds a PR adds name it
+            clean_checkout(BASE)
+            on_base = stale_kinds(pre_merge_stale(["crates/_base.rs"]))
+            files_of = lambda number: head_files(infos[number]['headRefOid'])  # noqa: E731
+            added = lambda files: bool(stale_kinds(pre_merge_stale(files)) - on_base)  # noqa: E731
+            crate_prs = [number for number in group if any(f.startswith("crates/") for f in files_of(number))]
+            culprits = red_members_suspects_first(
+                group,
+                crate_prs,
+                lambda subset: merge_all(subset) and added(sorted({f for n in subset for f in files_of(n)})),
+                lambda number: merge_alone(number) and added(files_of(number)),
+            )
+            for number in culprits:
+                named[number] = "LLRM_CHECK_STALE fails with it"
+                print(f"STALE RED pre-merge: #{number}")
             return culprits
         integration = {name[len("integration ") :].split("::", 1)[0] for name in failed_units if name.startswith("integration ")}
         if integration:
