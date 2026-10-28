@@ -60,3 +60,10 @@ def test_a_binary_overwritten_after_its_ok_is_refused(tmp_path):
     binary.write_text("#!/bin/sh\necho 'llrm-c aaaa1111'\n# another build\n")
     with pytest.raises(SystemExit, match="recorded when it was built"):
         stamp.check(binary, "aaaa1111")
+
+
+def test_an_llrm_cc_is_stamped_by_the_llrm_llc_beside_it(tmp_path):
+    """`llrm-cc --version` is the pinned clang's, so objsweep refused every llrm-cc ("no build stamp") and the m64 sweep of the object writers could not start."""
+    cc = stub(tmp_path, "llrm-cc", "clang version 24.0.0git (https://github.com/llvm/llvm-project.git d1106deb71cc)")
+    stub(tmp_path, "llrm-llc", "llrm-llc aaaa1111")
+    assert stamp.check(cc, "aaaa1111") == "aaaa1111"

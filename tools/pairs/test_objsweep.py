@@ -109,3 +109,15 @@ def test_a_changed_debug_byte_is_a_changed_object(tmp_path):
 
     args = type("A", (), {"old": cc("old", "A"), "new": cc("new", "B"), "targets": "m16", "levels": "O2", "jobs": 1, "debug": True})()
     assert objsweep.sweep(args, [tmp_path / "x.c"], "old") == 1
+
+
+def test_an_llrm_cc_is_asked_for_an_object_and_given_its_target(tmp_path, monkeypatch):
+    """objsweep ran llrm-cc as it ran llrm-c: m64 linked ("ld returned 1") and m32/m16 had no LLRM_CC_TARGET, so all 852 compiles failed on both sides and the sweep read "0 objects changed"."""
+    stub = tmp_path / "llrm-cc"
+    stub.write_text('#!/bin/sh\nfor a in "$@"; do case $a in -o) next=1;; *) [ -n "$next" ] && { printf "%s|%s|%s" "$*" "$LLRM_CC_TARGET" "$LLRM_CLANG_M16" > "$a"; next=; };; esac; done; exit 0\n')
+    stub.chmod(0o755)
+    monkeypatch.setenv("LLRM_CLANG_M16", "m16clang")
+    monkeypatch.setenv("LLRM_CC_TARGET", "inherited")
+    seen = {target: objsweep.compile_one(str(stub), tmp_path / "x.c", target, "O2", tmp_path / "x.o")[0].decode() for target in ("m64", "m32", "m16")}
+    assert all(" -c " in text.split("|")[0] + " " for text in seen.values()), seen
+    assert [text.split("|")[1:] for text in seen.values()] == [["", ""], ["x86_32-wat", ""], ["x86_16-wat", "m16clang"]], seen

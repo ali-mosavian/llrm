@@ -8,10 +8,11 @@
 //! `rewriters`.
 //!
 //! # DEVIATE 9 (MIR lacks the construct)
-//! * `llvm.usub.sat`, `llvm.uadd.sat`, `llvm.start.loop.iterations`,
-//!   `llvm.annotation`, `llvm.ptr.annotation`, `llvm.vscale` and
-//!   `llvm.loop.decrement.reg` are not MIR intrinsics (`Intrinsic::named` is
-//!   none for them, tested), so a call to one is an unknown, as any call is.
+//! * `llvm.start.loop.iterations`, `llvm.annotation`, `llvm.ptr.annotation`,
+//!   `llvm.vscale` and `llvm.loop.decrement.reg` are not MIR intrinsics
+//!   (`Intrinsic::named` is none for them, tested), so a call to one is an
+//!   unknown, as any call is. (`llvm.usub.sat` and `llvm.uadd.sat` are, and are
+//!   translated.)
 //! * No separate `ptrtoaddr`: MIR's `ptrtoint` is modelled as one.
 //! * Only a constant `getelementptr` expression has a SCEV; any other constant
 //!   expression is an unknown.
@@ -533,7 +534,7 @@ impl ScalarEvolution {
                 }
 
                 match cx.query(None).intrinsic(inst) {
-                    Some(Intrinsic::MinMax { .. }) => {
+                    Some(Intrinsic::MinMax { .. } | Intrinsic::Saturating { signed: false, .. }) => {
                         ops.push(instruction.operands[0]);
                         ops.push(instruction.operands[1]);
                     }
@@ -881,6 +882,24 @@ impl ScalarEvolution {
                         (false, false) => self.get_umin_expr(cx, ops, false),
                         (true, true) => self.get_smax_expr(cx, ops),
                         (true, false) => self.get_smin_expr(cx, ops),
+                    };
+                }
+                if let Some(Intrinsic::Saturating { op, signed: false }) = cx.query(None).intrinsic(inst) {
+                    let x = self.get_scev(cx, instruction.operands[0]);
+                    let y = self.get_scev(cx, instruction.operands[1]);
+                    return match op {
+                        // usub.sat: X - umin(X, Y), which cannot wrap.
+                        Bin::Sub => {
+                            let clamped = self.get_umin_expr(cx, vec![Use::of(x), Use::of(y)], false);
+                            self.get_minus_scev(cx, Use::of(x), Use::of(clamped), flags::NUW, 0)
+                        }
+                        // uadd.sat: umin(X, ~Y) + Y, which cannot wrap.
+                        Bin::Add => {
+                            let not_y = self.get_not_scev(cx, y);
+                            let clamped = self.get_umin_expr(cx, vec![Use::of(x), Use::of(not_y)], false);
+                            self.get_add_expr(cx, vec![Use::of(clamped), Use::of(y)], Flags::expr(flags::NUW), 0).scev
+                        }
+                        _ => unreachable!("an unsigned saturating intrinsic adds or subtracts"),
                     };
                 }
                 self.get_unknown(cx, v)

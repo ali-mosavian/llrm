@@ -115,10 +115,7 @@ fn plan(
     let Opcode::Load { volatile: false, .. } = function.instruction(load).opcode else { return None };
     let result = function.instruction(load).result?;
     context.types.int_bits(function.instruction(load).ty)?;
-    let extension = function.iter_block(home).skip_while(|&one| one != load).skip(1).find(|&one| {
-        let made = function.instruction(one);
-        matches!(made.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) && made.operands[0] == Operand::Value(result)
-    })?;
+    let extension = first_extension(function, home, load, result)?;
     let zero_extended = function.instruction(extension).opcode == Opcode::Cast(CastOp::ZExt);
     let mut compares = Vec::new();
     let mut same = Vec::new();
@@ -164,6 +161,57 @@ fn plan(
         return None;
     }
     Some(Plan { extension, same, others, compares })
+}
+
+/// The first extension of `result` after `load` in its block. The readers of
+/// the load name the candidates, so a load nothing extends costs its readers,
+/// not a scan of the block after it (a block of N loads was N^2/2 steps).
+fn first_extension(
+    function: &Function,
+    home: BlockId,
+    load: InstId,
+    result: llrm_mir::module::ValueId,
+) -> Option<InstId> {
+    let extends = |one: InstId| {
+        let made = function.instruction(one);
+        matches!(made.opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)) && made.operands[0] == Operand::Value(result)
+    };
+    let mut candidates = function
+        .users(result)
+        .iter()
+        .map(|used| used.user)
+        .filter(|&one| one != load && function.parent(one) == Some(home) && extends(one));
+    let first = candidates.next()?;
+    if candidates.next().is_none() {
+        return Some(first);
+    }
+    // Several: the earliest in the block, as the scan found it.
+    scan_after(function, home, load, extends)
+}
+
+fn scan_after(
+    function: &Function,
+    home: BlockId,
+    load: InstId,
+    extends: impl Fn(InstId) -> bool,
+) -> Option<InstId> {
+    function
+        .iter_block(home)
+        .skip_while(|&one| one != load)
+        .skip(1)
+        .find(
+            |&one| {
+                #[cfg(test)]
+                SCANNED.with(|steps| steps.set(steps.get() + 1));
+                extends(one)
+            },
+        )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Instructions looked at by block scans for an extension.
+    pub(crate) static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn int_constant(
