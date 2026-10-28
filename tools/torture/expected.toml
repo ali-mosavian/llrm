@@ -121,7 +121,3 @@ reason = "a wrong result at m32 (the m16 build passes)"
 [[open]]
 program = "20040409-3"
 reason = "a wrong result at m32 (the m16 build passes)"
-
-[[open]]
-program = "930529-1"
-reason = "does not finish in 15 s at -O2 and -Os"

@@ -60,6 +60,13 @@ class OptionTests(unittest.TestCase):
         `a > 1` on the no-wrap promise of a build that had asked for wrapping, and the program aborted (-O2 and -Os)."""
         self.assertEqual(torture.program_options('/* { dg-options "-fwrapv" } */\nint x;'), ["-fwrapv"])
 
+class BracedOptionTests(unittest.TestCase):
+    def test_options_in_braces_are_read_too(self):
+        """930529-1 says `{ dg-options { "-fwrapv" } }`: the braces hid the quotes from the reader, the program was built without -fwrapv and its
+        `i <= INT_MAX + 3` loop never ended (a 15 s timeout at -O2 and -Os, listed as an open compiler fault)."""
+        self.assertEqual(torture.program_options('/* { dg-options { "-fwrapv" } } */\nint x;'), ["-fwrapv"])
+
+
 class SymbolTests(unittest.TestCase):
     def test_an_undefined_symbol_is_refused_whichever_way_the_target_decorates_it(self):
         """m16 (cdecl, a leading underscore) reported `___builtin_prefetch` and `_sprintf`: the refusals name `__builtin_` and
