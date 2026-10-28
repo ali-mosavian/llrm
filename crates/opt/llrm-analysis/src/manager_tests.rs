@@ -1459,3 +1459,46 @@ fn a_declaration_change_summarizes_only_that_function_again() {
     let made = crate::attrsummary::functions_summarized() - before;
     assert!(made <= 3 * N, "{made} summaries worked out for {N} functions each changed once");
 }
+
+/// A summary kept while its declaration stands must not outlive a change in
+/// what its callees do: @entry's declaration is the same when @h comes to write
+/// @g, or stops, so only `GlobalsModRef`'s facts for @entry say its summary
+/// moved. After each edit the summaries are those a run from nothing makes.
+#[test]
+fn a_callee_that_comes_to_write_or_stops_writing_a_global_changes_its_callers_summary() {
+    let text = |body: &str| {
+        format!(
+            "@g = internal global i16 0
+
+define void @entry() {{
+entry:
+  call void @h()
+  ret void
+}}
+
+define internal void @h() {{
+entry:
+{body}  ret void
+}}
+"
+        )
+    };
+    let mut module = parsed(&text(""));
+    let h = module.named("h").unwrap();
+    // The objects of a context are one set, however often it is asked.
+    let objects = crate::memory::ObjectInterner::of(&module.context);
+    assert!(Rc::ptr_eq(&objects, &crate::memory::ObjectInterner::of(&module.context)));
+    let mut analyses = ModuleAnalyses::of(&module, Rc::new(Neutral));
+    for (body, writes_g) in [("", false), ("  store i16 1, ptr @g\n", true), ("", false)] {
+        // @h's body is replaced: the same declarations, a store to @g in it or
+        // not.
+        module = parsed(&text(body));
+        analyses.body_edited(h, &PreservedAnalyses::none());
+        let found = analyses.get::<Summaries>(&module);
+        let summaries = Result::as_ref(&*found).expect("summarized");
+        let writes = summaries["entry"].writes.iter().any(|one| one.object.kind == crate::memory::MemoryKind::Global);
+        assert_eq!(writes, writes_g, "@entry writes @g through @h: {body:?}");
+        let fresh = ModuleAnalyses::of(&module, Rc::new(Neutral)).get::<Summaries>(&module);
+        assert_eq!(*found, *fresh, "the summaries after {body:?} are not those of a run from nothing");
+    }
+}

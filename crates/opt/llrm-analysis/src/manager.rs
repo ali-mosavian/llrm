@@ -283,7 +283,7 @@ impl ModuleAnalysis for ForgedSelectors {
 pub struct Summaries;
 
 impl ModuleAnalysis for Summaries {
-    type Result = Result<IndexMap<String, Summary>, String>;
+    type Result = Result<IndexMap<String, Rc<Summary>>, String>;
     const NAME: &'static str = "summaries";
     fn covers(
         stale: &Self::Result,
@@ -344,7 +344,7 @@ impl ModuleAnalysis for Summaries {
 struct SummariesMade {
     inputs: SummaryInputs,
     tracked: BTreeSet<GlobalId>,
-    made: IndexMap<String, Summary>,
+    made: IndexMap<String, Rc<Summary>>,
 }
 
 /// The results `Summaries::run` read.
