@@ -12,6 +12,7 @@ mod die;
 pub mod eh_frame;
 mod frame;
 mod line;
+mod ranges;
 mod types;
 
 pub use buffer::{sleb, uleb};
@@ -79,6 +80,12 @@ pub fn expanded(
     if lists {
         names.push(if version >= 5 { ".debug_loclists" } else { ".debug_loc" });
     }
+    // The section of ranges, where a DIE has several.
+    let several =
+        info.code.len() > 1 || info.functions.iter().any(|one| one.ranges.len() > 1 || one.blocks.iter().any(many));
+    if several {
+        names.push(if version >= 5 { ".debug_rnglists" } else { ".debug_ranges" });
+    }
     let frame = frame::section(object, info, address as usize)?;
     if frame.is_some() {
         names.push(".debug_frame");
@@ -91,11 +98,12 @@ pub fn expanded(
         info: at(".debug_info"),
         line_strings: (version >= 5).then(|| at(".debug_line_str")),
         locations: lists.then(|| at(if version >= 5 { ".debug_loclists" } else { ".debug_loc" })),
+        ranges: several.then(|| at(if version >= 5 { ".debug_rnglists" } else { ".debug_ranges" })),
     };
     let mut out = die::Out::new(version, address as u8, places);
     out.segment = info.target_of(object.bits).segment_base;
     let line = line::program(object, info, &mut out)?;
-    let (info_part, abbrev, locations) = die::unit(object, info, &mut out)?;
+    let (info_part, abbrev, locations, ranges) = die::unit(object, info, &mut out)?;
     let aranges = die::aranges(object, info, &out)?;
     let mut sections = Vec::new();
     for name in &names {
@@ -106,6 +114,7 @@ pub fn expanded(
             ".debug_line" => line.clone(),
             ".debug_info" => info_part.clone(),
             ".debug_loclists" | ".debug_loc" => locations.clone(),
+            ".debug_rnglists" | ".debug_ranges" => ranges.clone().expect("named only where a DIE has several ranges"),
             ".debug_frame" => frame.clone().expect("named only where there is one"),
             _ => aranges.clone(),
         };
@@ -114,6 +123,11 @@ pub fn expanded(
     let mut made = Object { debug: None, ..object.clone() };
     made.sections.extend(sections);
     Ok(made)
+}
+
+/// A block, or one in it, of several code ranges.
+fn many(block: &llrm_object::debug::Block) -> bool {
+    block.ranges.len() > 1 || block.blocks.iter().any(many)
 }
 
 /// A block's variables and those of the blocks in it.
