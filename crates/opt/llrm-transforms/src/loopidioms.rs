@@ -212,6 +212,7 @@ impl FunctionPass for Merge {
     ) -> PreservedAnalyses {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
+        let bytes = analyses.outer().target().size_costs();
         let copies = !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
                 unit.context,
@@ -219,6 +220,7 @@ impl FunctionPass for Merge {
                 analyses.outer().callees(),
                 unit.function,
                 analyses.outer(),
+                self.size.then(|| (&mut *unit.declared, &bytes)),
             );
         let constants = crate::mergestores::merged_constants(
             unit.context,
