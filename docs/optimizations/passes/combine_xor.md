@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:222ddf8e2c3e85876a51cdeb0baf97eaeb0073f91cd73e2915130463079a3ce0 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:494be3741b8f08e256f3bfe0156191b31fcf1c329f2b19abfbb050e9e44004fa -->
 
 # combine_xor
 
@@ -17,14 +17,20 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 `undef` lanes are not matched or made).
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `foldXorToXor`, `foldNot`,
-`visitMaskedMerge`, the `ctlz`/`cttz` and
+each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the `ctlz`/`cttz` and
 `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
 `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 `canonicalizeConditionalNegationViaMathToSelect`,
 `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
 `foldMaskedAddXorPattern`.
+
+DEVIATE 3: `foldNot` makes its `not (cmp A, B)` arm for an integer compare
+with one use. Owed, in its order: DeMorgan with an inverted operand, the
+binary-operator arms (`~(X + C)`, `~(X - Y)`, shifts), the `bitcast` arms,
+`sinkNotIntoLogicalOp`, min/max and `is_fpclass`, the select of compares,
+`foldNotXor`, `getFreelyInverted`, a `not` of a compare with several uses
+(`canFreelyInvertAllUsersOf`, now inline in `combine_compares`), and `fcmp`.
 
 ## Example
 `Y ^ (X | Y)` is `X & ~Y`:

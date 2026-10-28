@@ -165,3 +165,26 @@ fn a_not_and_xored_with_its_operand_is_an_or_and_a_not_or_a_nand() {
 fn a_xor_constant_moves_out_of_the_inner_xor() {
     check(XY, "  %e = xor i32 %x, 77\n  %r = xor i32 %e, %y\n", &["xor i32 %x, %y", ", 77"], &[]);
 }
+
+/// `foldNot`: `not (cmp A, B)` is the inverse compare. Left as `xor (icmp eq (and x, 1), 0), true`, the
+/// `zext` of it never became `and x, 1`, and QB `rounded()` was 28 instructions against the pin's 14.
+#[test]
+fn a_not_of_a_one_use_compare_is_the_inverse_compare() {
+    let mut module = parsed(
+        "define i32 @f(i32 %x) {
+b0:
+  %a = and i32 %x, 1
+  %c = icmp eq i32 %a, 0
+  %n = xor i1 %c, true
+  %z = zext i1 %n to i32
+  ret i32 %z
+}
+",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    let out = printed(&module);
+    assert!(out.contains("icmp ne i32 %a, 0") && !out.contains("xor i1"), "{out}");
+}
