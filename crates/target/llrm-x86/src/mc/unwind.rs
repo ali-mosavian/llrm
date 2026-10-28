@@ -83,13 +83,11 @@ mod tests {
         0x44, 0, 0, 0, 0, 0, 0, 0, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
 
-    /// Functions with declared frames had no `.eh_frame` at all, so a C++ or
-    /// `-fexceptions` unwinder found nothing: the section is the pin's, byte
-    /// for byte, with a PC32 against `.text` for each function.
-    #[test]
-    fn the_eh_frame_is_the_pins_for_the_same_rows() {
+    /// The two functions of `PIN`: one that pushes two registers, subtracts
+    /// from the stack and pops them, and a 4-byte leaf.
+    fn both() -> Vec<Frame> {
         let saved = [("rbx", -24), ("r14", -16)];
-        let frames = vec![
+        vec![
             Frame {
                 section: 0,
                 offset: 0,
@@ -104,7 +102,15 @@ mod tests {
                 ],
             },
             Frame { section: 0, offset: 0x38, length: 4, rows: Vec::new() },
-        ];
+        ]
+    }
+
+    /// Functions with declared frames had no `.eh_frame` at all, so a C++ or
+    /// `-fexceptions` unwinder found nothing: the section is the pin's, byte
+    /// for byte, with a PC32 against `.text` for each function.
+    #[test]
+    fn the_eh_frame_is_the_pins_for_the_same_rows() {
+        let frames = both();
         let written = llrm_dwarf::eh_frame::expanded(&object(frames), &eh_target()).unwrap();
         let section = written.sections.last().unwrap();
         assert_eq!(section.name, ".eh_frame");
@@ -117,11 +123,11 @@ mod tests {
             ]
         );
         assert!(written.frames.is_empty());
-        assert!(
-            X86Objects
-                .write_object("elf", &object(vec![Frame { section: 0, offset: 0, length: 4, rows: vec![] }]))
-                .is_ok()
-        );
+        // The written file carries the section: its type is SHT_X86_64_UNWIND
+        // and its bytes are the pin's.
+        let file = X86Objects.write_object("elf", &object(both())).unwrap();
+        assert!(file.windows(4).any(|word| word == 0x7000_0001u32.to_le_bytes()));
+        assert!(file.windows(PIN.len()).any(|bytes| bytes == PIN));
     }
 
     #[test]

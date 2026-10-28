@@ -275,7 +275,9 @@ pub fn write<M: Machine>(object: &Object) -> Result<Vec<u8>, Unsupported> {
         let alignment = section.align.max(4).next_power_of_two();
         align(&mut out, alignment);
         let offset = out.len() as u64;
-        if kind == SHT_PROGBITS {
+        // Every type but NOBITS has its bytes in the file (`.eh_frame` is
+        // `SHT_X86_64_UNWIND`, `.init_array` `SHT_INIT_ARRAY`).
+        if kind != SHT_NOBITS {
             out.extend(&images[index]);
         }
         headers.push(Header {
