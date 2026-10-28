@@ -437,6 +437,8 @@ impl<'a> TypeLegalizer<'a> {
                 let opcode = if vt.size_in_bits() % 8 == 0 { ISD::SignExtend } else { ISD::ZeroExtend };
                 self.dag.get_node(opcode, to, &[value])
             }
+            // `PromoteIntRes_UNDEF`: an undef of the promoted type.
+            ISD::Undef | ISD::Poison => self.dag.get_undef(to),
             ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
                 let (lhs, rhs) = (self.promoted_integer(lhs), self.promoted_integer(rhs));
@@ -886,6 +888,17 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
             op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
+            ISD::SMulFix | ISD::UMulFix | ISD::SMulFixSat | ISD::UMulFixSat => self.expand_mulfix(value, half),
+            ISD::SShlSat | ISD::UShlSat => {
+                // `ExpandIntRes_SHLSAT`.
+                let expanded = super::expand_fixed::expand_shl_sat(self.dag, self.tli, value);
+                self.split_integer(expanded, half)
+            }
+            ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
+                // `ExpandIntRes_ADDSUBSAT`.
+                let expanded = super::expand_sat::expand_add_sub_sat(self.dag, self.tli, value);
+                self.split_integer(expanded, half)
+            }
             ISD::UMulO => self.expand_umulo(value, half),
             ISD::SMulO => self.expand_smulo(value, half),
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
@@ -1229,6 +1242,160 @@ impl<'a> TypeLegalizer<'a> {
         (lo, SDValue { node: hi.node, res: 0 })
     }
 
+    /// `ExpandIntRes_MULFIX`: the product of the whole values as four
+    /// half-width pieces, shifted right by the scale, and for the saturating
+    /// forms clamped by the bits above the result.
+    ///
+    /// DEVIATE SD103: the pieces come from `forceExpandMultiply`, never
+    /// `expandMUL_LOHI` (which uses a legal `UMUL_LOHI` of the half when there
+    /// is one): the same value, more instructions. Exit: translate
+    /// `expandMUL_LOHI`. Owner sdag-a. Review 2026-11-27.
+    ///
+    /// DEVIATE SD104: an unsigned scale above a half shifts `HH`, where the
+    /// pin shifts `HL` (its own comment says `HH`; upstream main fixed it):
+    /// bits `64 + scale` and up of the product lie in `HH`. Exit: the next
+    /// pin bump. Owner sdag-a. Review 2026-11-27.
+    fn expand_mulfix(
+        &mut self,
+        value: SDValue,
+        half: EVT,
+    ) -> (SDValue, SDValue) {
+        let op = self.dag.opcode(value);
+        let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+        let vt = self.dag.value_type(value);
+        let scale = self.dag.constant(self.dag.operand(value, 2)).expect("a constant scale") as u32;
+        let saturating = matches!(op, ISD::SMulFixSat | ISD::UMulFixSat);
+        let signed = matches!(op, ISD::SMulFix | ISD::SMulFixSat);
+        let bits = vt.size_in_bits();
+        let half_bits = half.size_in_bits();
+        let bool_vt = self.tli.types.set_cc_result_type(vt);
+
+        // A scale of zero is a plain multiply, clamped by its overflow.
+        if scale == 0 {
+            let result = if !saturating {
+                self.dag.get_node(ISD::Mul, vt, &[lhs, rhs])
+            } else {
+                let product =
+                    self.dag.get_node_multi(if signed { ISD::SMulO } else { ISD::UMulO }, &[vt, bool_vt], &[lhs, rhs]);
+                let overflow = SDValue { node: product.node, res: 1 };
+                if signed {
+                    let (min, max) = (1u128 << (bits - 1), (1u128 << (bits - 1)) - 1);
+                    let (sat_min, sat_max) = (self.dag.get_constant(min, vt), self.dag.get_constant(max, vt));
+                    let zero = self.dag.get_constant(0, vt);
+                    // The inputs' xor: sign bit clear, the product is positive.
+                    let xor = self.dag.get_node(ISD::Xor, vt, &[lhs, rhs]);
+                    let negative = self.dag.get_setcc(bool_vt, xor, zero, CondCode::SetLt);
+                    let saturated = self.dag.get_select(vt, negative, sat_min, sat_max);
+                    self.dag.get_select(vt, overflow, saturated, product)
+                } else {
+                    let sat_max = self.dag.get_all_ones_constant(vt);
+                    self.dag.get_select(vt, overflow, sat_max, product)
+                }
+            };
+            return self.split_integer(result, half);
+        }
+
+        let (low, high) = super::expand_fixed::force_expand_multiply(self.dag, signed, lhs, rhs);
+        let (p0, p1) = self.split_integer(low, half);
+        let (p2, p3) = self.split_integer(high, half);
+        let pieces = [p0, p1, p2, p3];
+
+        // Shift right by the scale: two funnel shifts pick the result's
+        // halves, none when the scale is a whole number of pieces.
+        let first = (scale / half_bits) as usize;
+        let (mut lo, mut hi) = if scale % half_bits != 0 {
+            let amount = self.dag.get_constant(u128::from(scale % half_bits), EVT::I8);
+            (
+                self.dag.get_node(ISD::FShr, half, &[pieces[first + 1], pieces[first], amount]),
+                self.dag.get_node(ISD::FShr, half, &[pieces[first + 2], pieces[first + 1], amount]),
+            )
+        } else {
+            (pieces[first], pieces[first + 1])
+        };
+        // No integer part, so nothing to overflow.
+        if !saturating || scale == bits {
+            return (lo, hi);
+        }
+
+        let (result_hl, result_hh) = (pieces[2], pieces[3]);
+        let bool_half = self.tli.types.set_cc_result_type(half);
+        let zero = self.dag.get_constant(0, half);
+        let ones = self.dag.get_all_ones_constant(half);
+        let test = |this: &mut Self, a: SDValue, b: SDValue, cc: CondCode| this.dag.get_setcc(bool_half, a, b, cc);
+        let half_mask = super::fold::mask(half_bits);
+
+        if !signed {
+            let sat_max = if scale < half_bits {
+                // Overflowed if (HH | (HL >> Scale)) != 0.
+                let amount = self.dag.get_constant(u128::from(scale), EVT::I8);
+                let adjusted = self.dag.get_node(ISD::Srl, half, &[result_hl, amount]);
+                let any = self.dag.get_node(ISD::Or, half, &[adjusted, result_hh]);
+                test(self, any, zero, CondCode::SetNe)
+            } else if scale == half_bits {
+                test(self, result_hh, zero, CondCode::SetNe)
+            } else {
+                // Overflowed if (HH >> (Scale - half)) != 0.
+                let amount = self.dag.get_constant(u128::from(scale - half_bits), EVT::I8);
+                let adjusted = self.dag.get_node(ISD::Srl, half, &[result_hh, amount]);
+                test(self, adjusted, zero, CondCode::SetNe)
+            };
+            hi = self.dag.get_select(half, sat_max, ones, hi);
+            lo = self.dag.get_select(half, sat_max, ones, lo);
+            return (lo, hi);
+        }
+
+        let (sat_max, sat_min);
+        if scale < half_bits {
+            // Overflowed past the maximum if the top (width - scale + 1) bits
+            // are above zero, past the minimum if below -1.
+            let overflow_bits = bits - scale + 1;
+            let hl_hi_mask =
+                self.dag.get_constant(half_mask & !super::fold::mask(half_bits - (overflow_bits - half_bits)), half);
+            let hl_lo_mask = self.dag.get_constant(super::fold::mask(bits - overflow_bits), half);
+            // Max if HH > 0 or (HH == 0 && HL > HLLoMask).
+            let hh_gt0 = test(self, result_hh, zero, CondCode::SetGt);
+            let hh_eq0 = test(self, result_hh, zero, CondCode::SetEq);
+            let hl_ugt = test(self, result_hl, hl_lo_mask, CondCode::SetUGt);
+            let and = self.dag.get_node(ISD::And, bool_half, &[hh_eq0, hl_ugt]);
+            sat_max = self.dag.get_node(ISD::Or, bool_half, &[hh_gt0, and]);
+            // Min if HH < -1 or (HH == -1 && HL < HLHiMask).
+            let hh_lt = test(self, result_hh, ones, CondCode::SetLt);
+            let hh_eq = test(self, result_hh, ones, CondCode::SetEq);
+            let hl_ult = test(self, result_hl, hl_hi_mask, CondCode::SetULt);
+            let and = self.dag.get_node(ISD::And, bool_half, &[hh_eq, hl_ult]);
+            sat_min = self.dag.get_node(ISD::Or, bool_half, &[hh_lt, and]);
+        } else if scale == half_bits {
+            // Max if HH > 0 or (HH == 0 && the sign bit of HL is set).
+            let hh_gt0 = test(self, result_hh, zero, CondCode::SetGt);
+            let hh_eq0 = test(self, result_hh, zero, CondCode::SetEq);
+            let hl_neg = test(self, result_hl, zero, CondCode::SetLt);
+            let and = self.dag.get_node(ISD::And, bool_half, &[hh_eq0, hl_neg]);
+            sat_max = self.dag.get_node(ISD::Or, bool_half, &[hh_gt0, and]);
+            // Min if HH < -1 or (HH == -1 && the sign bit of HL is clear).
+            let hh_lt = test(self, result_hh, ones, CondCode::SetLt);
+            let hh_eq = test(self, result_hh, ones, CondCode::SetEq);
+            let hl_pos = test(self, result_hl, zero, CondCode::SetGe);
+            let and = self.dag.get_node(ISD::And, bool_half, &[hh_eq, hl_pos]);
+            sat_min = self.dag.get_node(ISD::Or, bool_half, &[hh_lt, and]);
+        } else {
+            // As the first case, but only HH matters.
+            let overflow_bits = bits - scale + 1;
+            let hh_hi_mask = self.dag.get_constant(half_mask & !super::fold::mask(half_bits - overflow_bits), half);
+            let hh_lo_mask = self.dag.get_constant(super::fold::mask(half_bits - overflow_bits), half);
+            sat_max = test(self, result_hh, hh_lo_mask, CondCode::SetGt);
+            sat_min = test(self, result_hh, hh_hi_mask, CondCode::SetLt);
+        }
+
+        // Saturate to the signed maximum, then the signed minimum.
+        let max_hi = self.dag.get_constant(half_mask >> 1, half);
+        hi = self.dag.get_select(half, sat_max, max_hi, hi);
+        lo = self.dag.get_select(half, sat_max, ones, lo);
+        let min_hi = self.dag.get_constant(1u128 << (half_bits - 1), half);
+        hi = self.dag.get_select(half, sat_min, min_hi, hi);
+        lo = self.dag.get_select(half, sat_min, zero, lo);
+        (lo, hi)
+    }
+
     /// `ExpandIntRes_XMULO` for the signed multiply, with no `__mulodi4` (the
     /// pin leaves it to compiler-rt) and no 128-bit multiply:
     /// `forceExpandWideMUL` through `forceExpandMultiply`, Hacker's
@@ -1242,30 +1409,7 @@ impl<'a> TypeLegalizer<'a> {
         let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let wide = self.dag.value_type(value);
         let bits = wide.size_in_bits();
-        let half_bits = bits / 2;
-        let mask = self.dag.get_constant(super::fold::mask(half_bits), wide);
-        let shift = self.dag.get_constant(u128::from(half_bits), EVT::I8);
-        let and = |this: &mut Self, a: SDValue, b: SDValue| this.dag.get_node(ISD::And, wide, &[a, b]);
-        let mul = |this: &mut Self, a: SDValue, b: SDValue| this.dag.get_node(ISD::Mul, wide, &[a, b]);
-        let add = |this: &mut Self, a: SDValue, b: SDValue| this.dag.get_node(ISD::Add, wide, &[a, b]);
-        let (ll, rl) = (and(self, lhs, mask), and(self, rhs, mask));
-        let t = mul(self, ll, rl);
-        let tl = and(self, t, mask);
-        let th = self.dag.get_node(ISD::Srl, wide, &[t, shift]);
-        let lh = self.dag.get_node(ISD::Sra, wide, &[lhs, shift]);
-        let rh = self.dag.get_node(ISD::Sra, wide, &[rhs, shift]);
-        let lh_rl = mul(self, lh, rl);
-        let u = add(self, lh_rl, th);
-        let ul = and(self, u, mask);
-        let uh = self.dag.get_node(ISD::Sra, wide, &[u, shift]);
-        let ll_rh = mul(self, ll, rh);
-        let v = add(self, ll_rh, ul);
-        let vh = self.dag.get_node(ISD::Sra, wide, &[v, shift]);
-        let v_up = self.dag.get_node(ISD::Shl, wide, &[v, shift]);
-        let product_lo = add(self, tl, v_up);
-        let lh_rh = mul(self, lh, rh);
-        let carries = add(self, uh, vh);
-        let product_hi = add(self, lh_rh, carries);
+        let (product_lo, product_hi) = super::expand_fixed::force_expand_multiply(self.dag, true, lhs, rhs);
         let sign_shift = self.dag.get_constant(u128::from(bits - 1), EVT::I8);
         let sign = self.dag.get_node(ISD::Sra, wide, &[product_lo, sign_shift]);
         let overflow_vt = self.dag.node(value).values[1];

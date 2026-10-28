@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """QCport built through llrm-cc, run against the all-Borland build: the clang front end's gate.
 
-    QCPORT=.../src QCPORT_INC=... QCPORT_BORLAND=DIR [QCPORT_LLRMC_MODULES="dbg sys_time d_poly ent"] tools/qcport-run-cc.py [-Os]
+    QCPORT=.../src QCPORT_INC=... QCPORT_BORLAND=DIR [QCPORT_LLRMC_MODULES="mod ..."] tools/qcport-run-cc.py [-Os] [--row x86_16-dos-rp3]
 
-Every module of QCport's six source directories is compiled by llrm-cc for x86_16-dos (LLRM_CLANG_M16 names the i8086 clang;
-include path: LLRM_BORLAND_INC, made by tools/lowercase-includes.sh), except QCPORT_LLRMC_MODULES, which llrm-c compiles:
-Borland's `_asm` is not carried yet. The objects replace the Borland build's in QCPORT.LNK; both builds run headless as
+Every module of QCport's six source directories is compiled by llrm-cc for the row --row names (default x86_16-dos, or QCPORT_CC_ROW; LLRM_CLANG_M16 names the i8086 clang;
+include path: LLRM_BORLAND_INC, made by tools/lowercase-includes.sh), except QCPORT_LLRMC_MODULES, which llrm-c compiles
+(none by default: Borland's `_asm` goes through -fasm-blocks). The objects replace the Borland build's in QCPORT.LNK; both builds run headless as
 tools/qcport-run.py runs them and must draw the same frames, polygons and BENCH.BMP. Exit 1 on a build failure or a difference.
 """
 from __future__ import annotations
@@ -27,12 +27,21 @@ dosbatch = qr.dosbatch
 
 
 def main() -> int:
-    level = sys.argv[1] if len(sys.argv) > 1 else "-Os"
+    argv = sys.argv[1:]
+    row = os.environ.get("QCPORT_CC_ROW", "x86_16-dos")
+    if "--row" in argv:
+        at = argv.index("--row")
+        if at + 1 >= len(argv):
+            sys.exit("--row wants a llrm-cc target row, e.g. x86_16-dos-rp3")
+        row = argv[at + 1]
+        del argv[at : at + 2]
+    level = argv[0] if argv else "-Os"
+    qr.required("LLRM_CLANG_M16")
     qcport, include, borland = qr.required("QCPORT"), qr.required("QCPORT_INC"), qr.required("QCPORT_BORLAND")
     borland_include = qr.required("LLRM_BORLAND_INC")
     root = HERE.parent
     cc, llrm_c = root / "target/release/llrm-cc", qr.llrmbin.bin_dir() / "llrm-c"
-    by_llrm_c = set(os.environ.get("QCPORT_LLRMC_MODULES", "dbg sys_time d_poly ent").split())
+    by_llrm_c = set(os.environ.get("QCPORT_LLRMC_MODULES", "").split())
     sources = sorted(source for part in qr.MODULES for source in (qcport / part).glob("*.c"))
     dirs = [flag for part in (*qr.MODULES, "qgl") for flag in ("-I", str(qcport / part))]
     work = dosbatch.private_work("qcport-run-cc")
@@ -47,7 +56,7 @@ def main() -> int:
         out = sides["llrm"] / f"{source.stem}.obj"
         if source.stem in by_llrm_c:
             return qr.compile_failure(llrm_c, [*dirs, "-I", str(include)], source, out, level)
-        env = {**os.environ, "LLRM_CC_TARGET": "x86_16-dos"}
+        env = {**os.environ, "LLRM_CC_TARGET": row}
         done = subprocess.run([str(cc), level, "-c", "-fasm-blocks", "-D_asm=__asm", "-nostdinc", "-isystem", str(borland_include), *dirs, str(source), "-o", str(out)], capture_output=True, text=True, env=env)
         return None if done.returncode == 0 else f"{source.stem}: {done.stderr.strip()[-400:]}"
 

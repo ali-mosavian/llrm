@@ -116,7 +116,7 @@ fn synthetic() -> (llrm_object::Object, String) {
         Block, Enumerator, File, Function, Info, Kind, Language, Line, Location, Range, Register, Scalar, Type,
         Variable,
     };
-    use llrm_object::{Arch, Binding, Definition, Object, Role, Section, Symbol};
+    use llrm_object::{Binding, Definition, Object, Role, Section, Symbol};
     let code = vec![
         0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x06, 0xC7, 0x46, 0xFE, 0x05, 0x00, 0xBE, 0x2A, 0x00, 0xC7, 0x46, 0xFC, 0x07,
         0x00, 0x8B, 0x46, 0xFC, 0x33, 0xC0, 0x8B, 0xE5, 0x5D, 0xCB,
@@ -179,7 +179,7 @@ fn synthetic() -> (llrm_object::Object, String) {
     };
     let object = Object {
         name: "syn.c".into(),
-        arch: Arch::I8086,
+        bits: 16,
         sections: vec![text],
         symbols: vec![
             Symbol {
@@ -226,7 +226,11 @@ fn codeview_reads_an_enum_a_const_a_register_variable_and_a_block_scope() {
     let scratch = tempfile::tempdir().unwrap();
     let (object, source) = synthetic();
     std::fs::write(scratch.path().join("syn.c"), source).unwrap();
-    std::fs::write(scratch.path().join("syn.obj"), llrm_codegen::objectfile::write::write(&object).unwrap()).unwrap();
+    std::fs::write(
+        scratch.path().join("syn.obj"),
+        llrm_codegen::objectfile::write::write(&object, &llrm_x86::mc::omf::X86Omf).unwrap(),
+    )
+    .unwrap();
     dosbox::run(
         &[('c', &borland), ('v', &microsoft), ('w', scratch.path())],
         "v:\\bin",
