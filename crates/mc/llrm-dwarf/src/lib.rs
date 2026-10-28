@@ -81,8 +81,8 @@ pub fn expanded(
         names.push(if version >= 5 { ".debug_loclists" } else { ".debug_loc" });
     }
     // The section of ranges, where a DIE has several.
-    let several =
-        info.code.len() > 1 || info.functions.iter().any(|one| one.ranges.len() > 1 || one.blocks.iter().any(many));
+    let several = info.code.len() > 1
+        || info.functions.iter().any(|one| one.ranges.len() > 1 || (address != 2 && one.blocks.iter().any(many)));
     if several {
         names.push(if version >= 5 { ".debug_rnglists" } else { ".debug_ranges" });
     }

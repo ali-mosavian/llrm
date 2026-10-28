@@ -260,7 +260,7 @@ impl Writer<'_> {
         out: &mut Data,
         block: &llrm_object::debug::Block,
     ) -> Result<(), Unsupported> {
-        let [range] = block.ranges[..] else { return refused("a block scope in several ranges") };
+        let Some(range) = block.hull() else { return refused("a block scope in several sections") };
         let anchored = anchor(self.object, self.function, range)?;
         out.symbol(S_BLOCK32, |out| {
             put32(&mut out.bytes, 0);

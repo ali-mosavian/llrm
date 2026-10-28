@@ -717,7 +717,7 @@ impl Symbols<'_> {
         types: &mut Types,
         block: &model::Block,
     ) -> Result<(), Error> {
-        let [range] = block.ranges[..] else { return refused("a lexical block in pieces") };
+        let Some(range) = block.hull() else { return refused("a lexical block in several sections") };
         let mut data = Vec::new();
         self.scope_prefix(&mut data);
         data.truncate(8);

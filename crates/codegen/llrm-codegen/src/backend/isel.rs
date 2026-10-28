@@ -1285,7 +1285,7 @@ pub(crate) fn parameters(
                 ),
                 _ => None,
             };
-            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None })
+            Some(DebugVariable { name, r#type, place, parameter: true, argument, arrives: None, scope: None })
         })
         .collect()
 }
@@ -1397,7 +1397,16 @@ pub(crate) fn dbg_line(
     };
     let named =
         |field: &str| module.special.get(node).and_then(|special| special.fields.iter().position(|one| one == field));
-    Some(SrcLoc { line: number(named("line").unwrap_or(0))?, column: named("column").and_then(number).unwrap_or(0) })
+    let node_of = |field: &str| match named(field).and_then(|at| operands.get(at)) {
+        Some(llrm_mir::MetadataOperand::Node(id)) => id.0 + 1,
+        _ => 0,
+    };
+    Some(SrcLoc {
+        line: number(named("line").unwrap_or(0))?,
+        column: named("column").and_then(number).unwrap_or(0),
+        scope: node_of("scope"),
+        inlined_at: node_of("inlinedAt"),
+    })
 }
 
 /// `body` with each instruction's source line: that of the MIR instruction
@@ -1656,6 +1665,7 @@ pub(crate) fn noted(
                 parameter: variable.parameter,
                 argument: variable.argument,
                 arrives: None,
+                scope: variable.block,
             });
         }
     }
@@ -3682,6 +3692,7 @@ impl Selector<'_, '_, '_> {
                     parameter: variable.parameter,
                     argument: variable.argument,
                     arrives: None,
+                    scope: variable.block,
                 },
             ));
         }

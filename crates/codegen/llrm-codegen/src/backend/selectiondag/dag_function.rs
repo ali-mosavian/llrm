@@ -1218,6 +1218,7 @@ fn selected_in(
             parameter: variable.parameter,
             argument: variable.argument,
             arrives: None,
+            scope: variable.block,
         };
         // A parameter is said once. One the convention passes in a register is
         // in its declared cell (`-O0`'s copy of it), not in the register the

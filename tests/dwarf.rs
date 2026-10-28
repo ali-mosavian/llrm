@@ -1129,3 +1129,76 @@ fn a_far_16_bit_functions_cells_are_found_from_its_longer_frame_address() {
         assert!(text.contains(wanted), "no {wanted:?}:\n{text}");
     }
 }
+
+/// The tag of the DIE that holds the variable `name`, from `llvm-dwarfdump`'s
+/// indented output.
+fn parent_of_variable(
+    dump: &str,
+    name: &str,
+) -> Option<String> {
+    // (indent, tag, name) of each DIE; a DIE's name is its first `DW_AT_name`.
+    let mut dies: Vec<(usize, String, Option<String>)> = Vec::new();
+    for line in dump.lines() {
+        if let Some(at) = line.find("DW_TAG_") {
+            dies.push((at, line[at + 7..].trim().to_owned(), None));
+        } else if line.contains("DW_AT_name") {
+            if let (Some(die), Some(open)) = (dies.last_mut(), line.find("(\"")) {
+                die.2.get_or_insert_with(|| line[open + 2..].trim_end_matches(")").trim_end_matches('"').to_owned());
+            }
+        }
+    }
+    let at = dies.iter().position(|(_, tag, one)| tag == "variable" && one.as_deref() == Some(name))?;
+    let indent = dies[at].0;
+    dies[..at].iter().rev().find(|(outer, ..)| *outer < indent).map(|(_, tag, _)| tag.clone())
+}
+
+/// A local declared in a nested `{}` was written in the function itself: the
+/// writers had blocks and the backend never made one, so `t` and `u` were
+/// visible (and wrong) all through `f`. They are in lexical blocks now.
+#[test]
+fn a_local_in_a_nested_scope_is_in_a_lexical_block() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf");
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("blocks.o");
+    let made = compile(&fixtures.join("blocks.c"), &["-m32", "-O0", "-fobject-format=elf", "-g"], &object);
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    let tag = |name| parent_of_variable(&dump, name);
+    assert_eq!(tag("r").as_deref(), Some("subprogram"), "{dump}");
+    assert_eq!(tag("t").as_deref(), Some("lexical_block"), "{dump}");
+    assert_eq!(tag("u").as_deref(), Some("lexical_block"), "{dump}");
+}
+
+/// A function inlined twice left no trace in DWARF: the body's code was in the
+/// caller's lexical block and a debugger could not tell the two bodies, or the
+/// calls, apart. `inlined.ll` is `f` of `{ sq(t); } sq(a)` after the pin's
+/// inliner: each body is a `DW_TAG_inlined_subroutine` of `sq` with the line
+/// and column of its call.
+#[test]
+fn a_function_inlined_twice_has_two_inlined_subroutines_with_their_calls() {
+    let Some(dwarfdump) = dwarfdump() else {
+        skipped("needs llvm-dwarfdump");
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let object = scratch.path().join("inlined.o");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/inlined.ll");
+    let made = Command::new(env!("CARGO_BIN_EXE_llrm-llc"))
+        .args(["-O2", "-march=i486", "-fobject-format=elf", "-mabi=sysv", "-o"])
+        .arg(&object)
+        .arg(&source)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let dumped = Command::new(dwarfdump).arg("--debug-info").arg(&object).output().unwrap();
+    let dump = String::from_utf8_lossy(&dumped.stdout).into_owned();
+    assert_eq!(dump.matches("DW_TAG_inlined_subroutine").count(), 2, "{dump}");
+    assert!(dump.contains("DW_AT_call_line\t(2)") && dump.contains("DW_AT_call_column\t(48)"), "{dump}");
+    assert!(dump.contains("DW_AT_call_column\t(68)"), "{dump}");
+    assert_eq!(dump.matches("DW_AT_inline\t(DW_INL_inlined)").count(), 1, "one abstract sq: {dump}");
+}
