@@ -442,15 +442,6 @@ impl Selector<'_> {
         let base = name.strip_prefix("llvm.").map(|rest| rest.split('.').next().unwrap_or(rest)).unwrap_or("");
         match base {
             "lifetime" | "assume" | "dbg" | "donothing" | "invariant" => Ok(()),
-            // The size of the object is not known by now: all ones, or zero where the minimum is asked.
-            "objectsize" => {
-                let Some(bits) = self.types().int_bits(instruction.ty) else { return refuse("a non-integer objectsize") };
-                let Src::Int { value: minimum, .. } = self.src(arguments[1])? else {
-                    return refuse("an objectsize whose minimum is not a constant");
-                };
-                let value = if minimum != 0 { 0 } else { u128::MAX >> (128 - bits) };
-                self.define(result, Src::Int { bits, value })
-            }
             // What is left unfolded by now is not a constant, so only a literal operand makes it true.
             "is" if name.starts_with("llvm.is.constant") => {
                 let known = matches!(self.src(arguments[0])?, Src::Int { .. } | Src::Float { .. });

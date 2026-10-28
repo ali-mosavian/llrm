@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 216 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 217 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -190,6 +190,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | simpleloopunswitch | `SimpleLoopUnswitch`: a branch or switch in a loop on a loop-invariant condition, one side of which leaves the loop, is decided before the loop instead of on every trip (trivial). | In the `trivialunswitch@732` slot of LLVM's order, LPM1 after the second | [simpleloopunswitch](simpleloopunswitch.md) |
 | simplifycfg | A terminator on a constant becomes a jump, the blocks nothing reaches go, and what that leaves is merged: LLVM's `SimplifyCFGPass` and the `ConstantFoldTerminator`, `removeUnreachableBlocks` and `BasicBlock::removePredecessor` it is made of. | Once per round of the function fixed point, before `decide`: the branches | [simplifycfg](simplifycfg.md) |
 | simplifyindvar | SimplifyIndVar's comparison elimination: a comparison with an induction variable that ScalarEvolution proves true or false is that constant. | Step 0 of [`crate::indvars`](indvars.md), with the widening. | [simplifyindvar](simplifyindvar.md) |
+| simplifylibcalls | `LibCallSimplifier`: a call of a C library function that a cheaper one does as well becomes that one, as `printf("hi\n")` becomes `puts("hi")`. | Named by `pipeline`. | [simplifylibcalls](simplifylibcalls.md) |
 | sinkcast | CodeGenPrepare's `SinkCast` and `OptimizeNoopCopyExpression`: a cast read in other blocks is made again in each, where isel takes it as a register rename ([CodeGenPrepare.cpp#L1432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L1432)). | In `cgpaddr`'s run, before `optimizeExt`. | [sinkcast](sinkcast.md) |
 | sinkcommon | The code that ends every unconditional way into a block in the same way runs once in the block: SimplifyCFG's `sinkCommonCodeFromPredecessors`. | Named by `simplifycfg`, `switcharms`. | [sinkcommon](sinkcommon.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |

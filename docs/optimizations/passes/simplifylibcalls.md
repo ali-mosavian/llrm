@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifylibcalls.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifylibcalls.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:a7eaf1b4bcafe519b78ec48ce005e1c96011e0c8776a752ca846abfb14dfecab -->
+<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:7f0cc85ff49fb330e267c13409a2d3434014556f9bbc9c3796a5228bc7476643 -->
 
 # simplifylibcalls
 
@@ -39,3 +39,6 @@ Blocks and edges are unchanged: dominators and loops are preserved.
 call i32 (ptr, ...) @printf(ptr @.str)   ; @.str = c"hi\0A\00", unused
 ```
 becomes `call i32 @puts(ptr @str.0)` with `@str.0 = c"hi\00"`.
+
+## Used by
+Named by `pipeline`.
