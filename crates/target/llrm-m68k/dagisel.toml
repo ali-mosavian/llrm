@@ -1,4 +1,6 @@
 # The m68k DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# A td outside the LLVM tree (llvm_dir empty) needs `defm : RemapAllTargetPseudoPointerOperands<RC>;`
+# or -gen-instr-info fails. Its ids_includes name `GenInstrInfo.inc` and `GenRegisterInfo.inc`.
 # The cpu, atom, dynamic, types and node_predicate tables are features.toml's (llrm-dagisel-gen).
 [target]
 name = "m68k"
@@ -7,6 +9,8 @@ isd = "M68kISD::"
 llvm_dir = "M68k"
 td = "M68k.td"
 cpus = ["m68000", "m68020"]
+# Named by the hand code (src/dagisel/addr.rs, hooks.rs).
+extra_symbols = ["ISD::ATOMIC_CMP_SWAP", "M68k::PC", "M68kISD::GLOBAL_BASE_REG", "M68kISD::Wrapper", "M68kISD::WrapperPC", "M68kISD::SUB"]
 ids_includes = [
   "#define GET_INSTRINFO_ENUM",
   '#include "M68kGenInstrInfo.inc"',
