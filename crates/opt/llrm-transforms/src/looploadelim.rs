@@ -45,7 +45,7 @@ use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memdepchecker::DepType;
 use llrm_analysis::memory;
 use llrm_analysis::runtimecheck::RuntimePointerCheck;
-use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::{Kind, Ty};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
@@ -682,6 +682,12 @@ impl FunctionPass for LoopLoadElim {
         // Build up a worklist of inner-loops to transform to avoid iterator
         // invalidation.
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
+        // The expressions of the passes before stand while the function is as
+        // they left it.
+        let held = analyses.get::<Scevs>(unit.context, unit.layout, unit.function);
+        if !changed {
+            session.adopt(held.take());
+        }
         let worklist: Vec<BlockId> = {
             let (_, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
             env.loops
@@ -794,7 +800,12 @@ impl FunctionPass for LoopLoadElim {
             session = ScevSession::of(unit.context, unit.function, &outer);
             stale = false;
         }
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if changed {
+            PreservedAnalyses::none()
+        } else {
+            held.put(session.into_scev());
+            PreservedAnalyses::all()
+        }
     }
 }
 

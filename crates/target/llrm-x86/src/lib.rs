@@ -10,7 +10,8 @@ pub mod effects;
 #[cfg(test)]
 mod instructioncost_tests;
 pub mod lowering;
-pub use llrm_instr as parse;
+pub mod mc;
+pub use llrm_target::instr as parse;
 pub mod select;
 pub mod tti;
 #[cfg(test)]
@@ -284,9 +285,9 @@ pub mod instructions {
 
     /// What the reader of `x86.instr` must know: its registers, widths, flags
     /// and conditions (`dialect.toml`).
-    pub fn dialect() -> &'static llrm_instr::Dialect {
-        static DIALECT: std::sync::LazyLock<llrm_instr::Dialect> = std::sync::LazyLock::new(|| {
-            llrm_instr::Dialect::parse(include_str!("instructions/dialect.toml")).expect("dialect.toml parses")
+    pub fn dialect() -> &'static llrm_target::instr::Dialect {
+        static DIALECT: std::sync::LazyLock<llrm_target::instr::Dialect> = std::sync::LazyLock::new(|| {
+            llrm_target::instr::Dialect::parse(include_str!("instructions/dialect.toml")).expect("dialect.toml parses")
         });
         &DIALECT
     }

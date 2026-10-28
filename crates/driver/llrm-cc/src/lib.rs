@@ -105,9 +105,27 @@ fn pin() -> &'static str {
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
 
+/// `text` with each `{datalayout:NAME}` replaced by the `datalayout` of
+/// crates/target/llrm-NAME's description.
+fn expanded(text: &str) -> Result<String, String> {
+    let mut out = text.to_owned();
+    while let Some(start) = out.find("{datalayout:") {
+        let end = start + out[start..].find('}').ok_or("targets.toml: unclosed {datalayout:")?;
+        let name = &out[start + "{datalayout:".len()..end];
+        let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
+        let description = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+        let table: toml::Table = description.parse().map_err(|error| format!("{path}: {error}"))?;
+        let layout = table.get("datalayout").and_then(toml::Value::as_str).ok_or(format!("{path}: no datalayout"))?;
+        out.replace_range(start..=end, layout);
+    }
+    Ok(out)
+}
+
 pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
     let mut table: BTreeMap<String, Target> = toml::from_str(text).map_err(|error| format!("targets.toml: {error}"))?;
     for target in table.values_mut() {
+        target.datalayout = expanded(&target.datalayout)?;
+        target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
             *word = word.replace("{root}", ROOT);
         }
@@ -299,7 +317,11 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             build.clang.push(if level == "max" { "-O3".to_owned() } else { flag.to_owned() });
         } else if flag.starts_with("-mabi=") {
             // The backend's convention (clang's own -mabi is for other
-            // targets); it follows the table's.
+            // targets); it follows the table's. Open Watcom's `char` is
+            // unsigned, whatever the target's clang default.
+            if flag == "-mabi=watcom" && !argv.iter().any(|one| one == "-fsigned-char") {
+                build.clang.push("-funsigned-char".to_owned());
+            }
             build.llc.push(flag.to_owned());
         } else if flag == "-funroll-loops" || flag == "-fno-unroll-loops" {
             build.clang.push(flag.to_owned());
@@ -635,7 +657,33 @@ fn build(
 }
 
 /// Exit status: the failing tool's, 1 for a refusal of the driver's own.
+/// `--os-layer FIELD -m16|-m32`: what the target's OS layer says of C's runtime
+/// (the tools that assemble the start-up ask; no clang runs).
+pub fn os_layer(argv: &[String]) -> Option<Result<String, String>> {
+    let at = argv.iter().position(|one| one == "--os-layer")?;
+    let field = argv.get(at + 1).ok_or("--os-layer: expected one argument");
+    let mode = argv.iter().find_map(|one| one.strip_prefix("-m").filter(|bits| matches!(*bits, "16" | "32")));
+    Some(field.map_err(String::from).and_then(|field| {
+        let name = format!("x86-m{}", mode.ok_or("--os-layer needs -m16 or -m32")?);
+        let target = llrm_driver::all().into_iter().find(|one| one.name() == name).ok_or("no such target")?;
+        let layer = target.os_layer().ok_or("this target has no OS layer")?;
+        layer.report(&target.runtime("c").ok_or("this target has no C runtime")?, field)
+    }))
+}
+
 pub fn run_main(argv: &[String]) -> i32 {
+    if let Some(told) = os_layer(argv) {
+        return match told {
+            Ok(text) => {
+                println!("{}", text.trim_end());
+                0
+            }
+            Err(why) => {
+                eprintln!("llrm-cc: {why}");
+                2
+            }
+        };
+    }
     let go = || -> Result<(), i32> {
         let table = targets(TARGETS).map_err(|why| {
             eprintln!("llrm-cc: {why}");
