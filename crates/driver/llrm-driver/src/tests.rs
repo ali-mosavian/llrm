@@ -274,6 +274,20 @@ fn a_short_argument_read_as_a_quadword_is_no_undefined_read_at_m64() {
     }
 }
 
+/// `(float)u` read `rdi` whole: the dword move that zeroes its upper half was
+/// taken for a copy and coalesced away, so garbage above `edi` was converted.
+#[test]
+fn an_unsigned_dword_converted_at_m64_is_zero_extended_first() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %u) {\n  %r = uitofp i32 %u to float\n  ret float %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let convert = lines.iter().position(|line| line.starts_with("cvtsi2ss")).expect("the convert");
+    assert!(lines[..convert].iter().any(|line| line.starts_with("movzx r")), "{listing}");
+}
+
 /// A `zeroext` argument arrives with its high bits clear, so `x / 10` of an
 /// `unsigned short` multiplies the register as it is; ours `movzx`ed it first
 /// (3 instructions where the pin has 2 at -m64). A `signext` one is its own
@@ -1730,6 +1744,26 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.contains("setbe") && listing.contains("shl edx, 31"), "{listing}");
     assert!(!listing.contains("-2147483648"), "{listing}");
+}
+
+/// A 72-byte zero fill and copy at m64 -Os (`pattern_fill.c`,
+/// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
+/// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
+/// operand (RAX) not set by a glued CopyToReg" refused the function.
+#[test]
+fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr, ptr)\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %s) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
+                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 0, i64 72, i1 false)\n\
+                \x20 call void @llvm.memcpy.p0.p0.i64(ptr align 16 %b, ptr align 16 %s, i64 72, i1 false)\n\
+                \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep stosq") && listing.contains("rep movsq"), "{listing}");
 }
 
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
