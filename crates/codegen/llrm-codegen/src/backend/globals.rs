@@ -370,6 +370,14 @@ impl Initializer<'_> {
         let context = &self.module.context;
         let constant = context.get(id);
         let datum = match (&constant.kind, context.types.get(constant.ty)) {
+            // A pointer made of an integer (`(Video far *)0xA0000000`, a video
+            // segment): its image, no relocation.
+            (_, Type::Pointer(_)) if absolute(self.module, self.layout, id).is_some() => {
+                let at = absolute(self.module, self.layout, id).unwrap_or(0);
+                let size = self.layout.store_size(&context.types, constant.ty) as usize;
+                self.bytes(&at.to_le_bytes()[..size]);
+                return Ok(());
+            }
             (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
                 Datum::Pointer(Pointer {

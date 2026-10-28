@@ -322,31 +322,56 @@ fn an_m16_program_links_against_watcoms_start_up() {
     );
 }
 
-/// `int (far *fp)(int) = callee;` with `int far callee(int)` was refused by the
-/// fork's clang ("incompatible function pointer types"): `far` qualified the
-/// result of `callee` instead of its code, and the pointer's `far` was dropped
-/// or made a far pointer to a near function. Every m16 function is far.
+/// A far pointer initialised from an integer (`(Video far *)0xA0000000`, a
+/// video segment) and written elsewhere: isel refused it, "an address of no
+/// global", and the QB runtime's gfxdev.c did not build at x86_16-wat.
 #[test]
-fn a_far_function_pointer_takes_a_far_function() {
-    let Some(fork) = std::env::var_os("LLRM_CLANG_M16") else {
-        eprintln!("skipped: LLRM_CLANG_M16 is not set");
+fn a_far_pointer_initialised_from_an_integer_is_data() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
         return;
-    };
+    }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-fp-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-farint-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
-        dir.join("p.c"),
-        "int far callee(int x) { return x + 1; }\nint (far *fp)(int) = callee;\nint (*np)(int) = callee;\nint (* far fq)(int) = callee;\nint apply(int (far *f)(int), int v) { return f(v); }\n",
+        dir.join("v.c"),
+        "typedef volatile unsigned char far Video;\nstatic Video *screen = (Video far *)0xA0000000UL;\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
     )
     .unwrap();
     let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
         .env("LLRM_CC_TARGET", "x86_16-wat")
-        .env("LLRM_CLANG_M16", fork)
         .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
-        .args(["-O0", "-w", "-c", "-o"])
-        .arg(dir.join("p.o"))
-        .arg(dir.join("p.c"))
+        .args(["-Os", "-w", "-c", "-o"])
+        .arg(dir.join("v.o"))
+        .arg(dir.join("v.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// The same on the flat target, a near pointer (`(void *)(0xA000 << 4)`).
+#[test]
+fn a_near_pointer_initialised_from_an_integer_is_data() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-nearint-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("v.c"),
+        "typedef volatile unsigned char Video;\nstatic Video *screen = (Video *)(0xA000UL << 4);\nvoid page(Video *p) { screen = p; }\nVideo *get(void) { return screen; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-wat")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-Os", "-w", "-c", "-o"])
+        .arg(dir.join("v.o"))
+        .arg(dir.join("v.c"))
         .output()
         .unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -433,4 +458,35 @@ fn the_rp3_dos_row_is_regparm3_and_links() {
     assert!(rp3.contains("_g@3 proc") && rp3.contains("main_ proc"), "{rp3}");
     assert!(cdecl.contains("_g proc") && cdecl.contains("_main proc"), "{cdecl}");
     assert!(linked, "the rp3 program did not link");
+}
+
+/// `int (far *fp)(int) = callee;` with `int far callee(int)` was refused by the
+/// fork's clang ("incompatible function pointer types"): `far` qualified the
+/// result of `callee` instead of its code, and the pointer's `far` was dropped
+/// or made a far pointer to a near function. Every m16 function is far.
+#[test]
+fn a_far_function_pointer_takes_a_far_function() {
+    let Some(fork) = std::env::var_os("LLRM_CLANG_M16") else {
+        eprintln!("skipped: LLRM_CLANG_M16 is not set");
+        return;
+    };
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-fp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("p.c"),
+        "int far callee(int x) { return x + 1; }\nint (far *fp)(int) = callee;\nint (*np)(int) = callee;\nint (* far fq)(int) = callee;\nint apply(int (far *f)(int), int v) { return f(v); }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-wat")
+        .env("LLRM_CLANG_M16", fork)
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O0", "-w", "-c", "-o"])
+        .arg(dir.join("p.o"))
+        .arg(dir.join("p.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
 }
