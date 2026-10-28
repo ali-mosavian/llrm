@@ -444,8 +444,6 @@ fn a_double_copied_between_pinned_xmm_registers_stays_in_xmm() {
     assert!(!listing.contains("rax"), "no general register holds a double\n{listing}");
 }
 
-}
-
 /// `fcmp` of two doubles at m64 selected the x87 compare (`fcom`), which the
 /// emitter drops: `fcmp olt` was a lone `seta al` on whatever flags were live.
 /// The CPU has CMOV, so the table's `UCOMISD` pattern selects it.
