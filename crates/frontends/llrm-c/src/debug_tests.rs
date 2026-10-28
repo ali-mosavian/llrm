@@ -70,8 +70,9 @@ fn c_lines_are_the_main_files() {
         .map(|(line, _)| line)
         .collect();
     // A statement whose code the optimiser removed has no line (it had one
-    // while `-g` kept the stores); one it copied has two.
-    assert_eq!(lines, [15, 16, 15, 16, 15, 16, 17]);
+    // while `-g` kept the stores). Lines 15 and 16 interleaved while the
+    // pressure sink moved loads between them; it is deleted (#4992).
+    assert_eq!(lines, [15, 16, 17]);
 }
 
 /// HIR's codec writes a member's bit keys only for a bit field, so a program
@@ -169,7 +170,12 @@ fn the_model_tells_parameters_from_locals_and_places_the_code() {
     assert_eq!(object.symbols[f.symbol].name, "_f");
     let range = f.ranges[0];
     assert!(range.length > 0 && range.offset + range.length <= object.sections[range.section].image.len());
-    assert_eq!(info.lines.iter().map(|one| one.line).collect::<Vec<_>>(), [15, 16, 15, 16, 15, 16, 17]);
+    // The order follows the schedule (pressuresink's removal made it 15, 16,
+    // 17); the lines are the source's.
+    let mut lines: Vec<u32> = info.lines.iter().map(|one| one.line).collect();
+    lines.sort_unstable();
+    lines.dedup();
+    assert_eq!(lines, [15, 16, 17]);
     assert!(info.lines.iter().all(|one| one.file == 0));
     // The target's register file, once, for writers that know no target.
     assert_eq!(info.frame_register, "ebp");
