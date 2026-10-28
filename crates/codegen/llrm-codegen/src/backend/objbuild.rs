@@ -1309,7 +1309,7 @@ fn declared_frames(
                     kept.push(row);
                 }
             }
-            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept });
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept, seh: Vec::new() });
         }
     }
     frames
