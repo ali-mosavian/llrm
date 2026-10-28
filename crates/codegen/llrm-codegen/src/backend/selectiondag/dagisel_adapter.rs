@@ -444,6 +444,8 @@ impl Dag for DagisAdapter<'_> {
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
             NodeData::PhysReg(id) => pin_register(id),
+            // `$noreg`
+            NodeData::Register(0) => Some(0),
             _ => None,
         }
     }
