@@ -176,7 +176,7 @@ WATCOM_ROWS = {16: "x86_16-wat", 32: "x86_32-wat"}
 def c_compile(source: Path, obj: Path, target: str, level: str, include: Path, abi: list[str]) -> tuple[list[str], dict[str, str]]:
     """(command, environment) that builds the C `source` for `target`: llrm-c, or llrm-cc over clang where LLRM_C_FRONTEND=llrm-cc names it (the
     target is then a row of its table, not a flag)."""
-    if os.environ.get("LLRM_C_FRONTEND") == "llrm-cc":
+    if c_frontend() == "llrm-cc":
         if target_bits(target) not in WATCOM_ROWS:
             raise BuildError(f"llrm-cc has no row for {target}")
         row = {"LLRM_CC_TARGET": WATCOM_ROWS[target_bits(target)]}
@@ -230,6 +230,9 @@ def runtime_object(name: str, path: Path, defines: tuple[str, ...] = ()) -> Path
 def object_name(name: str) -> str:
     """The object of runtime file `name`, unique across directories: a platform's start.asm and the OS layer's share a stem."""
     source = Path(name)
+    if source.is_absolute():
+        # The compiler names the hook by absolute path; its leading "/" made the object's name a directory (jwasm A1106: cannot open file).
+        source = source.relative_to(ROOT) if source.is_relative_to(ROOT) else Path(*source.parts[1:])
     return "_".join([*(part for part in source.parent.parts if part != "runtime"), source.stem]).upper() + ".OBJ"
 
 
@@ -286,9 +289,14 @@ REAL_MODE = linkrecipe.named(16)
 _COMPILERS = {"c": "llrm-c", "nib": "llrm-nib"}
 
 
+def c_frontend() -> str:
+    """The C compiler a run builds with: llrm-cc over clang, or llrm-c where LLRM_C_FRONTEND=llrm-c asks (a build with the c-legacy feature)."""
+    return "llrm-c" if os.environ.get("LLRM_C_FRONTEND") == "llrm-c" else "llrm-cc"
+
+
 def os_layer(target: str, field: str, language: str) -> str:
     """What `language`'s compiler says of `target`'s OS layer (`--os-layer FIELD`)."""
-    said = subprocess.run([str(BIN / _COMPILERS[language]), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
+    said = subprocess.run([str(BIN / (c_frontend() if language == "c" else _COMPILERS[language])), m_flag(target), "--os-layer", field], capture_output=True, text=True, check=True).stdout.strip()
     if field == "directory" and "/runtime/" in said:
         # The compiler names the runtime of the tree it was built in; a target shared by two worktrees holds the other's (a gate of main
         # read the tip's path: 14 collection errors). The tools read this tree's.
@@ -300,7 +308,7 @@ def os_defines(target: str, language: str, abi: str | None = None) -> tuple[str,
     """What the assembler is told of `target`'s OS layer and `language`'s description: `SYMBOL=value` each."""
     defines = tuple(os_layer(target, "defines", language).split())
     # llrm-cc's Watcom rows enter `main_`, the start-up's default being `_main` (as -mabi=sysv and cdecl name it).
-    return (*defines, "LL_MAIN=main_") if language == "c" and abi not in ("sysv", "cdecl", "ia16") and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else defines
+    return (*defines, "LL_MAIN=main_") if language == "c" and abi not in ("sysv", "cdecl", "ia16") and c_frontend() == "llrm-cc" else defines
 
 
 def os_start(target: str, language: str) -> list[str]:

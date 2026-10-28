@@ -1860,6 +1860,45 @@ def test_the_tool_tests_wait_for_fresh_binaries_instead_of_dying_on_stale_ones(t
 
 def test_the_rebuild_includes_llrm_c_when_the_directory_holds_one(tmp_path):
     """`cargo build --release --bins` skips llrm-c (required-features = c-legacy): the llrm-c left in coord-ps-target stayed 02:55 old and refused the 03:12 pass ("binaries still older than the merged tree")."""
-    assert "c-legacy" not in ps.bins_command(tmp_path)
+    assert "wccq" not in ps.bins_command(tmp_path)
     (tmp_path / "llrm-c").write_text("")
-    assert ps.bins_command(tmp_path)[-2:] == ["--features", "c-legacy"]
+    assert ps.bins_command(tmp_path)[-2:] == ["--features", "wccq"]
+
+
+def test_the_link_and_behavioural_build_refreshes_llrm_c(tmp_path, monkeypatch):
+    """_build_release ran `--bins` without the llrm-c feature, then the stages touched the old llrm-c: QB programs linked with a stale compiler ("isel: value#15 is defined 2 times") and the 04:51 pass was refused at link five times."""
+    (tmp_path / "release").mkdir()
+    (tmp_path / "release" / "llrm-c").write_text("")
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path))
+    monkeypatch.setattr(ps, "git", lambda *args, **kw: "tree")
+    monkeypatch.setattr(ps, "_BUILT", set())
+    ran = []
+    monkeypatch.setattr(ps.subprocess, "run", lambda command, **kw: ran.append(command))
+    ps._build_release()
+    assert ran and "wccq" in ran[0], ran
+
+
+def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_path):
+    """Only the last 6 lines of pytest were kept: #5690 was refused five times with "BuildError" and the stderr naming the cause was cut."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    class Done:
+        returncode = 1
+        stdout = "\n".join(["E   dosbatch.BuildError: llrm-qb: the real cause", *["    frame"] * 30, "ERROR tools/x.py::t", "1 error"])
+        stderr = ""
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: Done(), ensure=lambda: "")
+    assert any("the real cause" in line for line in got), got
+
+
+def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
+    """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+
+    def slow(command, **kw):
+        raise ps.subprocess.TimeoutExpired(command, 600)
+
+    got = ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=slow, ensure=lambda: "")
+    assert got and "600 s" in got[0], got

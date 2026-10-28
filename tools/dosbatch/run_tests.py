@@ -49,7 +49,7 @@ DEFAULT_FLAGS = ["-O2"]
 KEYS = ("flags", "known", "bc", "diverges", "dialect", "link", "data", "stdin", "mask", "targets")
 FLAT = dosbatch.linkrecipe.named(32)
 HEADER = re.compile(rf"^\s*(?:'|//|#)\s*({'|'.join(KEYS)}):\s*(.*?)\s*$")
-COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-c"]}
+COMPILERS = {".bas": ["llrm-qb"], ".nib": [], ".c": ["llrm-cc"]}
 TOOLS = {"qb45": dosbatch.QB45_TOOLS, "pds71": dosbatch.PDS71_TOOLS, "vbdos": dosbatch.VBDOS_TOOLS}
 
 
@@ -160,15 +160,16 @@ def first_difference(want: list[str], got: list[str]) -> str:
 def compile_command(program: Program, obj: Path) -> list[str]:
     """The compiler's command for `program`; a C program goes through $LLRM_ISEL (see dosbatch.with_isel)."""
     tool, *rest = COMPILERS[program.source.suffix]
+    tool = dosbatch.c_frontend() if program.source.suffix == ".c" else tool
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
         # llrm-cc reads the row's own llrm_os.h (-isystem); llrm-c's is for llrm-c's pragmas
-        dialect = [] if os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else ["-I", str(dosbatch.c_include(target, obj.parent))]
+        dialect = [] if dosbatch.c_frontend() == "llrm-cc" else ["-I", str(dosbatch.c_include(target, obj.parent))]
     # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
     excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
     extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
-    if program.source.suffix == ".c" and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc":
+    if program.source.suffix == ".c" and dosbatch.c_frontend() == "llrm-cc":
         # llrm-cc takes the target as a row (compile_env), not a -m flag, and stops at the object with -c.
         tool, flags = "llrm-cc", [one for one in program.flags if one not in ("-m16", "-m32")]
         command = [str(BIN / tool), "-c", str(program.source), *rest, *dialect, *flags, *excess, *extra, "-o", str(obj)]
@@ -181,7 +182,7 @@ def compile_command(program: Program, obj: Path) -> list[str]:
 
 def compile_env(program: Program) -> dict[str, str]:
     """What `compile_command` needs set: llrm-cc's target row, for a C program where the run builds C with it."""
-    if program.source.suffix != ".c" or os.environ.get("LLRM_C_FRONTEND") != "llrm-cc":
+    if program.source.suffix != ".c" or dosbatch.c_frontend() != "llrm-cc":
         return {}
     return dosbatch.c_compile(program.source, Path("x.obj"), dosbatch.target_of(program.flags, dosbatch.REAL_MODE), "-O2", Path("."), [])[1]
 
@@ -330,7 +331,7 @@ def main() -> int:
         # Only the programs whose target has that ABI: the compilers refuse the others.
         has = {}
         for target in dosbatch.target_modes():
-            done = subprocess.run([str(BIN / "llrm-c"), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
+            done = subprocess.run([str(BIN / dosbatch.c_frontend()), dosbatch.m_flag(target), f"-mabi={args.abi}", "--os-layer", "directory"], capture_output=True, text=True)
             has[target] = done.returncode == 0
         programs = [dataclasses.replace(p, flags=[*p.flags, f"-mabi={args.abi}"]) for p in programs if p.source.suffix in (".c", ".nib") and not any(one.startswith("-mabi=") for one in p.flags) and has[dosbatch.target_of(p.flags, dosbatch.REAL_MODE)] and not any(one.endswith(".wc") for one in p.link)]
     for program in [one for one in programs if unavailable(one)]:

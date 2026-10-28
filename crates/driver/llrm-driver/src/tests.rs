@@ -872,7 +872,13 @@ fn a_floor_intrinsic_is_a_call_of_floor() {
                 define double @f(double %x) {\n  %a = call double @llvm.floor.f64(double %x)\n  ret double %a\n}\n";
     let (built, _) = crate::llc::compiled(&flags(&["-m32"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.lines().any(|line| line.trim().starts_with("call ") && line.contains("floor")), "{listing}");
+    // the DAG default, as the pin does, jumps to the libcall at a return
+    assert!(
+        listing
+            .lines()
+            .any(|line| ["call ", "jmp "].iter().any(|op| line.trim().starts_with(op)) && line.contains("floor")),
+        "{listing}"
+    );
 }
 
 /// `__builtin_prefetch` is `llvm.prefetch`; the 386/486 have no instruction for
@@ -1089,7 +1095,9 @@ fn m16_library_calls_are_the_watcom_register_convention() {
     for name in ["atan2_", "strlen_", "printf_", "getch_", "ceil_"] {
         assert!(listing.contains(&format!("call {name}")), "{name}: {listing}");
     }
-    assert!(listing.contains("call _mine@3"), "{listing}");
+    // `mine` is in return position: the DAG default jumps to it, as the pin
+    // does
+    assert!(listing.contains("call _mine@3") || listing.contains("jmp _mine@3"), "{listing}");
 }
 
 /// A C `static` function at m16 stayed a far procedure (`call far ptr`,
@@ -1155,6 +1163,39 @@ fn a_clang_units_source_file_reaches_the_debug_info() {
     assert_eq!((source.map(|(name, _)| name), md5), (Some("dbg.c".to_owned()), Some(16)));
 }
 
+/// `-fno-inline=sum5` named the function as the source does, but the module
+/// is decorated (`_sum5` under sysv, `sum5_` under watcom) before the flag is
+/// looked up: "the program defines no function of that name", so
+/// tail_calls_edges.c failed to compile under llrm-cc at every ABI.
+#[test]
+fn no_inline_takes_the_source_name_under_every_abi() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @sum5(i32 %a) {\n  %r = add i32 %a, 5\n  ret i32 %r\n}\n";
+    for abi in ["sysv", "watcom"] {
+        let flags = flags(&["-fobject-format=omf", &format!("-mabi={abi}"), "-fno-inline=sum5"]);
+        crate::llc::compiled(&flags, text, "sum5").unwrap_or_else(|why| panic!("{abi}: {why}"));
+    }
+}
+
+/// `-fsanitize=stack` reached llrm-llc from llrm-cc and did nothing for IR:
+/// llrm-c marked the functions it compiled, an IR module's were never marked,
+/// so `stackover.c` ran off the stack instead of ending in "Stack Overflow!".
+#[test]
+fn fsanitize_stack_makes_every_function_compare_sp_on_entry() {
+    let text = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+                target triple = \"i486-unknown-linux-gnu\"\n\
+                define i32 @deep(i32 %a) {\n  %r = add i32 %a, 5\n  ret i32 %r\n}\n";
+    let listing = |extra: &[&str]| {
+        let mut arguments = vec!["-fobject-format=omf", "-mabi=sysv"];
+        arguments.extend(extra);
+        let (built, _) = crate::llc::compiled(&flags(&arguments), text, "deep").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    assert!(!listing(&[]).contains("STKOVERFLOW"), "unchecked");
+    assert!(listing(&["-fsanitize=stack"]).contains("STKOVERFLOW"), "checked");
+}
+
 /// An x86-64 target had no C runtime description, so no library routine: a
 /// `memmove` whose direction no pass proved was refused under `--isel=dag`
 /// ("memmove with no memmove in the runtime") and runtime/qb/dev/host/video.c
@@ -1213,4 +1254,17 @@ fn a_store_of_the_high_byte_is_a_byte_store() {
                 declare void @use(ptr)\n\
                 define void @f(i32 %o) {\n  %h = alloca [7 x i8], align 1\n  %lo = trunc i32 %o to i8\n  %p3 = getelementptr i8, ptr %h, i64 3\n  store i8 %lo, ptr %p3\n  %s = lshr i32 %o, 8\n  %hi = trunc i32 %s to i8\n  %p4 = getelementptr i8, ptr %h, i64 4\n  store i8 %hi, ptr %p4\n  call void @use(ptr %h)\n  ret void\n}\n";
     crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "f").unwrap();
+}
+
+/// Clearing a bit of an `i64` by a variable index was `mov rax,-1; btc rax,n;
+/// and`: the pin folds `xor (shl 1, n), -1` to `rotl -2, n` (DAGCombiner),
+/// which the table selects with the `and` as `btr`.
+#[test]
+fn a_variable_bit_clear_of_a_quadword_is_btr() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @clear(i64 %x, i64 %n) {\n  %b = shl i64 1, %n\n  %m = xor i64 %b, -1\n  %r = and i64 %x, %m\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "clear").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
 }

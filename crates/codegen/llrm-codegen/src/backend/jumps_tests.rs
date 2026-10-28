@@ -506,6 +506,32 @@ fn test_identical_result_tails_are_merged() {
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Branch).count(), 0);
 }
 
+/// lru: three zero arms, each laid out right after its conditional branch, were
+/// kept apart (3 `xor` + 3 `jmp`) because the jump taken off was assumed to
+/// fall through. It cannot: the block laid out next is not its successor
+/// (`getFallThrough`), so the pin merges them (`BothFallThrough`).
+#[test]
+fn test_zero_arms_each_after_their_branch_are_merged() {
+    let arm = |at: i64| block(at, vec![_inserted(_move(at, imm(0))), _inserted(_jump(at + 1, 90))], vec![90]);
+    let body = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10).into(),
+            block(20, vec![_compare(20), _branch(21, "je", 40), _jump(22, 30)], vec![40, 30]).into(),
+            arm(30).into(),
+            block(40, vec![_compare(40), _branch(41, "je", 60), _jump(42, 50)], vec![60, 50]).into(),
+            arm(50).into(),
+            block(60, vec![_move(60, bx()), _return(61)], vec![]).into(),
+            block(90, vec![_compare(90), _compare(91), _compare(92), _return(93)], vec![]).into(),
+        ],
+    );
+    let result = merged(&body).unwrap();
+
+    assert_eq!(physical(&result).iter().filter(|what| what.op == Operation::Move && what.target.is_none()).count(), 2);
+}
+
 /// The compare of a branch the merge made redundant stays, as in LLVM (T6):
 /// the dead-code sweep that followed each merge cost 1.7 M Ir on d_faces and
 /// changed no object.
@@ -2121,6 +2147,45 @@ fn test_the_instruction_both_ways_begin_with_is_hoisted_above_the_compare() {
     let at = lines.iter().position(|line| line.as_str() == "mov cx, 5").unwrap();
     let compare = lines.iter().position(|line| line.starts_with("cmp")).unwrap();
     assert!(at < compare, "{lines:?}");
+}
+
+fn arms_after(
+    head: Vec<Arc<Insn>>,
+    set: impl Fn(i64) -> Vec<Arc<Insn>>,
+) -> Vec<String> {
+    let arm = |at: i64, tail: Arc<Insn>| {
+        let mut insns = set(at);
+        insns.extend([tail, _return(at + 90)]);
+        insns
+    };
+    _printed(vec![
+        block(1, head, vec![9, 4]).into(),
+        block(4, arm(4, _move(5, bx())), vec![]).into(),
+        block(9, arm(9, _move(10, bx())), vec![]).into(),
+    ])
+}
+
+/// The zero both arms return is `xor ax, ax` by the time arms are folded: it
+/// sets flags, which the compare in front of the branch sets again, so it runs
+/// above the compare (x_prefix, x_life, recgcd: +2..3 instructions each).
+#[test]
+fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
+    let lines = arms_after(vec![_compare(1), _branch(2, "je", 9)], |at| {
+        vec![_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None))]
+    });
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// A branch whose flags come from an earlier instruction, not a compare in
+/// front of it, reads what a hoisted `xor` would clobber.
+#[test]
+fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare() {
+    let lines = arms_after(vec![_move(1, bx()), _branch(2, "je", 9)], |at| {
+        vec![_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None))]
+    });
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 2, "{lines:?}");
 }
 
 /// The pin copies propagation twice, again after tail duplication and block

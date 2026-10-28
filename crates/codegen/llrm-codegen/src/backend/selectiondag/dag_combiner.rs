@@ -741,6 +741,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(flipped, vt, &[not_a, not_b]));
             }
         }
+        // fold (xor (shl 1, x), -1) -> (rotl ~1, x): a zero placed in a value
+        // of all ones, which the target clears a bit with (`btr`) when it
+        // meets an `and` (DAGCombiner::visitXOR).
+        let ones = match vt.size_in_bits() {
+            128.. => u128::MAX,
+            bits => (1u128 << bits) - 1,
+        };
+        if vt.is_integer()
+            && self.dag.opcode(n0) == ISD::Shl
+            && self.dag.constant(self.dag.operand(n0, 0)) == Some(1)
+            && self.dag.constant(n1) == Some(ones)
+            && self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::Rotl, vt))
+        {
+            let amount = self.dag.operand(n0, 1);
+            let not_one = self.dag.get_constant(ones - 1, vt);
+            return Some(self.dag.get_node(ISD::Rotl, vt, &[not_one, amount]));
+        }
         if self.dag.constant(n1) != Some(1) || self.dag.opcode(n0) != ISD::SetCC {
             return self.reassociate_ops(ISD::Xor, n0, n1);
         }
@@ -1167,11 +1184,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// query: a constant moves right, `x + ~x` is -1, constants merge through
     /// a `sub` or an `add`, and an `add` of a negation or of a `sub` of the
     /// other operand is a `sub` or the operand itself.
-    ///
-    /// DEVIATE SD210: an `add` of constants is not reassociated when it feeds
-    /// a memory access (`reassociationCanBreakAddressingModePattern` is not
-    /// translated; the matcher folds the displacement there). Exit: that
-    /// query. Owner sdag-b. Review 2026-12-10.
     fn visit_add(
         &mut self,
         node: SDValue,
@@ -1203,19 +1215,13 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(self.dag.get_node(ISD::Sub, vt, &[sum, n01]));
                 }
             }
-            // `(add (add x, c0), c1)` is `(add x, c0 + c1)`.
-            if self.dag.opcode(n0) == ISD::Add && plain(self.dag, self.dag.operand(n0, 1)) {
-                let feeds_memory = self
-                    .dag
-                    .users(node)
-                    .any(|user| matches!(
-                        self.dag.opcode(SDValue { node: user, res: 0 }),
-                        ISD::Load | ISD::Store
-                    ));
-                if !feeds_memory {
-                    let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
-                    return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
-                }
+            // `(add (add x, c0), c1)` is `(add x, c0 + c1)` (`reassociateOps`).
+            if self.dag.opcode(n0) == ISD::Add
+                && plain(self.dag, self.dag.operand(n0, 1))
+                && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+            {
+                let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
             }
         }
         let is_neg =
@@ -1245,14 +1251,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Sub, vt, &[a, d]));
             }
         }
-        let feeds_memory = self
-            .dag
-            .users(node)
-            .any(|user| matches!(
-                self.dag.opcode(SDValue { node: user, res: 0 }),
-                ISD::Load | ISD::Store
-            ));
-        if !feeds_memory {
+        if !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1) {
             return self.reassociate_ops(ISD::Add, n0, n1);
         }
         None

@@ -453,7 +453,7 @@ def smoke_bins(env: dict | None = None) -> str:
 
 def bins_command(directory: Path) -> list[str]:
     """The cargo build that refreshes every binary `directory` holds: `--bins` skips llrm-c (required-features = c-legacy), so a leftover llrm-c stayed older than the sources for good and the 03:12 pass was refused for it."""
-    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "c-legacy"] if (directory / "llrm-c").is_file() else [])]
+    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "wccq"] if (directory / "llrm-c").is_file() else [])]
 
 
 def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
@@ -1080,8 +1080,14 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
     if why := (ensure or ensure_bins)():  # the tools resolve the release binaries and refuse stale ones: the 02:32 batch died on "stale binaries" here, before the build stage ran
         return [why]
     stage("tool-tests")
-    done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
-    return [] if done.returncode == 0 else (done.stdout + done.stderr).strip().splitlines()[-6:]
+    try:
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+    except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
+        return ["the tool tests ran past 600 s"]
+    if done.returncode == 0:
+        return []
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    return [*[line for line in lines if line.startswith("E  ")][:20], *lines[-6:]]  # the last lines are the summary; the error text sits above them
 
 
 def landing_scanner_failures(
@@ -1197,7 +1203,8 @@ def _build_release() -> None:
     tree = git("rev-parse", "HEAD^{tree}").strip() + git("status", "--porcelain", "--untracked-files=no").strip()
     if tree in _BUILT:
         return
-    subprocess.run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=ROOT, check=True)
+    release = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "release"
+    subprocess.run(slotted(bins_command(release)), cwd=ROOT, check=True)  # --bins alone leaves llrm-c as old as the last hand build, and the stages touch it fresh
     _BUILT.add(tree)
 
 

@@ -230,7 +230,6 @@ pub mod mirprint;
 pub mod nativeframe;
 pub mod nearcode;
 pub mod needs;
-pub mod neighbours;
 pub mod objbuild;
 pub mod optimizephis;
 pub mod overlap;
