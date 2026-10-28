@@ -1425,6 +1425,12 @@ impl LirBody {
         }
     }
 
+    /// The instructions of every block in order, as `insns` lists them, with
+    /// no list made (a gate that only asks `any` cloned every `Arc`).
+    pub fn iter_insns(&self) -> impl Iterator<Item = &Arc<Insn>> {
+        self.blocks.iter().flat_map(|block| block.insns.iter())
+    }
+
     /// Python `LirBody.insns`.
     #[must_use]
     pub fn insns(&self) -> Vec<Arc<Insn>> {
@@ -1573,6 +1579,28 @@ where
 #[cfg(test)]
 mod tests {
     use llrm_lir::registers::RegId;
+
+    use crate::model::lir::{LirBlock, LirBody};
+
+    /// The float gates asked `body.insns().iter().any(..)`, which cloned every
+    /// `Arc` of the function into a list first (0.31 M Ir of d_faces). The
+    /// iterator names the same instructions in the same order.
+    #[test]
+    fn test_iter_insns_lists_the_instructions_of_every_block_in_order() {
+        let block =
+            |at: i64, count: i64| LirBlock::new(at, (0..count).map(|n| instruction(at * 10 + n, None)).collect());
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![block(0, 2).into(), block(1, 0).into(), block(2, 3).into()],
+            Default::default(),
+            Default::default(),
+        );
+        let listed: Vec<_> = body.insns();
+        let walked: Vec<_> = body.iter_insns().collect();
+        assert_eq!(walked.len(), 5);
+        assert!(listed.iter().zip(&walked).all(|(one, other)| Arc::ptr_eq(one, other)));
+    }
 
     /// A table kept past the instruction it named answered for whatever was
     /// allocated at its address next: the key of an instruction was its

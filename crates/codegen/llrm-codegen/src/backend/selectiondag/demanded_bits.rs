@@ -352,6 +352,20 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                     KnownBits { zero: (k.zero >> amount) | (all & !(all >> amount)), one: k.one >> amount, width }
                 }
             }
+            // `SimplifyDemandedBits` of `FSHL` and `FSHR`, the tail for a
+            // variable amount (TargetLowering.cpp#L2326-L2331): at a
+            // power-of-two width only the bottom `log2 width` bits of the
+            // amount are demanded, so `fshl x, y, (and n, 31)` is `fshl x, y,
+            // n` (the pin's `MaskedShlrdAmountPats` would then have nothing
+            // left to drop). Not translated: the constant-amount split of the
+            // demanded bits and `fshr` as `srl`.
+            ISD::FShl | ISD::FShr => {
+                let amount = self.dag.operand(op, 2);
+                if self.dag.constant(amount).is_none() && width.is_power_of_two() {
+                    self.sdb(amount, u128::from(width) - 1, depth + 1, false, tlo)?;
+                }
+                unknown
+            }
             ISD::Rotl | ISD::Rotr => {
                 let (op0, op1) = (self.dag.operand(op, 0), self.dag.operand(op, 1));
                 if let Some(c) = self.dag.constant(op1) {

@@ -213,8 +213,8 @@ pub struct RuntimeContracts<'a> {
     /// it (QB's `B$ENRA`): the entry block's zero writes to a fresh local are
     /// then dropped.
     pub frame_zeroed: bool,
-    /// What the private functions already machined wrote: a direct call of one
-    /// destroys that and no more (`CalleeFacts`), as the old selector reads it.
+    /// What the module's finished callees wrote, which a call of one destroys
+    /// and no more (`isel`'s `written`).
     pub facts: Option<&'a crate::backend::calleefacts::CalleeFacts>,
 }
 
@@ -296,17 +296,6 @@ fn modelled(
 }
 
 impl CallConventions<'_> {
-    /// What the direct callee `callee` was found to write, where it takes part
-    /// in interprocedural register use and has been machined.
-    fn written(
-        &self,
-        callee: Option<&Callee>,
-    ) -> Option<crate::backend::calleefacts::Written> {
-        let (facts, Some(Callee::Global(id))) = (self.contracts?.facts?, callee) else { return None };
-        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned()?;
-        facts.written(&name)
-    }
-
     /// The contract of a call of `callee` where its convention has no
     /// description: the ABI's, named by the routine (`call_clobbers`).
     fn contract(
@@ -373,13 +362,23 @@ impl CallConventions<'_> {
 }
 
 impl super::emit::Conventions for CallConventions<'_> {
+    fn written(
+        &self,
+        callee: Option<&Callee>,
+    ) -> Option<(
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+        std::collections::BTreeSet<llrm_lir::registers::RegId>,
+    )> {
+        let Some(Callee::Global(id)) = callee else { return None };
+        let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned()?;
+        let written = self.contracts?.facts?.written(&name)?;
+        Some((written.whole, written.high))
+    }
+
     fn clobbers_high(
         &self,
         callee: Option<&Callee>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
-        if let Some(written) = self.written(callee) {
-            return written.high;
-        }
         let Some(found) = self.convention_of(callee) else { return self.contract_high(callee) };
         let regs = llrm_lir::registers::Regs(self.arch.registers());
         self.arch
@@ -395,9 +394,6 @@ impl super::emit::Conventions for CallConventions<'_> {
         callee: Option<&Callee>,
         clobbers: &std::collections::BTreeSet<llrm_lir::registers::RegId>,
     ) -> std::collections::BTreeSet<llrm_lir::registers::RegId> {
-        if let Some(written) = self.written(callee) {
-            return written.whole;
-        }
         match self.contract(callee) {
             Some(contract) if contract.control == llrm_qbruntime::Control::Never => Default::default(),
             _ => clobbers.clone(),
@@ -408,10 +404,6 @@ impl super::emit::Conventions for CallConventions<'_> {
         &self,
         callee: Option<&Callee>,
     ) -> Option<std::collections::BTreeSet<llrm_lir::registers::RegId>> {
-        // a private function that takes part changes what its body wrote
-        if let Some(written) = self.written(callee) {
-            return Some(written.whole);
-        }
         // inline assembly changes the registers its name states
         if let Some(Callee::Named(name)) = callee
             && let Some(block) = llrm_mir::intrinsics::asm(name)
@@ -482,7 +474,7 @@ fn tables(arch: &dyn Target) -> std::sync::Arc<Tables> {
     slots
         .entry(bits)
         .or_insert_with(|| {
-            let forms = llrm_instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
+            let forms = llrm_target::instr::parse(&arch.forms_text(), arch.dialect()).expect("x86.instr parses");
             let opcodes = match bits {
                 16 => x86_m16::MACHINE_OPCODES,
                 64 => x86_x64::MACHINE_OPCODES,
@@ -710,6 +702,10 @@ fn selected_in(
     };
     let Some(text) = module.datalayout.as_deref() else { return refuse("a module with no datalayout") };
     let layout = DataLayout::parse(text).map_err(Unselected)?;
+    // The pin's combineMul declines only at `minsize`. Where a pointer is
+    // narrower than the widest native integer (m16), -Os keeps `imul` as well:
+    // the chains grow its objects (27 of 175 by 3550 B, tests/run/c -Os).
+    let bytes_beat_clocks = cpu.size && layout.pointer(0).bits < layout.largest_legal_integer();
     let convention = crate::backend::isel::convention(module, &layout, id, arch)?;
     let mut info = FunctionLoweringInfo::new(function);
     if contracts.is_some_and(|contracts| contracts.frame_zeroed) {
@@ -718,7 +714,7 @@ fn selected_in(
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
-        TargetLowering::x86_64(Features::default(), MVT::I64)
+        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), ..Features::default() }, MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -755,7 +751,9 @@ fn selected_in(
         // only). Flipping it grows m32 -Os +250 B and m16 -Os +301 B; only
         // matmul (-3) and x_life (-18/-13) gain. Exit: keep the divide
         // unless the expansion forces spills (matmul's `urem i16 %x,3` costs
-        // +59 B in 4 spill slots).
+        // +59 B in 4 spill slots). Cost: an idiv is ~40 clocks on a 486 where
+        // the multiply is ~13; div_constants_long m32 -Os is 5095 B against the
+        // pin's 5463 (2026-10-27).
         .with_int_div_cheap(cpu.size || cpu.min_size)
         .with_jump_tables(cpu.target().costs().jump_table != 0)
         .with_opt_size(cpu.size || cpu.min_size)
@@ -944,7 +942,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: false, min_size: cpu.size || cpu.min_size },
+            &mut X86Lowering { cmov: false, sse2: arch.scalar_sse(), min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },

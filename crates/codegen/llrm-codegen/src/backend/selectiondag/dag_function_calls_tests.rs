@@ -4,6 +4,7 @@
 use super::dag_function::selected;
 use super::dag_function_tests::{FAR_CALL, M16_STACK_ARGS, Stub, names, select_with_contracts, verdicts};
 use crate::model::ir::{Loc, Operation};
+use crate::testing::m16_ir;
 
 const CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare i32 @bar(i32, i32)
@@ -342,7 +343,7 @@ fn an_m16_call_pushes_its_stack_arguments() {
 /// `LLRM_ISEL_REAL`).
 #[test]
 fn a_call_of_a_16_bit_callee_destroys_the_upper_halves() {
-    let module = llrm_mir::parse::module(FAR_CALL).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(FAR_CALL)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let high: Vec<_> = done
@@ -553,7 +554,7 @@ fn a_landing_pad_is_marked_and_reachable_from_the_entry() {
     assert_eq!(done.calls.get(&landing).map(String::as_str), Some("__LANDING"));
 }
 
-const INLINE_CODE: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const INLINE_CODE: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i32 @llrm.ia16.code.89a60000.2p0(ptr)
 define i32 @f() {
 entry:
@@ -568,7 +569,7 @@ entry:
 /// node and refused "opcode 30013" (QCport's `__emit__`, 3 functions).
 #[test]
 fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
-    let module = llrm_mir::parse::module(INLINE_CODE).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(INLINE_CODE)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     assert_eq!(done.inline.len(), 1, "{:?}", done.inline);
@@ -579,7 +580,7 @@ fn inline_code_is_laid_down_at_its_site_with_its_frame_place() {
     assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), (disp + addend) as u16);
 }
 
-const BYVAL_ODD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const BYVAL_ODD: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare void @g(ptr byval([41 x i8]) %p)
 define void @f(ptr %q) {
 entry:
@@ -594,7 +595,7 @@ entry:
 /// argument area the stores do not cover at m16" (byval_struct -O0).
 #[test]
 fn an_odd_sized_byval_argument_is_stored_in_place_at_m16() {
-    let module = llrm_mir::parse::module(BYVAL_ODD).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(BYVAL_ODD)).expect("parses");
     selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
 }
@@ -716,7 +717,7 @@ fn a_split_condition_exports_what_the_later_blocks_read() {
     assert_eq!(done.body.blocks.len(), 5, "entry, the second compare, then, else, join");
 }
 
-const PORTS: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const PORTS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare i8 @llrm.ia16.in.i8(i16)
 declare void @llrm.ia16.out.i8(i16, i8)
 define i8 @f(i16 %p) {
@@ -732,7 +733,7 @@ entry:
 /// refused them ("intrinsic call llrm.ia16.out.i8": palette_using_pds71).
 #[test]
 fn port_writes_and_reads_stay_in_order() {
-    let module = llrm_mir::parse::module(PORTS).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(PORTS)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -793,7 +794,7 @@ fn a_fixed_point_divide_is_selected() {
     assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
 }
 
-const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 
 @_inbuf = global [512 x i8] zeroinitializer
 @_inpos = global [2 x i8] zeroinitializer
@@ -844,7 +845,7 @@ declare i32 @LL$READ(i16, ptr addrspace(1), i16) addrspace(1)
 /// found unneeded), where the int is AX. jpeg_single: +379 bytes at m16.
 #[test]
 fn a_long_result_truncated_to_an_int_does_not_read_dx() {
-    let done = select_with_contracts(TRUNCATED_LONG_RESULT).unwrap_or_else(|why| panic!("{why}"));
+    let done = select_with_contracts(m16_ir(TRUNCATED_LONG_RESULT)).unwrap_or_else(|why| panic!("{why}"));
     let names: Vec<String> =
         done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
     for wide in ["shl", "or"] {
@@ -1049,7 +1050,7 @@ entry:
 }
 ";
 
-const PUSH_SEGMENT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const PUSH_SEGMENT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 @g = global i16 0
 declare void @h(ptr addrspace(2), ptr)
 define void @f(ptr %p) {
@@ -1060,7 +1061,7 @@ entry:
 }
 ";
 
-const BYVAL_FORTY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const BYVAL_FORTY: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 declare void @g(ptr byval([40 x i8]) %p)
 define void @f(ptr %q) minsize {
 entry:
@@ -1094,7 +1095,7 @@ fn a_select_before_a_call_stays_above_the_call_frame() {
 /// use.
 #[test]
 fn a_pushed_segment_of_a_global_is_an_immediate() {
-    let module = llrm_mir::parse::module(PUSH_SEGMENT).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(PUSH_SEGMENT)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let insns = done.body.insns();
@@ -1103,7 +1104,7 @@ fn a_pushed_segment_of_a_global_is_an_immediate() {
     assert!(pushes.iter().any(|w| matches!(&w.sources[..], [Loc::Imm(imm)] if imm.address.is_some())), "{pushes:?}");
 }
 
-const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+const CONSTANT_PUSHED_AROUND_A_SELECT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
 @\"INPUTVALUE&\" = internal global [4 x i8] zeroinitializer
 @\"BRANCHCHOICE%\" = internal global [2 x i8] zeroinitializer
 @$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c\"\\04\\00\", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c\"DONE\" }>
@@ -1150,7 +1151,7 @@ declare cc 1000 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
 /// `gvnphi.bas` stopped compiling at -O2 m16.
 #[test]
 fn a_segment_pushed_by_two_calls_around_a_select_is_still_defined() {
-    select_with_contracts(CONSTANT_PUSHED_AROUND_A_SELECT).unwrap_or_else(|e| panic!("{e}"));
+    select_with_contracts(m16_ir(CONSTANT_PUSHED_AROUND_A_SELECT)).unwrap_or_else(|e| panic!("{e}"));
 }
 
 /// A 40-byte byval copy is past the store limit (4 at -Os, 8 otherwise), so the
@@ -1158,7 +1159,7 @@ fn a_segment_pushed_by_two_calls_around_a_select_is_still_defined() {
 /// 28 bytes more in `byval_struct.c` (249 against the old selector's 193).
 #[test]
 fn a_forty_byte_byval_argument_is_a_string_move() {
-    let module = llrm_mir::parse::module(BYVAL_FORTY).expect("parses");
+    let module = llrm_mir::parse::module(m16_ir(BYVAL_FORTY)).expect("parses");
     let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
     let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
@@ -1195,6 +1196,7 @@ entry:
         enter: false,
         free: false,
         wrap_split_size: false,
+        slot_scratch: None,
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));

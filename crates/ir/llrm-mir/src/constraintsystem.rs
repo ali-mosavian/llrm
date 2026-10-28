@@ -76,6 +76,7 @@ impl<K> Default for ConstraintSystem<K> {
 }
 
 /// `getLastCoefficient`.
+#[inline(always)]
 fn last_coefficient(
     row: &[Entry],
     id: u16,
