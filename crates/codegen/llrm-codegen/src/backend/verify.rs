@@ -182,12 +182,9 @@ pub fn physical(
     };
     // At 64 bits a read of RAX also reaches the lane above EAX, which no
     // 32-bit view of the register names.
-    let whole = |register: RegId| -> Lanes {
+    let whole = |register: RegId| {
         let lanes = _lanes(regs, register);
-        match regs.view(regs.root(register), 64) {
-            Some(whole) if body.bits == 64 => lanes.or(&_lanes(regs, whole)),
-            _ => lanes,
-        }
+        regs.view(regs.root(register), body.bits).map_or(lanes, |all| lanes.or(&_lanes(regs, all)))
     };
     let walked = |at: i64, defined: Lanes, complaint: &mut Lanes| -> Lanes {
         let mut defined = defined;
