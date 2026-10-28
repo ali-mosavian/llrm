@@ -5854,6 +5854,7 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
             Parameter::Registers(vec![RegId::DX, RegId::AX]),
         ],
         returns: Vec::new(),
+        float_result: None,
         popped: 0,
         saved: Vec::new(),
         stack_arguments: 0,

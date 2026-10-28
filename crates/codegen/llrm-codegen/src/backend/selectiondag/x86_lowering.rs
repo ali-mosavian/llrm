@@ -1413,6 +1413,30 @@ fn lower_setcc_carry(
     dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags])
 }
 
+/// The two halves of `expandFP_TO_UINT` for an `i64`: `value` less 2^63 when it
+/// is at least that, and the sign bit (`1 << 63`) to put back when it was.
+fn unsigned_fixup_operands(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    float: MVT,
+) -> (SDValue, SDValue) {
+    let value_vt = dag.value_type(value);
+    // 2^63, the first value that does not fit a signed `i64`.
+    let threshold = match float {
+        MVT::F32 => 0x5F00_0000u128,
+        MVT::F64 => 0x43E0_0000_0000_0000,
+        _ => (0x403Eu128 << 64) | (1u128 << 63),
+    };
+    let threshold = dag.get_constant_fp(threshold, value_vt);
+    let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
+    let sixty_three = dag.get_constant(63, EVT::I8);
+    let adjust = dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]);
+    let zero = dag.get_constant_fp(0, value_vt);
+    let offset = dag.get_select(value_vt, at_least, threshold, zero);
+    (dag.get_node(ISD::FSub, value_vt, &[value, offset]), adjust)
+}
+
 /// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
 /// result's size, then a load of it. An unsigned `i32` goes through an `i64`
 /// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
@@ -1443,6 +1467,14 @@ fn lower_fp_to_int(
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
         }
+        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
+        // when it is at least that, converted signed, with the sign bit put
+        // back.
+        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
+            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
+            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
+            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
+        }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
@@ -1452,20 +1484,9 @@ fn lower_fp_to_int(
     let chain = dag.entry_node();
     let mut adjust = None;
     if unsigned_fixup {
-        // 2^63, the first value that does not fit a signed `i64`.
-        let threshold = match float {
-            MVT::F32 => 0x5F00_0000u128,
-            MVT::F64 => 0x43E0_0000_0000_0000,
-            _ => (0x403Eu128 << 64) | (1u128 << 63),
-        };
-        let threshold = dag.get_constant_fp(threshold, value_vt);
-        let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
-        let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
-        let sixty_three = dag.get_constant(63, EVT::I8);
-        adjust = Some(dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]));
-        let zero = dag.get_constant_fp(0, value_vt);
-        let offset = dag.get_select(value_vt, at_least, threshold, zero);
-        value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+        let (shifted, flip) = unsigned_fixup_operands(dag, value, float);
+        value = shifted;
+        adjust = Some(flip);
     }
     let info =
         MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
