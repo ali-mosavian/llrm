@@ -21,7 +21,7 @@ b0:
     let mut module = parsed(text);
     let before = results(&module, &[&[]]);
     let layout = llrm_analysis::testing::layout(&module);
-    let changed = super::split(&mut module, &layout);
+    let changed = super::split(&mut module, &layout, llrm_x86_m16::spaces());
     let after = printed(&module);
     assert_eq!(results(&module, &[&[]]), before, "{after}");
     assert!(!changed.is_empty(), "{after}");
@@ -34,7 +34,7 @@ fn splitted(text: &str) -> (String, bool) {
     let mut module = parsed(text);
     let before = results(&module, &[&[]]);
     let layout = llrm_analysis::testing::layout(&module);
-    let changed = !super::split(&mut module, &layout).is_empty();
+    let changed = !super::split(&mut module, &layout, llrm_x86_m16::spaces()).is_empty();
     let after = printed(&module);
     assert_eq!(results(&module, &[&[]]), before, "{after}");
     (after, changed)
@@ -255,6 +255,30 @@ b0:
 ",
     );
     assert!(after.contains("%a = load") && after.contains("%c = load"), "{after}");
+}
+
+/// A constant gep names a byte of the variable, not the variable: the store of
+/// 9 at byte 99 was forwarded to the load at byte 50 of an internal
+/// `[100 x i8]` (m16 `huge`), which read 9 for 0 (tests/cc/dos/bigstatic.c
+/// printed 18 for 9).
+#[test]
+fn a_store_through_a_constant_gep_is_not_forwarded_to_a_load_of_another_byte() {
+    let (after, _) = splitted(
+        "@t = internal addrspace(1) global [100 x i8] zeroinitializer
+
+define i16 @f() {
+b0:
+  store i8 9, ptr addrspace(1) getelementptr inbounds (i8, ptr addrspace(1) @t, i32 99)
+  %a = load i8, ptr addrspace(1) getelementptr inbounds (i8, ptr addrspace(1) @t, i32 99)
+  %b = load i8, ptr addrspace(1) getelementptr inbounds (i8, ptr addrspace(1) @t, i32 50)
+  %x = zext i8 %a to i16
+  %y = zext i8 %b to i16
+  %s = add i16 %x, %y
+  ret i16 %s
+}
+",
+    );
+    assert!(!after.contains("i16 18") && after.matches("load").count() >= 1, "{after}");
 }
 
 /// Two `float`s spelled as `[8 x i8]` (QB's `ACCX!`, `ACCY!`) were never

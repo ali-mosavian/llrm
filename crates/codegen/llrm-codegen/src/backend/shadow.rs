@@ -39,10 +39,9 @@ use crate::model::lir::LirBody;
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Selector {
     /// `isel`: one forward walk over MIR.
-    Old,
-    /// The SelectionDAG translation, `selectiondag-plan.md`. The default, as
-    /// the pin has no other.
     #[default]
+    Old,
+    /// The SelectionDAG translation, `selectiondag-plan.md`.
     Dag,
     /// The DAG path where it can select, else the old selector, each refusal
     /// reported (`[isel] NAME refused: WHY`): what the harness measures.
@@ -57,6 +56,12 @@ impl Selector {
             Self::Dag => "dag",
             Self::Shadow => "shadow",
         }
+    }
+
+    /// The selector a target gets when `--isel` names none: the DAG path for
+    /// the targets it selects (16- and 32-bit x86), the old one for the rest.
+    pub fn for_target(target: &dyn llrm_target::Target) -> Self {
+        if target.selects_by_dag() { Self::Dag } else { Self::Old }
     }
 
     /// The selector `--isel=<text>` names.

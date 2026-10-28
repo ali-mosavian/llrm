@@ -122,7 +122,14 @@ fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Rea
 pub fn split(
     module: &mut Module,
     layout: &DataLayout,
+    spaces: llrm_mir::spaces::Spaces,
 ) -> Vec<GlobalId> {
+    // A body that forges a pointer into the data segment (`DEF SEG = VARSEG(w)`
+    // then POKE) may write any variable by its address: none is a register
+    // (GlobalsAA's `forged`, 188fd3905).
+    if llrm_analysis::forging::forges_selector(module, spaces) {
+        return Vec::new();
+    }
     let mut changed = BTreeSet::new();
     let held = held(module);
     let candidates: Vec<GlobalId> = module
@@ -233,6 +240,23 @@ struct Direct {
     stores: Vec<InstId>,
 }
 
+/// Whether `constant` is `id`'s own address, through casts alone.
+fn is_the_variable(
+    context: &llrm_mir::context::Context,
+    constant: llrm_mir::context::ConstantId,
+    id: GlobalId,
+) -> bool {
+    use llrm_mir::context::{ConstantExpr, ConstantKind};
+    use llrm_mir::opcode::CastOp;
+    match &context.get(constant).kind {
+        ConstantKind::Global(one) => *one == id,
+        ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::BitCast | CastOp::AddrSpaceCast, value }) => {
+            is_the_variable(context, *value, id)
+        }
+        _ => false,
+    }
+}
+
 /// The functions that use `id`, or none where a use is not a direct, simple
 /// load or store: a gep on the way is an offset another pass folds.
 fn direct_uses(
@@ -253,6 +277,13 @@ fn direct_uses(
         }
         let mut direct = Direct { function: function_id, loads: Vec::new(), stores: Vec::new() };
         for &(inst, index) in &reach.uses {
+            // `GlobalStatus` sees through `stripPointerCasts`, not through a
+            // gep: a constant gep names a byte of the variable,
+            // whatever its value, not the variable.
+            let Operand::Constant(operand) = function.instruction(inst).operands[index] else { return None };
+            if !is_the_variable(&module.context, operand, id) {
+                return None;
+            }
             match function.instruction(inst).opcode {
                 Opcode::Load { volatile: false, .. } if index == 0 => direct.loads.push(inst),
                 Opcode::Store { volatile: false, .. } if index == 1 => direct.stores.push(inst),

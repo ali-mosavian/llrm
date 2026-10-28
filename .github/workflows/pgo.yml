@@ -45,8 +45,8 @@ jobs:
       # The plain dist llrm-c to compare with, and the other tools identical.py looks for beside each compiler (release builds: they do not vary).
       - name: The plain dist llrm-c
         run: |
-          cargo build --release --bins -q
-          cargo build --profile dist --bin llrm-c -q
+          cargo build --release --bins --features wccq -q
+          cargo build --profile dist --bin llrm-c --features wccq -q
           mkdir -p target/plain
           for f in target/release/*; do [ -f "$f" ] && [ -x "$f" ] && ln -sf "$PWD/$f" "target/plain/$(basename "$f")"; done
           rm -f target/plain/llrm-c

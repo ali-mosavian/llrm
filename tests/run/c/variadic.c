@@ -1,10 +1,15 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv
 /* A function with `...` reads its variable arguments from where they were pushed, on each target and ABI: the list pointed
    at a 16-bit address on -m32 and read garbage. A struct parameter before them is a copy of its words, not the arguments. */
+#ifdef __clang__
+/* clang copies a parameter whose address is taken, so the stack walk below reads the copy's neighbours: its own va_list. */
+#include <stdarg.h>
+#else
 typedef char *va_list;
 #define va_start(ap, last) ((ap) = (char *)&(last) + ((sizeof(last) + sizeof(int) - 1) & ~(sizeof(int) - 1)))
 #define va_arg(ap, type) (*(type *)(((ap) += sizeof(int)) - sizeof(int)))
 #define va_end(ap) ((void)0)
+#endif
 extern void report(long value);
 
 struct big { int i[6]; };
@@ -33,8 +38,17 @@ int after_struct(struct big pa, int pb, ...)
 /* The address of a struct parameter steps into the arguments after it, as STDARG.H's va_start does. */
 int walk(struct big pa, ...)
 {
+#ifdef __clang__
+    va_list ap;
+    int first;
+    va_start(ap, pa);
+    first = va_arg(ap, int);
+    va_end(ap);
+    return first + pa.i[0];
+#else
     char *p = (char *)&pa + sizeof pa;
     return *(int *)p + pa.i[0];
+#endif
 }
 
 int main(void)

@@ -802,10 +802,7 @@ impl Builder<'_> {
                         fixed += 1;
                         self.dag
                             .fixed_offsets
-                            .insert(
-                                -fixed,
-                                offset + part as i64 * i64::from(self.target.dag.pointer.size_in_bits() / 8),
-                            );
+                            .insert(-fixed, offset + part as i64 * i64::from(part_vt.size_in_bits() / 8));
                         let ptr = self.dag.get_frame_index(self.target.dag.pointer, -fixed);
                         // The fixed object is a whole stack slot
                         // (`CreateFixedObject`),
@@ -1424,6 +1421,13 @@ impl Builder<'_> {
             let flags = SDValue { node: flags.node, res: 0 };
             return Ok(Some(self.dag.get_node(super::x86isd::LLRM_CALL_FLAGS, vt, &[flags])));
         }
+        if let (true, Some(xmm)) = (vt.is_floating_point(), plan.float_result) {
+            // X86's `LowerCallResult` with SSE: a `float` or `double` is read
+            // from the vector register the convention names
+            let copy = self.dag.get_copy_from_phys_reg(chain, xmm, vt, glue);
+            self.dag.set_root(SDValue { node: copy.node, res: 1 });
+            return Ok(Some(SDValue { node: copy.node, res: 0 }));
+        }
         if vt.is_floating_point() {
             // X86's `LowerCallResult`: the value is popped from st(0), which
             // the allocator knows as `FP0`
@@ -1494,7 +1498,13 @@ impl Builder<'_> {
         } else if let Some(&operand) = instruction.operands.first() {
             let value = self.get_value(operand)?;
             let vt = self.dag.value_type(value);
-            if vt.is_floating_point() {
+            if let (true, Some(xmm)) = (vt.is_floating_point(), self.convention.float_result) {
+                // `LowerReturn` with SSE: copied to the vector register
+                let copy = self.dag.get_copy_to_phys_reg(chain, xmm, value, glue);
+                chain = SDValue { node: copy.node, res: 0 };
+                glue = Some(SDValue { node: copy.node, res: 1 });
+                ops.push(self.dag.get_phys_register(vt, xmm));
+            } else if vt.is_floating_point() {
                 // x87 returns in st(0), which no register names: the value is
                 // RET_GLUE's operand
                 ops.push(value);

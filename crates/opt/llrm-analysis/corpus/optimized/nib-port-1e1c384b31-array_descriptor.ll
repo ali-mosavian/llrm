@@ -1,17 +1,15 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-define internal i16 @main() addrspace(1) {
+define cc 1005 i16 @main() addrspace(1) nearcode "llrm-fp-eval"="x87-extended" memory(inaccessiblemem: readwrite) {
 b1:
-  call addrspace(1) void @N$PU2(i16 3)
-  call addrspace(1) void @N$PN()
+  tail call cc 1005 addrspace(1) void @N$PU2(i16 3)
+  tail call cc 1005 addrspace(1) void @N$PN()
   ret i16 10
 }
 
-declare void @llvm.memset.p0.i16(ptr nocapture writeonly, i8, i16, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+declare cc 1005 void @N$PU2(i16) addrspace(1) memory(inaccessiblemem: readwrite)
 
-declare void @N$PU2(i16) addrspace(1)
-
-declare void @N$PN() addrspace(1)
+declare cc 1005 void @N$PN() addrspace(1) memory(inaccessiblemem: readwrite)
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

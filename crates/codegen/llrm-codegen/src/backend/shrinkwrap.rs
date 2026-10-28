@@ -97,6 +97,14 @@
 //! the restore, or where it falls into it. A block that reaches the restore any
 //! other way refuses the placement (`saverestore`'s DEVIATE 2).
 //!
+//! DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
+//! epilogue on an edge, or that does not end in a return, is refused; the
+//! registers stay saved at the entry. The pin wraps those and duplicates the
+//! `ret` into each early exit, which costs a byte per exit, and the branch that
+//! skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
+//! smaller). Exit: the placement is made as the pin does once jumps are sized
+//! after the epilogue is placed.
+//!
 //! # See also
 //! LLVM's
 //! [`ShrinkWrap`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/ShrinkWrap.cpp).
@@ -238,7 +246,9 @@ pub fn wrapped(
         let split = placement.split.as_deref().unwrap_or_default();
         // Under `size` the split changes where the early exit lands, and a
         // branch over the epilogue grows past its short form (QCport m16 -Os
-        // +9 B, nothing smaller): the registers stay saved at the entry.
+        // +9 B, nothing smaller): the registers stay saved at the entry. The
+        // caller states `size` only for a target that says so (the pin has no
+        // such check).
         if size && (!split.is_empty() || !uses.is_return(placement.restore)) {
             continue;
         }
