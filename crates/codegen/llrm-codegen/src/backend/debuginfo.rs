@@ -704,7 +704,14 @@ pub fn laid_out(
         registers: debug.registers.clone(),
         files: vec![match &debug.source {
             Some((name, md5)) => model::File {
-                name: name.clone(),
+                // CodeView looks for a file by the name it is given, beside
+                // the program or where its user says: a directory of the
+                // build machine is no help to it.
+                name: if matches!(debug.dialect, model::Dialect::Cv4) {
+                    name.rsplit(['/', '\\']).next().unwrap_or(name).to_owned()
+                } else {
+                    name.clone()
+                },
                 checksum: md5.clone().map(|bytes| (llrm_object::debug::ChecksumKind::Md5, bytes)),
             },
             None => model::File { name: source.to_owned(), checksum: None },

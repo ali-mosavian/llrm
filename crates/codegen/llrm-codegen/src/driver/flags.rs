@@ -209,6 +209,9 @@ pub struct Flags {
     /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
     /// is an explicit `__cdecl`.
     pub regcall_default: bool,
+    /// `-mc-library`: the library's functions (`cos`, `strlen`) keep their
+    /// C convention, as the Borland library the program links has them.
+    pub c_library: bool,
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
@@ -237,6 +240,7 @@ impl Default for Flags {
             wrapv: false,
             float_store: false,
             regcall_default: false,
+            c_library: false,
             level: Level::O2,
             passes: Vec::new(),
             march: None,
@@ -319,6 +323,7 @@ impl Flags {
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            "-mc-library" => self.c_library = true,
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
             _ if flag.starts_with("-mcode-segment=") => {

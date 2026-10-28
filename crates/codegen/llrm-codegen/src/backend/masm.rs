@@ -119,6 +119,7 @@ use std::sync::{Arc, LazyLock};
 
 use llrm_lir::registers::Regs;
 use llrm_lir::registers::{RegId, RegSet};
+use llrm_object::assembler::Cfi;
 
 use crate::backend::{select, target};
 use crate::model::ir::{self, Addr, Loc, Operation, Semantics, Space};
@@ -580,6 +581,9 @@ pub enum Item {
     Callee(Callee),
     Semantics(Semantics),
     Mark(Mark),
+    /// A `.cfi_*` directive (`MCCFIInstruction`), where LLVM's lands: no
+    /// code of its own.
+    Cfi(llrm_object::assembler::Cfi),
 }
 
 /// `-g`: a place in the code a debugger is told of.
@@ -605,6 +609,9 @@ pub enum Mark {
     /// The call before it clobbers this register (one mark for each it
     /// clobbers).
     Clobbered(RegId),
+    /// The procedure declares its call frame information (`Item::Cfi`): it
+    /// has a frame descriptor even where it has no directive.
+    Declared,
 }
 
 /// Where an instruction put a value `-g` names.
@@ -640,6 +647,101 @@ fn placed(dest: &Loc) -> Option<Place> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// The call frame information a prologue and epilogue declare
+/// (`X86FrameLowering::emitPrologue`/`emitEpilogue`): the frame address as
+/// each instruction of the entry and exit sequences moves it. `depth` is the
+/// frame address minus the stack pointer; once the frame register is set the
+/// address is `frame` past it and pushes and pops no longer move it.
+#[derive(Clone, Debug)]
+struct CfiState {
+    slot: i64,
+    sp: u16,
+    bp: u16,
+    depth: i64,
+    framed: bool,
+    frame: i64,
+}
+
+impl CfiState {
+    fn entry(
+        slot: i64,
+        sp: u16,
+        bp: u16,
+    ) -> Self {
+        CfiState { slot, sp, bp, depth: slot, framed: false, frame: 0 }
+    }
+
+    /// The directive that restates the frame address after code that left it
+    /// (a return): the prologue's.
+    fn restate(&self) -> Item {
+        Item::Cfi(if self.framed {
+            Cfi::DefCfa { register: self.bp, offset: self.frame }
+        } else {
+            Cfi::DefCfaOffset { offset: self.depth }
+        })
+    }
+
+    /// The directives that follow `what`, where `X86FrameLowering` states them.
+    /// `bp` is the frame register as the sequence names it.
+    fn after(
+        &mut self,
+        what: &Semantics,
+        bp: &Loc,
+    ) -> Vec<Item> {
+        let imm = |loc: &Loc| match loc {
+            Loc::Imm(imm) => Some(imm.value),
+            _ => None,
+        };
+        let mut out = Vec::new();
+        match (what.op, what.name.as_deref()) {
+            (Operation::Push, _) => {
+                self.depth += self.slot;
+                if &what.sources[0] == bp {
+                    // The frame register's own save is declared at once, the
+                    // others' at the end of the prologue.
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                    out.push(Cfi::Offset { register: self.bp, offset: -self.depth });
+                } else if !self.framed {
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                }
+            }
+            (Operation::Pop, _) => {
+                self.depth -= self.slot;
+                if self.framed && what.dests.first() == Some(bp) {
+                    self.framed = false;
+                    out.push(Cfi::DefCfa { register: self.sp, offset: self.depth });
+                } else if !self.framed {
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                }
+            }
+            (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+                self.framed = true;
+                self.frame = self.depth;
+                out.push(Cfi::DefCfaRegister { register: self.bp });
+            }
+            (Operation::Binary, Some(name @ ("sub" | "add"))) if what.dests.first() == Some(&sp_reg()) => {
+                let size = what.sources.get(1).and_then(imm).unwrap_or(0);
+                self.depth += if name == "sub" { size } else { -size };
+                if !self.framed && size != 0 {
+                    out.push(Cfi::DefCfaOffset { offset: self.depth });
+                }
+            }
+            (Operation::Address, _) => {
+                if let Some(Loc::Mem(from)) = what.sources.first() {
+                    self.depth = self.frame - from.offset;
+                }
+            }
+            (Operation::Nothing, Some("leave")) => {
+                self.depth = self.frame - self.slot;
+                self.framed = false;
+                out.push(Cfi::DefCfa { register: self.sp, offset: self.depth });
+            }
+            _ => {}
+        }
+        out.into_iter().map(Item::Cfi).collect()
     }
 }
 
@@ -819,7 +921,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     let eligible = procedure.entry == 0
         && procedure.interrupt.is_none()
         && !procedure.far
-        && procedure.body.bits == 32
+        && matches!(procedure.body.bits, 32 | 64)
         && procedure.reserve != 0
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
@@ -844,11 +946,21 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
     // costs a 486 3 clocks): they lie a multiple of it below the registers,
     // and the gap is reserved with them.
-    let align = procedure.registers.align.max(procedure.registers.slot);
-    let gap = (align - pushed % align) % align;
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap) {
+    let slot = procedure.registers.slot;
+    let align = procedure.registers.align.max(slot);
+    // Where the frame register is omitted and that is settled without a size
+    // comparison (`frame_omitted`), its cell is not reserved: the return
+    // address and the registers are what the locals are aligned below. The
+    // 32-bit frames keep it (Watcom's layout, not the pin's).
+    let dropped = matches!(procedure.body.bits, 64) && {
+        let held = frame_held(&procedure);
+        (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
+    };
+    let above = if dropped { slot } else { 0 };
+    let gap = (align - (above + pushed) % align) % align;
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
-            body: lir::LirBody { saved_first: true, ..body },
+            body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
             reserve: procedure.reserve + gap,
             ..procedure
         },
@@ -1049,7 +1161,7 @@ fn parts(
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
     let locals = reserve != 0;
-    let held = |reserve: i64| if omit && locals { reserve + slot } else { reserve };
+    let held = |reserve: i64| if omit && locals && !procedure.body.slot_dropped { reserve + slot } else { reserve };
     // A call finds the stack a multiple of the target's alignment, as its
     // callee assumes (a double on its stack at an 8-aligned address): the frame
     // takes what keeps it so, the return address, the pushed registers, the
@@ -1376,14 +1488,54 @@ fn built(
             })
             .collect();
     let cells = blocks_arguments(&procedure.body);
+    // Call frame information, declared as the entry and the exits are written:
+    // only for a plain frame (no shrink-wrapping, interrupt, `enter` or stack
+    // check), which is what the rows below are right for.
+    let plain = llrm_x86::mc::unwind::declares(procedure.body.bits)
+        && wrap.is_none()
+        && procedure.interrupt.is_none()
+        && procedure.entry == 0
+        && !procedure.far
+        && procedure.stack_check.is_none()
+        && sequences.entry.iter().all(|one| one.name.as_deref() != Some("enter"));
+    let bp = reg(FRAME);
+    // The DWARF numbers the directives name, from the target's table.
+    let dwarf =
+        |register: RegId| regs.name(register).and_then(llrm_x86::mc::unwind::register).map(|number| number as u16);
+    let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
+    let mut cfi =
+        numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let (mut entry_items, mut after_entry) = (Vec::new(), None);
+    if let Some(cfi) = cfi.as_mut() {
+        entry_items.push(Item::Mark(Mark::Declared));
+        let mut pending = Vec::new();
+        for one in &enter {
+            entry_items.push(Item::Semantics(one.clone()));
+            let marks = cfi.after(one, &bp);
+            // The System V callee-saved registers: rbx, rbp and r12 to r15
+            // (the frame register's own push is told apart by its name).
+            if one.op == Operation::Push
+                && let Loc::Reg(pushed) = &one.sources[0]
+                && let Some(register) =
+                    dwarf(pushed.register).filter(|number| llrm_x86::mc::unwind::CALLEE_SAVED.contains(number))
+            {
+                // A callee-saved register's own offset is declared after the
+                // whole prologue (`emitCalleeSavedFrameMoves`).
+                pending.push(Item::Cfi(Cfi::Offset { register, offset: -cfi.depth }));
+                entry_items.extend(marks);
+            } else {
+                entry_items.extend(marks);
+            }
+        }
+        // In the reverse of the order they were pushed, as the pin lists them.
+        entry_items.extend(pending.into_iter().rev());
+        after_entry = Some(cfi.clone());
+    } else {
+        entry_items.extend(enter.into_iter().map(Item::Semantics));
+    }
     let mut split_edges: Vec<(i64, Option<i64>, Vec<crate::backend::shrinkwrap::Piece>)> = Vec::new();
-    let mut out: Vec<Item> = line
-        .map(&mut marked)
-        .into_iter()
-        .chain(arrived)
-        .chain(cells)
-        .chain(enter.into_iter().map(Item::Semantics))
-        .collect();
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(entry_items).collect();
+    let body_from = out.len();
     // An item or two per instruction, a label and an alignment per block, and
     // the pieces of the frame: growing it by doubling copied every item some
     // six times.
@@ -1567,6 +1719,36 @@ fn built(
     if let Some(check) = &procedure.stack_check {
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
         out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
+    }
+    // The stack moves wherever the code moves it, whether the sequences or the
+    // body wrote the instruction; what follows a return or a jump is the
+    // frame the prologue left.
+    if let Some(done) = after_entry {
+        let tail = out.split_off(body_from);
+        let mut cfi = done.clone();
+        for item in tail {
+            let ends = match &item {
+                Item::Semantics(what) => {
+                    let marks = cfi.after(what, &bp);
+                    let ends = matches!(what.op, Operation::Return | Operation::Jump);
+                    out.push(item);
+                    out.extend(marks);
+                    ends
+                }
+                Item::Callee(Callee { tail: true, .. }) => {
+                    out.push(item);
+                    true
+                }
+                _ => {
+                    out.push(item);
+                    false
+                }
+            };
+            if ends {
+                cfi = done.clone();
+                out.push(done.restate());
+            }
+        }
     }
     Ok(out)
 }
@@ -1754,7 +1936,7 @@ fn addressed_pass(
     let name_of = |target: i64| label(number, target);
     for item in items.iter_mut() {
         match item {
-            Item::Align(_) => {}
+            Item::Align(_) | Item::Cfi(_) => {}
             Item::Label(label) => {
                 if after_dead_end.contains(&label.name) {
                     depth = None;
@@ -2126,7 +2308,7 @@ pub fn _procedure_of(
         match item {
             Item::Align(CodeAlign { log2, .. }) => out.push(format!("    align {}", 1u32 << log2)),
             Item::Label(Label { name }) => out.push(format!("{name}:")),
-            Item::Mark(_) => {}
+            Item::Mark(_) | Item::Cfi(_) => {}
             Item::Callee(Callee { code, .. }) if !code.is_empty() => {
                 out.extend(_code(&code).into_iter().map(|line| format!("    {line}")));
             }

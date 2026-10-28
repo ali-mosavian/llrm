@@ -166,6 +166,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         BrInd => pin::BRIND,
         Load => pin::LOAD,
         Store => pin::STORE,
+        AtomicSwap => pin::ATOMIC_SWAP,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,
@@ -444,6 +445,8 @@ impl Dag for DagisAdapter<'_> {
     ) -> Option<u16> {
         match self.dag.nodes()[node as usize].data {
             NodeData::PhysReg(id) => pin_register(id),
+            // `$noreg`
+            NodeData::Register(0) => Some(0),
             _ => None,
         }
     }
