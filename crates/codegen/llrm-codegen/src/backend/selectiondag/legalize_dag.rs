@@ -74,6 +74,8 @@ pub struct DagLegalizer<'a, H: Hooks> {
     tli: &'a TargetLowering,
     hooks: &'a mut H,
     legalized: HashSet<u32>,
+    /// The topological sweeps `run` made.
+    pub sweeps: u32,
 }
 
 impl<'a, H: Hooks> DagLegalizer<'a, H> {
@@ -83,13 +85,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
         let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
-        DagLegalizer { dag, tli, hooks, legalized }
+        DagLegalizer { dag, tli, hooks, legalized, sweeps: 0 }
     }
 
     /// `SelectionDAG::Legalize`.
     pub fn run(&mut self) -> Result<(), LegalizeError> {
         loop {
             let mut any = false;
+            let nodes = self.dag.nodes().len();
+            self.sweeps += 1;
             for n in self.reverse_topological() {
                 if self.is_dead(n) || !self.legalized.insert(n) {
                     continue;
@@ -98,7 +102,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 self.dag.cur_order = self.dag.node(SDValue { node: n, res: 0 }).order;
                 self.legalize_op(n)?;
             }
-            if !any {
+            // A sweep that built no node leaves nothing new to legalize.
+            if !any || self.dag.nodes().len() == nodes {
                 return Ok(());
             }
         }
