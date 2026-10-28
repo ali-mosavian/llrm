@@ -249,7 +249,7 @@ mod tests {
                 assert_eq!(first.dests, vec![Loc::Mem(Mem { width: 4, ..cell.clone() })]);
                 assert_eq!(first.sources, vec![imm(0x2ffff, 4, None)]);
                 assert_eq!(insns[insns.len() - 1].what.as_ref().unwrap().op, Operation::Nothing);
-                let covers = |body: &LirBody| body.insns().iter().map(|one| one.covers).collect::<Vec<_>>();
+                let covers = |body: &LirBody| body.iter_insns().map(|one| one.covers).collect::<Vec<_>>();
                 assert_eq!(covers(&result), covers(&body));
             }
         }

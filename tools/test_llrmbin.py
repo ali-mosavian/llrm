@@ -160,3 +160,29 @@ def test_a_dist_binary_not_matching_its_recorded_md5_is_stale_with_a_fresh_mtime
     repo, dist, source = _dist(tmp_path, b"other", b"built")
     os.utime(source, (1, 1))
     assert llrmbin.stale_binaries(dist, repo) == ["llrm-c"]
+
+
+def test_the_compiler_is_llrm_cc_where_it_is_built_else_llrm_c(tmp_path):
+    """C2: every tool names the C compiler through `compiler`, so deleting llrm-c moves them all at once."""
+    (tmp_path / "llrm-c").write_text("")
+    assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-c"
+    (tmp_path / "llrm-cc").write_text("")
+    assert llrmbin.compiler(tmp_path) == tmp_path / "llrm-cc"
+
+
+def test_a_pinned_llrm_cc_has_the_path_length_llrm_c_had(tmp_path):
+    """The name was counted as `llrm-c`: llrm-cc's path was one byte longer, which moves an instruction count."""
+    (tmp_path / "llrm-cc").write_text("")
+    assert len(str(llrmbin.pinned(tmp_path / "llrm-cc"))) == llrmbin.PINNED_BYTES
+
+
+def test_the_stamp_is_read_from_llrm_llc_when_there_is_no_llrm_c(tmp_path, monkeypatch):
+    """llrm-cc prints clang's --version, no stamp; the backend beside it prints the sha. Without llrm-c nothing was checked."""
+    import stamp
+
+    seen = []
+    monkeypatch.setattr(stamp, "check", lambda binary, *args, **kwargs: seen.append(binary.name))
+    for name in ("llrm-cc", "llrm-llc"):
+        (tmp_path / name).write_text("")
+    llrmbin.stamped(tmp_path)
+    assert seen == ["llrm-llc"]

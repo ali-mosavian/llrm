@@ -160,6 +160,7 @@ pub mod combine_xor;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
+pub mod constmerge;
 pub mod constraintelim;
 pub mod constraintelim_induction;
 #[cfg(test)]
@@ -289,6 +290,7 @@ pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;

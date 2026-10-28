@@ -163,18 +163,32 @@ def compile_command(program: Program, obj: Path) -> list[str]:
     dialect = ["--dialect", program.dialect, "--runtime", program.dialect] if program.source.suffix == ".bas" else []
     target = dosbatch.target_of(program.flags, dosbatch.REAL_MODE)
     if program.source.suffix == ".c":
-        dialect = ["-I", str(dosbatch.c_include(target, obj.parent))]
+        # llrm-cc reads the row's own llrm_os.h (-isystem); llrm-c's is for llrm-c's pragmas
+        dialect = [] if os.environ.get("LLRM_C_FRONTEND") == "llrm-cc" else ["-I", str(dosbatch.c_include(target, obj.parent))]
     # LLRM_EXCESS: a BASIC program's excess precision, set the same on both sides of a pair; LLRM_EXTRA_FLAGS: flags for every program (an ablation)
     excess = [f"-fexcess-precision={os.environ['LLRM_EXCESS']}"] if program.source.suffix == ".bas" and os.environ.get("LLRM_EXCESS") else []
     extra = os.environ.get("LLRM_EXTRA_FLAGS", "").split()
+    if program.source.suffix == ".c" and os.environ.get("LLRM_C_FRONTEND") == "llrm-cc":
+        # llrm-cc takes the target as a row (compile_env), not a -m flag, and stops at the object with -c.
+        tool, flags = "llrm-cc", [one for one in program.flags if one not in ("-m16", "-m32")]
+        command = [str(BIN / tool), "-c", str(program.source), *rest, *dialect, *flags, *excess, *extra, "-o", str(obj)]
+        return dosbatch.with_isel(command)
     command = [str(BIN / tool), str(program.source), *rest, *dialect, *program.flags, *excess, *extra, "-o", str(obj)]
     # real mode keeps the old selector unless $LLRM_ISEL_REAL says the run is the real-mode check
     real = program.source.suffix == ".c" and target == dosbatch.REAL_MODE
     return command if real and not os.environ.get("LLRM_ISEL_REAL") else dosbatch.with_isel(command)
 
 
+def compile_env(program: Program) -> dict[str, str]:
+    """What `compile_command` needs set: llrm-cc's target row, for a C program where the run builds C with it."""
+    if program.source.suffix != ".c" or os.environ.get("LLRM_C_FRONTEND") != "llrm-cc":
+        return {}
+    return dosbatch.c_compile(program.source, Path("x.obj"), dosbatch.target_of(program.flags, dosbatch.REAL_MODE), "-O2", Path("."), [])[1]
+
+
 def compile_one(program: Program, obj: Path) -> str | None:
-    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True)
+    env = compile_env(program)
+    done = cpulimit.run(compile_command(program, obj), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0 or not obj.exists():
         return "compile: " + (done.stderr or done.stdout).strip()[-600:]
     return None
@@ -222,7 +236,8 @@ def build_foreign(program: Program, target: str, work: Path, stem: str) -> tuple
         if source.suffix == ".asm":
             dosbatch.assemble(source, obj, *dosbatch.os_defines(target, "c"))
         else:
-            dosbatch._host(dosbatch.with_isel([str(BIN / "llrm-c"), str(source), "-I", str(include), dosbatch.m_flag(target), *abi, level, "-o", str(obj)]))
+            command, env = dosbatch.c_compile(source, obj, target, level, include, abi)
+            dosbatch._host(command, env)
         objects.append(obj)
     return tuple(objects)
 
@@ -275,9 +290,10 @@ def build(program: Program, work: Path, stem: str) -> Job | str:
                 elif source.suffix == ".asm":
                     dosbatch.assemble(source, extra, *dosbatch.os_defines(target, "c"))
                 else:
-                    dosbatch._host([str(BIN / "llrm-c"), str(source), "-I", str(dosbatch.c_include(target, work)), dosbatch.m_flag(target), *(one for one in program.flags if one.startswith("-mabi=")), level, "-o", str(extra)])
+                    command, env = dosbatch.c_compile(source, extra, target, level, dosbatch.c_include(target, work), [one for one in program.flags if one.startswith("-mabi=")])
+                    dosbatch._host(command, env)
                 others.append(extra)
-            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others))
+            loaders = dosbatch.link_target(target, obj, exe, work, objects_after=tuple(others), defines=dosbatch.os_defines(target, "c", next((one[len("-mabi="):] for one in program.flags if one.startswith("-mabi=")), None)))
             dosbatch.check_loads(exe)
         except (dosbatch.BuildError, dosbatch.TooBig) as error:
             return f"link: {error}"
