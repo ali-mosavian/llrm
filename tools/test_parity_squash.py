@@ -1932,5 +1932,21 @@ def test_a_red_naming_a_file_asks_the_prs_touching_it_before_the_rest():
     alone = lambda number: asked.append(number) or number == "5"  # noqa: E731
     assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["5"]
     assert asked[0] == "3", asked
-    assert ps.named_files("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
-    assert ps.named_files("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file
+    assert ps.files_named_in("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
+    assert ps.files_named_in("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file
+
+
+def test_no_function_assigns_a_local_that_shadows_a_module_function_it_calls():
+    """merge_batch's build branch assigned `named_files = ...` while its integration branch called the module's named_files(): UnboundLocalError crashed the 07:39 pass (#5703)."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(ps))
+    module_functions = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    clashes = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef):
+            stores = {n.id for n in ast.walk(fn) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+            calls = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+            clashes += [f"{fn.name}: {name}" for name in sorted(stores & calls & module_functions)]
+    assert clashes == [], clashes

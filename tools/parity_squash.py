@@ -1281,7 +1281,7 @@ def red_members(members: list[str], red_with, alone_red) -> list[str]:
     return found or [number for number in members if alone_red(number)]
 
 
-def named_files(text: str) -> set[str]:
+def files_named_in(text: str) -> set[str]:
     """The file paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`, `tools/pairs/dyn.py: 1 copies`)."""
     return set(re.findall(r"[\w-]+(?:/[\w.-]+)+\.\w+", text))
 
@@ -2182,7 +2182,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             targets = sorted({name.split("::", 1)[0] for name in probe})
             red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
             alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
-            failure_files = named_files(parity_smoke_module().causes_of(failed_units))
+            failure_files = files_named_in(parity_smoke_module().causes_of(failed_units))
             suspects = [number for number in group if failure_files & set(head_files(infos[number]['headRefOid']))]
             return red_members_suspects_first(group, suspects, red_with, alone_red)
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
