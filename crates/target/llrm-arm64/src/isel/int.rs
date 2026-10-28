@@ -887,8 +887,9 @@ impl Selector<'_> {
     }
 
     /// Whether the `and` `value` is read only by a comparison with zero whose
-    /// predicate `tst`'s flags answer: equality and the signed orders (`tst`
-    /// leaves C and V clear, as a compare with zero leaves V).
+    /// predicate `tst`'s flags answer (and that is no leaf of a `ccmp` chain):
+    /// equality and the signed orders (`tst` leaves C and V clear, as a
+    /// compare with zero leaves V).
     pub(super) fn tested_by_compare(
         &self,
         value: llrm_mir::ValueId,
@@ -910,7 +911,9 @@ impl Selector<'_> {
                     | IntPredicate::Sle
             )
         );
+        // A leaf of a `ccmp` chain compares a register: its `and` is made.
         eligible
+            && !reader.result.is_some_and(|result| self.conjunctions.contains(result))
             && own == self.function.parent(user.user)
             && reader.operands[0] == Operand::Value(value)
             && self.is_zero(reader.operands[1])

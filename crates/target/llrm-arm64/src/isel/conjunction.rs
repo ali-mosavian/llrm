@@ -30,7 +30,8 @@
 //!
 //! DEVIATE 3: the pin reaches this from `getAArch64Cmp`, `LowerBRCOND` and a
 //! combine; here from the condition of a `select` and of a `br` that is no
-//! chain, which is where the selector asks for flags (`condition`).
+//! chain (`chain` keeps a branch's conditions together by the pin's cost
+//! policy), which is where the selector asks for flags (`condition`).
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::{BinaryOp, Opcode, Operand, ValueId};
@@ -172,15 +173,12 @@ impl Selector<'_> {
         }
         let instruction = self.function.instruction(inst);
         if let Opcode::ICmp(_) = instruction.opcode {
-            // An `and` left for a `tst` has no register to compare.
-            if let Operand::Value(left) = instruction.operands[0]
-                && let Some(def) = super::value_def(self.function, left)
-                && self.function.instruction(def).opcode == Opcode::Binary(BinaryOp::And)
-                && self.tested_by_compare(left)
-            {
-                return None;
-            }
-            let bits = self.types().int_bits(self.operand_type(instruction.operands[0]).ok()?)?;
+            // A pointer compares as the 64-bit integer it is.
+            let ty = self.operand_type(instruction.operands[0]).ok()?;
+            let bits = match self.ty(ty) {
+                llrm_mir::Type::Pointer(_) => 64,
+                _ => self.types().int_bits(ty)?,
+            };
             if bits > 64 {
                 return None;
             }

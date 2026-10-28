@@ -306,6 +306,17 @@ pub trait Tti {
         false
     }
 
+    /// `getJumpConditionMergingParams`: the budget for keeping the compares
+    /// of a branch on `a && b` or `a || b` one condition. Split always, where
+    /// the target says nothing.
+    fn jump_condition_merging_params(
+        &self,
+        query: &crate::jumpmerge::JumpMergeQuery,
+    ) -> crate::jumpmerge::CondMerging {
+        let _ = query;
+        crate::jumpmerge::CondMerging::SPLIT
+    }
+
     /// Whether an `optsize` caller's inline of a callee that stays must not
     /// grow the code: the callee's `CodeSize` over the instructions the
     /// inline cost did not fold, against the call and the pushes of its

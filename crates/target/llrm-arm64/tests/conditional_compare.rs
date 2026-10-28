@@ -61,3 +61,29 @@ fn the_chains_give_the_values_c_does() {
     let ran = std::process::Command::new(&program).output().unwrap();
     assert!(ran.status.success(), "{}", String::from_utf8_lossy(&ran.stdout));
 }
+
+/// `if (x >= left && y >= top && x <= right && y <= bottom)` was four
+/// compare-and-branch pairs (8 instructions): the pin keeps the compares of a
+/// branch together when the right sides are cheap
+/// (`shouldKeepJumpConditionsTogether`, AArch64's budget of 8), giving `cmp`
+/// and three `ccmp` (`gfx_plot`).
+#[test]
+fn a_branch_on_cheap_compares_is_a_ccmp_chain() {
+    let asm =
+        driver::assembly(include_str!("data/conditional_compare_branch.ll"), Platform::Darwin, true).expect("lowers");
+    let start = asm.find("_plot:").expect("the function is there");
+    let text = &asm[start..];
+    let text = &text[..text.find("\n_").unwrap_or(text.len())];
+    assert_eq!(text.matches("ccmp").count(), 3, "{text}");
+    assert_eq!(text.lines().filter(|line| line.trim_start().starts_with("b.")).count(), 1, "{text}");
+}
+
+/// A pointer compare was no leaf of a `ccmp` chain (`int_bits` of a pointer is
+/// none), so `p < end` joined with a bit test stayed a `csinc`, a `csel` and a
+/// `tst` (`str_take`, +4 over clang): the pin gives `cmp` and `ccmp`.
+#[test]
+fn a_pointer_compare_is_a_ccmp_leaf() {
+    let asm =
+        driver::assembly(include_str!("data/conditional_compare_pointer.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.contains("ccmp x") && asm.contains(", #0, #4, hs"), "{asm}");
+}

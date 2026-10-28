@@ -7,6 +7,11 @@
 //! `and` and `or` (`m_LogicalAnd`, `m_LogicalOr`), join like the instructions.
 //! A mix of `or` and `and` is not a chain: it needs a block per subtree, and
 //! stays a value.
+//!
+//! Whether to split is `shouldKeepJumpConditionsTogether` with AArch64's
+//! `getJumpConditionMergingParams` (`llrm_mir::jumpmerge`, the target's
+//! numbers in its `Tti`): a condition kept together is a value, and the
+//! `ccmp` chain of `conjunction` takes it.
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::{BinaryOp, InstId, Opcode, Operand, ValueId};
@@ -41,12 +46,14 @@ impl Selector<'_> {
     pub(super) fn find_chains(&mut self) {
         let mut chains = Chains::default();
         let mut found = Vec::new();
+        let mut bpi = None;
         for (_, inst) in self.function.walk() {
             let branch = self.function.instruction(inst);
             if branch.opcode == Opcode::Br
                 && branch.operands.len() == 3
                 && let Operand::Value(condition) = branch.operands[0]
                 && let Some(chain) = self.chain_of(condition, inst)
+                && !self.kept_together(inst, condition, &mut bpi)
             {
                 found.push((condition, chain));
             }
@@ -60,6 +67,68 @@ impl Selector<'_> {
             chains.roots.insert(root, chain);
         }
         self.chains = chains;
+    }
+
+    /// `shouldKeepJumpConditionsTogether` for the branch `branch` on the chain
+    /// `condition`: the cost of the right operand's own instructions against
+    /// AArch64's budget.
+    fn kept_together(
+        &self,
+        branch: InstId,
+        condition: ValueId,
+        bpi: &mut Option<llrm_analysis::bpi::BranchProbabilityInfo>,
+    ) -> bool {
+        use llrm_mir::jumpmerge::{JumpMergeQuery, Logic, should_keep_together};
+        let Some(joiner) = super::value_def(self.function, condition) else { return false };
+        let Some((op, operands)) = self.joined(joiner) else { return false };
+        let logic = if op == BinaryOp::Or { Logic::Or } else { Logic::And };
+        let tti = crate::tti::AArch64::of_cpu(self.platform.cpu()).expect("a cpu the platform names");
+        let context = &self.module.context;
+        let params = llrm_mir::tti::Tti::jump_condition_merging_params(
+            &tti,
+            &JumpMergeQuery { context, function: self.function, logic, lhs: operands[0], rhs: operands[1] },
+        );
+        let block = self.function.parent(branch);
+        let &[_, Operand::Block(first), Operand::Block(second)] = &self.function.instruction(branch).operands[..]
+        else {
+            return false;
+        };
+        let (function, module, layout) = (self.function, self.module, self.layout);
+        let mut likely = || {
+            let bpi = bpi.get_or_insert_with(|| {
+                llrm_analysis::bpi::BranchProbabilityInfo::of(
+                    llrm_analysis::bpi::Module {
+                        context: &module.context,
+                        declarations: &module.globals,
+                        metadata: &module.metadata,
+                        layout,
+                    },
+                    function,
+                )
+            });
+            // The pin names the successors the other way round: the edge it
+            // calls true is the second.
+            let block = block?;
+            if bpi.is_edge_hot(function, block, second) {
+                Some(true)
+            } else if bpi.is_edge_hot(function, block, first) {
+                Some(false)
+            } else {
+                None
+            }
+        };
+        should_keep_together(
+            &tti,
+            context,
+            layout,
+            &module.globals,
+            function,
+            joiner,
+            logic,
+            (operands[0], operands[1]),
+            params,
+            &mut likely,
+        )
     }
 
     /// Whether `value` is a one-use `or`/`and` of i1 read by `reader` in its
