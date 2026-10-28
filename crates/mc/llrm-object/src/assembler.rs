@@ -19,6 +19,26 @@ pub trait AsmBackend {
         count: usize,
     ) -> bool;
 
+    /// Fills the field of `kind` at `at` of `image` with `value`, the distance
+    /// from the place for a pc-relative one (`MCAsmBackend::applyFixup`), and
+    /// refuses what the field cannot hold. The default is a data field of
+    /// `kind_info(kind).bits`, little endian.
+    fn apply_fixup(
+        &self,
+        image: &mut [u8],
+        at: usize,
+        kind: FixupKind,
+        pc_rel: bool,
+        value: i64,
+        section: &str,
+    ) -> Result<(), Unsupported> {
+        let width = usize::from(self.kind_info(kind).bits).div_ceil(8);
+        if width == 0 {
+            return Err(Unsupported(format!("{section}: kind {} has no field", kind.0)));
+        }
+        crate::apply_fixup(image, at, width, pc_rel, value, section)
+    }
+
     /// Mach-O's compact unwind encoding for a function whose prologue the
     /// call frame instructions `cfi` describe
     /// (`MCAsmBackend::generateCompactUnwindEncoding`); 0 where the target has
@@ -155,6 +175,34 @@ mod tests {
         }
         let prologue = [Cfi::DefCfaOffset { offset: 16 }, Cfi::Offset { register: 6, offset: -16 }];
         assert_eq!(Plain.generate_compact_unwind_encoding(&prologue), 0);
+    }
+
+    /// A backend that names no field of its own fills a data field of the
+    /// width its kind states, and refuses a value the field cannot hold.
+    #[test]
+    fn the_default_apply_fixup_fills_the_kinds_data_field() {
+        struct Plain;
+        impl AsmBackend for Plain {
+            fn kind_info(
+                &self,
+                kind: FixupKind,
+            ) -> FixupKindInfo {
+                kind.info()
+            }
+
+            fn write_nop_data(
+                &self,
+                _: &mut Vec<u8>,
+                _: usize,
+            ) -> bool {
+                false
+            }
+        }
+        let mut image = [0xAA; 6];
+        Plain.apply_fixup(&mut image, 1, FixupKind::DATA_4, true, -2, ".text").unwrap();
+        assert_eq!(image, [0xAA, 0xFE, 0xFF, 0xFF, 0xFF, 0xAA]);
+        assert!(Plain.apply_fixup(&mut image, 1, FixupKind::DATA_2, true, 0x8000, ".text").is_err());
+        assert!(Plain.apply_fixup(&mut image, 1, FixupKind::NONE, false, 0, ".text").is_err());
     }
 
     /// Made-up fragments, no target: a label, fixed bytes, a jump of 2 bytes
