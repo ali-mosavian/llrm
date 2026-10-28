@@ -622,15 +622,6 @@ why = "measured 9.1 -> 37.9 Minstr (x4.14)"
 [[debt]]
 kind = "steps"
 axis = "nest"
-name = "settled remember"
-ratio = 3.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 11.4 -> 36.4 Minstr (x3.19)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
 name = "mir combine@1499"
 ratio = 3
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -753,15 +744,6 @@ ratio = 3.1
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 3.4 -> 9.9 Minstr (x2.88)"
-
-[[debt]]
-kind = "steps"
-axis = "nest"
-name = "analysis exposed-frames"
-ratio = 3.1
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 3.2 -> 9.6 Minstr (x2.95)"
 
 [[debt]]
 kind = "steps"
