@@ -92,6 +92,10 @@ pub struct Convention {
     pub arguments_clobbered: bool,
     /// The same for the registers a result leaves in.
     pub results_clobbered: bool,
+    /// Functions of this name that no function of the module calls and whose
+    /// address is not taken keep nothing for their caller: the run-time
+    /// start-up that calls them discards every register once they return.
+    pub entry_clobbers_all: Vec<String>,
     /// The convention a variadic call uses in place of this one: it moves the
     /// arguments, not the symbol.
     pub variadic: Option<String>,
@@ -124,6 +128,11 @@ pub struct Convention {
     /// return with the late path (the exit then jumps over the epilogue). Left
     /// false where that jump outgrows its short form (QCport m16 -Os +9 B).
     pub frame_wrap_split_size: bool,
+    /// The registers a frame of one stack slot pushes and pops instead of a
+    /// `sub`/`add` of the stack pointer: the pushed one holds nothing a
+    /// push may not read, the popped one is a caller-saved register no result
+    /// or tail call argument is in.
+    pub frame_slot_scratch: Option<(String, String)>,
     pub stack: String,
     /// The registers a callee keeps, the frame register among them.
     pub preserved: Vec<Kept>,
@@ -207,6 +216,7 @@ const KEYS: &[&str] = &[
     "aggregate_arguments_in_memory",
     "arguments_clobbered",
     "results_clobbered",
+    "entry_clobbers_all",
     "variadic",
     "pops_as",
     "symbol",
@@ -225,6 +235,8 @@ const KEYS: &[&str] = &[
     "frame_optional",
     "frame_enter",
     "frame_wrap_split_size",
+    "frame_slot_push",
+    "frame_slot_pop",
     "stack",
     "preserved",
     "clobbered",
@@ -633,6 +645,10 @@ impl Convention {
             aggregate_arguments_in_memory: flag("aggregate_arguments_in_memory")?,
             arguments_clobbered: flag("arguments_clobbered")?,
             results_clobbered: flag("results_clobbered")?,
+            entry_clobbers_all: match table.get("entry_clobbers_all") {
+                Some(_) => names(table.get("entry_clobbers_all"), "entry_clobbers_all")?,
+                None => Vec::new(),
+            },
             variadic: table.contains_key("variadic").then(|| text("variadic")).transpose()?,
             pops_as: table.contains_key("pops_as").then(|| text("pops_as")).transpose()?,
             symbol,
@@ -655,6 +671,10 @@ impl Convention {
             frame_optional: flag("frame_optional")?,
             frame_enter: flag("frame_enter")?,
             frame_wrap_split_size: flag("frame_wrap_split_size")?,
+            frame_slot_scratch: table
+                .contains_key("frame_slot_push")
+                .then(|| Ok::<_, String>((text("frame_slot_push")?, text("frame_slot_pop")?)))
+                .transpose()?,
             stack: text("stack")?,
             preserved,
             clobbered: names(table.get("clobbered"), "clobbered")?,

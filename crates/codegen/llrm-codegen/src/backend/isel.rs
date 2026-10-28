@@ -254,6 +254,9 @@ pub struct Convention {
     pub parameters: Vec<Parameter>,
     /// The registers a result leaves in, low part first.
     pub returns: Vec<RegId>,
+    /// The vector register a `float` or `double` result leaves in, where the
+    /// convention has one (SysV: `xmm0`); else it is st(0).
+    pub float_result: Option<RegId>,
     /// The bytes the function pops as it returns.
     pub popped: i64,
     /// The registers its prologue may save: the convention's, but those its
@@ -614,7 +617,19 @@ pub fn convention_for(
         0
     };
     let saved = saved(arch, described, &parameters, &returns);
-    Ok(Convention { parameters, returns, popped, saved, stack_arguments: cursor, first })
+    let float_result = described
+        .and_then(|one| one.float_result_register())
+        .filter(|_| {
+            matches!(
+                types.get(result),
+                Type::Float(llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)
+            )
+        })
+        .map(|name| arch.register_named(name))
+        .filter(|register| {
+            llrm_lir::registers::Regs(arch.registers()).in_class(*register, llrm_lir::registers::class::XMM)
+        });
+    Ok(Convention { parameters, returns, float_result, popped, saved, stack_arguments: cursor, first })
 }
 
 /// The stack bytes the address of a struct result takes where `entry` passes it
@@ -1364,6 +1379,28 @@ fn homed(
     found
 }
 
+/// The source line the `!dbg` of `inst` names.
+pub(crate) fn dbg_line(
+    module: &Module,
+    function: &Function,
+    inst: InstId,
+) -> Option<u32> {
+    function
+        .instruction(inst)
+        .metadata
+        .iter()
+        .find(|(kind, _)| kind == "dbg")
+        .and_then(
+            |&(_, node)| match module.metadata[node.0 as usize].operands.first() {
+                Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
+                    llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
+                    _ => None,
+                },
+                _ => None,
+            },
+        )
+}
+
 /// `body` with each instruction's source line: that of the MIR instruction
 /// its `at` was selected from, as its `!dbg` names it.
 fn lined(
@@ -1374,20 +1411,7 @@ fn lined(
 ) -> LirBody {
     let mut lines: IndexMap<i64, u32> = IndexMap::default();
     for (&inst, &at) in ats {
-        let line = function
-            .instruction(inst)
-            .metadata
-            .iter()
-            .find(|(kind, _)| kind == "dbg")
-            .and_then(
-                |&(_, node)| match module.metadata[node.0 as usize].operands.first() {
-                    Some(llrm_mir::MetadataOperand::Constant(value)) => match module.context.get(*value).kind {
-                        llrm_mir::ConstantKind::Int(line) => u32::try_from(line).ok(),
-                        _ => None,
-                    },
-                    _ => None,
-                },
-            );
+        let line = dbg_line(module, function, inst);
         if let Some(line) = line {
             lines.insert(at, line);
         }
@@ -1898,7 +1922,7 @@ impl Selector<'_, '_, '_> {
         let mut homes = IndexMap::<usize, i64>::default();
         // Every alloca whose address is exposed, in one pass: the scan for each
         // asked the whole body of it.
-        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst| self.marker(inst));
+        let exposed = llrm_analysis::frameescape::exposed_allocas(function, |inst, _| self.marker(inst));
         // An object lies on its type's alignment, or its size's largest power
         // of two where the front end typed it as bytes, at most the stack slot
         // or where the function keeps the stack, which is wider: a local
@@ -6093,7 +6117,7 @@ impl Selector<'_, '_, '_> {
                     // The sequence pushes above its operand: the stack's top
                     // slots are not free for a value live across it.
                     let scratch = llrm_x86::select::x87_scratch(name);
-                    one.clobbers.extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                    one.clobbers.extend(self.regs().rfp_registers().iter().rev().take(scratch).copied());
                     out.push(Arc::new(one));
                     Ok(())
                 }

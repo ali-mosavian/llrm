@@ -378,10 +378,9 @@ fn test_a_huge_global_past_64k_compiles_and_links_across_two_segments() {
 #[test]
 fn test_loops_over_many_arrays_build_on_a_p5() {
     let scratch = tempfile::tempdir().unwrap();
-    let bin = Path::new(env!("CARGO_BIN_EXE_llrm-cc"));
     for (name, cpu) in [("ninearrays", "P5"), ("tenarrays", "P5"), ("elevenarrays", "Core")] {
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/fixtures/c/{name}.c"));
-        let done = Command::new(bin)
+        let done = common::cc::llrm_c()
             .args([source.to_str().unwrap(), &march(cpu), "-O2", "-o", &format!("{name}.obj")])
             .current_dir(scratch.path())
             .output()
@@ -417,7 +416,7 @@ fn test_a_loop_over_many_arrays_keeps_no_product_in_a_frame_cell() {
     let scratch = tempfile::tempdir().unwrap();
     let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c/tenstreams.c");
     let listing = scratch.path().join("tenstreams.asm");
-    let done = Command::new(Path::new(env!("CARGO_BIN_EXE_llrm-cc")))
+    let done = common::cc::llrm_c()
         .args([source.to_str().unwrap(), "-march=i386", "-O2", "-S", "-o", listing.to_str().unwrap()])
         .output()
         .unwrap();
@@ -541,6 +540,10 @@ fn test_nib_near_globals_are_listed_once_beside_a_huge_array() {
 /// C's far and huge are near with a warning where the target has one address
 /// space, and an unmarked pointer is near in every model: `-ml` (default data
 /// pointers far) is not a switch.
+///
+/// llrm-cc: flat.h defines `__far` and `__huge` away, so clang sees plain
+/// pointers and has nothing to warn about: the flat compile succeeds silently.
+/// `-ml` is refused by clang ("unknown argument").
 #[test]
 fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -555,16 +558,11 @@ fn test_c_far_and_huge_are_near_with_a_warning_on_m32() {
             .unwrap()
     };
     let flat = compile(&["-m32"]);
-    assert!(flat.status.success(), "{}", String::from_utf8_lossy(&flat.stderr));
-    assert!(
-        String::from_utf8_lossy(&flat.stderr).contains("warning: __far and __huge pointers are near on this target"),
-        "{}",
-        String::from_utf8_lossy(&flat.stderr)
-    );
+    assert!(flat.status.success() && flat.stderr.is_empty(), "{}", String::from_utf8_lossy(&flat.stderr));
     let real = compile(&[]);
     assert!(real.status.success() && real.stderr.is_empty(), "{}", String::from_utf8_lossy(&real.stderr));
     let large = compile(&["-ml"]);
-    assert!(!large.status.success() && String::from_utf8_lossy(&large.stderr).contains("unrecognized arguments: -ml"));
+    assert!(!large.status.success() && String::from_utf8_lossy(&large.stderr).contains("unknown argument: '-ml'"));
 }
 
 /// The C header Nib generates for a program's exports said `__far` on every
@@ -598,7 +596,9 @@ fn test_the_generated_header_is_far_only_where_far_code_is() {
 /// threshold is the `memcpy` call, as in the pin (`llc -mtriple=i386 -O2`:
 /// 64, 100 and 128 B at align 4 are `rep movsl`; 132 B and 300 B, at align 1
 /// or 4, are `calll memcpy`; X86 `getMaxInlineSizeThreshold` is 128). This test
-/// asserted `rep movsd` for a 300 B copy, which the call replaced.
+/// asserted `rep movsd` for a 300 B copy, which the call replaced. llrm-cc: the
+/// 300 B clear is `call memset` (the pin's llc on the same C), the 100 B copy
+/// `rep movsd`; m16 has no library to call and fills with `rep stosb`.
 #[test]
 fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
     let scratch = tempfile::tempdir().unwrap();
@@ -615,7 +615,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
         std::fs::read_to_string(out).unwrap()
     };
     let flat = listing("x86-m32");
-    assert!(flat.contains("rep stosd") && flat.contains("rep movsd"), "{flat}");
+    assert!(flat.contains("call memset_") && flat.contains("rep movsd"), "{flat}");
     assert!(flat.contains("call memcpy_"), "{flat}");
     assert!(
         !flat.contains("DGROUP")
@@ -623,7 +623,7 @@ fn test_m32_block_operations_are_rep_string_instructions_without_segments() {
         "{flat}"
     );
     let real = listing("x86-m16");
-    assert!(real.contains("rep stosd") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
+    assert!(real.contains("rep stosb") && real.lines().any(|line| line.trim() == "pop es"), "{real}");
 }
 
 /// A program the repository ships as an example or a benchmark compiles without
@@ -768,6 +768,10 @@ fn test_the_assembler_is_told_the_runtime_descriptions_fields() {
 /// SAME of every program, and a build whose output differs must be reported
 /// DIFF with a failing exit, or a change that moved a target's code would pass
 /// the gate silently.
+///
+/// llrm-cc: the gate compiles with `-c` under `LLRM_CC_TARGET` (llrm-cc links
+/// by default) and takes `IDENTITY_SAME_SOURCE=1` for the self-comparison,
+/// which its same-binary guard refused.
 #[test]
 fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_one() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -780,6 +784,7 @@ fn test_the_identity_gate_passes_a_build_against_itself_and_fails_a_different_on
         Command::new(root.join("tools/identity.sh"))
             .args(["c", compiler, new.to_str().unwrap()])
             .env("TMPDIR", scratch.path())
+            .env("IDENTITY_SAME_SOURCE", "1")
             .output()
             .unwrap()
     };
@@ -824,5 +829,23 @@ fn test_llrm_os_h_needs_no_include_path() {
             .output()
             .unwrap();
         assert!(done.status.success(), "llrm-c {mode}: {}", String::from_utf8_lossy(&done.stdout));
+    }
+}
+
+/// The link script compiled the float helpers with `target/release/llrm-cc`
+/// under the checkout, so a driver built in any other target directory could
+/// compile but not link: "No such file or directory:
+/// .../target/release/llrm-cc".
+#[test]
+fn test_a_program_links_with_a_driver_built_outside_the_checkouts_target_dir() {
+    let scratch = tempfile::tempdir().unwrap();
+    let source = scratch.path().join("p.c");
+    std::fs::write(&source, "int main(void) { return 0; }\n").unwrap();
+    for mode in ["-m16", "-m32"] {
+        let done = common::cc::llrm_c()
+            .args([mode, source.to_str().unwrap(), "-o", scratch.path().join("p.exe").to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "{mode}: {}", String::from_utf8_lossy(&done.stderr));
     }
 }

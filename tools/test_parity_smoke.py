@@ -684,6 +684,17 @@ assertion `left == right` failed: a node on the worklist is ready
     assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"
 
 
+def test_the_compile_smoke_drives_the_c_compiler_llrm_cc_names(tmp_path, monkeypatch):
+    """C2 switches the C compiler to llrm-cc: a smoke that compiled with the name "llrm-c" would still pass on a dist that has only the old binary."""
+    seen = []
+    monkeypatch.setattr(ps, "compile_ok", lambda command, env: seen.append(Path(command[0]).name))
+    for name in ("llrm-cc", "llrm-c"):
+        (tmp_path / name).write_text("")
+    ps.programs(tmp_path)
+    assert {"llrm-cc"} <= set(seen) and "llrm-c" not in seen
+
+
+
 def test_a_failing_scanner_names_the_stale_pages_in_its_cause():
     """docs_in_sync was refused at 01:41, 01:44 and 02:08 as a bare test name; w1 could not tell which page, and the scratch tree passed."""
     output = """\
@@ -711,6 +722,14 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
     assert failed == {"integration docs_in_sync::test_no_generated_page_is_stale"}
     cause = ps.causes_of(failed)
     assert "lsr_solve.md" in cause and "sinkcast.md" in cause and "RUST_BACKTRACE" not in cause
+
+
+def test_the_crates_whose_prs_blew_the_instruction_budget_have_a_ranking():
+    """llrm-codegen had no ranking, so a codegen PR ran its whole lib: 168 G of 60 G, #5325's batch refused four times."""
+    ranking = ps.selection().get("units", {})
+    for crate in ("llrm-codegen", "llrm-mir", "llrm-cc"):
+        assert ps.unit_tests(crate, 6.4, {k: [(n, s) for n, s in v["tests"]] for k, v in ranking.items()}), crate
+
 
 def test_a_cut_step_reports_the_instructions_it_ran(tmp_path, monkeypatch):
     """The budget read 0 G for a unit step that run_cut killed and ~120 G for one that finished (llrm-codegen, twice): SIGKILL took perf's counts with it."""

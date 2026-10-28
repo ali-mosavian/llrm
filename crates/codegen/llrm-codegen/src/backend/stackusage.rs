@@ -185,7 +185,7 @@ pub fn elide_checks(
     for procedure in procedures.iter_mut() {
         let Some(check) = &procedure.stack_check else { continue };
         let leaf = procedure.callees.is_empty()
-            && procedure.body.insns().iter().all(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Call));
+            && procedure.body.iter_insns().all(|one| one.what.as_ref().is_none_or(|what| what.op != Operation::Call));
         if leaf
             && !procedure.public
             && entered_directly(&procedure.name)

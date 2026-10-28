@@ -232,8 +232,14 @@ pub struct SelectionDAG {
     /// count as users.
     /// By node id; the arena only grows, so ids index it.
     deleted: Vec<bool>,
+    /// `delete_dead`'s worklist, kept between calls: a fresh `vec![node]` per
+    /// call was one allocation each (51K on jpeg_fixed -O2).
+    dead_work: Vec<u32>,
     /// The `IROrder` of the `SDLoc` in force: nodes made now carry it.
     pub cur_order: u32,
+    /// The source line of the IR instruction at each `IROrder` (0: none), from
+    /// the `!dbg` the builder read: `SDLoc`'s line.
+    pub lines: Vec<u32>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,
@@ -320,7 +326,9 @@ impl SelectionDAG {
             uses: Vec::new(),
             cse: Cse::default(),
             deleted: Vec::new(),
+            dead_work: Vec::new(),
             cur_order: 0,
+            lines: Vec::new(),
             replacements: Vec::new(),
             config,
             entry: zero,
@@ -401,7 +409,8 @@ impl SelectionDAG {
         &mut self,
         node: u32,
     ) {
-        let mut work = vec![node];
+        let mut work = std::mem::take(&mut self.dead_work);
+        work.push(node);
         while let Some(n) = work.pop() {
             // Chain and glue nodes stay: the builder keeps handles on some
             // (the pin protects them with `HandleSDNode`).
@@ -424,6 +433,7 @@ impl SelectionDAG {
             self.deleted[n as usize] = true;
             work.extend(self.nodes[n as usize].ops.iter().map(|op| op.node));
         }
+        self.dead_work = work;
     }
 
     /// A load or store a combine replaced (`CombineTo`): the pin removes it at

@@ -21,8 +21,9 @@
 //! dominator tree, `greedy/hoistspill.rs` for the decision) runs after the
 //! allocation; `hoistSpillInsideBB`, `eliminateRedundantSpills` and
 //! `coalesceStackAccess` are translated, and `StackSlotColoring::
-//! RemoveDeadStores` in `spiller::_identities_dropped`. Exit: the snippets
-//! translated.
+//! RemoveDeadStores` in `spiller::_identities_dropped`. The fact: the pin
+//! spilled 62 times in 61 bench functions (m32 -O2, same MIR, 2026-10-27) and
+//! found no snippet. Exit: the snippets translated.
 //!
 //! DEVIATE D-G: a spilled phi value is not read from its home cell
 //! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
@@ -175,6 +176,8 @@ pub struct InlineSpiller<'a> {
     folded: usize,
     failed: bool,
     spilled: Vec<u32>,
+    /// The x87 registers a float spill's pieces may take, from the description.
+    rfp: Vec<RegId>,
     /// `Original` (InlineSpiller.cpp#L1460): the register every sibling of the
     /// one being spilled descends from, whose home they all share.
     original: u32,
@@ -245,6 +248,7 @@ impl<'a> InlineSpiller<'a> {
             folded: 0,
             failed: false,
             spilled: Vec::new(),
+            rfp: Vec::new(),
             original: 0,
             reg: 0,
             key: 0,
@@ -533,6 +537,7 @@ impl<'a> InlineSpiller<'a> {
             let mut folded = (**one).clone();
             folded.what = Some(Semantics { sources: vec![Loc::Mem(cell)], ..what.clone() });
             folded.uses.retain(|value| *value != reg);
+            folded.undefs.retain(|value| *value != reg);
             folded.symbol = Some(false);
             changed.push(Arc::new(folded));
         }
@@ -721,7 +726,7 @@ impl InlineSpiller<'_> {
             lis.insert_instr_after(block, renamed[renamed.len() - 1].id(), store);
             self.stores += 1;
         }
-        self.tables.orders.borrow_mut().insert(new, crate::backend::allocate::RFP.to_vec());
+        self.tables.orders.borrow_mut().insert(new, self.rfp.clone());
         self.tables.widths.borrow_mut().insert(new, 10);
         self.tables.float_bytes.borrow_mut().insert(new, bytes);
         NATIVE_UNITS.with(|one| one.set(one.get() + 1));
@@ -1416,6 +1421,9 @@ impl Spiller for InlineSpiller<'_> {
     ) {
         let SpillContext { lis, matrix, vrai, shrunk } = ctx;
         self.spilled.push(reg);
+        if self.rfp.is_empty() {
+            self.rfp = matrix.tri().regs.rfp_registers().to_vec();
+        }
         #[cfg(test)]
         crate::liveness::liveintervals::COMPUTED.with(|one| one.borrow_mut().clear());
         let first_new = new_vregs.len();

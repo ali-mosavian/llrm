@@ -45,6 +45,64 @@ pub enum FpClass {
 /// An opaque `MachineMemOperand`.
 pub type MemRef = u32;
 
+/// `SmallPtrSet<const SDNode *> &Visited` of `hasPredecessorHelper`: the nodes
+/// seen, as one bit per node number so a membership test costs one load (a
+/// list searched per operand made a walk of n nodes cost n squared).
+#[derive(Clone, Debug, Default)]
+pub struct Visited {
+    bits: Vec<u64>,
+    count: usize,
+}
+
+impl Visited {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A set holding `node`.
+    pub fn of(node: u32) -> Self {
+        let mut set = Self::new();
+        set.insert(node);
+        set
+    }
+
+    pub fn contains(
+        &self,
+        node: u32,
+    ) -> bool {
+        self.bits.get(node as usize / 64).is_some_and(|word| word >> (node % 64) & 1 != 0)
+    }
+
+    /// Adds `node`; false where it was there (`Visited.insert(N).second`).
+    pub fn insert(
+        &mut self,
+        node: u32,
+    ) -> bool {
+        let at = node as usize / 64;
+        if at >= self.bits.len() {
+            self.bits.resize(at + 1, 0);
+        }
+        let mask = 1_u64 << (node % 64);
+        let new = self.bits[at] & mask == 0;
+        self.bits[at] |= mask;
+        self.count += usize::from(new);
+        new
+    }
+
+    pub fn len(&self) -> usize {
+        self.count
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.bits.clear();
+        self.count = 0;
+    }
+}
+
 pub trait Dag {
     fn opcode(
         &self,
@@ -314,7 +372,7 @@ pub trait Dag {
     fn has_predecessor_helper(
         &self,
         node: u32,
-        visited: &mut Vec<u32>,
+        visited: &mut Visited,
         worklist: &mut Vec<u32>,
         max: usize,
     ) -> bool;

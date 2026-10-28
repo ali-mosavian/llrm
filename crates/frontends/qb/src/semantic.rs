@@ -526,6 +526,7 @@ pub struct Options {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
+    pub run_time_module: bool,
     /// Every procedure uses the runtime's frame entry and exit.
     pub runtime_frames: bool,
     /// Errors in code without a landing pad, as a module handler's, report
@@ -3889,7 +3890,21 @@ impl Compiler {
                     let (file, file_type) = self.expression(file)?;
                     let file = self.convert(file, file_type, INTEGER)?;
                     let Some(target) = target else {
-                        return self.unsupported("GET or PUT without a variable");
+                        // The FIELD buffer is the record: B$GET1/B$PUT1 take
+                        // the channel, B$GET2/B$PUT2 add the record number.
+                        let mut operands = vec![file];
+                        if let Some(position) = position {
+                            let (position, position_type) = self.expression(position)?;
+                            operands.push(self.convert(position, position_type, LONG)?);
+                        }
+                        let routine = match (*write, position.is_some()) {
+                            (false, false) => "B$GET1",
+                            (true, false) => "B$PUT1",
+                            (false, true) => "B$GET2",
+                            (true, true) => "B$PUT2",
+                        };
+                        self.emit_runtime_call(routine, Vec::new(), operands);
+                        continue;
                     };
                     let (target, target_type) = self.destination(target)?;
                     let address = self.far_address(target, target_type);
@@ -4735,6 +4750,40 @@ impl Compiler {
                         self.terminate("unreachable", Vec::new(), Vec::new())?;
                         let continuation = self.new_block();
                         self.select_block(continuation);
+                    }
+                    "PCOPY" => {
+                        let [from, to] = arguments.as_slice() else {
+                            return self.fail("PCOPY expects a source page and a destination page");
+                        };
+                        let mut pages = Vec::new();
+                        for page in [from, to] {
+                            let (page, page_type) = self.expression(page)?;
+                            pages.push(self.convert(page, page_type, INTEGER)?);
+                        }
+                        self.emit_runtime_call("B$PCPY", Vec::new(), pages);
+                    }
+                    "FIELD" => {
+                        // B$FLDP(channel), then B$FIEL(width, the string
+                        // variable's near descriptor) for each pair.
+                        let Some((file, pairs)) = arguments.split_first() else {
+                            return self.fail("FIELD expects a file number");
+                        };
+                        let (file, file_type) = self.expression(file)?;
+                        let file = self.convert(file, file_type, INTEGER)?;
+                        self.emit_runtime_call("B$FLDP", Vec::new(), vec![file]);
+                        for pair in pairs.chunks(2) {
+                            let [width, variable] = pair else {
+                                return self.fail("FIELD expects width AS variable pairs");
+                            };
+                            let (width, width_type) = self.expression(width)?;
+                            let width = self.convert(width, width_type, INTEGER)?;
+                            let (place, variable_type) = self.destination(variable)?;
+                            if variable_type != STRING {
+                                return self.fail("FIELD needs a variable-length string variable");
+                            }
+                            let descriptor = self.near_string_address(place);
+                            self.emit_runtime_call("B$FIEL", Vec::new(), vec![width, descriptor]);
+                        }
                     }
                     "CHAIN" => {
                         let [file] = arguments.as_slice() else {
@@ -10854,7 +10903,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -10862,7 +10911,8 @@ impl Compiler {
             } else {
                 "inline"
             },
-            if self.own_frames() { ",\"frames\":\"own\"" } else { "" }
+            if self.own_frames() { ",\"frames\":\"own\"" } else { "" },
+            if self.options.run_time_module { ",\"run_time_module\":true" } else { "" }
         )
         .unwrap();
         out
