@@ -505,10 +505,11 @@ pub fn extensions(
 /// target prices the pair lower (`peephole.peep`).
 ///
 /// DEVIATE ZL1 (owner w1, exit: the old selector goes; the DAG path, the
-/// default, does not run it): the pin keeps `movzx` on the i486 as on every x86; this pair is two
-/// clocks against three there. Gated on `Profile::clears_before_byte_load`, so
-/// off for size and where the extension is no slower or the partial register
-/// stalls. x_life -O2 m32 has 12 more `xor` than the pin from it.
+/// default, does not run it): the pin keeps `movzx` on the i486 as on every
+/// x86; this pair is two clocks against three there. Gated on
+/// `Profile::clears_before_byte_load`, so off for size and where the extension
+/// is no slower or the partial register stalls. x_life -O2 m32 has 12 more
+/// `xor` than the pin from it.
 pub fn zeroed_loads(
     rules: &peep::Rules,
     body: &LirBody,
