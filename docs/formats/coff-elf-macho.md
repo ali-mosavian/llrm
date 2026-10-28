@@ -108,7 +108,7 @@ symbol or a section has `r_extern = 0`, and entries are written last first, as L
 
 | format | debug |
 |---|---|
-| ELF, Mach-O | `llrm_debuginfo::expanded` adds DWARF sections; a format other than DWARF is refused ("this object format cannot carry CodeView") |
+| ELF, Mach-O | `llrm_dwarf::expanded` adds DWARF sections; a format other than DWARF is refused ("this object format cannot carry CodeView") |
 | COFF | CodeView C13: `.debug$S` and `.debug$T` (`llrm-coff/src/codeview`), whichever `-g` flavor is asked |
 
 Mach-O names are `__debug_info` and so on in segment `__DWARF`. An offset of one debug section into another

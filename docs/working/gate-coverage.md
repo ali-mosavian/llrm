@@ -49,7 +49,7 @@ Every layer prints its failures as names and the gate compares them with the hea
 | llrm-lir | 14 | 3 | 4 |
 | llrm-coff32 | 10 | 1 | 6 |
 | llrm-x86-m32 | 15 | 0 | 0 |
-| llrm-debuginfo | 14 | 0 | 0 |
+| llrm-dwarf | 14 | 0 | 0 |
 | llrm-bcdriver | 0 | 1 | 14 |
 | llrm-alloc | 0 | 1 | 8 |
 | llrm-macho | 7 | 0 | 0 |
@@ -59,7 +59,6 @@ Every layer prints its failures as names and the gate compares them with the hea
 | llrm-elf64 | 5 | 0 | 0 |
 | llrm-object | 3 | 0 | 0 |
 | llrm-coff64 | 3 | 0 | 0 |
-| llrm-instr | 2 | 0 | 0 |
 | llrm-x86-m64 | 2 | 0 | 0 |
 | llrm-elf-arm64 | 2 | 0 | 0 |
 | llrm-env | 1 | 0 | 0 |

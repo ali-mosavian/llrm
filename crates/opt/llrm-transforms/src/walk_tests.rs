@@ -299,6 +299,69 @@ b0:
     assert_eq!(runs(LINEAR), 0, "a count-down waits for nothing");
 }
 
+/// A caller that took a tree recursion's peeled copies is a body with
+/// self-copies: the equality fold of a multi-use difference is for it too. It
+/// was left out, and recsum -O1 kept the chain `n-1`, `n-2`, ... (m16 +288 B,
+/// m32 +203 B).
+#[test]
+fn test_a_caller_of_a_peeled_recursion_is_a_body_with_self_copies() {
+    use llrm_mir::program::ProgramPass;
+    let flagged = |name: &str| {
+        let mut module = parsed(FIB_TOP);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut analyses = Default::default();
+                let mut walk = crate::walk::Walk {
+                    inline: crate::inline::Threshold { recursive: true, ..Default::default() },
+                    simplify: Box::new(|_, _, _, _| {}),
+                };
+                walk.run(program, &mut analyses).expect("the walk runs");
+                program
+                    .modules[0]
+                    .function_mut(name)
+                    .expect("the function")
+                    .1
+                    .attrs
+                    .iter()
+                    .any(
+                        |attr| matches!(
+                            attr,
+                            llrm_mir::opcode::Attribute::Flag(flag) if flag == crate::walk::SELF_COPIED
+                        ),
+                    )
+            },
+        )
+        .expect("lent")
+    };
+    assert!(flagged("top"), "top took fib's peeled copies");
+}
+
+const FIB_TOP: &str = "define internal i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %base, label %rec
+
+base:
+  ret i32 %n
+
+rec:
+  %a = sub i32 %n, 1
+  %b = sub i32 %n, 2
+  %x = call i32 @fib(i32 %a)
+  %y = call i32 @fib(i32 %b)
+  %s = add i32 %x, %y
+  ret i32 %s
+}
+
+define i32 @top(i32 %n) {
+b0:
+  %r = call i32 @fib(i32 %n)
+  ret i32 %r
+}
+";
+
 /// A tail-recursive function called once: tail-call elimination makes its
 /// loop, and the caller then inlines it (LLVM's CGSCC order, which the pin
 /// follows). `recursive` and the call counts were taken before the walk, so
@@ -559,7 +622,9 @@ b0:
     assert!(peeled <= 2, "power was copied into itself, {peeled} remainders:\n{power}");
 }
 
-const CHOP: &str = "@values = internal global [64 x i32] zeroinitializer
+// Not internal: an internal table nothing stores to is constant, and its zeros
+// fold the loads away.
+const CHOP: &str = "@values = global [64 x i32] zeroinitializer
 
 define internal i32 @chop(i32 %lo, i32 %hi) {
 b0:
@@ -1471,4 +1536,45 @@ b0:
     let text = crate::testing::printed(&module);
     let body = text.split("define").nth(1).unwrap_or_default();
     assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
+}
+
+/// far6.bas (`far_poke_scanned_variable`): the split ahead of the walk made a
+/// static a stack slot while another body forged a pointer into the data
+/// segment (`DEF SEG = VARSEG(w)`) and POKEd it: 21257 where BC printed 100.
+#[test]
+fn test_module_ipo_keeps_a_static_in_memory_while_a_body_forges_a_selector() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "@n = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %a) norecurse {
+b0:
+  store i16 %a, ptr @n
+  %x = load i16, ptr @n
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define i8 @g(i16 %o) {
+b0:
+  %s = inttoptr i16 %o to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  ret i8 %v
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let body = text.split("define").nth(1).unwrap_or_default();
+    assert!(body.contains("ptr @n") && !body.contains("alloca i16"), "{text}");
 }

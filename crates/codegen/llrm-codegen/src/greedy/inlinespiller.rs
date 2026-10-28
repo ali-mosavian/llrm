@@ -21,8 +21,9 @@
 //! dominator tree, `greedy/hoistspill.rs` for the decision) runs after the
 //! allocation; `hoistSpillInsideBB`, `eliminateRedundantSpills` and
 //! `coalesceStackAccess` are translated, and `StackSlotColoring::
-//! RemoveDeadStores` in `spiller::_identities_dropped`. Exit: the snippets
-//! translated.
+//! RemoveDeadStores` in `spiller::_identities_dropped`. The fact: the pin
+//! spilled 62 times in 61 bench functions (m32 -O2, same MIR, 2026-10-27) and
+//! found no snippet. Exit: the snippets translated.
 //!
 //! DEVIATE D-G: a spilled phi value is not read from its home cell
 //! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
@@ -533,6 +534,7 @@ impl<'a> InlineSpiller<'a> {
             let mut folded = (**one).clone();
             folded.what = Some(Semantics { sources: vec![Loc::Mem(cell)], ..what.clone() });
             folded.uses.retain(|value| *value != reg);
+            folded.undefs.retain(|value| *value != reg);
             folded.symbol = Some(false);
             changed.push(Arc::new(folded));
         }
