@@ -1777,7 +1777,7 @@ name = "lir machinecp"
 ratio = 2.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w15"
-why = "measured 2.1 -> 5.4 Minstr (x2.53) after #5802; not new, under the floor on base while the threaded state machine doubled the compile. Cause (callgrind, llrm-llc at N=128/256): machinecp::propagated 4.9M -> 12.0M Ir, of which liveness::lanewise 4.5M -> 13.1M (x2.9, dead_at_exit): the lane-liveness worklist solve runs over a dispatch block with N back edges, so each round revisits N predecessors. The walks themselves are x1.5-1.9"
+why = "measured 2.1 -> 5.4 Minstr (x2.53) after #5802; not new, under the floor on base while the threaded state machine doubled the compile. Cause (callgrind, llrm-llc at N=128/256): machinecp::propagated 4.9M -> 12.0M Ir, of which liveness::lanewise 4.5M -> 13.1M (x2.9, dead_at_exit): the lane-liveness worklist solve runs over a dispatch block with N back edges, so each round revisits N predecessors. The walks themselves are x1.5-1.9. ~1% of the compile; the pin runs no liveness solve here, so no fix (coordinator, 10-28)"
 
 [[debt]]
 kind = "steps"
