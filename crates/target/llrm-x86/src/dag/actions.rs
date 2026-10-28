@@ -290,7 +290,7 @@ impl TargetLowering {
         for vt in ALL {
             self.set_ops(
                 &[
-                    SMin, SMax, UMin, UMax, Abs, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat, SMulFix, UMulFix,
+                    SMin, SMax, UMin, UMax, Abs, AbsMinPoison, FShl, FShr, SAddSat, UAddSat, SSubSat, USubSat, SMulFix, UMulFix,
                     SMulFixSat, UMulFixSat, SShlSat, UShlSat,
                 ],
                 &[vt],

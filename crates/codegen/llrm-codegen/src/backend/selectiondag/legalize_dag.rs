@@ -460,7 +460,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::FShl | ISD::FShr => Some(vec![super::expand_funnel::expand_funnel_shift(self.dag, self.tli, node)]),
             ISD::SShlSat | ISD::UShlSat => Some(vec![super::expand_fixed::expand_shl_sat(self.dag, self.tli, node)]),
-            ISD::Abs => Some(vec![self.expand_abs(node)]),
+            ISD::Abs | ISD::AbsMinPoison => Some(vec![self.expand_abs(node)]),
             ISD::CtPop => self.expand_ctpop(node).map(|result| vec![result]),
             ISD::BSwap => self.expand_bswap(node).map(|result| vec![result]),
             ISD::BitReverse => self.expand_bitreverse(node).map(|result| vec![result]),
@@ -503,6 +503,10 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> SDValue {
         let vt = self.dag.value_type(node);
         let x = self.dag.operand(node, 0);
+        // `expandABS` falls back from ABS_MIN_POISON to ABS when it is legal or custom.
+        if self.dag.opcode(node) == ISD::AbsMinPoison && self.tli.is_operation_legal_or_custom(ISD::Abs, vt) {
+            return self.dag.get_node(ISD::Abs, vt, &[x]);
+        }
         if self.tli.is_operation_legal(ISD::Sub, vt) {
             for op in [ISD::SMax, ISD::UMin] {
                 if self.tli.is_operation_legal(op, vt) {
