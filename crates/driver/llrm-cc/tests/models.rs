@@ -209,3 +209,56 @@ fn a_static_huge_object_past_a_segment_is_consecutive_segments() {
     let said = String::from_utf8_lossy(&ran.stdout).replace("\r\n", "\n");
     assert_eq!(said.trim().replace('\n', " "), "12748993 249 0 89 9");
 }
+
+/// tests/run/c programs written for llrm-c use `__far`/`__huge` at m32 (one
+/// address space: they name nothing) and the OS header's
+/// `PHYSICAL_TEXT_SCREEN`; the x86_32-dos row had neither, so 8 of them
+/// stopped at "expected ';' after top level declarator".
+#[test]
+fn the_flat_dos_row_reads_far_and_huge_and_names_the_text_screen() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-flat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("a.c"),
+        "short __far a[4];\nlong __huge *p;\nint f(void) { volatile unsigned char *s = (unsigned char *)PHYSICAL_TEXT_SCREEN; return a[1] + (p != 0) + *s; }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_32-dos")
+        .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+        .args(["-O1", "-w", "-S", "-o"])
+        .arg(dir.join("a.s"))
+        .arg(dir.join("a.c"))
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+}
+
+/// Plain `char` is signed on the DOS rows and unsigned under `-mabi=watcom`, as
+/// llrm-c had it: a stored 251 read -5 where watcom_far_sum.c wants 251 (it
+/// printed 1229 for 1485), and copy_runs.c wants the signed sum.
+#[test]
+fn plain_char_is_unsigned_only_under_the_watcom_abi() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("llrm-cc-char-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.c"), "int f(char *p) { return *p; }\n").unwrap();
+    for (row, plain) in [("x86_16-dos", "-mabi=cdecl"), ("x86_32-dos", "-mabi=sysv")] {
+        for (abi, unsigned) in [(plain, false), ("-mabi=watcom", true)] {
+            let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+                .env("LLRM_CC_TARGET", row)
+                .env("LLRM_LLC", root.join("target/release/llrm-llc"))
+                .args(["-O1", "-w", abi, "-S", "-o"])
+                .arg(dir.join("a.s"))
+                .arg(dir.join("a.c"))
+                .output()
+                .unwrap();
+            assert!(run.status.success(), "{row} {abi}: {}", String::from_utf8_lossy(&run.stderr));
+            let listing = std::fs::read_to_string(dir.join("a.s")).unwrap();
+            assert_eq!(listing.contains("movzx"), unsigned, "{row} {abi}: {listing}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

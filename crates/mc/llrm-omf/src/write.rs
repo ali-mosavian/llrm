@@ -6,7 +6,7 @@ use std::borrow::Cow;
 use std::fmt;
 use std::rc::Rc;
 
-use llrm_object::{Definition, Kind, Object, Role, Section, Target};
+use llrm_object::{DebugSection, Definition, Fix, FixupKind, FixupKindInfo, Object, Role, Section, Target};
 
 use crate::omf;
 
@@ -95,7 +95,7 @@ impl Comdats {
             own = (own ^ 0xff).wrapping_mul(0x0000_0100_0000_01b3);
         };
         feed(object.name.as_bytes());
-        for section in object.sections.iter().filter(|section| section.role != Role::Debug) {
+        for section in object.sections.iter().filter(|section| !matches!(section.role, Role::Debug(_))) {
             feed(section.name.as_bytes());
             feed(&section.image);
             let mut text = Vec::with_capacity(48);
@@ -200,32 +200,83 @@ fn class(section: &Section) -> &'static str {
         (Role::Bss, true) => "BSS",
         (Role::Bss, false) => "FAR_BSS",
         (Role::Stack, _) => "STACK",
-        (Role::Debug, _) if section.name == crate::codeview::SYMBOLS => "DEBSYM",
-        (Role::Debug, _) if section.name.starts_with(".debug_") => "DWARF",
-        (Role::Debug, _) => "DEBTYP",
+        (Role::InitFunctions, _) => "DATA",
+        (Role::Debug(DebugSection::CodeViewSymbols), _) => "DEBSYM",
+        (Role::Debug(DebugSection::Dwarf), _) => "DWARF",
+        (Role::Debug(DebugSection::CodeViewTypes), _) => "DEBTYP",
     }
 }
 
+/// What a target tells the OMF writer of its fixup kinds (LLVM's
+/// `MCObjectTargetWriter`): the generic kinds and the segmented pair are the
+/// writer's own.
+pub trait OmfTargetWriter {
+    /// What `kind` says of its field.
+    fn kind_info(
+        &self,
+        kind: FixupKind,
+    ) -> FixupKindInfo;
+    /// Whether `kind` is a call or jump's displacement.
+    fn is_branch(
+        &self,
+        kind: FixupKind,
+    ) -> bool;
+}
+
+/// The generic kinds alone: what the tests write without a target.
+#[cfg(test)]
+pub(crate) struct GenericOmf;
+
+#[cfg(test)]
+impl OmfTargetWriter for GenericOmf {
+    fn kind_info(
+        &self,
+        kind: FixupKind,
+    ) -> FixupKindInfo {
+        kind.info()
+    }
+
+    fn is_branch(
+        &self,
+        _: FixupKind,
+    ) -> bool {
+        false
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn write_generic(object: &Object) -> Result<Vec<u8>, Error> {
+    write(object, &GenericOmf)
+}
+
 /// The location code of a field, and whether it is self-relative.
-fn location(kind: Kind) -> Result<(u8, bool), Error> {
-    Ok(match kind {
-        Kind::Abs { width: 2 } => (OFFSET, false),
-        Kind::Abs { width: 4 } => (OFFSET32, false),
-        Kind::SegmentBase => (BASE, false),
-        Kind::FarPointer => (POINTER, false),
-        Kind::PcRel { width, from } if width == from && matches!(width, 2 | 4) => {
+fn location(
+    writer: &dyn OmfTargetWriter,
+    fix: Fix,
+) -> Result<(u8, bool), Error> {
+    let width = writer.kind_info(fix.kind).bits / 8;
+    Ok(match (fix.kind, fix.pc_rel) {
+        (FixupKind::DATA_2, false) => (OFFSET, false),
+        (FixupKind::DATA_4, false) => (OFFSET32, false),
+        (FixupKind::SEGMENT_BASE, false) => (BASE, false),
+        (FixupKind::FAR_POINTER, false) => (POINTER, false),
+        (FixupKind::DATA_2 | FixupKind::DATA_4, true) if fix.pc_bias == usize::from(width) => {
             (if width == 2 { OFFSET } else { OFFSET32 }, true)
         }
-        Kind::Branch { width: 2 } => (OFFSET, true),
-        Kind::Branch { width: 4 } => (OFFSET32, true),
-        other => return Err(unencodable(format!("OMF has no fixup for {other:?}"))),
+        (kind, true) if writer.is_branch(kind) && width == 2 => (OFFSET, true),
+        (kind, true) if writer.is_branch(kind) && width == 4 => (OFFSET32, true),
+        _ => return Err(unencodable(format!("OMF has no fixup for {fix:?}"))),
     })
 }
 
 /// Bytes of a field that hold a value: a far pointer's offset is its first two.
-fn packed(kind: Kind) -> usize {
-    match kind {
-        Kind::Abs { width: 4 } | Kind::PcRel { width: 4, .. } | Kind::Branch { width: 4 } => 4,
+fn packed(
+    writer: &dyn OmfTargetWriter,
+    fix: Fix,
+) -> usize {
+    match fix.kind {
+        FixupKind::FAR_POINTER | FixupKind::SEGMENT_BASE => 2,
+        kind if writer.kind_info(kind).bits == 32 => 4,
         _ => 2,
     }
 }
@@ -253,6 +304,7 @@ struct Resolved {
 }
 
 fn resolved(
+    writer: &dyn OmfTargetWriter,
     object: &Object,
     extern_index: &[usize],
     comdats: &Comdats,
@@ -260,7 +312,7 @@ fn resolved(
     at: usize,
 ) -> Result<Resolved, Error> {
     let reloc = section.relocs.iter().find(|one| one.at == at).expect("the caller names a fixup");
-    let (loc, relative) = location(reloc.kind)?;
+    let (loc, relative) = location(writer, reloc.fix())?;
     let in_group = |section: usize| object.omf_groups.iter().position(|group| group.members.contains(&section));
     let (method, datum, group) = match reloc.target {
         Target::OmfGroup(group) => (GROUP_TARGET, group as i64 + 1, Some(group)),
@@ -289,8 +341,8 @@ fn resolved(
     // linker that writes the index of the fixup's frame (jwlink's
     // `FindGroupIdx`) finds none for a frame that is the segment itself
     // where the segment is not the group's first, and writes 0.
-    let through_group =
-        matches!(loc, OFFSET | OFFSET32) && !relative || section.role == Role::Debug && matches!(loc, POINTER | BASE);
+    let through_group = matches!(loc, OFFSET | OFFSET32) && !relative
+        || matches!(section.role, Role::Debug(_)) && matches!(loc, POINTER | BASE);
     let subrecord = match group {
         Some(group) if through_group => {
             [vec![GROUP_FRAME << 4 | 4 | method], omf::as_index(group as i64 + 1)?, omf::as_index(datum)?].concat()
@@ -406,25 +458,26 @@ fn linsym(
 /// Section `index`'s LEDATA and FIXUPP records, or its COMDAT and FIXUPP
 /// records where `named`.
 fn ledata(
+    writer: &dyn OmfTargetWriter,
     object: &Object,
     extern_index: &[usize],
     comdats: &Comdats,
     named: Option<&Named>,
     index: usize,
 ) -> Result<Vec<Rc<omf::Record>>, Error> {
-    let bits = object.arch.bits();
+    let bits = u32::from(object.bits);
     let section = &object.sections[index];
     let mut at_sorted: Vec<usize> = section.relocs.iter().map(|one| one.at).collect();
     at_sorted.sort_unstable();
     let mut image = section.image.clone();
     let mut subrecords = std::collections::BTreeMap::new();
     for &at in &at_sorted {
-        let made = resolved(object, extern_index, comdats, section, at)?;
-        let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").kind;
-        if kind == Kind::SegmentBase && made.value != 0 {
+        let made = resolved(writer, object, extern_index, comdats, section, at)?;
+        let kind = section.relocs.iter().find(|one| one.at == at).expect("sorted from them").fix();
+        if kind.kind == FixupKind::SEGMENT_BASE && made.value != 0 {
             return Err(unencodable(format!("{}: a segment base with an addend", section.name)));
         }
-        pack_field(&mut image, at, packed(kind), made.value);
+        pack_field(&mut image, at, packed(writer, kind), made.value);
         subrecords.insert(at, (made.subrecord, kind));
     }
     let (mut out, mut placed) = (Vec::new(), 0);
@@ -434,7 +487,7 @@ fn ledata(
         while start < end {
             let mut stop = end.min(start + CHUNK);
             for &at in &at_sorted {
-                if at < stop && stop < at + subrecords[&at].1.width() {
+                if at < stop && stop < at + usize::from(writer.kind_info(subrecords[&at].1.kind).bits / 8) {
                     stop = at;
                 }
             }
@@ -452,7 +505,7 @@ fn ledata(
                 .filter(|&&at| start <= at && at < stop)
                 .map(|&at| {
                     let (subrecord, kind) = &subrecords[&at];
-                    let (loc, relative) = location(*kind).expect("resolved above");
+                    let (loc, relative) = location(writer, *kind).expect("resolved above");
                     let offset = at - start;
                     let lead = 0x80 | if relative { 0 } else { 0x40 } | (loc as usize) << 2 | offset >> 8;
                     [&[lead as u8, (offset & 0xFF) as u8][..], subrecord].concat()
@@ -527,7 +580,10 @@ fn debug_definition(
 }
 
 /// `object` as an OMF object file.
-pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
+pub fn write(
+    object: &Object,
+    writer: &dyn OmfTargetWriter,
+) -> Result<Vec<u8>, Error> {
     let turbo = matches!(
         &object.debug,
         Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
@@ -553,7 +609,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         // linker joins and relocates.
         Some(info) if dwarf => {
             let mut lines = crate::codeview::lines(object, info)?;
-            let expanded = llrm_debuginfo::expanded(object, info).map_err(|error| unencodable(error.0))?;
+            let expanded = llrm_dwarf::expanded(object, info).map_err(|error| unencodable(error.0))?;
 
             lines.resize(expanded.sections.len(), Vec::new());
             (Cow::Owned(expanded), lines)
@@ -568,7 +624,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
         }
     };
     let object = &*object;
-    let bits = object.arch.bits();
+    let bits = u32::from(object.bits);
     if !matches!(bits, 16 | 32) {
         return Err(unencodable(format!("OMF has no {bits}-bit records")));
     }
@@ -644,7 +700,7 @@ pub fn write(object: &Object) -> Result<Vec<u8>, Error> {
     }
     let mut data = Vec::new();
     for index in 0..object.sections.len() {
-        data.extend(ledata(object, &extern_index, &comdats, named_comdats.get(&index), index)?);
+        data.extend(ledata(writer, object, &extern_index, &comdats, named_comdats.get(&index), index)?);
     }
 
     let mut records = vec![Rc::new(omf::Record::new(omf::THEADR, string(&object.name)))];
@@ -783,9 +839,13 @@ mod tests {
         }
     }
 
-    use llrm_object::{Arch, Binding, Reloc, Symbol};
+    use llrm_object::{Binding, Reloc, Symbol};
 
     use super::*;
+
+    fn write(object: &Object) -> Result<Vec<u8>, Error> {
+        write_generic(object)
+    }
 
     fn symbol(
         name: &str,
@@ -804,13 +864,13 @@ mod tests {
     }
 
     fn object(
-        arch: Arch,
+        bits: u8,
         sections: Vec<Section>,
         symbols: Vec<Symbol>,
     ) -> Object {
         Object {
             name: "t.c".into(),
-            arch,
+            bits,
             sections,
             symbols,
             omf_groups: Vec::new(),
@@ -823,7 +883,7 @@ mod tests {
     /// as an object named `t.c`.
     fn with_helper(code: Vec<u8>) -> Object {
         let mut made = object(
-            Arch::I8086,
+            16u8,
             vec![section("T", code, Vec::new())],
             vec![Symbol {
                 name: "helper".into(),
@@ -883,12 +943,8 @@ mod tests {
     fn a_fixup_is_never_split_between_ledata_records() {
         let size = CHUNK * 3;
         let starts = [CHUNK - 1, 2 * CHUNK - 2];
-        let relocs = starts
-            .iter()
-            .map(|&at| Reloc { at, kind: Kind::FarPointer, target: Target::Symbol(0), addend: 0 })
-            .collect();
-        let made =
-            object(Arch::I8086, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
+        let relocs = starts.iter().map(|&at| Reloc::new(at, Fix::FAR_POINTER, Target::Symbol(0), 0)).collect();
+        let made = object(16u8, vec![section("T", vec![0; size], relocs)], vec![symbol("f", Definition::Undefined)]);
         let bytes = write(&made).unwrap();
         let records = crate::omf::parse(&bytes).unwrap();
         let cuts: Vec<usize> = records
@@ -907,9 +963,9 @@ mod tests {
     /// holds the addend.
     #[test]
     fn a_call_is_a_self_relative_fixup_against_an_extern() {
-        let call = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 4 }, target: Target::Symbol(0), addend: -2 };
+        let call = Reloc::new(1, Fix::pc_rel(4, 4), Target::Symbol(0), -2);
         let made = object(
-            Arch::I386,
+            32u8,
             vec![section("T", vec![0xE8, 0, 0, 0, 0], vec![call])],
             vec![symbol("f", Definition::Undefined)],
         );
@@ -926,15 +982,30 @@ mod tests {
     /// once the runtime was linked in: the debug fixup's frame was the data
     /// segment, which is not at its group's base there (`_NULL` comes first),
     /// so no group matched it. A data symbol's address in the debug section
+    /// The class of a debug segment came from its name (`$$SYMBOLS`, a
+    /// `.debug_` prefix), so a CodeView symbols section under any other
+    /// name was written as DEBTYP; the role says it now.
+    #[test]
+    fn a_debug_segments_class_comes_from_its_role_not_its_name() {
+        let classed = |name: &str, kind| {
+            let mut debug = section(name, vec![0; 4], vec![]);
+            debug.role = Role::Debug(kind);
+            class(&debug)
+        };
+        assert_eq!(classed("whatever", DebugSection::CodeViewSymbols), "DEBSYM");
+        assert_eq!(classed("$$SYMBOLS", DebugSection::CodeViewTypes), "DEBTYP");
+        assert_eq!(classed("x", DebugSection::Dwarf), "DWARF");
+    }
+
     /// is addressed through its group.
     #[test]
     fn a_debug_address_in_a_group_is_addressed_through_the_group() {
         let mut data = section("D", vec![0; 4], vec![]);
         data.role = Role::Data;
-        let far = Reloc { at: 2, kind: Kind::FarPointer, target: Target::Section(0), addend: 0 };
+        let far = Reloc::new(2, Fix::FAR_POINTER, Target::Section(0), 0);
         let mut debug = section("$$SYMBOLS", vec![0; 8], vec![far]);
-        debug.role = Role::Debug;
-        let mut made = object(Arch::I8086, vec![data, debug], vec![]);
+        debug.role = Role::Debug(DebugSection::CodeViewSymbols);
+        let mut made = object(16u8, vec![data, debug], vec![]);
         made.omf_groups = vec![llrm_object::OmfGroup { name: "DGROUP".into(), members: vec![0] }];
         let records = crate::omf::parse(&write(&made).unwrap()).unwrap();
         let fixupp = records.iter().filter(|one| one.r#type == omf::FIXUPP).last().unwrap();
@@ -945,7 +1016,7 @@ mod tests {
     /// A 64-bit object was written with 16-bit records.
     #[test]
     fn a_64_bit_object_is_refused() {
-        let made = object(Arch::X8664, vec![section("T", vec![0xC3], vec![])], vec![]);
+        let made = object(64u8, vec![section("T", vec![0xC3], vec![])], vec![]);
         assert!(matches!(write(&made), Err(Error::Unencodable(text)) if text.contains("64-bit")));
     }
 
@@ -953,7 +1024,7 @@ mod tests {
     /// one byte; the writer refuses it, and 64K exactly keeps the B bit.
     #[test]
     fn a_16_bit_segment_past_64k_is_refused() {
-        let big = |bytes: usize| object(Arch::I8086, vec![section("T", vec![0; bytes], vec![])], vec![]);
+        let big = |bytes: usize| object(16u8, vec![section("T", vec![0; bytes], vec![])], vec![]);
         assert!(matches!(write(&big(0x10001)), Err(Error::Unencodable(text)) if text.contains("holds 65536")));
         assert!(write(&big(0x10000)).is_ok());
     }
@@ -962,9 +1033,8 @@ mod tests {
     /// refused.
     #[test]
     fn a_pc_relative_field_omf_cannot_say_is_refused() {
-        let jump = Reloc { at: 1, kind: Kind::PcRel { width: 4, from: 8 }, target: Target::Symbol(0), addend: 0 };
-        let made =
-            object(Arch::I386, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
+        let jump = Reloc::new(1, Fix::pc_rel(4, 8), Target::Symbol(0), 0);
+        let made = object(32u8, vec![section("T", vec![0; 8], vec![jump])], vec![symbol("f", Definition::Undefined)]);
         assert!(matches!(write(&made), Err(Error::Unencodable(_))));
     }
 }

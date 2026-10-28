@@ -82,6 +82,9 @@ pub struct Options {
     /// `-fno-inline=NAME`: the functions named are `noinline` (the pin's
     /// attribute), whichever frontend made them.
     pub no_inline: Vec<String>,
+    /// `-fsanitize=stack`: every function compares SP with the runtime's
+    /// limit on entry (`stack.toml` of the target's C runtime).
+    pub stack_check: bool,
     /// `--isel=`: the instruction selector.
     pub isel: crate::backend::shadow::Selector,
     /// The library routines the target's runtime has, each with the calling
@@ -99,6 +102,7 @@ impl Options {
         arch: std::rc::Rc<dyn llrm_target::Target>,
         selection: &'static crate::backend::isel::Compiled,
     ) -> Self {
+        let isel = crate::backend::shadow::Selector::for_target(&*arch);
         Self {
             machine,
             pipeline: Default::default(),
@@ -115,7 +119,8 @@ impl Options {
             spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
-            isel: Default::default(),
+            stack_check: false,
+            isel,
             libcalls: Vec::new(),
         }
     }
@@ -126,30 +131,46 @@ impl Options {
         Self::new(machine, std::rc::Rc::new(llrm_x86_m16::M16), crate::backend::isel::m16())
     }
 
+    /// The debug format asked for, and what its writer needs said, on
+    /// `assembled`'s debug information.
+    pub fn describe_debug(
+        &self,
+        assembled: &mut masm::Module,
+    ) {
+        if let Some(debug) = assembled.debug.as_mut() {
+            debug.format = self.debug_format;
+            debug.cfa = self.cfa_locations();
+            debug.ranges = self.location_ranges();
+            // Only DWARF 5 has a place for a file's MD5; LLVM leaves it out of
+            // older ones.
+            if matches!(
+                debug.format,
+                llrm_object::debug::Format::Dwarf { version } if version < 5
+            ) && let Some((_, md5)) = debug.source.as_mut()
+            {
+                *md5 = None;
+            }
+        }
+    }
+
     /// Whether the debug writer this object format and `-g` flavor pick says
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
-        use llrm_object::debug::Format;
-        match (self.object_format, self.debug_format) {
-            (_, Format::TurboDebugger) => llrm_omf::LOCATION_RANGES,
-            (_, Format::Dwarf { .. }) => llrm_debuginfo::LOCATION_RANGES,
-            ("omf", _) => llrm_omf::LOCATION_RANGES,
-            ("coff", _) => llrm_coff::LOCATION_RANGES,
-            _ => llrm_debuginfo::LOCATION_RANGES,
-        }
+        self.debug_format.location_ranges().unwrap_or_else(|| self.format_info().location_ranges)
     }
 
     /// Whether that writer places a frame cell from the canonical frame
     /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
-        use llrm_object::debug::Format;
-        match (self.object_format, self.debug_format) {
-            (_, Format::TurboDebugger) => llrm_omf::CFA_LOCATIONS,
-            (_, Format::Dwarf { .. }) => llrm_debuginfo::CFA_LOCATIONS,
-            ("omf", _) => llrm_omf::CFA_LOCATIONS,
-            ("coff", _) => llrm_coff::CFA_LOCATIONS,
-            _ => llrm_debuginfo::CFA_LOCATIONS,
-        }
+        self.debug_format.cfa_locations().unwrap_or_else(|| self.format_info().cfa_locations)
+    }
+
+    /// What the object format says of the debug writer it picks by default; a
+    /// format unknown to the target is ELF's.
+    fn format_info(&self) -> llrm_object::AsmInfo {
+        use llrm_target::object::Format;
+        let format = Format::parse(self.object_format).unwrap_or(Format::Elf);
+        crate::backend::objbuild::asm_info(format)
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -210,6 +231,29 @@ fn no_inlined(
     Ok(())
 }
 
+/// Each function `program` defines marked to check its stack on entry.
+fn stack_checked(program: &mut Program) {
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                && !function.is_declaration()
+            {
+                function.attrs.push(llrm_mir::facts::Fact::StackCheck.carrier());
+            }
+        }
+    }
+}
+
+/// What C's runtime says of its stack on `arch`: the `stack.toml` its
+/// description names.
+fn runtime_stack_check(arch: &dyn llrm_target::Target) -> Result<crate::hir::model::StackCheck, String> {
+    let description = arch.runtime("c").ok_or("-fsanitize=stack: this target has no C runtime")?;
+    let name = description.string("stack").map_err(|error| format!("-fsanitize=stack: {error}"))?;
+    let file = description.file(&name).ok_or_else(|| format!("-fsanitize=stack: {name} is not shipped"))?;
+    let row = toml::Value::Table(file.parse().map_err(|error| format!("-fsanitize=stack: {name}: {error}"))?);
+    crate::hir::model::StackCheck::from_toml(&row)
+}
+
 /// `program` compiled for the machine: emitted, optimized, then each module
 /// selected and assembled, its code in `<MODULE>_TEXT`, each function linked
 /// by its symbol and its data where the frontend put it. Each module's
@@ -256,11 +300,7 @@ pub fn compiled(
                 assembled.externs.push((name.clone(), "near".to_owned()));
             }
         }
-        if let Some(debug) = assembled.debug.as_mut() {
-            debug.format = options.debug_format;
-            debug.cfa = options.cfa_locations();
-            debug.ranges = options.location_ranges();
-        }
+        options.describe_debug(&mut assembled);
         timed("data layout", || {
             placed.lay_out(
                 &mut assembled,
@@ -321,7 +361,9 @@ pub fn compiled_module(
     let assembled = timed("assemble", || {
         assemble::assembled_by(
             &program.modules[0],
-            &crate::abi::llvm::LlvmAbi,
+            &crate::abi::llvm::LlvmAbi {
+                stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
+            },
             &format!("{}_TEXT", name.to_uppercase()),
             ProfileOrName::Profile(cpu),
             &segments,
@@ -332,6 +374,7 @@ pub fn compiled_module(
         )
     })?;
     let mut assembled = assembled;
+    options.describe_debug(&mut assembled);
     data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
     stage_files(options, "", &assembled)?;
     Ok(assembled)
@@ -451,6 +494,9 @@ pub fn optimized(
     options: &Options,
 ) -> Result<(), String> {
     no_inlined(program, &options.no_inline)?;
+    if options.stack_check {
+        stack_checked(program);
+    }
     let mut pipeline = options.pipeline.clone();
     // The DAG builder lowers the switches that remain, as the pin's
     // SelectionDAGBuilder does; the shadow run keeps the old selector's
@@ -464,7 +510,11 @@ pub fn optimized(
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
+<<<<<<< HEAD
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso))?;
+=======
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso))?;
+>>>>>>> origin/feat/parity
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program
@@ -523,7 +573,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::funnel::expanded(module, |operation| options.arch.expands(operation)),
+                |module| crate::backend::funnel::expanded(
+                    module,
+                    |operation| options.arch.expands(operation),
+                    |bits| crate::backend::funnel::kept_for_isel(options.isel, &format!("i{bits}")),
+                ),
             )
     })?;
     timed("mir absolute values", || {

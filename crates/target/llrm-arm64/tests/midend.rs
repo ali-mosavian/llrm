@@ -26,9 +26,22 @@ fn a_wide_constant_is_built_outside_the_loop_that_uses_it() {
     let text = include_str!("data/wide_constant_loop.ll");
     let asm = driver::assembly(text, Platform::Darwin, true).expect("the function lowers");
     let lines: Vec<&str> = asm.lines().map(str::trim).collect();
-    let back = lines.iter().rposition(|l| l.starts_with("b.")).expect("a loop branch");
+    // The loop closes on its last branch to an earlier label: `b.cond`, `cbnz`
+    // or a plain `b` (a count-down loop is `cbnz` into a block that jumps
+    // back).
+    let label = |l: &str| l.strip_suffix(':').map(str::to_owned);
+    let back = (0..lines.len())
+        .rev()
+        .find(|&at| {
+            let mnemonic = lines[at].split_whitespace().next().unwrap_or("");
+            let branch =
+                mnemonic == "b" || mnemonic.starts_with("b.") || matches!(mnemonic, "cbz" | "cbnz" | "tbz" | "tbnz");
+            let target = lines[at].rsplit(' ').next().unwrap();
+            branch && lines[..at].iter().any(|l| label(l).as_deref() == Some(target))
+        })
+        .unwrap_or_else(|| panic!("a loop branch: {asm}"));
     let target = lines[back].rsplit(' ').next().unwrap();
-    let start = lines.iter().position(|l| l.strip_suffix(':') == Some(target)).expect("the loop label");
+    let start = lines.iter().position(|l| label(l).as_deref() == Some(target)).expect("the loop label");
     // Premise: the constant is built somewhere (not folded away).
     assert!(lines.iter().any(|l| l.starts_with("movk")), "{asm}");
     let inside: Vec<&&str> =
@@ -100,4 +113,63 @@ fn atomics_are_kept_and_selected_as_the_pin_does() {
     assert!(function("_fetch_and").iter().any(|line| line.starts_with("ldclrl")), "{asm}");
     assert_eq!(count("_compare_exchange", "casal"), 1, "{asm}");
     assert_eq!(function("_fences").iter().filter(|line| line.starts_with("dmb")).count(), 2, "{asm}");
+
+/// `@llvm.global_ctors` was refused (`appending`), and then would have been
+/// a data symbol nobody calls: each constructor is a pointer in the loader's
+/// init section, lowest priority first, and an entry without a function is
+/// dropped.
+#[test]
+fn global_ctors_become_init_function_pointers_in_priority_order() {
+    let object = driver::object(include_str!("data/global_ctors.ll"), Platform::Darwin, "ctors.o", true)
+        .expect("the module lowers");
+    let init = object
+        .sections
+        .iter()
+        .find(|section| section.role == llrm_object::Role::InitFunctions)
+        .expect("an init-function section");
+    assert_eq!(init.image.len(), 16, "two pointers");
+    let names: Vec<&str> = init
+        .relocs
+        .iter()
+        .map(|reloc| match reloc.target {
+            llrm_object::Target::Symbol(index) => object.symbols[index].name.as_str(),
+            ref other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(names, ["_early", "_late"]);
+    // The pipeline keeps what only the constructor list names.
+    for name in names {
+        let symbol = object.symbols.iter().find(|symbol| symbol.name == name).expect("a symbol");
+        assert!(matches!(symbol.definition, llrm_object::Definition::Defined { .. }), "{name}");
+    }
+    assert!(object.symbols.iter().all(|symbol| !symbol.name.contains("llvm.global_ctors")));
+    // dyld runs a `__DATA,__mod_init_func` section (type
+    // S_MOD_INIT_FUNC_POINTERS, 9).
+    let file = driver::object_file(include_str!("data/global_ctors.ll"), Platform::Darwin, "ctors.o", true).unwrap();
+    let at = file.windows(16).position(|w| w.starts_with(b"__mod_init_func\0")).expect("the section name");
+    let flags = u32::from_le_bytes(file[at + 64..at + 68].try_into().unwrap());
+    assert_eq!(flags, 9, "S_MOD_INIT_FUNC_POINTERS");
+}
+
+/// A `{ T, i1 }` carried round a back edge in a phi (a cmpxchg retry loop has
+/// one) was refused with "a phi with no register": an aggregate phi is copied
+/// member by member.
+#[test]
+fn an_aggregate_phi_lowers() {
+    let asm = driver::assembly(include_str!("data/agg_phi.ll"), Platform::Darwin, true).expect("lowers");
+    assert!(asm.matches("bl _step").count() >= 2, "{asm}");
+}
+
+/// A name clang writes `"\01_pthread_join"` is the symbol as given; the Mach-O
+/// underscore was added again, and `ld` looked for `__pthread_join`.
+#[test]
+fn a_verbatim_name_gets_no_underscore() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+target triple = \"arm64-apple-macosx27.2.0\"\n\
+declare i32 @\"\\01_pthread_join\"(ptr, ptr)\n\
+define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null)\n  ret i32 %r\n}\n";
+    let object = driver::object(text, Platform::Darwin, "verbatim.o", true).expect("lowers");
+    let names: Vec<&str> = object.symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+    assert!(names.contains(&"_pthread_join"), "{names:?}");
+    assert!(!names.contains(&"__pthread_join"), "{names:?}");
 }

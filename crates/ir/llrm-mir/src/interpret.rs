@@ -410,6 +410,25 @@ impl<'m> Machine<'m> {
                 };
                 Val::Aggregate(vec![wrapped, overflowed])
             }
+            Intrinsic::Saturating { op, signed } => {
+                let exact = binary(op, if signed { Flags::NSW } else { Flags::NUW }, argument(0), argument(1))?;
+                match (exact, argument(0), argument(1)) {
+                    (Val::Poison, Val::Int { bits, width }, Val::Int { .. }) => {
+                        // Overflow is toward the first argument's sign when
+                        // signed, else off the top (add) or bottom (sub).
+                        let ones = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+                        let sign = 1u128 << (width - 1);
+                        let bits = match (signed, op) {
+                            (true, _) if bits & sign != 0 => sign,
+                            (true, _) => ones >> 1,
+                            (false, BinaryOp::Add) => ones,
+                            (false, _) => 0,
+                        };
+                        Val::Int { bits, width }
+                    }
+                    (exact, _, _) => exact,
+                }
+            }
             Intrinsic::MinMax { signed, max } => {
                 let predicate = match (signed, max) {
                     (true, true) => IntPredicate::Sgt,
@@ -491,7 +510,47 @@ impl<'m> Machine<'m> {
                 };
                 Val::Int { bits: value as u128 & mask(width), width }
             }
+            Intrinsic::FixedMul { signed, saturating } => {
+                let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
+                    (argument(0), argument(1), argument(2))
+                else {
+                    return Ok(Val::Poison);
+                };
+                let sign = |bits: u128| ((bits << (128 - width)) as i128) >> (128 - width);
+                let (min, max) = if signed {
+                    (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
+                } else {
+                    (0, (1i128 << width) - 1)
+                };
+                let (a, b) = if signed { (sign(a), sign(b)) } else { (a as i128, b as i128) };
+                let wide = (a * b) >> scale;
+                Val::Int { bits: (if saturating { wide.clamp(min, max) } else { wide }) as u128 & mask(width), width }
+            }
+            Intrinsic::ShiftSat { signed } => {
+                let (Val::Int { bits: a, width }, Val::Int { bits: by, .. }) = (argument(0), argument(1)) else {
+                    return Ok(Val::Poison);
+                };
+                if by >= u128::from(width) {
+                    return Ok(Val::Poison);
+                }
+                let (min, max) = if signed {
+                    (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
+                } else {
+                    (0, (1i128 << width) - 1)
+                };
+                let a = if signed { ((a << (128 - width)) as i128) >> (128 - width) } else { a as i128 };
+                Val::Int { bits: (a << by).clamp(min, max) as u128 & mask(width), width }
+            }
             // Fused or not is the machine's choice, as the LangRef allows.
+            Intrinsic::CopySign => match (argument(0), argument(1)) {
+                (Val::Float(FloatKind::Float, magnitude), Val::Float(FloatKind::Float, sign)) => {
+                    Val::Float(FloatKind::Float, (magnitude & 0x7fff_ffff) | (sign & 0x8000_0000))
+                }
+                (Val::Float(kind, magnitude), Val::Float(_, sign)) if kind != FloatKind::Float => {
+                    Val::Float(kind, (magnitude & (u64::MAX >> 1)) | (sign & (1 << 63)))
+                }
+                _ => Val::Poison,
+            },
             Intrinsic::FMulAdd => {
                 let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?

@@ -107,3 +107,10 @@ def test_two_runs_writing_one_cached_object_at_once_both_finish(tmp_path, monkey
         one.join()
     assert not failures, failures
     assert [path.suffix for path in (tmp_path / "cache").iterdir()] == [".obj"]
+
+
+def test_the_extenders_vector_note_is_not_part_of_a_programs_output():
+    """paint_queue sets INT 43h and DOS/32A prints a warning line at exit: the flat-only test compared it as output ("byte 15: want <end> got 68") and refused #5690."""
+    note = b"DOS/32A warning (9003): real mode interrupt vector has been modified: INT 43h\r\n"
+    assert qb32.without_extender_notes(b" 4  15  4  4 \r\n" + note) == b" 4  15  4  4 \r\n"
+    assert qb32.without_extender_notes(b"DOS/32A warning (9004): other\r\n") == b"DOS/32A warning (9004): other\r\n"

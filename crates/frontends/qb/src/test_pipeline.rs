@@ -18,7 +18,7 @@ fn test_a_constant_offset_rebased_onto_the_counter_stays_defined() {
         &program,
         Path::new("MOD.BAS"),
         None,
-        &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()),
+        &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()),
     )
     .unwrap();
 }
@@ -52,7 +52,7 @@ fn test_a_string_comparison_compiles_where_on_error_is_on() {
             &program,
             Path::new("CMP.BAS"),
             None,
-            &llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone()),
+            &llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone()),
         )
         .unwrap_or_else(|error| panic!("{runtime}: {error}"));
     }

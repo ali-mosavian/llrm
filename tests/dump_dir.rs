@@ -13,6 +13,9 @@ fn shm_is_tmpfs() -> bool {
 
 /// `--dump` and `LLRM_MIR_STAGES` into a tmpfs directory both stop the tool
 /// with a message and make nothing there.
+///
+/// llrm-cc: the refusal was llrm-c's and went with it; llrm-cc calls the same
+/// check, so a dump into tmpfs exited 0 and wrote there.
 #[test]
 fn a_dump_into_tmpfs_is_refused_by_each_tool() {
     if !shm_is_tmpfs() {

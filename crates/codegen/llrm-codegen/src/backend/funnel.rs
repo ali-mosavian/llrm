@@ -44,6 +44,7 @@ use super::expansion::{self, Emitter};
 pub fn expanded(
     module: &mut Module,
     expands: impl Fn(&str) -> bool,
+    kept: impl Fn(u32) -> bool,
 ) -> Result<(), String> {
     let (left, right) = (expands("fshl"), expands("fshr"));
     expansion::expand_calls(
@@ -53,8 +54,24 @@ pub fn expanded(
             Intrinsic::FunnelShift { left: false } if right => Some(false),
             _ => None,
         },
-        expand,
+        |context, function, inst, left| {
+            let bits = context.types.int_bits(function.instruction(inst).ty);
+            if bits.is_some_and(&kept) {
+                return Ok(());
+            }
+            expand(context, function, inst, left)
+        },
     )
+}
+
+/// Whether the selector takes a funnel shift of `bits` as it is: the DAG
+/// lowers a funnel shift of a byte, word or dword itself (`LowerFunnelShift`,
+/// `SHLD`/`SHRD`), as the pin does.
+pub fn kept_for_isel(
+    isel: crate::backend::shadow::Selector,
+    ty: &str,
+) -> bool {
+    isel == crate::backend::shadow::Selector::Dag && matches!(ty, "i8" | "i16" | "i32")
 }
 
 /// The integer constant `operand` is.

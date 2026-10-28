@@ -8,13 +8,13 @@
 # CHECK-LABEL: _scroll_up proc
 # CHECK: rep movsd
 # CHECK: _scroll_up endp
+# The pin keeps a word fill and a descending copy as counted loops.
 # CHECK-LABEL: _scroll_down proc
-# CHECK: std
-# CHECK: rep movsd
-# CHECK: cld
+# CHECK-NOT: rep
+# CHECK-NOT: std
 # CHECK: _scroll_down endp
 # CHECK-LABEL: _palette proc
-# CHECK: rep stosw
+# CHECK-NOT: rep
 # CHECK: _palette endp
 # CHECK-LABEL: _smear proc
 # CHECK-NOT: rep

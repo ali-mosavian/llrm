@@ -194,10 +194,22 @@ pub fn object_file(
     name: &str,
     optimize: bool,
 ) -> Result<Vec<u8>, String> {
+    use llrm_target::object::Format;
     let object = object(text, platform, name, optimize)?;
+    use llrm_object::ObjectTarget;
+    let objects = crate::mc::Arm64Objects;
+    let macho = || objects.write_object("macho", &object).map_err(|error| error.to_string());
+    let elf = || objects.write_object("elf", &object).map_err(|error| error.to_string());
+    if let Some(dir) = llrm_target::object::all_writers_dir() {
+        for (format, written) in [(Format::MachO, macho()), (Format::Elf, elf())] {
+            if let Ok(written) = written {
+                llrm_target::object::record_writer(&dir, format, &written);
+            }
+        }
+    }
     match platform {
-        Platform::Darwin => llrm_macho::write(&object).map_err(|error| error.to_string()),
-        Platform::Linux => llrm_elf_arm64::write(&object).map_err(|error| error.to_string()),
+        Platform::Darwin => macho(),
+        Platform::Linux => elf(),
     }
 }
 

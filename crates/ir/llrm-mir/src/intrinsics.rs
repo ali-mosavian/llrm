@@ -31,6 +31,12 @@ pub enum Intrinsic {
         op: BinaryOp,
         signed: bool,
     },
+    /// `llvm.{s,u}{add,sub}.sat`: the result clamped to the type's range
+    /// rather than wrapped.
+    Saturating {
+        op: BinaryOp,
+        signed: bool,
+    },
     /// `llvm.{s,u}{max,min}`.
     MinMax {
         signed: bool,
@@ -40,6 +46,17 @@ pub enum Intrinsic {
     /// fraction bits as the third argument says.
     Fixed {
         divide: bool,
+    },
+    /// `llvm.umul.fix` and `llvm.{s,u}mul.fix.sat`: as `smul.fix`, unsigned
+    /// or clamped to the range rather than wrapped.
+    FixedMul {
+        signed: bool,
+        saturating: bool,
+    },
+    /// `llvm.{s,u}shl.sat`: the first argument shifted left by the second,
+    /// clamped to the range rather than wrapped.
+    ShiftSat {
+        signed: bool,
     },
     /// `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop`.
     BitCount(BitCount),
@@ -63,6 +80,8 @@ pub enum Intrinsic {
         signed: bool,
     },
     FMulAdd,
+    /// `llvm.copysign`: the first argument with the second's sign.
+    CopySign,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
@@ -401,6 +420,29 @@ const fn overflow(
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
+const fn fixed_mul(
+    name: &'static str,
+    signed: bool,
+    saturating: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::FixedMul { signed, saturating }, Slot::Any(0), FIXED, Kind::Int)
+}
+
+const fn shift_sat(
+    name: &'static str,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::ShiftSat { signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
+const fn saturating(
+    name: &'static str,
+    op: BinaryOp,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::Saturating { op, signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
 const FLOAT: &[Slot] = &[Slot::Any(0)];
 
 const fn unary(
@@ -451,13 +493,17 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 61] = [
+const TABLE: [Spec; 71] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
     overflow("llvm.usub.with.overflow", BinaryOp::Sub, false),
     overflow("llvm.smul.with.overflow", BinaryOp::Mul, true),
     overflow("llvm.umul.with.overflow", BinaryOp::Mul, false),
+    saturating("llvm.sadd.sat", BinaryOp::Add, true),
+    saturating("llvm.uadd.sat", BinaryOp::Add, false),
+    saturating("llvm.ssub.sat", BinaryOp::Sub, true),
+    saturating("llvm.usub.sat", BinaryOp::Sub, false),
     min_max("llvm.smax", true, true),
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
@@ -473,6 +519,11 @@ const TABLE: [Spec; 61] = [
     compare("llvm.scmp", true),
     compare("llvm.ucmp", false),
     arithmetic("llvm.smul.fix", Intrinsic::Fixed { divide: false }, Slot::Any(0), FIXED, Kind::Int),
+    fixed_mul("llvm.umul.fix", false, false),
+    fixed_mul("llvm.smul.fix.sat", true, true),
+    fixed_mul("llvm.umul.fix.sat", false, true),
+    shift_sat("llvm.sshl.sat", true),
+    shift_sat("llvm.ushl.sat", false),
     Spec {
         name: "llvm.sdiv.fix",
         intrinsic: Intrinsic::Fixed { divide: true },
@@ -488,6 +539,7 @@ const TABLE: [Spec; 61] = [
         &[Slot::Any(0), Slot::Any(0), Slot::Any(0)],
         Kind::Float,
     ),
+    arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),

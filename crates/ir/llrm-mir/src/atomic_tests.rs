@@ -39,7 +39,11 @@ fn a_hidden_atomic_is_a_call_whose_name_says_what_it_was() {
 fn an_x86_atomic_load_and_store_lower_to_volatile_accesses() {
     let mut module = parse::module(TEXT).unwrap();
     hidden(&mut module).unwrap();
+<<<<<<< HEAD
     lowered(&mut module, 32, true).unwrap();
+=======
+    lowered(&mut module, 32, true, false).unwrap();
+>>>>>>> origin/feat/parity
     let kinds = opcodes(&module);
     assert!(kinds.contains(&Opcode::Load { align: Some(4), volatile: true }), "{kinds:?}");
     assert!(kinds.contains(&Opcode::Store { align: Some(4), volatile: true }), "{kinds:?}");
@@ -60,7 +64,11 @@ fn an_x86_atomic_load_and_store_lower_to_volatile_accesses() {
 fn an_ordered_atomic_is_refused_where_the_target_has_no_lowering() {
     let mut module = parse::module(TEXT).unwrap();
     hidden(&mut module).unwrap();
+<<<<<<< HEAD
     let refused = lowered(&mut module, 32, false).unwrap_err();
+=======
+    let refused = lowered(&mut module, 32, false, false).unwrap_err();
+>>>>>>> origin/feat/parity
     assert!(refused.contains("load acquire"), "{refused}");
 }
 
@@ -78,6 +86,39 @@ entry:
 ";
     let mut module = parse::module(text).unwrap();
     hidden(&mut module).unwrap();
+<<<<<<< HEAD
     let refused = lowered(&mut module, 32, true).unwrap_err();
     assert!(refused.contains("64 bits"), "{refused}");
 }
+=======
+    let refused = lowered(&mut module, 32, true, false).unwrap_err();
+    assert!(refused.contains("64 bits"), "{refused}");
+}
+
+const SWAP: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16\"
+@flag = global i32 0
+define i32 @f(i32 %v) {
+entry:
+  %a = atomicrmw xchg ptr @flag, i32 %v acquire
+  store atomic i32 %v, ptr @flag seq_cst, align 4
+  fence acq_rel
+  ret i32 %a
+}
+";
+
+/// An exchange and a `seq_cst` store were refused at x86 ("is not lowered for
+/// this target yet"): the runtime's `atomic_exchange_explicit` did not
+/// compile. Where the target selects `xchg` they stay calls; the fence short
+/// of `seq_cst` is gone.
+#[test]
+fn an_x86_exchange_and_a_seq_cst_store_stay_for_the_target_to_select() {
+    let mut module = parse::module(SWAP).unwrap();
+    hidden(&mut module).unwrap();
+    lowered(&mut module, 32, true, true).unwrap();
+    let calls = opcodes(&module).iter().filter(|opcode| matches!(opcode, Opcode::Call(_))).count();
+    assert_eq!(calls, 2);
+    let mut refused = parse::module(SWAP).unwrap();
+    hidden(&mut refused).unwrap();
+    assert!(lowered(&mut refused, 32, true, false).unwrap_err().contains("not lowered"));
+}
+>>>>>>> origin/feat/parity
