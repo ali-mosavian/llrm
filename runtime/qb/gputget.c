@@ -30,6 +30,9 @@ static unsigned row_bytes(unsigned width)
     return (width * gfx_current->bits + 7) / 8;
 }
 
+#pragma aux B_GGET "B$GGET"
+#pragma aux B_GPUT "B$GPUT"
+
 /* B$GGET: GET (x1, y1)-(x2, y2), array; the corners were given by B$N1xx and
    B$N2xx. */
 void B_GGET(qb_data_ptr data, const AD *ad)
@@ -130,6 +133,3 @@ void B_GPUT(qb_data_ptr data, const AD *ad, short how)
         in += planes * per_plane;
     }
 }
-
-#pragma aux B_GGET "B$GGET"
-#pragma aux B_GPUT "B$GPUT"

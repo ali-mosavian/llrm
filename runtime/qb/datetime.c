@@ -11,6 +11,11 @@ static void put2(char *to, unsigned value)
     to[1] = (char)('0' + value % 10);
 }
 
+#pragma aux B_FDAT "B$FDAT"
+#pragma aux B_FTIM "B$FTIM"
+#pragma aux B_SDAT "B$SDAT"
+#pragma aux B_STIM "B$STIM"
+
 /* B$FDAT: DATE$, mm-dd-yyyy. */
 SD *B_FDAT(void)
 {
@@ -133,8 +138,3 @@ void B_STIM(SD *text)
         qb_error(BE_ILLFUN);
     str_tmp_free(text);
 }
-
-#pragma aux B_FDAT "B$FDAT"
-#pragma aux B_FTIM "B$FTIM"
-#pragma aux B_SDAT "B$SDAT"
-#pragma aux B_STIM "B$STIM"

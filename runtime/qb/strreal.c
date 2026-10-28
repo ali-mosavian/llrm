@@ -14,6 +14,9 @@ static SD *real_text(double v, int is_double)
     return result;
 }
 
+#pragma aux B_STR4 "B$STR4"
+#pragma aux B_STR8 "B$STR8"
+
 SD *B_STR4(float v)
 {
     return real_text(v, 0);
@@ -23,6 +26,3 @@ SD *B_STR8(double v)
 {
     return real_text(v, 1);
 }
-
-#pragma aux B_STR4 "B$STR4"
-#pragma aux B_STR8 "B$STR8"

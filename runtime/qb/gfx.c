@@ -327,6 +327,32 @@ static void window_point(int second, int step, float x, float y)
     logical_at_y = gfx_last_y;
 }
 
+#pragma aux B_N1I2 "B$N1I2"
+#pragma aux B_N1R4 "B$N1R4"
+#pragma aux B_N2I2 "B$N2I2"
+#pragma aux B_N2R4 "B$N2R4"
+#pragma aux B_S1I2 "B$S1I2"
+#pragma aux B_S1R4 "B$S1R4"
+#pragma aux B_S2I2 "B$S2I2"
+#pragma aux B_S2R4 "B$S2R4"
+#pragma aux B_VIEW "B$VIEW"
+#pragma aux B_WIND "B$WIND"
+#pragma aux B_WIN0 "B$WIN0"
+#pragma aux B_VEW0 "B$VEW0"
+#pragma aux B_PSTC "B$PSTC"
+#pragma aux B_PSET "B$PSET"
+#pragma aux B_PRST "B$PRST"
+#pragma aux B_PMAP "B$PMAP"
+#pragma aux B_PNR4 "B$PNR4"
+#pragma aux B_PNI2 "B$PNI2"
+#pragma aux B_PAL2 "B$PAL2"
+#pragma aux B_PALU "B$PALU"
+#pragma aux graphics_used "B$GRPUSED"
+#pragma aux ega_used "B$EGAUSED"
+#pragma aux vga_used "B$VGAUSED"
+#pragma aux cga_used "B$CGAUSED"
+#pragma aux mono_used "B$MONUSED"
+
 void B_N1I2(short x, short y)
 {
     if (gfx_window_on)
@@ -581,21 +607,6 @@ void B_PALU(qb_data_ptr data, const AD *ad)
     }
 }
 
-#pragma aux B_N1I2 "B$N1I2"
-#pragma aux B_N1R4 "B$N1R4"
-#pragma aux B_N2I2 "B$N2I2"
-#pragma aux B_N2R4 "B$N2R4"
-#pragma aux B_S1I2 "B$S1I2"
-#pragma aux B_S1R4 "B$S1R4"
-#pragma aux B_S2I2 "B$S2I2"
-#pragma aux B_S2R4 "B$S2R4"
-#pragma aux B_VIEW "B$VIEW"
-#pragma aux B_WIND "B$WIND"
-#pragma aux B_WIN0 "B$WIN0"
-#pragma aux B_VEW0 "B$VEW0"
-#pragma aux B_PSTC "B$PSTC"
-#pragma aux B_PSET "B$PSET"
-#pragma aux B_PRST "B$PRST"
 /* B$PMAP: PMAP(expr, funct) -- 0 and 1 map a logical x or y to the viewport's pixel, 2 and 3 a pixel to the logical
    point; the pixel is counted from the viewport's corner. With no window the points are the pixels. */
 float *B_PMAP(float expr, short funct)
@@ -620,11 +631,6 @@ float *B_PMAP(float expr, short funct)
     return &result;
 }
 
-#pragma aux B_PMAP "B$PMAP"
-#pragma aux B_PNR4 "B$PNR4"
-#pragma aux B_PNI2 "B$PNI2"
-#pragma aux B_PAL2 "B$PAL2"
-#pragma aux B_PALU "B$PALU"
 
 /* SCREEN is taken here once a program has this linked (screen.c). */
 extern void (*screen_set_mode)(int mode);
@@ -673,8 +679,3 @@ void gfx_xinit(void)
 /* What the compiler names to have the graphics screen linked: a program that
    draws or sets a mode refers to these, and they are only to be found. */
 const byte graphics_used, ega_used, vga_used, cga_used, mono_used;
-#pragma aux graphics_used "B$GRPUSED"
-#pragma aux ega_used "B$EGAUSED"
-#pragma aux vga_used "B$VGAUSED"
-#pragma aux cga_used "B$CGAUSED"
-#pragma aux mono_used "B$MONUSED"

@@ -4,6 +4,8 @@
 
 static double value;
 
+#pragma aux B_FVAL "B$FVAL"
+
 /* B$FVAL: the number a string starts with, 0 if none, as a DOUBLE whose address
    is returned.  Blanks inside it do not count (VAL("3 4") is 34).  The parser
    needs a NUL, which the argument does not have, so it reads a copy with the
@@ -27,5 +29,3 @@ double *B_FVAL(SD *sd)
     str_tmp_free(sd);
     return &value;
 }
-
-#pragma aux B_FVAL "B$FVAL"

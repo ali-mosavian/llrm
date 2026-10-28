@@ -3,9 +3,12 @@
 #include "nhstutil.h"
 #include "qb.h"
 
+#pragma aux llrm_os_stack_low "LL$STACK_LOW"
+#pragma aux B_FRSD "B$FRSD"
+#pragma aux B_FRI2 "B$FRI2"
+
 /* The lowest stack address a checked function may reach (the OS layer's). */
 extern uword llrm_os_stack_low;
-#pragma aux llrm_os_stack_low "LL$STACK_LOW"
 
 static long stack_free(void)
 {
@@ -31,6 +34,3 @@ long B_FRI2(short selector)
         return stack_free();
     return str_free_bytes();
 }
-
-#pragma aux B_FRSD "B$FRSD"
-#pragma aux B_FRI2 "B$FRI2"

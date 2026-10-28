@@ -63,6 +63,16 @@ static Trap *trap_of(short device, long number)
     return 0;
 }
 
+#pragma aux B_STIK "B$STIK"
+#pragma aux B_FSTG "B$FSTG"
+#pragma aux B_FPEN "B$FPEN"
+#pragma aux B_EVAR "B$EVAR"
+#pragma aux B_EVSW "B$EVSW"
+#pragma aux B_EVAN "B$EVAN"
+#pragma aux B_EVPD "B$EVPD"
+#pragma aux B_EVDN "B$EVDN"
+#pragma aux B_FPLY "B$FPLY"
+
 /* B$EVAR: ON device(number) GOSUB the handler of that number; 0 takes the
    trap away. */
 void B_EVAR(short device, long number, short handler)
@@ -221,13 +231,3 @@ short B_FPEN(short which)
     (void)which;
     return 0;
 }
-
-#pragma aux B_STIK "B$STIK"
-#pragma aux B_FSTG "B$FSTG"
-#pragma aux B_FPEN "B$FPEN"
-#pragma aux B_EVAR "B$EVAR"
-#pragma aux B_EVSW "B$EVSW"
-#pragma aux B_EVAN "B$EVAN"
-#pragma aux B_EVPD "B$EVPD"
-#pragma aux B_EVDN "B$EVDN"
-#pragma aux B_FPLY "B$FPLY"
