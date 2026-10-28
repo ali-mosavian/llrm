@@ -1392,6 +1392,79 @@ fn a_variable_bit_clear_of_a_quadword_is_btr() {
     assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
 }
 
+/// The `.eh_frame` of `text` (an x86-64 module) written as ELF.
+fn eh_frame_of(text: &str) -> Vec<u8> {
+    let (built, format) = crate::llc::compiled(&flags(&["-m64", "-O2"]), text, "f").unwrap();
+    let bytes = llrm_codegen::backend::objbuild::written_in(
+        &built,
+        "f.ll",
+        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+        format,
+    )
+    .unwrap();
+    let (u16_at, u32_at, u64_at) = (
+        |at: usize| u16::from_le_bytes(bytes[at..at + 2].try_into().unwrap()) as usize,
+        |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize,
+        |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap()) as usize,
+    );
+    let (headers, count, names) = (u64_at(0x28), u16_at(0x3C), u16_at(0x3E));
+    let header = |index: usize| headers + index * u16_at(0x3A);
+    let strings = u64_at(header(names) + 0x18);
+    (0..count)
+        .map(header)
+        .find(|&at| {
+            let from = strings + u32_at(at);
+            bytes[from..].starts_with(b".eh_frame\0")
+        })
+        .map(|at| bytes[u64_at(at + 0x18)..u64_at(at + 0x18) + u64_at(at + 0x20)].to_vec())
+        .unwrap_or_default()
+}
+
+const SYSV: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                    target triple = \"x86_64-unknown-linux-gnu\"\n";
+
+fn hex(text: &str) -> Vec<u8> {
+    (0..text.len()).step_by(2).map(|at| u8::from_str_radix(&text[at..at + 2], 16).unwrap()).collect()
+}
+
+/// An x86-64 ELF object had no `.eh_frame`, so a debugger or an exception
+/// could not unwind through its functions. The bytes are what the pin's clang
+/// writes (`-target x86_64-linux-gnu -O1 -c`) for `push rax; call; pop; ret`
+/// and for `push rbx; ...; pop rbx; ret`, where the code is the same length:
+/// the offset of `rbx` is declared after the prologue.
+#[test]
+fn a_function_with_a_push_and_a_pushed_register_has_the_pins_eh_frame() {
+    let one_slot = format!(
+        "{SYSV}declare void @g()\ndefine void @f() \"disable-tail-calls\"=\"true\" {{\n  call void @g()\n  ret void\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&one_slot),
+        hex("1400000000000000017a5200017810011b0c070890010000140000001c000000000000000800000000410e10460e0800")
+    );
+    let saved = format!(
+        "{SYSV}declare i32 @g()\ndefine i32 @f(i32 %a) {{\n  %r = call i32 @g()\n  %s = add i32 %r, %a\n  ret i32 %s\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&saved),
+        hex(
+            "1400000000000000017a5200017810011b0c0708900100001c0000001c000000000000000c00000000410e1083024a0e0800000000000000"
+        )
+    );
+}
+
+/// With a frame register the address is rebased on it and goes back to `rsp`
+/// at the `leave`: `def_cfa_register rbp` (0x0D 0x06) after the `mov`, and
+/// `def_cfa rsp, 8` (0x0C 0x07 0x08) after it.
+#[test]
+fn a_frame_register_function_rebases_the_frame_address_on_it_and_back() {
+    let text = format!(
+        "{SYSV}declare void @g(ptr)\ndefine void @f(i32 %n) \"disable-tail-calls\"=\"true\" {{\n  %p = alloca i32, i32 %n\n  call void @g(ptr %p)\n  ret void\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    let has = |pattern: &[u8]| frame.windows(pattern.len()).any(|window| window == pattern);
+    assert!(has(&[0x0D, 0x06]) && has(&[0x0C, 0x07, 0x08]) && has(&[0x86, 0x02]), "{frame:02x?}");
+}
+
 /// `tot += r(&slot)` in a loop: `liverangeshrink` took the call's result for a
 /// value defined before the call's frame barrier and hoisted the add to the
 /// top of the loop. The first pass added garbage and the last never added
@@ -1436,4 +1509,45 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
+}
+
+/// A callee-saved register pushed before the stack `sub` (the pin's order,
+/// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
+/// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
+/// rbx`), as the pin writes it.
+#[test]
+fn a_pushed_register_before_the_stack_adjustment_is_declared_after_it() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr)\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [24 x i8]\n  %r = call i32 @g(ptr %buf)\n  %s = add i32 %r, %a\n  ret i32 %s\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    assert!(frame.windows(4).any(|window| window[0] == 0x0E && window[2..] == [0x83, 0x02]), "{frame:02x?}");
+}
+
+/// The pin declares the offsets of the saved registers last pushed first
+/// (`rbx` at cfa-32, `r14` at -24, `rbp` at -16 after pushes of rbp, r14,
+/// rbx). They were listed in push order, and a pushed `rbp` that was no frame
+/// register got no offset at all.
+#[test]
+fn saved_registers_are_declared_last_pushed_first() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndeclare i32 @h(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @h(i32 %b)\n  %z = call i32 @g(i32 %x)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %z\n  ret i32 %t\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    let offsets = |window: &[u8]| window[0] & 0xC0 == 0x80 && window[2] & 0xC0 == 0x80 && window[1] > window[3];
+    assert!(frame.windows(4).any(offsets), "{frame:02x?}");
+}
+
+/// An `add eax, 2` was read as a move of the stack pointer: the frame address
+/// went 2 lower (`def_cfa_offset 14`, then 6) in the middle of the function.
+/// The bytes are the pin's for `push rax; call; add eax,2; pop rcx; ret`.
+#[test]
+fn an_add_to_a_register_other_than_the_stack_pointer_does_not_move_the_frame_address() {
+    let text = format!(
+        "{SYSV}declare i32 @g()\ndefine i32 @f() \"disable-tail-calls\"=\"true\" {{\n  %r = call i32 @g()\n  %s = add i32 %r, 2\n  ret i32 %s\n}}\n"
+    );
+    assert_eq!(
+        eh_frame_of(&text),
+        hex("1400000000000000017a5200017810011b0c070890010000140000001c000000000000000b00000000410e10490e0800")
+    );
 }
