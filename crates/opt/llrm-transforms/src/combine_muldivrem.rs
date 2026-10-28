@@ -38,10 +38,6 @@
 //! DEVIATE 5 (temporary): `narrowMathIfNoOverflow` (`InstructionCombining.cpp`,
 //! shared with `visitAdd`) is left out until `combine_shared` has it.
 //!
-//! DEVIATE 6 (temporary): `Negator::Negate` is not translated; it is taken to
-//! fail, so the two folds that use it are skipped and the step after each
-//! (the `zext`/`sext` multiply by `-1 << C`) is tried where C++ would stop.
-//!
 //! DEVIATE 8: `simplifyICmpInst` in `visitURem` is asked without the context
 //! instruction, dominator tree and assumptions (no query that takes them):
 //! it can only find less.
@@ -577,17 +573,23 @@ fn fold_mul_of_exact_shr(
 }
 
 /// `Op0->hasOneUse() && match(Op1, m_NegatedPower2())`: `X * (-1<<C)` as `(-X)
-/// * (1<<C)`; DEVIATE 6 for the `Negator` half.
+/// * (1<<C)`.
 fn fold_mul_by_negated_power_of_two(
     c: &mut Combiner,
     inst: InstId,
 ) -> Option<Visit> {
-    let (op0, op1, _) = parts(c, inst);
+    let (op0, op1, flags) = parts(c, inst);
     let (neg_pow2, w) = apint(c, op1)?;
     if !has_one_use(c, op0) || !is_negated_power2(neg_pow2, w) {
         return None;
     }
-    // DEVIATE 6: Negator::Negate(/*IsNegation*/ true, HasNSW, Op0).
+    // Interpret X * (-1<<C) as (-X) * (1<<C) and try to sink the negation.
+    let has_nsw = flags.contains(Flags::NSW);
+    if let Some(neg_op0) = c.negate(true, has_nsw, op0) {
+        let neg_c = negate(c, op1)?;
+        let nsw = has_nsw && is_not_min_signed(c, op1);
+        return Some(Visit::Replace(c.create_binop(inst, BinaryOp::Mul, neg_op0, neg_c, wrap(false, nsw))));
+    }
 
     // ({z/s}ext X) * (-1<<C) --> (zext (-X)) << C
     let x = {
@@ -1081,7 +1083,11 @@ pub fn visit_mul(
 
     // (-X * Y) * -X --> (X * Y) * X
     // (-X << Y) * -X --> (X << Y) * X
-    // DEVIATE 6: Negator::Negate(false, /*IsNSW*/ false, Op0) when Op1 is -X.
+    if let Some((_, x, _)) = neg1
+        && let Some(neg_op0) = c.negate(false, false, op0)
+    {
+        return Visit::Replace(c.create_binop(inst, BinaryOp::Mul, neg_op0, x, Flags::default()));
+    }
 
     if let Some(r) = fold_mul_of_exact_div(c, inst) {
         return r;

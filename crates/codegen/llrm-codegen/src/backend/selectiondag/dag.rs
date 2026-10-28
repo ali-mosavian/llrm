@@ -246,6 +246,7 @@ pub struct SelectionDAG {
     /// The IR instruction each `IROrder` was made for, in order: what a
     /// debug record's `before` names.
     pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,
+
     /// The (low, high) halves type legalization expanded each integer value
     /// into (`ExpandedIntegers`): where a debug record's value went.
     pub expanded_integers: std::collections::HashMap<SDValue, (SDValue, SDValue)>,
