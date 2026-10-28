@@ -1535,3 +1535,44 @@ b0:
     let body = text.split("define").nth(1).unwrap_or_default();
     assert!(!body.contains("ptr @n") && body.contains("alloca i16"), "{text}");
 }
+
+/// far6.bas (`far_poke_scanned_variable`): the split ahead of the walk made a
+/// static a stack slot while another body forged a pointer into the data
+/// segment (`DEF SEG = VARSEG(w)`) and POKEd it: 21257 where BC printed 100.
+#[test]
+fn test_module_ipo_keeps_a_static_in_memory_while_a_body_forges_a_selector() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "@n = internal global [2 x i8] zeroinitializer
+
+define i16 @f(i16 %a) norecurse {
+b0:
+  store i16 %a, ptr @n
+  %x = load i16, ptr @n
+  %y = add i16 %x, 1
+  ret i16 %y
+}
+
+define i8 @g(i16 %o) {
+b0:
+  %s = inttoptr i16 %o to ptr addrspace(2)
+  %far = addrspacecast ptr addrspace(2) %s to ptr addrspace(1)
+  %v = load volatile i8, ptr addrspace(1) %far
+  ret i8 %v
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::default()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none() };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    let body = text.split("define").nth(1).unwrap_or_default();
+    assert!(body.contains("ptr @n") && !body.contains("alloca i16"), "{text}");
+}
