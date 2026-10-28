@@ -1253,3 +1253,23 @@ fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
     assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
     assert_eq!(calls(true), 1, "-Os: the divide routine");
 }
+
+/// An indirect call with no stack arguments said nothing of what its callee
+/// pops (`LowerCallFrame` says it only where a call frame was set up), so the
+/// frame reader (`masm`) refused the function once the allocator gave the frame
+/// register to a value: "the frame register was given to a value and the frame
+/// cannot be addressed through the stack pointer" (QB runtime `B$VIEW` at m32
+/// `-Os`, which broke the runtime build).
+#[test]
+fn an_indirect_call_with_no_arguments_says_it_pops_none() {
+    let ir = "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"
+define void @f(ptr %fp) {
+  call void %fp()
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(ir).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    assert_eq!(done.body.call_pops.values().copied().collect::<Vec<_>>(), vec![0], "{:?}", done.body.call_pops);
+}
