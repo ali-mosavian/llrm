@@ -841,7 +841,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // A frame with no register to push is still the pin's where it keeps the
     // frame register and moves the stack pointer (`alloca`): `mov rsp, rbp;
     // pop rbp`, not `lea rsp, [rbp - N]; leave`.
-    let rebuilt = procedure.body.bits == 64 && moves_stack(&procedure.body);
+    let rebuilt = matches!(procedure.body.bits, 64) && moves_stack(&procedure.body);
     if !eligible || (pushed == 0 && !rebuilt) {
         return procedure;
     }
