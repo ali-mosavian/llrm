@@ -2015,6 +2015,20 @@ def test_format_tip_commits_a_generated_page_that_is_new(tmp_path):
     assert "docs/optimizations/passes/newpass.md" in sh(tmp_path, "ls-files"), "the new page is not in the tip"
 
 
+def test_two_halves_that_build_apart_and_fail_together_name_the_later_pr():
+    """#5784 and #5830 each passed alone and the batch failed with "missing field seh": the second half was tested on a base without the first half's PRs
+    (PUSH_MODE lands nothing until the end), both halves passed, and the push met the pair; the set was assembled again each pass."""
+    pending, refused, tested = [], [], []
+
+    def passes(group):
+        tested.append(list(group))
+        return not {"2", "3"} <= set(group)
+
+    ps.batch(["1", "2", "3", "4"], passes, pending.append, refused.append, pending=pending)
+    assert refused == ["3"]
+    assert pending == ["1", "2", "4"]
+    assert ["1", "2", "3"] in tested
+
 def test_the_integration_probe_names_what_integration_failures_returns():
     """The 16:17 batch failed `integration target_facts::shared_code_holds_no_copy_of_a_target_fact`; the halving probe held the name without `integration `, so
     `probe & integration_failures(...)` was empty for every subset and #5784 (red alone) was cleared in 37 s."""
