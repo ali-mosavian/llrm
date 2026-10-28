@@ -526,6 +526,7 @@ pub struct Options {
     pub whole_program: bool,
     /// Lay out dynamic arrays read together in one allocation.
     pub array_merging: bool,
+    pub run_time_module: bool,
     /// Every procedure uses the runtime's frame entry and exit.
     pub runtime_frames: bool,
     /// Errors in code without a landing pad, as a module handler's, report
@@ -4746,6 +4747,29 @@ impl Compiler {
                             pages.push(self.convert(page, page_type, INTEGER)?);
                         }
                         self.emit_runtime_call("B$PCPY", Vec::new(), pages);
+                    }
+                    "FIELD" => {
+                        // B$FLDP(channel), then B$FIEL(width, the string
+                        // variable's near descriptor) for each pair.
+                        let Some((file, pairs)) = arguments.split_first() else {
+                            return self.fail("FIELD expects a file number");
+                        };
+                        let (file, file_type) = self.expression(file)?;
+                        let file = self.convert(file, file_type, INTEGER)?;
+                        self.emit_runtime_call("B$FLDP", Vec::new(), vec![file]);
+                        for pair in pairs.chunks(2) {
+                            let [width, variable] = pair else {
+                                return self.fail("FIELD expects width AS variable pairs");
+                            };
+                            let (width, width_type) = self.expression(width)?;
+                            let width = self.convert(width, width_type, INTEGER)?;
+                            let (place, variable_type) = self.destination(variable)?;
+                            if variable_type != STRING {
+                                return self.fail("FIELD needs a variable-length string variable");
+                            }
+                            let descriptor = self.near_string_address(place);
+                            self.emit_runtime_call("B$FIEL", Vec::new(), vec![width, descriptor]);
+                        }
                     }
                     "CHAIN" => {
                         let [file] = arguments.as_slice() else {
@@ -10859,7 +10883,7 @@ impl Compiler {
         }
         write!(
             out,
-            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}}}\n",
+            "}}],\"runtime\":\"{}\",\"schema\":5,\"target\":\"i386-real-mode\",\"array_order\":\"{}\",\"float_mode\":\"{}\",\"float_semantics\":\"machine\"{}{}}}\n",
             self.runtime,
             if self.options.row_major { "row-major" } else { "column-major" },
             if self.options.alternate_math {
@@ -10867,7 +10891,8 @@ impl Compiler {
             } else {
                 "inline"
             },
-            if self.own_frames() { ",\"frames\":\"own\"" } else { "" }
+            if self.own_frames() { ",\"frames\":\"own\"" } else { "" },
+            if self.options.run_time_module { ",\"run_time_module\":true" } else { "" }
         )
         .unwrap();
         out
