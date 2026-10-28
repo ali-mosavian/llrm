@@ -19,18 +19,15 @@
 //! `b1 := fld [a]; b1 := fmul b1, b0`, `b1` being `fp1`'s value.
 //!
 //! # Needs
-//! [`crate::backend::allocate::RFP`].
+//! [`llrm_lir::registers::Regs::rfp_registers`].
 
 use std::collections::VecDeque;
 
-use llrm_lir::registers::{Regs, class};
+use llrm_lir::registers::Regs;
 
-use crate::backend::allocate::RFP;
 use crate::model::ir::{Held, Loc, Reg, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::support::hash::{HashSet, IndexMap};
-
-const SLOTS: usize = RFP.len();
 
 /// Which of `FP0`..`FP6` `place` is.
 pub(super) fn slot_of(
@@ -40,10 +37,7 @@ pub(super) fn slot_of(
     let Loc::Reg(Reg { register, width: 10 }) = place else {
         return None;
     };
-    if !regs.in_class(*register, class::RFP) {
-        return None;
-    }
-    RFP.iter().position(|one| one == register)
+    regs.rfp_registers().iter().position(|one| one == register)
 }
 
 /// The slots `what` reads and the slots it writes, as bit masks.
@@ -106,7 +100,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
             .as_ref()
             .is_some_and(|what| what.sources.iter().chain(&what.dests).any(|place| slot_of(regs, place).is_some()))
     };
-    if !body.insns().iter().any(|one| named(one)) {
+    if !body.iter_insns().any(|one| named(one)) {
         return None;
     }
     let fresh = body
@@ -121,7 +115,7 @@ pub(super) fn valued(body: &LirBody) -> Option<LirBody> {
         })
         .max()
         .map_or(0, |most| most + 1);
-    let border: [u32; SLOTS] = std::array::from_fn(|at| fresh + at as u32);
+    let border: Vec<u32> = (0..regs.rfp_registers().len() as u32).map(|at| fresh + at).collect();
     let blocks = body
         .blocks
         .iter()

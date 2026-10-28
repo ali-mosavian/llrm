@@ -19,18 +19,31 @@ owner = "w-2"
 
 [[program]]
 match = "*/nbody.*"
-cause = "untriaged"
-owner = "w-2"
+cause = "BASIC SINGLE rounding at excess standard (SIZES_EXCESS=fast: 91 -> 70 B); the rest as fpbench"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/stft_single.*"
-cause = "untriaged"
+cause = "integer movs (+15 on the pin's own IR at m32); x87 ops and fxch equal"
 owner = "w-13"
+status = "cause known"
+oracle = "m32 llc"
+
+[[program]]
+match = "*/data_after_checked*"
+cause = "correctness-driven: EXP overflow and LOG domain checks (B$SERR 6 and 5) that main did not emit, +24 insns in $QB$MAIN"
+owner = "w-2"
+status = "accept: behaviour change"
+oracle = "none"
 
 [[program]]
 match = "*/log_exp*"
-cause = "tree-pre"
+cause = "correctness-driven: the same EXP/LOG range checks (+21 insns in $QB$MAIN)"
 owner = "w-2"
+status = "accept: behaviour change"
+oracle = "none"
 
 [[program]]
 match = "*/mandel*"
@@ -49,8 +62,10 @@ owner = "w-2"
 
 [[program]]
 match = "*/fpbench*"
-cause = "untriaged"
-owner = "w-2"
+cause = "BASIC SINGLE rounding at excess standard (set SIZES_EXCESS=fast on both: 126 -> 74 B); the rest is far-array selector spills and a second counter (RA/LSR), x87 ops equal"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/memory.nib"
@@ -79,13 +94,17 @@ owner = "w-1"
 
 [[program]]
 match = "*/lru*"
-cause = "untriaged"
-owner = "w-13"
+cause = "relocatable-immediate store (w12) and RA; the stosb fill saves 5 B (disabled: 378 vs 373)"
+owner = "w-12"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/matmul*"
-cause = "untriaged"
+cause = "RA: five frame temporaries [bp-2..-12] and two address registers per row (_bench_matmul 123 -> 137 insns in the nib, same shape in .c/.bas); loop forms equal"
 owner = "w-13"
+status = "cause known"
+oracle = "none"
 
 [[program]]
 match = "*/jpeg*"
@@ -93,6 +112,111 @@ cause = "untriaged"
 owner = "w-13"
 
 # A pass whose removal shrinks a grower is its cause under --ablate (the flag name without -fno-); the owner of that pass.
+
+[[program]]
+match = "grep/grep.c"
+cause = "same pre-ISel IR shape as grep.bas (IR 158 vs 155, 12 fewer phis, asm +6 insns): loop-carried counters held in frame slots [bp-2],[bp-4],[bp-12] and reloaded; RA"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "*/particle.nib"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 112 vs 111, asm +20 insns)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "shellsort/shellsort.bas"
+cause = "CGP address sinking: +4 inttoptr and +4 addrspacecast at cgpaddr (IR 66 -> 75), re-made in the using blocks as the pin's optimizeMemoryInst does; the asm reloads the segment"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "shellsort/shellsort.c"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 52 vs 50, asm +7)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "shellsort/shellsort.nib"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 54 vs 56, asm +11)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/pow_unrolled.bas"
+cause = "correctness-driven: the same ^ domain check as data_after_checked (+1 fcmp, +1 unreachable, IR 9 -> 12)"
+owner = "w-2"
+status = "accept: behaviour change"
+oracle = "none"
+
+[[program]]
+match = "nbody_single/nbody_single.*"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 142 -> 120 and 139 -> 116, asm +11 and +5); BASIC SINGLE rounding is equal in fast mode"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "queens/queens.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 80 vs 79, asm +9)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "switch/switch.c"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 34 vs 34, frame 4 -> 6, an extra spill of the loop counter)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/fpdeep.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 41 vs 44, asm +3)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "recchop/recchop.c"
+cause = "TailCallElim (pin-faithful) turned the accumulating tail recursion into a loop; the frame grows (recpow power: push bp/si and a spill on the entry path, main exits frameless) so shrink-wrap and the frame are the cost; the `tail` marker alone changes no code (recchop frame 6 -> 10, count-to-zero loop)"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qb/localp.bas"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 14 vs 16, asm +2)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "qlight/qlight.*"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (qlight.bas IR 40 -> 33, asm +3; qlight.c IR 32 -> 30, asm +1)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "tile/tile.*"
+cause = "same pre-ISel IR (counts equal or smaller) and the asm grows: spills and a larger frame, shapes of RA; oracle is the --dump of both dists (IR 38 -> 40 and 33 -> 36, asm +7 and +10)"
+owner = "w-13"
+status = "cause known"
+oracle = "none"
+
+[[program]]
+match = "recpow/recpow.c"
+cause = "TailCallElim (pin-faithful) turned the accumulating tail recursion into a loop; the frame grows (recpow power: push bp/si and a spill on the entry path, main exits frameless) so shrink-wrap and the frame are the cost; the `tail` marker alone changes no code"
+owner = "w-10"
+status = "cause known"
+oracle = "none"
 
 [[flag]]
 flag = "tree-ch"

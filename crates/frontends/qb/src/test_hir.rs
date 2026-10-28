@@ -58,7 +58,7 @@ pub(super) fn fixture(name: &str) -> PathBuf {
 }
 
 fn codegen() -> llrm_codegen::driver::Options {
-    llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone())
+    llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone())
 }
 
 /// `qb_compile.assembled(program)`.
@@ -88,7 +88,7 @@ pub(super) fn listing_calls_kept(program: &Program) -> String {
 
 /// The module's MIR as the front end emits it, as text.
 pub(super) fn emitted_mir(program: &Program) -> String {
-    let options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let options = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     let (mir, _) = llrm_codegen::driver::emitted(program, &options).expect("emits");
     llrm_mir::print::module(&mir.modules[0])
 }
@@ -103,7 +103,7 @@ pub(super) fn optimized_mir_inlining(
     program: &Program,
     inline: llrm_transforms::inline::Threshold,
 ) -> String {
-    let mut options = llrm_driver::m16_options(llrm_x86_m16::machine::BASIC.clone());
+    let mut options = llrm_driver::m16_options_old(llrm_x86_m16::machine::BASIC.clone());
     options.pipeline.inline = inline;
     let (mut mir, _) = llrm_codegen::driver::emitted(program, &options).expect("emits");
     llrm_codegen::driver::optimized(&mut mir, &options).expect("optimizes");

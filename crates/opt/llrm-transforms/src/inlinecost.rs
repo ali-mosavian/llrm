@@ -304,6 +304,26 @@ fn frame_bound(
     module.global(id).function().is_some_and(|function| has_flag(&function.attrs, "frame_bound"))
 }
 
+/// Whether the caller makes a `frame_bound` call itself: it registers an error
+/// handler, so it is the frame that runs the callee's re-arm.
+fn registers_a_handler(site: &Site) -> bool {
+    site.caller
+        .layout()
+        .iter()
+        .any(
+            |&block| site.caller
+                .iter_block(block)
+                .any(
+                    |inst| matches!(
+                        site.caller.instruction(inst).opcode,
+                        Opcode::Call(_) | Opcode::Invoke(_)
+                    )
+                        && llrm_mir::memory::callee(&site.module.context, site.caller, inst)
+                            .is_some_and(|target| frame_bound(site.module, target)),
+                ),
+        )
+}
+
 fn call_info(
     function: &Function,
     inst: InstId,
@@ -868,7 +888,21 @@ impl<'a> Analyzer<'a> {
                 match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
                     (Some(tti), Some(kind), Some(src), Some(dst)) => {
                         let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
-                        cost.valid && cost.value == 0
+                        // BasicTTIImpl.h:1298-1311: the extension of a simple
+                        // load.
+                        let of_load = match operation.operands[0] {
+                            Operand::Value(value) => match self.callee.value(value).def {
+                                llrm_mir::module::ValueDef::Instruction(def) => {
+                                    matches!(
+                                        self.callee.instruction(def).opcode,
+                                        Opcode::Load { volatile: false, .. }
+                                    )
+                                }
+                                llrm_mir::module::ValueDef::Argument(_) => false,
+                            },
+                            _ => false,
+                        };
+                        (cost.valid && cost.value == 0) || (of_load && tti.ext_load_free(kind, dst, src))
                     }
                     _ => false,
                 }
@@ -1454,7 +1488,9 @@ impl<'a> Analyzer<'a> {
         // registration): its effect belongs to the frame that runs it, so the
         // callee is not copied into another frame (the `returns_twice` rule of
         // `visitCallBase`, InlineCost.cpp:2473).
-        if frame_bound(self.site.module, target) {
+        // Not a handler its owner alone calls: its re-arm then runs in the
+        // frame that registered it (the owner's landing pad), not another.
+        if frame_bound(self.site.module, target) && !(self.site.sole_call_to_local && registers_a_handler(self.site)) {
             self.has_uninlineable_intrinsic = true;
             return false;
         }
