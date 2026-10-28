@@ -19,3 +19,12 @@ pub mod opcode {
     pub const STZP: u16 = 342;
     pub const SUB8: u16 = 343;
 }
+
+pub mod reg {
+    pub const Imag16RegClassID: u16 = 2;
+    pub const Imag8RegClassID: u16 = 0;
+    pub const P: u16 = 1;
+}
+
+pub mod generic {
+}
