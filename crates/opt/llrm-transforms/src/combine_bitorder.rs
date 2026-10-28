@@ -275,7 +275,8 @@ fn correct_for_bswap(
         return false;
     }
     // Byte indices: a byte reversal.
-    from >> 3 == (width >> 3) - (to >> 3) - 1
+    // unsigned wrap, as the pin's `BitWidth / 8 - To / 8 - 1`
+    from >> 3 == (width >> 3).wrapping_sub(to >> 3).wrapping_sub(1)
 }
 
 fn correct_for_bitreverse(
@@ -283,7 +284,7 @@ fn correct_for_bitreverse(
     to: u32,
     width: u32,
 ) -> bool {
-    from == width - to - 1
+    from == width.wrapping_sub(to).wrapping_sub(1)
 }
 
 /// `matchBSwapOrBitReverse`: `inst` (an `or`) is a `bswap` or `bitreverse` of
