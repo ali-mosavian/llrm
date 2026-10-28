@@ -582,7 +582,13 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::absolute::expanded(module, |operation| options.arch.expands(operation)),
+                |module| {
+                    crate::backend::absolute::expanded(module, |operation| {
+                        // the DAG lowers `llvm.abs` itself (`LowerABS`, `neg;
+                        // cmov`)
+                        options.arch.expands(operation) && options.isel != crate::backend::shadow::Selector::Dag
+                    })
+                },
             )
     })?;
     timed("mir compares", || {

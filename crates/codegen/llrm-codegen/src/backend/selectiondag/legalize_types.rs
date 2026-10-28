@@ -722,6 +722,41 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[chain, cond, dest]);
                 SDValue { node: updated, res: 0 }
             }
+            ISD::Store
+                if at == 1
+                    && self.dag.value_type(self.dag.operand(node, 1)).is_integer()
+                    && self.dag.value_type(self.dag.operand(node, 1)).size_in_bits() % 8 == 0
+                    && !self.dag.value_type(self.dag.operand(node, 1)).size_in_bits().is_power_of_two() =>
+            {
+                // `PromoteIntOp_STORE` and the pin's split of a truncating
+                // store of an odd width (`LegalizeDAG`): the promoted value
+                // stored in power-of-two pieces, the low one first.
+                let (chain, value, ptr) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("a store has a memory operand")
+                };
+                let promoted = self.promoted_integer(value);
+                let wide = self.dag.value_type(promoted);
+                let (mut left, mut at_bit) = (self.dag.value_type(value).size_in_bits(), 0);
+                let mut stores = Vec::new();
+                while left > 0 {
+                    let piece = 1 << left.ilog2();
+                    let vt = EVT::integer(piece);
+                    let shifted = if at_bit == 0 {
+                        promoted
+                    } else {
+                        let by = self.dag.get_constant(u128::from(at_bit), EVT::I8);
+                        self.dag.get_node(ISD::Srl, wide, &[promoted, by])
+                    };
+                    let part = self.dag.get_node(ISD::Truncate, vt, &[shifted]);
+                    let at = self.address_plus(ptr, u128::from(at_bit / 8));
+                    stores.push(self.dag.get_store(chain, part, at, super::dag::MemInfo { mem_vt: vt, ..info }));
+                    at_bit += piece;
+                    left -= piece;
+                }
+                self.dag.get_token_factor(&stores)
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,

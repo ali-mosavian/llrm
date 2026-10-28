@@ -112,6 +112,16 @@ fn walk(
             }
         }
         ISD::Select => operand(1).intersect(operand(2)),
+        // `AssertZext`: the bits at and above the asserted type are zero.
+        ISD::AssertZext => {
+            let inner = operand(0);
+            let asserted = match dag.node(dag.operand(value, 1)).data {
+                super::dag::NodeData::ValueType(asserted) => asserted.size_in_bits(),
+                _ => width,
+            };
+            let zero = inner.zero | (all & !mask(asserted.min(width)));
+            KnownBits { zero, one: inner.one & !zero, width }
+        }
         ISD::ZeroExtend => {
             let inner = operand(0);
             // The new high bits are zero.
@@ -202,6 +212,14 @@ pub fn num_sign_bits(
     if dag.opcode(value) == ISD::SignExtend {
         let inner = dag.operand(value, 0);
         return num_sign_bits(dag, inner) + width - dag.value_type(inner).size_in_bits();
+    }
+    // `ComputeNumSignBits` of `AssertSext` (`VTBits - Bits + 1`) and
+    // `AssertZext` (`VTBits - Bits`).
+    if matches!(dag.opcode(value), ISD::AssertSext | ISD::AssertZext)
+        && let super::dag::NodeData::ValueType(asserted) = dag.node(dag.operand(value, 1)).data
+    {
+        let extra = u32::from(dag.opcode(value) == ISD::AssertSext);
+        return width - asserted.size_in_bits() + extra;
     }
     if dag.opcode(value) == ISD::SignExtendInReg
         && let super::dag::NodeData::ValueType(inner) = dag.node(dag.operand(value, 1)).data
