@@ -61,7 +61,7 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
-use llrm_lir::registers::Regs;
+use llrm_lir::registers::{RegId, Regs};
 use llrm_object::{Binding, Definition, Fix, Object, ObjectTarget, OmfGroup, Reloc, Role, Section, Symbol, Target};
 use llrm_target::object::{CodeModel, Format};
 
@@ -291,6 +291,8 @@ pub struct Segment {
     pub lines: Vec<(u32, usize)>,
     /// Each procedure body's bounds, in order.
     pub bodies: Vec<(masm::Mark, usize)>,
+    /// The declared call frame information and where it stands.
+    pub cfi: Vec<(masm::Mark, usize)>,
     /// The widest alignment a data item in it asks for.
     pub align: usize,
 }
@@ -310,6 +312,7 @@ impl Segment {
             fixups: Vec::new(),
             lines: Vec::new(),
             bodies: Vec::new(),
+            cfi: Vec::new(),
             align: 1,
         }
     }
@@ -321,6 +324,9 @@ impl Segment {
     ) {
         match mark {
             masm::Mark::Line { line, .. } => self.line(line),
+            declared @ (masm::Mark::Cfa { .. } | masm::Mark::Saved { .. }) => {
+                self.cfi.push((declared, self.image.len()))
+            }
             bound => self.bodies.push((bound, self.image.len())),
         }
     }
@@ -1209,6 +1215,7 @@ pub fn object_of(
         .map(|debug| super::debuginfo::laid_out(debug, module, source, &segments, symbols, &index))
         .transpose()
         .map_err(Unencodable)?;
+    let frames = if model == CodeModel::Flat64 { declared_frames(&segments, symbols, sizes) } else { Vec::new() };
     let mut sections = Vec::new();
     for segment in segments {
         let Segment { name, role, near, mut image, spans, fixups, align, .. } = segment;
@@ -1237,9 +1244,66 @@ pub fn object_of(
         symbols: table,
         omf_groups,
         omf_comdat: Vec::new(),
-        frames: Vec::new(),
+        frames,
         debug,
     })
+}
+
+/// The frames the procedures declared (`Mark::Cfa`, `Mark::Saved`): one row
+/// where the frame address or a save changes, as the state after the marks
+/// at that offset.
+fn declared_frames(
+    segments: &[Segment],
+    symbols: &IndexMap<String, (usize, usize)>,
+    sizes: &IndexMap<String, usize>,
+) -> Vec<llrm_object::Frame> {
+    use llrm_object::debug::FrameRow;
+    let name = |register: RegId| format!("{register:?}").to_lowercase();
+    let mut frames = Vec::new();
+    for (section, segment) in segments.iter().enumerate() {
+        if segment.cfi.is_empty() {
+            continue;
+        }
+        for (symbol, &(home, start)) in symbols {
+            let Some(&length) = sizes.get(symbol).filter(|_| home == section) else { continue };
+            let marks: Vec<&(masm::Mark, usize)> =
+                segment.cfi.iter().filter(|(_, at)| (start..start + length).contains(at) || *at == start).collect();
+            if marks.is_empty() {
+                continue;
+            }
+            let entry = FrameRow { offset: 0, cfa_register: "rsp".into(), cfa_offset: 8, saved: Vec::new() };
+            let mut state = entry.clone();
+            let mut rows: Vec<FrameRow> = Vec::new();
+            for &&(mark, at) in &marks {
+                match mark {
+                    masm::Mark::Cfa { framed, offset } => {
+                        state.cfa_register = if framed { "rbp" } else { "rsp" }.into();
+                        state.cfa_offset = offset;
+                    }
+                    masm::Mark::Saved { register, at: place } => state.saved.push((name(register), place)),
+                    _ => {}
+                }
+                state.offset = at - start;
+                if rows.last().is_some_and(|row| row.offset == state.offset) {
+                    rows.pop();
+                }
+                rows.push(state.clone());
+            }
+            // A row is a change: one that repeats the one before it, or ends at
+            // the function's end, says nothing.
+            let mut kept: Vec<FrameRow> = Vec::new();
+            for row in rows {
+                let before = kept.last().unwrap_or(&entry);
+                let same = (&row.cfa_register, row.cfa_offset, &row.saved)
+                    == (&before.cfa_register, before.cfa_offset, &before.saved);
+                if !same && row.offset < length {
+                    kept.push(row);
+                }
+            }
+            frames.push(llrm_object::Frame { section, offset: start, length, rows: kept });
+        }
+    }
+    frames
 }
 
 pub fn _target(name: &str) -> &str {

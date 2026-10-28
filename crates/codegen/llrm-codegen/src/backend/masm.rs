@@ -605,6 +605,13 @@ pub enum Mark {
     /// The call before it clobbers this register (one mark for each it
     /// clobbers).
     Clobbered(RegId),
+    /// Declared call frame information (`.cfi_def_cfa`, `_offset`,
+    /// `_register`): from here the frame address is `offset` past the frame
+    /// register (`framed`) or the stack pointer.
+    Cfa { framed: bool, offset: i64 },
+    /// `.cfi_offset`: from here `register` is saved at `at` from the frame
+    /// address.
+    Saved { register: RegId, at: i64 },
 }
 
 /// Where an instruction put a value `-g` names.
@@ -640,6 +647,82 @@ fn placed(dest: &Loc) -> Option<Place> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// The call frame information a prologue and epilogue declare
+/// (`X86FrameLowering::emitPrologue`/`emitEpilogue`): the frame address as
+/// each instruction of the entry and exit sequences moves it. `depth` is the
+/// frame address minus the stack pointer; once the frame register is set the
+/// address is `frame` past it and pushes and pops no longer move it.
+#[derive(Clone, Debug)]
+struct Cfi {
+    slot: i64,
+    depth: i64,
+    framed: bool,
+    frame: i64,
+}
+
+impl Cfi {
+    fn entry(slot: i64) -> Self {
+        Cfi { slot, depth: slot, framed: false, frame: 0 }
+    }
+
+    fn mark(&self) -> Item {
+        Item::Mark(Mark::Cfa { framed: self.framed, offset: if self.framed { self.frame } else { self.depth } })
+    }
+
+    /// The marks that follow `what`. `bp` is the frame register as the
+    /// sequence names it; `spelled` (below) maps it to the target's later.
+    fn after(
+        &mut self,
+        what: &Semantics,
+        bp: &Loc,
+    ) -> Vec<Item> {
+        let before = (self.framed, self.depth);
+        let mut out = Vec::new();
+        let imm = |loc: &Loc| match loc {
+            Loc::Imm(imm) => Some(imm.value),
+            _ => None,
+        };
+        match (what.op, what.name.as_deref()) {
+            (Operation::Push, _) => {
+                self.depth += self.slot;
+                if &what.sources[0] == bp {
+                    // The frame register's own save is declared at once, the
+                    // others' at the end of the prologue.
+                    if let Loc::Reg(one) = bp {
+                        out.push(Item::Mark(Mark::Saved { register: one.register, at: -self.depth }));
+                    }
+                }
+            }
+            (Operation::Pop, _) => self.depth -= self.slot,
+            (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+                self.framed = true;
+                self.frame = self.depth;
+                return vec![self.mark()];
+            }
+            (Operation::Binary, Some("sub")) => self.depth += what.sources.get(1).and_then(imm).unwrap_or(0),
+            (Operation::Binary, Some("add")) => self.depth -= what.sources.get(1).and_then(imm).unwrap_or(0),
+            (Operation::Address, _) => {
+                if let Some(Loc::Mem(from)) = what.sources.first() {
+                    self.depth = self.frame - from.offset;
+                }
+            }
+            (Operation::Nothing, Some("leave")) => {
+                self.depth = self.frame - self.slot;
+                self.framed = false;
+            }
+            _ => {}
+        }
+        // The frame register popped: the address is the stack pointer's again.
+        if self.framed && what.op == Operation::Pop && what.dests.first() == Some(bp) {
+            self.framed = false;
+        }
+        if !self.framed && (before.0 || before.1 != self.depth) {
+            out.insert(0, self.mark());
+        }
+        out
     }
 }
 
@@ -1376,14 +1459,46 @@ fn built(
             })
             .collect();
     let cells = blocks_arguments(&procedure.body);
+    // Call frame information, declared as the entry and the exits are written:
+    // only for a plain frame (no shrink-wrapping, interrupt, `enter` or stack
+    // check), which is what the rows below are right for.
+    let plain = procedure.body.bits == 64
+        && wrap.is_none()
+        && !sequences.first
+        && procedure.interrupt.is_none()
+        && procedure.entry == 0
+        && !procedure.far
+        && procedure.stack_check.is_none()
+        && sequences.entry.iter().all(|one| one.name.as_deref() != Some("enter"));
+    let bp = reg(FRAME);
+    let mut cfi = plain.then(|| Cfi::entry(procedure.registers.slot));
+    let (mut entry_items, mut after_entry) = (Vec::new(), None);
+    if let Some(cfi) = cfi.as_mut() {
+        entry_items.push(cfi.mark());
+        let pushes = sequences.entry.len() - sequences.saved.len();
+        let mut pending = Vec::new();
+        for (at, one) in enter.iter().enumerate() {
+            entry_items.push(Item::Semantics(one.clone()));
+            let marks = cfi.after(one, &bp);
+            if at >= pushes
+                && let Loc::Reg(pushed) = &one.sources[0]
+            {
+                // A callee-saved register's own offset is declared after the
+                // whole prologue (`emitCalleeSavedFrameMoves`).
+                pending.push(Item::Mark(Mark::Saved { register: pushed.register, at: -cfi.depth }));
+                entry_items.extend(marks.into_iter().filter(|mark| !matches!(mark, Item::Mark(Mark::Saved { .. }))));
+            } else {
+                entry_items.extend(marks);
+            }
+        }
+        entry_items.extend(pending);
+        after_entry = Some(cfi.clone());
+    } else {
+        entry_items.extend(enter.into_iter().map(Item::Semantics));
+    }
     let mut split_edges: Vec<(i64, Option<i64>, Vec<crate::backend::shrinkwrap::Piece>)> = Vec::new();
-    let mut out: Vec<Item> = line
-        .map(&mut marked)
-        .into_iter()
-        .chain(arrived)
-        .chain(cells)
-        .chain(enter.into_iter().map(Item::Semantics))
-        .collect();
+    let mut out: Vec<Item> = line.map(&mut marked).into_iter().chain(arrived).chain(cells).chain(entry_items).collect();
+    let body_from = out.len();
     // An item or two per instruction, a label and an alignment per block, and
     // the pieces of the frame: growing it by doubling copied every item some
     // six times.
@@ -1567,6 +1682,36 @@ fn built(
     if let Some(check) = &procedure.stack_check {
         out.push(Item::Label(Label { name: label(number, cold_at(&procedure.body)) }));
         out.push(Item::Callee(Callee::new(check.handler.clone(), check.far)));
+    }
+    // The stack moves wherever the code moves it, whether the sequences or the
+    // body wrote the instruction; what follows a return or a jump is the
+    // frame the prologue left.
+    if let Some(done) = after_entry {
+        let tail = out.split_off(body_from);
+        let mut cfi = done.clone();
+        for item in tail {
+            let ends = match &item {
+                Item::Semantics(what) => {
+                    let marks = cfi.after(what, &bp);
+                    let ends = matches!(what.op, Operation::Return | Operation::Jump);
+                    out.push(item);
+                    out.extend(marks);
+                    ends
+                }
+                Item::Callee(Callee { tail: true, .. }) => {
+                    out.push(item);
+                    true
+                }
+                _ => {
+                    out.push(item);
+                    false
+                }
+            };
+            if ends {
+                cfi = done.clone();
+                out.push(done.mark());
+            }
+        }
     }
     Ok(out)
 }
@@ -1992,6 +2137,9 @@ fn spelled(
     registers: &llrm_target::FrameRegisters,
 ) -> Item {
     let register = |one: RegId| registers.spelled(one);
+    if let Item::Mark(Mark::Saved { register: saved, at }) = item {
+        return Item::Mark(Mark::Saved { register: register(saved), at });
+    }
     // A frame place with no register is addressed through the frame register.
     let framed = |through: RegId, addr: Option<Addr>, index: RegId| {
         if through == RegId::None && index == RegId::None && addr.is_some_and(|addr| addr.space == Space::Frame) {
