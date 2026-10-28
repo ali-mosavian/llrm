@@ -662,12 +662,24 @@ fn pushed_arguments(
             at += 1;
             continue;
         };
+        let mut floats = false;
+        let is_float_store = |insn: &Insn| {
+            insn.what
+                .as_ref()
+                .is_some_and(|what| what.op == Operation::FloatStore && what.name.as_deref() == Some("fst"))
+        };
         let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
             .filter(|&place| is_store(&insns[place]))
             .inspect(|&place| {
                 // Only a move of a word or a dword can be a push.
                 if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move) {
-                    refused = true;
+                    // DEVIATE SD405: tuned for size, a popped x87 store is
+                    // made with its own area (below); the stackifier pops it.
+                    if split_wide.is_some() && is_float_store(&insns[place]) {
+                        floats = true;
+                    } else {
+                        refused = true;
+                    }
                 }
             })
             .map(|place| {
@@ -690,6 +702,35 @@ fn pushed_arguments(
                 here
             }) && next == size.value
         };
+        // The x87 stores keep their order and nothing else x87 comes between
+        // them and the pushes' place: the stack discipline is unchanged.
+        let last_store = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
+        let first_float = (at + 1..end).find(|&place| is_store(&insns[place]) && is_float_store(&insns[place]));
+        let float_order_ok = {
+            let offsets: Vec<i64> = stores
+                .iter()
+                .filter(|&&(place, _, _)| is_float_store(&insns[place]))
+                .map(|&(_, offset, _)| offset)
+                .collect();
+            offsets.windows(2).all(|pair| pair[0] > pair[1])
+        };
+        let x87_between = first_float.is_some_and(|first| {
+            (first..=last_store).any(|place| {
+                !is_store(&insns[place])
+                    && insns[place].what.as_ref().is_some_and(|what| {
+                        matches!(
+                            what.op,
+                            Operation::FloatLoad | Operation::FloatStore | Operation::FloatArith
+                        )
+                    })
+            })
+        });
+        // One popped store: each takes an area (`sub; mov bx, sp`) of its own,
+        // seven bytes against three for a store into a shared one.
+        let one_float = stores.iter().filter(|&&(place, _, _)| is_float_store(&insns[place])).count() == 1;
+        if floats && (refused || !tiled || !float_order_ok || x87_between || !one_float) {
+            refused = true;
+        }
         if refused || !tiled {
             // The stores keep their places; each is based on a copy of SP.
             let value = state.next_value;
@@ -728,9 +769,50 @@ fn pushed_arguments(
         // The pushes go where the last store was; the area and the stores go.
         let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
         let mut pushes = Vec::new();
-        for &(place, _, _) in stores.iter().rev() {
+        for &(place, _, width) in stores.iter().rev() {
             let old = &insns[place];
             let what = old.what.as_ref().expect("a store");
+            if is_float_store(old) {
+                // `sub sp, w; mov base, sp; fstp [base]`: the cell is a
+                // push, made through a copy of SP.
+                let value = state.next_value;
+                state.next_value += 1;
+                let base = Held { value, width: 2 };
+                if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
+                    classes.push((value, tag));
+                }
+                let area = insns[at].clone();
+                let mut sub = area.what.clone().expect("an area");
+                if let Loc::Imm(imm) = &mut sub.sources[1] {
+                    imm.value = i64::from(width);
+                }
+                let made_sub = state.next_address();
+                pushes.push(Arc::new(Insn::new(
+                    made_sub,
+                    Some((made_sub, made_sub)),
+                    Some(sub),
+                    area.defines.clone(),
+                    area.uses.clone(),
+                )));
+                let from = Semantics {
+                    name: Some("mov".into()),
+                    dests: vec![Loc::Held(base)],
+                    sources: vec![Loc::Reg(Reg { register: sp, width: 2 })],
+                    ..Semantics::new(Operation::Move)
+                };
+                let made_mov = state.next_address();
+                pushes.push(Arc::new(Insn::new(made_mov, Some((made_mov, made_mov)), Some(from), vec![value], vec![])));
+                let mut store = what.clone();
+                if let [Loc::Mem(cell)] = &mut store.dests[..] {
+                    cell.through = llrm_lir::registers::RegId::None;
+                    cell.base = Some(base);
+                    cell.offset = 0;
+                }
+                let mut uses = old.uses.clone();
+                uses.push(value);
+                pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(store), old.defines.clone(), uses)));
+                continue;
+            }
             let source = what.sources[0].clone();
             let uses = old.uses.clone();
             let halves = match (&source, split_wide) {
