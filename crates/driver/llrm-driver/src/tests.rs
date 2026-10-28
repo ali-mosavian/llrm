@@ -1464,3 +1464,16 @@ fn a_frame_register_function_rebases_the_frame_address_on_it_and_back() {
     let has = |pattern: &[u8]| frame.windows(pattern.len()).any(|window| window == pattern);
     assert!(has(&[0x0D, 0x06]) && has(&[0x0C, 0x07, 0x08]) && has(&[0x86, 0x02]), "{frame:02x?}");
 }
+
+/// A callee-saved register pushed before the stack `sub` (the pin's order,
+/// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
+/// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
+/// rbx`), as the pin writes it.
+#[test]
+fn a_pushed_register_before_the_stack_adjustment_is_declared_after_it() {
+    let text = format!(
+        "{SYSV}declare i32 @g(ptr)\ndefine i32 @f(i32 %a) \"disable-tail-calls\"=\"true\" {{\n  %buf = alloca [24 x i8]\n  %r = call i32 @g(ptr %buf)\n  %s = add i32 %r, %a\n  ret i32 %s\n}}\n"
+    );
+    let frame = eh_frame_of(&text);
+    assert!(frame.windows(4).any(|window| window[0] == 0x0E && window[2..] == [0x83, 0x02]), "{frame:02x?}");
+}

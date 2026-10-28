@@ -1483,7 +1483,6 @@ fn built(
     // check), which is what the rows below are right for.
     let plain = procedure.body.bits == 64
         && wrap.is_none()
-        && !sequences.first
         && procedure.interrupt.is_none()
         && procedure.entry == 0
         && !procedure.far
@@ -1499,14 +1498,15 @@ fn built(
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
-        let pushes = sequences.entry.len() - sequences.saved.len();
         let mut pending = Vec::new();
-        for (at, one) in enter.iter().enumerate() {
+        for one in &enter {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
-            if at >= pushes
+            // The System V callee-saved registers: rbx and r12 to r15 (rbp is
+            // the frame register's, declared with its push).
+            if one.op == Operation::Push
                 && let Loc::Reg(pushed) = &one.sources[0]
-                && let Some(register) = dwarf(pushed.register)
+                && let Some(register) = dwarf(pushed.register).filter(|number| [3, 12, 13, 14, 15].contains(number))
             {
                 // A callee-saved register's own offset is declared after the
                 // whole prologue (`emitCalleeSavedFrameMoves`).
