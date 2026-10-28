@@ -818,13 +818,22 @@ fn realign_of(body: &lir::LirBody) -> i64 {
 
 /// Why `procedure` cannot have its stack pointer realigned, if it cannot: it
 /// is refused rather than compiled with a local off its alignment.
+///
+/// DEVIATE RA1 (owner w4, 2026-10-28): a dynamic `alloca` beside an
+/// over-aligned local is refused; the pin addresses the locals through a base
+/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner w4,
+/// 2026-10-28): `-g` variables are refused; their locations need the canonical
+/// frame address, which a realigned frame moves. Exit for both: the pin's
+/// base pointer and CFA locations in `lowered`.
 pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
     if realign_of(&procedure.body) == 0 {
         return None;
     }
     let body = &procedure.body;
-    let why = if body.bits != 64 {
-        "outside 64-bit code"
+    // No pin alignment exists at 16 bits (real mode has no `and sp` frame the
+    // pin builds).
+    let why = if body.bits < 32 {
+        "in 16-bit code"
     } else if procedure.entry != 0
         || procedure.interrupt.is_some()
         || procedure.far
