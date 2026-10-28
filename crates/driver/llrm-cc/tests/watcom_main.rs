@@ -563,3 +563,61 @@ fn an_os_layer_call_pushes_its_arguments_at_x86_16_wat() {
     assert!(last.iter().any(|line| line.trim_start().starts_with("push")), "{listing}");
     assert!(!last.iter().any(|line| line.trim_start().starts_with("mov ax")), "{listing}");
 }
+
+/// The rp3 row links Borland's library: `cos` and `fabs` are `_cos` and
+/// `_fabs`, not the Watcom `cos_` (llc named every library function Watcom's
+/// under regparm3: QCport's rp3 link failed on undefined `cos_`, `sin_`,
+/// `sqrt_`, `fabs_`), while the program's own functions stay `_name@3`.
+#[test]
+fn the_rp3_row_calls_the_library_by_its_c_names() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = std::env::temp_dir().join(format!("llrm-cc-rp3-lib-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("l.c"),
+        "double cos(double);\ndouble fabs(double);\ndouble f(double x) { return cos(x) + fabs(x); }\n",
+    )
+    .unwrap();
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+        .env("LLRM_CC_TARGET", "x86_16-dos-rp3")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap_or_else(|| root.join("target/release/llrm-llc").into()))
+        .args(["-O2", "-w", "-S", "-o"])
+        .arg(dir.join("l.s"))
+        .arg(dir.join("l.c"))
+        .output()
+        .unwrap();
+    let listing = std::fs::read_to_string(dir.join("l.s")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    assert!(listing.contains("extern _cos:") && listing.contains("extern _fabs:"), "{listing}");
+    assert!(listing.contains("_f@3 proc"), "{listing}");
+}
+
+/// Open Watcom's front end predefines the CPU macro (`__386__` flat, `__I86__`
+/// real mode) that code written for it tests: bench/textfill took its
+/// 16-bit branch at x86_32-wat, and the torture limits.h gave `int` 32767.
+#[test]
+fn the_wat_rows_predefine_the_watcom_cpu_macro() {
+    if std::env::var_os("LLRM_PIN_CLANG").is_none() || std::env::var_os("LLRM_OW").is_none() {
+        eprintln!("skipped: LLRM_PIN_CLANG or LLRM_OW is not set");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("llrm-cc-wat-cpu-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (row, want, other) in [("x86_32-wat", "__386__", "__I86__"), ("x86_16-wat", "__I86__", "__386__")] {
+        std::fs::write(dir.join("m.c"), format!("#ifndef {want}\n#error {want} is not defined\n#endif\n#ifdef {other}\n#error {other} is defined\n#endif\nint v;\n")).unwrap();
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc"))
+            .env("LLRM_CC_TARGET", row)
+            .args(["-O2", "-w", "-S", "-o"])
+            .arg(dir.join("m.s"))
+            .arg(dir.join("m.c"))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{row}: {}", String::from_utf8_lossy(&run.stderr));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

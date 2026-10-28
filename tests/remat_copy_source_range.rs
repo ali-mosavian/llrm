@@ -1,6 +1,6 @@
 //! A copy erased by rematerialization cuts back the range of its source.
 
-use std::process::Command;
+mod common;
 
 /// gfxdev.c at m16 -Os panicked in the splitter ("Empty interval"): the spiller
 /// made a split copy again from its root definition and erased the copy, but
@@ -9,7 +9,7 @@ use std::process::Command;
 fn test_an_erased_remat_copy_shrinks_the_range_it_read() {
     let root = env!("CARGO_MANIFEST_DIR");
     let scratch = tempfile::tempdir().unwrap();
-    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-c"));
+    let mut command = common::cc::llrm_c();
     command.current_dir(scratch.path()).args(["-m16", "-Os"]);
     for directory in [
         "runtime/qb/dev",
