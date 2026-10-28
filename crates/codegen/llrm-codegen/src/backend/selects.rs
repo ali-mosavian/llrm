@@ -110,7 +110,7 @@ pub fn minmax_expanded(module: &mut Module) -> Result<(), String> {
                 let ConstantKind::Global(callee) = context.get(callee).kind else { return None };
                 match (matches!(instruction.opcode, Opcode::Call(_)), intrinsics[callee.0 as usize]) {
                     (true, Some(Intrinsic::MinMax { signed, max })) => Some((inst, Some((signed, max)))),
-                    (true, Some(Intrinsic::UnsignedSubSat)) => Some((inst, None)),
+                    (true, Some(Intrinsic::Saturating { op: BinaryOp::Sub, signed: false })) => Some((inst, None)),
                     _ => None,
                 }
             })
