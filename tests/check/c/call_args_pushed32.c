@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -Os -march=i486 --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -Os -march=i486 --isel=dag -S -o /dev/stdout
 // At -Os m32 the select that sizes the memset was scheduled inside the call sequence, so the frame was not closed in its block and every argument
 // went to [esp+k] (QCport weapons _pl_fire: 4 pushes where the pin has 98). The pin's source-order queue computes it first and pushes.
 extern void *memset(void *, int, unsigned);

@@ -31,13 +31,17 @@ pub enum Intrinsic {
         op: BinaryOp,
         signed: bool,
     },
+    /// `llvm.{s,u}{add,sub}.sat`: the result clamped to the type's range
+    /// rather than wrapped.
+    Saturating {
+        op: BinaryOp,
+        signed: bool,
+    },
     /// `llvm.{s,u}{max,min}`.
     MinMax {
         signed: bool,
         max: bool,
     },
-    /// `llvm.usub.sat`: the difference, or zero where it would go below zero.
-    UnsignedSubSat,
     /// `llvm.smul.fix` and `llvm.sdiv.fix`: signed fixed point with as many
     /// fraction bits as the third argument says.
     Fixed {
@@ -403,6 +407,14 @@ const fn overflow(
     arithmetic(name, Intrinsic::WithOverflow { op, signed }, Slot::WithFlag(0), INTS, Kind::Int)
 }
 
+const fn saturating(
+    name: &'static str,
+    op: BinaryOp,
+    signed: bool,
+) -> Spec {
+    arithmetic(name, Intrinsic::Saturating { op, signed }, Slot::Any(0), INTS, Kind::Int)
+}
+
 const FLOAT: &[Slot] = &[Slot::Any(0)];
 
 const fn unary(
@@ -453,18 +465,21 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 62] = [
+const TABLE: [Spec; 65] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
     overflow("llvm.usub.with.overflow", BinaryOp::Sub, false),
     overflow("llvm.smul.with.overflow", BinaryOp::Mul, true),
     overflow("llvm.umul.with.overflow", BinaryOp::Mul, false),
+    saturating("llvm.sadd.sat", BinaryOp::Add, true),
+    saturating("llvm.uadd.sat", BinaryOp::Add, false),
+    saturating("llvm.ssub.sat", BinaryOp::Sub, true),
+    saturating("llvm.usub.sat", BinaryOp::Sub, false),
     min_max("llvm.smax", true, true),
     min_max("llvm.smin", true, false),
     min_max("llvm.umax", false, true),
     min_max("llvm.umin", false, false),
-    arithmetic("llvm.usub.sat", Intrinsic::UnsignedSubSat, Slot::Any(0), INTS, Kind::Int),
     bit_count("llvm.ctlz", BitCount::LeadingZeros),
     bit_count("llvm.cttz", BitCount::TrailingZeros),
     bit_count("llvm.ctpop", BitCount::Population),
