@@ -162,7 +162,8 @@ use llrm_support::hash::{IndexMap, SparseIdMap};
 use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
-/// for none. A callee's budget, in semantic operations, scales with it.
+/// for none. A callee's budget, in semantic operations, scales with it. The
+/// hint and hot-site thresholds are `InlineParams`' (inlinecost.rs).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Threshold {
     pub limit: i64,
@@ -196,7 +197,8 @@ impl Threshold {
         Self { last: false, ..Self::new(0) }
     }
 
-    /// The same where code size outranks speed.
+    /// The same where code size outranks speed: the caller is `optsize`, so the
+    /// call is held to `OptSizeThreshold` (inlinecost.rs, D8).
     pub fn for_size(self) -> Self {
         Self { single: true, ..self }
     }

@@ -749,6 +749,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "aggressive-instcombine@678",
     "jumptableswitch@672",
     "constraint-elimination@699",
+    "mldst-motion@783",
 ];
 
 /// Run counts LLVM does not match yet, stated and not checked:

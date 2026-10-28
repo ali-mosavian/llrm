@@ -241,8 +241,10 @@ pub fn apply(
     types: &llrm_mir::types::Types,
     header: BlockId,
     edits: &[ExitEdit],
-) -> Vec<InstId> {
+) -> Applied {
     let mut marked = Vec::new();
+    let mut copied = Vec::new();
+    let mut moved = Vec::new();
     for edit in edits {
         // `OptimizeMax`: the compare is made again, without the select.
         if let Some(max) = &edit.max {
@@ -292,18 +294,30 @@ pub fn apply(
         {
             if function.users(cond_value).has_one_use() {
                 function.move_to(cond, Position::Before(term)).expect("a placed compare");
+                moved.push(cond);
             } else {
                 let copy = function.clone_instruction(cond);
                 function.insert(copy, Position::Before(term)).expect("a placed copy");
                 let copy_value = function.instruction(copy).result.expect("a compare value");
                 function.set_operand(term, 0, Operand::Value(copy_value));
                 let _ = header;
+                copied.push((cond, copy));
                 cond = copy;
             }
         }
         marked.push(cond);
     }
-    marked
+    Applied { marked, moved, copied }
+}
+
+/// What [`apply`] did to the exit tests.
+pub struct Applied {
+    /// The exit tests that take the post-incremented value.
+    pub marked: Vec<InstId>,
+    /// The tests moved beside the branch.
+    pub moved: Vec<InstId>,
+    /// (test, its copy beside the branch): the copy takes the test's use.
+    pub copied: Vec<(InstId, InstId)>,
 }
 
 // ---- OptimizeShadowIV ----
