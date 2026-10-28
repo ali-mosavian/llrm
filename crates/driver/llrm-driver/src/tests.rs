@@ -1392,6 +1392,55 @@ fn a_variable_bit_clear_of_a_quadword_is_btr() {
     assert!(listing.lines().any(|line| line.trim().starts_with("btr")), "{listing}");
 }
 
+/// The pin pushes the callee-saved registers `ebp, ebx, edi, esi`
+/// (`clang -target i386-unknown-linux-gnu -O2` on this function, with and
+/// without `-fno-omit-frame-pointer`): the last of CSR_32 (`esi, edi, ebx,
+/// ebp`) first. llrm pushed `esi, edi, ebp` here, the order of its own list
+/// (`ebx, esi, edi, ebp`). The allocator takes no `ebx` for this function, so
+/// the three it pushes are those of the pin's order.
+#[test]
+fn m32_callee_saved_registers_are_pushed_in_the_pins_order() {
+    let text = "\
+         target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n\
+         target triple = \"i386-unknown-linux-gnu\"\n\
+         declare i32 @g(i32)\n\
+         define i32 @six(i32 %a, i32 %b, i32 %c, i32 %d, i32 %e, i32 %f) {\n\
+           %s1 = call i32 @g(i32 %a)\n\
+           %s2 = call i32 @g(i32 %b)\n\
+           %s3 = call i32 @g(i32 %c)\n\
+           %s4 = call i32 @g(i32 %d)\n\
+           %s5 = call i32 @g(i32 %e)\n\
+           %s6 = call i32 @g(i32 %f)\n\
+           %p1 = call i32 @g(i32 %s1)\n\
+           %p2 = call i32 @g(i32 %s2)\n\
+           %p3 = call i32 @g(i32 %s3)\n\
+           %p4 = call i32 @g(i32 %s4)\n\
+           %p5 = call i32 @g(i32 %s5)\n\
+           %p6 = call i32 @g(i32 %s6)\n\
+           %t0 = add i32 %s1, %p1\n\
+           %x2 = add i32 %s2, %p2\n\
+           %t1 = add i32 %t0, %x2\n\
+           %x3 = add i32 %s3, %p3\n\
+           %t2 = add i32 %t1, %x3\n\
+           %x4 = add i32 %s4, %p4\n\
+           %t3 = add i32 %t2, %x4\n\
+           %x5 = add i32 %s5, %p5\n\
+           %t4 = add i32 %t3, %x5\n\
+           %x6 = add i32 %s6, %p6\n\
+           %t5 = add i32 %t4, %x6\n\
+           ret i32 %t5\n\
+         }\n\
+         ";
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O2"]), text, "six").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let pushed: Vec<&str> = listing
+        .lines()
+        .map(str::trim)
+        .filter(|line| matches!(*line, "push ebp" | "push ebx" | "push edi" | "push esi"))
+        .collect();
+    assert_eq!(pushed, ["push ebp", "push edi", "push esi"], "{listing}");
+}
+
 /// The `.eh_frame` of `text` (an x86-64 module) written as ELF.
 fn eh_frame_of(text: &str) -> Vec<u8> {
     let (built, format) = crate::llc::compiled(&flags(&["-m64", "-O2"]), text, "f").unwrap();
@@ -1509,4 +1558,25 @@ fn constant_stores_interleaved_with_stores_to_another_object_are_one_quadword_st
     let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), &text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
     assert!(listing.lines().any(|line| line.trim().starts_with("mov qword ptr [rsp")), "{listing}");
+}
+
+/// The `.xdata` of an x86-64 module written as COFF, found by `.pdata`'s
+/// layout: the frames the compiler declared (`.seh_*`) against the bytes read
+/// back from the same code agree.
+#[test]
+fn the_declared_win64_prologue_is_what_the_code_bytes_say() {
+    let text = format!(
+        "{SYSV}declare i32 @g(i32)\ndefine i32 @f(i32 %a, i32 %b) \"disable-tail-calls\"=\"true\" {{\n  %x = call i32 @g(i32 %a)\n  %y = call i32 @g(i32 %b)\n  %s = add i32 %x, %y\n  %t = add i32 %s, %a\n  ret i32 %t\n}}\n"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2"]), &text, "f").unwrap();
+    let object =
+        llrm_codegen::backend::objbuild::built(&built, "f.ll", llrm_codegen::backend::objbuild::CodeLayout::OneSegment)
+            .unwrap();
+    let frame = object.frames.first().expect("a declared frame");
+    assert!(!frame.seh.is_empty(), "no .seh_* directive reached the frame");
+    let section = &object.sections[frame.section];
+    let body = &section.image[frame.offset..frame.offset + frame.length];
+    let declared = llrm_x86::mc::win64unwind::from_seh("f", &frame.seh).unwrap();
+    let read = llrm_x86::mc::win64unwind::from_prologue("f", body).unwrap();
+    assert_eq!(declared, read, "{:?}", frame.seh);
 }

@@ -748,6 +748,41 @@ impl CfiState {
     }
 }
 
+/// The `.seh_*` directive a prologue instruction needs
+/// (`X86FrameLowering::BuildCFI`'s Win64 arm): `.seh_pushreg` for a push of a
+/// register the function must keep, `.seh_stackalloc` for `sub rsp` and for a
+/// push of any other register, `.seh_setframe` where the frame register is set
+/// from `rsp`. `hardware` is a register's number in the instruction set.
+fn seh_after(
+    what: &Semantics,
+    bp: &Loc,
+    hardware: &dyn Fn(&Loc) -> Option<u8>,
+) -> Option<Item> {
+    use llrm_object::Seh;
+    let imm = |loc: &Loc| match loc {
+        Loc::Imm(imm) => Some(imm.value),
+        _ => None,
+    };
+    let seh = match (what.op, what.name.as_deref()) {
+        (Operation::Push, _) => {
+            let number = hardware(what.sources.first()?)?;
+            if llrm_x86::mc::win64unwind::is_nonvolatile(number) { Seh::PushReg(number) } else { Seh::StackAlloc(8) }
+        }
+        (Operation::Move, _) if what.dests.first() == Some(bp) && what.sources.first() == Some(&sp_reg()) => {
+            Seh::SetFrame(hardware(bp)?, 0)
+        }
+        (Operation::Address, _) if what.dests.first() == Some(bp) => match what.sources.first() {
+            Some(Loc::Mem(from)) => Seh::SetFrame(hardware(bp)?, u64::try_from(from.offset).ok()?),
+            _ => return None,
+        },
+        (Operation::Binary, Some("sub")) if what.dests.first() == Some(&sp_reg()) => {
+            Seh::StackAlloc(u64::try_from(what.sources.get(1).and_then(imm)?).ok()?)
+        }
+        _ => return None,
+    };
+    Some(Item::Seh(seh))
+}
+
 fn reg(register: RegId) -> Loc {
     Loc::Reg(ir::Reg { register, width: 2 })
 }
@@ -925,7 +960,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
         && procedure.interrupt.is_none()
         && !procedure.far
         && matches!(procedure.body.bits, 32 | 64)
-        && procedure.reserve != 0
+        && (procedure.reserve != 0 || moves_stack(&procedure.body))
         && procedure.callees.values().all(|one| one.code.is_empty())
         && [false, true].iter().all(|omit| {
             // Nothing wrapped, or the frame and every register at the one Save
@@ -943,17 +978,31 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
             })
         });
     let pushed = saved_of(&procedure).len() as i64 * procedure.registers.slot;
-    if !eligible || pushed == 0 {
+    // A frame with no register to push is still the pin's where it keeps the
+    // frame register and moves the stack pointer (`alloca`): `mov rsp, rbp;
+    // pop rbp`, not `lea rsp, [rbp - N]; leave`.
+    let rebuilt = procedure.body.bits == 64 && moves_stack(&procedure.body);
+    if !eligible || (pushed == 0 && !rebuilt) {
         return procedure;
     }
     // The locals keep their alignment from BP (an 8-byte cell at 4 mod 8
     // costs a 486 3 clocks): they lie a multiple of it below the registers,
     // and the gap is reserved with them.
-    let align = procedure.registers.align.max(procedure.registers.slot);
-    let gap = (align - pushed % align) % align;
-    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap) {
+    let slot = procedure.registers.slot;
+    let align = procedure.registers.align.max(slot);
+    // Where the frame register is omitted and that is settled without a size
+    // comparison (`frame_omitted`), its cell is not reserved: the return
+    // address and the registers are what the locals are aligned below. The
+    // 32-bit frames keep it (Watcom's layout, not the pin's).
+    let dropped = procedure.body.bits == 64 && {
+        let held = frame_held(&procedure);
+        (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
+    };
+    let above = if dropped { slot } else { 0 };
+    let gap = (align - (above + pushed) % align) % align;
+    match crate::backend::relayout::pushed_down(&procedure.body, pushed + gap - above) {
         Some(body) => Procedure {
-            body: lir::LirBody { saved_first: true, ..body },
+            body: lir::LirBody { saved_first: true, slot_dropped: dropped, ..body },
             reserve: procedure.reserve + gap,
             ..procedure
         },
@@ -1051,6 +1100,10 @@ fn lowered(
     omit: bool,
 ) -> (Vec<Semantics>, Vec<Semantics>) {
     use crate::backend::framelowering::{FrameInfo, Op, emit_epilogue, emit_prologue};
+    // The last of the target's callee-saved list is pushed first
+    // (`spillCalleeSavedRegisters` walks the list backwards).
+    let saved: Vec<RegId> = saved.iter().rev().copied().collect();
+    let saved = &saved[..];
     const FP: u32 = u32::MAX - 1;
     const EAX: u32 = u32::MAX;
     let slot = procedure.registers.slot;
@@ -1154,7 +1207,7 @@ fn parts(
                 || procedure.callees.values().any(|one| may_address_frame(&one.code)))
     };
     let locals = reserve != 0;
-    let held = |reserve: i64| if omit && locals { reserve + slot } else { reserve };
+    let held = |reserve: i64| if omit && locals && !procedure.body.slot_dropped { reserve + slot } else { reserve };
     // A call finds the stack a multiple of the target's alignment, as its
     // callee assumes (a double on its stack at an 8-aligned address): the frame
     // takes what keeps it so, the return address, the pushed registers, the
@@ -1499,6 +1552,10 @@ fn built(
     let numbers = dwarf(procedure.registers.pointer).zip(dwarf(procedure.registers.stack));
     let mut cfi =
         numbers.filter(|_| plain).map(|(frame, stack)| CfiState::entry(procedure.registers.slot, stack, frame));
+    let hardware = |loc: &Loc| match loc {
+        Loc::Reg(one) => regs.name(one.register).and_then(llrm_x86::mc::win64unwind::hardware),
+        _ => None,
+    };
     let (mut entry_items, mut after_entry) = (Vec::new(), None);
     if let Some(cfi) = cfi.as_mut() {
         entry_items.push(Item::Mark(Mark::Declared));
@@ -1507,6 +1564,7 @@ fn built(
         for (at, one) in enter.iter().enumerate() {
             entry_items.push(Item::Semantics(one.clone()));
             let marks = cfi.after(one, &bp);
+            entry_items.extend(seh_after(one, &bp, &hardware));
             if at >= pushes
                 && let Loc::Reg(pushed) = &one.sources[0]
                 && let Some(register) = dwarf(pushed.register)

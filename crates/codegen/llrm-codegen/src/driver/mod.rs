@@ -520,6 +520,14 @@ pub fn optimized(
                 |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
             )
     })?;
+    timed("mir over-aligned locals", || {
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(
+                |module| crate::backend::overalign::aligned(module, &llrm_target::Target::layout(&*options.arch)),
+            )
+    })?;
     if options.arch.expands("fptoui.i64") {
         timed("mir fp to unsigned", || program.modules.iter_mut().try_for_each(crate::backend::fpconvert::expanded))?;
     }
