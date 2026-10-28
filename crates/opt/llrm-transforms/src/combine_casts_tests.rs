@@ -516,3 +516,38 @@ b0:
     assert!(out.contains("call i16 @llvm.umax.i16(i16 %a, i16 %b)"), "{out}");
     assert!(out.contains("call i16 @llvm.abs.i16(i16 %a, i1 false)"), "{out}");
 }
+
+/// `trunc` and `sext` of an `scmp` result (-1, 0 or 1) change the intrinsic's
+/// result type. Stayed an `i8` compare and a cast before.
+#[test]
+fn a_trunc_or_sext_of_scmp_changes_its_result_type() {
+    let text = "declare i8 @llvm.scmp.i8.i32(i32, i32)
+
+define i4 @f(i32 %x, i32 %y) {
+b0:
+  %c = call i8 @llvm.scmp.i8.i32(i32 %x, i32 %y)
+  %r = trunc i8 %c to i4
+  ret i4 %r
+}
+
+define i32 @g(i32 %x, i32 %y) {
+b0:
+  %c = call i8 @llvm.scmp.i8.i32(i32 %x, i32 %y)
+  %r = sext i8 %c to i32
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let layout = DataLayout::parse("e-i8:8-i16:16-i32:32-i64:64").expect("a datalayout");
+    for name in ["f", "g"] {
+        let (context, function) = module.function_mut(name).expect("a function");
+        crate::combine::combine_with_declared(context, &globals, &metadata, &layout, function, visit, &mut declared);
+    }
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i4 @llvm.scmp.i4.i32(i32 %x, i32 %y)"), "{out}");
+    assert!(out.contains("call i32 @llvm.scmp.i32.i32(i32 %x, i32 %y)"), "{out}");
+}

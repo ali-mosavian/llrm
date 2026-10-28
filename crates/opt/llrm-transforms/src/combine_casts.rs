@@ -751,6 +751,37 @@ fn is_eliminable_cast_pair(
     Some(result)
 }
 
+/// `scmp(x, y)` or `ucmp(x, y)` as `base` and its operands, when `v` is a call.
+fn cmp_intrinsic(
+    c: &Combiner,
+    v: Operand,
+) -> Option<(&'static str, Operand, Operand)> {
+    let q = query(c, None);
+    ["scmp", "ucmp"]
+        .into_iter()
+        .find_map(
+            |base| {
+                let (_, args) = pattern::intrinsic_call(&q, v, &format!("llvm.{base}"))?;
+                let [lhs, rhs] = *args else { return None };
+                Some((base, lhs, rhs))
+            },
+        )
+}
+
+/// `Builder.CreateIntrinsic(DestTy, scmp/ucmp, {x, y})`.
+fn create_cmp_intrinsic(
+    c: &mut Combiner,
+    at: InstId,
+    base: &str,
+    ty: TypeId,
+    lhs: Operand,
+    rhs: Operand,
+) -> Operand {
+    let result = bits_of(c, ty);
+    let operand = width(c, lhs);
+    c.create_intrinsic_named(at, &format!("llvm.{base}.i{result}.i{operand}"), ty, &[lhs, rhs])
+}
+
 /// `commonCastTransforms` (:223): the transforms common to all cast visitors.
 pub fn common_cast_transforms(
     c: &mut Combiner,
@@ -1188,7 +1219,16 @@ pub fn visit_trunc(
         }
     }
     // DEVIATE 1: trunc (vscale).
-    // DEVIATE 4: trunc(scmp(x, y)), trunc(ucmp(x, y)).
+    // trunc(scmp(x, y)) -> scmp(x, y) with a narrower result type.
+    // trunc(ucmp(x, y)) -> ucmp(x, y) with a narrower result type.
+    // scmp/ucmp produce only -1, 0, or 1, so any result type with at least 2
+    // bits can represent every possible value and the truncation is lossless.
+    if dest_w >= 2
+        && shared::has_one_use(c, src)
+        && let Some((base, lhs, rhs)) = cmp_intrinsic(c, src)
+    {
+        return Visit::Replace(create_cmp_intrinsic(c, inst, base, dest_ty, lhs, rhs));
+    }
 
     if dest_w == 1 && (nuw || nsw) && nonzero::is_known_non_zero(&query(c, Some(inst)), src, 0) {
         return Visit::Replace(c.int(dest_ty, 1));
@@ -1759,7 +1799,14 @@ pub fn visit_sext(
     }
 
     // DEVIATE 1: sext (vscale).
-    // DEVIATE 4: sext(scmp(x, y)), sext(ucmp(x, y)).
+    // sext(scmp(x, y)) -> scmp(x, y) with a wider result type.
+    // sext(ucmp(x, y)) -> ucmp(x, y) with a wider result type.
+    if shared::has_one_use(c, src)
+        && let Some((base, lhs, rhs)) = cmp_intrinsic(c, src)
+    {
+        let dest_ty = c.function.instruction(inst).ty;
+        return Visit::Replace(create_cmp_intrinsic(c, inst, base, dest_ty, lhs, rhs));
+    }
 
     let nsw_trunc = {
         let q = query(c, Some(inst));
