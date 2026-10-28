@@ -1696,6 +1696,18 @@ impl Builder<'_> {
                 }
                 self.cast_value(*op, operand, vt, SDNodeFlags::default())
             }
+            // `getValueImpl` visits a constant expression as the instruction it
+            // is: `add (ptrtoint @a), 3` is an add of the two.
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::Binary { op, lhs, rhs }) => {
+                let opcode = match op {
+                    BinaryOp::Add => ISD::Add,
+                    BinaryOp::Sub => ISD::Sub,
+                    BinaryOp::Xor => ISD::Xor,
+                    _ => return Err(Refused("a constant binary operator")),
+                };
+                let (lhs, rhs) = (self.constant_value(*lhs)?, self.constant_value(*rhs)?);
+                Ok(self.dag.get_node(opcode, vt, &[lhs, rhs]))
+            }
             _ => Err(Refused("aggregate constant")),
         }
     }
