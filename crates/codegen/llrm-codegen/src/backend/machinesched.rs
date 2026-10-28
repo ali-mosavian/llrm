@@ -40,9 +40,9 @@ use std::sync::Arc;
 
 use llrm_lir::registers::{RegId, Regs};
 
-use crate::backend::allocate::{LiveAt, live_rows};
 use crate::backend::classes::RegisterClasses;
 use crate::backend::liveness;
+use crate::backend::liverows::{LiveAt, live_rows};
 use crate::backend::regclass;
 use crate::backend::regpressure::{Delta, Model, Pick, PressureChange, Region, Tracker, try_pressure};
 use crate::backend::target::Segments;

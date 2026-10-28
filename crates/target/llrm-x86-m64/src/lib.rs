@@ -193,6 +193,10 @@ impl llrm_target::Target for M64 {
         llrm_x86::calling::frame(CALLING.native())
     }
 
+    fn callee_pops(&self) -> bool {
+        CALLING.conventions.iter().any(|one| one.cleanup == llrm_target::calling::Cleanup::Callee)
+    }
+
     fn frame_optional(&self) -> bool {
         CALLING.native().frame_optional
     }

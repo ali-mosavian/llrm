@@ -1987,7 +1987,7 @@ pub fn addresses<'a>(
             };
             Ok(match _affine_address(regs, body.bits, rest, &dead_after, target_cpu)? {
                 Some((taken, made)) => {
-                    let live_out = live_out.get_or_init(|| crate::backend::allocate::live_out(body));
+                    let live_out = live_out.get_or_init(|| crate::backend::liverows::live_out(body));
                     let live_out = live_out.get(&block.at).cloned().unwrap_or_default();
                     (!_loses_live_definition(&rest[..taken], &made[0], &rest[taken..], &live_out))
                         .then_some((taken, made))

@@ -198,15 +198,14 @@ impl Settled {
             .map_or(0, |record| record.bits)
     }
 
-    /// `pass` found nothing on `function` as it is, under facts `slice`.
+    /// `pass` found nothing on a body as it was at `mark`, under facts `slice`.
     pub fn note(
         &self,
         pass: &'static str,
-        function: &Function,
+        mark: Mark,
         slice: Slice,
         bits: u8,
     ) {
-        let mark = function.mark();
         self.found.borrow_mut().entry(mark.lineage()).or_default().insert(pass, Record { mark, slice, bits });
     }
 

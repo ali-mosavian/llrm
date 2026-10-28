@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_muldivrem.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_muldivrem.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:a0e73af13b59c1b849e2814308f3ad05093a8fe8b2cb9c36cb026d3b3d3e53e8 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_muldivrem.rs sha256:173d3a7aec65d613a3e029a639be05385a21ef2c133393dbb6274370cb369033 -->
 
 # combine_muldivrem
 
@@ -23,29 +23,13 @@ to the first operand order that matches, as in C++.
 DEVIATE 1: `foldVectorBinop` is not translated: MIR has no vector
 operations, so no `ConstantVector` case either.
 
-DEVIATE 2 (temporary): steps that call a helper another family owns are
-left out and named where they stood: `foldBinopWithPhiOperands` (phi
-family),
-`foldBinOpIntoSelectOrPhi`, `foldBinOpSelectBinOp`,
-`foldBinOpOfSelectAndCastOfSelectCondition` and `FoldOpIntoSelect` (select
-family). Each is a
-`// DEVIATE 2:` comment at its place in the order.
-
-DEVIATE 3 (temporary): the folds that build an intrinsic call (`abs`,
-`umin`, `umax`, `cttz`) are left out until the Builder can declare an
-intrinsic (`combine_build` DEVIATE 2); each is a `// DEVIATE 3:` comment at
-its place. `takeLog2` cannot look through `umin`/`umax` for the same reason.
+DEVIATE 2 (temporary): `foldBinOpSelectBinOp` and
+`foldBinOpOfSelectAndCastOfSelectCondition` (select family) are left out,
+each a `// DEVIATE 2:` comment at its place in the order.
 
 DEVIATE 4: a constant that `ConstantExpr::getNeg` or `getShl` would leave
 as an expression is not built (MIR holds no binary constant expressions):
 the fold is skipped where the constants do not fold to a number.
-
-DEVIATE 5 (temporary): `narrowMathIfNoOverflow` (`InstructionCombining.cpp`,
-shared with `visitAdd`) is left out until `combine_shared` has it.
-
-DEVIATE 6 (temporary): `Negator::Negate` is not translated; it is taken to
-fail, so the two folds that use it are skipped and the step after each
-(the `zext`/`sext` multiply by `-1 << C`) is tried where C++ would stop.
 
 DEVIATE 8: `simplifyICmpInst` in `visitURem` is asked without the context
 instruction, dominator tree and assumptions (no query that takes them):

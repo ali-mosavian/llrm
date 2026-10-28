@@ -48,12 +48,13 @@
 //! larger one stays), the copy goes and every `v1` is `v2`.
 //!
 //! # Used by
-//! `backend::coalesce`.
+//! `coalescer::pass`.
 
 pub mod driver;
 pub mod env;
 pub mod joinvals;
 pub mod pair;
+pub mod pass;
 pub mod register_coalescer;
 
 #[cfg(test)]
