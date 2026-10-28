@@ -2306,16 +2306,16 @@ impl Emitter<'_, '_> {
                 };
                 use llrm_lir::registers::RegId;
                 let mut requires = std::mem::take(&mut self.arguments);
-                // `GR64_TC` at 64 bits: the caller-saved registers but r10,
-                // which the static chain takes.
-                let candidates: &[RegId] = if name == "TCRETURNri64" {
-                    &[RegId::EAX, RegId::ECX, RegId::EDX, RegId::ESI, RegId::EDI, RegId::R8D, RegId::R9D, RegId::R11D]
+                // At 64 bits any caller-saved general register will do
+                // (`GR64_TC`); the 32-bit class is the three the arguments
+                // of a cdecl call leave.
+                let candidates: Vec<RegId> = if name == "TCRETURNri64" {
+                    self.ctx.caller_saved.iter().copied().collect()
                 } else {
-                    &[RegId::EAX, RegId::ECX, RegId::EDX]
+                    vec![RegId::EAX, RegId::ECX, RegId::EDX]
                 };
                 let free = candidates
-                    .iter()
-                    .copied()
+                    .into_iter()
                     .find(|one| {
                         self.ctx.caller_saved.contains(one) && requires.iter().all(|(_, taken)| taken.root() != *one)
                     })
