@@ -240,6 +240,9 @@ pub struct SelectionDAG {
     /// The source line of the IR instruction at each `IROrder` (0: none), from
     /// the `!dbg` the builder read: `SDLoc`'s line.
     pub lines: Vec<u32>,
+    /// The IR instruction each `IROrder` was made for, in order: what a
+    /// debug record's `before` names.
+    pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,
@@ -329,6 +332,7 @@ impl SelectionDAG {
             dead_work: Vec::new(),
             cur_order: 0,
             lines: Vec::new(),
+            inst_order: Vec::new(),
             replacements: Vec::new(),
             config,
             entry: zero,
