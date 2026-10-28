@@ -17,7 +17,8 @@ impl Placer {
     /// The instructions `block` would be copied as, and whether it may be.
     /// Not copied: a block with a phi, a call's record, a group, a symbol or
     /// bytes spread over others (a copy claims no source bytes of its own), or
-    /// one of data, a barrier, a call or an indirect jump.
+    /// one of data, a barrier, a call, an indirect jump or a sibling call (its
+    /// callee is named by the instruction's id, which a copy does not keep).
     fn copied(
         &self,
         block: usize,
@@ -41,6 +42,7 @@ impl Placer {
                             what.op,
                             Operation::Barrier | Operation::Data | Operation::Call
                         )
+                            && !(what.op == Operation::Return && what.name.as_deref() == Some("jmp"))
                             && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect),
                     ),
             );
