@@ -930,13 +930,16 @@ def timed(took: dict[str, float], name: str, call):
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
-def batch(prs: list, passes, land, refuse, offenders=None) -> None:
+def batch(prs: list, passes, land, refuse, offenders=None, pending=None) -> None:
     """Land `prs` (up to MAX_BATCH, ready, in order) with ONE test of the combined tree. `passes(prs)` merges them all into the base and runs the fast set; when it fails the
     set is halved (2+2, then singles): the passing half lands, then the other half is tested on top of what landed. `refuse(pr)` names a PR that fails alone. `offenders(prs)`,
-    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once."""
+    when given, names the PRs that fail the failing unit alone: they are refused and the rest are tested once. `pending` is the list `land` appends to when it does not push
+    (PUSH_MODE): those PRs are not on the base yet, so a later half is tested on top of them; without that two halves that build apart land together and the push fails
+    on the pair (#5784 x #5830, "missing seh", 15:57 and 16:11: every PR passed alone, the set was assembled again each pass)."""
     if not prs:
         return
-    if passes(prs):
+    under = [pr for pr in (pending or ()) if pr not in prs]
+    if passes([*under, *prs]):
         try:
             land.group = list(prs)  # the members that land together: a rescan after a drop covers them once
         except AttributeError:  # a builtin as `land` (tests) has no attributes
@@ -945,17 +948,19 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
             land(pr)
         return
     if len(prs) == 1:
+        if under:
+            print(f"interaction: #{prs[0]} fails on top of {' '.join('#' + pr for pr in under)}")
         refuse(prs[0])
         return
     # A unit the head passes fails on the merged tree: the PRs that fail it alone are dropped by name and the rest are tested once, instead of a smoke per half.
     if offenders and (named := [pr for pr in offenders(prs) if pr in prs]) and len(named) < len(prs):
         for pr in named:
             refuse(pr)
-        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders)
+        batch([pr for pr in prs if pr not in named], passes, land, refuse, offenders, pending)
         return
     middle = len(prs) // 2
-    batch(prs[:middle], passes, land, refuse, offenders)
-    batch(prs[middle:], passes, land, refuse, offenders)
+    batch(prs[:middle], passes, land, refuse, offenders, pending)
+    batch(prs[middle:], passes, land, refuse, offenders, pending)
 
 
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
@@ -2065,6 +2070,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         failed_units.clear()
         failed_build.clear()
         stage("fast-merge")
+        print(f"members {len(group)}: {' '.join('#' + number for number in group)}")
         gate = docs_gated(merge_one, docs_stale(ROOT))
         kept, out = fast_merge(group, gate)
         docs_synced.update(gate.synced & set(kept))
@@ -2365,7 +2371,7 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         try:
-            batch(list(numbers), passes, land, refuse, offending if FAST else None)
+            batch(list(numbers), passes, land, refuse, offending if FAST else None, pending)
             if pending:
                 tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
                 if tip:
