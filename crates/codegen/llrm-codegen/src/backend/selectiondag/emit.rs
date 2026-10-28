@@ -304,6 +304,9 @@ struct Emitter<'a, 'd> {
     /// The carry a flag producer made, saved in a byte before another unit
     /// wrote the flags, for the `adc`/`sbb` that still reads it.
     saved_carry: HashMap<u32, Held>,
+    /// The machine nodes emitted: the scheduler's clone of a unit emits its
+    /// node again.
+    machine_emitted: llrm_support::hash::HashSet<u32>,
     /// The `CopyToReg EFLAGS` nodes emitted.
     flag_copies_done: llrm_support::hash::HashSet<u32>,
 }
@@ -420,6 +423,7 @@ pub fn emit_in(
         last_select: None,
         flag_insns: HashMap::default(),
         saved_carry: HashMap::default(),
+        machine_emitted: Default::default(),
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
         glue_users: {
@@ -1414,12 +1418,21 @@ impl Emitter<'_, '_> {
         let form = &self.ctx.map.forms()[form];
         let node = self.dag.node(SDValue { node: n, res: 0 });
         // The results: the first `num_defs` values that are not chain or glue.
+        // A clone of the unit (`CopyAndMoveSuccessors`) is there for the flags
+        // it leaves: its results are values of their own, and the
+        // readers keep the first one's.
+        let cloned = !self.machine_emitted.insert(n);
         let mut dests = Vec::new();
         for (i, vt) in node.values.iter().enumerate().take(usize::from(desc.num_defs)) {
-            let held = self
-                .exported_register(SDValue { node: n, res: i as u8 })
-                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)));
-            self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
+            let held = if cloned {
+                self.fresh(width(self.ctx.map.scalar_sse(), *vt))
+            } else {
+                self.exported_register(SDValue { node: n, res: i as u8 })
+                    .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), *vt)))
+            };
+            if !cloned {
+                self.values.insert(SDValue { node: n, res: i as u8 }, held.value);
+            }
             dests.push(Loc::Held(held));
         }
         let cell_width =
@@ -2824,17 +2837,12 @@ impl Emitter<'_, '_> {
                 self.values.insert(result, source.value);
                 return Ok(Some(()));
             }
-            // An undefined value reads as zero, as the old selector's undef
-            // does.
+            // `ProcessImplicitDefs` turns the reads into undef reads and
+            // erases it, as for the old selector's undef.
             "IMPLICIT_DEF" => {
                 let held = self.fresh(width);
                 self.values.insert(result, held.value);
-                self.push(
-                    Operation::Move,
-                    "mov",
-                    vec![Loc::Held(held)],
-                    vec![Loc::Imm(Imm { value: 0, width, address: None })],
-                );
+                self.push(Operation::Nothing, crate::processimpdefs::IMPLICIT_DEF, vec![Loc::Held(held)], vec![]);
                 return Ok(Some(()));
             }
             // `INSERT_SUBREG undef, x, idx`: x in the low part of a wider
@@ -3050,6 +3058,36 @@ impl Emitter<'_, '_> {
         }
     }
 
+    /// The register an x87 result is defined in: the one a `CopyToReg` of it
+    /// names (`CreateVirtualRegisters`), else a fresh value. Made apart, the
+    /// result and its export were two values with a copy between them, and the
+    /// coalescer's terminal rule kept a loop's copy of the old value
+    /// (`recfloat` -O2: 10 instructions a trip against the pin's 9).
+    fn x87_result(
+        &mut self,
+        result: SDValue,
+    ) -> Held {
+        let exported = self
+            .dag
+            .users(result)
+            .find_map(
+                |user| {
+                    let node = self.dag.node(SDValue { node: user, res: 0 });
+                    if self.dag.opcode(SDValue { node: user, res: 0 }) != ISD::CopyToReg || node.ops[2] != result {
+                        return None;
+                    }
+                    match self.dag.node(node.ops[1]).data {
+                        NodeData::Register(reg) => Some(reg),
+                        _ => None,
+                    }
+                },
+            );
+        match exported {
+            Some(reg) => Held { value: self.vreg(reg), width: 10 },
+            None => self.fresh(10),
+        }
+    }
+
     /// The pin's x87 pseudos (`LD_Fp64m`, `ST_Fp64m32`, `ADD_Fp80m64`,
     /// `ILD_Fp32m64`, `CHS_Fp32` ...) as the forms the stackifier reads:
     /// `FloatLoad` `fld` of a cell, `fldz`, `fld1`, `fild`; `FloatStore`
@@ -3110,7 +3148,7 @@ impl Emitter<'_, '_> {
             "LD" | "ILD" => {
                 let (first, _) = digits(rest);
                 let cell = self.cell(&group(0)?, first / 8)?;
-                let held = self.fresh(10);
+                let held = self.x87_result(result);
                 self.values.insert(result, held.value);
                 let mnemonic = if prefix == "LD" { "fld" } else { "fild" };
                 self.push(Operation::FloatLoad, mnemonic, vec![Loc::Held(held)], vec![Loc::Mem(cell)]);
@@ -3137,7 +3175,7 @@ impl Emitter<'_, '_> {
                 let Loc::Held(source) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
-                let held = self.fresh(10);
+                let held = self.x87_result(result);
                 self.values.insert(result, held.value);
                 let mnemonic = format!("f{}", prefix.to_ascii_lowercase());
                 self.push(Operation::FloatUnary, &mnemonic, vec![Loc::Held(held)], vec![Loc::Held(source)]);
@@ -3150,14 +3188,14 @@ impl Emitter<'_, '_> {
                     Arc::get_mut(last)
                         .expect("a fresh instruction")
                         .clobbers
-                        .extend(crate::backend::allocate::RFP.iter().rev().take(scratch).copied());
+                        .extend(self.ctx.registers.rfp_registers().iter().rev().take(scratch).copied());
                 }
             }
             "ADD" | "SUB" | "SUBR" | "MUL" | "DIV" | "DIVR" => {
                 let Loc::Held(left) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
-                let held = self.fresh(10);
+                let held = self.x87_result(result);
                 self.values.insert(result, held.value);
                 let op = prefix.to_ascii_lowercase();
                 let (mnemonic, right) = if let Some(integer) = rest.strip_prefix('I') {

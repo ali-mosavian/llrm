@@ -150,7 +150,7 @@ gate runs it as the `identity` step; [tools](../../tools/readme.md) describes it
 
 ## Debug information
 
-`tests/dwarf.rs` and `crates/mc/llrm-debuginfo` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm writes; `tests/turbo.rs` and
+`tests/dwarf.rs` and `crates/mc/llrm-dwarf` run llvm-dwarfdump, gdb, ld and as over the DWARF llrm writes; `tests/turbo.rs` and
 `tests/cv4.rs` drive Turbo Debugger and CodeView sessions. A test whose tool is missing prints `SKIPPED: why` and passes; with
 `LLRM_REQUIRE_DWARF=1` (`LLRM_REQUIRE_TURBO`, `LLRM_REQUIRE_CODEVIEW`, `LLRM_REQUIRE_WDUMP`) it fails instead. A host that has the
 tools sets them all with `. tools/debug-gate.env`.

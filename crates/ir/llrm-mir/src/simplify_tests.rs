@@ -1219,6 +1219,23 @@ fn a_load_of_a_constant_table_at_a_constant_offset_is_the_element() {
     assert_eq!(simplified(&table("global", at), "v"), None);
 }
 
+/// `simplifyLoadInst` folds a load from an address that is an instruction over
+/// a constant global: any element of a uniform initializer is its value, and a
+/// constant-offset one is that element. g_seq's `b[i] * 2` over a zero
+/// `static const` table stayed a load, kept every `a[i] += ...` after it, and
+/// GVN at K=128 ran 192 M instructions on an IR the pin shrinks to nothing.
+#[test]
+fn a_load_through_a_gep_of_a_constant_global_is_folded() {
+    let load = |initializer: &str, index: &str| {
+        format!(
+            "@t = internal constant [4 x i16] {initializer}\n\ndefine i16 @f(i16 %i) {{\nb0:\n  %p = getelementptr inbounds nuw [2 x i8], ptr @t, i16 {index}\n  %v = load i16, ptr %p\n  ret i16 %v\n}}\n"
+        )
+    };
+    assert_eq!(simplified(&load("zeroinitializer", "%i"), "v").as_deref(), Some("0"));
+    assert_eq!(simplified(&load("[i16 5, i16 6, i16 7, i16 8]", "2"), "v").as_deref(), Some("7"));
+    assert_eq!(simplified(&load("[i16 5, i16 6, i16 7, i16 8]", "%i"), "v"), None);
+}
+
 /// `simplifyICmpWithMinMax` matches intrinsic calls: an icmp of two values that
 /// are not calls asks no name. It made eight lookups an icmp, 1.4 K Ir each
 /// (2,264 asks of 3.1 M Ir in d_faces -O2; the pin's matchers cost 75).

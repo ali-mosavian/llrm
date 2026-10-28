@@ -113,6 +113,15 @@ def test_llrm_cc_reads_the_rows_own_os_header_not_llrm_cs(monkeypatch, tmp_path)
     assert "/llrm-c-header-dir" not in dosbatch.c_compile(source, tmp_path / "p.obj", "x86-m16", "-O2", Path("/llrm-c-header-dir"), [])[0]
 
 
+def test_a_watcom_abi_program_links_the_start_up_that_calls_main_whichever_frontend_built_it(monkeypatch):
+    """-mabi=watcom spells `main` as `main_` under llrm-c too: watcom_far_sum, fsgs_call, register_upper_half and wc16_mixed failed to link
+    ('_main is an undefined reference') when only llrm-cc's runs asked for LL_MAIN=main_ (#5540)."""
+    monkeypatch.setattr(dosbatch, "os_layer", lambda target, field, language: "A=1")
+    monkeypatch.setenv("LLRM_C_FRONTEND", "llrm-c")
+    assert dosbatch.os_defines("x86-m16", "c", "watcom") == ("A=1", "LL_MAIN=main_")
+    assert dosbatch.os_defines("x86-m16", "c", None) == ("A=1",)
+
+
 def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
     """llrm-nib names the hook by absolute path: the object's name began with "/", a directory that did not exist (jwasm A1106 in NibCutTests)."""
     name = dosbatch.object_name(str(dosbatch.ROOT / "runtime/nib/x86-m16/init.asm"))

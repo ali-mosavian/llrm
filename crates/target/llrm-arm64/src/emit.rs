@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
-use llrm_object::{Arch, Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
+use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
@@ -157,11 +157,11 @@ pub fn object(
                                 .map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
                         }
                         Target::Symbol { name, addend } => {
-                            let Some(kind) = fixup.kind.relocation() else {
+                            let Some(fix) = fixup.kind.relocation() else {
                                 return Err(format!("{}: {inst}: no relocation for {:?}", function.symbol, fixup.kind));
                             };
                             let target = RelocTarget::Symbol(symbols.find(&name));
-                            text_relocs.push(Reloc { at: cursor, kind, target, addend });
+                            text_relocs.push(Reloc::new(cursor, fix, target, addend));
                         }
                         Target::Offset(_) => unreachable!("an offset is encoded"),
                     }
@@ -177,12 +177,12 @@ pub fn object(
         let mut relocs = Vec::new();
         for (offset, one) in &members {
             for DataReloc { at, symbol, addend } in &one.relocs {
-                relocs.push(Reloc {
-                    at: offset + at,
-                    kind: llrm_object::Kind::Abs { width: 8 },
-                    target: RelocTarget::Symbol(symbols.find(symbol)),
-                    addend: *addend,
-                });
+                relocs.push(Reloc::new(
+                    offset + at,
+                    llrm_object::Fix::abs(8),
+                    RelocTarget::Symbol(symbols.find(symbol)),
+                    *addend,
+                ));
             }
         }
         sections.push(section(section_name, role, align, image, relocs));
@@ -190,7 +190,7 @@ pub fn object(
     let _ = (GlobalKind::Variable, Linkage::External);
     Ok(Object {
         name: name.to_owned(),
-        arch: Arch::Arm64,
+        bits: 64,
         sections,
         symbols: symbols.list,
         omf_groups: Vec::new(),

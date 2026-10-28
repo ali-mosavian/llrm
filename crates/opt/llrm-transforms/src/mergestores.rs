@@ -72,8 +72,8 @@ use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Callees};
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
-use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::Outer;
+use llrm_mir::opcode::{CallInfo, Flags, Opcode};
+use llrm_mir::passes::{Declared, Outer};
 use llrm_support::hash::IndexMap;
 
 use crate::profit::OperationCosts;
@@ -172,17 +172,110 @@ fn chunks(
     made
 }
 
+/// A run of copies of adjacent cells that `llvm.memcpy` stands for.
+struct Call {
+    destination: Operand,
+    source: Operand,
+    to: u32,
+    from: u32,
+    width: u32,
+    length: i64,
+    /// The last store of the run: the call stands there.
+    last: InstId,
+    stores: Vec<InstId>,
+    loads: Vec<InstId>,
+}
+
+/// DEVIATE M5 (rows, `copy_runs -Os`, +163 bytes at m16): tuned for size, a run
+/// of copies of adjacent cells that `rep movs` does in fewer code bytes than
+/// the loads and stores `MEMCPY_MOVES` makes of it is `llvm.memcpy`. The pin
+/// merges the run into dword copies and stops there (24 pairs for 96 bytes).
+/// The calls made, and the pairs left.
+fn string_runs(
+    unit: &Unit,
+    span: &mut Vec<Pair>,
+    reads: &[Operand],
+    costs: &OperationCosts,
+) -> (Vec<Call>, Vec<Pair>) {
+    let kept = std::mem::take(span);
+    if kept.iter().any(|one| reads.contains(&one.dst)) {
+        return (Vec::new(), kept);
+    }
+    let mut groups: Vec<Vec<Pair>> = Vec::new();
+    for pair in &kept {
+        let space = (unit.space(pair.src_pointer), unit.space(pair.dst_pointer));
+        match groups.iter_mut().find(|group| {
+            group[0].src == pair.src
+                && group[0].dst == pair.dst
+                && (unit.space(group[0].src_pointer), unit.space(group[0].dst_pointer)) == space
+        }) {
+            Some(group) => group.push(pair.clone()),
+            None => groups.push(vec![pair.clone()]),
+        }
+    }
+    let mut calls = Vec::new();
+    let mut taken: Vec<InstId> = Vec::new();
+    for mut group in groups {
+        group.sort_by_key(|one| one.dst_low);
+        if group.windows(2).any(|two| two[1].dst_low < two[0].dst_low + two[0].width) {
+            continue;
+        }
+        let mut at = 0;
+        while at < group.len() {
+            let mut end = at + 1;
+            while end < group.len()
+                && group[end].dst_low == group[end - 1].dst_low + group[end - 1].width
+                && group[end].src_low == group[end - 1].src_low + group[end - 1].width
+                && group[end].width == group[end - 1].width
+            {
+                end += 1;
+            }
+            let run = &group[at..end];
+            at = end;
+            let length: i64 = run.iter().map(|one| one.width).sum();
+            let pairs = length / 4 + i64::from((length % 4).count_ones());
+            if pairs <= 8 || crate::loopidioms::copy_price(costs, length, false) >= pairs * (costs.load + costs.store) {
+                continue;
+            }
+            let (Some(to), Some(from)) = (unit.space(run[0].dst_pointer), unit.space(run[0].src_pointer)) else {
+                continue;
+            };
+            let last = run.iter().max_by_key(|one| one.store_order).expect("a run has copies");
+            taken.extend(run.iter().map(|one| one.store));
+            calls.push(Call {
+                destination: run[0].dst_pointer,
+                source: run[0].src_pointer,
+                to,
+                from,
+                width: unit.layout.pointer(to).index_bits,
+                length,
+                last: last.store,
+                stores: run.iter().map(|one| one.store).collect(),
+                loads: run.iter().map(|one| one.load).collect(),
+            });
+        }
+    }
+    let left = kept.into_iter().filter(|one| !taken.contains(&one.store)).collect();
+    (calls, left)
+}
+
 /// `function` with each run of copies of adjacent cells to adjacent cells made
 /// one wider copy; whether any was.
 pub fn merged_copies(
-    context: &Context,
+    context: &mut Context,
     layout: &DataLayout,
     callees: &Callees,
     function: &mut Function,
     outer: &Outer,
+    runs: Option<(&mut Declared, &OperationCosts)>,
 ) -> bool {
+    let (mut declared, run_costs) = match runs {
+        Some((declared, costs)) => (Some(declared), Some(costs)),
+        None => (None, None),
+    };
     let legal = layout.largest_legal_integer();
     let mut plan: Vec<Vec<Pair>> = Vec::new();
+    let mut calls: Vec<Call> = Vec::new();
     {
         let unit = Unit::within(context, layout, function, outer);
         // The loads of the span, by result: one map for the function, emptied
@@ -196,7 +289,15 @@ pub fn merged_copies(
                              reads: &mut Vec<Operand>,
                              loads: &mut IdMap<ValueId, InstId>,
                              put: &mut Vec<ValueId>| {
-                plan.extend(chunks(&unit, span, reads, legal));
+                let kept = match run_costs {
+                    Some(costs) => {
+                        let (taken, kept) = string_runs(&unit, span, reads, costs);
+                        calls.extend(taken);
+                        kept
+                    }
+                    None => std::mem::take(span),
+                };
+                plan.extend(chunks(&unit, &kept, reads, legal));
                 span.clear();
                 reads.clear();
                 for value in put.drain(..) {
@@ -266,6 +367,41 @@ pub fn merged_copies(
             flush(&mut span, &mut reads, &mut loads, &mut put);
         }
     }
+    for call in &calls {
+        let declared = declared.as_mut().expect("calls come with a declaration set");
+        let (callee, function_type) =
+            crate::loopidioms::_copy(context, declared, crate::loopidioms::How::Apart, call.to, call.from, call.width);
+        let length = crate::counting::constant(context, &llrm_analysis::num::Num::from(call.length), call.width);
+        let pointer = context.types.ptr(0);
+        let callee = Operand::Constant(context.constant(llrm_mir::context::Constant {
+            ty: pointer,
+            kind: llrm_mir::context::ConstantKind::Global(callee),
+        }));
+        let off = crate::counting::constant(context, &llrm_analysis::num::Num::from(0), 1);
+        let info = CallInfo {
+            function_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); 4],
+            attrs: Vec::new(),
+            tail: Default::default(),
+        };
+        let void = context.types.void();
+        let made = function.create_instruction(
+            Opcode::Call(Box::new(info)),
+            void,
+            vec![call.destination, call.source, length, off, callee],
+            Flags::default(),
+            None,
+        );
+        function.insert(made, Position::Before(call.last)).expect("a placed store");
+        for &store in &call.stores {
+            function.erase(store).expect("a store has no result");
+        }
+        for &load in &call.loads {
+            function.erase(load).expect("a load with no use left");
+        }
+    }
     for chunk in &plan {
         let bits = (chunk[0].width * chunk.len() as i64 * 8) as u32;
         let ty = context.types.int(bits);
@@ -296,7 +432,7 @@ pub fn merged_copies(
             function.erase(one.load).expect("a load with no use left");
         }
     }
-    !plan.is_empty()
+    !(plan.is_empty() && calls.is_empty())
 }
 
 /// One store of a constant a merge may take.
@@ -539,7 +675,7 @@ mod tests {
             (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
         let callees = llrm_mir::memory::callees(&module);
         let (context, function) = module.function_mut("f").expect("@f");
-        let changed = merged_copies(context, &layout, &callees, function, &outer);
+        let changed = merged_copies(context, &layout, &callees, function, &outer, None);
         let after = printed(&module);
         assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
         (after, changed)
@@ -563,6 +699,48 @@ mod tests {
     }
 
     /// `a[0] = b[0]; a[1] = b[1]` is a dword load and a dword store.
+    /// 24 word copies from `@b` to `@a`, with `size` the pass's mode: the
+    /// printed form. Priced in code bytes on the DOS target.
+    fn forty_eight_bytes(size: bool) -> String {
+        let steps = (0..24)
+            .map(|at| {
+                format!(
+                    "  %s{at} = getelementptr inbounds [24 x i16], ptr @b, i16 0, i16 {at}\n  %d{at} = getelementptr inbounds [24 x i16], ptr @a, i16 0, i16 {at}\n  %v{at} = load i16, ptr %s{at}\n  store i16 %v{at}, ptr %d{at}\n"
+                )
+            })
+            .collect::<String>();
+        let text = format!(
+            "@a = global [24 x i16] zeroinitializer\n@b = global [24 x i16] zeroinitializer\n\ndefine i16 @f(i16 %q) {{\n{steps}  ret i16 %q\n}}\n"
+        );
+        let before = parsed(&format!("{DOS}{text}"));
+        let mut module = before.clone();
+        let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
+        let (layout, outer) = (layout(&module), Outer::of(&module, Some(machine.clone())));
+        let callees = llrm_mir::memory::callees(&module);
+        let bytes = llrm_mir::target::Machine::size_costs(&*machine);
+        let mut declared = llrm_mir::passes::Declared::default();
+        let (context, function) = module.function_mut("f").expect("@f");
+        let runs = size.then_some((&mut declared, &bytes));
+        merged_copies(context, &layout, &callees, function, &outer, runs);
+        printed(&module)
+    }
+
+    /// 96 bytes of word copies were 24 dword loads and stores (copy_runs -Os
+    /// m16: 501 bytes against main's 338); tuned for size they are one
+    /// `llvm.memcpy`, which isel makes `rep movsd`. Tuned for speed they stay
+    /// the pin's dword copies.
+    #[test]
+    fn test_a_long_run_of_copies_is_a_memcpy_tuned_for_size() {
+        let size = forty_eight_bytes(true);
+        // The declaration is added once the pass has run: the callee prints
+        // unnamed.
+        assert!(size.contains("(ptr %d0, ptr %s0, i16 48, i1 false)"), "{size}");
+        assert_eq!(size.matches("load").count(), 0, "{size}");
+        let speed = forty_eight_bytes(false);
+        assert!(!speed.contains("i16 48"), "{speed}");
+        assert_eq!(speed.matches("load i32").count(), 12, "{speed}");
+    }
+
     #[test]
     fn test_two_adjacent_word_copies_are_one_dword_copy() {
         let (after, changed) = merge(&two_words([0, 1]), INPUTS);
