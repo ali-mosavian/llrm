@@ -31,6 +31,9 @@ ARGUMENTS = "start.qmp -ticks 300"
 # The attract loop: an empty command line starts `startdemos demo1 demo2 demo3` (src/host/sys.c). run.sh gives an empty argument its default, so one space.
 ATTRACT_ARGUMENTS = " "
 ATTRACT_DEMOS = ("demo1.qdc", "demo2.qdc", "demo3.qdc")
+LOG_READ = 16 << 20  # a looping fault writes without end: the first megabytes name it
+# What the shipped QCport draws at -Os, from both builds: a different count is a miscompile or a changed benchmark, not noise.
+EXPECTED = {"modules": 65, "frames": "62", "polys": "37637", "md5": "ba64e86d"}
 LOGS = ("cstep.txt", "dosbox.out", "dosbox.log", "cport.txt", "CPORT.TXT", "error.log", "ERROR.LOG")
 # FP87 first: the order the build that runs uses; CM first leaves a program that links and stops after its arguments.
 LIBRARIES = ("FP87", "MATHM", "CM")
@@ -92,6 +95,12 @@ def verdict(reference: dict[str, str], built: dict[str, str]) -> list[str]:
     return [f"{key}: Borland {reference.get(key)}, llrm {built.get(key)}" for key in ("frames", "polys", "md5") if reference.get(key) != built.get(key)]
 
 
+def pinned(modules: int, built: dict[str, str]) -> list[str]:
+    """Where the llrm build's drawing is not the pinned one (EXPECTED): empty where it is."""
+    seen = {"modules": modules, "frames": built.get("frames"), "polys": built.get("polys"), "md5": (built.get("md5") or "")[:8]}
+    return [f"{key}: pinned {EXPECTED[key]}, llrm {seen[key]}" for key in EXPECTED if seen[key] != EXPECTED[key]]
+
+
 def tails(directory: Path, lines: int = 12) -> list[str]:
     """What the emulator and the program last said, for a run that drew nothing: the work directory is gone with a CI runner."""
     out = []
@@ -102,8 +111,19 @@ def tails(directory: Path, lines: int = 12) -> list[str]:
     return out or [f"  {directory.name}: no output at all ({sorted(p.name for p in directory.iterdir())[:12]})"]
 
 
+def faults(directory: Path) -> list[str]:
+    """The CPU exceptions the emulator logged in `directory`, each once: a miscompiled program that executes garbage ends in one, then loops on it."""
+    seen = []
+    for name in LOGS:
+        one = directory / name
+        if one.is_file():
+            with one.open(errors="replace") as log:
+                seen += re.findall(r"CPU_Exception: Calling CPU_Interrupt for exception (\d+)", log.read(LOG_READ))
+    return [f"CPU exception {number}" for number in dict.fromkeys(seen)]
+
+
 def attract_problems(directory: Path) -> list[str]:
-    """What the attract loop run in `directory` did wrong: a demo it never started, and every line that says it ran out of memory. Empty where all three played."""
+    """What the attract loop run in `directory` did wrong: a CPU exception, a demo it never started, and every line that says it ran out of memory. Empty where all three played."""
     def text(name: str) -> str:
         one = directory / name
         return one.read_text(errors="replace") if one.is_file() else ""
@@ -112,7 +132,7 @@ def attract_problems(directory: Path) -> list[str]:
     started = re.findall(r"attract demo (\S+) map", "\n".join(text(name) for name in LOGS).replace("\r", ""))
     memory = [line.strip() for name in LOGS for line in text(name).replace("\r", "").splitlines() if "out of memory" in line.lower()]
     missing = [demo for demo in ATTRACT_DEMOS if demo not in started]
-    return ([f"never started: {' '.join(missing)}"] if missing else []) + list(dict.fromkeys(memory))[:3]
+    return faults(directory) + ([f"never started: {' '.join(missing)}"] if missing else []) + list(dict.fromkeys(memory))[:3]
 
 
 # tools/xfail.toml id of the attract run at -O2: it runs out of memory (code 329,553 bytes against Borland's 296,085); the shipped -Os build (342,560) plays all three demos.
@@ -124,7 +144,7 @@ def attract_verdict(wrong: dict[str, list[str]]) -> list[str]:
 def attract_over(directory: Path) -> bool:
     """The attract run has said all it will: all three demos started, or it ran out of memory."""
     problems = attract_problems(directory)
-    return not problems or any("out of memory" in one.lower() for one in problems)
+    return not problems or any("out of memory" in one.lower() or one.startswith("CPU exception") for one in problems)
 
 
 def progress(directory: Path) -> int:
