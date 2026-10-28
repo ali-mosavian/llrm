@@ -405,6 +405,19 @@ fn a_select_of_a_loaded_value_is_a_cmov_from_memory() {
     assert!(listing.lines().any(|line| line.trim().starts_with("cmovge") && line.contains('[')), "{listing}");
 }
 
+/// Setting a bit of an `i64` by a variable index stopped the emitter
+/// (`Unmapped("BTS64rr")`): the x86-64 file had `bt` and `btc` but not `bts`,
+/// which the table selects from `or` with a shifted bit.
+#[test]
+fn a_variable_bit_set_of_a_quadword_is_bts() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define i64 @set(i64 %x, i64 %n) {\n  %b = shl i64 1, %n\n  %r = or i64 %x, %b\n  ret i64 %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-O2", "--isel=dag"]), text, "set").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.lines().any(|line| line.trim().starts_with("bts")), "{listing}");
+}
+
 /// `x == 0xFFFFFFF7` on an `i64` stopped the encoder at `cmp rdi, 0xfffffff7`:
 /// `foldImmediate` put a zero-extended 32-bit constant in a 64-bit immediate,
 /// which the CPU sign-extends. It stays in a register.
