@@ -43,7 +43,9 @@ pub struct DataLayout {
 /// one `Types` (by address and size, so another context's ids do not read it)
 /// and only for a struct whose body is defined.
 #[derive(Default)]
-struct StructLayouts(std::sync::Mutex<(usize, usize, usize, crate::hash::HashMap<TypeId, std::sync::Arc<(u64, Vec<u64>)>>)>);
+struct StructLayouts(
+    std::sync::Mutex<(usize, usize, usize, crate::hash::HashMap<TypeId, std::sync::Arc<(u64, Vec<u64>)>>)>,
+);
 
 impl Clone for StructLayouts {
     fn clone(&self) -> Self {
@@ -52,7 +54,10 @@ impl Clone for StructLayouts {
 }
 
 impl PartialEq for StructLayouts {
-    fn eq(&self, _: &Self) -> bool {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
         true
     }
 }
@@ -60,7 +65,10 @@ impl PartialEq for StructLayouts {
 impl Eq for StructLayouts {}
 
 impl std::fmt::Debug for StructLayouts {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         f.write_str("StructLayouts")
     }
 }
@@ -69,7 +77,8 @@ thread_local! {
     static COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many struct layouts this thread has worked out, for a test that each is made once.
+/// How many struct layouts this thread has worked out, for a test that each is
+/// made once.
 pub fn layouts_computed() -> usize {
     COMPUTED.with(std::cell::Cell::get)
 }
@@ -706,7 +715,9 @@ mod tests {
     /// `getStructLayout` map does.
     #[test]
     fn a_structs_layout_is_made_once_however_often_its_size_is_asked() {
-        let module = crate::parse::module("%inner = type { i16, i32, [4 x i8] }\n%outer = type { %inner, i16, %inner }\n").unwrap();
+        let module =
+            crate::parse::module("%inner = type { i16, i32, [4 x i8] }\n%outer = type { %inner, i16, %inner }\n")
+                .unwrap();
         let types = &module.context.types;
         let layout = DataLayout::parse("e-p:16:16-i32:32").unwrap();
         let outer = types.intern(crate::types::Type::Named("outer".into()));
