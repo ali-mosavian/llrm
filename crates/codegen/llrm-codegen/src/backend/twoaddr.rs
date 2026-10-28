@@ -59,14 +59,14 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::backend::coalesce;
 use crate::model::ir::{self, Held, Loc, Mem, Operation, Semantics};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 use crate::support::hash::{IndexMap, IndexSet};
 
 /// Operations that read their destination.
-pub const _TIED: [Operation; 4] = [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select];
+pub const _TIED: [Operation; 5] =
+    [Operation::Binary, Operation::Unary, Operation::Funnel, Operation::Select, Operation::Exchange];
 
 /// `lea`: which tied instructions become a `lea` before allocation (DEVIATE
 /// TA-4, twoaddress.rs).
@@ -373,7 +373,7 @@ fn _reused(body: &LirBody) -> LirBody {
             let swap = |value: u32| if value == into.value { first.value } else { value };
             for place in at..=last {
                 index(&mut reads, &mut writes, place, &insns[place], false);
-                insns[place] = coalesce::_renamed(&insns[place], &swap);
+                insns[place] = insns[place].renamed(&swap);
                 index(&mut reads, &mut writes, place, &insns[place], true);
             }
             changed = true;
@@ -1152,7 +1152,7 @@ mod tests {
     }
 
     fn names_of(body: &LirBody) -> Vec<String> {
-        body.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+        body.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
     }
 
     fn of(insns: Vec<Arc<Insn>>) -> LirBody {
@@ -1375,6 +1375,41 @@ mod tests {
         assert!(position(&got, "lea") < position(&got, "add"), "{names:?}");
     }
 
+    /// Finding the kill of a tied add's source walked the block from its end
+    /// back to the last reader (`(at + 1..len).rev().find`), for every tied
+    /// add: quadratic in a long straight-line block (jpeg-sized: 118 M of
+    /// 615 M instructions at 64 statements, 1.9 G of 5.6 G at 256). The pin
+    /// reads the kill from `LiveVariables`; the search is now the
+    /// instructions the reschedule may move across.
+    #[test]
+    fn test_finding_the_kill_does_not_walk_the_rest_of_the_block() {
+        use crate::twoaddress::KILL_SEARCHED;
+        let searched = |tail: i64| {
+            let mut insns = Vec::new();
+            for p in 0..20_i64 {
+                let (base, r) = (p * 5, 1000 + p as u32 * 10);
+                let what = Semantics {
+                    name: Some("add".into()),
+                    dests: vec![held(r + 1, 4)],
+                    sources: vec![held(r, 4), Loc::Mem(crate::model::ir::Mem::new(None, 4))],
+                    ..Semantics::new(Operation::Binary)
+                };
+                insns.push(imm_def(base, r));
+                insns.push(Arc::new(Insn::new(base + 1, Some((base + 1, base + 1)), Some(what), vec![r + 1], vec![r])));
+                insns.push(lea_of(base + 2, r + 2, r));
+                insns.push(read(base + 3, r + 1));
+                insns.push(read(base + 4, r + 2));
+            }
+            insns.extend((0..tail).map(|k| imm_def(1000 + k, 9000 + k as u32)));
+            KILL_SEARCHED.with(|n| n.set(0));
+            let _ = tied(&of(insns), Off);
+            KILL_SEARCHED.with(std::cell::Cell::get)
+        };
+        let (short, long) = (searched(50), searched(2000));
+        assert!(short > 0, "the premise: the reschedules search for a kill");
+        assert!(long <= 2 * short, "{long} instructions looked at behind a 2000-instruction tail, {short} behind 50");
+    }
+
     /// The pin's checks: a kill that is a copy, or a call between, leaves the
     /// add where it was.
     #[test]
@@ -1586,7 +1621,7 @@ mod tests {
         let before = crate::backend::allocate::live_rows_walks(&input);
         let got = tied(&input, Default::default());
         let names: Vec<_> =
-            got.insns().iter().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+            got.iter_insns().filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
         assert_eq!(names, ["mov", "mov", "add", "mov"], "the premise: the update in place was found: {names:?}");
         assert_eq!(crate::backend::allocate::live_rows_walks(&input) - before, 0);
         let built = crate::liveness::liveintervals::BUILT.with(std::cell::Cell::get);
@@ -1814,7 +1849,7 @@ mod tests {
         let add = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
         let got = tied(&of(vec![imm_def(0, 7), add, read(2, 8), read(3, 7)]), Off);
         let mut shapes = Vec::new();
-        for one in got.insns().iter() {
+        for one in got.iter_insns() {
             let Some(what) = one.what.as_ref() else { continue };
             shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
         }
@@ -1842,7 +1877,7 @@ mod tests {
         let mul = Arc::new(Insn::new(1, Some((1, 1)), Some(what), vec![8], vec![7]));
         let got = tied(&of(vec![imm_def(0, 7), mul, read(2, 8), read(3, 7)]), Off);
         let mut shapes = Vec::new();
-        for one in got.insns().iter() {
+        for one in got.iter_insns() {
             let Some(what) = one.what.as_ref() else { continue };
             shapes.push((what.name.clone().unwrap_or_default().to_string(), what.sources.clone()));
         }

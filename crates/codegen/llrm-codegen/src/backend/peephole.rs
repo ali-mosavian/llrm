@@ -622,10 +622,18 @@ pub fn high_extracts<'a>(
     let regs = body.regs();
     let profile = targets::profile(cpu)?;
     let mut virtual_uses = Counter::default();
+    // The value a bare anchor (an instruction with no operation, left where a
+    // coalesced copy was) hands on: its one use to its one definition.
+    let mut anchors: std::collections::BTreeMap<u32, u32> = Default::default();
     for block in &body.blocks {
         for one in &block.insns {
             for value in &one.uses {
                 *virtual_uses.entry(*value).or_insert(0) += 1;
+            }
+            if one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing)
+                && let ([from], [to]) = (one.uses.as_slice(), one.defines.as_slice())
+            {
+                anchors.insert(*from, *to);
             }
         }
     }
@@ -641,7 +649,8 @@ pub fn high_extracts<'a>(
             })[&at]
                 .clone()
         };
-        let insns = _code_windows(&block.insns, 3, |run| -> Result<_, String> {
+        let sunk = _copies_sunk_to_high_shifts(regs, body.bits, &block.insns);
+        let insns = _code_windows(sunk.as_deref().unwrap_or(&block.insns), 3, |run| -> Result<_, String> {
             if run.len() == 3 {
                 if let Some(changed) =
                     _register_high_extract(regs, body.bits, run, &dead_after, &virtual_uses, profile)?
@@ -653,14 +662,85 @@ pub fn high_extracts<'a>(
                 return Ok(None);
             }
             let pair = &run[..2];
-            Ok(match _selected_register_high_extract(regs, body.bits, pair, &dead_after, &virtual_uses, profile)? {
-                Some(changed) => Some((2, changed)),
-                None => _high_extract(regs, body.bits, pair, &dead_after).map(|changed| (2, changed)),
-            })
+            Ok(
+                match _selected_register_high_extract(
+                    regs,
+                    body.bits,
+                    pair,
+                    &dead_after,
+                    &virtual_uses,
+                    &anchors,
+                    profile,
+                )? {
+                    Some(changed) => Some((2, changed)),
+                    None => _high_extract(regs, body.bits, pair, &dead_after).map(|changed| (2, changed)),
+                },
+            )
         })?;
         blocks.push(block.with_insns(insns));
     }
     Ok(body.with_blocks(blocks))
+}
+
+/// `mov dst, src` moved down to the `shr dst, 16` it feeds when the code
+/// between neither reads or writes `dst` nor writes `src` (an allocation can
+/// put a spill store of `src` in between), so the pair is adjacent for the high
+/// extract. `None` where nothing moved.
+fn _copies_sunk_to_high_shifts(
+    regs: Regs,
+    bits: u32,
+    insns: &[Arc<Insn>],
+) -> Option<Vec<Arc<Insn>>> {
+    const REACH: usize = 6;
+    let shifted = |one: &Insn| -> Option<Reg> {
+        let what = one.what.as_ref()?;
+        match (what.op, what.name.as_deref(), what.dests.as_slice(), what.sources.as_slice()) {
+            (
+                Operation::Binary,
+                Some("shr"),
+                [Loc::Reg(dest @ Reg { width: 4, .. })],
+                [Loc::Reg(read), Loc::Imm(count)],
+            ) if dest == read && count.value == 16 => Some(*dest),
+            _ => None,
+        }
+    };
+    let mut out: Option<Vec<Arc<Insn>>> = None;
+    for shift_at in 0..insns.len() {
+        let list = out.as_deref().unwrap_or(insns);
+        let Some(dest) = shifted(&list[shift_at]) else { continue };
+        let dest_lanes = _lanes(regs, dest.register);
+        let mut between: Vec<&Arc<Insn>> = Vec::new();
+        for at in (0..shift_at).rev().take(REACH + 1) {
+            let one = &list[at];
+            if one.is_meta() {
+                continue;
+            }
+            let Some((_, source)) = crate::backend::copysink::copy_of(one).filter(|(copied, _)| *copied == dest) else {
+                between.push(one);
+                continue;
+            };
+            if ir::root(dest.register) != ir::root(source.register) && !between.is_empty() {
+                let source_lanes = _lanes(regs, source.register);
+                let clear = between
+                    .iter()
+                    .all(
+                        |other| other.what.is_some()
+                            && other.clobbers.is_empty()
+                            && !crate::backend::copysink::touches(regs, bits, other, &dest_lanes, true)
+                            && !crate::backend::copysink::touches(regs, bits, other, &dest_lanes, false)
+                            && !crate::backend::copysink::touches(regs, bits, other, &source_lanes, false),
+                    );
+                if clear {
+                    let mut moved = list.to_vec();
+                    let copy = moved.remove(at);
+                    moved.insert(shift_at - 1, copy);
+                    out = Some(moved);
+                }
+            }
+            break;
+        }
+    }
+    out
 }
 
 fn _register_high_extract(
@@ -771,6 +851,7 @@ fn _selected_register_high_extract(
     parts: &[Arc<Insn>],
     dead_after: &dyn Fn(usize) -> Lanes,
     virtual_uses: &Counter,
+    anchors: &std::collections::BTreeMap<u32, u32>,
     cpu: &Profile,
 ) -> Result<Option<Vec<Arc<Insn>>>, String> {
     let (moved, shift) = (&parts[0], &parts[1]);
@@ -827,7 +908,11 @@ fn _selected_register_high_extract(
     }
     let shared_two_address = moved.defines == shift.defines && shift.defines == shift.uses;
     let temporary_chain = shift.uses == moved.defines && count(virtual_uses, moved.defines[0]) == 1;
-    if !(shared_two_address || temporary_chain) {
+    // The copy's value reaches the shift through an anchor that is its one use.
+    let anchored = shift.defines == shift.uses
+        && count(virtual_uses, moved.defines[0]) == 1
+        && anchors.get(&moved.defines[0]) == Some(&shift.uses[0]);
+    if !(shared_two_address || temporary_chain || anchored) {
         return Ok(None);
     }
 
@@ -862,7 +947,13 @@ fn _selected_register_high_extract(
         return Ok(None);
     }
 
-    let combined = Arc::new(Insn { what: Some(extract), defines: shift.defines.clone(), ..(**moved).clone() });
+    // The anchor still reads the copy's value: the combined instruction defines
+    // it too.
+    let mut defines = shift.defines.clone();
+    if anchored && !(shared_two_address || temporary_chain) {
+        defines.extend(moved.defines.iter().copied());
+    }
+    let combined = Arc::new(Insn { what: Some(extract), defines, ..(**moved).clone() });
     let folded = lir::without(
         &[combined, Arc::clone(shift)],
         |one| Arc::ptr_eq(one, shift),
@@ -2200,7 +2291,7 @@ const _ARITHMETIC: u32 =
 static _DIFFERING: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(RflagsBits::OF | RflagsBits::CF | RflagsBits::AF));
 // What `xor r,r` writes: a direction flag read later, as a string fill reads
 // it, is no objection.
-static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHMETIC));
+pub(crate) static _ARITHMETIC_LANES: LazyLock<Lanes> = LazyLock::new(|| _flag_lanes(_ARITHMETIC));
 
 /// `inc edi; cmp edi,0; jne` is `inc edi; jne`.
 ///

@@ -108,6 +108,56 @@ fn a_memset_overwritten_by_a_store_goes() {
     assert!(!after.contains("llvm.memset.p0.i16(ptr @g"), "{after}");
 }
 
+/// bench/scroll at -O3: the blank bottom row became `memset.pattern` (the loop
+/// idiom, which the pin does not form) and the `memmove` that follows covers
+/// it. The pin's unrolled stores were deleted; the fill stayed, `rep stosw`
+/// per pass (+5.5% clocks).
+#[test]
+fn a_memset_pattern_overwritten_by_a_memmove_goes() {
+    let after = eliminated(
+        "@g = global [2000 x i16] zeroinitializer
+declare void @llvm.experimental.memset.pattern.p0.i16.i32(ptr, i16, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+
+define void @f() {
+b0:
+  %row = getelementptr inbounds i8, ptr @g, i32 3840
+  call void @llvm.experimental.memset.pattern.p0.i16.i32(ptr %row, i16 1824, i32 80, i1 false)
+  %dst = getelementptr inbounds i8, ptr @g, i32 160
+  call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr @g, i32 3840, i1 false)
+  ret void
+}
+",
+        &[&[]],
+    );
+    assert!(!after.contains("call void @llvm.experimental.memset.pattern"), "{after}");
+    assert!(after.contains("call void @llvm.memmove"), "{after}");
+}
+
+/// A copy that reads the fill it covers needs it: the source is the blank row.
+#[test]
+fn a_memset_pattern_read_by_the_covering_memmove_stays() {
+    let after = eliminated(
+        "@g = global [2000 x i16] zeroinitializer
+declare void @llvm.experimental.memset.pattern.p0.i16.i32(ptr, i16, i32, i1)
+declare void @llvm.memmove.p0.p0.i32(ptr, ptr, i32, i1)
+
+define void @f() {
+b0:
+  %row = getelementptr inbounds i8, ptr @g, i32 3840
+  call void @llvm.experimental.memset.pattern.p0.i16.i32(ptr %row, i16 1824, i32 80, i1 false)
+  %src = getelementptr inbounds i8, ptr @g, i32 3000
+  call void @llvm.memmove.p0.p0.i32(ptr @g, ptr %src, i32 1000, i1 false)
+  %dst = getelementptr inbounds i8, ptr @g, i32 160
+  call void @llvm.memmove.p0.p0.i32(ptr %dst, ptr %row, i32 3840, i1 false)
+  ret void
+}
+",
+        &[&[]],
+    );
+    assert!(after.contains("call void @llvm.experimental.memset.pattern"), "{after}");
+}
+
 /// A chain of overwrites costs in proportion to its length.
 #[test]
 fn a_long_chain_of_overwrites_is_linear() {
@@ -383,4 +433,33 @@ fn a_place_is_worked_out_once_for_each_instruction() {
     eliminated(&body, &[&[1]]);
     let made = super::locations() - before;
     assert!(made <= 52, "{made} places worked out for 52 instructions");
+}
+
+/// `n` locals, each stored twice (the first store is dead) and read once.
+fn locals(n: usize) -> String {
+    let mut text = String::from("define i32 @f() {\nb0:\n");
+    for k in 0..n {
+        text += &format!("  %p{k} = alloca i32\n  store i32 1, ptr %p{k}\n  store i32 2, ptr %p{k}\n");
+    }
+    text += "  %s0 = add i32 0, 0\n";
+    for k in 0..n {
+        text += &format!("  %v{k} = load i32, ptr %p{k}\n  %s{} = add i32 %s{k}, %v{k}\n", k + 1);
+    }
+    text + &format!("  ret i32 %s{n}\n}}\n")
+}
+
+/// `object_of` walked an alloca's uses at every access asked of it, since the
+/// pass did not hand it the exposed frames: matmul -O2 made 27,548 walks and
+/// 1.9 M tree inserts in a third of the pass. The walks are the frames', not
+/// the accesses'.
+#[test]
+fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
+    let scans = |n: usize| {
+        let mut module = parsed(&locals(n));
+        let before = llrm_analysis::frameescape::scans();
+        managed(&mut module, DeadStoreElimination);
+        llrm_analysis::frameescape::scans() - before
+    };
+    let (small, large) = (scans(8), scans(64));
+    assert!(large <= 64 + 8 && small <= 8 + 8, "8 locals: {small} walks, 64 locals: {large}");
 }

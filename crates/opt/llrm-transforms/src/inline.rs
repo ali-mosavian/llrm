@@ -162,16 +162,11 @@ use llrm_support::hash::{IndexMap, SparseIdMap};
 use crate::profit::{OperationCosts, operation};
 
 /// How much inlining may copy: LLVM's inline threshold, 225 at -O2 and 0
-/// for none. A callee's budget, in semantic operations, scales with it.
-/// `hint` is the ratio a routine the language marks worth inlining may grow
-/// by: LLVM's inline-hint threshold, 325 against 225; 1/1 where code size
-/// outranks speed. `hot` is the same for a call in a loop: LLVM's
-/// locally-hot call site threshold, 525 against 225.
+/// for none. A callee's budget, in semantic operations, scales with it. The
+/// hint and hot-site thresholds are `InlineParams`' (inlinecost.rs).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Threshold {
     pub limit: i64,
-    pub hint: (i64, i64),
-    pub hot: (i64, i64),
     /// Where code size outranks speed: a call also removes its arguments'
     /// pushes and cleanup.
     pub single: bool,
@@ -194,7 +189,7 @@ pub struct Threshold {
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, hint: (325, 225), hot: (525, 225), single: false, last: true, cp_clone: false, recursive: false }
+        Self { limit, single: false, last: true, cp_clone: false, recursive: false }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -202,9 +197,10 @@ impl Threshold {
         Self { last: false, ..Self::new(0) }
     }
 
-    /// The same where code size outranks speed: a hint or a loop buys nothing.
+    /// The same where code size outranks speed: the caller is `optsize`, so the
+    /// call is held to `OptSizeThreshold` (inlinecost.rs, D8).
     pub fn for_size(self) -> Self {
-        Self { hint: (1, 1), hot: (1, 1), single: true, ..self }
+        Self { single: true, ..self }
     }
 }
 

@@ -103,7 +103,7 @@ impl LlrmC {
         // llrm-c chose by the output's extension: `-o x.obj` compiled, `-o
         // x.asm` wrote the listing; llrm-cc links unless told `-c` or
         // `-S`.
-        let stops = self.arguments.iter().any(|one| one == "-c" || one == "-S");
+        let stops = self.arguments.iter().any(|one| one == "-c" || one == "-S" || one == "-E");
         let output = self.arguments.iter().position(|one| one == "-o").and_then(|at| self.arguments.get(at + 1));
         let extension =
             output.and_then(|path| Path::new(path).extension()).map(|one| one.to_string_lossy().to_ascii_lowercase());

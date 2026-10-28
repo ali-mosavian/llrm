@@ -154,7 +154,7 @@ pub fn physical(
     use crate::support::hash::IndexMap;
     let regs = body.regs();
     let machine_state =
-        |register: RegId| register.is_segment_register() || regs.is_frame(register) || regs.is_stack(register);
+        |register: RegId| regs.is_segment(register) || regs.is_frame(register) || regs.is_stack(register);
     let mut entering = Lanes::new();
     for block in body.blocks.iter().filter(|block| block.at == body.entry) {
         for (held, register) in block.insns.iter().flat_map(|one| one.delivers.iter()) {
@@ -162,7 +162,7 @@ pub fn physical(
         }
     }
     for register in regs.integer_registers().iter().copied().chain(regs.segments()) {
-        if preserved.contains(&register.full_register()) || machine_state(register) {
+        if preserved.contains(&regs.root(register)) || machine_state(register) {
             entering = entering.or(&_lanes(regs, register));
         }
     }
@@ -757,7 +757,10 @@ mod tests {
             Operation::FloatStore,
             "fstp",
             vec![Loc::Mem(ir::Mem::new(Some(ir::Addr::new(ir::Space::Frame, -8)), 8))],
-            vec![Loc::Reg(ir::Reg { register: crate::backend::allocate::RFP[0], width: 10 })],
+            vec![Loc::Reg(ir::Reg {
+                register: llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers()[0],
+                width: 10,
+            })],
         );
         let body = body(
             "x87",
@@ -870,6 +873,9 @@ mod tests {
             vec![],
         );
         assert!(physical(&physical_body(vec![write, read.clone()]), &BTreeSet::new()).is_empty());
-        assert!(physical(&physical_body(vec![read]), &BTreeSet::from([RegId::BX.full_register()])).is_empty());
+        assert!(
+            physical(&physical_body(vec![read]), &BTreeSet::from([physical_body(vec![]).regs().root(RegId::BX)]))
+                .is_empty()
+        );
     }
 }

@@ -150,6 +150,13 @@ fn walk(
             }
             _ => KnownBits::unknown(width),
         },
+        // `computeKnownBits` of a `ZEXTLOAD`: the bits above the memory type.
+        ISD::Load if value.res == 0 => match &dag.node(value).data {
+            super::dag::NodeData::Mem(info) if info.ext == Some(super::actions::LoadExt::ZExtLoad) => {
+                KnownBits { zero: all & !mask(info.mem_vt.size_in_bits()), one: 0, width }
+            }
+            _ => KnownBits::unknown(width),
+        },
         ISD::AnyExtend => {
             let inner = operand(0);
             KnownBits { zero: inner.zero, one: inner.one, width }
@@ -203,6 +210,18 @@ pub fn num_sign_bits(
         // extension makes and what the operand has.
         let made = width - inner.size_in_bits() + 1;
         return made.max(num_sign_bits(dag, dag.operand(value, 0)));
+    }
+    // `ComputeNumSignBits` of a `SEXTLOAD` (`VTBits - MemBits + 1`) and a
+    // `ZEXTLOAD` (`VTBits - MemBits`).
+    if dag.opcode(value) == ISD::Load
+        && value.res == 0
+        && let super::dag::NodeData::Mem(info) = &dag.node(value).data
+    {
+        match info.ext {
+            Some(super::actions::LoadExt::SExtLoad) => return width - info.mem_vt.size_in_bits() + 1,
+            Some(super::actions::LoadExt::ZExtLoad) => return width - info.mem_vt.size_in_bits(),
+            _ => {}
+        }
     }
     let known = known_bits(dag, value);
     let sign = 1u128 << (width - 1);

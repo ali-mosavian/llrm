@@ -82,3 +82,18 @@ fn a_token_factor_drops_an_operand_another_operand_is_chained_after() {
     });
     assert!(same_set(found, expected));
 }
+
+/// `TF(a, l, b, c)` where `c` follows `TF(b, a, l)`: the walk met three
+/// operands in one token factor with two left to consider and panicked
+/// `attempt to subtract with overflow` (`fconst` at m64). The pin's unsigned
+/// count wraps.
+#[test]
+fn a_token_factor_meeting_more_operands_than_are_left_does_not_underflow() {
+    let (found, _) = combined_roots(|dag, entry| {
+        let (a, l, b) = (store(dag, entry, 1), store(dag, entry, 2), store(dag, entry, 3));
+        let behind = dag.get_token_factor(&[b, a, l]);
+        let c = store(dag, behind, 5);
+        (dag.get_token_factor(&[a, l, b, c]), vec![])
+    });
+    assert_eq!(found.len(), 1, "everything but `c` is ordered before it");
+}

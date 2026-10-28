@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sccp.rs sha256:a241c469a912bfdce614ea7a80dee02041caaaa63a205e5632f6276cfb01638a -->
+<!-- src: crates/opt/llrm-transforms/src/sccp.rs sha256:c669ab5f7518e766e3858d494cfb58ccb11876f9c7223ce25b0741867a726b9a -->
 
 # sccp
 
@@ -38,3 +38,6 @@ See `sccp_tests.rs`.
 
 ## See also
 - Uses: [`crate::sccpsolver`](sccpsolver.md), [`crate::local::change_to_unreachable`](local.md)
+
+## Used by
+Named by `calledvaluepropagation`, `ipsccp`, `pipeline`.

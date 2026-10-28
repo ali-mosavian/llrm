@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/divrempairs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/divrempairs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:09e744c49de7de762fccab21ea8e57a1fa63dc6268f5473a16213ac51229260a -->
+<!-- src: crates/opt/llrm-transforms/src/divrempairs.rs sha256:5106181efad1d3f5a93b6f0c3295cfa8fd613e8eb12c8c4bdbd6be972b9b0bc1 -->
 
 # divrempairs
 
@@ -42,3 +42,6 @@ and `tailrec` (PassBuilderPipelines.cpp#L1667).
 
 ## Keeps
 Blocks and edges are unchanged: dominators and loops are preserved.
+
+## Used by
+Named by `pipeline`.

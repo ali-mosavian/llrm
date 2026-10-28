@@ -46,7 +46,7 @@ TEST_PY = re.compile(r"^-\s*def (test_\w+)")
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from stages import PREFIX, stage  # noqa: E402
+from stages import PREFIX, stage, summary as stage_summary  # noqa: E402
 import pidfile  # noqa: E402
 
 
@@ -309,17 +309,9 @@ def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
 
 
 def precheck_checks(dev: Path, target: Path):
-    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: a ratchet's name, fmt's files, the docs' stale pages. Run on the
+    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: fmt's files, the docs' stale pages. Run on the
     dev checkout against the persistent dev target; the items are what a head's own failures are told apart from a PR's by."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import parity_smoke  # noqa: PLC0415
-    from buildslot import slotted  # noqa: PLC0415
-
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-
-    def ratchets(root: Path) -> dict[str, set[str]]:
-        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True, errors="replace"))
-        return {name: {name} for name in failed}
 
     def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
         if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
@@ -330,14 +322,15 @@ def precheck_checks(dev: Path, target: Path):
         return {"fmt": files or {"fmt --check failed"}} if done.returncode else {}
 
     def docs(root: Path) -> dict[str, set[str]]:
-        done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
+        done = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=root, env=env, capture_output=True, text=True, errors="replace")
         if not done.returncode:
             return {}
         out = (done.stdout + done.stderr).splitlines()
         return {"docs": {line.strip() for line in out if line.strip().startswith("docs/")} or {"docsbuild --check failed"}}
 
     fmt.takes_only = True
-    return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
+    # no ratchets here: the batch's smoke runs all of them on the merged tree and on the head, so a red one is refused there (seconds to minutes per PR, median 80 s at load 70, were spent twice)
+    return [("fmt", fmt), ("docs", docs)]
 
 
 def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None, only: list[str] | None = None) -> dict[str, set[str]]:
@@ -451,6 +444,11 @@ def smoke_bins(env: dict | None = None) -> str:
     raise SystemExit(f"PARITY_BIN is unset and {found} lacks {', '.join(n for n in BINARIES if not (found / n).is_file())}: `cargo build --release --bin llrm-c --bin llrm-qb --bin llrm-nib`, or set PARITY_BIN to a directory that has them")
 
 
+def bins_command(directory: Path) -> list[str]:
+    """The cargo build that refreshes every binary `directory` holds: `--bins` skips llrm-c (required-features = c-legacy), so a leftover llrm-c stayed older than the sources for good and the 03:12 pass was refused for it."""
+    return ["cargo", "build", "--release", "--bins", "-q", *(["--features", "wccq"] if (directory / "llrm-c").is_file() else [])]
+
+
 def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     """"" when the binaries the smoke will use are newer than the tree's sources; else rebuild them (`buildslot cargo build --release --bins`, CARGO_TARGET_DIR from
     the environment) and check again, and say which are still stale. The merge rewrites files after the binaries were built: llrmbin.stale_binaries then flagged them,
@@ -463,7 +461,7 @@ def ensure_bins(env: dict | None = None, build=None, cwd: Path = ROOT) -> str:
     directory = Path(smoke_bins(env))
     if not llrmbin.stale_binaries(directory, cwd):
         return ""
-    built = (build or (lambda: subprocess.run(slotted(["cargo", "build", "--release", "--bins", "-q"]), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True, errors="replace")))()
+    built = (build or (lambda: subprocess.run(slotted(bins_command(directory)), cwd=cwd, env={**os.environ, **(env or {})}, capture_output=True, text=True, errors="replace")))()
     still = llrmbin.stale_binaries(directory, cwd)
     if not still:
         return ""
@@ -523,7 +521,7 @@ def land_lock(path: str = LAND_LOCK, wait: bool = True):
             fcntl.flock(lock, fcntl.LOCK_UN)
 
 
-GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docsbuild/build.py --sync writes
+GENERATED = ("docs/optimizations/passes/", "docs/optimizations/analyses/", "docs/optimizations/backend/", "docs/architecture/readme.md")  # what tools/docs/docsbuild/build.py --sync writes
 
 
 def docs_stale_lines(output: str) -> list[str]:
@@ -538,7 +536,7 @@ def regenerate(conflicts: list[str], cwd: Path = ROOT) -> str:
         return "conflicts in files nothing generates: " + ", ".join(path for path in conflicts if not path.startswith(GENERATED))
     for path in conflicts:
         git("checkout", "--ours", "--", path, cwd=cwd)
-    build = [sys.executable, "tools/docsbuild/build.py"]
+    build = [sys.executable, "tools/docs/docsbuild/build.py"]
     for flags in (["--sync", "--force"], ["--check"]):
         done = subprocess.run([*build, *flags], cwd=cwd, capture_output=True, text=True, errors="replace")
         if flags == ["--check"]:
@@ -738,6 +736,15 @@ def waiting(number: str, path: str | None = None) -> bool:
     return number in re.sub(r"#.*", "", text).split()
 
 
+def conflict_detail(head: str, body: str, base: str = BASE, cwd: Path = ROOT) -> str:
+    """` [owner W; conflicts in: file file]` for a PR whose squash GitHub refused for merge conflicts: the files `git merge-tree` finds when `head` meets `base`, and the `Owner:` line of its
+    description. #5456 and #5462 were refused at squash with neither, and the coordinator probed each by hand."""
+    done = subprocess.run(["git", "merge-tree", "--write-tree", "--name-only", "--no-messages", base, head], cwd=cwd, capture_output=True, text=True, errors="replace")
+    files = done.stdout.splitlines()[1:] if done.returncode == 1 else []
+    owner = (re.search(r"^\s*Owner:\s*(\S+)", body or "", re.M) or [None, "unknown"])[1]
+    return f" [owner {owner}; conflicts in: {' '.join(files[:6]) or 'none found'}]"
+
+
 def squash(number: str, info: dict, body: str, run=subprocess.run, update=update_generated_only, settle: float = 5, merge=merge_parity, retry_wait: float = 60) -> bool | None:
     """Squash PR `number` into feat/parity; None, with nothing pushed, when waits.txt holds it now. In fast mode a PR GitHub calls conflicting (only generated pages, regenerated) is first brought up to date on its branch, and says so in a comment."""
     run = rate_limit_proof(run)
@@ -772,7 +779,9 @@ def squash(number: str, info: dict, body: str, run=subprocess.run, update=update
         return False
     if done.returncode:
         # GitHub's own words ("Head branch was modified", "not mergeable"): a refusal that named none read `4108: REFUSED: #4108 `
-        print(f"#{number}: REFUSED: the squash was refused by GitHub: {' '.join((done.stderr or done.stdout or 'no message').split())[-200:]}")
+        why = ' '.join((done.stderr or done.stdout or 'no message').split())[-200:]
+        detail = conflict_detail(info["headRefOid"], info.get("body") or pr_body(number)) if "merge conflicts" in why else ""
+        print(f"#{number}: REFUSED: the squash was refused by GitHub: {why}{detail}")
     return done.returncode == 0
 
 
@@ -853,6 +862,71 @@ def beside(background, foreground):
         return front, future.result()
 
 
+OVERLAP_MAX_LOAD = float(os.environ.get("OVERLAP_MAX_LOAD") or 3 * (os.cpu_count() or 1))  # 1-minute load above this: the two builds would only fight over the CPUs; the host runs at ~2.4 x its cores with other sessions' builds
+OVERLAP_MIN_FREE_GB = 8  # two cargo builds at once; oomd kills sessions when memory runs out
+OVERLAP_OFF_SECONDS = 3600
+
+
+def overlap_flag() -> Path:
+    return Path(os.environ.get("LAND_TMP", "/tmp")) / "overlap-off"
+
+
+def free_gb() -> float:
+    """MemAvailable in GB; a host that does not say counts as plenty."""
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) / 1024 / 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return float("inf")
+
+
+def overlap_verdict(load=os.getloadavg, now=time.time, flag: Path | None = None, free=free_gb) -> str:
+    """Why the workspace check and the scanner build run in a row, or "" when they run together: for an hour after an overlapped run took longer than its two halves in a row, at a load
+    above OVERLAP_MAX_LOAD, or with under OVERLAP_MIN_FREE_GB of memory free."""
+    flag = flag or overlap_flag()
+    if flag.exists() and now() - flag.stat().st_mtime < OVERLAP_OFF_SECONDS:
+        return "the last overlapped run was slower than its halves in a row"
+    if (current := load()[0]) > OVERLAP_MAX_LOAD:
+        return f"load {current:.0f} is above {OVERLAP_MAX_LOAD:.0f}"
+    if (spare := free()) < OVERLAP_MIN_FREE_GB:
+        return f"{spare:.0f} GB free is under {OVERLAP_MIN_FREE_GB}"
+    return ""
+
+
+def check_beside_scanners(load=os.getloadavg, now=time.time, flag: Path | None = None, free=free_gb) -> bool:
+    return not overlap_verdict(load, now, flag, free)
+
+
+def check_and_scan(check, scan) -> tuple[str, bool]:
+    """(the build error or "", whether the scan passed), the two run together. `beside` returns (foreground, background): the first draft of this unpacked them the other way round, so
+    every overlapped batch called a passing build broken (`True[:300]`, a TypeError) and a failing one lost its text."""
+    took: dict[str, float] = {}
+    begun = time.monotonic()
+    scanned, broken = beside(timed(took, "check", check), timed(took, "scanners", scan))
+    note_overlap(time.monotonic() - begun, took["check"] + took["scanners"])
+    return broken, scanned
+
+
+def note_overlap(wall: float, serial: float, flag: Path | None = None) -> None:
+    """Prints the overlapped wall time against its halves' sum; an overlap slower than that turns itself off for an hour."""
+    print(f"check beside scanners: {wall:.0f} s against {serial:.0f} s in a row")
+    if wall > serial:
+        (flag or overlap_flag()).write_text(f"{wall:.0f} > {serial:.0f}\n")
+
+
+def timed(took: dict[str, float], name: str, call):
+    def run():
+        begun = time.monotonic()
+        try:
+            return call()
+        finally:
+            took[name] = time.monotonic() - begun
+
+    return run
+
+
 MAX_BATCH = int(os.environ.get("BATCH_CAP") or (16 if FAST else 8))  # PRs per smoke: with ~38 ready PRs queued, batches of four took 12-16 minutes each; a failing batch is halved, so the cost of a bad PR is log2(8) more smokes
 
 
@@ -885,6 +959,27 @@ def batch(prs: list, passes, land, refuse, offenders=None) -> None:
 
 
 SCAN_CRATE = "llrm-mir"  # the crate whose lib tests scan the other crates' sources
+
+
+def offender_detail(names, members=None, near: bool = False) -> str:
+    """` [offending files: #N path path; ...]` for the files a failing scan names, each under the PRs of the batch whose diff touches it (`members()` -> {PR: files}): the target_facts refusal
+    of sqb-5378 listed three files and no PR, and the owners were found by hand. `near`: a file no PR touches names the PRs that touch its directory (a link panic in greedy/spliteditor.rs
+    was another file's change, #5486's, in the same directory)."""
+    paths = list(dict.fromkeys(re.findall(r"(?<![\w./-])[\w][\w.-]*(?:/[\w.-]+)+\.(?:rs|py|toml|md|sh|json)\b", " ".join(names))))
+    if not paths or not members:
+        return ""
+    touched = members()
+    by_pr = {number: [one for one in paths if one in files] for number, files in touched.items()}
+    parts = [f"#{number} {' '.join(found)}" for number, found in by_pr.items() if found]
+    left = [one for one in paths if not any(one in found for found in by_pr.values())]
+    if near:
+        for one in list(left):
+            folder = one.rsplit("/", 1)[0] + "/"
+            if neighbours := [f"#{number}" for number, files in touched.items() if any(other.startswith(folder) for other in files)]:
+                parts.append(f"{one}: same directory touched by {' '.join(neighbours)}")
+                left.remove(one)
+    parts += [f"no PR of the batch: {' '.join(left)}"] if left else []
+    return f" [offending files: {'; '.join(parts)}]" if parts else ""
 
 
 def docs_detail(names, root: Path = ROOT, base: str = BASE, stale=None, members=None) -> str:
@@ -960,7 +1055,64 @@ def new_lib_failures(
 
 # Scanners the landing runner runs on every batch, whatever LAND_FAST_TESTS says (the user's call of 2026-10-19 is no tests at landing): reading docs costs milliseconds. A runner
 # without the switch ran no scanner; the live one has it, and still landed #4039 with docs_links red (see scanner_tests_line).
-ALWAYS_SCANNERS = ("docs_in_sync", "docs_links", "no_local_paths", "target_facts")
+ALWAYS_SCANNERS = (
+    "block_list_ratchet",
+    "core_depends_on_no_target",
+    "core_fixtures_are_for_core_tests",
+    "descriptions_are_read",
+    "docs_in_sync",
+    "docs_links",
+    "dosbox_progress",
+    "no_kill_by_pattern",
+    "no_local_paths",
+    "no_partial_ecx_counts",
+    "no_todo",
+    "selectiondag_registry",
+    "target_facts",
+    "tracked_build_products",
+)
+
+
+BUILD_SCRIPT_INPUTS = ("crates/target/", "crates/backend/llrm-iselgen/", "crates/codegen/llrm-codegen/src/backend/peep/")
+
+
+def scanners_for(files: list[str]) -> tuple[str, ...]:
+    """The default scan, plus build_script_reruns (three `cargo build --release --bins`, ~67 s) when the diff touches a build.rs, a Cargo.toml/Cargo.lock or a file the selector generator reads;
+    the full scan (LAND_FAST_TESTS=1, nightly) runs it always."""
+    if any(f.endswith(("build.rs", "Cargo.toml", "Cargo.lock")) or f.startswith(BUILD_SCRIPT_INPUTS) for f in files):
+        return (*ALWAYS_SCANNERS, "build_script_reruns")
+    return ALWAYS_SCANNERS
+
+
+def tool_tests_for(files: list[str], root: Path = ROOT) -> list[str]:
+    """The pytest files of the Python tools a diff touches: tools/x.py -> tools/test_x.py, and a changed test file itself; none for a diff outside tools/."""
+    tests = set()
+    for name in files:
+        path = Path(name)
+        if path.suffix != ".py" or path.parts[:1] != ("tools",):
+            continue
+        test = path if path.name.startswith("test_") else path.with_name(f"test_{path.name}")
+        if (root / test).is_file():
+            tests.add(str(test))
+    return sorted(tests)
+
+
+def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, ensure=None) -> list[str]:
+    """The last lines of a failing pytest over `tool_tests_for(files)`; none when they pass or no tool changed. test_assemble sat red on parity for hours behind a landing that ran Rust tests only."""
+    tests = tool_tests_for(files, root)
+    if not tests:
+        return []
+    if why := (ensure or ensure_bins)():  # the tools resolve the release binaries and refuse stale ones: the 02:32 batch died on "stale binaries" here, before the build stage ran
+        return [why]
+    stage("tool-tests")
+    try:
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+    except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
+        return ["the tool tests ran past 600 s"]
+    if done.returncode == 0:
+        return []
+    lines = (done.stdout + done.stderr).strip().splitlines()
+    return [*[line for line in lines if line.startswith("E  ")][:20], *lines[-6:]]  # the last lines are the summary; the error text sits above them
 
 
 def landing_scanner_failures(
@@ -970,7 +1122,7 @@ def landing_scanner_failures(
     on_head=None,
 ) -> set[str]:
     """The new red scanners of a batch: all of them with the lib tests on (LAND_FAST_TESTS=1), else the always-on ones."""
-    return new_scanner_failures(files, on_merged, on_head, only=None if tests else ALWAYS_SCANNERS)
+    return new_scanner_failures(files, on_merged, on_head, only=None if tests else scanners_for(files))
 
 
 def new_scanner_failures(
@@ -1076,7 +1228,8 @@ def _build_release() -> None:
     tree = git("rev-parse", "HEAD^{tree}").strip() + git("status", "--porcelain", "--untracked-files=no").strip()
     if tree in _BUILT:
         return
-    subprocess.run(slotted(["cargo", "build", "--release", "-q", "--bins"]), cwd=ROOT, check=True)
+    release = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target") / "release"
+    subprocess.run(slotted(bins_command(release)), cwd=ROOT, check=True)  # --bins alone leaves llrm-c as old as the last hand build, and the stages touch it fresh
     _BUILT.add(tree)
 
 
@@ -1116,13 +1269,46 @@ def head_files(head: str, base: str = BASE, cwd: Path = ROOT) -> list[str]:
     return git("diff", "--name-only", f"{base}...{head}", cwd=cwd).split()
 
 
-def behavioural_culprits(group: list[str], files_of, alone_red) -> list[str]:
-    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else each backend PR merged alone and asked."""
+def halve_red(members: list[str], red_with) -> list[str]:
+    """The members that are red on their own, found by halving: `red_with(subset)` merges the subset and asks. A 48-PR batch costs about 2 log2(48) runs per culprit, not 48."""
+    if not members or not red_with(members):
+        return []
+    if len(members) == 1:
+        return members
+    mid = len(members) // 2
+    return halve_red(members[:mid], red_with) + halve_red(members[mid:], red_with)
+
+
+def red_members(members: list[str], red_with, alone_red) -> list[str]:
+    """The red `members` by halving, else (an interaction: no half is red) each one merged alone and asked."""
+    found = halve_red(members, red_with) if red_with else []
+    return found or [number for number in members if alone_red(number)]
+
+
+def files_named_in(text: str) -> set[str]:
+    """The file paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`, `tools/pairs/dyn.py: 1 copies`)."""
+    return set(re.findall(r"[\w-]+(?:/[\w.-]+)+\.\w+", text))
+
+
+def red_members_suspects_first(members: list[str], suspects: list[str], red_with, alone_red) -> list[str]:
+    """`red_members`, asking the `suspects` (the PRs whose diff touches a file the failure names) first and the rest only when none of them is red: the 06:53 batch walked 37 PRs one by one,
+    80 s each, for a copy in fpregs.rs that one PR touched."""
+    suspects = [number for number in members if number in suspects]
+    if not suspects or len(suspects) == len(members):
+        return red_members(members, red_with, alone_red)
+    return red_members(suspects, red_with, alone_red) or red_members([number for number in members if number not in suspects], red_with, alone_red)
+
+
+def behavioural_culprits(group: list[str], files_of, alone_red, red_with=None) -> list[str]:
+    """The PRs of `group` that turn the call-shaped programs red: the one backend PR of the batch when there is one (no build), else the backend PRs found by halving (`red_with`),
+    else (an interaction: no half is red) each backend PR merged alone and asked."""
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import behavioural  # noqa: PLC0415
 
     backend = [number for number in group if behavioural.touches(files_of(number))]
-    return backend if len(backend) <= 1 else [number for number in backend if alone_red(number)]
+    if len(backend) <= 1:
+        return backend
+    return red_members(backend, red_with, alone_red)
 
 
 def _link_programs() -> list[str]:
@@ -1143,7 +1329,8 @@ def rescan_alone(number: str, info: dict) -> set[str]:
     if subprocess.run(["git", "merge", "--no-edit", "-q", info["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
         subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
         return set()  # a conflict is the squash's to refuse
-    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+    files = git("diff", "--name-only", BASE, "HEAD").split()
+    return new_scanner_failures(files, only=scanners_for(files))
 
 
 def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
@@ -1154,8 +1341,9 @@ def rescan_group_alone(numbers: list[str], infos: dict[str, dict]) -> set[str]:
         git("fetch", "-q", "origin", infos[number]["headRefOid"])
         if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
             subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
-    subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync", "--force"], cwd=ROOT, capture_output=True)  # each member's pages are current alone; together the pass counts of docs/optimizations/passes/readme.md are not (11:35-11:49: the group scan was red, each member green)
-    return new_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), only=ALWAYS_SCANNERS)
+    subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=ROOT, capture_output=True)  # each member's pages are current alone; together the pass counts of docs/optimizations/passes/readme.md are not (11:35-11:49: the group scan was red, each member green)
+    files = git("diff", "--name-only", BASE, "HEAD").split()
+    return new_scanner_failures(files, only=scanners_for(files))
 
 
 def rescan_culprit(group: list[str], infos: dict[str, dict], rescan_group, rescan_one) -> tuple[str, set[str]] | None:
@@ -1256,6 +1444,48 @@ def _failing_on_head(by_package: dict[str, set[str]]) -> set[str]:
     return {f"unit {package}::{test}" for package, tests in by_package.items() for test in failing_on_checkout(package, tests)}
 
 
+PUSH_MODE = os.environ.get("PUSH_MODE") == "1"  # runner.env: land a verified batch as one fast-forward push of its merge tip, not one squash per PR
+
+
+def format_tip(cwd: Path = ROOT) -> bool:
+    """tools/fmt.sh and the docs sync on the batch tip, committed when they change anything (the squash path pushes the same to each PR's branch). True when a commit was made."""
+    subprocess.run(["tools/fmt.sh"], cwd=cwd, capture_output=True)
+    subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=cwd, capture_output=True)
+    git("add", "-A", "docs", cwd=cwd)  # a new pass's generated page is untracked: `commit -a` skipped it, --check passed on the file on disk, and rpoattrs, deadmi and calledvaluepropagation landed without their page
+    if not git("status", "--porcelain", "--untracked-files=no", cwd=cwd).strip():
+        return False
+    git("commit", "-qam", "style: fmt and generated docs of the batch", cwd=cwd)
+    return True
+
+
+def verify_tip(cwd: Path = ROOT) -> str:
+    """Why the tip fails the cheap checks (fmt, docs), or "" when it passes: they run on the exact tip that is pushed."""
+    if subprocess.run(["tools/fmt.sh", "--check"], cwd=cwd, capture_output=True).returncode:
+        return "fmt --check fails on the tip"
+    if subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True).returncode:
+        return "docs --check fails on the tip"
+    return ""
+
+
+def push_tip(heads: dict[str, str], cwd: Path = ROOT, base: str = BASE, ref: str = "feat/parity", prepare=format_tip, verify=verify_tip) -> tuple[str, str]:
+    """(tip, ""): the verified PR `heads` merged in order onto `base` (merge commits, the tests-append driver), formatted, checked, and pushed to `ref` as a plain fast-forward (never forced).
+    GitHub marks each PR whose head is in the tip merged. ("", why) when a head does not merge, the tip fails `verify`, or the push is refused: the caller squashes per PR then."""
+    clean_checkout(base, cwd)
+    for number, head in heads.items():
+        git("fetch", "-q", "origin", head, cwd=cwd)
+        if subprocess.run(["git", "merge", "--no-edit", "-q", head], cwd=cwd, capture_output=True).returncode:
+            subprocess.run(["git", "merge", "--abort"], cwd=cwd, capture_output=True)
+            return "", f"#{number} does not merge on the tip"
+    prepare(cwd)
+    if why := verify(cwd):
+        return "", why
+    tip = git("rev-parse", "HEAD", cwd=cwd).strip()
+    done = subprocess.run(["git", "push", "origin", f"{tip}:refs/heads/{ref}"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    if done.returncode:
+        return "", f"push refused: {(done.stderr or done.stdout).strip()[:200]}"
+    return tip, ""
+
+
 def clean_checkout(ref: str, cwd: Path = ROOT) -> None:
     """`ref` checked out with nothing left from earlier batches: tracked changes reset and UNTRACKED files removed. A regenerated docs page left untracked made every later PR that adds
     it fail its local merge ("would be overwritten"), which read as a conflict and left such PRs out for hours."""
@@ -1331,7 +1561,7 @@ def alone_refusals(head: str, base: str = BASE, cwd: Path = ROOT, check=None, sc
     if stale := (docs or docs_stale)(cwd):
         new = sorted(stale - (docs_on_base or (lambda: _alone_base_docs(base, target)))())
         if new:
-            return [f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}"]
+            return [f"generated docs out of date (tools/docs/docsbuild/build.py --sync): {', '.join(new[:5])}"]
     # the QB and C programs, built and linked: #4822 and #4839 (frontend changes) reached three batches and cost 19 refusals because only a batch member touching the runtime made the batch link
     if broken := (links or alone_link_failures)(files, cwd, target):
         return [f"programs do not link: {', '.join('link ' + line.split(':')[0] for line in broken[:5])}"]
@@ -1436,10 +1666,10 @@ def alone(numbers: list[str], heads: dict[str, str], base: str = BASE, refusals=
 
 
 def docs_stale(root: Path) -> set[str]:
-    """The generated pages `tools/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check: <its problem line>` when it fails without naming one)."""
-    if not (root / "tools/docsbuild/build.py").is_file():
+    """The generated pages `tools/docs/docsbuild/build.py --check` reports out of date in `root` (`docsbuild --check: <its problem line>` when it fails without naming one)."""
+    if not (root / "tools/docs/docsbuild/build.py").is_file():
         return set()
-    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
+    done = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=root, capture_output=True, text=True, errors="replace")
     if not done.returncode:
         return set()
     lines = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.strip()]
@@ -1457,7 +1687,7 @@ def docs_recheck(head: str, base: str, cwd: Path, base_docs: set[str]) -> str:
     if sha is None:
         return why
     new = sorted(docs_stale(cwd) - base_docs)
-    return f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""
+    return f"generated docs out of date (tools/docs/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""
 
 
 def _alone_docs_recheck(head: str, base: str) -> str:
@@ -1481,19 +1711,19 @@ def docs_refusal(before: set[str], root: Path, docs=docs_stale) -> tuple[str, se
     with six pages stale: the head's red docs_in_sync was excused, so the batch never saw a new one."""
     now = docs(root)
     new = sorted(now - before)
-    return (f"generated docs out of date (tools/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
+    return (f"generated docs out of date (tools/docs/docsbuild/build.py --sync): {', '.join(new[:5])}" if new else ""), now
 
 
 def docs_sync_commit(root: Path = ROOT) -> str:
-    """"" when `tools/docsbuild/build.py --sync` in `root` ran and its pages are committed on top (nothing to commit is fine); else why. Generated docs out of date refused #5129, #5131 and #5119 for a
+    """"" when `tools/docs/docsbuild/build.py --sync` in `root` ran and its pages are committed on top (nothing to commit is fine); else why. Generated docs out of date refused #5129, #5131 and #5119 for a
     page the landing could have written, as it formats an unformatted head."""
-    done = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--sync"], cwd=root, capture_output=True, text=True, errors="replace")
+    done = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync"], cwd=root, capture_output=True, text=True, errors="replace")
     if done.returncode:
         return f"docsbuild --sync failed: {' '.join((done.stdout + done.stderr).split()[-12:])}"
     git("add", "-A", "docs", cwd=root)
     if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=root).returncode == 0:
         return ""
-    made = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "-m", "docs: tools/docsbuild/build.py --sync"], cwd=root, capture_output=True, text=True, errors="replace")
+    made = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "commit", "-q", "-m", "docs: tools/docs/docsbuild/build.py --sync"], cwd=root, capture_output=True, text=True, errors="replace")
     return "" if made.returncode == 0 else f"committing the synced pages failed: {made.stderr.strip()[:200]}"
 
 
@@ -1601,7 +1831,7 @@ def keep_refused_evidence(head: str, cwd: Path, why: list[str], directory: Path)
     out.mkdir(parents=True, exist_ok=True)
     (out / "head.txt").write_text(f"tree {git('rev-parse', 'HEAD', cwd=cwd).strip()}\npr head {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}\n")
     (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
-    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    check = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
     (out / "check.txt").write_text(check.stdout + check.stderr)
 
 
@@ -1615,7 +1845,7 @@ def keep_batch_evidence(heads: dict[str, str], cwd: Path, directory: Path, stamp
         lines.append(f"#{number} {head} committed {subprocess.run(['git', 'show', '-s', '--format=%cI', head], cwd=cwd, capture_output=True, text=True).stdout.strip() or '?'}")
     (out / "heads.txt").write_text("\n".join(lines) + "\n")
     (out / "status.txt").write_text(git("status", "--short", cwd=cwd))
-    check = subprocess.run([sys.executable, "tools/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
+    check = subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--check"], cwd=cwd, capture_output=True, text=True, errors="replace")
     (out / "check.txt").write_text(check.stdout + check.stderr)
 
 
@@ -1643,6 +1873,14 @@ def added_names(head: str, base: str, cwd: Path) -> set[str]:
     return set(ADDED_ITEM.findall(diff))
 
 
+def needs_the_merge_driver(before: str, head: str, cwd: Path) -> list[str]:
+    """The files `head` conflicts in with `before` under plain git (the tests-append driver off): where it is not empty, the batch's merge joined the PR only through that driver and
+    GitHub's squash, which has none, will refuse it as conflicting (#5462, #5481, #5591 in one day)."""
+    env = {**os.environ, "GIT_CONFIG_COUNT": "0"}
+    done = subprocess.run(["git", "-c", "merge.tests-append.driver=false", "merge-tree", "--write-tree", "--name-only", "--no-messages", before, head], cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    return done.stdout.splitlines()[1:] if done.returncode == 1 else []
+
+
 def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: Path = ROOT, limit: int = 16) -> tuple[list[str], dict[str, str]]:
     """The first `limit` of `numbers`, in order, that merge into `base` one after another without a conflict (`fast_merge`'s own merge, in a scratch worktree), and why
     each other waits. A batch of these loses no PR to a conflict with an earlier member: 63 of 93 conflict refusals in a week were with a member that landed, and the run
@@ -1654,25 +1892,40 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
         git("worktree", "add", "-q", "--detach", str(work), base, cwd=cwd)
         try:
             claimed: dict[str, str] = {}  # a name a kept PR adds -> that PR
+            started = time.monotonic()
+
+            def progress(number: str, outcome: str) -> None:
+                """One line per candidate on stderr (the runner's assemble.log): a 13-minute assembly printed nothing and nobody knew how far it was."""
+                print(f"assemble: #{number} {outcome} ({len(kept)}/{limit} kept, {time.monotonic() - started:.0f} s)", file=sys.stderr, flush=True)
+
             for number in numbers:
                 if len(kept) >= limit:
                     break
                 names = added_names(heads[number], base, cwd)
                 if clash := sorted(name for name in names if name in claimed):
                     waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
+                    progress(number, "waits (same name)")
                     continue
+                before = git("rev-parse", "HEAD", cwd=work).strip()
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
+                if not merge.returncode and (driven := needs_the_merge_driver(before, heads[number], work)):
+                    git("reset", "-q", "--hard", before, cwd=work)
+                    waits[number] = "needs owner parity merge: it conflicts without the tests-append driver in " + ", ".join(driven[:4])
+                    continue
                 if merge.returncode:
                     conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=work).split()
                     if conflicts and not regenerate(conflicts, work):
                         kept.append(number)
                         claimed.update(dict.fromkeys(names, number))
+                        progress(number, "kept (regenerated)")
                         continue
                     subprocess.run(["git", "merge", "--abort"], cwd=work, capture_output=True)
                     waits[number] = "conflicts with an earlier PR of the batch: " + ", ".join(conflicts or ["the tree"])
+                    progress(number, "waits (conflict)")
                 else:
                     kept.append(number)
                     claimed.update(dict.fromkeys(names, number))
+                    progress(number, "kept")
         finally:
             subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=cwd, capture_output=True)
     return kept, waits
@@ -1816,10 +2069,13 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         if not kept:
             return True
         stage("workspace-check")
-        if broken := _workspace_check(ROOT):
+
+        def build_refused(broken: str) -> bool:
             print(f"REFUSED: the batch does not build: {broken[:300]}")
             failed_build.append(broken)
+            failed_units.clear()  # a scanner run beside a tree that does not build says nothing; the build is the reason
             return False
+
         def blame(new: list[str]) -> None:
             if any(name.startswith("integration docs") for name in new):
                 keep_batch_evidence({number: infos[number]["headRefOid"] for number in group}, ROOT, Path(os.environ.get("LAND_TMP", "/tmp")) / "refused", time.strftime("%H%M%S"))
@@ -1834,28 +2090,32 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
                 # The always-on scanners read sources and docs (milliseconds): a red one refuses the batch before the minutes of lib tests it would otherwise wait for.
                 stage("scanners-early")
                 if new := sorted(landing_scanner_failures(changed, False)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("lib-tests")
                 if new := sorted(new_lib_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
                 stage("scanners")
                 if new := sorted(new_scanner_failures(changed)):
-                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                    print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                     failed_units.update(new)
                     blame(new)
                     return False
             if os.environ.get("LAND_FAST_TESTS") != "1":
                 stage("scanners")  # a cargo test build of the scanner targets: workspace-check's 58% of a batch hid it
             if os.environ.get("LAND_FAST_TESTS") != "1" and (new := sorted(landing_scanner_failures(git("diff", "--name-only", BASE, "HEAD").split(), False))):
-                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}")
+                print(f"REFUSED: the batch fails {', '.join(new)}, which the head passes{parity_smoke_module().causes_of(new)}{docs_detail(new, members=members_files)}{offender_detail(new, members_files)}")
                 failed_units.update(new)
                 blame(new)
+                return False
+            if broken_tools := tool_test_failures(git("diff", "--name-only", BASE, "HEAD").split()):
+                print(f"REFUSED: the batch fails the tests of the tools it changes: {' / '.join(broken_tools)[:300]}")
+                failed_units.add("tools tests")
                 return False
             return True
 
@@ -1869,14 +2129,25 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return [], pre_merge_behavioural(files)
 
         if OVERLAP:
+            if broken := _workspace_check(ROOT):
+                return build_refused(broken)
             tests_ok, (unlinked, red) = beside(release_pass, tests_pass)
         else:
-            tests_ok = tests_pass()
+            # the dev-profile check (its own target dir) and the release scanner build share nothing: 60 s + 100 s in a row in sqb-5342
+            why_serial = overlap_verdict()
+            print(f"check beside scanners: {'serial (' + why_serial + ')' if why_serial else 'on'}")
+            if not why_serial:
+                broken, tests_ok = check_and_scan(lambda: _workspace_check(ROOT), tests_pass)
+            else:
+                broken = _workspace_check(ROOT)
+                tests_ok = not broken and tests_pass()
+            if broken:
+                return build_refused(broken)
             unlinked, red = release_pass() if tests_ok else ([], [])
         if not tests_ok:
             return False
         if unlinked:
-            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}")
+            print(f"REFUSED: the batch's runtime does not link: {'; '.join(unlinked)[:300]}{offender_detail(unlinked, members_files, near=True)}")
             failed_units.update(f"link {line.split(':')[0]}" for line in unlinked)
             return False
         if red:
@@ -1895,6 +2166,17 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             return False
         return True
 
+    def merge_all(numbers: list[str]) -> bool:
+        """The PRs `numbers` merged together onto a clean head in the batch's checkout."""
+        stage(f"halve {len(numbers)}: {' '.join('#' + n for n in numbers)}")
+        clean_checkout(BASE)
+        for number in numbers:
+            git("fetch", "-q", "origin", infos[number]["headRefOid"])
+            if subprocess.run(["git", "merge", "--no-edit", "-q", infos[number]["headRefOid"]], cwd=ROOT, capture_output=True).returncode:
+                subprocess.run(["git", "merge", "--abort"], cwd=ROOT, capture_output=True)
+                return False
+        return True
+
     def offending(group: list[str]) -> list[str]:
         """The PRs of `group` that fail what the batch failed, each merged alone on the head: the unit asked exactly (a minute at most per PR), or the build; none when nothing is known."""
         if failed_build:
@@ -1907,7 +2189,12 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
         wrong = sorted(name[len("behavioural ") :] for name in failed_units if name.startswith("behavioural "))
         if wrong:
             files_of = lambda number: head_files(infos[number]['headRefOid'])  # noqa: E731
-            culprits = behavioural_culprits(group, files_of, lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))))
+            culprits = behavioural_culprits(
+                group,
+                files_of,
+                lambda number: merge_alone(number) and bool(pre_merge_behavioural(files_of(number))),
+                lambda subset: merge_all(subset) and bool(pre_merge_behavioural(sorted({f for n in subset for f in files_of(n)}))),
+            )
             for number in culprits:
                 named[number] = f"BEHAVIOURAL RED pre-merge: {' '.join(wrong)}"
                 print(f"BEHAVIOURAL RED pre-merge: #{number} {' '.join(wrong)}")
@@ -1921,7 +2208,11 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             if not probe:
                 return []
             targets = sorted({name.split("::", 1)[0] for name in probe})
-            return [number for number in group if merge_alone(number) and probe & parity_smoke_module().integration_failures(targets)]
+            red_with = lambda subset: merge_all(subset) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            alone_red = lambda number: merge_alone(number) and bool(probe & parity_smoke_module().integration_failures(targets))  # noqa: E731
+            failure_files = files_named_in(parity_smoke_module().causes_of(failed_units))
+            suspects = [number for number in group if failure_files & set(head_files(infos[number]['headRefOid']))]
+            return red_members_suspects_first(group, suspects, red_with, alone_red)
         units = {tuple(name[len("unit "):].split("::", 1)) for name in failed_units if name.startswith("unit ")}
         by_package: dict[str, set[str]] = {}
         for package, test in units:
@@ -1996,6 +2287,8 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
 
     rescan_check = (lambda *_: "") if os.environ.get("LAND_SKIP_RESCAN") == "1" else make_rescan_check()  # the user's bulk order: the batch scan stands, no rescan after a drop
 
+    pending: list[str] = []
+
     def land(number: str) -> None:
         if number in left_out:
             if left_out[number].startswith("head moved"):
@@ -2016,57 +2309,76 @@ def merge_batch(numbers: list[str], known: dict[str, str] | None = None) -> int:
             refused.append(number)
             late_drops.append(number)
             return
-        sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
-        if not sha:
-            print(f"#{number}: REFUSED: {why}")
-            refused.append(number)
-            late_drops.append(number)
+        if PUSH_MODE:
+            pending.append(number)
             return
-        if sha != infos[number]["headRefOid"]:
-            print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
-            infos[number] = {**infos[number], "headRefOid": sha}
-            for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
-                seen = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
-                if seen == sha:
-                    break
-                time.sleep(5)
-        if number in docs_synced:
-            synced_sha, why = sync_docs_head(infos[number]["headRefOid"], infos[number]["headRefName"])
-            if not synced_sha:
+        finish(number)
+
+    def finish(number: str) -> None:
+            sha, why = format_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+            if not sha:
                 print(f"#{number}: REFUSED: {why}")
                 refused.append(number)
                 late_drops.append(number)
                 return
-            if synced_sha != infos[number]["headRefOid"]:
-                print(f"#{number}: generated docs synced with tools/docsbuild/build.py --sync ({synced_sha[:9]})")
-                infos[number] = {**infos[number], "headRefOid": synced_sha}
-                for _ in range(12):
-                    seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
-                    if seen == synced_sha:
+            if sha != infos[number]["headRefOid"]:
+                print(f"#{number}: formatted with tools/fmt.sh ({sha[:9]})")
+                infos[number] = {**infos[number], "headRefOid": sha}
+                for _ in range(12):  # GitHub takes the pushed head as the PR's before a --match-head-commit squash accepts it
+                    seen = json.loads(gh_run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
+                    if seen == sha:
                         break
                     time.sleep(5)
-        landed_ok = squash(number, infos[number], known_red_line(known))
-        if landed_ok is None:
-            held.append(number)
-            late_drops.append(number)
-            return
-        (landed if landed_ok else moved if number in HEAD_MOVED else refused).append(number)
-        if not landed_ok:
-            late_drops.append(number)
-        if landed_ok:
-            git("fetch", "-q", "origin", "feat/parity")
-            log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
+            if number in docs_synced:
+                synced_sha, why = sync_docs_head(infos[number]["headRefOid"], infos[number]["headRefName"])
+                if not synced_sha:
+                    print(f"#{number}: REFUSED: {why}")
+                    refused.append(number)
+                    late_drops.append(number)
+                    return
+                if synced_sha != infos[number]["headRefOid"]:
+                    print(f"#{number}: generated docs synced with tools/docs/docsbuild/build.py --sync ({synced_sha[:9]})")
+                    infos[number] = {**infos[number], "headRefOid": synced_sha}
+                    for _ in range(12):
+                        seen = json.loads(subprocess.run(["gh", "pr", "view", number, "--json", "headRefOid"], capture_output=True, text=True, errors="replace").stdout or "{}").get("headRefOid")
+                        if seen == synced_sha:
+                            break
+                        time.sleep(5)
+            landed_ok = squash(number, infos[number], known_red_line(known))
+            if landed_ok is None:
+                held.append(number)
+                late_drops.append(number)
+                return
+            (landed if landed_ok else moved if number in HEAD_MOVED else refused).append(number)
+            if not landed_ok:
+                late_drops.append(number)
+            if landed_ok:
+                git("fetch", "-q", "origin", "feat/parity")
+                log_landed(git("rev-parse", BASE).strip(), number, "gate-ok")
 
     with land_lock():
         if git("status", "--porcelain", "--untracked-files=no").strip():
             raise SystemExit("this checkout has uncommitted changes")
         try:
             batch(list(numbers), passes, land, refuse, offending if FAST else None)
+            if pending:
+                tip, why = push_tip({n: infos[n]["headRefOid"] for n in pending})
+                if tip:
+                    print(f"PUSHED: {tip} to feat/parity with {' '.join('#' + n for n in pending)}")
+                    for number in pending:
+                        landed.append(number)
+                        log_landed(tip, number, "gate-ok")
+                else:
+                    print(f"one-push failed ({why}); squashing each PR instead")
+                    for number in pending:
+                        finish(number)
         except BatchTooOld:
             back = [one for one in numbers if one not in landed and one not in refused]
             print(f"batch older than {BATCH_MAX_SECONDS // 60} min: its heads and assembly are stale; back to the queue unlanded: {' '.join('#' + one for one in back) or '-'}")
     for line in hold_own_refusals(refused, {**left_out, **named}, {n: infos[n]["headRefOid"] for n in refused if n in infos}):
         print(line)
+    if times := stage_summary():
+        print(times)
     print(batch_summary(landed, refused, held, moved))
     return 1 if refused else 0
 
