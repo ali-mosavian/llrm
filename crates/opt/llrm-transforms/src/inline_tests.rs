@@ -48,8 +48,8 @@ fn inline_with(
     loop {
         let available = every_body(module, &layout);
         let mut declared = llrm_mir::passes::Declared::of(module);
-        let (context, function) = module.function_mut(caller).unwrap();
-        let spliced = expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
+        let (context, function, metadata) = module.function_and_metadata_mut(caller).unwrap();
+        let spliced = expanded_all(context, function, &by, &available, None, &mut declared, metadata).unwrap();
         declared.place(module).unwrap();
         if spliced == 0 {
             return changed;
@@ -614,8 +614,8 @@ fn self_inlined(ops: usize) -> (usize, i64) {
     let frequencies = SparseIdMap::default();
     let by = Caller { layout: &layout, recursive: true, self_inlining: Some(&frequencies), peeling: false };
     let mut declared = llrm_mir::passes::Declared::of(&module);
-    let (context, function) = module.function_mut("down").unwrap();
-    expanded_all(context, function, &by, &available, None, &mut declared).unwrap();
+    let (context, function, metadata) = module.function_and_metadata_mut("down").unwrap();
+    expanded_all(context, function, &by, &available, None, &mut declared, metadata).unwrap();
     declared.place(&mut module).unwrap();
     let text = printed(&module);
     (text.matches("add i32").count(), before)
@@ -678,4 +678,43 @@ b0:
     assert!(inline_into(&mut module, "f", 0));
     let printed = printed(&module);
     assert!(printed[printed.find("define void @f(").unwrap()..].contains("notail call void @g"), "{printed}");
+}
+
+/// An inlined body kept the callee's own locations, so a debugger saw `sq`'s
+/// lines as `f`'s, with no inlined call: no `DW_TAG_inlined_subroutine`.
+#[test]
+fn test_inlined_instructions_are_located_at_the_call() {
+    let mut module = parsed(
+        "define internal i32 @sq(i32 %x) {
+b1:
+  %m = mul i32 %x, %x, !dbg !5
+  ret i32 %m
+}
+
+define i32 @f(i32 %a) {
+b1:
+  %r = call i32 @sq(i32 %a), !dbg !6
+  ret i32 %r
+}
+
+!1 = distinct !DISubprogram(name: \"sq\")
+!2 = distinct !DISubprogram(name: \"f\")
+!5 = !DILocation(line: 1, column: 40, scope: !1)
+!6 = !DILocation(line: 2, column: 48, scope: !2)
+",
+    );
+    assert!(inline_into(&mut module, "f", 0));
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+    let mul = function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::Binary { .. }))
+        .unwrap();
+    let (_, node) = function.instruction(mul).metadata.iter().find(|(kind, _)| kind == "dbg").unwrap();
+    let special = &module.special[node];
+    let at = special.fields.iter().position(|one| one == "inlinedAt").expect("an inlinedAt");
+    let llrm_mir::MetadataOperand::Node(call) = module.metadata[node.0 as usize].operands[at] else { panic!() };
+    let line = module.special[&call].fields.iter().position(|one| one == "line").expect("a line");
+    let llrm_mir::MetadataOperand::Constant(line) = module.metadata[call.0 as usize].operands[line] else { panic!() };
+    assert!(matches!(module.context.get(line).kind, llrm_mir::ConstantKind::Int(2)), "inlined at the call's line");
 }
