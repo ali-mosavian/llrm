@@ -19,6 +19,7 @@ RUNNER_ENV = (
     "WAITS",
     "BATCH_CAP",
     "PUSH_MODE",
+    "BUILDSLOT_LANDING",  # parity_squash runs the whole batch inside buildslot.landing(); its tool tests inherit it
 )
 
 for name in RUNNER_ENV:

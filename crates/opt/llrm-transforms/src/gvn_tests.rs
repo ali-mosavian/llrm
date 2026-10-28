@@ -1236,3 +1236,16 @@ fn test_an_intrinsic_of_forwarded_constants_folds() {
     );
     assert!(after.contains("ret i16 5") && !after.contains("call i16 @llvm.umax"), "{after}");
 }
+
+/// `object_of` walked an alloca's uses at every access asked of it, since the
+/// pass did not hand it the exposed frames: matmul -O2 made 133 M instructions
+/// in GVN against the pin's 18 M, 12 walks here for 3 locals. The walks are
+/// the frames', not the accesses'.
+#[test]
+fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
+    let mut module = parsed(include_str!("../tests/fixtures/gvn_matmul_loops.ll"));
+    let before = llrm_analysis::frameescape::scans();
+    crate::testing::managed(&mut module, Gvn::default());
+    let walks = llrm_analysis::frameescape::scans() - before;
+    assert!(walks <= 3, "{walks} walks for 3 locals");
+}

@@ -241,7 +241,7 @@ fn with_default_convention(
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
     // routines of floatm.c) takes the default too.
-    let library: std::collections::HashSet<llrm_mir::context::GlobalId> = {
+    let library: llrm_mir::hash::HashSet<llrm_mir::context::GlobalId> = {
         module
             .globals
             .iter()
@@ -368,6 +368,7 @@ pub fn compiled_dumping(
     refuse_foreign_conventions(&module)?;
     allow_near_calls(&mut module);
     with_default_convention(&mut module, default, flags.regcall_default);
+    crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
     llrm_mir::dbgimport::types_and_globals(&mut module);

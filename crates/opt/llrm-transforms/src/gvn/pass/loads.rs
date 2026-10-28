@@ -33,6 +33,7 @@ use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
 
+use super::exposing;
 use super::{GvnPass, local};
 use crate::vncoercion::{self, Inserter, MemIntrinsic};
 
@@ -191,7 +192,7 @@ impl GvnPass<'_> {
         &mut self,
         inst: InstId,
     ) -> MemDepResult {
-        let unit = Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
         let mut aa = BasicAA::new(&unit);
         self.md.get_dependency(MdEnv { unit: &unit, dt: &self.dt }, &mut aa, inst)
     }
@@ -201,7 +202,7 @@ impl GvnPass<'_> {
         &mut self,
         value: Operand,
     ) {
-        let unit = Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
         self.md.invalidate_cached_pointer_info(&unit, value);
     }
 
@@ -212,7 +213,8 @@ impl GvnPass<'_> {
         inst: InstId,
     ) -> bool {
         matches!(self.function.instruction(inst).opcode, Opcode::Call(_))
-            && Unit::within(&*self.context, self.layout, &*self.function, self.outer).intrinsic(inst)
+            && exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed)
+                .intrinsic(inst)
                 == Some(Intrinsic::LifetimeStart)
     }
 
@@ -367,7 +369,7 @@ impl GvnPass<'_> {
         from: InstId,
     ) -> Option<Operand> {
         let function = &*self.function;
-        let unit = Unit::within(&*self.context, self.layout, function, self.outer);
+        let unit = exposing(Unit::within(&*self.context, self.layout, function, self.outer), self.exposed);
         let mut aa = BasicAA::new(&unit);
         let mut batch = llrm_analysis::aa::BatchAAResults::new(&mut aa);
         let mut visited = 0u32;
@@ -414,7 +416,7 @@ impl GvnPass<'_> {
         false_addr: Operand,
         from: InstId,
     ) -> Option<AvailableValue> {
-        let unit = Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+        let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
         let loc = llrm_analysis::aa::MemoryLocation::get(&unit, load).expect("a load");
         let load_ty = self.function.instruction(load).ty;
         let v1 = self.find_dominating_value(&loc.with_new_ptr(true_addr), load_ty, from)?;
@@ -612,7 +614,7 @@ impl GvnPass<'_> {
     ) -> bool {
         let mut deps: Vec<NonLocalDepResult> = Vec::new();
         {
-            let unit = Unit::within(&*self.context, self.layout, &*self.function, self.outer);
+            let unit = exposing(Unit::within(&*self.context, self.layout, &*self.function, self.outer), self.exposed);
             let mut aa = BasicAA::new(&unit);
             self.md.get_non_local_pointer_dependency(MdEnv { unit: &unit, dt: &self.dt }, &mut aa, load, &mut deps);
         }
