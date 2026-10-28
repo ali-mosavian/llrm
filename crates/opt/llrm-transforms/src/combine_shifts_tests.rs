@@ -304,7 +304,7 @@ fn shl_of_a_zext_with_zeros_to_shift_out_is_a_zext_of_a_shl() {
         "i32",
         "i8 %x",
         "  %m = and i8 %x, 15\n  %z = zext i8 %m to i32\n  %r = shl i32 %z, 4\n  ret i32 %r\n",
-        "  %0 = shl i8 %x, 4\n  %1 = and i8 %0, -16\n  %2 = zext i8 %1 to i32\n  ret i32 %2\n",
+        "  %0 = shl i8 %x, 4\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
     check(
         "i32",
@@ -430,13 +430,13 @@ fn shl_of_a_masked_value_keeps_the_mask_it_cannot_drop() {
         "i32",
         "i32 %x, i32 %n",
         "  %one = shl i32 1, %n\n  %m = add i32 %one, -1\n  %a = and i32 %x, %m\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
-        "  %one = shl nuw i32 1, %n\n  %m = add i32 %one, -1\n  %a = and i32 %x, %m\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
+        "  %one = shl nuw i32 1, %n\n  %m = add i32 %one, 255\n  %a = and i32 %x, %m\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
     );
     check(
         "i32",
         "i32 %x",
         "  %a = and i32 %x, 255\n  %r = shl i32 %a, 24\n  ret i32 %r\n",
-        "  %0 = shl i32 %x, 24\n  %1 = and i32 %0, -16777216\n  ret i32 %1\n",
+        "  %r = shl i32 %x, 24\n  ret i32 %r\n",
     );
     check(
         "i32",
