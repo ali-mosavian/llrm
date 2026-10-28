@@ -11,7 +11,7 @@ use crate::facts::Facts;
 use crate::hash::HashMap;
 use crate::intrinsics::Intrinsic;
 use crate::module::{BlockId, Function, GlobalKind, MetadataOperand, Module, Operand, ValueDef, ValueId};
-use crate::opcode::{Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
+use crate::opcode::{AtomicKind, Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, RmwOp};
 use crate::types::{FloatKind, Type, TypeId};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -410,6 +410,25 @@ impl<'m> Machine<'m> {
                 };
                 Val::Aggregate(vec![wrapped, overflowed])
             }
+            Intrinsic::Saturating { op, signed } => {
+                let exact = binary(op, if signed { Flags::NSW } else { Flags::NUW }, argument(0), argument(1))?;
+                match (exact, argument(0), argument(1)) {
+                    (Val::Poison, Val::Int { bits, width }, Val::Int { .. }) => {
+                        // Overflow is toward the first argument's sign when
+                        // signed, else off the top (add) or bottom (sub).
+                        let ones = if width == 128 { u128::MAX } else { (1u128 << width) - 1 };
+                        let sign = 1u128 << (width - 1);
+                        let bits = match (signed, op) {
+                            (true, _) if bits & sign != 0 => sign,
+                            (true, _) => ones >> 1,
+                            (false, BinaryOp::Add) => ones,
+                            (false, _) => 0,
+                        };
+                        Val::Int { bits, width }
+                    }
+                    (exact, _, _) => exact,
+                }
+            }
             Intrinsic::MinMax { signed, max } => {
                 let predicate = match (signed, max) {
                     (true, true) => IntPredicate::Sgt,
@@ -491,7 +510,47 @@ impl<'m> Machine<'m> {
                 };
                 Val::Int { bits: value as u128 & mask(width), width }
             }
+            Intrinsic::FixedMul { signed, saturating } => {
+                let (Val::Int { bits: a, width }, Val::Int { bits: b, .. }, Val::Int { bits: scale, .. }) =
+                    (argument(0), argument(1), argument(2))
+                else {
+                    return Ok(Val::Poison);
+                };
+                let sign = |bits: u128| ((bits << (128 - width)) as i128) >> (128 - width);
+                let (min, max) = if signed {
+                    (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
+                } else {
+                    (0, (1i128 << width) - 1)
+                };
+                let (a, b) = if signed { (sign(a), sign(b)) } else { (a as i128, b as i128) };
+                let wide = (a * b) >> scale;
+                Val::Int { bits: (if saturating { wide.clamp(min, max) } else { wide }) as u128 & mask(width), width }
+            }
+            Intrinsic::ShiftSat { signed } => {
+                let (Val::Int { bits: a, width }, Val::Int { bits: by, .. }) = (argument(0), argument(1)) else {
+                    return Ok(Val::Poison);
+                };
+                if by >= u128::from(width) {
+                    return Ok(Val::Poison);
+                }
+                let (min, max) = if signed {
+                    (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1)
+                } else {
+                    (0, (1i128 << width) - 1)
+                };
+                let a = if signed { ((a << (128 - width)) as i128) >> (128 - width) } else { a as i128 };
+                Val::Int { bits: (a << by).clamp(min, max) as u128 & mask(width), width }
+            }
             // Fused or not is the machine's choice, as the LangRef allows.
+            Intrinsic::CopySign => match (argument(0), argument(1)) {
+                (Val::Float(FloatKind::Float, magnitude), Val::Float(FloatKind::Float, sign)) => {
+                    Val::Float(FloatKind::Float, (magnitude & 0x7fff_ffff) | (sign & 0x8000_0000))
+                }
+                (Val::Float(kind, magnitude), Val::Float(_, sign)) if kind != FloatKind::Float => {
+                    Val::Float(kind, (magnitude & (u64::MAX >> 1)) | (sign & (1 << 63)))
+                }
+                _ => Val::Poison,
+            },
             Intrinsic::FMulAdd => {
                 let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
@@ -943,6 +1002,46 @@ impl<'m> Machine<'m> {
                         }
                         None
                     }
+                    Opcode::Atomic(info) if info.kind == AtomicKind::Fence => None,
+                    // One thread runs here: an atomic access is the plain one.
+                    Opcode::Atomic(info) => {
+                        let at = usize::from(info.kind == AtomicKind::Store);
+                        let Val::Ptr(address) = value(self, at)? else {
+                            return undefined("an atomic access through poison");
+                        };
+                        let ty = match info.kind {
+                            AtomicKind::Load => instruction.ty,
+                            AtomicKind::Store => function.operand_type(&self.module.context, ops[0]).expect("a value"),
+                            _ => function.operand_type(&self.module.context, ops[1]).expect("a value"),
+                        };
+                        if self.checked {
+                            let size = self.layout.alloc_size(self.types(), ty);
+                            self.touch(function, &mut touched, ops[at], address, size, info.kind != AtomicKind::Load)?;
+                        }
+                        match info.kind {
+                            AtomicKind::Load => Some(self.load(ty, address)?),
+                            AtomicKind::Store => {
+                                let stored = value(self, 0)?;
+                                self.store(&stored, ty, address)?;
+                                None
+                            }
+                            AtomicKind::Rmw(op) => {
+                                let old = self.load(ty, address)?;
+                                let new = rmw(op, old.clone(), value(self, 1)?)?;
+                                self.store(&new, ty, address)?;
+                                Some(old)
+                            }
+                            _ => {
+                                let old = self.load(ty, address)?;
+                                let hit = icmp(IntPredicate::Eq, old.clone(), value(self, 1)?);
+                                if matches!(hit, Val::Int { bits: 1, .. }) {
+                                    let new = value(self, 2)?;
+                                    self.store(&new, ty, address)?;
+                                }
+                                Some(Val::Aggregate(vec![old, hit]))
+                            }
+                        }
+                    }
                     Opcode::GetElementPtr { source } => {
                         let operands = (0..ops.len()).map(|at| value(self, at)).collect::<Run<Vec<_>>>()?;
                         Some(self.gep(*source, instruction.ty, &operands)?)
@@ -998,6 +1097,36 @@ impl<'m> Machine<'m> {
         let low = (i128::from(base) + offset) as u128 & mask(index_bits);
         let address = (u128::from(base) & !mask(index_bits)) | low;
         Ok(Val::Ptr(address as u64))
+    }
+}
+
+/// What an `atomicrmw` stores: `op` of the old value and the operand.
+fn rmw(
+    op: RmwOp,
+    old: Val,
+    operand: Val,
+) -> Run<Val> {
+    let plain = |op| binary(op, Flags::default(), old.clone(), operand.clone());
+    let chosen = |predicate| match icmp(predicate, old.clone(), operand.clone()) {
+        Val::Int { bits: 1, .. } => old.clone(),
+        Val::Int { .. } => operand.clone(),
+        _ => Val::Poison,
+    };
+    match op {
+        RmwOp::Xchg => Ok(operand),
+        RmwOp::Add => plain(BinaryOp::Add),
+        RmwOp::Sub => plain(BinaryOp::Sub),
+        RmwOp::And => plain(BinaryOp::And),
+        RmwOp::Or => plain(BinaryOp::Or),
+        RmwOp::Xor => plain(BinaryOp::Xor),
+        RmwOp::Nand => match (plain(BinaryOp::And)?, &old) {
+            (Val::Int { bits, width }, _) => Ok(Val::Int { bits: !bits & mask(width), width }),
+            _ => Ok(Val::Poison),
+        },
+        RmwOp::Max => Ok(chosen(IntPredicate::Sgt)),
+        RmwOp::Min => Ok(chosen(IntPredicate::Slt)),
+        RmwOp::UMax => Ok(chosen(IntPredicate::Ugt)),
+        RmwOp::UMin => Ok(chosen(IntPredicate::Ult)),
     }
 }
 

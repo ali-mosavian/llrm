@@ -953,14 +953,31 @@ pub fn rotate_loops(run: &mut Run) -> bool {
     changed
 }
 
-/// DEVIATE: under `-Os` a header is copied only when it has four instructions
-/// or fewer (`RotationMaxHeaderSize` is 16 in the pin, `hasMinSize` alone
-/// lowers it). Code bytes m16 -Os, QCport 65 modules + 71 vsgcc programs, by
-/// limit: 16 = 262435 + 14831, 4 = 262098 + 14745 with no object larger than
-/// at 16; 3 and 2 save more (261979, 260491) but x_mergesort +21 and, at 2,
-/// x_base64 +23 and d_alias +20: an unrotated counted loop loses its trip
-/// count to SCEV (a `div` appears), which no header size predicts.
+/// DEVIATE (m16 only): under `-Os` a header is copied only when it has four
+/// instructions or fewer (`RotationMaxHeaderSize` is 16 in the pin,
+/// `hasMinSize` alone lowers it). Code bytes m16 -Os, QCport 65 modules + 71
+/// vsgcc programs, by limit: 16 = 262435 + 14831, 4 = 262098 + 14745 with no
+/// object larger than at 16; 3 and 2 save more (261979, 260491) but x_mergesort
+/// +21 and, at 2, x_base64 +23 and d_alias +20: an unrotated counted loop loses
+/// its trip count to SCEV (a `div` appears), which no header size predicts.
 const SIZE_MAX_HEADER: u32 = 4;
+
+/// The header instructions a loop may copy: none without header duplication,
+/// the pin's 16, or `SIZE_MAX_HEADER` for a size build on a target with
+/// segment registers (m16), the only target the byte sweep was run for.
+pub fn header_limit(
+    duplicate_headers: bool,
+    size: bool,
+    target: &dyn llrm_mir::target::Machine,
+) -> u32 {
+    if !duplicate_headers {
+        0
+    } else if size && target.segment_registers() > 0 {
+        SIZE_MAX_HEADER
+    } else {
+        16
+    }
+}
 
 /// `LoopRotatePass`: every loop of the function rotated with header
 /// duplication on (`EnableHeaderDuplication`), whose limit is the pass's
@@ -989,13 +1006,7 @@ impl FunctionPass for LoopRotate {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = target_tti(outer.target());
         let options = Options {
-            max_header_size: if !self.duplicate_headers {
-                0
-            } else if self.size {
-                SIZE_MAX_HEADER
-            } else {
-                16
-            },
+            max_header_size: header_limit(self.duplicate_headers, self.size, outer.target()),
             rotation_only: false,
             is_util_mode: false,
             prepare_for_lto: false,

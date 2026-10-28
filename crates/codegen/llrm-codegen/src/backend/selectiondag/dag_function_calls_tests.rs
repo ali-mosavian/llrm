@@ -186,6 +186,33 @@ fn a_call_destroys_what_its_conventions_says() {
     );
 }
 
+const VARIADIC_CALL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare cc 1002 i32 @w(i32, ...)
+define i32 @main() {
+entry:
+  %a = call cc 1002 i32 (i32, ...) @w(i32 7, i32 8)
+  ret i32 %a
+}
+";
+
+/// A variadic call under watcall passes as cdecl does (`variadic =
+/// \"cdecl32\"`) and destroys what cdecl does. The DAG path used watcall's set
+/// (EAX alone), so a value held in ECX across `printf` or a variadic `sum` was
+/// destroyed: tests/llc/varargs.c printed `1604196 36` for `15 36` at
+/// x86_32-wat.
+#[test]
+fn a_variadic_call_destroys_what_the_variadic_convention_says() {
+    use llrm_target::Target;
+    let module = llrm_mir::parse::module(VARIADIC_CALL).expect("parses");
+    let done = selected(&module, "main", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let call = insns.iter().find(|i| i.call.is_some()).expect("a call");
+    let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
+    let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
+    assert!(call.clobbers.contains(&named("ecx")) && call.clobbers.contains(&named("edx")), "{:?}", call.clobbers);
+}
+
 const BYVAL_ADDRESS: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @bar(ptr)
 define void @f(ptr %z, ptr byval([20 x i8]) %x, ptr %y) {
@@ -623,6 +650,7 @@ fn a_runtime_call_pops_every_argument_it_is_given() {
         segments: &crate::backend::target::BASIC,
         runtime: true,
         frame_zeroed: false,
+        facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
@@ -915,6 +943,7 @@ declare cc 1000 void @user(i16) addrspace(1)
         segments: &crate::backend::target::BASIC,
         runtime: false,
         frame_zeroed: false,
+        facts: None,
     };
     let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
     let done = super::dag_function::selected_in_pool(
@@ -1135,4 +1164,92 @@ fn a_forty_byte_byval_argument_is_a_string_move() {
         .unwrap_or_else(|e| panic!("{}", e.0));
     let ops: Vec<_> = done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.clone()).collect();
     assert!(ops.iter().any(|name| name.starts_with("movs")), "{ops:?}");
+}
+
+/// A direct call of a private function that took part in `CalleeFacts` was
+/// taken to destroy the whole convention, not what the callee wrote: `main`
+/// kept a value in CX across `lsum_`, which wrote CX and saved nothing, and
+/// `varargs` printed 4324 for 15 under DOSBox at m16.
+#[test]
+fn a_call_of_a_private_function_destroys_what_it_wrote() {
+    use llrm_lir::registers::RegId;
+    const IR: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define internal i16 @leaf(i16 %a) {
+entry:
+  ret i16 %a
+}
+define i16 @f(i16 %x) {
+entry:
+  %r = call i16 @leaf(i16 %x)
+  ret i16 %r
+}
+";
+    let module = llrm_mir::parse::module(IR).expect("parses");
+    let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
+    let frame = llrm_target::FrameRegisters {
+        pointer: RegId::BP,
+        stack: RegId::SP,
+        saved: vec![],
+        slot: 2,
+        align: 2,
+        optional: false,
+        enter: false,
+        free: false,
+        wrap_split_size: false,
+        slot_scratch: None,
+    };
+    let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    facts.record("leaf", &leaf.body, &frame);
+    let written = facts.written("leaf").expect("leaf takes part");
+    assert!(!written.whole.contains(&RegId::ECX), "the leaf writes no CX: {:?}", written.whole);
+    let contracts = super::dag_function::RuntimeContracts {
+        abi: &Stub { flags: false },
+        segments: &crate::backend::target::BASIC,
+        runtime: false,
+        frame_zeroed: false,
+        facts: Some(&facts),
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|why| panic!("{}", why.0));
+    let call = done.body.insns().iter().find(|i| i.call.is_some()).cloned().expect("a call");
+    let lost: Vec<RegId> = call.clobbers.iter().map(|r| crate::model::ir::root(*r)).collect();
+    assert!(!lost.contains(&RegId::ECX), "a call of leaf destroys {lost:?}, leaf wrote {:?}", written.whole);
+}
+
+const M16_UDIV_TEN: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32\"
+define cc 1005 i64 @f(i64 %x) addrspace(1) {
+entry:
+  %q = udiv i64 %x, 10
+  ret i64 %q
+}
+";
+
+/// `x / 10` on an `i64` was always the `$div64` routine; the pin
+/// (`expandDIVREMByConstant`) multiplies by the magic number at speed and
+/// keeps the call at `-Os`.
+#[test]
+fn an_i64_udiv_by_a_constant_is_inline_at_speed_and_a_call_at_size() {
+    let module = llrm_mir::parse::module(M16_UDIV_TEN).expect("parses");
+    let calls = |size: bool| {
+        let mut cpu = crate::backend::cpu::profile("386").expect("a cpu").clone();
+        cpu.size = size;
+        let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+        done.body
+            .insns()
+            .iter()
+            .filter(|i| i.what.as_ref().is_some_and(|w| w.op == crate::model::ir::Operation::Call))
+            .count()
+    };
+    assert_eq!(calls(false), 0, "speed: multiplied by the magic number");
+    assert_eq!(calls(true), 1, "-Os: the divide routine");
 }

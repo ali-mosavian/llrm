@@ -66,6 +66,8 @@ test    cmp    -/rm,ri    64    alu_rr    -    -    -    -/OF,SF,ZF,AF,CF,PF    
 bt    cmp    -/r,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_r{w}
 bt    cmp    -/r,i    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bt_rm{w}_imm8
 btc    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btc_rm{w}_r{w}
+bts    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Bts_rm{w}_r{w}
+btr    binary    r/^0,r    64    alu_rr    -    -    -    -/OF,SF,AF,CF,PF    Btr_rm{w}_r{w}
 push    push    -/rmi    64    push_r    -    sp,ss    sp    -/-    Push_r{w}
 pop    pop    rm/-    64    pop_r    -    sp,ss    sp    -/-    Pop_r{w}
 # movsxd: the sign extension of a dword into a quadword.
@@ -98,6 +100,10 @@ andnps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Andnps_xmm_xmmm128
 orps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Orps_xmm_xmmm128
 movaps	move	x/xm	128	sse_move	-	self,same	-	-/-	Movaps_xmm_xmmm128
 movaps	move	m/x	128	sse_move	-	-	-	-/-	Movaps_xmmm128_xmm
+movq	extend	r/x	64	sse_move	-	-	-	-/-	Movq_rm64_xmm
+movq_x	extend	x/r	64	sse_move	-	-	-	-/-	Movq_xmm_rm64
+movd	extend	r/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm
+movd_x	extend	x/r	32	sse_move	-	-	-	-/-	Movd_xmm_rm32
 cvtss2sd	extend	x/xm	32	sse_move	-	-	-	-/-	Cvtss2sd_xmm_xmmm32
 cvtsd2ss	extend	x/xm	64	sse_move	-	-	-	-/-	Cvtsd2ss_xmm_xmmm64
 cvtsi2ss	extend	x/rm	32	sse_move	-	-	-	-/-	Cvtsi2ss_xmm_rm32

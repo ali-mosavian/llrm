@@ -88,6 +88,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("LoadFold", "pushfold@6"),
     ("CmpAsSub", "cmpsub@1"),
     ("OptimizePHIs", "optimizephis@1"),
+    ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
@@ -160,6 +161,9 @@ pub fn machine_with<'a>(
         // On SSA, first: a phi cycle that carries one value is that value (the
         // pin: OptimizePHIs, ahead of MachineCSE).
         Box::new(crate::backend::optimizephis::OptimizePhis),
+        // As the pin has it, straight after selection: what selection built
+        // and nothing reads (a far pointer joined for the string registers).
+        Box::new(crate::backend::deadmi::DeadMachineInstructionElim),
         // Before SsaSpill: a constant several edges of a phi carry is one
         // value.
         Box::new(crate::backend::phiconst::SharedConstants),
@@ -176,7 +180,11 @@ pub fn machine_with<'a>(
         // MachineSink).
         Box::new(crate::backend::precse::MachineCse { classes: Rc::clone(classes) }),
         // On SSA, where a def with phi users alone can go to its edge.
-        Box::new(crate::backend::machinesink::MachineSink { size: target.size, limit: classes.available.len() }),
+        Box::new(crate::backend::machinesink::MachineSink {
+            size: target.size,
+            limit: classes.available.len(),
+            classes: Rc::clone(classes),
+        }),
         // On SSA, after sinking (the pin's PeepholeOptimizer): a subtract
         // nothing reads is a compare (optimizeCompareInstr).
         Box::new(crate::backend::peepholeopt::PeepholeOptimizer { size: target.size }),
@@ -225,6 +233,9 @@ pub fn machine_with<'a>(
         Box::new(floatalloc::FloatAlloc { frame: frame.clone(), classes: Rc::clone(classes) }),
         Box::new(twoaddr::TwoAddress {
             lea: match target.dword_address_form() {
+                None if target.address_forms.iter().any(|form| form.index_width == 8) => {
+                    crate::twoaddress::ThreeAddress::Wide
+                }
                 None => crate::twoaddress::ThreeAddress::Off,
                 Some(form) if form.secondary => crate::twoaddress::ThreeAddress::AddSubWords,
                 Some(_) => crate::twoaddress::ThreeAddress::All,
@@ -553,6 +564,21 @@ mod tests {
         for later in ["MachineLICM", "MachineCSE", "MachineSink", "PeepholeOptimizer"] {
             assert!(at("MachineCombiner") < at(later), "{later}: {names:?}");
         }
+    }
+
+    /// `llc -O2 -debug-pass` has X86FixupSetCC before the pre-RA scheduler;
+    /// ours ran after it, so the zero a `setcc` needs was placed once the
+    /// order was fixed (x_rle m32: a `lea` in another place).
+    #[test]
+    fn test_fixupsetcc_runs_before_the_machine_scheduler() {
+        let names: Vec<&'static str> =
+            machine(&IndexMap::default(), None, None, None, false, "486", &crate::backend::target::BUILT_IN)
+                .expect("phases")
+                .iter()
+                .map(|phase| phase.class_name())
+                .collect();
+        let at = |one: &str| names.iter().position(|name| *name == one).expect(one);
+        assert!(at("FixupSetCC") < at("MachineScheduler"), "{names:?}");
     }
 
     #[test]

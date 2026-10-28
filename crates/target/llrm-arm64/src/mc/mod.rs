@@ -2,11 +2,54 @@
 //! (`encode`), its text (`text`) and the immediates the encodings code
 //! (`immediate`). Translated from LLVM's `AArch64` MC layer.
 
+pub mod backend;
+pub mod elf;
 pub mod encode;
+pub mod fixup;
 pub mod immediate;
 pub mod inst;
+pub mod macho;
 mod text;
 pub mod visit;
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported};
+
+/// arm64's object writers.
+pub struct Arm64Objects;
+
+impl ObjectTarget for Arm64Objects {
+    fn write_object(
+        &self,
+        format: &str,
+        object: &Object,
+    ) -> Result<Vec<u8>, Unsupported> {
+        let expanded;
+        let object = match (format, &object.debug) {
+            ("elf" | "macho", Some(info)) => {
+                expanded = llrm_dwarf::expanded(object, info)?;
+                &expanded
+            }
+            _ => object,
+        };
+        match format {
+            "macho" => llrm_macho::write(object, &macho::Arm64MachO),
+            "elf" => elf::write(object),
+            _ => Err(Unsupported(format!("no {format} writer for arm64 yet"))),
+        }
+    }
+
+    fn asm_info(
+        &self,
+        format: &str,
+    ) -> Option<AsmInfo> {
+        matches!(format, "macho" | "elf").then_some(AsmInfo {
+            pref_align: false,
+            hosted: true,
+            location_ranges: true,
+            cfa_locations: true,
+        })
+    }
+}

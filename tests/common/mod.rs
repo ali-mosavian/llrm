@@ -9,6 +9,7 @@ use std::path::Path;
 
 pub mod cc;
 pub mod dosbox;
+pub mod pin;
 
 /// A target's datalayout string, from its `datalayout.toml`, for the IR a test
 /// writes.

@@ -100,7 +100,7 @@ def flat(work: Path, sources: list[Path]) -> dict:
         obj, exe, listing = work / f"{source.stem}.obj32", work / f"{source.stem}.exe", work / f"{source.stem}.map32"
         if reason := qb32.compile_basic(source, obj):
             raise SystemExit(f"{source}: {reason}")
-        dosbatch.link_target(qb32.TARGET, obj, exe, work, listing=listing, runtime=(qb32.START_FILES, []), objects_after=tuple(qb32.closure(obj, runtime)))
+        dosbatch.link_target(qb32.TARGET, obj, exe, work, listing=listing, runtime=(qb32.START_FILES, []), objects_after=tuple(qb32.closure(obj, runtime)), defines=dosbatch.os_defines(qb32.TARGET, "qb"))
         out[source.stem] = jw_map(listing)
     return out
 

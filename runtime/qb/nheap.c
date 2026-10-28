@@ -170,6 +170,13 @@ void lh_compact(void)
         make(heap_low, top - heap_low, LH_FREE);
 }
 
+void nh_compact(void)
+{
+    str_compact();
+    lh_compact();
+    lh_give_free_to_strings();
+}
+
 /* An entry of `bytes` of data, for `owner`: the free room, then a scan, then
    room from string space, with string space compacted first when that is not
    enough (LH_ALC_GROW). */

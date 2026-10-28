@@ -17,7 +17,9 @@ ret:\n  ret void\n}\n".replace("@LAYOUT@", &common::datalayout("x86-m32"))
 }
 
 /// x_mergesort `msort` pushed ebx/esi/edi/ebp before its early `jl` to the
-/// return: the registers were saved at the entry, not on the late path.
+/// return: the registers were saved at the entry, not on the late path. The
+/// test named `push ebx`, which the allocator stopped choosing: it read the
+/// missing push as a failure (any callee-saved push counts).
 #[test]
 fn test_the_early_exit_precedes_the_pushes_when_the_late_path_branches_to_the_return() {
     let scratch = tempfile::tempdir().unwrap();
@@ -30,5 +32,6 @@ fn test_the_early_exit_precedes_the_pushes_when_the_late_path_branches_to_the_re
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let asm = String::from_utf8_lossy(&output.stdout);
     let body = asm.split("_f proc near").nth(1).unwrap();
-    assert!(body.find("jl ").unwrap() < body.find("push ebx").unwrap(), "{asm}");
+    let push = body.find("push ").expect("a callee-saved register is pushed on the late path");
+    assert!(body.find("jl ").unwrap() < push, "{asm}");
 }
