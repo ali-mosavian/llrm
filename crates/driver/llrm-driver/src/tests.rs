@@ -274,6 +274,20 @@ fn a_short_argument_read_as_a_quadword_is_no_undefined_read_at_m64() {
     }
 }
 
+/// `(float)u` read `rdi` whole: the dword move that zeroes its upper half was
+/// taken for a copy and coalesced away, so garbage above `edi` was converted.
+#[test]
+fn an_unsigned_dword_converted_at_m64_is_zero_extended_first() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                define float @f(i32 %u) {\n  %r = uitofp i32 %u to float\n  ret float %r\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let convert = lines.iter().position(|line| line.starts_with("cvtsi2ss")).expect("the convert");
+    assert!(lines[..convert].iter().any(|line| line.starts_with("movzx r")), "{listing}");
+}
+
 /// A `zeroext` argument arrives with its high bits clear, so `x / 10` of an
 /// `unsigned short` multiplies the register as it is; ours `movzx`ed it first
 /// (3 instructions where the pin has 2 at -m64). A `signext` one is its own
