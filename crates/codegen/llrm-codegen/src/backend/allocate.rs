@@ -228,10 +228,11 @@ use std::sync::Arc;
 use llrm_lir::registers::RegId;
 
 use crate::analysis::frequency::Frequency;
-use crate::analysis::intervals::{self as ranges, Indexes, Interval, key};
+use crate::analysis::intervals::{self as ranges, Indexes, key};
 use crate::backend::cpu::{self as targets, Profile, ProfileOrName};
 use crate::backend::frame::{self as frames, Frame, Refused};
 use crate::backend::live::LiveRanges;
+use crate::backend::masks::_whole;
 use crate::backend::target::{self, Segments};
 use crate::backend::{constrain, datagroup};
 use crate::model::ir::{self, Addr, Held, Loc, Mem, Operation, Semantics, Space};
@@ -1191,15 +1192,6 @@ pub fn live_reference(body: &LirBody) -> (Live, Live) {
     (live_in, live_out)
 }
 
-/// How far a range has got, and therefore what may still be tried on it.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum Stage {
-    Assign = 0,
-    Split = 1,
-    Spill = 2,
-    Done = 3,
-}
-
 use crate::backend::classes::RegisterClasses;
 use crate::backend::regclass::classes;
 
@@ -1320,32 +1312,6 @@ pub fn explicit_selectors_given(
         blocks.push(block.with_insns(insns));
     }
     Some(body.with_blocks(blocks))
-}
-
-/// The values an instruction is a plain same-width copy between, if it is.
-fn _copy_pair(one: &Insn) -> Option<(u32, u32)> {
-    let what = one.what.as_ref()?;
-    if what.op == Operation::Move && what.name.as_deref() == Some("mov") {
-        if let ([Loc::Held(dest)], [Loc::Held(source)]) = (what.dests.as_slice(), what.sources.as_slice()) {
-            if dest.width == source.width && dest.value != source.value {
-                return Some((dest.value, source.value));
-            }
-        }
-    }
-    None
-}
-
-fn _copy_hints(body: &LirBody) -> IndexMap<u32, Vec<u32>> {
-    let mut hints: IndexMap<u32, Vec<u32>> = IndexMap::default();
-    for block in &body.blocks {
-        for one in &block.insns {
-            if let Some((dest, source)) = _copy_pair(one) {
-                hints.entry(dest).or_default().push(source);
-                hints.entry(source).or_default().push(dest);
-            }
-        }
-    }
-    hints
 }
 
 /// How many copies away a fixed register still reaches a value as its hint: the
@@ -1504,31 +1470,6 @@ thread_local! {
     static LAST_STATS: std::cell::Cell<(usize, usize, usize, usize)> = const { std::cell::Cell::new((0, 0, 0, 0)) };
 }
 
-/// Every value that wants a register, dead definitions included.
-/// The values of `wanted` the body still names: from the postings the body is
-/// followed with, not a walk of every instruction (a spill asks it of its few).
-fn _named_among(
-    body: &LirBody,
-    wanted: &BTreeSet<u32>,
-) -> BTreeSet<u32> {
-    let arrives: BTreeSet<u32> = body.blocks.iter().flat_map(|block| block.phis.iter().map(|phi| phi.result)).collect();
-    let found: BTreeSet<u32> = crate::backend::postings::following(body, |postings| {
-        wanted
-            .iter()
-            .copied()
-            .filter(|value| {
-                arrives.contains(value) || postings.defs_count(*value) != 0 || postings.uses_count(*value) != 0
-            })
-            .collect()
-    });
-    body.facts.0.bump_by("named-among", wanted.len());
-    if llrm_support::env_flag!("LLRM_CHECK_POSTINGS") {
-        let walked: BTreeSet<u32> = _values(body).into_iter().filter(|one| wanted.contains(one)).collect();
-        assert!(found == walked, "{}: the values still named, from the postings, differ from the walk", body.name);
-    }
-    found
-}
-
 fn _values(body: &LirBody) -> Vec<u32> {
     let mut out: BTreeSet<u32> = BTreeSet::new();
     for block in &body.blocks {
@@ -1539,33 +1480,6 @@ fn _values(body: &LirBody) -> Vec<u32> {
         }
     }
     out.into_iter().collect()
-}
-
-/// Where a range sits in the queue: first by how few registers may hold it
-/// (LLVM's register class `AllocationPriority`,
-/// which `RegClassPriorityTrumpsGlobalness` puts before anything else), then
-/// `_priority`. The wide values fit around the narrow ones.
-fn _queue_priority(
-    one: Option<&Interval>,
-    at: Stage,
-    class: Option<usize>,
-    wide: usize,
-    index: &Indexes,
-) -> f64 {
-    let narrow = class.map_or(0, |registers| wide.saturating_sub(registers));
-    _priority(one, at, index) + narrow as f64 * 1e9
-}
-
-/// Where this range sits in the queue. Larger first, as LLVM does.
-fn _priority(
-    one: Option<&Interval>,
-    at: Stage,
-    index: &Indexes,
-) -> f64 {
-    match one {
-        None => 0.0,
-        Some(one) => one.size(index) as f64 + if at != Stage::Assign { 1e6 } else { 0.0 },
-    }
 }
 
 /// How wide each value is anywhere it is read or written.
@@ -1627,421 +1541,6 @@ pub(crate) fn _named_widths(one: &Insn) -> impl Iterator<Item = (u32, u32)> + '_
         .chain(one.requires.iter().chain(&one.delivers).map(|(place, _register)| *place))
         .map(|place| (place.value, place.width))
         .chain(one.widths.iter().copied())
-}
-
-/// A point that destroys registers without naming them: `during` the
-/// instruction, their high halves only, or `before` it reads its operands.
-pub struct Mask {
-    pub slot: i64,
-    pub during: BTreeSet<RegId>,
-    pub high: BTreeSet<RegId>,
-    pub before: BTreeSet<RegId>,
-}
-
-/// The points that destroy registers, and, for each register, where, in order:
-/// whether a value is live across one is asked of every value and every
-/// register, over and over, and answered from the slots by bisection, not by a
-/// look at every point.
-#[derive(Default)]
-pub struct Masks {
-    list: Vec<Arc<Mask>>,
-    /// The instruction each point is of, where the points came from a body:
-    /// what `after` finds the points of the instructions a rewrite removed
-    /// by.
-    owners: Vec<usize>,
-    /// Points handed out by `iter`, for a test that a query by span does not
-    /// walk them all.
-    walked: std::cell::Cell<usize>,
-    reaching: std::cell::OnceCell<crate::support::hash::HashMap<RegId, Reaching>>,
-    /// The points a rewrite added, where `after` made these from the ones
-    /// before it: what a register held across the rewrite may now be
-    /// destroyed at.
-    added: Option<Vec<Arc<Mask>>>,
-}
-
-/// The points that destroy one register, as `Masks::destroyed_within` asks.
-pub struct Destroyers<'a> {
-    lists: [&'a [i64]; 3],
-}
-
-impl Destroyers<'_> {
-    /// The first and last point in `lo..hi`.
-    pub fn within(
-        &self,
-        lo: i64,
-        hi: i64,
-    ) -> Option<(i64, i64)> {
-        let mut found: Option<(i64, i64)> = None;
-        for list in self.lists {
-            let from = list.partition_point(|slot| *slot < lo);
-            let to = from + list[from..].partition_point(|slot| *slot < hi);
-            if from < to {
-                let (first, last) = (list[from], list[to - 1]);
-                found = Some(found.map_or((first, last), |(low, high)| (low.min(first), high.max(last))));
-            }
-        }
-        found
-    }
-}
-
-/// Where one register is destroyed, sorted: before the point's own reads
-/// (`read`), during it (`during`), or only its high half (`high`).
-#[derive(Clone, Default)]
-struct Reaching {
-    read: Vec<i64>,
-    during: Vec<i64>,
-    high: Vec<i64>,
-}
-
-impl Masks {
-    pub fn new(list: Vec<Mask>) -> Self {
-        Self {
-            list: list.into_iter().map(Arc::new).collect(),
-            owners: Vec::new(),
-            walked: std::cell::Cell::new(0),
-            reaching: std::cell::OnceCell::new(),
-            added: None,
-        }
-    }
-
-    /// The points of `body`, which is the body of `before` with the
-    /// instructions of `changes` removed and added, in the same numbering:
-    /// the points of the instructions kept are kept, as LLVM's `SlotIndexes`
-    /// keep an instruction's index across an edit. None where `before` did
-    /// not come from a body.
-    pub fn after(
-        before: Masks,
-        gone_slots: &IndexMap<usize, i64>,
-        index: &Indexes,
-        segments: &Segments,
-        changes: &ranges::Changes,
-    ) -> Option<Masks> {
-        if before.owners.len() != before.list.len() {
-            return None;
-        }
-        let Masks { mut list, mut owners, reaching, .. } = before;
-        let owner_of = |slot: i64, owner: usize, list: &[Arc<Mask>], owners: &[usize]| -> Option<usize> {
-            let from = list.partition_point(|mask| mask.slot < slot);
-            (from..list.len()).take_while(|at| list[*at].slot == slot).find(|at| owners[*at] == owner)
-        };
-        let mut removed: Vec<usize> = Vec::new();
-        for one in &changes.gone {
-            let Some(slot) = gone_slots.get(&ranges::key(one)) else { continue };
-            if let Some(at) = owner_of(*slot, ranges::key(one), &list, &owners) {
-                removed.push(at);
-            }
-        }
-        removed.sort_unstable();
-        let mut added: Vec<(i64, usize, Arc<Mask>)> = Vec::new();
-        for one in &changes.added {
-            if let Some(mask) = _mask_of(one, index.at.get(&ranges::key(one)).copied()?, segments) {
-                added.push((mask.slot, ranges::key(one), Arc::new(mask)));
-            }
-        }
-        added.sort_by_key(|(slot, owner, _)| (*slot, *owner));
-        let put: Vec<Arc<Mask>> = added.iter().map(|(_, _, mask)| Arc::clone(mask)).collect();
-        // The points are edited where they stand: the ones the rewrite removed
-        // go, the ones it added go in after the points of their slot, and the
-        // rest are not touched, where a copy of the list cost a look at every
-        // point at each of a function's rewrites.
-        let mut taken: Vec<Arc<Mask>> = Vec::with_capacity(removed.len());
-        for at in removed.iter().rev() {
-            owners.remove(*at);
-            taken.push(list.remove(*at));
-        }
-        taken.reverse();
-        for (slot, owner, mask) in added {
-            let at = list.partition_point(|point| point.slot <= slot);
-            list.insert(at, mask);
-            owners.insert(at, owner);
-        }
-        let found = Masks {
-            list,
-            owners,
-            walked: std::cell::Cell::new(0),
-            reaching: std::cell::OnceCell::new(),
-            added: Some(put.clone()),
-        };
-        if let Some(mut reaching) = reaching.into_inner() {
-            for mask in &taken {
-                Self::unreach(&mut reaching, mask);
-            }
-            for mask in &put {
-                Self::reach(&mut reaching, mask);
-            }
-            let _ = found.reaching.set(reaching);
-        }
-        Some(found)
-    }
-
-    fn reach(
-        found: &mut crate::support::hash::HashMap<RegId, Reaching>,
-        mask: &Mask,
-    ) {
-        for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
-            let one = found.entry(*register).or_default();
-            let list = if mask.before.contains(register) {
-                &mut one.read
-            } else if mask.during.contains(register) {
-                &mut one.during
-            } else {
-                &mut one.high
-            };
-            let at = list.partition_point(|slot| *slot < mask.slot);
-            list.insert(at, mask.slot);
-        }
-    }
-
-    fn unreach(
-        found: &mut crate::support::hash::HashMap<RegId, Reaching>,
-        mask: &Mask,
-    ) {
-        for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
-            let Some(one) = found.get_mut(register) else { continue };
-            let list = if mask.before.contains(register) {
-                &mut one.read
-            } else if mask.during.contains(register) {
-                &mut one.during
-            } else {
-                &mut one.high
-            };
-            let at = list.partition_point(|slot| *slot < mask.slot);
-            if list.get(at) == Some(&mask.slot) {
-                list.remove(at);
-            }
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.list.is_empty()
-    }
-
-    /// The points the rewrite this was made after added; None where it was made
-    /// from a body.
-    pub fn added(&self) -> Option<&[Arc<Mask>]> {
-        self.added.as_deref()
-    }
-
-    /// Whether these are the same points as `other`, in the same order, and
-    /// the registers are reached at the same slots.
-    pub fn same_points(
-        &self,
-        other: &Masks,
-    ) -> bool {
-        let key = |mask: &Mask| (mask.slot, mask.during.clone(), mask.high.clone(), mask.before.clone());
-        let mut mine: Vec<_> = self.list.iter().zip(&self.owners).map(|(mask, owner)| (key(mask), *owner)).collect();
-        let mut theirs: Vec<_> =
-            other.list.iter().zip(&other.owners).map(|(mask, owner)| (key(mask), *owner)).collect();
-        mine.sort_by_key(|(key, owner)| (key.0, *owner));
-        theirs.sort_by_key(|(key, owner)| (key.0, *owner));
-        let reached = |found: &Masks| -> Vec<(RegId, Vec<i64>, Vec<i64>, Vec<i64>)> {
-            let mut all: Vec<_> = found
-                .list
-                .iter()
-                .flat_map(|mask| mask.before.iter().chain(&mask.during).chain(&mask.high))
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .filter_map(|register| {
-                    found
-                        .reaching(*register)
-                        .map(|one| (*register, one.read.clone(), one.during.clone(), one.high.clone()))
-                })
-                .collect();
-            all.sort_by_key(|one| format!("{:?}", one.0));
-            all
-        };
-        mine == theirs && reached(self) == reached(other)
-    }
-
-    /// Room for `more` points, and the room there is, for a test that `after`
-    /// edits the list it is given and does not build another.
-    #[cfg(test)]
-    pub fn reserve_points(
-        &mut self,
-        more: usize,
-    ) {
-        self.list.reserve(more);
-        self.owners.reserve(more);
-    }
-
-    #[cfg(test)]
-    pub fn point_capacity(&self) -> usize {
-        self.list.capacity().min(self.owners.capacity())
-    }
-
-    /// How many points `iter` has handed out.
-    pub fn walked(&self) -> usize {
-        self.walked.get()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Mask> + '_ {
-        self.walked.set(self.walked.get() + self.list.len());
-        self.list.iter().map(|mask| &**mask)
-    }
-
-    /// The first and last point in `lo..hi` that destroys `register` (its high
-    /// half only counts for a register wider than a word): the points of one
-    /// register are sorted, so a block's span asks two searches, not every
-    /// point of the function.
-    pub fn destroyed_within(
-        &self,
-        register: RegId,
-        width: u32,
-        lo: i64,
-        hi: i64,
-    ) -> Option<(i64, i64)> {
-        self.destroyers(register, width).within(lo, hi)
-    }
-
-    /// Where `register` is destroyed, found once for the many spans a
-    /// candidate asks of it.
-    pub fn destroyers(
-        &self,
-        register: RegId,
-        width: u32,
-    ) -> Destroyers<'_> {
-        match self.reaching(register) {
-            Some(one) => Destroyers { lists: [&one.read, &one.during, if width > 2 { &one.high } else { &[] }] },
-            None => Destroyers { lists: [&[], &[], &[]] },
-        }
-    }
-
-    fn reaching(
-        &self,
-        register: RegId,
-    ) -> Option<&Reaching> {
-        self.reaching
-            .get_or_init(|| {
-                let mut found: crate::support::hash::HashMap<RegId, Reaching> =
-                    crate::support::hash::HashMap::default();
-                for mask in self.list.iter().map(|mask| &**mask) {
-                    for register in mask.before.iter().chain(&mask.during).chain(&mask.high) {
-                        let one = found.entry(*register).or_default();
-                        if mask.before.contains(register) {
-                            one.read.push(mask.slot);
-                        } else if mask.during.contains(register) {
-                            one.during.push(mask.slot);
-                        } else {
-                            one.high.push(mask.slot);
-                        }
-                    }
-                }
-                for one in found.values_mut() {
-                    one.read.sort_unstable();
-                    one.during.sort_unstable();
-                    one.high.sort_unstable();
-                }
-                found
-            })
-            .get(&register)
-    }
-}
-
-/// Every point a register is destroyed without being named, and which. The
-/// data segment register is reloaded ahead of a point that needs the data
-/// group, so it holds none of that point's operands either.
-pub fn _masks(
-    body: &LirBody,
-    index: &Indexes,
-    segments: &Segments,
-) -> Masks {
-    let mut list: Vec<Arc<Mask>> = Vec::new();
-    let mut owners: Vec<usize> = Vec::new();
-    for block in &body.blocks {
-        for one in &block.insns {
-            if let Some(mask) = _mask_of(one, index.at[&ranges::key(one)], segments) {
-                list.push(Arc::new(mask));
-                owners.push(ranges::key(one));
-            }
-        }
-    }
-    Masks { list, owners, walked: std::cell::Cell::new(0), reaching: std::cell::OnceCell::new(), added: None }
-}
-
-/// The point `one` is at `slot`, if it destroys a register without naming it.
-fn _mask_of(
-    one: &Arc<Insn>,
-    slot: i64,
-    segments: &Segments,
-) -> Option<Mask> {
-    let during: BTreeSet<RegId> = one.clobbers.iter().map(|register| _whole(*register)).collect();
-    let high: BTreeSet<RegId> = one.clobbers_high.iter().map(|register| _whole(*register)).collect();
-    let before: BTreeSet<RegId> = target::needs_data_group(one).then_some(segments.data).into_iter().collect();
-    (!during.is_empty() || !high.is_empty() || !before.is_empty()).then_some(Mask { slot, during, high, before })
-}
-
-/// The 32-bit register this one is part of.
-pub fn _whole(register: RegId) -> RegId {
-    ir::root(register)
-}
-
-/// Whether this range is live across a point that destroys the register, or
-/// into one that destroys it before reading.
-pub fn _clobbered(
-    one: &Interval,
-    register: RegId,
-    masks: &Masks,
-    width: u32,
-) -> bool {
-    let answer = _clobbered_from(one, register, masks, width);
-    if check_clobbered() {
-        assert_eq!(
-            answer,
-            _clobbered_reference(one, register, masks, width),
-            "LLRM_CHECK_CLOBBERED: {register:?} over {:?}",
-            one.segments
-        );
-    }
-    answer
-}
-
-fn check_clobbered() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| llrm_support::env_flag!("LLRM_CHECK_CLOBBERED"))
-}
-
-/// `_clobbered`, from where each register is destroyed: a segment meets a point
-/// where the point is after its start and, by `reaches`, no later than its end.
-fn _clobbered_from(
-    one: &Interval,
-    register: RegId,
-    masks: &Masks,
-    width: u32,
-) -> bool {
-    let Some(places) = masks.reaching(_whole(register)) else { return false };
-    // The first slot after `start` is the best candidate: any later one reaches
-    // no further.
-    let after = |slots: &[i64], start: i64| slots.get(slots.partition_point(|slot| *slot <= start)).copied();
-    one.segments
-        .iter()
-        .any(
-            |seg| after(&places.read, seg.start).is_some_and(|slot| seg.end >= ranges::def_point(slot))
-                || after(&places.during, seg.start).is_some_and(|slot| seg.end > ranges::def_point(slot))
-                || (width > 2 && after(&places.high, seg.start).is_some_and(|slot| seg.end > ranges::def_point(slot))),
-        )
-}
-
-/// What `_clobbered` was: a look at every point.
-pub fn _clobbered_reference(
-    one: &Interval,
-    register: RegId,
-    masks: &Masks,
-    width: u32,
-) -> bool {
-    let mine = _whole(register);
-    for mask in masks.iter() {
-        let slot = mask.slot;
-        let read = mask.before.contains(&mine);
-        if !read && !mask.during.contains(&mine) && (!mask.high.contains(&mine) || width <= 2) {
-            continue;
-        }
-        // A use keeps its value alive to `slot + DEF`.
-        let reaches = |end: i64| if read { end >= ranges::def_point(slot) } else { end > ranges::def_point(slot) };
-        if one.segments.iter().any(|seg| seg.start < slot && reaches(seg.end)) {
-            return true;
-        }
-    }
-    false
 }
 
 /// Assign, then rewrite. LLVM's two halves, in one phase.
@@ -2241,22 +1740,6 @@ impl LIRTransform for RegAlloc {
     }
 }
 
-/// Python `max(first, second)`: the first unless the second is larger.
-fn _max(
-    first: f64,
-    second: f64,
-) -> f64 {
-    if second > first { second } else { first }
-}
-
-/// Python `min(first, second)`: the first unless the second is smaller.
-fn _min(
-    first: f64,
-    second: f64,
-) -> f64 {
-    if second < first { second } else { first }
-}
-
 /// Frame traffic inside loops by cause, weighted by loop depth: the spiller's
 /// reloads, stores and rematerializations, and the frame operands of x87 and
 /// other instructions. The allocator can reach only the first three.
@@ -2380,7 +1863,6 @@ mod tests {
     use llrm_lir::registers::RegId;
 
     use super::*;
-    use crate::analysis::intervals::Segment;
     use crate::backend::rewriter::{_dead_insertions, _placed, _settled};
     use crate::backend::{parcopy, select, verify};
     use crate::model::ir::{Imm, Reg};
@@ -2466,18 +1948,6 @@ mod tests {
         let message = got.err().map(|error| error.to_string()).expect("an error, not a fallback allocation");
         assert!(message.contains("cannot_place"), "{message}");
         assert_eq!(greedy_runs().1, 0, "nothing falls back");
-    }
-
-    /// A spill walked every instruction of the body to learn which of its few
-    /// values the rewrite left named (d_faces -O1: 634 spills, 272 M of 24.7 G
-    /// instructions). The postings say.
-    #[test]
-    fn test_the_values_a_spill_left_named_come_from_the_postings_not_a_walk() {
-        let at = |at: i64, defines: Vec<u32>, uses: Vec<u32>| Insn::new(at, Some((at, at + 1)), None, defines, uses);
-        let body = body_of("f", 0, vec![at(0, vec![1], vec![]), at(1, vec![2], vec![1]), at(2, vec![], vec![2])]);
-        let found = super::_named_among(&body, &BTreeSet::from([1, 2, 3]));
-        assert_eq!(found, BTreeSet::from([1, 2]), "value 3 is named nowhere");
-        assert_eq!(body.facts.0.counted("named-among"), 3, "asked of the three values, from the postings");
     }
 
     /// lru bas `BENCHLRU&` at -Os: an argument loaded in the entry block and
@@ -2977,37 +2447,6 @@ mod tests {
             insns[0].what.as_ref().expect("semantics").dests[0],
             reg(RegId::SI, 2),
             "the original was pinned away from si"
-        );
-    }
-
-    /// A base or index on m16 may be BX, SI, DI or BP; a value of any class
-    /// fits in the rest. The queue took the longest range first whatever
-    /// its class, so a short base found its three registers taken by wide
-    /// values that could have been elsewhere: bench/quicksort +18%
-    /// instructions against the search over shapes, which tried the
-    /// base first (#944).
-    #[test]
-    fn test_a_value_few_registers_may_hold_goes_before_a_longer_one_any_may() {
-        let span = |end: i64| Interval::new(1, vec![Segment { start: 0, end }]);
-        let (short, long) = (span(4), span(400));
-        assert!(
-            _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain())
-                > _queue_priority(Some(&long), Stage::Assign, Some(6), 6, &Indexes::plain())
-        );
-        assert!(
-            _queue_priority(Some(&short), Stage::Assign, None, 6, &Indexes::plain())
-                < _queue_priority(Some(&long), Stage::Assign, None, 6, &Indexes::plain()),
-            "no class: longest first"
-        );
-        assert!(
-            _queue_priority(Some(&long), Stage::Assign, Some(4), 6, &Indexes::plain())
-                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain()),
-            "one class: longest first"
-        );
-        assert!(
-            _queue_priority(Some(&short), Stage::Assign, Some(1), 6, &Indexes::plain())
-                > _queue_priority(Some(&short), Stage::Assign, Some(4), 6, &Indexes::plain()),
-            "the fewer registers, the sooner"
         );
     }
 

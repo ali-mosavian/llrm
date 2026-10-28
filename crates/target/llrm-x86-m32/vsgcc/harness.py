@@ -33,7 +33,18 @@ def source_dir(prog):
 sys.path.insert(0, str(REPO / "tools"))
 import llrmbin  # noqa: E402
 
-LLRM = llrmbin.bin_dir() / "llrm-c"   # where cargo put it; build.sh and ctime.py use the same
+LLRM = llrmbin.bin_dir() / "llrm-cc"   # where cargo put it; build.sh and ctime.py use the same
+
+
+def cc_env(bits=32):
+    """The environment to run `LLRM` in: the caller's, with what llrm-cc needs. LLRM_CLANG_M16 is for 16-bit compiles
+    only: a 32-bit one given it refuses its clang as not the pinned one."""
+    env = {**os.environ, **llrmbin.cc_environment()}
+    if bits != 16:
+        env.pop("LLRM_CLANG_M16", None)
+    return env
+
+
 STUB, SENT, STACK_TOP, MEM = 0x8000, 0x7000, 0x7F0000, 0x800000
 # main is entered as after a call from code that keeps the System V stack boundary: esp + 4, the caller's, a multiple of 16.
 ENTRY_ESP = STACK_TOP - 4
