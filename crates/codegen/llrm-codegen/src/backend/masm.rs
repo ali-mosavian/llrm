@@ -960,6 +960,10 @@ fn lowered(
     omit: bool,
 ) -> (Vec<Semantics>, Vec<Semantics>) {
     use crate::backend::framelowering::{FrameInfo, Op, emit_epilogue, emit_prologue};
+    // The last of the target's callee-saved list is pushed first
+    // (`spillCalleeSavedRegisters` walks the list backwards).
+    let saved: Vec<RegId> = saved.iter().rev().copied().collect();
+    let saved = &saved[..];
     const FP: u32 = u32::MAX - 1;
     const EAX: u32 = u32::MAX;
     let slot = procedure.registers.slot;
