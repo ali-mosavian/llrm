@@ -311,6 +311,10 @@ impl Tti for AArch64 {
             )
     }
 
+    fn vector_register_bits(&self) -> u32 {
+        128
+    }
+
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
     /// `aarch64-br-merging-base-cost` 2 plus the `ccmp` bias 6, less the
     /// cbz/tbnz bias 6 where one side is already a single compare-and-branch

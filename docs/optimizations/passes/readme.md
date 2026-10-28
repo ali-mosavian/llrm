@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 220 documented, 0 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 221 documented, 0 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -196,6 +196,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | simplifylibcalls | `LibCallSimplifier`: a call of a C library function that a cheaper one does as well becomes that one, as `printf("hi\n")` becomes `puts("hi")`. | Named by `pipeline`. | [simplifylibcalls](simplifylibcalls.md) |
 | sinkcast | CodeGenPrepare's `SinkCast` and `OptimizeNoopCopyExpression`: a cast read in other blocks is made again in each, where isel takes it as a register rename ([CodeGenPrepare.cpp#L1432](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L1432)). | In `cgpaddr`'s run, before `optimizeExt`. | [sinkcast](sinkcast.md) |
 | sinkcommon | The code that ends every unconditional way into a block in the same way runs once in the block: SimplifyCFG's `sinkCommonCodeFromPredecessors`. | Named by `simplifycfg`, `switcharms`. | [sinkcommon](sinkcommon.md) |
+| slpcompares | Compares of adjacent bytes against constants become one wide compare: the part of LLVM's `SLPVectorizer` that matters here, where a vector of compares is `reduce.and`ed, `VectorCombine` and `InstCombine` then make it a compare of one integer. | At the pin's `slp-vectorizer` slot, after `simplifycfg` has made the | [slpcompares](slpcompares.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |
 | speculate | A block that only a branch reaches and that jumps back to the branch's other target runs before the branch, its phis in the target becoming selects: the `speculativelyExecuteBB` step of SimplifyCFG. | Named by `simplifycfg`. | [speculate](speculate.md) |
 | spill | The one spill model every pricing of register pressure shares: what values past the target's registers cost. | [`crate::profit`](profit.md) (`spill_forecast`, `weighted`) prices every motion with | [spill](spill.md) |

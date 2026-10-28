@@ -306,6 +306,12 @@ pub trait Tti {
         false
     }
 
+    /// `getRegisterBitWidth(FixedWidthVector)`: the bits of the widest vector
+    /// register, 0 where the target has none (and the SLP vectorizer is off).
+    fn vector_register_bits(&self) -> u32 {
+        0
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.

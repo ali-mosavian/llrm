@@ -801,6 +801,9 @@ pub(crate) fn llvm_order(
             // The slots' options, with the pin's lines,
             // are `simplifycfg::Options::{L1438, L1682}`.
             simplify_cfg_with("simplifycfg@1438", simplifycfg::Options::L1438),
+            // SLPVectorizerPass (l.1455): the compares of adjacent bytes
+            // against constants, on a target with vector registers.
+            slot("slp@1455", Box::new(crate::slpcompares::SlpCompares)),
             combine("combine@1464"),
             // LoopUnrollAndJamPass (l.1474), in its own loop pass manager
             // before LoopUnrollPass; the nest is in simplify form and LCSSA.
