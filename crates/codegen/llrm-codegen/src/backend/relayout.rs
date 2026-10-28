@@ -745,6 +745,7 @@ mod tests {
                 optional: false,
                 enter: false,
                 wrap_split_size: false,
+                slot_scratch: None,
                 free: false,
             },
             landing: None,
