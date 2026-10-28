@@ -82,6 +82,9 @@ pub struct Options {
     /// `-fno-inline=NAME`: the functions named are `noinline` (the pin's
     /// attribute), whichever frontend made them.
     pub no_inline: Vec<String>,
+    /// `-fsanitize=stack`: every function compares SP with the runtime's
+    /// limit on entry (`stack.toml` of the target's C runtime).
+    pub stack_check: bool,
     /// `--isel=`: the instruction selector.
     pub isel: crate::backend::shadow::Selector,
     /// The library routines the target's runtime has, each with the calling
@@ -116,6 +119,7 @@ impl Options {
             spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
+            stack_check: false,
             isel,
             libcalls: Vec::new(),
         }
@@ -203,6 +207,29 @@ fn no_inlined(
         }
     }
     Ok(())
+}
+
+/// Each function `program` defines marked to check its stack on entry.
+fn stack_checked(program: &mut Program) {
+    for module in &mut program.modules {
+        for global in &mut module.globals {
+            if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
+                && !function.is_declaration()
+            {
+                function.attrs.push(llrm_mir::facts::Fact::StackCheck.carrier());
+            }
+        }
+    }
+}
+
+/// What C's runtime says of its stack on `arch`: the `stack.toml` its
+/// description names.
+fn runtime_stack_check(arch: &dyn llrm_target::Target) -> Result<crate::hir::model::StackCheck, String> {
+    let description = arch.runtime("c").ok_or("-fsanitize=stack: this target has no C runtime")?;
+    let name = description.string("stack").map_err(|error| format!("-fsanitize=stack: {error}"))?;
+    let file = description.file(&name).ok_or_else(|| format!("-fsanitize=stack: {name} is not shipped"))?;
+    let row = toml::Value::Table(file.parse().map_err(|error| format!("-fsanitize=stack: {name}: {error}"))?);
+    crate::hir::model::StackCheck::from_toml(&row)
 }
 
 /// `program` compiled for the machine: emitted, optimized, then each module
@@ -316,7 +343,9 @@ pub fn compiled_module(
     let assembled = timed("assemble", || {
         assemble::assembled_by(
             &program.modules[0],
-            &crate::abi::llvm::LlvmAbi,
+            &crate::abi::llvm::LlvmAbi {
+                stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
+            },
             &format!("{}_TEXT", name.to_uppercase()),
             ProfileOrName::Profile(cpu),
             &segments,
@@ -446,6 +475,9 @@ pub fn optimized(
     options: &Options,
 ) -> Result<(), String> {
     no_inlined(program, &options.no_inline)?;
+    if options.stack_check {
+        stack_checked(program);
+    }
     let mut pipeline = options.pipeline.clone();
     // The DAG builder lowers the switches that remain, as the pin's
     // SelectionDAGBuilder does; the shadow run keeps the old selector's
