@@ -125,6 +125,7 @@ pub mod combine_gep;
 pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
+pub mod combine_icmp_binop;
 pub mod combine_icmp_const;
 pub mod combine_icmp_logic;
 pub mod combine_loadstore;
@@ -209,6 +210,7 @@ pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
 pub mod indvars;
+pub mod inferalignment;
 pub mod inferfunctionattrs;
 pub mod inferspace;
 #[cfg(test)]
@@ -257,6 +259,7 @@ pub mod loopunrollandjam;
 pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopversioning;
+pub mod lowerconstantintrinsics;
 pub mod lowerexpect;
 pub mod lsr_chain;
 pub mod lsr_collect;
@@ -285,6 +288,7 @@ pub mod memsetpattern;
 #[cfg(test)]
 mod memsetpattern_tests;
 pub mod mergestores;
+pub mod mldstmotion;
 pub mod narrowspace;
 #[cfg(test)]
 mod narrowspace_tests;

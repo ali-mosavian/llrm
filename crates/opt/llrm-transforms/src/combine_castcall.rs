@@ -47,14 +47,16 @@ impl Combiner<'_> {
         call: InstId,
     ) -> Visit {
         let Opcode::Call(info) = &self.function.instruction(call).opcode else { return Visit::None };
-        let info = info.clone();
+        // The bail-outs below are the common path: the call's info is cloned
+        // only once one of them has not been taken.
+        let (tail, function_type) = (info.tail, info.function_type);
         let Some(global) = llrm_mir::memory::callee(self.context, self.function, call) else { return Visit::None };
         let Some(callee) = self.env.globals.get(global.0 as usize).and_then(|global| global.function()) else {
             return Visit::None;
         };
         // a declaration may not be accurate: `void @foo()` is the usual
         // placeholder for an unknown prototype
-        if !self.env.callees.get(&global).is_some_and(|summary| summary.defined) || info.tail == Tail::MustTail {
+        if !self.env.callees.get(&global).is_some_and(|summary| summary.defined) || tail == Tail::MustTail {
             return Visit::None;
         }
         let named = |attrs: &[Attribute], name: &str| {
@@ -68,17 +70,19 @@ impl Combiner<'_> {
         if named(&callee.attrs, "thunk") || named(&callee.attrs, "naked") {
             return Visit::None;
         }
-        if callee.ty == info.function_type {
+        if callee.ty == function_type {
             return Visit::None;
         }
         let (Type::Function { returns: callee_returns, parameters, variadic }, Type::Function { returns, .. }) =
-            (self.context.types.get(callee.ty).clone(), self.context.types.get(info.function_type).clone())
+            (self.context.types.get(callee.ty).clone(), self.context.types.get(function_type).clone())
         else {
             return Visit::None;
         };
         if callee_returns != returns {
             return Visit::None;
         }
+        let Opcode::Call(info) = &self.function.instruction(call).opcode else { return Visit::None };
+        let info = info.clone();
         // `takes_i32_inalloca` must not lose its pointer, nor a byval call its
         // copy
         let somewhere = |name: &str| {
@@ -106,7 +110,7 @@ impl Combiner<'_> {
             // what `va_arg` reads
             for &operand in &operands[parameters.len()..actual] {
                 let ty = self.type_of(operand);
-                if self.context.types.int_bits(ty).is_some_and(|bits| bits < 32) {
+                if self.context.types.int_bits(ty).is_some_and(|width| width < 32) {
                     return Visit::None;
                 }
             }

@@ -2,15 +2,19 @@
 //! `!DICompositeType`, `!DIGlobalVariable`, ...) as the model [`debuginfo`]
 //! writes and a backend reads: `llrm.dbg.types` and `llrm.dbg.globals`.
 //!
+//! A procedure (`!DISubprogram`) and its variables (`!DILocalVariable`, named
+//! by the `#dbg_declare` records of its body) go the same way: the records
+//! name the model's variable nodes after, and the procedure lists its
+//! parameters.
+//!
 //! A typedef or qualifier is its target: the model has no node for either.
 //! A type the model cannot spell (a size it has no scalar for) is left out,
 //! and so is whatever names it.
 
-use std::collections::HashMap;
-
 use crate::context::ConstantKind;
-use crate::debuginfo::{self, Dialect, Global, Kind, Language, Member, Reach, Scalar, Type};
-use crate::module::{MetadataId, MetadataOperand, Module};
+use crate::debuginfo::{self, Dialect, Function, Global, Kind, Language, Member, Reach, Scalar, Type, Variable};
+use crate::hash::HashMap;
+use crate::module::{DebugWhat, GlobalKind, MetadataId, MetadataOperand, Module};
 
 /// What `module`'s specialized nodes describe, added to the model; the
 /// language too. A module with none is left alone.
@@ -18,7 +22,7 @@ pub fn types_and_globals(module: &mut Module) {
     if module.special.is_empty() {
         return;
     }
-    let mut import = Import { made: HashMap::new(), void: None, near: near_pointers(module) };
+    let mut import = Import { made: HashMap::default(), void: None, near: near_pointers(module) };
     for (at, attached) in module.global_metadata.clone() {
         let Some(name) = module.globals.get(at as usize).and_then(|one| one.name.as_deref()).map(str::to_owned) else {
             continue;
@@ -29,8 +33,88 @@ pub fn types_and_globals(module: &mut Module) {
             }
         }
     }
+    import.functions(module);
     if let Some(language) = language(module) {
         debuginfo::set_language(module, language, Dialect::Cv4);
+    }
+    if let Some((name, md5)) = unit_file(module) {
+        debuginfo::set_file(module, &name, md5.as_deref());
+    }
+}
+
+/// The unit's source file, from the `!DIFile` of its `!DICompileUnit`: its
+/// name, and the checksum where it is an MD5.
+fn unit_file(module: &Module) -> Option<(String, Option<String>)> {
+    let (id, _) = module.special.iter().find(|(_, one)| one.kind == "DICompileUnit")?;
+    let Some(MetadataOperand::Node(file)) = operand(module, *id, "file") else { return None };
+    let md5 = ident(module, *file, "checksumkind")
+        .filter(|kind| kind == "CSK_MD5")
+        .and_then(|_| text(module, *file, "checksum"));
+    Some((text(module, *file, "filename")?, md5))
+}
+
+impl Import {
+    /// Each defined function with a `!DISubprogram`: a procedure of the
+    /// model, and its `#dbg_declare` records name variable nodes of the
+    /// model.
+    fn functions(
+        &mut self,
+        module: &mut Module,
+    ) {
+        for at in 0..module.globals.len() {
+            let Some(function) = module.globals[at].function() else { continue };
+            let Some(&(_, subprogram)) = function.metadata.iter().find(|(kind, _)| kind == "dbg") else { continue };
+            let Some(name) = module.globals[at].name.as_deref().map(str::to_owned) else { continue };
+            let mut records = function.debug_records.clone();
+            let mut parameters: Vec<(i64, String, MetadataId)> = Vec::new();
+            let mut made: HashMap<MetadataId, MetadataId> = HashMap::default();
+            for record in &mut records {
+                if !matches!(record.what, DebugWhat::Declare(_) | DebugWhat::Value(_)) {
+                    continue;
+                }
+                let old = record.variable;
+                if let Some(&new) = made.get(&old) {
+                    record.variable = new;
+                    continue;
+                }
+                if kind(module, old) != "DILocalVariable" {
+                    continue;
+                }
+                let Some(variable_name) = text(module, old, "name") else { continue };
+                let Some(r#type) = self.r#type(module, node(module, old, "type")) else { continue };
+                // `arg: N` counts from 1: the position among the parameters.
+                let argument = int(module, old, "arg").filter(|&one| one > 0).map(|one| one - 1);
+                let new = debuginfo::add_variable(
+                    module,
+                    &Variable {
+                        scope: name.clone(),
+                        name: variable_name.clone(),
+                        r#type,
+                        offset: 0,
+                        parameter: argument.is_some(),
+                        argument,
+                    },
+                );
+                if let Some(argument) = argument {
+                    parameters.push((argument, variable_name, r#type));
+                }
+                made.insert(old, new);
+                record.variable = new;
+            }
+            parameters.sort();
+            parameters.dedup_by_key(|one| one.0);
+            if let (Some(display), Some(procedure)) =
+                (text(module, subprogram, "name"), self.r#type(module, node(module, subprogram, "type")))
+            {
+                debuginfo::add_function(
+                    module,
+                    &Function { function: name, module: false, name: display, r#type: procedure, parameters },
+                );
+            }
+            if let GlobalKind::Function(function) = &mut module.globals[at].kind {
+                function.debug_records = records;
+            }
+        }
     }
 }
 

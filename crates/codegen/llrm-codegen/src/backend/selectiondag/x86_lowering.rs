@@ -48,6 +48,8 @@ pub mod x86isd {
     use super::ISD;
 
     pub const ADC: ISD = ISD::Target(477);
+    pub const SMUL: ISD = ISD::Target(744);
+    pub const UMUL: ISD = ISD::Target(776);
     pub const ADD: ISD = ISD::Target(478);
     pub const AND: ISD = ISD::Target(485);
     pub const BRCOND: ISD = ISD::Target(493);
@@ -57,6 +59,8 @@ pub mod x86isd {
     /// (`sbb r, r`), else `0`.
     pub const SETCC_CARRY: ISD = ISD::Target(740);
     pub const BSF: ISD = ISD::Target(495);
+    pub const FSHL: ISD = ISD::Target(625);
+    pub const FSHR: ISD = ISD::Target(626);
     pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
@@ -307,7 +311,7 @@ impl Hooks for X86Lowering {
             ISD::SetCC => lower_setcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov),
             ISD::BrCond => lower_brcond(dag, node),
-            ISD::UAddO | ISD::USubO => Some(lower_xalu(dag, node)),
+            ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
             ISD::UAddOCarry | ISD::USubOCarry => Some(lower_addsub_carry(dag, node)),
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
             ISD::GlobalAddress => lower_global_address(dag, node),
@@ -319,6 +323,7 @@ impl Hooks for X86Lowering {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
@@ -343,7 +348,7 @@ impl Hooks for X86Lowering {
     }
 }
 
-fn cond_code(
+pub(super) fn cond_code(
     dag: &mut SelectionDAG,
     code: u128,
 ) -> SDValue {
@@ -575,7 +580,7 @@ fn get_bt(
 /// of `x`; the carry flag is the bit, so `!= 0` is `B` and `== 0` is `AE`.
 /// (The reassociated three-way `and` and the immediate forms are not taken,
 /// SD200.)
-fn lower_and_to_bt(
+pub(super) fn lower_and_to_bt(
     dag: &mut SelectionDAG,
     and: SDValue,
     cc: CondCode,
@@ -824,7 +829,7 @@ fn lower_select(
         code = cond_code(dag, cond::NE);
         flags = emit_test(dag, cond, cond::NE);
     }
-    // DEVIATE SD313: where the pointer is a word (m16) an `i16` select stays
+    // DEVIATE SD239: where the pointer is a word (m16) an `i16` select stays
     // a word: widened to `i32` every move takes an operand-size prefix. Owner
     // w10. Exit: none (machine fact). Review 2026-12-10.
     let word16 = dag.config.pointer == EVT::I16;
@@ -982,7 +987,7 @@ fn combine_setcc(
 
 /// `combineCarryThroughADD`: flags of `(add carry, -1)`, where the carry is a
 /// `setb` (through extends, truncates and `and 1`), are the flags the `setb`
-/// read. DEVIATE SD315: the `COND_A` form (a swapped `sub`) is not
+/// read. DEVIATE SD242: the `COND_A` form (a swapped `sub`) is not
 /// translated. Reason: nothing produces it at 32 bits yet. Exit: with
 /// `combineSBB`'s remaining folds. Owner: sdag-b. Review 2026-12-10.
 fn carry_through_add(
@@ -1013,15 +1018,49 @@ fn carry_through_add(
 
 /// `combineADC` and `combineSBB`, the carry-through-add part: the carry in
 /// comes from the flags the `setb` read, so `setb; add al, -1; adc` is `adc`.
-/// (The `ADC 0, 0` and `SBB` constant folds are not translated.)
+/// (The `ADC 0, 0` strength reduction is not translated: it replaces both
+/// results.)
 fn combine_adc_sbb(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let flags = carry_through_add(dag, dag.operand(node, 2))?;
     let (opcode, vt) = (dag.opcode(node), dag.node(node).values.clone());
-    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
-    Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]))
+    let (lhs, rhs, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let flags_used = dag.has_users(SDValue { node: node.node, res: 1 });
+    if opcode == x86isd::ADC {
+        let (lhs_c, rhs_c) = (dag.constant(lhs), dag.constant(rhs));
+        // Canonicalize constant to RHS.
+        if lhs_c.is_some() && rhs_c.is_none() {
+            return Some(dag.get_node_multi(opcode, &vt, &[rhs, lhs, carry]));
+        }
+        // Fold ADC(C1,C2,Carry) -> ADC(0,C1+C2,Carry) iff the flag result is
+        // dead or C1+C2 doesn't signed/unsigned overflow.
+        if let (Some(c1), Some(c2)) = (lhs_c, rhs_c)
+            && c1 != 0
+        {
+            let ty = dag.value_type(lhs);
+            let width = ty.size_in_bits();
+            let mask = super::fold::mask(width);
+            let sum = (c1 + c2) & mask;
+            let signed = |v: u128| ((v << (128 - width)) as i128) >> (128 - width);
+            let unsigned_overflow = c1 + c2 > mask;
+            let signed_overflow = signed(c1).checked_add(signed(c2)).is_none_or(|s| s != signed(sum));
+            if !flags_used || (!unsigned_overflow && !signed_overflow) {
+                let zero = dag.get_constant(0, ty);
+                let sum = dag.get_constant(sum, ty);
+                return Some(dag.get_node_multi(opcode, &vt, &[zero, sum, carry]));
+            }
+        }
+    }
+    if let Some(flags) = carry_through_add(dag, carry) {
+        return Some(dag.get_node_multi(opcode, &vt, &[lhs, rhs, flags]));
+    }
+    // Fold SBB(SUB(X,Y),0,Carry) -> SBB(X,Y,Carry) iff the flag result is dead.
+    if opcode == x86isd::SBB && dag.opcode(lhs) == ISD::Sub && dag.constant(rhs) == Some(0) && !flags_used {
+        let (x, y) = (dag.operand(lhs, 0), dag.operand(lhs, 1));
+        return Some(dag.get_node_multi(opcode, &vt, &[x, y, carry]));
+    }
+    None
 }
 
 /// `combineBrCond`: the same for a branch.
@@ -1046,7 +1085,7 @@ fn combine_add(
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     if vt != EVT::I32 {
-        return None;
+        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
     }
     // `m_Add` matches either operand as the difference.
     let hidden_lea = |difference: SDValue, z: SDValue| {
@@ -1060,7 +1099,9 @@ fn combine_add(
         Some((shift, y, z))
     };
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    let (shift, y, z) = hidden_lea(a, b).or_else(|| hidden_lea(b, a))?;
+    let Some((shift, y, z)) = hidden_lea(a, b).or_else(|| hidden_lea(b, a)) else {
+        return super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node);
+    };
     let sum = dag.get_node(ISD::Add, vt, &[shift, z]);
     Some(dag.get_node(ISD::Sub, vt, &[sum, y]))
 }
@@ -1135,11 +1176,6 @@ fn combine_x86_add_sub(
     None
 }
 
-/// `combineSub` through `combineAddOrSubToADCOrSBB`, the zero case: `0 - (and
-/// (srl x, n), 1)` is `-1` when bit `n` of `x` is set: `bt x, n; sbb r, r`
-/// (`SETCC_CARRY`), where `and; neg` took two instructions and a mask. (The
-/// `adc`/`sbb` forms with a variable first operand, the `cmp`/`neg` carry
-/// forms and `-1 + setae` are not translated.)
 /// `combineUIntToFP`: `UINT_TO_FP` is custom, so the generic combine never
 /// makes it a `SINT_TO_FP` when the sign bit is clear; here a `nneg` flag or a
 /// known clear sign bit does, which is one `fild` of the value itself and not
@@ -1156,27 +1192,43 @@ fn combine_uint_to_fp(
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
 }
 
+/// `combineSub`: `combineAddOrSubToADCOrSBB` ([`super::x86_carry`]), then
+/// `combineSubSetcc`. (The `SUB(…, SBB)` and `~A - ~B` folds are not
+/// translated, SD219.)
 fn combine_sub(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
+    super::x86_carry::add_or_sub_node_to_adc_or_sbb(dag, node).or_else(|| combine_sub_setcc(dag, node))
+}
+
+/// `combineSubSetcc` ([L60838][pin]): `sub C, zext(setcc)` is
+/// `zext(setcc inverted) + (C - 1)` for a nonzero `C` (`2 - (a < b)` is
+/// `(a >= b) + 1`: a `setge` and an `inc`, not a load of the constant and a
+/// `sub`).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L60838
+fn combine_sub_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (op0, op1) = (dag.operand(node, 0), dag.operand(node, 1));
     let vt = dag.value_type(node);
-    if vt != EVT::I32 || !dag.is_null_constant(dag.operand(node, 0)) {
+    let constant = dag.constant(op0).filter(|c| *c != 0)?;
+    if dag.opcode(op1) != ISD::ZeroExtend || dag.use_count(op1.node) != 1 {
         return None;
     }
-    let mut y = dag.operand(node, 1);
-    if dag.opcode(y) == ISD::ZeroExtend && dag.use_count(y.node) == 1 {
-        y = dag.operand(y, 0);
-    }
-    if dag.opcode(y) != ISD::And || dag.use_count(y.node) != 1 || dag.constant(dag.operand(y, 1)) != Some(1) {
+    let setcc = dag.operand(op1, 0);
+    if dag.opcode(setcc) != x86isd::SETCC || dag.use_count(setcc.node) != 1 {
         return None;
     }
-    let (flags, code) = lower_and_to_bt(dag, y, CondCode::SetNe)?;
-    if code != cond::B {
-        return None;
-    }
-    let code = cond_code(dag, cond::B);
-    Some(dag.get_node(x86isd::SETCC_CARRY, vt, &[code, flags]))
+    let code = dag.constant(dag.operand(setcc, 0))?;
+    let opposite = cond_code(dag, code ^ 1);
+    let inverted = dag.get_node(x86isd::SETCC, EVT::I8, &[opposite, dag.operand(setcc, 1)]);
+    let widened = dag.get_node(ISD::ZeroExtend, vt, &[inverted]);
+    let adjusted = dag.get_constant(constant.wrapping_sub(1), vt);
+    Some(dag.get_node(ISD::Add, vt, &[widened, adjusted]))
 }
 
 /// `combineCMov`, up to the constant selects: `cmov x, x` is `x`; a select
@@ -1296,9 +1348,9 @@ fn lower_jump_table(
     Some(dag.get_node(wrapper_kind(vt), vt, &[target]))
 }
 
-/// `LowerXALUO` for the unsigned add and subtract with overflow: the flags of
-/// `X86ISD::ADD`/`SUB`, and the carry (`B`; `E` for an add of one) as a
-/// `setcc`, merged with the sum.
+/// `LowerXALUO`: the flags of `X86ISD::ADD`/`SUB`/`UMUL`/`SMUL`, and the
+/// overflow as a `setcc` of them (`B` for the unsigned add and subtract, `E`
+/// for an add of one, `O` for the rest), merged with the result.
 fn lower_xalu(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1307,7 +1359,11 @@ fn lower_xalu(
     let vt = dag.value_type(node);
     let (opcode, code) = match dag.opcode(node) {
         ISD::UAddO => (x86isd::ADD, if dag.constant(rhs) == Some(1) { cond::E } else { cond::B }),
-        _ => (x86isd::SUB, cond::B),
+        ISD::USubO => (x86isd::SUB, cond::B),
+        ISD::SAddO => (x86isd::ADD, cond::O),
+        ISD::SSubO => (x86isd::SUB, cond::O),
+        ISD::UMulO => (x86isd::UMUL, cond::B),
+        _ => (x86isd::SMUL, cond::B),
     };
     let value = dag.get_node_multi(opcode, &[vt, EVT::I32], &[lhs, rhs]);
     let flags = SDValue { node: value.node, res: 1 };
@@ -1360,6 +1416,30 @@ fn lower_setcc_carry(
     dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags])
 }
 
+/// The two halves of `expandFP_TO_UINT` for an `i64`: `value` less 2^63 when it
+/// is at least that, and the sign bit (`1 << 63`) to put back when it was.
+fn unsigned_fixup_operands(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    float: MVT,
+) -> (SDValue, SDValue) {
+    let value_vt = dag.value_type(value);
+    // 2^63, the first value that does not fit a signed `i64`.
+    let threshold = match float {
+        MVT::F32 => 0x5F00_0000u128,
+        MVT::F64 => 0x43E0_0000_0000_0000,
+        _ => (0x403Eu128 << 64) | (1u128 << 63),
+    };
+    let threshold = dag.get_constant_fp(threshold, value_vt);
+    let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
+    let sixty_three = dag.get_constant(63, EVT::I8);
+    let adjust = dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]);
+    let zero = dag.get_constant_fp(0, value_vt);
+    let offset = dag.get_select(value_vt, at_least, threshold, zero);
+    (dag.get_node(ISD::FSub, value_vt, &[value, offset]), adjust)
+}
+
 /// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
 /// result's size, then a load of it. An unsigned `i32` goes through an `i64`
 /// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
@@ -1390,6 +1470,14 @@ fn lower_fp_to_int(
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
         }
+        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
+        // when it is at least that, converted signed, with the sign bit put
+        // back.
+        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
+            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
+            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
+            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
+        }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
@@ -1399,20 +1487,9 @@ fn lower_fp_to_int(
     let chain = dag.entry_node();
     let mut adjust = None;
     if unsigned_fixup {
-        // 2^63, the first value that does not fit a signed `i64`.
-        let threshold = match float {
-            MVT::F32 => 0x5F00_0000u128,
-            MVT::F64 => 0x43E0_0000_0000_0000,
-            _ => (0x403Eu128 << 64) | (1u128 << 63),
-        };
-        let threshold = dag.get_constant_fp(threshold, value_vt);
-        let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
-        let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
-        let sixty_three = dag.get_constant(63, EVT::I8);
-        adjust = Some(dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]));
-        let zero = dag.get_constant_fp(0, value_vt);
-        let offset = dag.get_select(value_vt, at_least, threshold, zero);
-        value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+        let (shifted, flip) = unsigned_fixup_operands(dag, value, float);
+        value = shifted;
+        adjust = Some(flip);
     }
     let info =
         MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
@@ -1740,6 +1817,64 @@ fn combine_mul(
         }
     }
     new_mul
+}
+
+/// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
+/// is done in a dword: `fshl(x,y,z)` is `(((aext x << 8) | zext y) << (z & 7))
+/// >> 8`. An `i8` by a constant is two shifts and an `or`
+/// (`expandFunnelShift`). An `i16` is the target node with the amount modulo
+/// 16 (`SHLD16`/`SHRD16`); the dword is already legal.
+///
+/// DEVIATE SD247: the `isSHLDSlow` expansion of `i16` is not translated (no
+/// target of ours sets it). Owner sdag-b.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L32188
+fn lower_funnel_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let is_fshr = dag.opcode(node) == ISD::FShr;
+    let (op0, op1, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let amount_vt = dag.value_type(amount);
+    let bits = vt.size_in_bits();
+    if vt == EVT::I8 {
+        if let Some(by) = dag.constant(amount) {
+            let by = (by % u128::from(bits)) as u32;
+            if by == 0 {
+                return Some(if is_fshr { op1 } else { op0 });
+            }
+            let (left, right) = if is_fshr { (bits - by, by) } else { (by, bits - by) };
+            let high = dag.get_constant(u128::from(left), amount_vt);
+            let low = dag.get_constant(u128::from(right), amount_vt);
+            let high = dag.get_node(ISD::Shl, vt, &[op0, high]);
+            let low = dag.get_node(ISD::Srl, vt, &[op1, low]);
+            return Some(dag.get_node(ISD::Or, vt, &[high, low]));
+        }
+        let wide = EVT::I32;
+        let mask = dag.get_constant(u128::from(bits - 1), amount_vt);
+        let shift = dag.get_constant(u128::from(bits), amount_vt);
+        let hi = dag.get_node(ISD::AnyExtend, wide, &[op0]);
+        let lo = dag.get_zext_or_trunc(op1, wide);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let hi = dag.get_node(ISD::Shl, wide, &[hi, shift]);
+        let mut result = dag.get_node(ISD::Or, wide, &[hi, lo]);
+        if is_fshr {
+            result = dag.get_node(ISD::Srl, wide, &[result, amount]);
+        } else {
+            result = dag.get_node(ISD::Shl, wide, &[result, amount]);
+            result = dag.get_node(ISD::Srl, wide, &[result, shift]);
+        }
+        return Some(dag.get_node(ISD::Truncate, vt, &[result]));
+    }
+    if vt == EVT::I16 {
+        let mask = dag.get_constant(15, amount_vt);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let op = if is_fshr { x86isd::FSHR } else { x86isd::FSHL };
+        return Some(dag.get_node(op, vt, &[op0, op1, amount]));
+    }
+    None
 }
 
 /// `LowerShiftParts` (`TargetLowering::expandShiftParts`): a double-width

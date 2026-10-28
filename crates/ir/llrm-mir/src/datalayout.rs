@@ -34,6 +34,53 @@ pub struct DataLayout {
     /// The preferred alignment of an aggregate, in bytes: `a:0:64`.
     aggregate_pref: u64,
     pub alloca_space: u32,
+    /// The natural stack alignment in bytes: `S32`.
+    pub stack_align: Option<u64>,
+    layouts: StructLayouts,
+}
+
+/// LLVM's `StructLayouts` map: a struct's layout, made once. It is held for
+/// one `Types` (by address and size, so another context's ids do not read it)
+/// and only for a struct whose body is defined.
+#[derive(Default)]
+struct StructLayouts(
+    std::sync::Mutex<(usize, usize, usize, crate::hash::HashMap<TypeId, std::sync::Arc<(u64, Vec<u64>)>>)>,
+);
+
+impl Clone for StructLayouts {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
+}
+
+impl PartialEq for StructLayouts {
+    fn eq(
+        &self,
+        _: &Self,
+    ) -> bool {
+        true
+    }
+}
+
+impl Eq for StructLayouts {}
+
+impl std::fmt::Debug for StructLayouts {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        f.write_str("StructLayouts")
+    }
+}
+
+thread_local! {
+    static COMPUTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many struct layouts this thread has worked out, for a test that each is
+/// made once.
+pub fn layouts_computed() -> usize {
+    COMPUTED.with(std::cell::Cell::get)
 }
 
 impl Default for DataLayout {
@@ -53,6 +100,8 @@ impl Default for DataLayout {
             aggregate_align: 1,
             aggregate_pref: 8,
             alloca_space: 0,
+            stack_align: None,
+            layouts: StructLayouts::default(),
         }
     }
 }
@@ -86,7 +135,8 @@ impl DataLayout {
                         layout.pointers.insert(space as u32, one);
                     }
                 }
-                "m" | "S" | "F" | "G" | "P" | "Fi" | "Fn" => {}
+                "S" => layout.stack_align = numbers(rest)?.first().map(|&bits| bytes(bits)).filter(|&one| one > 0),
+                "m" | "F" | "G" | "P" | "Fi" | "Fn" => {}
                 "A" => layout.alloca_space = numbers(rest)?.first().copied().unwrap_or(0) as u32,
                 "p" => {
                     let (space, fields) = match rest.split_once(':') {
@@ -440,7 +490,7 @@ impl DataLayout {
     ) -> u64 {
         match types.get(ty) {
             Type::Array { element, count } => self.alloc_size(types, *element) * count,
-            Type::Struct { .. } | Type::Named(_) => self.struct_layout(types, ty).0,
+            Type::Struct { .. } | Type::Named(_) => self.shared_struct_layout(types, ty).0,
             _ => bytes(self.size_bits(types, ty)),
         }
     }
@@ -476,8 +526,8 @@ impl DataLayout {
                 }
                 _ => {
                     let field = index.expect("a struct's index is a constant");
-                    let (_, offsets) = self.struct_layout(types, current);
-                    constant += offsets[field as usize] as i128;
+                    let layout = self.shared_struct_layout(types, current);
+                    constant += layout.1[field as usize] as i128;
                     current = types.member(current, field as u64).expect("a verified field");
                     continue;
                 }
@@ -490,11 +540,32 @@ impl DataLayout {
         (constant, variable)
     }
 
+    /// A struct's size and each field's offset.
     pub fn struct_layout(
         &self,
         types: &Types,
         ty: TypeId,
     ) -> (u64, Vec<u64>) {
+        let layout = self.shared_struct_layout(types, ty);
+        (layout.0, layout.1.clone())
+    }
+
+    /// `struct_layout`, held: `getStructLayout`.
+    pub fn shared_struct_layout(
+        &self,
+        types: &Types,
+        ty: TypeId,
+    ) -> std::sync::Arc<(u64, Vec<u64>)> {
+        let version = (types as *const Types as usize, types.version().0, types.version().1);
+        {
+            let mut held = self.layouts.0.lock().expect("the layout memo");
+            if (held.0, held.1, held.2) != version {
+                *held = (version.0, version.1, version.2, Default::default());
+            } else if let Some(found) = held.3.get(&ty) {
+                return std::sync::Arc::clone(found);
+            }
+        }
+        COMPUTED.with(|count| count.set(count.get() + 1));
         let packed = match types.get(ty) {
             Type::Struct { packed, .. } => *packed,
             Type::Named(name) => types.body(name).is_some_and(|body| body.packed),
@@ -509,7 +580,11 @@ impl DataLayout {
             offsets.push(offset);
             offset += self.alloc_size(types, field);
         }
-        (offset.next_multiple_of(self.align(types, ty)), offsets)
+        let made = std::sync::Arc::new((offset.next_multiple_of(self.align(types, ty)), offsets));
+        if types.fields(ty).is_some() {
+            self.layouts.0.lock().expect("the layout memo").3.insert(ty, std::sync::Arc::clone(&made));
+        }
+        made
     }
 }
 
@@ -632,5 +707,24 @@ mod tests {
             );
         }
         assert_eq!(new.float_alloc_size(FloatKind::X86Fp80), 10);
+    }
+
+    /// A struct's layout was worked out at every size ask: `object_of` asked
+    /// the same two nested structs 434 times in one LICM run, 3 MInstr of 23
+    /// (QCport d_alias, m16 -Os). It is made once for each struct, as LLVM's
+    /// `getStructLayout` map does.
+    #[test]
+    fn a_structs_layout_is_made_once_however_often_its_size_is_asked() {
+        let module =
+            crate::parse::module("%inner = type { i16, i32, [4 x i8] }\n%outer = type { %inner, i16, %inner }\n")
+                .unwrap();
+        let types = &module.context.types;
+        let layout = DataLayout::parse("e-p:16:16-i32:32").unwrap();
+        let outer = types.intern(crate::types::Type::Named("outer".into()));
+        let before = super::layouts_computed();
+        for _ in 0..100 {
+            assert_eq!(layout.alloc_size(types, outer), 28);
+        }
+        assert_eq!(super::layouts_computed() - before, 2, "outer and inner, once each");
     }
 }

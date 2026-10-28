@@ -198,6 +198,10 @@ impl llrm_target::Target for M32 {
         CALLING.native().frame_enter
     }
 
+    fn frame_wrap_split_size(&self) -> bool {
+        CALLING.native().frame_wrap_split_size
+    }
+
     /// Past EBP and the return address; there is no far call.
     fn first_argument_offset(
         &self,
@@ -300,6 +304,15 @@ impl llrm_target::Target for M32 {
         wide_divisor: bool,
     ) -> Result<llrm_target::routines::Divide, String> {
         llrm_x86::helpers::divide(signed, wide_divisor, 32).map_err(|refused| refused.message)
+    }
+
+    fn divide_routine_used(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_used(signed, wide_divisor, 32, used).map_err(|refused| refused.message)
     }
 
     fn float_width(

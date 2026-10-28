@@ -74,3 +74,65 @@ pub fn select_mul_lohi<D: AddrDag>(
     copy_results(dag, node, nvt, lo, hi, in_glue);
     true
 }
+
+/// `X86ISD::UMUL`, and `X86ISD::SMUL` at `i8` ([L5998][case]): the
+/// one-operand `MUL`/`IMUL` with an operand in `AL`/`AX`/`EAX`; the value is
+/// the low half and the flags are the multiply's `EFLAGS`. The other widths of
+/// `SMUL` are patterns. False for a type the case has no row for.
+///
+/// [case]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5998
+pub fn select_mul_flags<D: AddrDag>(
+    dag: &mut D,
+    hooks: &X86Hooks,
+    node: u32,
+    signed: bool,
+) -> bool {
+    let nvt = dag.value_type(SDValue::new(node, 0));
+    let (lo, reg_op, mem_op) = match (nvt, signed) {
+        (mvt::i8, true) => (x86::AL, x86::IMUL8r, x86::IMUL8m),
+        (mvt::i8, false) => (x86::AL, x86::MUL8r, x86::MUL8m),
+        (mvt::i16, false) => (x86::AX, x86::MUL16r, x86::MUL16m),
+        (mvt::i32, false) => (x86::EAX, x86::MUL32r, x86::MUL32m),
+        (mvt::i64, false) if hooks.options.cpu == Cpu::X64 => (x86::RAX, x86::MUL64r, x86::MUL64m),
+        _ => return false,
+    };
+    let (mut n0, mut n1) = (dag.operand(node, 0), dag.operand(node, 1));
+
+    let mut folded = hooks.try_fold_load(dag, node, node, n1);
+    if folded.is_none() {
+        folded = hooks.try_fold_load(dag, node, node, n0);
+        if folded.is_some() {
+            std::mem::swap(&mut n0, &mut n1);
+        }
+    }
+
+    let entry = dag.entry_node();
+    let copy = dag.copy_to_reg(entry, lo, n0, None);
+    let mut in_glue = SDValue::new(copy, 1);
+
+    if let Some(a) = folded {
+        let chain = dag.operand(n1.node, 0);
+        let ops = [a.base, a.scale, a.index, a.disp, a.segment, chain, in_glue];
+        let mul = dag.machine_node(mem_op, &[mvt::Other, mvt::Glue], &ops);
+        in_glue = SDValue::new(mul, 1);
+        dag.replace_uses(SDValue::new(n1.node, 1), SDValue::new(mul, 0));
+        if let Some(mems) = dag.mem_operands(n1.node) {
+            dag.set_node_mem_refs(mul, &mems);
+        }
+    } else {
+        in_glue = SDValue::new(dag.machine_node(reg_op, &[mvt::Glue], &[n1, in_glue]), 0);
+    }
+    for (result, reg, vt) in [(0u8, lo, nvt), (1, x86::EFLAGS, mvt::i32)] {
+        let value = SDValue::new(node, result);
+        if dag.users(value).is_empty() {
+            continue;
+        }
+        let entry = dag.entry_node();
+        let from = dag.copy_from_reg(entry, reg, vt, in_glue);
+        in_glue = SDValue::new(from, 2);
+        dag.replace_uses(value, SDValue::new(from, 0));
+    }
+    dag.remove_dead_node(node);
+    true
+}
