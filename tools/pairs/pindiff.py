@@ -356,7 +356,7 @@ def main(argv: list[str]) -> int:
             parser.error("--dyn is m32 only")
         import dyn as dynmod
 
-        dyn = dynmod.measure([row["name"] for row in rows], args.level, args.llc, work / "dyn", one)
+        dyn = dynmod.measure([row["name"] for row in rows], args.level, MACHINES["m32"]["march"], args.llc, work / "dyn", one)
         for name, result in dyn.items():
             if isinstance(result, str):
                 print(f"# no dynamic figures for {name}: {result}")

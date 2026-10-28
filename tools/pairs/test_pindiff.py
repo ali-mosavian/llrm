@@ -277,9 +277,10 @@ def test_the_dynamic_run_compiles_ours_at_the_level_asked_not_os_as_o2():
     dyn = load("dyn")
     from pathlib import Path
 
-    assert "-Os" in dyn.ours_command("llc", "Os", Path("a.ll"), Path("a.o"))
-    assert "-O2" not in dyn.ours_command("llc", "Os", Path("a.ll"), Path("a.o"))
-    assert "-O3" in dyn.ours_command("llc", "O3", Path("a.ll"), Path("a.o"))
+    assert "-Os" in dyn.ours_command("llc", "Os", "i486", Path("a.ll"), Path("a.o"))
+    assert "-O2" not in dyn.ours_command("llc", "Os", "i486", Path("a.ll"), Path("a.o"))
+    assert "-O3" in dyn.ours_command("llc", "O3", "i486", Path("a.ll"), Path("a.o"))
+    assert "-march=i486" in dyn.ours_command("llc", "O3", "i486", Path("a.ll"), Path("a.o"))
 
 
 def test_m32_clang_flags_do_not_default_every_function_to_regcall(monkeypatch):
