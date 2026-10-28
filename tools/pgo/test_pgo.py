@@ -181,3 +181,21 @@ def test_the_corpus_for_llrm_llc_leaves_out_what_llrm_cc_cannot_build_and_the_ot
     names = lambda jobs: {job[0] for job in jobs}  # noqa: E731
     unbuilt = {"es_across_copy", "idioms", "stackdeep", "stackover", "memcpy_runtime", "memfuncs_runtime", "overflow_builtins", "tail_calls_edges"}
     assert unbuilt <= names(pgo.corpus()) and not unbuilt & names(pgo.corpus(driver=True))
+
+
+def test_llrm_c_is_built_with_its_feature_and_llrm_llc_without(monkeypatch, tmp_path):
+    """`cargo build --bin llrm-c` alone fails "target llrm-c requires the features: c-legacy": the pgo job was red on parity."""
+    asked = []
+    monkeypatch.setattr(pgo.subprocess, "run", lambda command, **_: asked.append(command))
+    pgo.cargo(tmp_path, tmp_path, "", "llrm-c")
+    pgo.cargo(tmp_path, tmp_path, "", "llrm-llc")
+    assert asked[0][-2:] == ["--features", "wccq"] and "--features" not in asked[1]
+    builds = [line for line in (pgo.ROOT / ".github/workflows/pgo.yml").read_text().splitlines() if "cargo build" in line and ("--bin llrm-c" in line or "--bins" in line)]
+    assert builds and all("--features wccq" in line for line in builds), builds
+
+
+def test_the_build_command_the_ci_job_runs_parses(monkeypatch):
+    """CI's `pgo.py build --out .. --profile-dir .. --siblings ..` died in main(): `--binary` is a name, and its default str was resolved like a path ('str' object has no attribute 'resolve')."""
+    monkeypatch.chdir(pgo.ROOT)
+    args = pgo.parse(["build", "--out", "target/pgo-out", "--profile-dir", "target/pgo-profile", "--siblings", "target/plain"])
+    assert args.binary == "llrm-c" and args.out == pgo.ROOT / "target/pgo-out" and args.siblings == pgo.ROOT / "target/plain"

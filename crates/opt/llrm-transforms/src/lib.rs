@@ -84,6 +84,7 @@ pub mod availableexternally;
 mod availableexternally_tests;
 pub mod bdce;
 pub mod branchtocommon;
+pub mod calledvaluepropagation;
 pub mod calleepop;
 #[cfg(test)]
 mod calleepop_tests;

@@ -585,6 +585,29 @@ def test_a_pr_that_does_not_link_alone_is_refused_and_only_a_runtime_or_frontend
     assert got == ["qb arena_type: boom"] and len(ran) == 2, (got, ran)
 
 
+def test_a_pr_joined_only_by_the_tests_append_driver_waits_for_its_owner(tmp_path):
+    """#5462, #5481 and #5591 appended a test to a file an earlier member appended to: the batch's driver merged both, GitHub's squash refused each as conflicting."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "tools").mkdir()
+    (repo / "tools/merge_tests_append.py").write_text((Path(__file__).resolve().parent / "merge_tests_append.py").read_text())
+    (repo / ".gitattributes").write_text("at_tests.rs merge=tests-append\n")
+    (repo / "at_tests.rs").write_text("#[test]\nfn base() {}\n")
+    (repo / "other.txt").write_text("x\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    base_text = (repo / "at_tests.rs").read_text()
+    heads = {
+        "1": branch(repo, "a", "at_tests.rs", base_text + "\n#[test]\nfn first() {}\n"),
+        "2": branch(repo, "b", "at_tests.rs", base_text + "\n#[test]\nfn second() {}\n"),
+        "3": branch(repo, "c", "other.txt", "y\n"),
+    }
+    sh(repo, "checkout", "-q", "main")
+    kept, waits = ps.assemble(["1", "2", "3"], heads, base="main", cwd=repo)
+    assert kept == ["1", "3"], (kept, waits)
+    assert list(waits) == ["2"] and waits["2"].startswith("needs owner parity merge") and "at_tests.rs" in waits["2"], waits
+
+
 def test_assemble_prints_one_progress_line_per_candidate(tmp_path, capsys):
     """The 23:03 assembly ran 13 minutes with no output: nobody could say how many of the 40 heads were merged."""
     repo = tmp_path / "repo"

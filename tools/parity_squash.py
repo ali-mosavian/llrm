@@ -309,17 +309,9 @@ def fmt_differs(root: Path, files: list[str], run=subprocess.run) -> set[str]:
 
 
 def precheck_checks(dev: Path, target: Path):
-    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: a ratchet's name, fmt's files, the docs' stale pages. Run on the
+    """The cheap static checks of the gate, each `(name, root -> {check: the set of items failing})`: fmt's files, the docs' stale pages. Run on the
     dev checkout against the persistent dev target; the items are what a head's own failures are told apart from a PR's by."""
-    sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import parity_smoke  # noqa: PLC0415
-    from buildslot import slotted  # noqa: PLC0415
-
     env = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-
-    def ratchets(root: Path) -> dict[str, set[str]]:
-        failed = parity_smoke.ratchet_failures(root, run=lambda command: subprocess.run(slotted(command), cwd=root, env=env, capture_output=True, text=True, errors="replace"))
-        return {name: {name} for name in failed}
 
     def fmt(root: Path, only: list[str] | None = None) -> dict[str, set[str]]:
         if only is not None:  # the PR side: its own files only (the baseline, computed once per feat/parity sha, checks them all)
@@ -337,7 +329,8 @@ def precheck_checks(dev: Path, target: Path):
         return {"docs": {line.strip() for line in out if line.strip().startswith("docs/")} or {"docsbuild --check failed"}}
 
     fmt.takes_only = True
-    return [("ratchets", ratchets), ("fmt", fmt), ("docs", docs)]
+    # no ratchets here: the batch's smoke runs all of them on the merged tree and on the head, so a red one is refused there (seconds to minutes per PR, median 80 s at load 70, were spent twice)
+    return [("fmt", fmt), ("docs", docs)]
 
 
 def precheck_items(dev: Path, checks, deletions_of=None, seconds: dict[str, float] | None = None, only: list[str] | None = None) -> dict[str, set[str]]:
@@ -1091,6 +1084,11 @@ def scanners_for(files: list[str]) -> tuple[str, ...]:
     return ALWAYS_SCANNERS
 
 
+# Tests that launch DOSBox bench programs for minutes each (29 min for one pytest id): the CI gate runs them, a landing batch does not (its cap is 600 s).
+# Ids are relative to tools/, pytest's rootdir.
+GATE_ONLY_TESTS = ("dosbatch/test_qb32.py::test_bench_program_prints_what_it_should_on_both_targets",)
+
+
 def tool_tests_for(files: list[str], root: Path = ROOT) -> list[str]:
     """The pytest files of the Python tools a diff touches: tools/x.py -> tools/test_x.py, and a changed test file itself; none for a diff outside tools/."""
     tests = set()
@@ -1113,7 +1111,7 @@ def tool_test_failures(files: list[str], root: Path = ROOT, run=subprocess.run, 
         return [why]
     stage("tool-tests")
     try:
-        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
+        done = run(["uv", "run", "-q", "--project", "tools", "python", "-m", "pytest", "-q", "-x", "-p", "no:cacheprovider", *[f"--deselect={one}" for one in GATE_ONLY_TESTS], *tests], cwd=root, capture_output=True, text=True, errors="replace", timeout=600)
     except subprocess.TimeoutExpired:  # an uncaught timeout killed the batch with no REFUSED line, and the PR came back every pass
         return ["the tool tests ran past 600 s"]
     if done.returncode == 0:
@@ -1458,6 +1456,7 @@ def format_tip(cwd: Path = ROOT) -> bool:
     """tools/fmt.sh and the docs sync on the batch tip, committed when they change anything (the squash path pushes the same to each PR's branch). True when a commit was made."""
     subprocess.run(["tools/fmt.sh"], cwd=cwd, capture_output=True)
     subprocess.run([sys.executable, "tools/docs/docsbuild/build.py", "--sync", "--force"], cwd=cwd, capture_output=True)
+    git("add", "-A", "docs", cwd=cwd)  # a new pass's generated page is untracked: `commit -a` skipped it, --check passed on the file on disk, and rpoattrs, deadmi and calledvaluepropagation landed without their page
     if not git("status", "--porcelain", "--untracked-files=no", cwd=cwd).strip():
         return False
     git("commit", "-qam", "style: fmt and generated docs of the batch", cwd=cwd)
@@ -1879,6 +1878,14 @@ def added_names(head: str, base: str, cwd: Path) -> set[str]:
     return set(ADDED_ITEM.findall(diff))
 
 
+def needs_the_merge_driver(before: str, head: str, cwd: Path) -> list[str]:
+    """The files `head` conflicts in with `before` under plain git (the tests-append driver off): where it is not empty, the batch's merge joined the PR only through that driver and
+    GitHub's squash, which has none, will refuse it as conflicting (#5462, #5481, #5591 in one day)."""
+    env = {**os.environ, "GIT_CONFIG_COUNT": "0"}
+    done = subprocess.run(["git", "-c", "merge.tests-append.driver=false", "merge-tree", "--write-tree", "--name-only", "--no-messages", before, head], cwd=cwd, env=env, capture_output=True, text=True, errors="replace")
+    return done.stdout.splitlines()[1:] if done.returncode == 1 else []
+
+
 def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: Path = ROOT, limit: int = 16) -> tuple[list[str], dict[str, str]]:
     """The first `limit` of `numbers`, in order, that merge into `base` one after another without a conflict (`fast_merge`'s own merge, in a scratch worktree), and why
     each other waits. A batch of these loses no PR to a conflict with an earlier member: 63 of 93 conflict refusals in a week were with a member that landed, and the run
@@ -1904,7 +1911,12 @@ def assemble(numbers: list[str], heads: dict[str, str], base: str = BASE, cwd: P
                     waits[number] = f"adds {clash[0]}, which #{claimed[clash[0]]} adds too: one of them drops it"
                     progress(number, "waits (same name)")
                     continue
+                before = git("rev-parse", "HEAD", cwd=work).strip()
                 merge = subprocess.run(["git", "-c", "user.name=parity_squash", "-c", "user.email=parity_squash@localhost", "merge", "--no-edit", "-q", heads[number]], cwd=work, capture_output=True, text=True, errors="replace")
+                if not merge.returncode and (driven := needs_the_merge_driver(before, heads[number], work)):
+                    git("reset", "-q", "--hard", before, cwd=work)
+                    waits[number] = "needs owner parity merge: it conflicts without the tests-append driver in " + ", ".join(driven[:4])
+                    continue
                 if merge.returncode:
                     conflicts = git("diff", "--name-only", "--diff-filter=U", cwd=work).split()
                     if conflicts and not regenerate(conflicts, work):

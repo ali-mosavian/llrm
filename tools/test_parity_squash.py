@@ -1810,6 +1810,10 @@ def test_the_overlapped_check_returns_its_error_text_and_the_scan_verdict_not_ea
     assert ps.check_and_scan(lambda: "", lambda: False) == ("", False)
     assert ps.check_and_scan(lambda: "", lambda: True) == ("", True)
 
+def test_precheck_runs_no_ratchet_the_batch_smoke_runs_them_all():
+    """Precheck ran the 12 ratchets (median 80 s a PR at load 70) that every batch's smoke runs again on the merged tree and the head: 12 PRs of pre-flight held the first batch 40 min."""
+    assert [name for name, _ in ps.precheck_checks(Path("."), Path("."))] == ["fmt", "docs"]
+
 
 def test_a_conflict_detail_names_the_owner_and_the_conflicting_file(tmp_path):
     """#5456 and #5462 were refused at squash for merge conflicts: the line said neither who owns them nor where (dag_function_tests.rs); the coordinator ran git merge-tree by hand."""
@@ -1939,6 +1943,20 @@ def test_a_failing_tool_test_keeps_its_error_text_not_only_the_last_lines(tmp_pa
     assert any("the real cause" in line for line in got), got
 
 
+def test_the_tool_tests_of_a_landing_leave_the_dosbox_bench_programs_to_the_gate(tmp_path):
+    """#5690's tool-tests stage ran every bench program in DOSBox, minutes each, and ran into the 600 s cap; the batch was refused on a test the gate owns."""
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "test_other.py").write_text("")
+    ran = []
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    ps.tool_test_failures(["tools/test_other.py"], tmp_path, run=lambda command, **_: ran.append(command) or Done(), ensure=lambda: "")
+    assert ps.GATE_ONLY_TESTS and all(f"--deselect={one}" in ran[0] for one in ps.GATE_ONLY_TESTS), ran
+
+
 def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
     """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
     (tmp_path / "tools").mkdir()
@@ -1979,3 +1997,18 @@ def test_no_function_assigns_a_local_that_shadows_a_module_function_it_calls():
             calls = {n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
             clashes += [f"{fn.name}: {name}" for name in sorted(stores & calls & module_functions)]
     assert clashes == [], clashes
+
+
+def test_format_tip_commits_a_generated_page_that_is_new(tmp_path):
+    """New-pass pages (rpoattrs, deadmi, calledvaluepropagation) landed without their generated .md three times: the sync wrote them untracked, `commit -a` skipped them and --check passed on the file on disk."""
+    sh(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "tools" / "docs" / "docsbuild").mkdir(parents=True)
+    (tmp_path / "tools" / "fmt.sh").write_text("#!/bin/sh\n")
+    (tmp_path / "tools" / "fmt.sh").chmod(0o755)
+    (tmp_path / "tools" / "docs" / "docsbuild" / "build.py").write_text(
+        "import pathlib\npathlib.Path('docs/optimizations/passes').mkdir(parents=True, exist_ok=True)\npathlib.Path('docs/optimizations/passes/newpass.md').write_text('# newpass\\n')\n"
+    )
+    sh(tmp_path, "add", "-A")
+    sh(tmp_path, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+    assert ps.format_tip(tmp_path) is True
+    assert "docs/optimizations/passes/newpass.md" in sh(tmp_path, "ls-files"), "the new page is not in the tip"

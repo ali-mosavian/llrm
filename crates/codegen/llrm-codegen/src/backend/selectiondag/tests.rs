@@ -12,6 +12,7 @@ fn arg(
     dag.get_register(vt, reg)
 }
 
+mod abs;
 mod action_table;
 mod add_simplify;
 mod and_fold;
@@ -26,6 +27,7 @@ mod builder;
 mod cmov_constants;
 mod combiner;
 mod combiner_worklist;
+mod ctcount;
 mod dead_load;
 mod demanded_bits;
 mod div_by_constant;
@@ -48,6 +50,7 @@ mod i1_branch;
 mod i1_m16;
 mod iminmax;
 mod int_to_fp;
+mod known_load;
 mod legalize_dag;
 mod legalize_pending;
 mod legalize_sweeps;

@@ -140,7 +140,9 @@ def work_dir(profile_dir: Path) -> Path:
 
 def cargo(root: Path, target: Path, flags: str, binary: str = "llrm-c") -> subprocess.CompletedProcess:
     env = {**os.environ, "CARGO_TARGET_DIR": str(target), "RUSTFLAGS": flags}
-    return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", binary], cwd=root, env=env, capture_output=True, text=True)
+    # llrm-c is built only with its feature (wccq: the toolchain it compiles with): without, "requires the features: c-legacy".
+    features = ["--features", "wccq"] if binary == "llrm-c" else []
+    return subprocess.run(["cargo", "build", "--profile", "dist", "--bin", binary, *features], cwd=root, env=env, capture_output=True, text=True)
 
 
 def make_profile(root: Path, profile_dir: Path, exclude: frozenset[str], qcport: Path | None, binary: str = "llrm-c") -> None:
@@ -188,7 +190,7 @@ def summary(missing: list[str], profile_dir: Path) -> str:
     return "\n".join([head, *(f"  {name}" for name in missing[:20]), *([f"  ... and {len(missing) - 20} more"] if len(missing) > 20 else [])])
 
 
-def main() -> int:
+def parse(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="command", required=True)
     for name in ("build", "stale", "train"):
@@ -202,10 +204,15 @@ def main() -> int:
             one.add_argument("binary", type=Path)
         else:
             one.add_argument("--profile-dir", type=Path, default=Path(os.environ.get("PGO_DIR", ROOT / "target" / "pgo")))
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     for name in ("profile_dir", "out", "siblings", "binary"):  # the builds run in the repository: a relative path is read from there
-        if getattr(args, name, None):
+        if isinstance(getattr(args, name, None), Path):  # `build --binary` is a compiler's name, not a path
             setattr(args, name, getattr(args, name).resolve())
+    return args
+
+
+def main() -> int:
+    args = parse()
     qcport = Path(os.environ["QCPORT"]) if os.environ.get("QCPORT") else None
     exclude = frozenset(args.exclude)
     if args.command == "stale":

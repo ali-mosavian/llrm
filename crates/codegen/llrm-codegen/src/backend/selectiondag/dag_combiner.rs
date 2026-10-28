@@ -340,7 +340,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Sra => {
                 self.visit_sra(node).or_else(|| self.visit_shift(node)).or_else(|| self.reduce_load_width_of(node))
             }
+            // `visitFunnelShift`, closing with `SimplifyDemandedBits(N)`.
+            ISD::FShl | ISD::FShr => self.visit_funnel_shift(node).or_else(|| self.simplify_demanded(node)),
             ISD::BSwap => self.visit_bswap(node),
+            ISD::Abs | ISD::AbsMinPoison => self.visit_abs(node),
+            ISD::CtLz | ISD::CtTz => self.visit_ctlz_cttz(node),
+            ISD::CtPop => self.visit_ctpop(node),
             ISD::Rotl | ISD::Rotr => self.visit_rotate(node),
             ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax => self.visit_iminmax(node),
             ISD::BitReverse => self.visit_bitreverse(node),
@@ -353,9 +358,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::BitCast => self.visit_bitcast(node),
             ISD::Truncate => self.visit_truncate(node).or_else(|| self.simplify_demanded(node)),
             ISD::SignExtendInReg => self.visit_sext_in_reg(node),
-            // `visitFunnelShift`, its closing `SimplifyDemandedBits(N)`; the
-            // folds above it are not translated.
-            ISD::FShl | ISD::FShr => self.simplify_demanded(node),
             _ => None,
         }
     }

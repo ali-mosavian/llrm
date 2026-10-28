@@ -213,6 +213,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD42 | sdag-c | `X86DAGToDAGISel::Select` has only the store and shift hand matchers so far | `llrm-dagisel/src/x86_select.rs` |
 | SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD403 | sdag-d | the DAG path (`--isel=dag`): no branch odds or counted-loop trip counts, calls, locals, register arguments, switch lowering or multi-register phis yet; exit D1e, review 2026-12-03 | `selectiondag/dag_function.rs` |
+| SD404 | sdag-d | a rep-stos/rep-movs idiom for a word fill and a descending copy (`std; rep movs; cld`). The pin keeps both as counted loops, so this is a deviation: priced by the 486 loop at 4 instructions a trip against `rep stosw` at 5 + n clocks, and by the 5 bytes the loop's bounds check costs; unmeasured on a program. No code until priced on a program set | `selectiondag/emit.rs` |
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
@@ -230,6 +231,8 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD218 | sdag-b | `expandBITREVERSE` is the byte-swap and mask form only (no loop of single bits for a width that is not a power of two; none is legal here) | `selectiondag/legalize_dag.rs` |
 | SD219 | sdag-b | `combineAddOrSubToADCOrSBB` without the `ADOX` form (no ADX), the or/xor entry (`combineOrXorWithSETCC`) and the `ADD(ADC/SBB)`/`SUB(…, SBB)` folds | `selectiondag/x86_carry.rs` |
 | SD227 | sdag-b | `visitBSWAP`: no half-width `bswap (shl x, c)` form, no `bswap (bitreverse x)` canonicalisation | `selectiondag/bswap_combine.rs` |
+| SD246 | sdag-b | `visitABS`: no `foldABSToABD`, no `abs (sign_extend_inreg x)` narrowing | `selectiondag/abs_combine.rs` |
+| SD245 | sdag-b | `visitCTLZ/CTTZ/CTPOP`: no `foldCTLZToCTLS`, no half-width `ctpop`; non-zero is what known bits prove | `selectiondag/ctcount_combine.rs` |
 | SD254 | sdag-b | `visitRotate`: no demanded-bits simplification of the operand, no `distributeTruncateThroughAnd` | `selectiondag/rotate_combine.rs` |
 | SD237 | sdag-b | w12, m16: a zero whose only reader is a `sub_8bit`/`sub_16bit` extract is made at that width, not as the pin's `MOV32r0` (a dword `xor` is 3 bytes at real mode, the 66 prefix) | `selectiondag/emit.rs` |
 | SD221 | sdag-b | w12, m16: `shouldAvoidImmediateInstFormsForSize` does not count a call argument's store as a use (it is a `push imm` at real mode); the pin has no 16-bit target | `llrm-dagisel/src/x86_hooks.rs` |
@@ -261,6 +264,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |
 | SD102 | sdag-a | an `invoke` has no `EH_LABEL`s and a `landingpad` builds nothing (QB's pad is entered by the runtime) | `selectiondag.rs` |
+| SD105 | sdag-a | `visitFunnelShift` ports the constant-amount folds and the funnel of consecutive loads; the identity fold, variable-amount range folds and rotate fold are not ported | `selectiondag/combine_funnel.rs` |
 | SD103 | sdag-a | `ExpandIntRes_MULFIX` takes its pieces from `forceExpandMultiply`, never `expandMUL_LOHI` | `selectiondag/legalize_types.rs` |
 | SD104 | sdag-a | an unsigned `ExpandIntRes_MULFIXSAT` scale above a half shifts `HH`, where the pin shifts `HL` (upstream fixed it) | `selectiondag/legalize_types.rs` |
 | SD107 | sdag-a | `lowerFaddFsub` never forms a horizontal add (SSE3 `haddps` is not described); scalar `FADD`/`FSUB` stay as they are | `selectiondag/x86_lowering.rs` |

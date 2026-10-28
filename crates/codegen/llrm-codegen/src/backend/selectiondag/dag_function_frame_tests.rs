@@ -1206,6 +1206,17 @@ entry:
 }
 ";
 
+const M16_FAR_TO_FAR_COPY: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+
+declare void @llvm.memcpy.p1.p1.i16(ptr addrspace(1), ptr addrspace(1), i16, i1)
+
+define void @f(ptr addrspace(1) %d, ptr addrspace(1) %s) {
+entry:
+  call void @llvm.memcpy.p1.p1.i16(ptr addrspace(1) %d, ptr addrspace(1) %s, i16 12, i1 false)
+  ret void
+}
+";
+
 /// A 12-byte copy from a far pointer at -Os was `rep movsb` with cx = 12
 /// (QCport atk_army): the near copy of the same size is `rep movsd` with cx =
 /// 3, and the segment override does not change the unit.
@@ -1224,4 +1235,50 @@ fn at_os_a_12_byte_far_copy_moves_dwords() {
         .filter_map(|w| w.name.as_deref().map(str::to_owned))
         .collect();
     assert_eq!(moves, ["movsd"], "one string move of dwords");
+}
+
+/// `(x >> 16)` of a loaded `i64` was `shrd` of the two halves loaded apart
+/// (`f_lshr_16` at m16, 8 instructions against the pin's 6): the pin's
+/// `visitFunnelShift` joins the funnel of consecutive loads into one load at
+/// the byte offset, and the high half is a narrower load.
+#[test]
+fn a_funnel_of_consecutive_loads_is_one_load_at_the_offset() {
+    let text = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(ptr %p) {
+entry:
+  %v = load i64, ptr %p
+  %r = lshr i64 %v, 16
+  ret i64 %r
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .map(|w| w.name.as_deref().unwrap_or("").to_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n == "shrd"), "{names:?}");
+}
+
+/// A far string move left the dword each pointer was joined into for the string
+/// registers (`or(movzx off, shl sel, 16)`) in the body, read by no one. Its
+/// `shl` read the selector at four bytes, the allocator held the word in a
+/// dword register, and QCport gib/ent -Os grew by dword spills and
+/// `mov eax,[bp-N]; mov ax,..; mov [bp-N],eax` inserts (gib +161 B).
+#[test]
+fn a_far_string_move_leaves_no_dword_join_once_dead_code_is_gone() {
+    let module = llrm_mir::parse::module(M16_FAR_TO_FAR_COPY).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let joins = |body: &crate::model::lir::LirBody| {
+        body.insns().iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some("shl")).count()
+    };
+    assert!(joins(&done.body) > 0, "the premise: selection builds the joined dword");
+    let cleaned = crate::backend::deadmi::eliminated(&done.body);
+    assert_eq!(joins(&cleaned), 0, "the unread join is gone");
 }
