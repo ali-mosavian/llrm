@@ -214,6 +214,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD400 | sdag-d | `EmitLoweredSelect` per `CMOV_GR*`, no run or cascade look-ahead | `selectiondag/emit.rs` |
 | SD403 | sdag-d | the DAG path (`--isel=dag`): no branch odds or counted-loop trip counts, calls, locals, register arguments, switch lowering or multi-register phis yet; exit D1e, review 2026-12-03 | `selectiondag/dag_function.rs` |
 | SD404 | sdag-d | a rep-stos/rep-movs idiom for a word fill and a descending copy (`std; rep movs; cld`). The pin keeps both as counted loops, so this is a deviation: priced by the 486 loop at 4 instructions a trip against `rep stosw` at 5 + n clocks, and by the 5 bytes the loop's bounds check costs; unmeasured on a program. No code until priced on a program set | `selectiondag/emit.rs` |
+| SD405 | sdag-d | real mode at -Os: a popped x87 argument takes an area of its own (`sub sp, n; mov bx, sp; fstp [bx]`) and the other arguments are pushes; the pin stores every argument into one area. Size: 10 bytes against 14 for one float and one word | `selectiondag/emit.rs` |
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
@@ -260,7 +261,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD249 | sdag-b | `reduceLoadWidth` of a constant `srl`/`sra`/`and` of a load only; no `freeze` look-through, no `shl` opening; every x86 narrow access is taken as legal (`isLegalNarrowLdSt`). Exit: none while x86 loads stay unaligned-legal | `selectiondag/reduce_load_width.rs` |
 | SD243 | sdag-b | w12, m16: tuned for size, a dword constant argument with a byte-sized half is two `pushw`, not `pushd imm32`; the pin has no 16-bit push | `selectiondag/emit.rs` |
 | SD244 | sdag-b | w12, m16, parked (not applied): a segment-to-far cast stays out of a loop it is made outside of. Measured: `tools/sizes.py -Os` over 315 programs 182540 -> 183693 B (+1153; deedlines +477, qbdemo +236), grep.bas 416 -> 461 lines, no program smaller; SD220's sink wins | `sinkcast.rs` |
-| SD253 | sdag-b | w12: a function calling a hidden atomic (`llrm.atomic.*`) is selected by the old selector; the DAG has no atomic nodes, and its call path left the callee unnamed (assemble.rs panic, tests/check/mir/atomic_xchg.ll after the flip) | `assemble.rs` |
+| SD253 | sdag-b | w12: a function calling a hidden atomic other than `xchg` and an ordered store (`llrm.atomic.*`: load, cmpxchg, rmw ops) is selected by the old selector; the DAG has `ATOMIC_SWAP` only | `assemble.rs` |
 
 | SD100 | sdag-a | a call's `TargetGlobalAddress` has no relocation flag (`[TF=7]`) | `selectiondag.rs` |
 | SD101 | sdag-a | `freeze` folds away only for a constant or a `freeze` (`isGuaranteedNotToBeUndefOrPoison` is partial) | `selectiondag/fold.rs` |

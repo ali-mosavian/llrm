@@ -1192,6 +1192,10 @@ pub struct LirBody {
     /// allocated (the pin's order), so every local lies that much lower
     /// (`masm::saved_first`).
     pub saved_first: bool,
+    /// A `saved_first` frame whose frame register is omitted: the cell it
+    /// would have held is not reserved, the locals lie directly below the
+    /// pushed registers.
+    pub slot_dropped: bool,
     /// What each return takes back is instructions of the body, made while the
     /// frame register was omitted (`true`) or kept (`false`)
     /// (`masm::exits_inserted`); the printer adds nothing at a return.
@@ -1382,6 +1386,7 @@ impl LirBody {
             slotted: false,
             cfa_variables: false,
             saved_first: false,
+            slot_dropped: false,
             frame_exit: None,
             frame_saved: None,
             notes: Arc::default(),
@@ -1451,6 +1456,7 @@ impl LirBody {
             slotted: self.slotted,
             cfa_variables: self.cfa_variables,
             saved_first: self.saved_first,
+            slot_dropped: self.slot_dropped,
             frame_exit: self.frame_exit,
             frame_saved: self.frame_saved.clone(),
             notes: Arc::clone(&self.notes),
