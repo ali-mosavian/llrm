@@ -166,6 +166,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         BrInd => pin::BRIND,
         Load => pin::LOAD,
         Store => pin::STORE,
+        AtomicSwap => pin::ATOMIC_SWAP,
         CallSeqStart => pin::CALLSEQ_START,
         CallSeqEnd => pin::CALLSEQ_END,
         DynamicStackAlloc => pin::DYNAMIC_STACKALLOC,

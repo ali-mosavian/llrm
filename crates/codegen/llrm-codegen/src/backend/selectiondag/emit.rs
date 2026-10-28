@@ -1436,6 +1436,32 @@ impl Emitter<'_, '_> {
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
             return Ok(());
         }
+        // `ATOMIC_SWAP`: the register takes the old value and the cell the new,
+        // both ways at once as the `xchg` the machine locks.
+        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm") {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let cell_width = self
+                .ctx
+                .map
+                .memory_bytes(name)
+                .unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+            let operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
+            let (Some(Loc::Held(from)), Some(cell)) = (
+                operands.iter().find(|o| matches!(o, Loc::Held(_))).cloned(),
+                operands.iter().find(|o| matches!(o, Loc::Mem(_))).cloned(),
+            ) else {
+                return Err(EmitError::Unsupported(format!("{name}: operands")));
+            };
+            let old = self
+                .exported_register(SDValue { node: n, res: 0 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
+            self.values.insert(SDValue { node: n, res: 0 }, old.value);
+            self.push(Operation::Exchange, "xchg", vec![Loc::Held(old), cell.clone()], vec![Loc::Held(from), cell]);
+            if let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut()) {
+                *last = Arc::new(Insn { volatile: true, ..(**last).clone() });
+            }
+            return Ok(());
+        }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
         let form = self
