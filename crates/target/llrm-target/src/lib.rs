@@ -593,6 +593,12 @@ pub trait Target {
         registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
     }
 
+    /// Whether scalar floating point lives in SSE registers: its register
+    /// file states roots of class `xmm`.
+    fn scalar_sse(&self) -> bool {
+        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
+    }
+
     /// The indexed addresses a memory access may use, priced by `costs` (its
     /// operand-size prefix in `prefix`) and `address_stall`: native form first.
     fn address_forms(
