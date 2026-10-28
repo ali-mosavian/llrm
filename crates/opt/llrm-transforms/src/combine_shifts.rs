@@ -14,10 +14,6 @@
 //! DEVIATE 1: `foldVectorBinop` is not translated: MIR has no vector
 //! operations.
 //!
-//! DEVIATE 2 (temporary): `SimplifyDemandedInstructionBits`
-//! (`loop-products-slope`) is left out, named where it stood in a `// DEVIATE
-//! 2:` comment.
-//!
 //! DEVIATE 3 (temporary): the folds that build an intrinsic call (`bswap`) are
 //! left out until the Builder can declare an intrinsic (`combine_build`
 //! DEVIATE 2); each is a `// DEVIATE 3:` comment at its place.
@@ -643,7 +639,11 @@ fn common_shift_transforms(
         return Some(c.replace_with_binop(inst, op, op0, new_ext, Flags::default()));
     }
 
-    // DEVIATE 2: SimplifyDemandedInstructionBits.
+    // See if we can fold away this shift.
+    let found = c.simplify_demanded_instruction_bits(inst);
+    if !matches!(found, Visit::None) {
+        return Some(found);
+    }
     // Try to fold a constant and a select into the select's arguments.
     if matches!(op0, Operand::Constant(_))
         && let Some(select) = c.definition_of(op1).filter(|&def| c.function.instruction(def).opcode == Opcode::Select)

@@ -273,6 +273,7 @@ struct Emitter<'a, 'd> {
     /// The `fcom` operands of each float compare, by the `SAHF` that reads its
     /// status word: the `fcom` is pushed there, next to the flag reader.
     pending_fcom: HashMap<u32, (Held, Held)>,
+    first_at: HashMap<u32, i64>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
     /// The `fld1`/`fldz` already loaded for a constant, valid until the next
@@ -380,6 +381,10 @@ pub struct Emitted {
     /// The frame places each inline code site patches in, by site: (byte of
     /// the code, displacement, addend).
     pub inline_places: Vec<(i64, Vec<(usize, i64, i64)>)>,
+    /// The LIR value each DAG value was made in.
+    pub values: HashMap<SDValue, u32>,
+    /// The address of the first instruction emitted for each `IROrder`.
+    pub first_at: HashMap<u32, i64>,
 }
 
 /// The LIR blocks for `units` of `dag`, in order: one, plus the three a
@@ -434,6 +439,7 @@ pub fn emit_in(
         machine_emitted: Default::default(),
         flag_copies_done: Default::default(),
         pending_fcom: HashMap::default(),
+        first_at: HashMap::default(),
         glue_users: {
             let mut users: HashMap<SDValue, Vec<u32>> = HashMap::default();
             for (at, one) in dag.nodes().iter().enumerate() {
@@ -450,6 +456,14 @@ pub fn emit_in(
             let (first_block, order) =
                 (emitter.blocks.len().saturating_sub(1), dag.node(SDValue { node, res: 0 }).order);
             emitter.node(node)?;
+            if !emitter.first_at.contains_key(&order)
+                && let Some(first) =
+                    emitter.blocks.iter().skip(first_block).enumerate().find_map(|(index, block)| {
+                        block.insns.get(if index == 0 { before } else { 0 }).map(|one| one.at)
+                    })
+            {
+                emitter.first_at.insert(order, first);
+            }
             // `SDLoc` to `DebugLoc`: what the node emitted is of its IR
             // instruction's line.
             if let Some(&Some(line)) = dag.lines.get(order as usize) {
@@ -515,6 +529,8 @@ pub fn emit_in(
         pops: emitter.pops,
         indirect_pops: emitter.indirect_pops,
         inline_places: emitter.inline_places,
+        values: emitter.values,
+        first_at: emitter.first_at,
     })
 }
 
@@ -662,12 +678,24 @@ fn pushed_arguments(
             at += 1;
             continue;
         };
+        let mut floats = false;
+        let is_float_store = |insn: &Insn| {
+            insn.what
+                .as_ref()
+                .is_some_and(|what| what.op == Operation::FloatStore && what.name.as_deref() == Some("fst"))
+        };
         let mut stores: Vec<(usize, i64, u32)> = (at + 1..end)
             .filter(|&place| is_store(&insns[place]))
             .inspect(|&place| {
                 // Only a move of a word or a dword can be a push.
                 if insns[place].what.as_ref().is_some_and(|what| what.op != Operation::Move) {
-                    refused = true;
+                    // DEVIATE SD405: tuned for size, a popped x87 store is
+                    // made with its own area (below); the stackifier pops it.
+                    if split_wide.is_some() && is_float_store(&insns[place]) {
+                        floats = true;
+                    } else {
+                        refused = true;
+                    }
                 }
             })
             .map(|place| {
@@ -690,6 +718,35 @@ fn pushed_arguments(
                 here
             }) && next == size.value
         };
+        // The x87 stores keep their order and nothing else x87 comes between
+        // them and the pushes' place: the stack discipline is unchanged.
+        let last_store = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
+        let first_float = (at + 1..end).find(|&place| is_store(&insns[place]) && is_float_store(&insns[place]));
+        let float_order_ok = {
+            let offsets: Vec<i64> = stores
+                .iter()
+                .filter(|&&(place, _, _)| is_float_store(&insns[place]))
+                .map(|&(_, offset, _)| offset)
+                .collect();
+            offsets.windows(2).all(|pair| pair[0] > pair[1])
+        };
+        let x87_between = first_float.is_some_and(|first| {
+            (first..=last_store).any(|place| {
+                !is_store(&insns[place])
+                    && insns[place].what.as_ref().is_some_and(|what| {
+                        matches!(
+                            what.op,
+                            Operation::FloatLoad | Operation::FloatStore | Operation::FloatArith
+                        )
+                    })
+            })
+        });
+        // One popped store: each takes an area (`sub; mov bx, sp`) of its own,
+        // seven bytes against three for a store into a shared one.
+        let one_float = stores.iter().filter(|&&(place, _, _)| is_float_store(&insns[place])).count() == 1;
+        if floats && (refused || !tiled || !float_order_ok || x87_between || !one_float) {
+            refused = true;
+        }
         if refused || !tiled {
             // The stores keep their places; each is based on a copy of SP.
             let value = state.next_value;
@@ -728,9 +785,50 @@ fn pushed_arguments(
         // The pushes go where the last store was; the area and the stores go.
         let last = stores.iter().map(|&(place, _, _)| place).max().unwrap_or(end - 1);
         let mut pushes = Vec::new();
-        for &(place, _, _) in stores.iter().rev() {
+        for &(place, _, width) in stores.iter().rev() {
             let old = &insns[place];
             let what = old.what.as_ref().expect("a store");
+            if is_float_store(old) {
+                // `sub sp, w; mov base, sp; fstp [base]`: the cell is a
+                // push, made through a copy of SP.
+                let value = state.next_value;
+                state.next_value += 1;
+                let base = Held { value, width: 2 };
+                if let Some(tag) = class_tag(AddrMode::Real16, Role::Base) {
+                    classes.push((value, tag));
+                }
+                let area = insns[at].clone();
+                let mut sub = area.what.clone().expect("an area");
+                if let Loc::Imm(imm) = &mut sub.sources[1] {
+                    imm.value = i64::from(width);
+                }
+                let made_sub = state.next_address();
+                pushes.push(Arc::new(Insn::new(
+                    made_sub,
+                    Some((made_sub, made_sub)),
+                    Some(sub),
+                    area.defines.clone(),
+                    area.uses.clone(),
+                )));
+                let from = Semantics {
+                    name: Some("mov".into()),
+                    dests: vec![Loc::Held(base)],
+                    sources: vec![Loc::Reg(Reg { register: sp, width: 2 })],
+                    ..Semantics::new(Operation::Move)
+                };
+                let made_mov = state.next_address();
+                pushes.push(Arc::new(Insn::new(made_mov, Some((made_mov, made_mov)), Some(from), vec![value], vec![])));
+                let mut store = what.clone();
+                if let [Loc::Mem(cell)] = &mut store.dests[..] {
+                    cell.through = llrm_lir::registers::RegId::None;
+                    cell.base = Some(base);
+                    cell.offset = 0;
+                }
+                let mut uses = old.uses.clone();
+                uses.push(value);
+                pushes.push(Arc::new(Insn::new(old.at, old.covers, Some(store), old.defines.clone(), uses)));
+                continue;
+            }
             let source = what.sources[0].clone();
             let uses = old.uses.clone();
             let halves = match (&source, split_wide) {
@@ -1434,6 +1532,32 @@ impl Emitter<'_, '_> {
             let at = self.next_address();
             let insn = Insn::new(at, Some((at, at)), Some(what), vec![zero.value], vec![]);
             self.blocks.last_mut().expect("a block").insns.push(Arc::new(insn));
+            return Ok(());
+        }
+        // `ATOMIC_SWAP`: the register takes the old value and the cell the new,
+        // both ways at once as the `xchg` the machine locks.
+        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm") {
+            let node = self.dag.node(SDValue { node: n, res: 0 });
+            let cell_width = self
+                .ctx
+                .map
+                .memory_bytes(name)
+                .unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+            let operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
+            let (Some(Loc::Held(from)), Some(cell)) = (
+                operands.iter().find(|o| matches!(o, Loc::Held(_))).cloned(),
+                operands.iter().find(|o| matches!(o, Loc::Mem(_))).cloned(),
+            ) else {
+                return Err(EmitError::Unsupported(format!("{name}: operands")));
+            };
+            let old = self
+                .exported_register(SDValue { node: n, res: 0 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
+            self.values.insert(SDValue { node: n, res: 0 }, old.value);
+            self.push(Operation::Exchange, "xchg", vec![Loc::Held(old), cell.clone()], vec![Loc::Held(from), cell]);
+            if let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut()) {
+                *last = Arc::new(Insn { volatile: true, ..(**last).clone() });
+            }
             return Ok(());
         }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX

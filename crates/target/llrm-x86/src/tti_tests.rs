@@ -319,3 +319,21 @@ fn the_x86_lsr_hooks_are_those_of_the_pin() {
     assert!(!i486.can_macro_fuse_cmp() && core2.can_macro_fuse_cmp());
     assert_eq!(i486.number_of_gpr_registers(), 8);
 }
+
+/// A real-mode loop LSR rewrites to something its own model rates worse (the
+/// `(i + j) % 3` of bench matmul at -Os: +13 B, +355 executed instructions)
+/// stayed rewritten because the pin's X86 never drops such a solution.
+#[test]
+fn real_mode_drops_an_lsr_solution_the_model_rates_worse_and_flat_code_keeps_it() {
+    let real = crate::tti::RealMode {
+        scale_costs: vec![(1, 0), (2, 2), (4, 2), (8, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+    };
+    assert!(X86::of_cpu("i486").unwrap().in_real_mode(real).should_drop_lsr_solution_if_less_profitable());
+    assert!(!X86::of_cpu("i486").unwrap().should_drop_lsr_solution_if_less_profitable());
+}
