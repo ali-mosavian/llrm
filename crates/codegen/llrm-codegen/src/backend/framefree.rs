@@ -160,6 +160,7 @@ pub fn has_fp(
         || inline
         || landing
         || body.returns_twice
+        || !body.over_aligned.is_empty()
         || (!body.variables.is_empty() && !body.cfa_variables)
     {
         return true;

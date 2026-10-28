@@ -1720,6 +1720,38 @@ fn m32_callee_saved_registers_are_pushed_in_the_pins_order() {
     assert_eq!(pushed, ["push ebp", "push edi", "push esi"], "{listing}");
 }
 
+const ALIGNED_IR: &str = "declare i32 @use(ptr)\n\
+    define i32 @aligned(i32 %n) {\n  %v = alloca [4 x i32], align 64\n  store i32 %n, ptr %v\n  \
+    %r = call i32 @use(ptr %v)\n  ret i32 %r\n}\n";
+
+/// A 32-bit local wanting 64 bytes of alignment lay wherever the stack was. The
+/// frame is the pin's `push ebp; mov ebp, esp; and esp, -64; sub esp, N` (the
+/// pin's `clang -target i386-unknown-linux-gnu` on the same function), the
+/// stack taken back from the frame register.
+#[test]
+fn m32_over_aligned_local_realigns_the_stack_pointer() {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32\"\n{ALIGNED_IR}"
+    );
+    let (built, _) = crate::llc::compiled(&flags(&["-m32", "-O1"]), &text, "aligned").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let at = lines.iter().position(|line| *line == "and esp, -64").unwrap_or_else(|| panic!("{listing}"));
+    assert_eq!(lines[at - 1], "mov ebp, esp", "{listing}");
+    assert!(lines.contains(&"mov esp, ebp"), "{listing}");
+}
+
+/// There is no pin alignment at 16 bits: an over-aligned local is refused with
+/// its reason, not compiled off its alignment.
+#[test]
+fn m16_over_aligned_local_is_refused() {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"\n{ALIGNED_IR}"
+    );
+    let error = crate::llc::compiled(&flags(&["-m16", "-O1"]), &text, "aligned").err().unwrap();
+    assert!(error.contains("in 16-bit code is not realigned"), "{error}");
+}
+
 /// A callee-saved register pushed before the stack `sub` (the pin's order,
 /// `saved_first`) had no `.eh_frame`: the frame was left out of the declared
 /// ones. Its offset is declared after the `sub` (`def_cfa_offset n; offset
