@@ -1010,12 +1010,6 @@ pub fn _reachable(
     // map keeps the others when BranchFolding erases a block.
     let mut made = body.with_blocks(blocks);
     _prune(&mut made);
-    let present: HashSet<i64> = made.blocks.iter().map(|one| one.at).collect();
-    if let Some(kept) = made.frequencies.as_mut().filter(|kept| kept.0.keys().any(|at| !present.contains(at))) {
-        *kept = Arc::new(lir::BlockFrequencies(
-            kept.0.iter().filter(|(at, _)| present.contains(at)).map(|(at, runs)| (*at, *runs)).collect(),
-        ));
-    }
     made
 }
 
@@ -1053,6 +1047,13 @@ pub fn _prune(body: &mut LirBody) {
             })
         })
         .collect();
+    // A block dropped whole leaves the table with it.
+    let present: HashSet<i64> = body.blocks.iter().map(|one| one.at).collect();
+    if let Some(kept) = body.frequencies.as_mut().filter(|kept| kept.0.keys().any(|at| !present.contains(at))) {
+        *kept = Arc::new(lir::BlockFrequencies(
+            kept.0.iter().filter(|(at, _)| present.contains(at)).map(|(at, runs)| (*at, *runs)).collect(),
+        ));
+    }
 }
 
 #[cfg(test)]
