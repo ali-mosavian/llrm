@@ -46,7 +46,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     }
 
     /// `isOperationLegalOrCustom(op, vt)`; false without a table.
-    fn fp_op_legal_or_custom(
+    pub(super) fn fp_op_legal_or_custom(
         &self,
         op: ISD,
         vt: EVT,
@@ -535,6 +535,104 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let (neg1, cost1) = self.negated_expression(n1, 0)?;
         (cost0 == Cost::Cheaper || cost1 == Cost::Cheaper)
             .then(|| self.dag.get_node_flags(ISD::FDiv, vt, &[neg0, neg1], flags))
+    }
+
+    fn int_const(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        match self.dag.node(value).data {
+            NodeData::Const { bits, .. } => Some(bits),
+            _ => None,
+        }
+    }
+
+    /// `visitFP_ROUND`: a constant, `round(extend x)` and `round(round x)`.
+    pub(super) fn visit_fp_round(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (n0, n1) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let vt = self.dag.value_type(node);
+        if let Some(bits) = self.fp_bits(n0)
+            && let Some(c) = fp_value::convert(self.dag.value_type(n0), vt, bits)
+        {
+            return Some(self.dag.get_constant_fp(c, vt));
+        }
+        let inner = self.dag.operand(n0, 0);
+        match self.dag.opcode(n0) {
+            // fold (fp_round (fp_extend x)) -> x
+            ISD::FpExtend if self.dag.value_type(inner) == vt => Some(inner),
+            // fold (fp_round (fp_round x)) -> (fp_round x), when the first
+            // truncates exactly, or both allow contraction
+            ISD::FpRound => {
+                let (trunc, inner_trunc) = (self.int_const(n1)? == 1, self.int_const(self.dag.operand(n0, 1))? == 1);
+                let contract = self.dag.node(node).flags.has(SDNodeFlags::ALLOW_CONTRACT)
+                    && self.dag.node(n0).flags.has(SDNodeFlags::ALLOW_CONTRACT);
+                if (self.legal_operations() && !self.fp_op_legal_or_custom(ISD::FpRound, vt))
+                    || !(contract || inner_trunc)
+                {
+                    return None;
+                }
+                let flag =
+                    self.dag.get_constant_with(u128::from(trunc && inner_trunc), self.dag.value_type(n1), true, false);
+                Some(self.dag.get_node(ISD::FpRound, vt, &[inner, flag]))
+            }
+            _ => None,
+        }
+    }
+
+    /// `visitFP_EXTEND`: a constant and `extend(round(x, 1))`.
+    pub(super) fn visit_fp_extend(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        // fp_round(fpextend) is left for the round to fold
+        if self.dag.use_count(node.node) == 1
+            && self
+                .dag
+                .users(node)
+                .next()
+                .is_some_and(|user| self.dag.node(SDValue { node: user, res: 0 }).opcode == ISD::FpRound)
+        {
+            return None;
+        }
+        if let Some(bits) = self.fp_bits(n0)
+            && let Some(c) = fp_value::convert(self.dag.value_type(n0), vt, bits)
+        {
+            return Some(self.dag.get_constant_fp(c, vt));
+        }
+        if self.dag.opcode(n0) == ISD::FpRound && self.int_const(self.dag.operand(n0, 1)) == Some(1) {
+            let (inner, flag) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let in_vt = self.dag.value_type(inner);
+            return Some(if in_vt == vt {
+                inner
+            } else if vt.size_in_bits() < in_vt.size_in_bits() {
+                self.dag.get_node(ISD::FpRound, vt, &[inner, flag])
+            } else {
+                self.dag.get_node(ISD::FpExtend, vt, &[inner])
+            });
+        }
+        None
+    }
+
+    /// `visitSINT_TO_FP` and `visitFP_TO_SINT` of a constant.
+    pub(super) fn visit_fp_int_convert(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let n0 = self.dag.operand(node, 0);
+        let vt = self.dag.value_type(node);
+        if self.dag.opcode(node) == ISD::SIntToFp {
+            let width = self.dag.value_type(n0).size_in_bits();
+            let bits = self.int_const(n0).filter(|_| width <= 64)?;
+            let value = ((bits << (128 - width)) as i128 >> (128 - width)) as i64;
+            return Some(self.dag.get_constant_fp(fp_value::from_signed(vt, value)?, vt));
+        }
+        let value = fp_value::to_signed(self.dag.value_type(n0), self.fp_bits(n0)?, vt.size_in_bits())?;
+        Some(self.dag.get_constant(value as u128 & super::fold::mask(vt.size_in_bits()), vt))
     }
 
     /// `visitFMUL`.

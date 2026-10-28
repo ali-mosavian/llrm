@@ -249,7 +249,8 @@ fn borland(source: &Path) -> Result<llrm_codegen::backend::masm::Module, String>
     let stream = crate::compile::recorded_for(source, &[], false, &[], &profile).map_err(|error| error.0)?;
     let machine =
         llrm_codegen::abi::machine::Machine { cpu: "386".to_owned(), ..llrm_x86_m16::machine::BUILT_IN.clone() };
-    let options = llrm_codegen::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options(machine) };
+    let options =
+        llrm_codegen::driver::Options { abi: Some("cdecl".to_owned()), ..llrm_driver::m16_options_old(machine) };
     crate::compile::selected(&stream, &source.file_stem().unwrap().to_string_lossy(), None, &options)
         .map_err(|error| format!("{error:?}"))
 }

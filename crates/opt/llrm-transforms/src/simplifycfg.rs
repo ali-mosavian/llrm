@@ -152,10 +152,11 @@
 //!   would send two or more edges to a loop header, or leave one. Here a jump
 //!   alone in a block that holds a loop's simple form up (its preheader, its
 //!   one latch, a dedicated exit: `decide::loop_form_blocks`) is also kept
-//!   while the option is on, because rounds repeat until nothing changes and
-//!   `loopsimplify` runs in them: LLVM's passes run once, and without this the
-//!   two undid each other each round ("cycle after 3 rounds" on the `deedlines`
-//!   demo). Exit: the LLVM-order pipeline (`LLRM_EXP_LLVM`) is the default.
+//!   while `Options::loop_form_kept` is on, because rounds repeat until nothing
+//!   changes and `loopsimplify` runs in them: LLVM's passes run once, and
+//!   without this the two undid each other each round ("cycle after 3 rounds"
+//!   on the `deedlines` demo). The LLVM-order pipeline (the default) turns it
+//!   off at every slot; exit: the rounds pipeline (`LLRM_NO_LLVM_ORDER`) goes.
 //!
 //! # Runs
 //! Once per round of the function fixed point, before `decide`: the branches
@@ -242,6 +243,12 @@ pub struct Options {
     /// `needCanonicalLoops`: true by default and at the early slot, false at
     /// the one after vectorization.
     pub need_canonical_loop: bool,
+    /// D7: keep the jump alone in a block that holds a loop's simple form up,
+    /// which the pin removes (`TryToSimplifyUncondBranchFromEmptyBlock` at
+    /// L8820 asks only the loop headers). On for the rounds that repeat
+    /// with `loopsimplify`; off in the LLVM-order pipeline, whose passes run
+    /// once.
+    pub loop_form_kept: bool,
     /// `SpeculateBlocks`: true by default and at every slot.
     pub speculate_blocks: bool,
     /// `HoistCommonInsts`: hoist the code the arms of a branch share even
@@ -269,6 +276,7 @@ impl Options {
     /// canonical.
     pub const L1438: Options = Options {
         need_canonical_loop: false,
+        loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
@@ -286,6 +294,7 @@ impl Options {
     /// last two are not translated.
     pub const L1682: Options = Options {
         need_canonical_loop: true,
+        loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: false,
         sink_common_insts: false,
@@ -301,6 +310,7 @@ impl Default for Options {
     fn default() -> Self {
         Options {
             need_canonical_loop: true,
+            loop_form_kept: true,
             speculate_blocks: true,
             hoist_common_insts: false,
             sink_common_insts: false,
@@ -390,7 +400,7 @@ fn iteratively_simplified(
     // D7: with the option, a function with a loop only; found at the first
     // jump alone in a block, which most functions never have.
     let form = LoopForm {
-        wanted: !headers.is_empty() && options.need_canonical_loop,
+        wanted: !headers.is_empty() && options.need_canonical_loop && options.loop_form_kept,
         known,
         cell: std::cell::OnceCell::new(),
     };
@@ -398,10 +408,24 @@ fn iteratively_simplified(
     while local {
         local = false;
         for block in function.layout().to_vec() {
-            if function.is_placed(block)
-                && block_simplified(options, context, spec, declared, function, block, folded, &headers, &form)
-            {
-                local = true;
+            // `SimplifyCFGOpt::run`: a visit that asked to be repeated is.
+            let mut resimplify = true;
+            while resimplify && function.is_placed(block) {
+                resimplify = false;
+                if block_simplified(
+                    options,
+                    context,
+                    spec,
+                    declared,
+                    function,
+                    block,
+                    folded,
+                    &headers,
+                    &form,
+                    &mut resimplify,
+                ) {
+                    local = true;
+                }
             }
         }
         changed |= local;
@@ -458,6 +482,7 @@ fn block_simplified(
     folded: &mut bool,
     headers: &IdSet<BlockId>,
     form: &LoopForm,
+    resimplify: &mut bool,
 ) -> bool {
     let callees = spec.outer.callees();
     // No predecessor but not the entry, or only itself: unreachable.
@@ -489,7 +514,12 @@ fn block_simplified(
     // `simplifyOnce`'s switch on the terminator (SimplifyCFG.cpp#L9368): each
     // arm runs only its own kind's steps, in the pin's order.
     let acted = match terminator_kind(function, block) {
-        Terminator::Conditional => cond_branch_simplified(options, context, spec, function, block, folded, headers),
+        // Each fold of `simplifyCondBranch` returns `requestResimplify()`.
+        Terminator::Conditional => {
+            let acted = cond_branch_simplified(options, context, spec, function, block, folded, headers);
+            *resimplify |= acted;
+            acted
+        }
         // `simplifySwitch`: the shared hoist, then the switch steps.
         Terminator::Switch => {
             function.is_placed(block)

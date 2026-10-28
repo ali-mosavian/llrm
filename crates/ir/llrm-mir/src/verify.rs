@@ -7,7 +7,7 @@ use crate::domtree::DomTree;
 use crate::hash::{HashMap, HashSet};
 use crate::intrinsics::{self, Intrinsic};
 use crate::module::{BlockId, Function, GlobalKind, InstId, Linkage, Module, Operand, ValueDef};
-use crate::opcode::{Attribute, BinaryOp, CastOp, Opcode};
+use crate::opcode::{AtomicKind, AtomicOrdering, Attribute, BinaryOp, CastOp, Opcode};
 use crate::types::{Type, TypeId};
 
 pub fn verify(module: &Module) -> Vec<String> {
@@ -20,6 +20,15 @@ pub fn verify(module: &Module) -> Vec<String> {
         };
         if declaration && !matches!(global.linkage, Linkage::External | Linkage::ExternWeak) {
             out.push(format!("@{name}: Global is external, but doesn't have external or weak linkage!"));
+        }
+        if let GlobalKind::Variable(variable) = &global.kind {
+            let array = matches!(module.context.types.get(variable.ty), Type::Array { .. });
+            if global.linkage == Linkage::Appending && !array {
+                out.push(format!("@{name}: Only global arrays can have appending linkage!"));
+            }
+            if matches!(name, "llvm.global_ctors" | "llvm.global_dtors") && global.linkage != Linkage::Appending {
+                out.push(format!("@{name}: invalid linkage for intrinsic global variable"));
+            }
         }
         if let GlobalKind::Function(function) = &global.kind {
             if intrinsics::is_reserved(name) {
@@ -468,6 +477,69 @@ impl Checker<'_> {
             Opcode::Store { .. } if !is_pointer(self, ty(1)) => {
                 self.fail(format!("{at} stores through {}", self.show(ty(1))))
             }
+            Opcode::Atomic(info) => {
+                // LLVM's `Verifier::visitLoadInst`, `visitStoreInst`,
+                // `visitAtomicRMWInst`,
+                // `visitAtomicCmpXchgInst` and `visitFenceInst`.
+                let pointer = usize::from(info.kind == AtomicKind::Store);
+                if info.kind != AtomicKind::Fence && !is_pointer(self, ty(pointer)) {
+                    self.fail(format!("{at} accesses through {}", self.show(ty(pointer))));
+                }
+                let accessed = match info.kind {
+                    AtomicKind::Load => Some(result),
+                    AtomicKind::Store => Some(ty(0)),
+                    AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => Some(ty(1)),
+                    AtomicKind::Fence => None,
+                };
+                if let Some(accessed) = accessed
+                    && !is_int(self, accessed)
+                    && !is_pointer(self, accessed)
+                    && !(matches!(self.ty(accessed), Type::Float(_))
+                        && !matches!(info.kind, AtomicKind::CmpXchg { .. }))
+                {
+                    self.fail(format!(
+                        "{at}: atomic {} operand must have integer, pointer or floating point type!",
+                        mnemonic_of(info.kind)
+                    ));
+                }
+                let order = info.ordering;
+                match info.kind {
+                    AtomicKind::Load if matches!(order, AtomicOrdering::Release | AtomicOrdering::AcqRel) => {
+                        self.fail(format!("{at}: Load cannot have Release ordering"))
+                    }
+                    AtomicKind::Store if matches!(order, AtomicOrdering::Acquire | AtomicOrdering::AcqRel) => {
+                        self.fail(format!("{at}: Store cannot have Acquire ordering"))
+                    }
+                    AtomicKind::Rmw(_) if order == AtomicOrdering::Unordered => {
+                        self.fail(format!("{at}: atomicrmw instructions cannot be unordered."))
+                    }
+                    AtomicKind::Fence
+                        if !matches!(
+                            order,
+                            AtomicOrdering::Acquire
+                                | AtomicOrdering::Release
+                                | AtomicOrdering::AcqRel
+                                | AtomicOrdering::SeqCst
+                        ) =>
+                    {
+                        self.fail(format!(
+                            "{at}: fence instructions may only have acquire, release, acq_rel, or seq_cst ordering."
+                        ))
+                    }
+                    AtomicKind::CmpXchg { failure, .. } => {
+                        if order < AtomicOrdering::Monotonic || failure < AtomicOrdering::Monotonic {
+                            self.fail(format!("{at}: cmpxchg cannot be unordered"));
+                        } else if matches!(failure, AtomicOrdering::Release | AtomicOrdering::AcqRel) {
+                            self.fail(format!("{at}: cmpxchg failure ordering cannot include release semantics"));
+                        } else if failure > order && order != AtomicOrdering::Release {
+                            self.fail(format!(
+                                "{at}: cmpxchg failure ordering cannot be stronger than success ordering"
+                            ));
+                        }
+                    }
+                    _ => {}
+                }
+            }
             Opcode::Alloca { address_space, .. } => {
                 if let Some(count) = types.first().copied().flatten()
                     && !is_int(self, count)
@@ -630,5 +702,16 @@ impl Checker<'_> {
         if self.function.personality.is_none() {
             self.fail(format!("{at} in a function without a personality"));
         }
+    }
+}
+
+/// What an atomic instruction is called in a diagnostic.
+fn mnemonic_of(kind: AtomicKind) -> &'static str {
+    match kind {
+        AtomicKind::Load => "load",
+        AtomicKind::Store => "store",
+        AtomicKind::Rmw(_) => "atomicrmw",
+        AtomicKind::CmpXchg { .. } => "cmpxchg",
+        AtomicKind::Fence => "fence",
     }
 }

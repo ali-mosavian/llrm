@@ -7,7 +7,7 @@ use super::opcodes::{OpcodeMap, Unmapped};
 
 fn map() -> OpcodeMap {
     let target = llrm_x86_m32::M32;
-    let forms = llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses");
+    let forms = llrm_target::instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses");
     OpcodeMap::new(forms)
 }
 
@@ -122,7 +122,7 @@ fn a_memory_operand_has_the_width_the_name_gives() {
 
 fn map64() -> OpcodeMap {
     let target = llrm_x86_m64::M64;
-    OpcodeMap::new(llrm_instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses"))
+    OpcodeMap::new(llrm_target::instr::parse(&target.forms_text(), target.dialect()).expect("x86.instr parses"))
 }
 
 /// The pin names the scalar SSE instructions `ADDSDrr`, `MOVSDrm_alt`,
@@ -201,4 +201,13 @@ fn a_conversions_memory_operand_is_its_sources_size() {
         .map(memory_bytes),
         [Some(8), Some(4), Some(4), Some(8), Some(4), Some(8), Some(16), Some(8)]
     );
+}
+
+/// The second of two byte stores of `o` and `o >> 8` is `MOV8mr_NOREX` (the
+/// store of `AH`); its name has no width the parser reads, so its cell was a
+/// dword and the encoder refused a byte register stored into it.
+#[test]
+fn a_norex_byte_store_is_one_byte() {
+    assert_eq!(super::opcodes::memory_bytes("MOV8mr_NOREX"), Some(1));
+    assert_eq!(super::opcodes::memory_bytes("MOV8mr"), Some(1));
 }
