@@ -137,6 +137,7 @@ pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
 pub mod logic_setcc;
+mod match_rotate;
 pub mod opcodes;
 mod reassociate;
 pub mod reduce_load_width;
@@ -206,6 +207,8 @@ mod freeze_tests;
 mod gaps_tests;
 #[cfg(test)]
 mod invoke_tests;
+#[cfg(test)]
+mod match_rotate_tests;
 #[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]
