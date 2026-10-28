@@ -490,14 +490,14 @@ fn a_memmove_with_a_proved_direction_is_a_string_copy() {
     assert!(refused.contains("memmove"), "{refused}");
 }
 
-/// A backward `memmove` of a size that is no multiple of four moves the low
-/// bytes after the dwords.
+/// A backward `memmove` of a size that is no multiple of four goes a byte at a
+/// time at m32: a flat target names no register to carry a dword copy's tail.
 #[test]
-fn a_backward_memmove_at_m32_moves_the_tail_bytes_after_the_dwords() {
+fn a_backward_memmove_at_m32_of_an_odd_size_moves_bytes() {
     let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
     let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
-    let tail = [0xFD, 0xF3, 0xA5, 0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4, 0xFC];
-    assert!(backward.inline.values().any(|bytes| bytes[..] == tail), "{:?}", backward.inline);
+    let bytes = [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC];
+    assert!(backward.inline.values().any(|code| code[..] == bytes), "{:?}", backward.inline);
 }
 
 const SCALED_INDEX_AT_M16: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"

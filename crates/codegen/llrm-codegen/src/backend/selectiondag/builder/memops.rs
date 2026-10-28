@@ -896,13 +896,19 @@ impl Builder<'_> {
         near_16 || !self.runtime_has("memmove")
     }
 
+    /// The operands of a string move on a flat target, which names no string
+    /// registers: count, source, destination.
+    fn flat_string_names() -> [&'static str; 3] {
+        ["cx", "si", "di"]
+    }
+
     /// `std; rep movsd; cld` from the last dword down, then the `size % 4` low
     /// bytes (`add si, 3; add di, 3; mov cx, dx; rep movsb`): a move a pass
     /// proved backward, as the old selector writes it (`LLRM_ASM`, SD305, with
     /// `cx`, `si`, `di`, `dx` as operands). A size that is a multiple of four
-    /// has no tail. At m16 the pointers are near, so DS is copied to ES first
-    /// and `movsd` takes the operand-size prefix; a flat target needs neither
-    /// (it names no string registers).
+    /// has no tail, and a flat target takes only that. At m16 the pointers are
+    /// near, so DS is copied to ES first and `movsd` takes the operand-size
+    /// prefix; a flat target needs neither (it names no string registers).
     fn backward_rep_movs_dwords(
         &mut self,
         chain: SDValue,
@@ -928,6 +934,10 @@ impl Builder<'_> {
         };
         let (from, to) = (last(self, src), last(self, dst));
         let tail = self.constant_size(count).is_none_or(|bytes| bytes % 4 != 0);
+        // A flat target names no string registers to carry a tail's count in.
+        if flat && tail {
+            return self.backward_rep_movsb(chain, dst, src, size);
+        }
         let mut code = if flat { vec![0xFD, 0xF3, 0xA5] } else { vec![0x1E, 0x07, 0xFD, 0xF3, 0x66, 0xA5] };
         if tail {
             code.extend([0x83, 0xC6, 0x03, 0x83, 0xC7, 0x03, 0x89, 0xD1, 0xF3, 0xA4]);
@@ -940,11 +950,11 @@ impl Builder<'_> {
         let name_of = |register| self.arch.registers().name(register).expect("a described register");
         let mut names = match strings {
             Some(strings) => vec![name_of(strings.count), name_of(strings.source), name_of(strings.destination)],
-            None => vec!["cx", "si", "di"],
+            None => Self::flat_string_names().to_vec(),
         };
         let mut values = vec![dwords, from, to];
         if tail {
-            names.push(strings.map_or("dx", |strings| name_of(strings.tail)));
+            names.push(name_of(strings.expect("a flat move has no tail").tail));
             values.push(rest);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
@@ -998,7 +1008,10 @@ impl Builder<'_> {
             Some(strings) => {
                 [(name_of(strings.count), count), (name_of(strings.source), from), (name_of(strings.destination), to)]
             }
-            None => [("cx", count), ("si", from), ("di", to)],
+            None => {
+                let [counter, source, destination] = Self::flat_string_names();
+                [(counter, count), (source, from), (destination, to)]
+            }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
             // `push ds; pop es`: both pointers are near, in DS; ES holds
