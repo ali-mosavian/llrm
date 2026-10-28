@@ -745,6 +745,9 @@ pub struct Selected {
     /// `depth` and are handed to the frame as spill slots, which
     /// `slots::slots_colored` shares by their live ranges.
     pub temporaries: usize,
+    /// The locals wanting more than the stack's alignment: (displacement,
+    /// alignment).
+    pub over_aligned: Vec<(i64, i64)>,
     /// The `at` of what starts the landing pad, which the runtime enters.
     pub landing: Option<i64>,
 }
@@ -1114,6 +1117,7 @@ pub fn selected_with<'c>(
         extents: Vec::new(),
         allocas: 0,
         frame_objects: Vec::new(),
+        over_aligned: Vec::new(),
         scratch: 0,
         ats: IndexMap::default(),
         fused: BTreeSet::new(),
@@ -1231,9 +1235,13 @@ pub fn selected_with<'c>(
         depth: selector.depth,
         extents: selector.extents,
         temporaries: 0,
+        over_aligned: selector.over_aligned,
         landing: selector.landing,
     })
 }
+
+/// The alignment the frame keeps a local to without realigning the stack.
+pub(crate) const OVER_ALIGNED: i64 = 16;
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.
@@ -1749,6 +1757,8 @@ pub struct Selector<'m, 'c, 'p> {
     allocas: i64,
     /// Each alloca's frame displacement and size.
     frame_objects: Vec<(i64, i64)>,
+    /// The groups' slots wanting more than the stack's alignment.
+    over_aligned: Vec<(i64, i64)>,
     /// The temporaries' bytes the instruction being selected has taken:
     /// a temporary lives only within the instruction that made it.
     scratch: i64,
@@ -1931,13 +1941,17 @@ impl Selector<'_, '_, '_> {
         let mut align_of = IndexMap::<usize, i64>::default();
         for &block in layout {
             for inst in function.iter_block(block) {
-                if let (&Opcode::Alloca { allocated, .. }, Some(size)) =
+                if let (&Opcode::Alloca { allocated, align: wanted, .. }, Some(size)) =
                     (&function.instruction(inst).opcode, self.alloca_bytes(inst))
                 {
                     let align = natural_align(&self.module.context.types, &self.layout, allocated)
                         .max(size & size.wrapping_neg())
                         .min(kept.max(i64::from(self.arch.stack_slot_bytes())))
                         .max(1);
+                    // More than the frame keeps the stack aligned to: the frame
+                    // realigns the stack pointer for it.
+                    let wanted = wanted.map_or(0, |one| one as i64);
+                    let align = if wanted > OVER_ALIGNED { wanted } else { align };
                     let widest = align_of.entry(group_of[&inst]).or_insert(1);
                     *widest = (*widest).max(align);
                 }
@@ -1969,6 +1983,9 @@ impl Selector<'_, '_, '_> {
                 -self.depth
             };
             self.extents.push((disp, size));
+            if align > OVER_ALIGNED {
+                self.over_aligned.push((disp, align));
+            }
             homes.insert(group, disp);
         }
         for &block in layout {

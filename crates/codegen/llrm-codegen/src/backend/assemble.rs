@@ -392,7 +392,10 @@ pub fn assembled_by(
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
-                    procedure
+                    if let Some(why) = masm::realign_refusal(&procedure) {
+                        return Err(why);
+                    }
+                    masm::realigned(procedure)
                 } else {
                     let procedure = timed("lir split returns", || returnsplit::split(procedure));
                     // Asked only by a tail a copy could save a jump for.
@@ -414,7 +417,11 @@ pub fn assembled_by(
                     if let Some(error) = unprintable.take() {
                         return Err(error);
                     }
-                    let procedure = masm::exits_inserted(masm::saved_first(masm::Procedure { body, ..procedure }));
+                    let procedure = masm::Procedure { body, ..procedure };
+                    if let Some(why) = masm::realign_refusal(&procedure) {
+                        return Err(why);
+                    }
+                    let procedure = masm::exits_inserted(masm::saved_first(procedure));
                     if procedure.body.frame_exit.is_some() {
                         let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
                             .map_err(|error| error.to_string())?;
@@ -743,7 +750,9 @@ fn machined_once(
     // (`X86FrameLowering::orderFrameObjects`); taken over the layouts below
     // where it brings fewer operands past a one-byte displacement than they do.
     let far = far_frame(&first.body);
-    let ordered = if far > 0 {
+    // An over-aligned local lies on its alignment below the aligned top: a
+    // layout that moves objects would break it.
+    let ordered = if far > 0 && first.body.over_aligned.is_empty() {
         crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
     } else {
         None
@@ -1076,8 +1085,10 @@ fn staged(
         depth,
         extents,
         temporaries,
+        over_aligned,
         landing,
     } = selected.map_err(|error| format!("@{name}: {}", error.0))?;
+    let body = LirBody { over_aligned, ..body };
     let mut registers =
         llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
     // The convention's entry functions (`entry_clobbers_all`) keep nothing for
