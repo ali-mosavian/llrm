@@ -551,6 +551,36 @@ impl Tti for X86 {
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
     }
 
+    /// X86's `getJumpConditionMergingParams`: `x86-br-merging-base-cost` 2,
+    /// one more for `a == b && a == c` (a fast pattern); an `or` of two `==`
+    /// splits (no CCMP on these targets). Likely bias 0, unlikely bias -1.
+    fn jump_condition_merging_params(
+        &self,
+        query: &llrm_mir::jumpmerge::JumpMergeQuery,
+    ) -> llrm_mir::jumpmerge::CondMerging {
+        use llrm_mir::jumpmerge::{CondMerging, Logic};
+        use llrm_mir::module::{Operand, ValueDef};
+        use llrm_mir::opcode::{IntPredicate, Opcode};
+        let is_eq = |operand: Operand| match operand {
+            Operand::Value(value) => match query.function.value(value).def {
+                ValueDef::Instruction(inst) => {
+                    matches!(
+                        query.function.instruction(inst).opcode,
+                        Opcode::ICmp(IntPredicate::Eq)
+                    )
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        let both_eq = is_eq(query.lhs) && is_eq(query.rhs);
+        match query.logic {
+            Logic::Or if both_eq => CondMerging::SPLIT,
+            Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
+            _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
+        }
+    }
+
     fn intrinsic_cost(
         &self,
         name: &str,
@@ -570,7 +600,7 @@ impl Tti for X86 {
             Some(Some(cost)) => Cost::of(cost),
             Some(None) => Cost::INVALID,
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => Cost::INVALID,
+            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
         }
     }
 

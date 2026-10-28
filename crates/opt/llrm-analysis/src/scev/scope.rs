@@ -2,13 +2,15 @@
 //! run when another does: `getDefiningScopeBound`,
 //! `isGuaranteedToTransferExecutionTo` and `isSCEVExprNeverPoison`.
 
+use llrm_mir::constantfolding;
+use llrm_mir::context::ConstantId;
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::valuetracking::guarantee;
 
 use super::backedge::ExitCountKind;
-use super::expr::{Kind, Scev, Use, flags};
+use super::expr::{Kind, Scev, Ty, Use, flags};
 use super::{Cx, Flags, ScalarEvolution};
 
 /// The `ScanLimit` default of `isGuaranteedToTransferExecutionToSuccessor`.
@@ -335,12 +337,8 @@ impl ScalarEvolution {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10253
     /// `computeSCEVAtScope`.
     ///
-    /// # DEVIATE 10 (constants are interned in the context, which `Cx` holds
-    /// by `&`)
-    /// The two exits that make a constant out of an unknown instruction are
-    /// not taken: `getConstantEvolutionLoopExitValue` (tracked as #2328) and
-    /// `ConstantFoldInstOperands` over the operands' values at scope. The
-    /// expression is then the unknown, which is less precise and never wrong.
+    /// # DEVIATE 10
+    /// `ConstantEvolutionLoopExitValue` is not cached per phi; the result is memoized per value and scope.
     fn compute_scev_at_scope(
         &mut self,
         cx: &Cx,
@@ -496,15 +494,103 @@ impl ScalarEvolution {
                                 return Use::of(self.get_scev(cx, backedge_val));
                             }
                         }
-                        // getConstantEvolutionLoopExitValue: DEVIATE 10.
+                        // Okay, we know how many times the containing loop executes. If this is a
+                        // constant evolving phi, get the final value at the specified iteration.
+                        if let Some(count) = self.as_constant(backedge_taken_count)
+                            && let Some(exit) = self.get_constant_evolution_loop_exit_value(
+                                cx,
+                                inst,
+                                count.zext_value(),
+                                &curr_loop,
+                            )
+                        {
+                            return Use::of(self.get_scev(cx, Operand::Constant(exit)));
+                        }
                     }
                 }
 
-                // ConstantFoldInstOperands of the operands at scope: DEVIATE
-                // 10.
+                // Okay, this is an expression that we cannot symbolically evaluate into a SCEV. Check
+                // to see if it's possible to symbolically evaluate the arguments into constants, and
+                // if so, try to constant propagate the result.
+                if cx.function.instruction(inst).opcode != Opcode::Phi
+                    && self.is_value_scevable(cx, value)
+                    && super::exit_value::can_constant_fold(cx, inst)
+                    && !matches!(cx.function.instruction(inst).opcode, Opcode::Load { volatile: true, .. })
+                {
+                    let operands = cx.function.instruction(inst).operands.clone();
+                    let mut folded: Vec<ConstantId> = Vec::with_capacity(operands.len());
+                    for op in operands {
+                        let constant = match op {
+                            Operand::Constant(c) => c,
+                            Operand::Value(_) if self.is_value_scevable(cx, op) => {
+                                let at_scope = self.get_scev_at_scope_of_value(cx, op, l).scev;
+                                let Some(c) = self.build_constant_from_scev(cx, at_scope) else { return Use::of(v) };
+                                c
+                            }
+                            _ => return Use::of(v),
+                        };
+                        folded.push(constant);
+                    }
+                    let env = constantfolding::Env { globals: cx.globals, layout: cx.layout };
+                    if let Some(c) = constantfolding::constant_fold_inst_operands_at(cx.context, env, cx.function, inst, &folded) {
+                        return Use::of(self.get_scev(cx, Operand::Constant(c)));
+                    }
+                }
                 Use::of(v)
             }
             Kind::CouldNotCompute => unreachable!("Attempt to use a SCEVCouldNotCompute object!"),
+        }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L10290
+    /// `BuildConstantFromSCEV`: the constant `s` is made of, if it is one.
+    fn build_constant_from_scev(
+        &self,
+        cx: &Cx,
+        s: Scev,
+    ) -> Option<ConstantId> {
+        let ty_id = |ty: Ty| match ty {
+            Ty::Int(bits) => cx.context.types.int(bits),
+            Ty::Ptr(space) => cx.context.types.ptr(space),
+        };
+        let node = self.node(s);
+        match &node.kind {
+            Kind::Constant(ap) => Some(cx.context.int(cx.context.types.int(ap.width), ap.zext_value() as i128)),
+            Kind::Unknown(Operand::Constant(c)) => Some(*c),
+            Kind::Truncate(op) | Kind::ZeroExtend(op) | Kind::SignExtend(op) => {
+                let signed = matches!(node.kind, Kind::SignExtend(_));
+                let c = self.build_constant_from_scev(cx, op.scev)?;
+                constantfolding::constant_fold_integer_cast(cx.context, cx.layout, c, ty_id(node.ty?), signed)
+            }
+            Kind::Add(ops) | Kind::Mul(ops) => {
+                let env = constantfolding::Env { globals: cx.globals, layout: cx.layout };
+                let is_add = matches!(node.kind, Kind::Add(_));
+                let mut pointer: Option<ConstantId> = None;
+                let mut acc: Option<ConstantId> = None;
+                for op in ops {
+                    let c = self.build_constant_from_scev(cx, op.scev)?;
+                    if self.node(op.scev).ty?.is_pointer() {
+                        if !is_add || pointer.replace(c).is_some() {
+                            return None;
+                        }
+                        continue;
+                    }
+                    let bop = if is_add { BinaryOp::Add } else { BinaryOp::Mul };
+                    acc = Some(match acc {
+                        None => c,
+                        Some(a) => constantfolding::constant_fold_binary_op_operands(cx.context, env, bop, a, c)?,
+                    });
+                }
+                match (pointer, acc) {
+                    (Some(p), Some(offset)) => {
+                        let i8 = cx.context.types.int(8);
+                        Some(constantfolding::constant_fold_get_element_ptr(cx.context, i8, p, &[offset], 0))
+                    }
+                    (Some(p), None) => Some(p),
+                    (None, acc) => acc,
+                }
+            }
+            _ => None,
         }
     }
 

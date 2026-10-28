@@ -254,7 +254,7 @@ pub mod regthrash;
 pub mod relayout;
 pub mod returnsplit;
 pub mod rmw;
-pub mod saverestore;
+pub use llrm_analysis::saverestore;
 pub mod schedule;
 pub mod selectconstants;
 pub mod selectiondag;

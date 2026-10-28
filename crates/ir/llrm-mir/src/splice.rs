@@ -8,18 +8,32 @@ use crate::hash::HashMap;
 use crate::module::{BlockId, Function, InstId, Operand, ValueId};
 use crate::opcode::{Flags, Opcode};
 
-/// Whether a copy of `body` can stand in another function: no unwind edge,
-/// and stack allocated only on entry and of a constant size, so the copy
-/// can sit on the caller's entry, above anything it could be counted by.
+/// Whether a copy of `body` can stand in another function: no unwind edge.
+/// Stack allocated on entry and of a constant size sits on the caller's entry;
+/// any other (`is_static` is false) stays where it is, and the caller brackets
+/// the copy with `stacksave`/`stackrestore` (`has_dynamic_alloca`).
 pub fn carries(body: &Function) -> bool {
-    let entry = body.entry();
-    body.walk().all(|(block, inst)| match &body.instruction(inst).opcode {
-        Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume => false,
-        Opcode::Alloca { .. } => {
-            Some(block) == entry
-                && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
-        }
-        _ => true,
+    body.walk().all(|(_, inst)| !matches!(
+        body.instruction(inst).opcode,
+        Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume
+    ))
+}
+
+/// Whether the alloca `inst` of `body` is on its entry and of a constant size.
+fn is_static(
+    body: &Function,
+    block: BlockId,
+    inst: InstId,
+) -> bool {
+    Some(block) == body.entry()
+        && body.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
+}
+
+/// The address space of the first alloca of `body` that is not static, if any.
+pub fn has_dynamic_alloca(body: &Function) -> Option<u32> {
+    body.walk().find_map(|(block, inst)| match body.instruction(inst).opcode {
+        Opcode::Alloca { address_space, .. } if !is_static(body, block, inst) => Some(address_space),
+        _ => None,
     })
 }
 
@@ -132,7 +146,7 @@ pub fn spliced(
             }
             // A static alloca stays static: on the caller's entry.
             let position = match instruction.opcode {
-                Opcode::Alloca { .. } if one == entry => Position::Before(first),
+                Opcode::Alloca { .. } if is_static(callee, one, inst) => Position::Before(first),
                 _ => Position::End(blocks[&one]),
             };
             function.insert(copy, position).expect("a placed block");

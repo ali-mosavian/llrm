@@ -4402,10 +4402,67 @@ fn simplify_instruction_with_operands(
         Opcode::Phi => simplify_phi(q, inst),
         Opcode::Load { volatile, .. } => simplify_load(q, *volatile, operands[0], instruction.ty),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
+        Opcode::ExtractValue(indices) => simplify_extract_value(q, operands[0], indices),
+        Opcode::InsertValue(indices) => simplify_insert_value(q, operands[0], operands[1], indices),
         Opcode::Call(_) => calls::simplify_call(q, inst, operands),
         Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
         _ => None,
     }
+}
+
+/// `simplifyExtractValueInst`
+/// ([:5526](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L5526)):
+/// a constant aggregate's member, or the value an `insertvalue` of the same path put in.
+/// DEVIATE: the `umul.with.overflow` by one case is `lazyvalueinfo`'s alone.
+fn simplify_extract_value(
+    q: &Query,
+    agg: Operand,
+    indices: &[u32],
+) -> Option<Operand> {
+    if let Operand::Constant(c) = agg {
+        return constantfolding::constant_fold_extract_value_instruction(q.context, c, indices).map(Operand::Constant);
+    }
+    // extractvalue x, (insertvalue y, elt, n), n -> elt
+    let mut seen = Vec::new();
+    let mut at = agg;
+    while let Some(def) = q.definition(at) {
+        let insert = q.function.instruction(def);
+        let Opcode::InsertValue(put) = &insert.opcode else { break };
+        // An `insertvalue` cycle is unreachable code's.
+        if seen.contains(&def) {
+            break;
+        }
+        seen.push(def);
+        let common = put.len().min(indices.len());
+        if put[..common] == indices[..common] {
+            if put.len() == indices.len() {
+                return Some(insert.operands[1]);
+            }
+            break;
+        }
+        at = insert.operands[0];
+    }
+    None
+}
+
+/// `simplifyInsertValueInst`
+/// ([:5588](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L5588)):
+/// two constants are one, and putting back what was just read is no change.
+fn simplify_insert_value(
+    q: &Query,
+    agg: Operand,
+    value: Operand,
+    indices: &[u32],
+) -> Option<Operand> {
+    if let (Operand::Constant(c_agg), Operand::Constant(c_val)) = (agg, value) {
+        return constantfolding::constant_fold_insert_value_instruction(q.context, c_agg, c_val, indices)
+            .map(Operand::Constant);
+    }
+    // insertvalue x, (extractvalue x, n), n -> x
+    let def = q.definition(value)?;
+    let read = q.function.instruction(def);
+    (matches!(&read.opcode, Opcode::ExtractValue(path) if path[..] == *indices) && read.operands[0] == agg)
+        .then_some(agg)
 }
 
 /// `simplifyBinOp` for a caller that has operands and no instruction (a

@@ -6,7 +6,7 @@ use llrm_mir::{Attribute, CallInfo, GlobalKind, InstId, Instruction, Opcode, Ope
 
 use super::val::{AddrExpr, Base, G, Known, Val};
 use super::{Selected, Selector, Src, refuse};
-use crate::cc::{Assigner, Place, Scalar};
+use crate::cc::{Assigner, Place};
 use crate::machine::Platform;
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -19,6 +19,18 @@ fn has_flag(
     attrs.iter().any(|one| matches!(one, Attribute::Flag(flag) if flag == name))
 }
 
+/// What `attrs` promise of a value narrower than 32 bits: `zeroext` and
+/// `signext` say its upper bits are extended, as `AssertZext`/`AssertSext` do.
+fn promised_extension(attrs: &[Attribute]) -> Known {
+    if has_flag(attrs, "zeroext") {
+        Known::Zero
+    } else if has_flag(attrs, "signext") {
+        Known::Sign
+    } else {
+        Known::Nothing
+    }
+}
+
 /// Where the register save areas of a variadic function lie and where its
 /// variadic arguments begin, for `va_start`.
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +41,10 @@ pub(crate) struct VaInfo {
     vr_slot: Option<(u32, u64)>,
     /// The bytes of stack the named arguments take.
     named_stack: u64,
+}
+
+fn is_byval(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|one| matches!(one, Attribute::Type(name, _) if name == "byval"))
 }
 
 fn is_sret(attrs: &[Attribute]) -> bool {
@@ -63,28 +79,10 @@ impl Selector<'_> {
         &mut self,
         place: Place,
         leaf: &Val,
-        scalar: Scalar,
     ) -> Selected<()> {
         match (place, leaf) {
             (Place::Gpr(number), Val::Int(g)) => {
-                // `mov w, w` for a value narrower than 64 bits: it also clears
-                // the bits above the 32nd, which the caller
-                // leaves undefined.
-                let source = Gpr(number);
-                if scalar == Scalar::I32 {
-                    self.inst(Inst::LogicShifted {
-                        op: Logic::Orr,
-                        invert: false,
-                        width: Width::W,
-                        rd: g.reg,
-                        rn: Gpr::R31,
-                        rm: source,
-                        shift: Shift::Lsl,
-                        amount: 0,
-                    });
-                } else {
-                    self.emit(Op::Copy { dst: Reg::Gpr(g.reg), src: Reg::Gpr(source) });
-                }
+                self.emit(Op::Copy { dst: Reg::Gpr(g.reg), src: Reg::Gpr(Gpr(number)) });
             }
             (Place::Gpr(number), Val::Ptr(AddrExpr { base: Base::Reg(reg), .. })) => {
                 self.emit(Op::Copy { dst: Reg::Gpr(*reg), src: Reg::Gpr(Gpr(number)) });
@@ -102,14 +100,14 @@ impl Selector<'_> {
                             sign: false,
                             reg: g.reg,
                         },
-                        addr,
+                        addr, mmo: MemOperand::default()
                     }),
                     Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => self.inst(Inst::Load {
                         mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: *reg },
-                        addr,
+                        addr, mmo: MemOperand::default()
                     }),
                     Val::Float { reg, .. } => {
-                        self.inst(Inst::Load { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr })
+                        self.inst(Inst::Load { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr, mmo: MemOperand::default() })
                     }
                     _ => return refuse("a parameter that is not a register"),
                 }
@@ -132,15 +130,14 @@ impl Selector<'_> {
                 self.places_of(&mut assigner, ty, true)?
             };
             let mut value = self.fresh(ty)?;
-            let leaf_types = self.leaf_types(ty)?;
-            for ((place, leaf), leaf_type) in places.iter().zip(value.leaves_mut()).zip(leaf_types) {
-                let scalar = self.scalar(leaf_type)?;
-                self.copy_in(*place, leaf, scalar)?;
+            for (place, leaf) in places.iter().zip(value.leaves_mut()) {
+                self.copy_in(*place, leaf)?;
             }
             // What the attributes promise of its extension.
             let value = match value {
-                Val::Int(g) if has_flag(&attrs, "zeroext") => Val::Int(G { known: Known::Zero, ..g }),
-                Val::Int(g) if has_flag(&attrs, "signext") => Val::Int(G { known: Known::Sign, ..g }),
+                Val::Int(g) if promised_extension(&attrs) != Known::Nothing => {
+                    Val::Int(G { known: promised_extension(&attrs), ..g })
+                }
                 other => other,
             };
             self.vals.insert(parameter, value);
@@ -168,6 +165,7 @@ impl Selector<'_> {
                     self.inst(Inst::Store {
                         mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(number) },
                         addr: Addr::Slot { slot, offset: at as i64 * 8 },
+                        mmo: MemOperand::default(),
                     });
                 }
                 info.gr_slot = Some((slot, gr_size));
@@ -178,6 +176,7 @@ impl Selector<'_> {
                     self.inst(Inst::Store {
                         mem: Memory::Fp { bytes: 16, reg: Vreg(number) },
                         addr: Addr::Slot { slot, offset: at as i64 * 16 },
+                        mmo: MemOperand::default(),
                     });
                 }
                 info.vr_slot = Some((slot, vr_size));
@@ -266,11 +265,35 @@ impl Selector<'_> {
                 Callee::Register(g.reg)
             }
         };
-        let result = self.emit_call(callee, passed, assigner.stack_bytes(), returns)?;
+        let result = self.emit_call(
+            callee,
+            passed,
+            assigner.stack_bytes(),
+            returns,
+            promised_extension(&info.return_attrs),
+            self.sibling_call_eligible(instruction, info),
+        )?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }
         Ok(())
+    }
+
+    /// Whether the call may become a jump (`isEligibleForTailCallOptimization`): marked `tail`, the
+    /// caller's calling convention (`ccc`/`fastcc` pass alike) and return attributes, no hidden result
+    /// pointer or `byval` argument on either side, and a caller whose frame is just its own.
+    fn sibling_call_eligible(
+        &self,
+        instruction: &Instruction,
+        info: &CallInfo,
+    ) -> bool {
+        matches!(info.tail, llrm_mir::opcode::Tail::Tail | llrm_mir::opcode::Tail::MustTail)
+            && matches!(instruction.opcode, Opcode::Call(_))
+            && !self.mf.dynamic
+            && self.va.is_none()
+            && [info.calling_convention, self.function.calling_convention].iter().all(|cc| matches!(cc, 0 | 8))
+            && info.return_attrs == self.function.return_attrs
+            && !info.argument_attrs.iter().chain(&self.function.parameter_attrs).any(|attrs| is_sret(attrs) || is_byval(attrs))
     }
 
     /// `leaf` moved to the register or stack slot `place`; the register it
@@ -316,13 +339,13 @@ impl Selector<'_> {
                     sign: false,
                     reg: g.reg,
                 },
-                addr,
+                addr, mmo: MemOperand::default()
             }),
             Val::Ptr(address) => {
                 let reg = self.pointer_register(address)?;
-                self.inst(Inst::Store { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr });
+                self.inst(Inst::Store { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr, mmo: MemOperand::default() });
             }
-            Val::Float { reg, .. } => self.inst(Inst::Store { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr }),
+            Val::Float { reg, .. } => self.inst(Inst::Store { mem: Memory::Fp { bytes: size as u8, reg: *reg }, addr, mmo: MemOperand::default() }),
             Val::Agg(_) => return refuse("an aggregate leaf"),
         }
         Ok(())
@@ -337,6 +360,8 @@ impl Selector<'_> {
         passed: Vec<(Val, Vec<Place>)>,
         stack: u64,
         returns: llrm_mir::TypeId,
+        extension: Known,
+        tail: bool,
     ) -> Selected<Option<Val>> {
         let mut uses = Vec::new();
         // With a moving stack pointer the room for the stack arguments is made
@@ -384,7 +409,7 @@ impl Selector<'_> {
                 .collect::<Selected<Vec<_>>>()?;
             (places, defs)
         };
-        self.emit(Op::Call { callee, uses, defs: defs.clone() });
+        self.emit(Op::Call { callee, uses, defs: defs.clone(), tail: tail && room == 0 && !self.mf.dynamic });
         adjust(self, false);
         if result_places.is_empty() {
             return Ok(None);
@@ -395,8 +420,9 @@ impl Selector<'_> {
             let _ = leaf_type;
             let dst = match leaf {
                 Val::Int(g) => {
-                    // A result narrower than 32 bits is as the callee left it.
-                    g.known = Known::Nothing;
+                    // A result narrower than 32 bits is as the callee left it:
+                    // extended when the call says so.
+                    g.known = extension;
                     Reg::Gpr(g.reg)
                 }
                 Val::Ptr(AddrExpr { base: Base::Reg(reg), .. }) => Reg::Gpr(*reg),
@@ -423,7 +449,7 @@ impl Selector<'_> {
                 self.copy_out(*place, leaf, &mut uses)?;
             }
         }
-        self.emit(Op::Return { uses });
+        self.emit(Op::Return { uses, tail: None });
         Ok(())
     }
 
@@ -438,12 +464,31 @@ impl Selector<'_> {
         let base = name.strip_prefix("llvm.").map(|rest| rest.split('.').next().unwrap_or(rest)).unwrap_or("");
         match base {
             "lifetime" | "assume" | "dbg" | "donothing" | "invariant" => Ok(()),
+            // What is left unfolded by now is not a constant, so only a literal operand makes it true.
+            "is" if name.starts_with("llvm.is.constant") => {
+                let known = matches!(self.src(arguments[0])?, Src::Int { .. } | Src::Float { .. });
+                self.define(result, Src::Int { bits: 1, value: u128::from(known) })
+            }
             "expect" => {
                 let value = self.src(arguments[0])?;
                 self.define(result, value)
             }
             "trap" => {
                 self.inst(Inst::Brk { imm16: 1 });
+                Ok(())
+            }
+            // The operation as AArch64ISelLowering's LowerPREFETCH spells it: write, instruction cache, level, stream.
+            "prefetch" => {
+                let constant = |select: &mut Self, at: usize| match select.src(arguments[at])? {
+                    Src::Int { value, .. } => Ok(value as u8),
+                    _ => refuse("a prefetch whose kind is not a constant"),
+                };
+                let (write, locality, data) = (constant(self, 1)?, constant(self, 2)?, constant(self, 3)?);
+                let level = if locality == 0 { 0 } else { 3 - locality };
+                let op = write << 4 | u8::from(data == 0) << 3 | level << 1 | u8::from(locality == 0);
+                let address = self.pointer_operand(arguments[0])?;
+                let base = self.pointer_register(&address)?;
+                self.inst(Inst::Prefetch { op, base });
                 Ok(())
             }
             "smax" | "smin" | "umax" | "umin" => {
@@ -525,6 +570,9 @@ impl Selector<'_> {
             | "log" | "log2" | "log10" | "pow" => self.libm_intrinsic(base, instruction, arguments),
             "bswap" | "bitreverse" | "ctlz" | "cttz" | "abs" => self.bit_intrinsic(base, instruction, arguments),
             "memcpy" | "memmove" | "memset" => {
+                if self.inline_memory(base, arguments)? {
+                    return Ok(());
+                }
                 // The last argument is the volatile flag; the call is
                 // `memcpy(dst, src, n)`.
                 let mut assigner = Assigner::new(self.platform);
@@ -537,11 +585,8 @@ impl Selector<'_> {
                     passed.push((value, places));
                 }
                 let void = self.types().void();
-                let callee = Callee::Symbol(match self.platform.underscore() {
-                    true => format!("_{base}"),
-                    false => base.to_owned(),
-                });
-                self.emit_call(callee, passed, assigner.stack_bytes(), void)?;
+                let callee = Callee::Symbol(crate::data::symbol_name(self.platform, base));
+                self.emit_call(callee, passed, assigner.stack_bytes(), void, Known::Nothing, false)?;
                 Ok(())
             }
             "stacksave" => {
@@ -597,8 +642,8 @@ impl Selector<'_> {
             llrm_mir::Type::Float(llrm_mir::FloatKind::Float)
         );
         let name = format!("{base}{}", if single { "f" } else { "" });
-        let callee = Callee::Symbol(if self.platform.underscore() { format!("_{name}") } else { name });
-        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty)?;
+        let callee = Callee::Symbol(crate::data::symbol_name(self.platform, &name));
+        let result = self.emit_call(callee, passed, assigner.stack_bytes(), instruction.ty, Known::Nothing, false)?;
         if let (Some(value), Some(result_id)) = (result, instruction.result) {
             self.vals.insert(result_id, value);
         }
@@ -624,7 +669,7 @@ impl Selector<'_> {
             let addr = this.addressing(&at, bytes)?;
             this.inst(Inst::Store {
                 mem: Memory::Int { width: if bytes == 8 { Width::X } else { Width::W }, bytes, sign: false, reg },
-                addr,
+                addr, mmo: MemOperand::default()
             });
             Ok(())
         };
@@ -671,9 +716,9 @@ impl Selector<'_> {
             let target = AddrExpr { offset: to.offset + offset as i64, ..to.clone() };
             let reg = self.mf.gpr();
             let addr = self.addressing(&source, 8)?;
-            self.inst(Inst::Load { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr });
+            self.inst(Inst::Load { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr, mmo: MemOperand::default() });
             let addr = self.addressing(&target, 8)?;
-            self.inst(Inst::Store { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr });
+            self.inst(Inst::Store { mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg }, addr, mmo: MemOperand::default() });
         }
         Ok(())
     }

@@ -335,6 +335,46 @@ fn a_noipa_callee_is_never_inlined_by_cost() {
     }
 }
 
+/// A `weak` callee is never inlined: the QB runtime's `__attribute__((weak)) void music_tick(void) {}`
+/// was inlined into the tick thread as nothing, so the real `music_tick` of another object never
+/// ran and a program that waited on music hung. `weak_odr` and `linkonce_odr` bodies are
+/// equivalent by promise and are inlined.
+#[test]
+fn an_interposable_callee_is_not_inlined() {
+    let text = |linkage: &str| {
+        format!(
+            "{GLOBAL}define {linkage} void @callee() {{\nb0:\n  store i32 1, ptr @g\n  ret void\n}}\n\ndefine void @f() {{\nb0:\n  call void @callee()\n  ret void\n}}\n"
+        )
+    };
+    for (linkage, inlined) in [("weak", false), ("linkonce", false), ("weak_odr", true), ("linkonce_odr", true)] {
+        let module = crate::testing::parsed(&text(linkage));
+        let layout = llrm_mir::datalayout::DataLayout::default();
+        let (caller_id, _, caller) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("f")).unwrap();
+        let (callee_id, _, callee) = module.functions().find(|(_, g, _)| g.name.as_deref() == Some("callee")).unwrap();
+        let call = caller
+            .walk()
+            .map(|(_, inst)| inst)
+            .find(|&inst| llrm_mir::memory::callee(&module.context, caller, inst) == Some(callee_id))
+            .unwrap();
+        let site = Site {
+            module: &module,
+            layout: &layout,
+            caller,
+            caller_id,
+            call,
+            callee,
+            callee_id,
+            sole_call_to_local: false,
+            caller_recursive: false,
+            caller_size: CallerSize::Speed,
+            relative_frequency: None,
+            tti: None,
+        };
+        let verdict = inline_cost(&site, InlineParams::from_level(2));
+        assert_eq!(verdict.is_ok(), inlined, "{linkage}: {verdict:?}");
+    }
+}
+
 /// The target's price decides what is free: an address `p + 4 * i` folds into
 /// an x86 load (scale 4), the generic rule takes scale 1 only; a `trunc` to
 /// `i1` is free for X86's `isTruncateFree` and not for the generic legal

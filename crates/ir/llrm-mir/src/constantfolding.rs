@@ -2109,6 +2109,8 @@ fn can_constant_fold_intrinsic(id: Folded) -> bool {
                 | UmulWithOverflow
                 | Smulh
                 | Umulh
+                | Fma
+                | Fmuladd
                 | Fabs
                 | Floor
                 | Ceil
@@ -2634,6 +2636,23 @@ fn constant_fold_scalar_call3(
             let ty_width = context.types.int_bits(ty)?;
             let fits = signed(quotient as u128 & mask(width), width) == quotient;
             fits.then(|| int(context, ty_width, quotient as u128 & mask(width)))
+        }
+        // `fusedMultiplyAdd` to nearest, ties to even, for both: LLVM folds `fmuladd` fused.
+        IntrinsicId::Fma | IntrinsicId::Fmuladd => {
+            let Type::Float(kind) = context.types.get(ty) else { return None };
+            let bits = |operand: ConstantId| match context.get(operand).kind {
+                ConstantKind::Float(bits) => Some(bits),
+                _ => None,
+            };
+            let (a, b, c) = (bits(ops[0])?, bits(ops[1])?, bits(ops[2])?);
+            let fused = match kind {
+                FloatKind::Double => f64::from_bits(a).mul_add(f64::from_bits(b), f64::from_bits(c)).to_bits(),
+                FloatKind::Float => u64::from(
+                    f32::from_bits(a as u32).mul_add(f32::from_bits(b as u32), f32::from_bits(c as u32)).to_bits(),
+                ),
+                _ => return None,
+            };
+            Some(context.constant(Constant { ty, kind: ConstantKind::Float(fused) }))
         }
         IntrinsicId::Fshl | IntrinsicId::Fshr => {
             let (c0, width) = as_int(context, ops[0])?;

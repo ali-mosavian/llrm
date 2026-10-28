@@ -93,6 +93,7 @@ pub mod accessanalysis;
 pub mod aggregate;
 pub mod alias;
 pub mod aliasdiff;
+pub mod saverestore;
 pub mod aliassets;
 pub mod argumentattrs;
 pub mod assumptions;
@@ -147,6 +148,7 @@ pub mod memdepchecker;
 pub mod memory;
 pub mod memoryssa;
 pub mod mssa;
+pub mod placealias;
 pub mod mustexecute;
 pub mod nearest;
 #[cfg(test)]

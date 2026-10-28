@@ -1,8 +1,8 @@
 //! `llrm-arm64-llc [-S] [--no-opt] [-o OUT] FILE.ll`: LLVM IR from clang's
 //! front end alone (`-O2 -Xclang -disable-llvm-passes -Xclang
-//! -disable-lifetime-markers`) through the mid-end and the arm64 backend to an
-//! object (`-S`: its instructions as text; `--no-opt`: no mid-end, for IR that
-//! is already optimized). The platform is the module's `target triple`.
+//! -disable-lifetime-markers`; `-debug-only=inline-cost`: each inlining decision and every callee instruction's cost on stderr, as LLVM's option of that name) through the mid-end and the arm64 backend to an
+//! object (`-S`: its instructions as text; `-O<n>`: the mid-end's level, -O2 by default, as
+//! clang's `-O` of the same IR; `--no-opt`: no mid-end, for IR that is already optimized). The platform is the module's `target triple`.
 
 use llrm_arm64::driver;
 
@@ -16,14 +16,25 @@ fn main() {
 
 fn run() -> i32 {
     let mut assembly = false;
-    let mut optimize = true;
+    let mut level = driver::Level::O2;
     let mut output = None;
     let mut input = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "-S" => assembly = true,
-            "--no-opt" => optimize = false,
+            "-debug-only=inline-cost" => {
+                llrm_env::preset("LLRM_INLINE_REMARKS");
+                llrm_env::preset("LLRM_EXP_INLINETRACE");
+            }
+            "--no-opt" => level = driver::Level::O0,
+            other if other.starts_with("-O") => match driver::Level::parse(&other[2..]) {
+                Ok(parsed) => level = parsed,
+                Err(why) => {
+                    eprintln!("llrm-arm64-llc: {why}");
+                    return 2;
+                }
+            },
             "-o" => output = arguments.next(),
             other if input.is_none() && !other.starts_with('-') => input = Some(other.to_owned()),
             other => {
@@ -33,7 +44,7 @@ fn run() -> i32 {
         }
     }
     let Some(input) = input else {
-        eprintln!("usage: llrm-arm64-llc [-S] [--no-opt] [-o OUT] FILE.ll");
+        eprintln!("usage: llrm-arm64-llc [-S] [-O0|-O1|-O2|-O3|-Os|-Oz] [--no-opt] [-o OUT] FILE.ll");
         return 2;
     };
     let text = match std::fs::read_to_string(&input) {
@@ -50,9 +61,9 @@ fn run() -> i32 {
     };
     let name = std::path::Path::new(&input).file_stem().and_then(|one| one.to_str()).unwrap_or("module").to_owned();
     let result = if assembly {
-        driver::assembly(&text, platform, optimize).map(String::into_bytes)
+        driver::assembly(&text, platform, level).map(String::into_bytes)
     } else {
-        driver::object_file(&text, platform, &name, optimize)
+        driver::object_file(&text, platform, &name, level)
     };
     match result {
         Ok(bytes) => {

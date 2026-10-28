@@ -8,8 +8,13 @@
 //! becomes a constant takes its one edge, and the blocks that leaves
 //! unreachable are deleted.
 //!
-//! `llvm.objectsize` is the pin's second case and is not translated: llrm has
-//! no `lowerObjectSizeCall` yet.
+//! `llvm.objectsize` is the pin's second case (`lowerObjectSizeCall`) and is
+//! answered as unknown: all ones, or zero where the minimum is asked.
+//!
+//! DEVIATE 1: the size of a known object (an alloca, a global) is not
+//! computed, so `objectsize` of one is also unknown. The answer is sound,
+//! as it is for the pin with no object visitor result. Exit: the object-size
+//! visitor of `MemoryBuiltins.cpp` on top of `getBaseObjectSize`.
 //!
 //! # Example
 //! ```text
@@ -65,17 +70,28 @@ impl FunctionPass for LowerConstantIntrinsics {
     }
 }
 
-fn is_is_constant(
+#[derive(Clone, Copy, PartialEq)]
+enum Lowered {
+    IsConstant,
+    ObjectSize,
+}
+
+fn constant_intrinsic(
     context: &Context,
     globals: &[GlobalValue],
     function: &Function,
     inst: InstId,
-) -> bool {
-    llrm_mir::memory::callee(context, function, inst)
-        .and_then(|global| globals.get(global.0 as usize)?.name.as_deref())
-        .is_some_and(|name| {
-            name.strip_prefix("llvm.is.constant").is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-        })
+) -> Option<Lowered> {
+    let callee = llrm_mir::memory::callee(context, function, inst)?;
+    let name = globals.get(callee.0 as usize)?.name.as_deref()?;
+    let named = |base: &str| name.strip_prefix(base).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'));
+    if named("llvm.is.constant") {
+        Some(Lowered::IsConstant)
+    } else if named("llvm.objectsize") {
+        Some(Lowered::ObjectSize)
+    } else {
+        None
+    }
 }
 
 fn reachable(function: &Function) -> IdSet<BlockId> {
@@ -101,31 +117,39 @@ pub fn lowered(
     function: &mut Function,
 ) -> bool {
     let reached = reachable(function);
-    let calls: Vec<InstId> = function
+    let calls: Vec<(InstId, Lowered)> = function
         .layout()
         .iter()
         .copied()
         .filter(|block| reached.contains(block))
         .flat_map(|block| function.iter_block(block).collect::<Vec<_>>())
-        .filter(|&inst| is_is_constant(context, globals, function, inst))
+        .filter_map(|inst| Some((inst, constant_intrinsic(context, globals, function, inst)?)))
         .collect();
     if calls.is_empty() {
         return false;
     }
     let mut branches = Vec::new();
-    for call in calls {
+    for (call, which) in calls {
         if function.is_erased(call) {
             continue;
         }
         let instruction = function.instruction(call);
-        let manifest = matches!(
-            instruction.operands.first(),
-            Some(Operand::Constant(id)) if is_manifest_constant(context, *id)
-        );
-        let answer = context.constant(Constant {
-            ty: instruction.ty,
-            kind: if manifest { ConstantKind::Int(1) } else { ConstantKind::Int(0) },
-        });
+        let value = match which {
+            Lowered::IsConstant => u128::from(matches!(
+                instruction.operands.first(),
+                Some(Operand::Constant(id)) if is_manifest_constant(context, *id)
+            )),
+            // Unknown: all ones, or zero where the minimum is asked (operand 1).
+            Lowered::ObjectSize => match instruction.operands.get(1) {
+                Some(Operand::Constant(id)) if !matches!(context.get(*id).kind, ConstantKind::Int(0)) => 0,
+                _ => u128::MAX,
+            },
+        };
+        let bits = match context.types.get(instruction.ty) {
+            llrm_mir::types::Type::Int(bits) => u32::from(*bits),
+            _ => 1,
+        };
+        let answer = context.constant(Constant { ty: instruction.ty, kind: ConstantKind::Int(value & (u128::MAX >> (128 - bits))) });
         replaced_and_simplified(context, layout, globals, function, call, Operand::Constant(answer), &mut branches);
     }
     let mut dead_blocks = false;
@@ -220,7 +244,7 @@ pub fn module_lowered(module: &mut llrm_mir::module::Module) -> Result<(), Strin
         module.globals.iter().any(|global| {
             let llrm_mir::module::GlobalKind::Function(function) = &global.kind else { return false };
             function.layout().iter().any(|&block| {
-                function.iter_block(block).any(|inst| is_is_constant(&module.context, &module.globals, function, inst))
+                function.iter_block(block).any(|inst| constant_intrinsic(&module.context, &module.globals, function, inst).is_some())
             })
         })
     };

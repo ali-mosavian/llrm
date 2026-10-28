@@ -298,17 +298,17 @@ impl fmt::Display for Inst {
                 write!(out, "{} {}", if *link { "blr" } else { "br" }, gpr(*rn, Width::X, false))
             }
             Inst::Ret { rn } => write!(out, "ret {}", gpr(*rn, Width::X, false)),
-            Inst::Load { mem, addr } => memory_text(out, mem, addr, true),
-            Inst::Store { mem, addr } => memory_text(out, mem, addr, false),
+            Inst::Load { mem, addr, .. } => memory_text(out, mem, addr, true),
+            Inst::Store { mem, addr, .. } => memory_text(out, mem, addr, false),
             Inst::LoadPair { first, second, addr } => pair_text(out, first, second, addr, true),
             Inst::StorePair { first, second, addr } => pair_text(out, first, second, addr, false),
-            Inst::Adr { page, rd, target: to } => {
+            Inst::Adr { page, rd, target: to, got } => {
                 write!(
                     out,
                     "{} {}, {}",
                     if *page { "adrp" } else { "adr" },
                     gpr(*rd, Width::X, false),
-                    target(to, if *page { "@PAGE" } else { "" })
+                    target(to, match (page, got) { (true, true) => "@GOTPAGE", (true, false) => "@PAGE", _ => "" })
                 )
             }
             Inst::FpUnary { op, size, rd, rn } => {
@@ -327,6 +327,7 @@ impl fmt::Display for Inst {
                 };
                 write!(out, "{name} {}, {}", fpr(*rd, *size), fpr(*rn, *size))
             }
+            Inst::VectorMov { rd, rn } => write!(out, "mov v{}.16b, v{}.16b", rd.0, rn.0),
             Inst::FpBinary { op, size, rd, rn, rm } => {
                 let name = ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul"][*op as usize];
                 write!(out, "{name} {}, {}, {}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
@@ -345,6 +346,11 @@ impl fmt::Display for Inst {
             Inst::FpSelect { size, rd, rn, rm, cond } => {
                 write!(out, "fcsel {}, {}, {}, {cond}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
             }
+            Inst::VectorFill { rd, fill } => match fill {
+                Fill::Zero => write!(out, "movi.2d v{}, #0", rd.0),
+                Fill::Byte(byte) => write!(out, "movi.16b v{}, #{byte}", rd.0),
+                Fill::Gpr(source) => write!(out, "dup.16b v{}, {}", rd.0, gpr(*source, Width::W, false)),
+            },
             Inst::FpMoveImm { size, rd, imm8 } => {
                 write!(out, "fmov {}, #{}", fpr(*rd, *size), fp_immediate_value(*imm8))
             }
@@ -362,6 +368,19 @@ impl fmt::Display for Inst {
                     write!(out, "{name} {}, {}", fpr(*f, *size), gpr(*g, *width, false))
                 } else {
                     write!(out, "{name} {}, {}", gpr(*g, *width, false), fpr(*f, *size))
+                }
+            }
+            Inst::FpFixed { op, width, size, gpr: g, fpr: f, fbits } => {
+                let name = match op {
+                    FpConvert::ToFp { signed: true } => "scvtf",
+                    FpConvert::ToFp { signed: false } => "ucvtf",
+                    FpConvert::ToIntZero { signed: true } => "fcvtzs",
+                    _ => "fcvtzu",
+                };
+                if matches!(op, FpConvert::ToFp { .. }) {
+                    write!(out, "{name} {}, {}, #{fbits}", fpr(*f, *size), gpr(*g, *width, false))
+                } else {
+                    write!(out, "{name} {}, {}, #{fbits}", gpr(*g, *width, false), fpr(*f, *size))
                 }
             }
             Inst::Svc { imm16 } => write!(out, "svc #{imm16}"),
@@ -414,6 +433,7 @@ impl fmt::Display for Inst {
             ),
             Inst::Brk { imm16 } => write!(out, "brk #{imm16}"),
             Inst::Nop => out.write_str("nop"),
+            Inst::Prefetch { op, base } => write!(out, "prfm #{op}, [{}]", gpr(*base, Width::X, true)),
         }
     }
 }

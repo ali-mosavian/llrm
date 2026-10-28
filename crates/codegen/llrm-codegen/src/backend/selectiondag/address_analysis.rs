@@ -8,6 +8,8 @@
 //! [`BaseIndexOffset::equal_base_index`] says whether two share base and index
 //! and how many bytes apart they are; [`compute_aliasing`] turns that, or the
 //! kinds of their bases (frame index, global, constant pool), into a verdict.
+//! The verdict itself is `llrm_analysis::placealias::alias_of`, shared with arm64's
+//! load/store pairing; this file only reads the DAG into its inputs.
 //!
 //! DEVIATE AA1: no indexed loads or stores (x86 has none) and no lifetime
 //! nodes (the builder drops the markers): `matchLSNode`'s pre-inc/pre-dec and
@@ -20,6 +22,9 @@
 //!
 //! # Used by
 //! The combiner's chain walk (`mayAlias`, `GatherAllAliases`).
+
+use llrm_analysis::aa::AliasResult;
+use llrm_analysis::placealias::{Object, alias_of};
 
 use super::dag::{NodeData, SDValue, SelectionDAG};
 use super::isd::ISD;
@@ -204,41 +209,17 @@ pub fn compute_aliasing(
     let ptr0 = BaseIndexOffset::matching(dag, op0);
     let ptr1 = BaseIndexOffset::matching(dag, op1);
     let (base0, base1) = (ptr0.base?, ptr1.base?);
-    if let Some(diff) = ptr0.equal_base_index(&ptr1, dag) {
-        // If the size of memory access is unknown, do not use it.
-        if diff >= 0 {
-            // [----BasePtr0----]
-            //                         [---BasePtr1--]
-            // ========PtrDiff========>
-            return bytes0.map(|size| size as i64 > diff);
-        }
-        //                     [----BasePtr0----]
-        // [---BasePtr1--]
-        // =====(-PtrDiff)====>
-        return bytes1.map(|size| diff + size as i64 > 0);
-    }
-    let kind = |value: SDValue| match dag.node(value).data {
-        NodeData::FrameIndex(index) => Some((0, Some(index))),
-        NodeData::Global { symbol, .. } => Some((1, Some(symbol as i32))),
-        NodeData::PoolIndex(..) => Some((2, None)),
+    let object = |value: SDValue| match dag.node(value).data {
+        NodeData::FrameIndex(index) => Some(Object::Frame { id: i64::from(index), fixed: dag.fixed_offsets.contains_key(&index) }),
+        NodeData::Global { symbol, .. } => Some(Object::Global(symbol)),
+        NodeData::PoolIndex(..) => Some(Object::Pool),
         _ => None,
     };
-    // Frame indices that differ, one of them an alloca: allocas do not overlap.
-    if let (NodeData::FrameIndex(a), NodeData::FrameIndex(b)) = (dag.node(base0).data, dag.node(base1).data) {
-        if a != b && (!dag.fixed_offsets.contains_key(&a) || !dag.fixed_offsets.contains_key(&b)) {
-            return Some(false);
-        }
+    match alias_of(ptr0.equal_base_index(&ptr1, dag), object(base0).as_ref(), bytes0, object(base1).as_ref(), bytes1) {
+        AliasResult::NoAlias => Some(false),
+        AliasResult::MayAlias => None,
+        AliasResult::PartialAlias { .. } | AliasResult::MustAlias => Some(true),
     }
-    let (kind0, kind1) = (kind(base0)?, kind(base1)?);
-    // Bases of different kinds cannot alias.
-    if kind0.0 != kind1.0 {
-        return Some(false);
-    }
-    // Two different globals (a symbol and its alias are one in our IR).
-    if kind0.0 == 1 && kind0.1 != kind1.1 {
-        return Some(false);
-    }
-    None
 }
 
 #[cfg(test)]

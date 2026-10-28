@@ -13,8 +13,12 @@ pub mod machine;
 pub mod mc;
 pub mod mfunc;
 pub mod pairs;
+pub mod flagcse;
 pub mod prepass;
 pub mod regalloc;
+pub mod shrinkwrap;
+pub mod sibcall;
+pub mod storecluster;
 pub mod tti;
 #[cfg(test)]
 mod tti_tests;

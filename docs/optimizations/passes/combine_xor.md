@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:222ddf8e2c3e85876a51cdeb0baf97eaeb0073f91cd73e2915130463079a3ce0 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:8e050d6f3d81ad521f5f86edeb300a202fee303fef9cd6253229c45111926dd3 -->
 
 # combine_xor
 
@@ -17,14 +17,15 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 `undef` lanes are not matched or made).
 
 DEVIATE 2: the folds that call a helper not yet translated are left out,
-each named where it stood: `foldXorToXor`, `foldNot`,
-`visitMaskedMerge`, the `ctlz`/`cttz` and
+each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the `ctlz`/`cttz` and
 `fneg` bitcast folds, the `i1` select form of `(A & B) ^ (A | C)`,
 `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
 `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 `canonicalizeConditionalNegationViaMathToSelect`,
 `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
 `foldMaskedAddXorPattern`.
+
+DEVIATE 3: `foldNot` is in `combine_not`.
 
 ## Example
 `Y ^ (X | Y)` is `X & ~Y`:
