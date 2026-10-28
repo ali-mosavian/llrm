@@ -1,0 +1,9 @@
+[package]
+name = "llrm-wasm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The WebAssembly target: its descriptions, translated from LLVM's WebAssembly backend"
+
+[dependencies]
+llrm-target = { workspace = true }
