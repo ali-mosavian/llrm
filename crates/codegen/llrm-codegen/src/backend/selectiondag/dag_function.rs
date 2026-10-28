@@ -713,6 +713,7 @@ fn selected_in(
         32 | 64 => false,
         _ => return refuse("only m16, m32 and m64 are built so far"),
     };
+    // x86-64 has `cmov` (`canUseCMOV`); the 486 and P5 targets have none
     let m64 = bitness == 64;
     let Some(id) = module.named(name) else { return refuse(format!("no function @{name}")) };
     let Some(function) = module.global(id).function().filter(|one| !one.is_declaration()) else {
@@ -732,7 +733,7 @@ fn selected_in(
     let mut tli = if m16 {
         TargetLowering::x86_16(Features::default(), MVT::I16)
     } else if m64 {
-        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), ..Features::default() }, MVT::I64)
+        TargetLowering::x86_64(Features { sse2: arch.scalar_sse(), cmov: true, ..Features::default() }, MVT::I64)
     } else {
         TargetLowering::x86_32(Features::default(), MVT::I32)
     };
@@ -967,7 +968,7 @@ fn selected_in(
         let done = select_block(
             &mut built.dag,
             &tli,
-            &mut X86Lowering { cmov: false, sse2: arch.scalar_sse(), min_size: cpu.min_size || bytes_beat_clocks },
+            &mut X86Lowering { cmov: tli.can_use_cmov(), sse2: arch.scalar_sse(), min_size: cpu.min_size || bytes_beat_clocks },
             &selector,
             &mut hooks,
             &Info { source_order: true },
