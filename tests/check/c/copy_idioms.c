@@ -7,16 +7,18 @@
 // CHECK[-Os]: dec ax
 // CHECK-NOT: std
 // CHECK: {{_copy(@3)?}} endp
+// DEVIATE LU4 (1b6d7d8290): at -Os m16 LSR drops a rewrite its own model rates worse, so the overlapping scrolls keep their indexed loops, not the
+// pin's pointer bump (QCport -Os m16 -661 B overall; per loop scroll_up +1 insn/iter, scroll_down +2 and a saved SI).
 // CHECK-LABEL: {{_scroll_up(@3)?}} proc
 // CHECK[-O2]: rep movsd
-// CHECK[-Os]: dec ax
+// CHECK[-Os]: inc cx
 // CHECK-NOT: std
 // CHECK: {{_scroll_up(@3)?}} endp
 // CHECK-LABEL: {{_scroll_down(@3)?}} proc
 // A backward move is the fixed byte string `push ds; pop es; std; rep movsd; ...; cld` (memops.rs), listed as `db`.
 // CHECK[-O2]: db 01eh,007h,0fdh,0f3h,066h,0a5h
 // CHECK[-O2]: db 0fch
-// CHECK[-Os]: dec ax
+// CHECK[-Os]: dec cx
 // CHECK: {{_scroll_down(@3)?}} endp
 // CHECK-LABEL: {{_palette(@3)?}} proc
 // DEVIATE: the pin leaves a variable 16-bit fill a loop (no memset_pattern off Darwin, LoopIdiomRecognize.cpp L1214 at

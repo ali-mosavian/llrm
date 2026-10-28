@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_addsub.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_addsub.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_addsub.rs sha256:077fbb3f7dac8dde6754001c667e5a17d51c9ae0ed0c4a31e5b361994157e575 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_addsub.rs sha256:1074bd090730e8b8083a95f606184d7cd9212e78b8936e357f471e59355098a8 -->
 
 # combine_addsub
 
@@ -25,10 +25,9 @@ Each is a `// DEVIATE 2:` comment at its place in the order.
 `foldBinopWithPhiOperands`, `foldBinOpIntoSelectOrPhi` and
 `foldBinOpSelectBinOp` are the phi and select families'.
 
-DEVIATE 3 (temporary): the folds that build an intrinsic call (`usub.sat`,
-`uadd.sat`, `umax`, `umin`, `scmp`, `ctpop`...) are left out until the
-Builder can declare an intrinsic (`combine_build` DEVIATE 2); each is a
-`// DEVIATE 3:` comment at its place.
+DEVIATE 3: `uadd.sat(X, C) + -C --> umin(X, ~C)` is not made: the selector
+has no `uadd.sat` lowering. Only the `umax` intrinsic call is matched for
+`m_UMax`, not the select-of-compare form.
 
 DEVIATE 4: a constant that `ConstantExpr::getAdd` would leave as an
 expression is not built (MIR holds no binary constant expressions): the

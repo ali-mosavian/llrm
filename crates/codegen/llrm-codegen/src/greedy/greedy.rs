@@ -349,12 +349,24 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> Option<RegId> {
         None
     }
+    /// `RegCosts[phys]` (`TargetRegisterInfo::getRegisterCosts`, the
+    /// registers' `CostPerUse`): X86 sets none (D133902 dropped R8-R15's).
+    fn reg_cost(
+        &self,
+        _phys: RegId,
+    ) -> u8 {
+        0
+    }
     /// `TRI->getCSRFirstUseCost(MF)`: what the first use of a callee-saved
     /// register costs in entry-block executions (X86: `push` and `pop`).
     fn csr_first_use_cost(&self) -> u32 {
         0
     }
 }
+
+/// `uint8_t(~0u)`: no limit on the cost per use of the register a range may
+/// move to (`CostPerUseLimit`).
+const NO_COST_LIMIT: u8 = u8::MAX;
 
 /// `-regalloc-csr-cost-scale` / `TRI->getCSRCostScale(MF)`: the percentage of
 /// the first-use cost the allocator charges (X86 takes the default).
@@ -1097,14 +1109,31 @@ impl<'a> RAGreedy<'a> {
         &mut self,
         virt: &Rc<LiveInterval>,
         order: &AllocationOrder,
+        cost_per_use_limit: u8,
         fixed: &HashSet<u32>,
     ) -> Option<RegId> {
         // Keep track of the cheapest interference seen so far.
         let mut best_cost = EvictionCost::default();
         best_cost.set_max();
         let mut best_phys: Option<RegId> = None;
+        let order_limit = self.get_order_limit(order, cost_per_use_limit)?;
+        // When we are just looking for a reduced cost per use, don't break any
+        // hints, and only evict smaller spill weights.
+        if cost_per_use_limit < NO_COST_LIMIT {
+            best_cost.broken_hints = 0;
+            best_cost.max_weight = virt.weight();
+        }
+        let mut tried = 0usize;
         for (phys, is_hint) in order.iter() {
-            if !self.can_evict_interference_based_on_cost(virt, phys, false, &mut best_cost, fixed) {
+            if !is_hint {
+                if tried == order_limit {
+                    break;
+                }
+                tried += 1;
+            }
+            if !self.can_allocate_phys_reg(cost_per_use_limit, phys)
+                || !self.can_evict_interference_based_on_cost(virt, phys, false, &mut best_cost, fixed)
+            {
                 continue;
             }
             // Best so far.
@@ -1149,15 +1178,65 @@ impl<'a> RAGreedy<'a> {
         }
     }
 
+    /// `getOrderLimit` (RegAllocEvictionAdvisor.cpp#L669): how many registers
+    /// of the order to look at when only a cost per use below the limit will
+    /// do; none when no register of the class is cheaper.
+    fn get_order_limit(
+        &self,
+        order: &AllocationOrder,
+        cost_per_use_limit: u8,
+    ) -> Option<usize> {
+        let regs = order.get_order();
+        let mut order_limit = regs.len();
+        if cost_per_use_limit < NO_COST_LIMIT {
+            // Check of any registers in RC are below CostPerUseLimit.
+            let min_cost = regs.iter().map(|phys| self.env.reg_cost(*phys)).min().unwrap_or(u8::MAX);
+            if min_cost >= cost_per_use_limit {
+                return None;
+            }
+            // It is normal for register classes to have a long tail of
+            // registers with the same cost. We don't need to look at them if
+            // they're too expensive.
+            if regs.last().is_some_and(|last| self.env.reg_cost(*last) >= cost_per_use_limit) {
+                let mut last_change = 0usize;
+                let mut last_cost = u8::MAX;
+                for (at, phys) in regs.iter().enumerate() {
+                    let cost = self.env.reg_cost(*phys);
+                    if cost != last_cost {
+                        last_change = at;
+                    }
+                    last_cost = cost;
+                }
+                order_limit = last_change;
+            }
+        }
+        Some(order_limit)
+    }
+
+    /// `canAllocatePhysReg` (RegAllocEvictionAdvisor.cpp#L695).
+    fn can_allocate_phys_reg(
+        &self,
+        cost_per_use_limit: u8,
+        phys: RegId,
+    ) -> bool {
+        if self.env.reg_cost(phys) >= cost_per_use_limit {
+            return false;
+        }
+        // The first use of a callee-saved register in a function has cost 1.
+        // Don't start using a CSR when the CostPerUseLimit is low.
+        !(cost_per_use_limit == 1 && is_unused_callee_saved_reg(self.env, &self.matrix, phys))
+    }
+
     /// `tryEvict` (RegAllocGreedy.cpp#L715).
     fn try_evict(
         &mut self,
         virt: &Rc<LiveInterval>,
         order: &AllocationOrder,
         new_vregs: &mut Vec<u32>,
+        cost_per_use_limit: u8,
         fixed: &HashSet<u32>,
     ) -> Option<RegId> {
-        let best = self.try_find_eviction_candidate(virt, order, fixed)?;
+        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed)?;
         self.evict_interference(virt, best, new_vregs);
         Some(best)
     }
@@ -1190,14 +1269,14 @@ impl<'a> RAGreedy<'a> {
     /// register costs a `push` and a `pop` the first time it is used, so a
     /// cheaper split (or spill) of the range wins over it. The register to use,
     /// or none, with the pre-split's ranges in `new_vregs`.
-    ///
-    /// DEVIATE CSR1 (no number yet): `CostPerUseLimit` is not passed to
-    /// `tryEvict`, as this target's per-register costs are all zero.
+    /// A spill chosen over the register sets `cost_per_use_limit` to 1, so
+    /// `tryEvict` does not move onto a callee-saved register either.
     fn try_assign_csr_first_time(
         &mut self,
         virt: &Rc<LiveInterval>,
         order: &AllocationOrder,
         phys: RegId,
+        cost_per_use_limit: &mut u8,
         new_vregs: &mut Vec<u32>,
     ) -> Option<RegId> {
         let stage = self.extra.get_stage(virt.reg());
@@ -1215,7 +1294,13 @@ impl<'a> RAGreedy<'a> {
         if stage == LiveRangeStage::Spill && virt.is_spillable() {
             // We choose spill over using the CSR for the first time if the
             // spill cost is lower than CSRCost.
-            return splitter.csr_spill_is_dearer(virt, csr_cost).then_some(phys);
+            if splitter.csr_spill_is_dearer(virt, csr_cost) {
+                return Some(phys);
+            }
+            // We are going to spill, set CostPerUseLimit to 1 to make sure that
+            // we will not use a callee-saved register in tryEvict.
+            *cost_per_use_limit = 1;
+            return None;
         }
         if stage < LiveRangeStage::Split {
             // We choose pre-splitting over using the CSR for the first time if
@@ -1234,6 +1319,7 @@ impl<'a> RAGreedy<'a> {
         recolor_stack: &mut RecolorStack,
         depth: u32,
     ) -> Select {
+        let mut cost_per_use_limit = NO_COST_LIMIT;
         // First try assigning a free register.
         let order = self.order_of(virt.reg());
         if let Some(phys) = self.try_assign(virt, &order, new_vregs, fixed) {
@@ -1251,7 +1337,7 @@ impl<'a> RAGreedy<'a> {
                 && is_unused_callee_saved_reg(self.env, &self.matrix, phys)
                 && new_vregs.is_empty()
             {
-                let csr = self.try_assign_csr_first_time(virt, &order, phys, new_vregs);
+                let csr = self.try_assign_csr_first_time(virt, &order, phys, &mut cost_per_use_limit, new_vregs);
                 // Return now if we decide to use a CSR or create new vregs due
                 // to pre-splitting.
                 if csr.is_some() || !new_vregs.is_empty() {
@@ -1271,7 +1357,7 @@ impl<'a> RAGreedy<'a> {
         // and they should not get a second chance until they have been
         // split.
         if stage != LiveRangeStage::Split {
-            if let Some(phys) = self.try_evict(virt, &order, new_vregs, fixed) {
+            if let Some(phys) = self.try_evict(virt, &order, new_vregs, cost_per_use_limit, fixed) {
                 // If VirtReg has a hint and that hint is broken record this
                 // virtual register as a recoloring candidate for broken hint.
                 // Since we evicted a variable in its neighborhood it is likely
@@ -1650,6 +1736,13 @@ mod tests {
         ) -> bool {
             false
         }
+
+        fn callee_saved_alias(
+            &self,
+            phys: RegId,
+        ) -> Option<RegId> {
+            (phys == RegId::EBX).then_some(phys)
+        }
     }
 
     fn insn(
@@ -1745,6 +1838,19 @@ mod tests {
         check_valid(&mut greedy);
         assert_eq!(greedy.stats.failed, 0, "every range found a register");
         assert!(greedy.stats.spilled_ranges >= 2, "{:?}", greedy.stats);
+    }
+
+    /// `tryAssignCSRFirstTime` chose a spill over the register, but `tryEvict`
+    /// had no `CostPerUseLimit` and evicted a lighter range from the unused
+    /// callee-saved EBX, paying the push and pop the spill was chosen to avoid.
+    #[test]
+    fn test_a_cost_limit_of_one_keeps_eviction_off_an_unused_callee_saved_register() {
+        let body = body(vec![vec![insn(vec![1], vec![]), insn(vec![], vec![1])]]);
+        let env = Env { regs: vec![RegId::EAX, RegId::EBX] };
+        let greedy = allocator(&body, &env);
+        assert!(!greedy.can_allocate_phys_reg(1, RegId::EBX));
+        assert!(greedy.can_allocate_phys_reg(1, RegId::EAX));
+        assert!(greedy.can_allocate_phys_reg(NO_COST_LIMIT, RegId::EBX));
     }
 
     /// A heavier value evicts a lighter one; the evicted one is requeued and

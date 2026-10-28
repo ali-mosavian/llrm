@@ -39,8 +39,8 @@ def test_every_oracle_is_on_in_the_compile_environment():
 
 
 def test_a_run_that_drew_nothing_is_no_pass():
-    """qcport-run printed its summary only for a draw; no line, or zero polygons, is not one."""
-    good = "QCport: 65 modules by llrm-c draw what the Borland build draws: 300 frames, 12000 polys, bmp abcd1234"
+    """qcport-run-cc printed its summary only for a draw; no line, or zero polygons, is not one."""
+    good = "QCport: 65 modules at -Os draw what the Borland build draws: 300 frames, 12000 polys, bmp abcd1234"
     assert oracle_qcport.drew(good) == (300, 12000)
     assert oracle_qcport.drew(good.replace("12000 polys", "0 polys")) is None
     assert oracle_qcport.drew("a run did not finish: llrm") is None

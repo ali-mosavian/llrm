@@ -275,10 +275,10 @@ fn test_liveness_for_the_stack_numbers_only_the_floating_values() {
             Default::default(),
         )
     };
-    let (live_in, live_out) = crate::backend::allocate::live_among(&body, |value| value == 100);
+    let (live_in, live_out) = crate::backend::liverows::live_among(&body, |value| value == 100);
     let kept: usize = live_in.values().chain(live_out.values()).map(|set| set.iter().count()).sum();
     assert!(kept <= 2, "{kept} values in the sets");
-    let rows = crate::backend::allocate::live_rows_by(&body, |value| value == 100);
+    let rows = crate::backend::liverows::live_rows_by(&body, |value| value == 100);
     assert_eq!(rows.numbered(), 1, "the values numbered");
 }
 
