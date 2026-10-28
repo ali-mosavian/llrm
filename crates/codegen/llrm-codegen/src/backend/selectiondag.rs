@@ -103,14 +103,18 @@
 //! ([L2698](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/SelectionDAG.cpp#L2698)).
 
 pub use llrm_x86::dag::{actions, isd, lowering, mvt, x86isd};
+pub mod abs_combine;
 pub mod address_analysis;
+pub mod bitcast_combine;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
 pub mod builder;
 mod chain_combine;
+pub mod combine_funnel;
 pub mod combine_load;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
+pub mod ctcount_combine;
 mod dag;
 pub mod dag_combiner;
 pub mod dag_function;
@@ -121,18 +125,26 @@ pub mod div_combine;
 pub mod div_const;
 pub mod dump;
 pub mod emit;
+pub mod expand_divrem_const;
+pub mod expand_fixed;
+pub mod expand_funnel;
+pub mod expand_sat;
 pub mod fold;
 pub mod fp_combine;
 pub mod fp_value;
 pub mod function_lowering;
+pub mod iminmax_combine;
 pub mod inline_asm;
 pub mod known_bits;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;
 pub mod logic_setcc;
+mod match_rotate;
 pub mod opcodes;
 mod reassociate;
+pub mod reduce_load_width;
+pub mod rotate_combine;
 pub mod schedule;
 pub mod switchcg;
 pub mod x86_carry;
@@ -199,6 +211,8 @@ mod freeze_tests;
 mod gaps_tests;
 #[cfg(test)]
 mod invoke_tests;
+#[cfg(test)]
+mod match_rotate_tests;
 #[cfg(test)]
 mod mathops_tests;
 #[cfg(test)]

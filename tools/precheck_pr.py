@@ -15,7 +15,7 @@ stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `ne
 5. the changed .rs files are formatted (tools/fmt.sh);
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
 7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have, and
-   `tools/docsbuild/build.py --check` finds no generated page stale that the tip has not (seconds);
+   `tools/docs/docsbuild/build.py --check` finds no generated page stale that the tip has not (seconds);
 6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
@@ -253,7 +253,7 @@ def docs_failures(root: Path, base: str = BASE, docs=None, docs_on_base=None) ->
                 subprocess.run(["git", "worktree", "remove", "--force", str(work)], cwd=root, capture_output=True)
 
     new = sorted(stale - (docs_on_base or on_base)())
-    return [f"generated docs out of date: {', '.join(new[:6])}; run python3 tools/docsbuild/build.py --sync and commit the pages"] if new else []
+    return [f"generated docs out of date: {', '.join(new[:6])}; run python3 tools/docs/docsbuild/build.py --sync and commit the pages"] if new else []
 
 
 def precheck(

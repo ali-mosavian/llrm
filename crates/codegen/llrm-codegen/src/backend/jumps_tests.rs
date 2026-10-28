@@ -297,6 +297,48 @@ fn test_jump_over_a_block_nothing_reaches_is_dropped() {
     );
 }
 
+/// `_reachable` emptied the table of frequencies, so the next `Frequency::of`
+/// worked out all 257 blocks of d_faces again (2.12 M Ir in `inverted`).
+#[test]
+fn test_pruning_unreachable_blocks_keeps_the_frequencies_of_the_others() {
+    let mut start = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
+            block(5, vec![], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ],
+    );
+    start.frequencies =
+        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (5, 0.5), (9, 1.0)].into_iter().collect())));
+    let kept = _reachable(&start, start.blocks.clone());
+    let table = &kept.frequencies.as_ref().expect("a table").0;
+    assert_eq!(table.get(&1), Some(&1.0));
+    assert_eq!(table.get(&9), Some(&1.0));
+    assert!(crate::analysis::frequency::Frequency::violations(&kept).is_empty());
+}
+
+/// Folding branches pruned the unreachable block 5 in place and left it in
+/// the kept table: the verifier said "frequency kept for block 0x5, which is
+/// gone" after `jumps`, and every QB and Nib program failed to compile.
+#[test]
+fn test_folding_branches_drops_the_frequency_of_a_pruned_block() {
+    let mut start = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, bx()), _jump(2, 9)], vec![9]).into(),
+            block(5, vec![], vec![]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ],
+    );
+    start.frequencies =
+        Some(Arc::new(crate::model::lir::BlockFrequencies([(1, 1.0), (5, 0.5), (9, 1.0)].into_iter().collect())));
+    let done = branchfold::folded(&start, &std::collections::BTreeSet::new());
+    assert_eq!(crate::analysis::frequency::Frequency::violations(&done), Vec::<String>::new());
+}
+
 fn nothing(
     at: i64,
     covers: Option<(i64, i64)>,
@@ -454,6 +496,35 @@ fn two_zero_tails(inserted: bool) -> LirBody {
     )
 }
 
+/// Every arm of a join was seen whole (`Seq` of 41 items) to hash its last
+/// instruction, 82 items built where the pin reads three per arm
+/// (`HashEndOfMBB`, BranchFolding.cpp:362).
+#[test]
+fn test_arms_that_end_differently_are_not_seen_whole() {
+    let arm = |at: i64, last: Arc<Insn>| {
+        let mut insns: Vec<Arc<Insn>> = (0..40).map(|n| _compare(at + 100 + n)).collect();
+        insns.extend([_inserted(last), _inserted(_jump(at + 50, 30))]);
+        block(at, insns, vec![30]).into()
+    };
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20)], vec![20, 10]).into(),
+            arm(10, _move(10, imm(0))),
+            arm(20, _compare(20)),
+            block(30, vec![_compare(30), _compare(31), _compare(32), _return(33)], vec![]).into(),
+        ],
+    );
+    let source = placed(&source).unwrap();
+    tailmerge::ITEMS_BUILT.with(|one| one.set(0));
+
+    tailmerge::merged(&source, false, None).unwrap();
+
+    let built = tailmerge::ITEMS_BUILT.with(|one| one.get());
+    assert!(built <= 12, "{built} items built for two arms that cannot share a tail");
+}
+
 /// qglsurf emitted the same zero-result tail from two failure arms.
 #[test]
 fn test_identical_result_tails_are_merged() {
@@ -462,6 +533,32 @@ fn test_identical_result_tails_are_merged() {
 
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Move).count(), 1);
     assert_eq!(physical.iter().filter(|what| what.op == Operation::Branch).count(), 0);
+}
+
+/// lru: three zero arms, each laid out right after its conditional branch, were
+/// kept apart (3 `xor` + 3 `jmp`) because the jump taken off was assumed to
+/// fall through. It cannot: the block laid out next is not its successor
+/// (`getFallThrough`), so the pin merges them (`BothFallThrough`).
+#[test]
+fn test_zero_arms_each_after_their_branch_are_merged() {
+    let arm = |at: i64| block(at, vec![_inserted(_move(at, imm(0))), _inserted(_jump(at + 1, 90))], vec![90]);
+    let body = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 20), _jump(3, 10)], vec![20, 10]).into(),
+            arm(10).into(),
+            block(20, vec![_compare(20), _branch(21, "je", 40), _jump(22, 30)], vec![40, 30]).into(),
+            arm(30).into(),
+            block(40, vec![_compare(40), _branch(41, "je", 60), _jump(42, 50)], vec![60, 50]).into(),
+            arm(50).into(),
+            block(60, vec![_move(60, bx()), _return(61)], vec![]).into(),
+            block(90, vec![_compare(90), _compare(91), _compare(92), _return(93)], vec![]).into(),
+        ],
+    );
+    let result = merged(&body).unwrap();
+
+    assert_eq!(physical(&result).iter().filter(|what| what.op == Operation::Move && what.target.is_none()).count(), 2);
 }
 
 /// The compare of a branch the merge made redundant stays, as in LLVM (T6):
@@ -2079,6 +2176,45 @@ fn test_the_instruction_both_ways_begin_with_is_hoisted_above_the_compare() {
     let at = lines.iter().position(|line| line.as_str() == "mov cx, 5").unwrap();
     let compare = lines.iter().position(|line| line.starts_with("cmp")).unwrap();
     assert!(at < compare, "{lines:?}");
+}
+
+fn arms_after(
+    head: Vec<Arc<Insn>>,
+    set: impl Fn(i64) -> Vec<Arc<Insn>>,
+) -> Vec<String> {
+    let arm = |at: i64, tail: Arc<Insn>| {
+        let mut insns = set(at);
+        insns.extend([tail, _return(at + 90)]);
+        insns
+    };
+    _printed(vec![
+        block(1, head, vec![9, 4]).into(),
+        block(4, arm(4, _move(5, bx())), vec![]).into(),
+        block(9, arm(9, _move(10, bx())), vec![]).into(),
+    ])
+}
+
+/// The zero both arms return is `xor ax, ax` by the time arms are folded: it
+/// sets flags, which the compare in front of the branch sets again, so it runs
+/// above the compare (x_prefix, x_life, recgcd: +2..3 instructions each).
+#[test]
+fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
+    let lines = arms_after(vec![_compare(1), _branch(2, "je", 9)], |at| {
+        vec![_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None))]
+    });
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// A branch whose flags come from an earlier instruction, not a compare in
+/// front of it, reads what a hoisted `xor` would clobber.
+#[test]
+fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare() {
+    let lines = arms_after(vec![_move(1, bx()), _branch(2, "je", 9)], |at| {
+        vec![_inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None))]
+    });
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 2, "{lines:?}");
 }
 
 /// The pin copies propagation twice, again after tail duplication and block

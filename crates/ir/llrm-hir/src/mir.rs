@@ -1135,6 +1135,7 @@ fn declare_data(
     let bytes = module.context.types.intern(Type::Array { element: byte, count: object.bytes.len() as u64 });
     let linkage = match (ty, object.linkage) {
         (None, _) | (Some(_), model::DataLinkage::External | model::DataLinkage::Exported) => Linkage::External,
+        (Some(_), model::DataLinkage::Internal) if object.exposed => Linkage::External,
         (Some(_), model::DataLinkage::Internal) => Linkage::Internal,
         (Some(_), model::DataLinkage::Private) => Linkage::Private,
     };

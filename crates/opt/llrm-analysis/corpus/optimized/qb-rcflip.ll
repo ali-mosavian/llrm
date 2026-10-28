@@ -1,176 +1,121 @@
-target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-i32:16-i64:16"
+target datalayout = "e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3"
 
-@$data = internal global [0 x i8] zeroinitializer
-@$qb$statementTable = internal constant [0 x i8] zeroinitializer
-@"DT100%" = internal global [722 x i8] zeroinitializer
-@"DT100%$descriptor" = internal constant <{ ptr addrspace(1), [6 x i8], ptr, [6 x i8] }> <{ ptr addrspace(1) addrspacecast (ptr @"DT100%" to ptr addrspace(1)), [6 x i8] c"\00\00\00\00\01@", ptr getelementptr (i8, ptr @"DT100%", i16 360), [6 x i8] c"\02\00i\01L\FF" }>
-@$fslSegment = internal constant ptr addrspace(2) addrspacecast (ptr addrspace(1) @$string4$payload to ptr addrspace(2))
-@$string4$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string4$payload, i16 4) to i16), [6 x i8] c"\04\00SUM=" }>
-@$string4$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string4$payload, i16 2) to i16), ptr @$fslSegment }>
-@$string7$payload = internal addrspace(1) constant <{ [2 x i8], i16, [6 x i8] }> <{ [2 x i8] zeroinitializer, i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 4) to i16), [6 x i8] c"\04\00DONE" }>
-@$string7$descriptor = internal constant <{ i16, ptr }> <{ i16 ptrtoint (ptr addrspace(1) getelementptr (i8, ptr addrspace(1) @$string7$payload, i16 2) to i16), ptr @$fslSegment }>
+@"DT100%" = internal global [722 x i8] zeroinitializer, align 2
+@$string4 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string4, i16 4), [4 x i8] c"SUM=" }>
+@$string5 = internal constant <{ [2 x i8], ptr, [4 x i8] }> <{ [2 x i8] c"\04\00", ptr getelementptr (i8, ptr @$string5, i16 4), [4 x i8] c"DONE" }>
 
-define internal cc1000 void @__main() addrspace(1) {
+define internal cc 1000 void @__main() addrspace(1) "llrm-fp-eval"="x87-extended" noreturn norecurse {
 b1:
-  call cc1000 addrspace(1) void @RAMP()
-  call cc1000 addrspace(1) void @llrm.qb.B$CEND()
+  tail call cc 1000 addrspace(1) void @RAMP()
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$CEND()
   unreachable
 }
 
-define cc1000 void @RAMP() addrspace(1) {
+define cc 1000 void @RAMP() addrspace(1) "llrm-fp-eval"="x87-extended" norecurse {
 b1:
-  br label %b2
-
-b2:
-  %0 = phi i16 [ -1, %b1 ], [ %29, %b15 ]
-  %1 = phi i16 [ -1, %b1 ], [ %30, %b15 ]
-  %2 = icmp sge i16 %1, -156
-  br i1 %2, label %b5, label %b6
+  br label %b5
 
 b5:
-  %3 = add i16 %1, -63
-  %4 = sext i16 %3 to i32
-  %5 = sdiv i32 %4, 64
-  %6 = trunc i32 %5 to i16
-  %7 = shl i16 %6, 6
-  %8 = sub i16 %1, %7
-  %9 = sub i16 63, %8
-  %10 = add i16 %1, 180
-  %11 = getelementptr inbounds i16, ptr @"DT100%", i16 %10
-  store i16 %9, ptr %11, !tbaa !2
-  %12 = icmp eq i16 %0, 1
-  br i1 %12, label %b7, label %b9
+  %0 = phi i16 [ 64, %b1 ], [ %18, %b5 ]
+  %1 = phi i16 [ 0, %b1 ], [ %17, %b5 ]
+  %2 = phi i16 [ -1, %b1 ], [ %spec.store.select1, %b5 ]
+  %3 = lshr i16 %0, 6
+  %4 = shl nuw nsw i16 %3, 6
+  %5 = add nsw i16 %4, -1
+  %6 = sub i16 %0, %4
+  %7 = add i16 %1, %5
+  %8 = shl nsw i16 %1, 1
+  %9 = getelementptr i8, ptr @"DT100%", i16 %8
+  %10 = getelementptr i8, ptr %9, i16 358
+  %11 = icmp eq i16 %2, 1
+  %spec.store.select4 = select i1 %11, i16 %7, i16 %6
+  store i16 %spec.store.select4, ptr %10
+  %12 = icmp eq i16 %spec.store.select4, 0
+  %13 = and i1 %11, %12
+  %spec.store.select = select i1 %13, i16 -1, i16 %2
+  %14 = icmp eq i16 %spec.store.select4, 63
+  %15 = icmp eq i16 %spec.store.select, -1
+  %16 = select i1 %14, i1 %15, i1 false
+  %spec.store.select1 = select i1 %16, i16 1, i16 %spec.store.select
+  %17 = add nsw i16 %1, -1
+  %18 = add nuw nsw i16 %0, 1
+  %19 = icmp samesign ugt i16 %17, -156
+  br i1 %19, label %b5, label %20
 
-b6:
-  br label %b16
-
-b7:
-  %13 = load i16, ptr %11, !tbaa !2
-  %14 = sub i16 63, %13
-  store i16 %14, ptr %11, !tbaa !2
-  br label %b9
-
-b9:
-  %15 = load i16, ptr %11, !tbaa !2
-  %16 = icmp eq i16 %15, 0
-  %17 = sext i1 %16 to i16
-  %18 = sext i1 %12 to i16
-  %19 = and i16 %17, %18
-  %20 = icmp ne i16 %19, 0
-  br i1 %20, label %b12, label %b11
-
-b11:
-  br label %b12
-
-b12:
-  %21 = phi i16 [ -1, %b9 ], [ %0, %b11 ]
-  %22 = load i16, ptr %11, !tbaa !2
-  %23 = icmp eq i16 %22, 63
-  %24 = sext i1 %23 to i16
-  %25 = icmp eq i16 %21, -1
-  %26 = sext i1 %25 to i16
-  %27 = and i16 %24, %26
-  %28 = icmp ne i16 %27, 0
-  br i1 %28, label %b15, label %b14
-
-b14:
-  br label %b15
-
-b15:
-  %29 = phi i16 [ 1, %b12 ], [ %21, %b14 ]
-  %30 = add i16 %1, -1
-  br label %b2
-
-b16:
-  %31 = phi i16 [ 1, %b6 ], [ %59, %b29 ]
-  %32 = phi i16 [ 0, %b6 ], [ %60, %b29 ]
-  %33 = icmp sle i16 %32, 156
-  br i1 %33, label %b19, label %b20
+20:
+  br label %b19
 
 b19:
-  %34 = sext i16 %32 to i32
-  %35 = sdiv i32 %34, 64
-  %36 = trunc i32 %35 to i16
-  %37 = shl i16 %36, 6
-  %38 = sub i16 %32, %37
-  %39 = add i16 %32, 180
-  %40 = getelementptr inbounds i16, ptr @"DT100%", i16 %39
-  store i16 %38, ptr %40, !tbaa !2
-  %41 = icmp eq i16 %31, -1
-  br i1 %41, label %b21, label %b23
-
-b20:
-  br label %b30
+  %21 = phi i16 [ 63, %20 ], [ %46, %b23 ]
+  %22 = phi i16 [ -314, %20 ], [ %45, %b23 ]
+  %23 = phi i16 [ %spec.store.select3, %b23 ], [ 1, %20 ]
+  %24 = phi i16 [ %44, %b23 ], [ 0, %20 ]
+  %25 = lshr i16 %24, 6
+  %26 = shl nuw nsw i16 %25, 6
+  %27 = sub i16 %24, %26
+  %28 = add i16 %21, %26
+  %29 = and i16 %24, 192
+  %30 = sub nsw i16 %24, %29
+  %31 = getelementptr i8, ptr @"DT100%", i16 %22
+  %32 = getelementptr i8, ptr %31, i16 674
+  store i16 %27, ptr %32, !tbaa !2
+  %33 = icmp eq i16 %23, -1
+  br i1 %33, label %b21, label %b23
 
 b21:
-  %42 = load i16, ptr %40, !tbaa !2
-  %43 = sub i16 63, %42
-  store i16 %43, ptr %40, !tbaa !2
+  %34 = sub nsw i16 63, %30
+  %35 = getelementptr i8, ptr @"DT100%", i16 %22
+  %36 = getelementptr i8, ptr %35, i16 674
+  store i16 %28, ptr %36, !tbaa !2
   br label %b23
 
 b23:
-  %44 = load i16, ptr %40, !tbaa !2
-  %45 = icmp eq i16 %44, 63
-  %46 = sext i1 %45 to i16
-  %47 = icmp eq i16 %31, 1
-  %48 = sext i1 %47 to i16
-  %49 = and i16 %46, %48
-  %50 = icmp ne i16 %49, 0
-  br i1 %50, label %b26, label %b25
+  %37 = phi i16 [ %34, %b21 ], [ %27, %b19 ]
+  %38 = icmp eq i16 %37, 63
+  %39 = icmp eq i16 %23, 1
+  %40 = and i1 %38, %39
+  %spec.store.select2 = select i1 %40, i16 -1, i16 %23
+  %41 = icmp eq i16 %37, 0
+  %42 = icmp eq i16 %spec.store.select2, -1
+  %43 = select i1 %41, i1 %42, i1 false
+  %spec.store.select3 = select i1 %43, i16 1, i16 %spec.store.select2
+  %44 = add nuw nsw i16 %24, 1
+  %45 = add nsw i16 %22, 2
+  %46 = add nsw i16 %21, -1
+  %exitcond1 = icmp eq i16 %45, 0
+  br i1 %exitcond1, label %47, label %b19
 
-b25:
-  br label %b26
-
-b26:
-  %51 = phi i16 [ -1, %b23 ], [ %31, %b25 ]
-  %52 = load i16, ptr %40, !tbaa !2
-  %53 = icmp eq i16 %52, 0
-  %54 = sext i1 %53 to i16
-  %55 = icmp eq i16 %51, -1
-  %56 = sext i1 %55 to i16
-  %57 = and i16 %54, %56
-  %58 = icmp ne i16 %57, 0
-  br i1 %58, label %b29, label %b28
-
-b28:
-  br label %b29
-
-b29:
-  %59 = phi i16 [ 1, %b26 ], [ %51, %b28 ]
-  %60 = add i16 %32, 1
-  br label %b16
-
-b30:
-  %61 = phi i16 [ -156, %b20 ], [ %71, %b33 ]
-  %62 = phi i32 [ 0, %b20 ], [ %70, %b33 ]
-  %63 = icmp sle i16 %61, 156
-  br i1 %63, label %b33, label %b34
+47:
+  br label %b33
 
 b33:
-  %64 = add i16 %61, 180
-  %65 = getelementptr inbounds i16, ptr @"DT100%", i16 %64
-  %66 = load i16, ptr %65, !tbaa !2
-  %67 = add i16 %61, 200
-  %68 = mul i16 %66, %67
-  %69 = sext i16 %68 to i32
-  %70 = add i32 %62, %69
-  %71 = add i16 %61, 1
-  br label %b30
+  %48 = phi i16 [ 44, %47 ], [ %57, %b33 ]
+  %49 = phi i16 [ 48, %47 ], [ %56, %b33 ]
+  %50 = phi i32 [ %55, %b33 ], [ 0, %47 ]
+  %51 = getelementptr i8, ptr @"DT100%", i16 %49
+  %52 = load i16, ptr %51, !tbaa !2
+  %53 = mul i16 %52, %48
+  %54 = sext i16 %53 to i32
+  %55 = add i32 %50, %54
+  %56 = add nuw nsw i16 %49, 2
+  %57 = add nuw nsw i16 %48, 1
+  %exitcond = icmp eq i16 %56, 674
+  br i1 %exitcond, label %b34, label %b33
 
 b34:
-  call cc1000 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string4$descriptor)
-  call cc1000 addrspace(1) void @llrm.qb.B$PEI4(i32 %62)
-  call cc1000 addrspace(1) void @llrm.qb.B$PESD(ptr @$string7$descriptor)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PSSD(ptr @$string4)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PEI4(i32 %55)
+  tail call cc 1005 addrspace(1) void @llrm.qb.B$PESD(ptr @$string5)
   ret void
 }
 
-declare cc1000 void @llrm.qb.B$CEND() addrspace(1)
+declare cc 1005 void @llrm.qb.B$CEND() addrspace(1) nocallback nounwind noreturn
 
-declare cc1000 void @llrm.qb.B$PSSD(ptr) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PSSD(ptr) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PEI4(i32) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PEI4(i32) addrspace(1) nocallback
 
-declare cc1000 void @llrm.qb.B$PESD(ptr) addrspace(1)
+declare cc 1005 void @llrm.qb.B$PESD(ptr) addrspace(1) nocallback
 
 !0 = !{!"llrm hir"}
 !1 = !{!"place", !0, i64 0}

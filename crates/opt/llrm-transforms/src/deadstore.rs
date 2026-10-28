@@ -178,7 +178,11 @@ impl FunctionPass for DeadStoreElimination {
         // with it, and the graph follows them through its updater.
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let (frozen, before): (&Context, &Function) = (unit.context, unit.function);
-        let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape);
+        // The allocas whose address is exposed, once: without it `object_of`
+        // walked an alloca's uses at every access asked of it (matmul -O2:
+        // 27,548 walks, 1.9 M tree inserts, a third of the pass).
+        let exposed = analyses.get::<llrm_analysis::manager::ExposedFrames>(unit.context, unit.layout, unit.function);
+        let view = View::within(frozen, unit.layout, before, &outer).with_shape(&shape).with_exposed(&exposed);
         let shape = view.shape();
         // The manager's graph of this body, cloned: the removals update the
         // clone, so the held one stays as the body it describes.
@@ -297,7 +301,7 @@ struct Dse<'a> {
     leaves: std::cell::RefCell<HashMap<u32, bool>>,
     /// `loc_for_write` per instruction; a memset's is dropped when it is
     /// shortened.
-    written: std::cell::RefCell<HashMap<InstId, Option<Rc<Location>>>>,
+    written: std::cell::RefCell<IdMap<InstId, Option<Rc<Location>>>>,
 }
 
 impl<'a> Dse<'a> {
@@ -408,6 +412,36 @@ impl<'a> Dse<'a> {
         memory::memset(self.context, self.callees, self.function, inst)
     }
 
+    /// A `llvm.experimental.memset.pattern` call: LLVM's `MemSetBase` covers
+    /// it with the memset, so it writes and dies like one.
+    fn pattern(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        memory::pattern(self.context, self.callees, self.function, inst).is_some()
+    }
+
+    /// A non-volatile `llvm.memcpy` or `llvm.memmove` of a constant length:
+    /// its destination, source and byte count.
+    fn transfer(
+        &self,
+        inst: InstId,
+    ) -> Option<(Operand, Operand, u32)> {
+        let unit = self.aa.unit();
+        let callee = memory::callee(self.context, self.function, inst)?;
+        let Some(llrm_mir::intrinsics::Intrinsic::MemCpy | llrm_mir::intrinsics::Intrinsic::MemMove) =
+            unit.globals.get(callee.0 as usize)?.intrinsic()
+        else {
+            return None;
+        };
+        let operands = &self.function.instruction(inst).operands;
+        if operands.len() != 5 || self.memset_volatile(inst) {
+            return None;
+        }
+        let bytes = u32::try_from(llrm_mir::intrinsics::length(self.context, operands[2])?).ok().filter(|&n| n > 0)?;
+        Some((operands[0], operands[1], bytes))
+    }
+
     /// `getLocForWrite`: a store's place, or a memset's destination of a
     /// constant length.
     fn loc_for_write(
@@ -433,8 +467,14 @@ impl<'a> Dse<'a> {
         if self.is_store(inst) {
             return self.aa.location_of(inst);
         }
-        self.memset(inst)?;
-        let filled = llrm_analysis::memory::MemRef::filled(self.aa.unit(), inst)?;
+        let filled = if let Some((destination, _, bytes)) = self.transfer(inst) {
+            llrm_analysis::memory::MemRef::at(self.aa.unit(), destination, bytes)
+        } else {
+            if !self.pattern(inst) {
+                self.memset(inst)?;
+            }
+            llrm_analysis::memory::MemRef::filled(self.aa.unit(), inst)?
+        };
         // The provenance the accesses annotated, with the bytes the memset
         // fills.
         let provenance = match self.accesses.writes_in(self.aa.unit(), inst).as_deref() {
@@ -587,7 +627,7 @@ impl<'a> Dse<'a> {
     ) -> bool {
         match self.function.instruction(inst).opcode {
             Opcode::Store { volatile, .. } => !volatile,
-            Opcode::Call(_) => self.memset(inst).is_some_and(|(_, _, _)| !self.memset_volatile(inst)),
+            Opcode::Call(_) => (self.memset(inst).is_some() || self.pattern(inst)) && !self.memset_volatile(inst),
             _ => false,
         }
     }
@@ -1286,7 +1326,7 @@ impl<'a> Dse<'a> {
         inst: InstId,
         loc: &Location,
     ) -> bool {
-        if self.memset(inst).is_some() {
+        if self.memset(inst).is_some() || self.pattern(inst) {
             if let Some(written) = self.loc_for_write(inst) {
                 return self.aa.alias(&written, loc) != llrm_analysis::mssa::alias::AliasResult::No;
             }
@@ -1529,6 +1569,16 @@ impl<'a> Dse<'a> {
             }
             let (mut result, killing_off, dead_off) =
                 self.is_overwrite_at(killing_inst, dead_inst, &killing_loc, &dead_loc);
+            // A copy kills only what it covers whole and does not read.
+            if let Some((_, source, bytes)) = self.transfer(killing_inst) {
+                let read =
+                    self.aa.location_for(&llrm_analysis::memory::MemRef::at(self.aa.unit(), source, bytes), false);
+                if result != Overwrite::Complete
+                    || self.aa.alias(&read, &dead_loc) != llrm_analysis::mssa::alias::AliasResult::No
+                {
+                    continue;
+                }
+            }
             if result == Overwrite::MaybePartial {
                 result = self.is_partial_overwrite(&killing_loc, &dead_loc, killing_off, dead_off, dead_inst);
             }

@@ -40,10 +40,43 @@ fn preprocess_and_dependency_jobs_pass_through_without_the_target_flag() {
 
 #[test]
 fn untranslated_features_are_refused_not_dropped() {
-    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto", "-g", "-gdwarf-4"] {
+    for flag in ["-fsanitize=address", "-fprofile-generate", "-flto"] {
         assert!(parse(&words(&format!("{flag} x.c"))).is_err(), "{flag}");
     }
     assert!(parse(&words("-g0 x.c")).is_ok());
+}
+
+/// `-fsanitize=stack` and `bounds` were refused with "not translated yet",
+/// so stackover.c, stackdeep.c, es_across_copy.c and idioms.c (8 configs)
+/// could not compile under llrm-cc; the backend takes them.
+#[test]
+fn the_stack_and_bounds_checks_reach_the_backend() {
+    let one = built("-fsanitize=stack -fsanitize=bounds -c x.c");
+    assert_eq!(one.llc, words("-fsanitize=stack -fsanitize=bounds"));
+    assert!(parse(&words("-fsanitize=signed-integer-overflow x.c")).is_err());
+}
+
+/// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
+/// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
+/// for 1485 under llrm-cc.
+#[test]
+fn the_watcom_abi_makes_char_unsigned() {
+    let unsigned = |args: &str| built(args).clang.iter().any(|one| one == "-funsigned-char");
+    assert!(unsigned("-mabi=watcom -c x.c"));
+    assert!(!unsigned("-mabi=sysv -c x.c"));
+    assert!(!unsigned("-mabi=watcom -fsigned-char -c x.c"));
+}
+
+/// `-g` was refused ("debug info is not carried yet"), so no program could
+/// carry debug info: clang gets `-g`, the backend the flag that names the
+/// format.
+#[test]
+fn debug_flags_reach_clang_and_the_backend() {
+    let one = built("-gcodeview -c x.c");
+    assert!(one.clang.iter().any(|flag| flag == "-g"), "{:?}", one.clang);
+    assert!(one.clang.iter().any(|flag| flag == "-fexperimental-assignment-tracking=disabled"), "{:?}", one.clang);
+    assert_eq!(one.llc, words("-gcodeview"));
+    assert!(built("-g0 -c x.c").clang.iter().all(|flag| flag != "-g"));
 }
 
 #[test]
@@ -175,4 +208,14 @@ fn every_m16_row_states_the_targets_datalayout() {
 #[test]
 fn og_reaches_the_backend_as_o1_like_clang() {
     assert_eq!(built("-Og -c x.c").level, "1");
+}
+
+#[test]
+fn os_layer_answers_without_llrm_c_or_clang() {
+    // dosbatch asked `llrm-c --os-layer`, which a build without llrm-c lacks:
+    // every C program of the behavioural stage failed to link.
+    let said = os_layer(&words("--os-layer start -m32")).unwrap();
+    assert_eq!(said.unwrap().trim(), "start.asm");
+    assert!(os_layer(&words("-O2 x.c")).is_none());
+    assert!(os_layer(&words("--os-layer start")).unwrap().is_err());
 }

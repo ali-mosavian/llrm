@@ -166,8 +166,17 @@ impl FunctionPass for Gvn {
         let blocks = unit.function.layout().len();
         let shape = analyses.get::<llrm_analysis::cfg::Shape>(unit.context, unit.layout, unit.function);
         let tree = shape.dominance.tree(unit.function);
-        let (scalar, cfg_changed) =
-            pass::run_impl_cfg(unit.context, unit.layout, unit.function, analyses.outer(), self.pre, Some(tree));
+        let exposed = analyses.get::<llrm_analysis::manager::ExposedFrames>(unit.context, unit.layout, unit.function);
+        let (scalar, cfg_changed) = pass::run_impl_exposed(
+            unit.context,
+            unit.layout,
+            unit.function,
+            analyses.outer(),
+            self.pre,
+            Some(tree),
+            Some(&exposed),
+        );
+        drop(exposed);
         drop(shape);
         // Equal calls that touch nothing are one, after the arithmetic that
         // makes their arguments equal.
