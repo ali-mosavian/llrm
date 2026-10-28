@@ -241,7 +241,7 @@ fn with_default_convention(
     // convention whatever the default is, so `_strlen` was called where the
     // library has `strlen_`: a declaration or a definition of one (the float
     // routines of floatm.c) takes the default too.
-    let library: std::collections::HashSet<llrm_mir::context::GlobalId> = {
+    let library: llrm_mir::hash::HashSet<llrm_mir::context::GlobalId> = {
         module
             .globals
             .iter()
