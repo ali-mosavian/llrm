@@ -428,8 +428,6 @@ fn a_double_result_travels_in_xmm0() {
     assert!(listing.lines().any(|line| line.trim().ends_with("xmm0, xmm1")), "the result is copied to xmm0\n{listing}");
 }
 
-}
-
 /// A `double` returned by a call and passed straight to the return went
 /// `rax` -> `xmm0` (`mov rax, xmm0; mov xmm0, rax`): the copies around a value
 /// pinned in `xmm0` are plain moves, which named no class, so the value between
