@@ -15,15 +15,22 @@
 //! interval changes. Each register made gets its interval and weight and is
 //! returned for the queue; the interval of `reg` is erased.
 //!
-//! DEVIATE D-B: no snippets (`collectRegsToSpill`: the tiny copies to a
-//! sibling are not spilled with the register). `hoistAllSpills`
+//! `collectRegsToSpill`: a sibling's tiny copy of the register (one block, at
+//! most two values, copies to or from it and one other instruction) is spilled
+//! with it, and its copies are deleted at the end.
+//!
+//! DEVIATE D-B2: a load or store of the snippet's stack slot counts as its one
+//! other instruction (the pin accepts them without counting), and a register
+//! that `rematerialize_all` takes collects no snippets (the pin skips the
+//! snippet copies there and deletes them if they are dead). Exit: the stack
+//! accesses recognised, the remat path given the snippet copies.
+//!
+//! `hoistAllSpills`
 //! (`HoistSpillHelper`: spills of one value in several blocks merged up the
 //! dominator tree, `greedy/hoistspill.rs` for the decision) runs after the
 //! allocation; `hoistSpillInsideBB`, `eliminateRedundantSpills` and
 //! `coalesceStackAccess` are translated, and `StackSlotColoring::
-//! RemoveDeadStores` in `spiller::_identities_dropped`. The fact: the pin
-//! spilled 62 times in 61 bench functions (m32 -O2, same MIR, 2026-10-27) and
-//! found no snippet. Exit: the snippets translated.
+//! RemoveDeadStores` in `spiller::_identities_dropped`.
 //!
 //! DEVIATE D-G: a spilled phi value is not read from its home cell
 //! (`storedhomes`); it is stored and reloaded. Exit: the homes worked out
@@ -959,6 +966,99 @@ impl InlineSpiller<'_> {
             || widest_operand(insns, reg) == Some(10)
     }
 
+    /// `collectRegsToSpill` (InlineSpiller.cpp#L395): the register, then the
+    /// snippets among its copies to a sibling: tiny ranges that only copy to or
+    /// from it and have one other use, spilled with it. With the copies that
+    /// are to be deleted.
+    fn collect_regs_to_spill(
+        &self,
+        lis: &LiveIntervals,
+        matrix: &LiveRegMatrix,
+        reg: u32,
+    ) -> (Vec<u32>, crate::support::hash::HashSet<InstrKey>) {
+        let mut regs = vec![reg];
+        let mut copies: crate::support::hash::HashSet<InstrKey> = Default::default();
+        // Snippets all have the same original, so there can't be any for an
+        // original register.
+        if self.original == reg {
+            return (regs, copies);
+        }
+        let mut seen: crate::support::hash::HashSet<InstrKey> = Default::default();
+        let keys: Vec<InstrKey> =
+            lis.operands(reg).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)).collect();
+        for key in keys {
+            let one = lis.instr(key);
+            if one.group.is_some() {
+                continue;
+            }
+            let Some((dst, src)) = one.copy_of() else { continue };
+            let snip = if dst == reg {
+                src
+            } else if src == reg {
+                dst
+            } else {
+                continue;
+            };
+            if snip == reg || matrix.vrm.get_original(snip) != self.original || !lis.has_interval(snip) {
+                continue;
+            }
+            if !Self::is_snippet(lis, snip, reg) {
+                continue;
+            }
+            copies.insert(key);
+            if !regs.contains(&snip) {
+                regs.push(snip);
+            }
+        }
+        (regs, copies)
+    }
+
+    /// `isSnippet` (InlineSpiller.cpp#L326): `snip` lives in one block, has at
+    /// most two values, and is named by copies to or from `reg` and one other
+    /// instruction. DEVIATE D-B2: a load or store of the stack slot counts as
+    /// that other instruction (the pin accepts them without counting).
+    fn is_snippet(
+        lis: &LiveIntervals,
+        snip: u32,
+        reg: u32,
+    ) -> bool {
+        let li = lis.get_interval(snip);
+        if lis.interval_is_in_one_mbb(li).is_none() || li.range.get_num_val_nums() > 2 {
+            return false;
+        }
+        let mut seen: crate::support::hash::HashSet<InstrKey> = Default::default();
+        let mut other: Option<InstrKey> = None;
+        for key in lis.operands(snip).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)) {
+            // Allow copies to/from Reg.
+            if lis
+                .instr(key)
+                .copy_of()
+                .is_some_and(|(dst, src)| (dst == reg && src == snip) || (src == reg && dst == snip))
+            {
+                continue;
+            }
+            // Allow a single additional instruction.
+            if other.is_some_and(|seen| seen != key) {
+                return false;
+            }
+            other = Some(key);
+        }
+        true
+    }
+
+    /// A copy between two of the registers being spilled: one more snippet
+    /// copy (`spillAroundUses`: "Found new snippet copy").
+    fn snippet_copy_between(
+        &self,
+        lis: &LiveIntervals,
+        key: InstrKey,
+        regs: &[u32],
+    ) -> bool {
+        let one = lis.instr(key);
+        one.group.is_none()
+            && one.copy_of().is_some_and(|(dst, src)| dst != src && regs.contains(&dst) && regs.contains(&src))
+    }
+
     /// The cell of the home all siblings share, as wide as `reg`'s accesses.
     fn home_cell(
         &mut self,
@@ -1468,30 +1568,81 @@ impl Spiller for InlineSpiller<'_> {
                 return;
             }
         }
+        // `collectRegsToSpill`: the register, then its snippets.
+        let (regs, mut snippet_copies) = self.collect_regs_to_spill(lis, matrix, reg);
+        // A snippet the allocator placed leaves its register while its interval
+        // is as the union holds it (`LRE_CanEraseVirtReg`).
+        let placed: Vec<u32> = regs.iter().copied().skip(1).filter(|one| matrix.vrm.has_phys(*one)).collect();
+        for &one in &placed {
+            let interval = lis.get_interval(one).clone();
+            matrix.unassign(&interval);
+        }
         // Update LiveStacks now that we are committed to spilling.
+        for &one in &regs {
+            if one != reg && lis.has_interval(one) {
+                let snippet = lis.get_interval(one).range.clone();
+                self.homed.entry(self.key).or_default().push((one, snippet.clone()));
+                self.keys.insert(one, self.key);
+                self.merged(&snippet);
+            }
+        }
         if let Some(range) = &range {
             self.merged(range);
         }
-        for (block, members) in Self::units(lis, reg) {
-            if let [key] = members[..] {
-                if self.coalesce_stack_access(lis, key, block) || self.sibling_copy(lis, matrix, key, block) {
-                    continue;
+        for &one in &regs {
+            self.reg = one;
+            for (block, members) in Self::units(lis, one) {
+                if let [key] = members[..] {
+                    // Ignore copies to/from snippets. We'll delete them.
+                    if snippet_copies.contains(&key) {
+                        continue;
+                    }
+                    if self.snippet_copy_between(lis, key, &regs) {
+                        snippet_copies.insert(key);
+                        continue;
+                    }
+                    if self.coalesce_stack_access(lis, key, block) || self.sibling_copy(lis, matrix, key, block) {
+                        continue;
+                    }
+                }
+                let Some(fresh) = self.spill_unit(lis, one, block, &members) else {
+                    self.failed = true;
+                    return;
+                };
+                for value in fresh {
+                    edit.create_from(lis, &mut matrix.vrm, value, one);
+                    let mut li = lis.compute_virt_reg_interval(value);
+                    vrai.calculate_spill_weight_and_hint(&mut li, lis);
+                    lis.insert_interval(li);
+                    new_vregs.push(value);
                 }
             }
-            let Some(fresh) = self.spill_unit(lis, reg, block, &members) else {
-                self.failed = true;
-                return;
-            };
-            for value in fresh {
-                edit.create_from(lis, &mut matrix.vrm, value, reg);
-                let mut li = lis.compute_virt_reg_interval(value);
-                vrai.calculate_spill_weight_and_hint(&mut li, lis);
-                lis.insert_interval(li);
-                new_vregs.push(value);
-            }
         }
+        self.reg = reg;
         // Hoisted spills may cause dead code.
         self.eliminate_dead_defs(lis, matrix, shrunk);
+        // Finally delete the SnippetCopies.
+        for &one in &regs {
+            let mut seen = crate::support::hash::HashSet::default();
+            let left: Vec<InstrKey> =
+                lis.operands(one).iter().map(|operand| operand.instr).filter(|key| seen.insert(*key)).collect();
+            for key in left {
+                assert!(snippet_copies.contains(&key), "Remaining use wasn't a snippet copy");
+                let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(key));
+                lis.remove_instr(block, key);
+            }
+        }
+        // Delete all spilled registers.
+        for &one in regs.iter().skip(1) {
+            // `LRE_CanEraseVirtReg`: a snippet the allocator placed goes; one
+            // in the queue is only cleared, and the allocator
+            // erases it when it dequeues it.
+            if placed.contains(&one) {
+                edit.erase_virt_reg(lis, one);
+            } else {
+                lis.interval_mut(one).range.clear();
+            }
+        }
         edit.erase_virt_reg(lis, reg);
         self.recomputed(lis, &new_vregs[first_new..]);
         if let Some(range) = &range {
@@ -1682,17 +1833,58 @@ mod tests {
         let after = lis.block_insns(0);
         let at = stores(&lis);
         assert_eq!(at.len(), 1, "stores of the home: {after:?}");
-        assert_eq!(after[at[0]].uses, [1], "the source is stored, not the copy: {after:?}");
+        // The source is a snippet of the copy (`collectRegsToSpill`), so it is
+        // spilled with it: its definition is stored, the copy is deleted.
+        assert_eq!(after[at[0]].uses, after[0].defines, "the source is stored, not the copy: {after:?}");
         assert_eq!(at[0], 1, "right after the source's definition: {after:?}");
         assert!(after.iter().all(|one| one.copy_of().is_none()), "the copy is dead: {after:?}");
-        // Spilling the source in its turn stores its value once more, in the
-        // same home: the store of the register itself goes.
-        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
-        spiller.spill(ctx, 1, &mut made);
+        assert!(lis.get_interval(1).range.empty(), "the source went with it (cleared for the queue to drop)");
         drop(spiller);
+        assert_eq!(frame.slots.len(), 1, "one home: {:?}", frame.slots);
+    }
+
+    /// `%3` is a snippet of `%2`: a copy of it that one instruction reads. The
+    /// pin spills them together and deletes the copy (`collectRegsToSpill`),
+    /// so the reader takes the home. Without it the copy stayed, reading a
+    /// reload of `%2`, and the snippet was a register of its own to place.
+    #[test]
+    fn test_a_snippet_copy_is_deleted_with_the_spill_of_its_source() {
+        let global = Loc::Mem(Mem::new(Some(Addr::new(Space::Segment, 0)), 8));
+        let insns = vec![
+            x87(0, Operation::FloatLoad, "fld", vec![held(2)], vec![global.clone()], vec![2], vec![]),
+            x87(1, Operation::Move, "mov", vec![held(3)], vec![held(2)], vec![3], vec![2]),
+            x87(2, Operation::FloatArith, "fmul", vec![held(4)], vec![held(3), held(3)], vec![4], vec![3]),
+            x87(3, Operation::FloatArith, "fadd", vec![held(5)], vec![held(2), held(4)], vec![5], vec![2, 4]),
+            x87(4, Operation::FloatStore, "fstp", vec![global], vec![held(5)], vec![], vec![5]),
+        ];
+        let body =
+            LirBody::new("snippet", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+        let mut lis = LiveIntervals::new(&body);
+        for value in 2..=5 {
+            let li = lis.compute_virt_reg_interval(value);
+            lis.insert_interval(li);
+        }
+        let mut matrix = LiveRegMatrix::new(RegisterInfo::new(Regs(&llrm_x86_m16::REGISTER_INFO)), Box::new(NoFixed));
+        matrix.vrm.set_is_split_from_reg(2, 1);
+        matrix.vrm.set_is_split_from_reg(3, 1);
+        let mut frame = Frame::new(0);
+        let classes = RegisterClasses::m16();
+        let tables = Rc::new(Tables::default());
+        for value in 1..=5 {
+            tables.orders.borrow_mut().insert(value, vec![RegId::MM0]);
+            tables.float_bytes.borrow_mut().insert(value, 8);
+            tables.widths.borrow_mut().insert(value, 10);
+        }
+        let order_of = |_: u32| Vec::new();
+        let mut spiller = InlineSpiller::new(&body, &mut frame, &classes, &order_of, tables);
+        let (env, original) = (Env, Default::default());
+        let mut vrai = VirtRegAuxInfo::new(&env, &original);
+        let (mut shrunk, mut made) = (Vec::new(), Vec::new());
+        let ctx = SpillContext { lis: &mut lis, matrix: &mut matrix, vrai: &mut vrai, shrunk: &mut shrunk };
+        spiller.spill(ctx, 2, &mut made);
         let after = lis.block_insns(0);
-        assert_eq!(stores(&lis).len(), 1, "one store for the two spills: {after:?}");
-        assert_eq!(frame.slots.len(), 1, "one home for the two: {:?}", frame.slots);
+        assert!(after.iter().all(|one| one.copy_of().is_none()), "the snippet copy is gone: {after:?}");
+        assert!(after.iter().all(|one| !one.uses.contains(&3) && !one.defines.contains(&3)), "no %3 left: {after:?}");
     }
 
     /// The stores left in the blocks of a diamond after `hoistAllSpills`: a

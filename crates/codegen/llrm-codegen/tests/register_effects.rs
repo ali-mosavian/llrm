@@ -26,8 +26,12 @@ fn decoded(
     Some((&mut Decoder::new(bits, &encoded.code, DecoderOptions::NONE)).into_iter().collect())
 }
 
-/// The accesses that read an operand.
-const READS: [OpAccess; 4] = [OpAccess::Read, OpAccess::ReadWrite, OpAccess::CondRead, OpAccess::ReadCondWrite];
+/// The accesses that read an operand. A conditional write keeps the old value
+/// where it does not write, so the old value is read: `bsf ax, bx` leaves AX as
+/// it was when BX is zero, and the pin ties its `$fallback` operand to the
+/// destination (X86InstrMisc.td, `BSF16rr`) where iced states only `CondWrite`.
+const READS: [OpAccess; 5] =
+    [OpAccess::Read, OpAccess::ReadWrite, OpAccess::CondRead, OpAccess::ReadCondWrite, OpAccess::CondWrite];
 
 /// What the encoder's bytes read and write, in the lanes the passes see: the
 /// effects iced states of the bytes, which `x86.instr` must state of the
