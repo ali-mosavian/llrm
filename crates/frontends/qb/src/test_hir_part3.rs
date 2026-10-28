@@ -3784,3 +3784,29 @@ fn test_a_common_variable_is_still_stored_before_a_chain() {
     let call = main.find("call far ptr B$SCHN").expect("the call");
     assert!(main[..call].contains("mov word ptr X%, 4"), "x% is stored: {main}");
 }
+
+/// An object linked with BRUN45.LIB crashed at start ("no stack segment", entry
+/// at 0:0): BC without /O marks the header `bm` and names `$AC`, `$DAC` and
+/// `b$seg`, which make LINK pull in the loader of BRUN45.EXE. Ours named none.
+#[test]
+fn the_run_time_module_flag_marks_the_header_and_names_the_loader_externals() {
+    let directory = tempfile::tempdir().expect("creates a directory");
+    let path = written(&directory, "rtm.bas", b"PRINT \"hello\"\r\nEND\r\n");
+    let build = |run_time_module: bool| {
+        let frontend = qb_driver::Frontend { run_time_module, ..qb_driver::Frontend::new("qb45", "qb45") };
+        let program = qb_driver::parsed(&path, &frontend, None).expect("parses");
+        let bytes = object_bytes(&program, "RTM.BAS").expect("emits");
+        let records = omf::parse(&bytes).expect("parses");
+        let externals = omf::externals(&records);
+        let marker =
+            bytes.windows(2).any(|pair| pair == b"bm") as u8 + bytes.windows(2).any(|pair| pair == b"bl") as u8 * 2;
+        (marker, externals)
+    };
+    let (marker, externals) = build(true);
+    assert_eq!(marker & 1, 1, "header marker bm");
+    for name in ["$AC", "$DAC", "b$seg"] {
+        assert!(externals.iter().any(|one| one == name), "{name} in {externals:?}");
+    }
+    let (_, plain) = build(false);
+    assert!(!plain.iter().any(|one| one == "$AC"), "{plain:?}");
+}
