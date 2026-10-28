@@ -105,11 +105,11 @@ INSTR = re.compile(r"^\[instr\]\s+([\d.]+) (Minstr|Mcpu-ns) own\s+[\d.]+ \S+ tot
 
 
 def own_work(command: list[str]) -> dict[str, float]:
-    """Each step's own user-space Minstr from llrm-c's `LLRM_DEBUG=time` [instr] rows. CPU time instead of a count is no count."""
+    """Each step's own user-space Minstr from llrm-llc's `LLRM_DEBUG=time` [instr] rows (llrm-cc runs it). CPU time instead of a count is no count."""
     text = scaling.sample(command, {"LLRM_DEBUG": "time", "LLRM_TIME_TOP": "100000"})[2]
     rows = INSTR.findall(text)
     if not rows or any(unit != "Minstr" for _, unit, _ in rows):
-        raise NoCounter("llrm-c printed no instruction counts per step")
+        raise NoCounter("llrm-llc printed no instruction counts per step")
     return {name: float(own) for own, _, name in rows}
 
 
