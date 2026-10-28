@@ -1128,6 +1128,15 @@ fn test_bt_of_a_register_and_an_immediate_encodes() {
     assert_eq!(hex(&made(emitted(&bt)).code), "660fbae201");
 }
 
+/// `bt dword [bp-4], imm8` had no form: a union of one-bit bit-fields tested
+/// from memory (pr40493 at -O0) stopped `--isel=dag` on `BT32mi8`.
+#[test]
+fn test_bt_of_a_cell_and_an_immediate_encodes() {
+    let cell = Loc::Mem(ir::Mem { through: RegId::BP, disp_width: 2, ..frame(-4, 4) });
+    let bt = sem(Operation::Compare, Some("bt"), vec![], vec![cell, imm(1, 1)], None, false);
+    assert_eq!(hex(&made(emitted(&bt)).code), "660fba66fc01");
+}
+
 /// `dec byte [bp-4]` was unprintable: the memory form took words only, so
 /// `llrm-nib -m16 -O0 runtime.nib` stopped on G$74 under the DAG selector.
 #[test]
