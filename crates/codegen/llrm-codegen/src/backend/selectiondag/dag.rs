@@ -243,6 +243,12 @@ pub struct SelectionDAG {
     /// The IR instruction each `IROrder` was made for, in order: what a
     /// debug record's `before` names.
     pub inst_order: Vec<(llrm_mir::module::InstId, u32)>,
+    /// The (low, high) halves type legalization expanded each integer value
+    /// into (`ExpandedIntegers`): where a debug record's value went.
+    pub expanded_integers: std::collections::HashMap<SDValue, (SDValue, SDValue)>,
+    /// Each value `replace_all_uses_with` replaced, by what replaced it: where
+    /// a debug record's value went (`transferDbgValues`).
+    forwarded: std::collections::HashMap<SDValue, SDValue>,
     /// `CombineTo` calls a target hook made: the combiner replaces each and
     /// looks at the users again.
     replacements: Vec<(SDValue, SDValue)>,
@@ -333,6 +339,8 @@ impl SelectionDAG {
             cur_order: 0,
             lines: Vec::new(),
             inst_order: Vec::new(),
+            expanded_integers: Default::default(),
+            forwarded: Default::default(),
             replacements: Vec::new(),
             config,
             entry: zero,
@@ -645,6 +653,22 @@ impl SelectionDAG {
         std::mem::take(&mut self.replacements)
     }
 
+    /// `value` as the nodes built from it left it: followed through every
+    /// replacement.
+    pub fn resolve(
+        &self,
+        mut value: SDValue,
+    ) -> SDValue {
+        // The chain has no cycle: a value is replaced by a later one.
+        for _ in 0..self.forwarded.len() + 1 {
+            match self.forwarded.get(&value) {
+                Some(&next) if next != value => value = next,
+                _ => break,
+            }
+        }
+        value
+    }
+
     /// `ReplaceAllUsesWith(From, To)`: every operand `from` becomes `to`. A
     /// user that then equals an existing node is replaced by it in turn
     /// (`AddModifiedNodeToCSEMaps`); the arena only grows, so replaced nodes
@@ -660,6 +684,7 @@ impl SelectionDAG {
         }
         let mut work = vec![(from, to)];
         while let Some((from, to)) = work.pop() {
+            self.forwarded.insert(from, to);
             if self.root == from {
                 self.root = to;
             }

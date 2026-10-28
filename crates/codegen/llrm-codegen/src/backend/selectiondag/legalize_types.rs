@@ -183,6 +183,10 @@ impl<'a> TypeLegalizer<'a> {
             self.set_id(n, NodeId::Processed);
             self.release_users(n);
         }
+        // What the debug records of an expanded value name: its two halves.
+        for (value, halves) in &self.expanded {
+            self.dag.expanded_integers.insert(*value, *halves);
+        }
         Ok(changed)
     }
 
