@@ -719,6 +719,32 @@ entry:
     }
 }
 
+/// `llvm.copysign` was a call to the C library at m64; the pin selects the
+/// magnitude and sign masks (`andps` x2) and joins them (`orps`).
+#[test]
+fn an_m64_copysign_is_two_masks_and_an_or() {
+    for ty in ["double", "float"] {
+        let text = format!(
+            "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+declare {ty} @llvm.copysign.{s}({ty}, {ty})
+define {ty} @f({ty} %x, {ty} %y) {{
+entry:
+  %r = call {ty} @llvm.copysign.{s}({ty} %x, {ty} %y)
+  ret {ty} %r
+}}
+",
+            s = if ty == "double" { "f64" } else { "f32" }
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).unwrap_or_else(|e| panic!("{ty}: {}", e.0));
+        let insns = done.body.insns();
+        let names: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter_map(|w| w.name.as_deref()).collect();
+        let count = |n: &str| names.iter().filter(|x| **x == n).count();
+        assert_eq!((count("andps"), count("orps")), (2, 1), "{ty}: {names:?}");
+    }
+}
+
 /// `umul.with.overflow.i64` at m64 stopped at `CannotSelect("Target(776)")`:
 /// `X86ISD::UMUL` had the one-operand `mul` at 8, 16 and 32 bits only. It is
 /// `mul` with the operand in `rax`.

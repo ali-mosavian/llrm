@@ -283,6 +283,7 @@ static void close_fdb(Fdb *fdb)
     buffer_release();
     llrm_os_close(fdb->handle);
     lh_free(fdb);
+    lh_compact(); /* B$LHDALC_CPCT: no hole is left in the heap */
 }
 
 /* B$CLOS: CLOSE #a, #b ... closes those channels, and a bare CLOSE every file.
@@ -506,6 +507,55 @@ void B_PUT4(short channel, long record, qb_data_ptr data, short length)
 {
     position_at(open_fdb(channel), record);
     B_PUT3(channel, data, length);
+}
+
+/* B$GET1, B$PUT1: GET #n and PUT #n move the record buffer FIELD names, at the next record; B$GET2, B$PUT2: at a record
+   number. A record the file ends inside of (BC 4.5, measured) reads as far as there is, the rest of the buffer zeroed. */
+static Fdb *random_fdb(short channel)
+{
+    Fdb *fdb = open_fdb(channel);
+
+    if (fdb->mode != MD_RANDOM)
+        qb_error(BE_FILEMODE);
+    return fdb;
+}
+
+void B_GET1(short channel)
+{
+    Fdb *fdb = random_fdb(channel);
+    long got;
+
+    buffer_release();
+    got = llrm_os_read(fdb->handle, (os_data_mut)FDB_BUFFER(fdb), fdb->record_length);
+    if (got < 0)
+        qb_error(os_error(got));
+    for (; (unsigned long)got < fdb->record_length; got++)
+        FDB_BUFFER(fdb)[got] = 0;
+}
+
+void B_PUT1(short channel)
+{
+    Fdb *fdb = random_fdb(channel);
+    long put;
+
+    buffer_release();
+    put = llrm_os_write_file(fdb->handle, (os_data)FDB_BUFFER(fdb), fdb->record_length);
+    if (put < 0)
+        qb_error(os_error(put));
+    if ((unsigned)put != fdb->record_length)
+        qb_error(BE_DISKFULL);
+}
+
+void B_GET2(short channel, long record)
+{
+    position_at(random_fdb(channel), record);
+    B_GET1(channel);
+}
+
+void B_PUT2(short channel, long record)
+{
+    position_at(random_fdb(channel), record);
+    B_PUT1(channel);
 }
 
 /* B$SSEK: SEEK #channel, position. */
@@ -786,6 +836,10 @@ void file_xinit(void)
 #pragma aux B_FLOF "B$FLOF"
 #pragma aux B_FATR "B$FATR"
 #pragma aux B_FLDP "B$FLDP"
+#pragma aux B_GET1 "B$GET1"
+#pragma aux B_PUT1 "B$PUT1"
+#pragma aux B_GET2 "B$GET2"
+#pragma aux B_PUT2 "B$PUT2"
 #pragma aux B_FIEL "B$FIEL"
 #pragma aux file_close "@file_close@4"
 #pragma aux B_GET4 "B$GET4"
