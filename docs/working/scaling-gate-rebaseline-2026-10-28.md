@@ -29,7 +29,7 @@ doubling on `cases`; `dag isel` 2.9× on `joins`; the `chain` 512 compile is 3.5
 
 The generic gate (`scaling_gate.py`) still bounds every present step per axis.
 
-`ssa flow`, `split placed`, `split carving`, `ssa repaired`, `analysis dominated-edges` (2), `analysis bounded`, `analysis counted` (4),
+`ssa flow`, `split placed`, `split carving`, `ssa repaired`, `analysis dominated-edges` (2), `analysis bounded`, `analysis counted` (3),
 `analysis through-memory`, `spill color slots`, `intervals homes`, `mir homes`, `analysis float-facts`, `regalloc spill`,
 `analysis loop-products`, `analysis pressure`/`registers`, `lir floatassign` (2nd test), `spill short/local updates`, `after queue`,
 `after wanted` (2). The old allocator and its sub-steps are deleted; the analyses that remain are not run by these workloads.
