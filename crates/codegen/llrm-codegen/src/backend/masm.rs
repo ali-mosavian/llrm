@@ -2386,8 +2386,11 @@ pub fn _instruction(
         Operation::Extend => {
             // `cvtss2sd xmm0, xmm1`, `cvtsi2sd xmm0, eax`: the SSE converts
             // name their operands; `cwd` and `cdq` name theirs in the opcode.
-            if matches!(name, "movsx" | "movzx") || name.starts_with("cvt") {
-                vec![format!("{name} {}, {}", dests[0], sources[0])]
+            if matches!(name, "movsx" | "movzx")
+                || name.starts_with("cvt")
+                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x")
+            {
+                vec![format!("{} {}, {}", name.trim_end_matches("_x"), dests[0], sources[0])]
             } else {
                 vec![name.to_owned()]
             }
