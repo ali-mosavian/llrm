@@ -164,11 +164,6 @@ def nib_extras(source: Path) -> list[str]:
     return [str(one) for one in dosbatch.link_files(source, run_tests.header(source).get("link", "").split(), dosbatch.REAL_MODE)]
 
 
-def c_include_arguments(work: Path) -> list[str]:
-    """`-I` for the OS layer's C header (llrm_os.h), as tests/run gives every C program: a bench that includes bench_io.h needs it."""
-    return ["-I", str(dosbatch.c_include(dosbatch.REAL_MODE, work))]
-
-
 def c_environment(variant: Variant) -> dict[str, str]:
     """What llrm-cc is told of a C program's target: the Watcom row of the 16-bit target, whose programs enter `main_` as dosbatch links them."""
     return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
@@ -254,7 +249,7 @@ def compiles(variant: Variant, opt: str, work: Path, stem: str) -> list[tuple[st
     extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
     kept = kept_a_call(variant, work, stem) if variant.language == "c" else None
     if variant.language == "c":
-        extra += [*c_include_arguments(work), "-I", str(variant.source.parent), "-c"]
+        extra += ["-I", str(variant.source.parent), "-c"]
     flags = compile_flags(variant, opt, kept is not None)
     out = [(tool, [str(kept[1] if kept else variant.source), *arguments, *extra, *flags, "-o", str(obj)], obj)]
     if kept:
@@ -290,7 +285,7 @@ def build(variant: Variant, opt: str, work: Path, stem: str, objects: dict | Non
             arguments = ["--dialect", "qb45", "-fqb-runtime=llrm"]
         extra = [one for one in run_tests.compiler_arguments(variant.source) if one not in ("--dialect", "--runtime", variant.dialect)]
         if variant.language == "c":
-            extra += [*c_include_arguments(work), "-I", str(variant.source.parent), "-c"]
+            extra += ["-I", str(variant.source.parent), "-c"]
         done = cpulimit.run(dosbatch.with_isel([str(BIN / tool), str(source), *arguments, *extra, *flags, "-o", str(obj)]), 300, env=c_environment(variant), capture_output=True, text=True)
         if done.returncode != 0 or not obj.exists():
             return "compile: " + (done.stderr or done.stdout).strip()[-300:]
