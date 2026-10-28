@@ -1261,8 +1261,8 @@ def red_members(members: list[str], red_with, alone_red) -> list[str]:
 
 
 def named_files(text: str) -> set[str]:
-    """The `.rs` paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`)."""
-    return set(re.findall(r"[\w./-]+\.rs\b", text))
+    """The file paths a failure text names (`crates/x/src/y.rs: 7 copies of a target fact`, `tools/pairs/dyn.py: 1 copies`)."""
+    return set(re.findall(r"[\w-]+(?:/[\w.-]+)+\.\w+", text))
 
 
 def red_members_suspects_first(members: list[str], suspects: list[str], red_with, alone_red) -> list[str]:

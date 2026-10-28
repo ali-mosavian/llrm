@@ -1915,3 +1915,4 @@ def test_a_red_naming_a_file_asks_the_prs_touching_it_before_the_rest():
     assert ps.red_members_suspects_first(["1", "2", "3", "4", "5"], ["3"], None, alone) == ["5"]
     assert asked[0] == "3", asked
     assert ps.named_files("[integration t::x: crates/a/src/fpregs.rs: 7 copies; crates/b/mod.rs: 2]") == {"crates/a/src/fpregs.rs", "crates/b/mod.rs"}
+    assert ps.named_files("[tools/pairs/dyn.py: 1 copies of a target fact, none allowed]") == {"tools/pairs/dyn.py"}  # the 07:01 red named a .py file
