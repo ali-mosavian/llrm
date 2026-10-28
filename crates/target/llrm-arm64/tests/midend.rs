@@ -122,8 +122,8 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
     assert_eq!(flags, 9, "S_MOD_INIT_FUNC_POINTERS");
 }
 
-/// A name clang writes `"\01_pthread_join"` is the symbol as given; the Mach-O underscore was added
-/// again, and `ld` looked for `__pthread_join`.
+/// A name clang writes `"\01_pthread_join"` is the symbol as given; the Mach-O
+/// underscore was added again, and `ld` looked for `__pthread_join`.
 #[test]
 fn a_verbatim_name_gets_no_underscore() {
     let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
