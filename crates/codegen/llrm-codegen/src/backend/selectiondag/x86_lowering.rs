@@ -59,6 +59,8 @@ pub mod x86isd {
     /// (`sbb r, r`), else `0`.
     pub const SETCC_CARRY: ISD = ISD::Target(740);
     pub const BSF: ISD = ISD::Target(495);
+    pub const FSHL: ISD = ISD::Target(625);
+    pub const FSHR: ISD = ISD::Target(626);
     pub const BSR: ISD = ISD::Target(496);
     pub const CMOV: ISD = ISD::Target(507);
     pub const CMP: ISD = ISD::Target(508);
@@ -321,6 +323,7 @@ impl Hooks for X86Lowering {
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
+            ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
             ISD::FCopySign => lower_fcopysign(dag, node),
             ISD::DynamicStackAlloc => lower_dynamic_stackalloc(dag, node),
@@ -1413,6 +1416,30 @@ fn lower_setcc_carry(
     dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags])
 }
 
+/// The two halves of `expandFP_TO_UINT` for an `i64`: `value` less 2^63 when it
+/// is at least that, and the sign bit (`1 << 63`) to put back when it was.
+fn unsigned_fixup_operands(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    float: MVT,
+) -> (SDValue, SDValue) {
+    let value_vt = dag.value_type(value);
+    // 2^63, the first value that does not fit a signed `i64`.
+    let threshold = match float {
+        MVT::F32 => 0x5F00_0000u128,
+        MVT::F64 => 0x43E0_0000_0000_0000,
+        _ => (0x403Eu128 << 64) | (1u128 << 63),
+    };
+    let threshold = dag.get_constant_fp(threshold, value_vt);
+    let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
+    let sixty_three = dag.get_constant(63, EVT::I8);
+    let adjust = dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]);
+    let zero = dag.get_constant_fp(0, value_vt);
+    let offset = dag.get_select(value_vt, at_least, threshold, zero);
+    (dag.get_node(ISD::FSub, value_vt, &[value, offset]), adjust)
+}
+
 /// `FP_TO_INTHelper` for the x87: `fist` of the value to a stack slot of the
 /// result's size, then a load of it. An unsigned `i32` goes through an `i64`
 /// slot; an unsigned `i64` subtracts 2^63 from a value at or above it and
@@ -1443,6 +1470,14 @@ fn lower_fp_to_int(
             let wide = dag.get_node(ISD::FpToSInt, via, &[value]);
             return Some(dag.get_node(ISD::Truncate, result_vt, &[wide]));
         }
+        // An unsigned `i64` at m64 (`expandFP_TO_UINT`): the value less 2^63
+        // when it is at least that, converted signed, with the sign bit put
+        // back.
+        if !signed && result_vt == EVT::I64 && pointer == EVT::I64 {
+            let (shifted, adjust) = unsigned_fixup_operands(dag, value, float);
+            let wide = dag.get_node(ISD::FpToSInt, EVT::I64, &[shifted]);
+            return Some(dag.get_node(ISD::Xor, EVT::I64, &[wide, adjust]));
+        }
     }
     let unsigned_fixup = !signed && result_vt == EVT::I64;
     let stored_vt = if !signed && result_vt != EVT::I64 { EVT::I64 } else { result_vt };
@@ -1452,20 +1487,9 @@ fn lower_fp_to_int(
     let chain = dag.entry_node();
     let mut adjust = None;
     if unsigned_fixup {
-        // 2^63, the first value that does not fit a signed `i64`.
-        let threshold = match float {
-            MVT::F32 => 0x5F00_0000u128,
-            MVT::F64 => 0x43E0_0000_0000_0000,
-            _ => (0x403Eu128 << 64) | (1u128 << 63),
-        };
-        let threshold = dag.get_constant_fp(threshold, value_vt);
-        let at_least = dag.get_setcc(EVT::I8, value, threshold, CondCode::SetGe);
-        let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[at_least]);
-        let sixty_three = dag.get_constant(63, EVT::I8);
-        adjust = Some(dag.get_node(ISD::Shl, EVT::I64, &[wide, sixty_three]));
-        let zero = dag.get_constant_fp(0, value_vt);
-        let offset = dag.get_select(value_vt, at_least, threshold, zero);
-        value = dag.get_node(ISD::FSub, value_vt, &[value, offset]);
+        let (shifted, flip) = unsigned_fixup_operands(dag, value, float);
+        value = shifted;
+        adjust = Some(flip);
     }
     let info =
         MemInfo { mem_vt: stored_vt, align: size, volatile: false, base: MemBase::Stack(index), ext: None, space: 0 };
@@ -1793,6 +1817,64 @@ fn combine_mul(
         }
     }
     new_mul
+}
+
+/// `LowerFunnelShift`, the scalar part ([L32188][pin]). An `i8` by a variable
+/// is done in a dword: `fshl(x,y,z)` is `(((aext x << 8) | zext y) << (z & 7))
+/// >> 8`. An `i8` by a constant is two shifts and an `or`
+/// (`expandFunnelShift`). An `i16` is the target node with the amount modulo
+/// 16 (`SHLD16`/`SHRD16`); the dword is already legal.
+///
+/// DEVIATE SD247: the `isSHLDSlow` expansion of `i16` is not translated (no
+/// target of ours sets it). Owner sdag-b.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L32188
+fn lower_funnel_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let is_fshr = dag.opcode(node) == ISD::FShr;
+    let (op0, op1, amount) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let amount_vt = dag.value_type(amount);
+    let bits = vt.size_in_bits();
+    if vt == EVT::I8 {
+        if let Some(by) = dag.constant(amount) {
+            let by = (by % u128::from(bits)) as u32;
+            if by == 0 {
+                return Some(if is_fshr { op1 } else { op0 });
+            }
+            let (left, right) = if is_fshr { (bits - by, by) } else { (by, bits - by) };
+            let high = dag.get_constant(u128::from(left), amount_vt);
+            let low = dag.get_constant(u128::from(right), amount_vt);
+            let high = dag.get_node(ISD::Shl, vt, &[op0, high]);
+            let low = dag.get_node(ISD::Srl, vt, &[op1, low]);
+            return Some(dag.get_node(ISD::Or, vt, &[high, low]));
+        }
+        let wide = EVT::I32;
+        let mask = dag.get_constant(u128::from(bits - 1), amount_vt);
+        let shift = dag.get_constant(u128::from(bits), amount_vt);
+        let hi = dag.get_node(ISD::AnyExtend, wide, &[op0]);
+        let lo = dag.get_zext_or_trunc(op1, wide);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let hi = dag.get_node(ISD::Shl, wide, &[hi, shift]);
+        let mut result = dag.get_node(ISD::Or, wide, &[hi, lo]);
+        if is_fshr {
+            result = dag.get_node(ISD::Srl, wide, &[result, amount]);
+        } else {
+            result = dag.get_node(ISD::Shl, wide, &[result, amount]);
+            result = dag.get_node(ISD::Srl, wide, &[result, shift]);
+        }
+        return Some(dag.get_node(ISD::Truncate, vt, &[result]));
+    }
+    if vt == EVT::I16 {
+        let mask = dag.get_constant(15, amount_vt);
+        let amount = dag.get_node(ISD::And, amount_vt, &[amount, mask]);
+        let op = if is_fshr { x86isd::FSHR } else { x86isd::FSHL };
+        return Some(dag.get_node(op, vt, &[op0, op1, amount]));
+    }
+    None
 }
 
 /// `LowerShiftParts` (`TargetLowering::expandShiftParts`): a double-width
