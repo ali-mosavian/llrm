@@ -351,7 +351,7 @@ impl<'a> Selector<'a> {
         global: GlobalId,
     ) -> Selected<String> {
         let name = self.module.global(global).name.owned().ok_or("an unnamed global")?;
-        Ok(if self.platform.underscore() { format!("_{name}") } else { name })
+        Ok(crate::data::symbol_name(self.platform, &name))
     }
 
     /// Whether the global is reached through the GOT: it may be defined in

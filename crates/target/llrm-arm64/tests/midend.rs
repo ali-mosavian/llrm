@@ -121,3 +121,17 @@ fn global_ctors_become_init_function_pointers_in_priority_order() {
     let flags = u32::from_le_bytes(file[at + 64..at + 68].try_into().unwrap());
     assert_eq!(flags, 9, "S_MOD_INIT_FUNC_POINTERS");
 }
+
+/// A name clang writes `"\01_pthread_join"` is the symbol as given; the Mach-O underscore was added
+/// again, and `ld` looked for `__pthread_join`.
+#[test]
+fn a_verbatim_name_gets_no_underscore() {
+    let text = "target datalayout = \"e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+target triple = \"arm64-apple-macosx27.2.0\"\n\
+declare i32 @\"\\01_pthread_join\"(ptr, ptr)\n\
+define i32 @f(ptr %t) {\n  %r = call i32 @\"\\01_pthread_join\"(ptr %t, ptr null)\n  ret i32 %r\n}\n";
+    let object = driver::object(text, Platform::Darwin, "verbatim.o", true).expect("lowers");
+    let names: Vec<&str> = object.symbols.iter().map(|symbol| symbol.name.as_str()).collect();
+    assert!(names.contains(&"_pthread_join"), "{names:?}");
+    assert!(!names.contains(&"__pthread_join"), "{names:?}");
+}
