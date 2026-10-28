@@ -461,15 +461,6 @@ impl super::emit::Conventions for CallConventions<'_> {
                 self.general,
             ));
         }
-        // a runtime routine also destroys what its contract says
-        if let (Some(contracts), Some(Callee::Global(id))) = (self.contracts, callee) {
-            let name = self.module.global(llrm_mir::context::GlobalId(*id)).name.owned().unwrap_or_default();
-            if name.starts_with(crate::hir::mir::RUNTIME)
-                && let Ok(contract) = contracts.abi.contract(&name, false, 0)
-            {
-                out.extend(crate::backend::callregs::call_clobbers(&contract, contracts.segments, self.general));
-            }
-        }
         Some(out)
     }
 }
