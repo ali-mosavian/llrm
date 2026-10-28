@@ -49,6 +49,35 @@ pub fn collections() -> usize {
     COLLECTIONS.with(std::cell::Cell::get)
 }
 
+thread_local! {
+    static VISITS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The blocks a collection has been to (`VisitedBlocks`). Returns the
+/// (inserts, elements examined) on this thread: a test bounds the second by
+/// the first.
+pub fn visits() -> (usize, usize) {
+    VISITS.with(std::cell::Cell::get)
+}
+
+/// A `SmallPtrSet` of blocks.
+#[derive(Default)]
+struct Visited(llrm_mir::hash::HashSet<BlockId>);
+
+impl Visited {
+    /// Whether `block` was new.
+    fn insert(
+        &mut self,
+        block: BlockId,
+    ) -> bool {
+        VISITS.with(|one| {
+            let (inserts, examined) = one.get();
+            one.set((inserts + 1, examined + 1));
+        });
+        self.0.insert(block)
+    }
+}
+
 impl LoopGuards {
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L15749
     /// `LoopGuards::collect(L, SE)`.
@@ -62,7 +91,7 @@ impl LoopGuards {
         let header = loop_.get_header();
         let mut guards = Self::default();
         let Some(pred) = loop_.get_loop_predecessor(cx.function) else { return guards };
-        let mut visited_blocks = Vec::new();
+        let mut visited_blocks = Visited::default();
         Self::collect_from_block(se, cx, &mut guards, header, pred, &mut visited_blocks, 0);
         guards
     }
@@ -74,7 +103,7 @@ impl LoopGuards {
         cx: &Cx,
         guards: &mut Self,
         phi: llrm_mir::module::InstId,
-        visited_blocks: &mut Vec<BlockId>,
+        visited_blocks: &mut Visited,
         incoming_guards: &mut Vec<(BlockId, LoopGuards)>,
         depth: u32,
     ) {
@@ -92,15 +121,14 @@ impl LoopGuards {
 
         type MinMaxPattern = Option<(Ap, Type)>;
         let get_min_max_const = |se: &mut ScalarEvolution,
-                                 visited_blocks: &mut Vec<BlockId>,
+                                 visited_blocks: &mut Visited,
                                  incoming_guards: &mut Vec<(BlockId, LoopGuards)>,
                                  index: usize|
          -> MinMaxPattern {
             let (value, in_block) = incoming[index];
-            if visited_blocks.contains(&in_block) {
+            if !visited_blocks.insert(in_block) {
                 return None;
             }
-            visited_blocks.push(in_block);
 
             // Avoid analyzing unreachable blocks so that we don't get trapped
             // traversing cycles with ill-formed dominance or infinite cycles.
@@ -168,7 +196,7 @@ impl LoopGuards {
         guards: &mut Self,
         block: BlockId,
         pred: BlockId,
-        visited_blocks: &mut Vec<BlockId>,
+        visited_blocks: &mut Visited,
         depth: u32,
     ) {
         debug_assert!(cx.tree.is_reachable(block) && cx.tree.is_reachable(pred));
@@ -202,17 +230,13 @@ impl LoopGuards {
         // leading to the original header.
         // TODO (LLVM): share this logic with isLoopEntryGuardedByCond.
         let mut num_collected_conditions = 0;
-        if !visited_blocks.contains(&block) {
-            visited_blocks.push(block);
-        }
+        visited_blocks.insert(block);
         let mut pair = Some((pred, block));
         // `Pair.second` after the loop: the block the climb stopped at.
         let mut stopped_at = block;
         while let Some((first_block, second)) = pair {
             stopped_at = second;
-            if !visited_blocks.contains(&second) {
-                visited_blocks.push(second);
-            }
+            visited_blocks.insert(second);
             if let Some(terminator) = cx.function.terminator(first_block) {
                 let branch = cx.function.instruction(terminator);
                 if let (Opcode::Br, [condition, Operand::Block(taken), Operand::Block(_)]) =

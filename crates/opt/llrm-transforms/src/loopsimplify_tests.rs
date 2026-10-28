@@ -572,3 +572,32 @@ exit:
         function.layout().iter().map(|&one| function.block(one).name.as_deref().unwrap_or("new")).collect();
     assert_eq!(order, ["entry", "h1", "new", "b1", "h2", "b2", "exit"]);
 }
+
+/// `n` self-loops in a row, each entered from two blocks.
+fn entered_twice(n: usize) -> String {
+    let mut text = String::from("define void @f(i1 %c) {\nb0:\n  br label %e0\n\n");
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("e{}", k + 1) };
+        text += &format!(
+            "e{k}:\n  br i1 %c, label %h{k}, label %m{k}\n\nm{k}:\n  br label %h{k}\n\nh{k}:\n  br i1 %c, label %h{k}, label %x{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text + "end:\n  ret void\n}\n"
+}
+
+/// `simplifyLoop` found each loop's parent by asking every loop whether it held
+/// the header, and a header's place by a walk of the function: 128 loops in a
+/// row cost the pass 82 M instructions on the generated nests, the work
+/// growing with the square of the loops. A block is looked at once for each
+/// loop around it.
+#[test]
+fn finding_the_parents_of_loops_looks_at_each_block_once_per_loop_around_it() {
+    let probes = |n: usize| {
+        let before = super::parent_probes();
+        let (_, after) = simplify(&entered_twice(n));
+        assert_eq!(shape(&after, "h0"), (1, 1, true));
+        super::parent_probes() - before
+    };
+    let (a, b) = (probes(32), probes(128));
+    assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
+}

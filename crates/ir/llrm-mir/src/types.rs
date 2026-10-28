@@ -218,6 +218,12 @@ impl Types {
         matches!(self.get(id), Type::Void)
     }
 
+    /// What a held fact about these types was true of: how many there are, and
+    /// how many identified structs.
+    pub fn version(&self) -> (usize, usize) {
+        (self.types.len(), self.named.len())
+    }
+
     pub fn body(
         &self,
         name: &str,
