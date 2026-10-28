@@ -18,6 +18,28 @@ pub trait AsmBackend {
         out: &mut Vec<u8>,
         count: usize,
     ) -> bool;
+
+    /// Mach-O's compact unwind encoding for a function whose prologue the
+    /// call frame instructions `cfi` describe
+    /// (`MCAsmBackend::generateCompactUnwindEncoding`); 0 where the target has
+    /// none, which leaves the function to its DWARF frame.
+    fn generate_compact_unwind_encoding(
+        &self,
+        _cfi: &[Cfi],
+    ) -> u32 {
+        0
+    }
+}
+
+/// A call frame instruction (`MCCFIInstruction`), the operations a prologue
+/// states: the register and offset the canonical frame address is, and where a
+/// register is saved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Cfi {
+    DefCfa { register: u16, offset: i64 },
+    DefCfaRegister { register: u16 },
+    DefCfaOffset { offset: i64 },
+    Offset { register: u16, offset: i64 },
 }
 
 /// A piece of a section as the assembler lays it out (`MCFragment`): a label,
@@ -110,6 +132,31 @@ mod tests {
 
     /// A 3-byte body at offset 1 with a 16-byte preference pads to 4 (the
     /// body's power of two), never to 16.
+    /// A backend that says nothing of unwinding leaves a function to its DWARF
+    /// frame: encoding 0, whatever its prologue states.
+    #[test]
+    fn a_backend_with_no_compact_unwind_encodes_zero() {
+        struct Plain;
+        impl AsmBackend for Plain {
+            fn kind_info(
+                &self,
+                kind: FixupKind,
+            ) -> FixupKindInfo {
+                kind.info()
+            }
+
+            fn write_nop_data(
+                &self,
+                _: &mut Vec<u8>,
+                _: usize,
+            ) -> bool {
+                false
+            }
+        }
+        let prologue = [Cfi::DefCfaOffset { offset: 16 }, Cfi::Offset { register: 6, offset: -16 }];
+        assert_eq!(Plain.generate_compact_unwind_encoding(&prologue), 0);
+    }
+
     /// Made-up fragments, no target: a label, fixed bytes, a jump of 2 bytes
     /// that grows to 5 when its label is more than 127 bytes off.
     enum Test {
