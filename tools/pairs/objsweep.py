@@ -55,7 +55,8 @@ DEBUG_LEGS = {
 
 def writer_results(directory: Path) -> dict[str, str]:
     """The md5 of each `<format>.bin` the compile wrote through LLRM_OBJECT_ALL_WRITERS: every writer of the object's architecture, not only the one the target chose."""
-    return {file.stem: hashlib.md5(file.read_bytes()).hexdigest()[:12] for file in sorted(directory.glob("*.bin"))}
+    # A writer that refused the object leaves `<format>.err`: its message is compared like bytes, so a refusal on one side shows.
+    return {file.name: hashlib.md5(file.read_bytes()).hexdigest()[:12] for pattern in ("*.bin", "*.err") for file in sorted(directory.glob(pattern))}
 
 
 def run_compiler(command: list[str], out: Path, writers: dict[str, str] | None, environment: dict[str, str] | None = None) -> tuple[bytes | None, str]:
