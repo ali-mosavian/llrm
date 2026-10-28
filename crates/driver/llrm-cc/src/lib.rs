@@ -205,6 +205,7 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-bss-begin",
     "-fstack-usage",
     "-ffloat-store",
+    "-fverify-ir",
     "-fno-float-store",
 ];
 const LLC_PREFIXES: &[&str] =

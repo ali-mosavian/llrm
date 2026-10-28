@@ -873,7 +873,7 @@ fn dwarf_in_an_omf_object_links_into_an_le_image_that_llvm_reads() {
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let linked = Command::new(&jwlink)
         .args(["format", "os2", "le", "debug", "dwarf", "file", "known.obj", "name", "known.exe"])
-        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .args(["option", "quiet,start=main_,nodefaultlibs"])
         .current_dir(dir)
         .output()
         .unwrap();
@@ -896,7 +896,7 @@ fn dwarf_in_an_omf_object_links_into_an_le_image_that_llvm_reads() {
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
     let linked = Command::new(&jwlink)
         .args(["format", "os2", "le", "file", "plain.obj", "name", "plain.exe"])
-        .args(["option", "quiet,start=_main,nodefaultlibs"])
+        .args(["option", "quiet,start=main_,nodefaultlibs"])
         .current_dir(dir)
         .output()
         .unwrap();

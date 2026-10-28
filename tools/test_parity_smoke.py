@@ -684,6 +684,17 @@ assertion `left == right` failed: a node on the worklist is ready
     assert reasons["the_second_half_of_a_far_i64_load_moves_the_offset_and_keeps_the_selector"] == "assertion `left == right` failed: a node on the worklist is ready (left: Processed, right: Ready)"
 
 
+def test_the_compile_smoke_drives_the_c_compiler_llrm_cc_names(tmp_path, monkeypatch):
+    """C2 switches the C compiler to llrm-cc: a smoke that compiled with the name "llrm-c" would still pass on a dist that has only the old binary."""
+    seen = []
+    monkeypatch.setattr(ps, "compile_ok", lambda command, env: seen.append(Path(command[0]).name))
+    for name in ("llrm-cc", "llrm-c"):
+        (tmp_path / name).write_text("")
+    ps.programs(tmp_path)
+    assert {"llrm-cc"} <= set(seen) and "llrm-c" not in seen
+
+
+
 def test_a_failing_scanner_names_the_stale_pages_in_its_cause():
     """docs_in_sync was refused at 01:41, 01:44 and 02:08 as a bare test name; w1 could not tell which page, and the scratch tree passed."""
     output = """\
