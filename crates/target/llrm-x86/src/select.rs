@@ -1707,7 +1707,9 @@ pub fn funnel_mem(
     let bits = i64::from(cell.width) * 8;
     let opcode = name.to_uppercase();
     let instruction = match count {
-        None => raised(create_mem_reg_reg(code_of!(opcode, "_RM", bits, "_R", bits, "_CL")?, r#where, other, RegId::CL)),
+        None => {
+            raised(create_mem_reg_reg(code_of!(opcode, "_RM", bits, "_R", bits, "_CL")?, r#where, other, RegId::CL))
+        }
         Some(count) => {
             raised(create_mem_reg_i32(code_of!(opcode, "_RM", bits, "_R", bits, "_IMM8")?, r#where, other, count))
         }
