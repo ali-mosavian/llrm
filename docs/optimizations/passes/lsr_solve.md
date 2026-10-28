@@ -26,3 +26,4 @@ Nothing runs it yet: stage 5 of the translation of LSR.
 ## Limits
 DEVIATE: `AMK_PostIndexed` (x86 prefers none) is not ported.
 DEVIATE LU3: see `solve`, the drop of a rewrite that spills (real mode).
+DEVIATE LU4: real mode also drops a rewrite its own model rates worse than the loop (`should_drop_lsr_solution_if_less_profitable`; the pin's X86 does not). Price, QCport 65 modules -Os m16 llrm-cc old: 216225 -> 215564 B (-661; 20 modules smaller, 10 larger, worst +40); bench C -Os: matmul 6702 -> 6347 instructions, 299 -> 286 B, 47 programs equal; BASIC and Nib: 5 of 82 differ, matmul/quicksort nib 6809 vs 7268 and 232891 vs 266197 instructions fewer, no program slower. Exit: none, a size rule for a target the pin does not have.
