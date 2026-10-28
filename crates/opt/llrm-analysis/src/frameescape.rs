@@ -285,6 +285,7 @@ pub fn analysed(function: &Function) -> Escapes {
 
 thread_local! {
     static SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WHOLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -296,6 +297,21 @@ pub fn whole_runs() -> usize {
 
 /// How many times this thread has asked `exposes` of one alloca, for a test
 /// that a function's answers are found once.
+pub fn reads() -> usize {
+    READS.with(std::cell::Cell::get)
+}
+
+/// Counts the operands `ExposedFrames::update` read from the edits it was
+/// given.
+pub fn count_reads(n: usize) {
+    READS.with(|reads| reads.set(reads.get() + n));
+}
+
+/// Whether `function` has an alloca, which every answer here is about.
+pub fn has_alloca(function: &Function) -> bool {
+    function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. }))
+}
+
 pub fn scans() -> usize {
     SCANS.with(std::cell::Cell::get)
 }
@@ -310,7 +326,7 @@ pub fn exposed_allocas(
 ) -> BTreeSet<ValueId> {
     // Nothing to answer for a function with no alloca; the scan below walks
     // every operand of every instruction.
-    if !function.walk().any(|(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Alloca { .. })) {
+    if !has_alloca(function) {
         return BTreeSet::new();
     }
     WHOLE.with(|runs| runs.set(runs.get() + 1));
