@@ -608,8 +608,13 @@ impl<'a> Folder<'a> {
             }
         }
         let mut insns: Vec<Arc<Insn>> = block.insns.iter().cloned().collect();
-        for (place, (at, _)) in run.iter().enumerate() {
-            insns.insert(from + place, Arc::clone(&first.insns[*at]));
+        for (place, (at, by)) in run.iter().enumerate() {
+            // One instruction for both ways: the line they share (L2251).
+            let (kept, other) = (&first.insns[*at], &second.insns[*by]);
+            let line = lir::merged_line(kept.line, other.line);
+            let hoisted =
+                if line == kept.line { Arc::clone(kept) } else { Arc::new(Insn { line, ..(**kept).clone() }) };
+            insns.insert(from + place, hoisted);
         }
         self.set(index, block.with_insns(insns).into_inner());
         for (place, leads) in
