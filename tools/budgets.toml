@@ -162,15 +162,6 @@ why = "measured 118.9 -> 359.9 Minstr (x3.03)"
 
 [[debt]]
 kind = "events"
-axis = "functions"
-name = "scev_nodes"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 17272 -> 51992 (x3.01)"
-
-[[debt]]
-kind = "events"
 axis = "branches"
 name = "lir_rename_asks"
 ratio = 2.8
