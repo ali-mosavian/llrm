@@ -100,20 +100,14 @@ impl LlrmC {
 
     fn command(&mut self) -> Command {
         let wide = self.arguments.iter().any(|one| one == "-m32");
-        // llrm-c wrote an object for an `.o`/`.obj` output; llrm-cc links
-        // unless told `-c`.
-        let object = self.arguments.windows(2).any(|pair| {
-            pair[0] == "-o"
-                && (pair[1].to_string_lossy().ends_with(".obj") || pair[1].to_string_lossy().ends_with(".o"))
-        }) && !self.arguments.iter().any(|one| one == "-c" || one == "-S" || one == "-E");
+        // llrm-c only ever wrote an object, to any `-o`; llrm-cc links unless
+        // told `-c` (or `-S`, `-E`).
+        let object = !self.arguments.iter().any(|one| one == "-c" || one == "-S" || one == "-E");
         let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc"));
         command
             .env("LLRM_CC_TARGET", if wide { "x86_32-wat" } else { "x86_16-wat" })
             .args(object.then_some("-c"))
             .args(self.arguments.iter().filter(|one| *one != "-m16" && *one != "-m32"))
-            // `llrm-c` only ever wrote an object; `llrm-cc` links a `.o`
-            // without it
-            .arg("-c")
             .envs(self.environment.iter().map(|(key, value)| (key, value)));
         for key in &self.removed {
             command.env_remove(key);
