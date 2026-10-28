@@ -129,16 +129,23 @@ impl DebugTarget {
     }
 }
 
+/// How the information is written, as against what it says: the format asked
+/// for and the habits of the compiler whose reader follows it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DebugOptions {
+    pub format: Format,
+    /// Which CodeView 4 an OMF object carries, where the frontend says.
+    pub dialect: Dialect,
+    pub producer: Producer,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Info {
     /// The machine, where the target says so; unset, [`DebugTarget::of`] the
     /// object's architecture.
     pub target: Option<DebugTarget>,
-    pub format: Format,
+    pub options: DebugOptions,
     pub language: Language,
-    /// Which CodeView 4 an OMF object carries, where the frontend says.
-    pub dialect: Dialect,
-    pub producer: Producer,
     /// The register a [`Location::Frame`] is relative to.
     pub frame_register: String,
     /// What a [`Location::Frame`] is measured from: that register, or the
@@ -467,6 +474,20 @@ impl Info {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The format asked for is not a fact of the program: changing it must
+    /// leave every fact `Info` states as it was.
+    #[test]
+    fn the_options_are_apart_from_the_facts() {
+        let facts = Info { language: Language::C, types: vec![Type::Scalar(Scalar::Char)], ..Info::default() };
+        let asked = Info {
+            options: DebugOptions { format: Format::Dwarf { version: 4 }, dialect: Dialect::Cv4, ..Default::default() },
+            ..facts.clone()
+        };
+        assert_ne!(asked, facts);
+        assert_eq!(DebugOptions::default(), facts.options);
+        assert_eq!(Info { options: DebugOptions::default(), ..asked }, facts);
+    }
 
     #[test]
     fn a_typedef_of_an_enum_of_a_byte_is_a_byte() {

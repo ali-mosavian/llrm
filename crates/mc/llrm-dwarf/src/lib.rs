@@ -49,7 +49,7 @@ pub fn expanded(
     object: &Object,
     info: &Info,
 ) -> Result<Object, Unsupported> {
-    let version = match info.format {
+    let version = match info.options.format {
         Format::Default => DEFAULT_VERSION,
         Format::Dwarf { version } if matches!(version, 2..=5) => version,
         Format::Dwarf { version } => return refused(format!("version {version} is not written: 2 to 5 are")),

@@ -1,4 +1,6 @@
-use llrm_object::debug::{Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable};
+use llrm_object::debug::{
+    DebugOptions, Function, Info, Kind, Line, Location, Range, Reach, Register, Scalar, Type, Variable,
+};
 use llrm_object::{Binding, Object, Section, Symbol, Target};
 
 use super::*;
@@ -39,7 +41,7 @@ fn object(
     };
     let register = |name: &str, dwarf| Register { name: name.into(), bits: 32, dwarf, codeview: None };
     let info = Info {
-        format,
+        options: DebugOptions { format, ..Default::default() },
         language: llrm_object::debug::Language::C,
         frame_register: "ebp".into(),
         registers: vec![register("ebp", Some(5)), register("eax", Some(0)), register("ah", None)],

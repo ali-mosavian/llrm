@@ -131,7 +131,7 @@ fn module(
     info: &Info,
 ) -> Result<cvwrite::Module, Error> {
     // QB 4.5's module record is nameless.
-    let name = (info.producer != model::Producer::Qb45).then(|| object.name.clone());
+    let name = (info.options.producer != model::Producer::Qb45).then(|| object.name.clone());
     let made = info.types.iter().map(typed).collect::<Result<Vec<_>, Error>>()?;
     let usable = usable(info, &made);
     let mut types: Vec<Type> = made
@@ -217,7 +217,7 @@ pub fn sections(
     object: &Object,
     info: &Info,
 ) -> Result<[Section; 2], Error> {
-    match info.format {
+    match info.options.format {
         model::Format::Default | model::Format::CodeView => {}
         model::Format::Dwarf { .. } => {
             return refused("OMF cannot carry DWARF: use -gcodeview, or -fobject-format=elf");
@@ -226,10 +226,10 @@ pub fn sections(
     }
     // What the frontend says: CodeView 4 as C7 writes it, or the dialect
     // BASIC's compilers write (`cvwrite`).
-    if info.dialect == model::Dialect::Cv4 {
+    if info.options.dialect == model::Dialect::Cv4 {
         return crate::cv4::sections(object, info);
     }
-    let flavor = Flavor { qb45: info.producer == model::Producer::Qb45 };
+    let flavor = Flavor { qb45: info.options.producer == model::Producer::Qb45 };
     let encoded = cvwrite::written(&module(object, info)?, flavor).map_err(Error::Unencodable)?;
     let mut relocs = Vec::new();
     let mut image = encoded.symbols;

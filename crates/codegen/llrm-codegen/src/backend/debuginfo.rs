@@ -87,7 +87,7 @@ use std::collections::BTreeSet;
 
 use llrm_lir::registers::RegId;
 use llrm_mir::{MetadataId, debuginfo as di};
-use llrm_object::debug::{self as model, Info, Kind, Location, Variable};
+use llrm_object::debug::{self as model, DebugOptions, Info, Kind, Location, Variable};
 
 use crate::backend::objbuild::Segment;
 use crate::backend::{globals, masm};
@@ -462,10 +462,8 @@ pub fn laid_out(
         module.procedures.iter().filter_map(|one| symbols.get(&one.name).copied()).collect();
     starts.sort_unstable();
     let mut info = Info {
-        format: debug.format,
+        options: DebugOptions { format: debug.format, dialect: debug.dialect, producer: debug.producer },
         language: debug.language,
-        dialect: debug.dialect,
-        producer: debug.producer,
         frame_register: debug.frame_register.clone(),
         return_register: debug.return_register.clone(),
         registers: debug.registers.clone(),

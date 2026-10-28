@@ -586,11 +586,11 @@ pub fn write(
 ) -> Result<Vec<u8>, Error> {
     let turbo = matches!(
         &object.debug,
-        Some(info) if info.format == llrm_object::debug::Format::TurboDebugger
+        Some(info) if info.options.format == llrm_object::debug::Format::TurboDebugger
     );
     let dwarf = matches!(
         &object.debug,
-        Some(info) if matches!(info.format, llrm_object::debug::Format::Dwarf { .. })
+        Some(info) if matches!(info.options.format, llrm_object::debug::Format::Dwarf { .. })
     );
     let debug = object.debug.is_some() && !turbo && !dwarf;
     // Turbo Debugger's records go among the object's own; CodeView's two

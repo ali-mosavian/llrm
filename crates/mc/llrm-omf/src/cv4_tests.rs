@@ -47,7 +47,7 @@ fn object(
     };
     let info = Info {
         language: Language::C,
-        dialect: llrm_object::debug::Dialect::Cv4,
+        options: llrm_object::debug::DebugOptions { dialect: llrm_object::debug::Dialect::Cv4, ..Default::default() },
         frame_register: if bits == 16 { "bp" } else { "ebp" }.into(),
         code: vec![range],
         types,
