@@ -1924,7 +1924,13 @@ impl Builder<'_> {
                 _ => 64,
             };
             let wide = self.dag.value_type(operand).size_in_bits() > mantissa;
-            if self.target.float_store && matches!(op, CastOp::SIToFP | CastOp::UIToFP) && wide {
+            // As the pin: a conversion that only feeds float arithmetic stays
+            // exact, where `fimul`/`fiadd` fold it.
+            if self.target.float_store
+                && matches!(op, CastOp::SIToFP | CastOp::UIToFP)
+                && wide
+                && !self.read_only_by_float_arithmetic(instruction)
+            {
                 self.round_through_memory(converted, dest)
             } else {
                 converted
@@ -1932,6 +1938,23 @@ impl Builder<'_> {
         };
         self.set_value(instruction.result.expect("a cast has a result"), result);
         Ok(())
+    }
+
+    /// Whether every reader of `instruction`'s value is a float `fadd`, `fsub`
+    /// or `fmul`.
+    fn read_only_by_float_arithmetic(
+        &self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> bool {
+        let Some(result) = instruction.result else { return false };
+        let users = self.function.users(result);
+        !users.is_empty()
+            && users.iter().all(|one| {
+                matches!(
+                    self.function.instruction(one.user).opcode,
+                    Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul)
+                )
+            })
     }
 
     /// Whether every reader of `instruction`'s value stores it: a store's
