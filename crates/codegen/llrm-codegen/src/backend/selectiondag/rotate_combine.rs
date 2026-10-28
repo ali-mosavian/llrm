@@ -2,7 +2,7 @@
 //! operand; an amount past the width is taken modulo it; `rotl i16 x, 8` is
 //! a `bswap`; two rotates by constants are one.
 //!
-//! DEVIATE SD244: not the demanded-bits simplification of the operand and
+//! DEVIATE SD254: not the demanded-bits simplification of the operand and
 //! not `distributeTruncateThroughAnd` (the amount is a constant in the cases
 //! this target meets). Owner sdag-b.
 //!
@@ -53,7 +53,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         // rot i16 X, 8 --> bswap X
-        if self.dag.constant(n1) == Some(8) && bits == 16 && self.has_rotate_operation(ISD::BSwap, vt) {
+        if self.dag.constant(n1) == Some(8) && bits == 2 * u128::from(u8::BITS) && self.has_rotate_operation(ISD::BSwap, vt) {
             return Some(self.dag.get_node(ISD::BSwap, vt, &[n0]));
         }
         // fold (rot* (rot* x, c2), c1) -> (rot* x, ((c1 % bitsize) +- (c2 %
