@@ -98,6 +98,7 @@ impl Builder<'_> {
             }
             Intrinsic::Compare { .. }
             | Intrinsic::FMulAdd
+            | Intrinsic::CopySign
             | Intrinsic::Fixed { .. }
             | Intrinsic::FixedMul { .. }
             | Intrinsic::ShiftSat { .. } => self.visit_math(instruction, intrinsic),
