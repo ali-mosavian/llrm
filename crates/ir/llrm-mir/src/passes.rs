@@ -2410,6 +2410,18 @@ impl ModuleAnalyses {
         self.invalidate_bodies(preserved);
     }
 
+    /// `invalidate` for a pass that changed the declarations of the bodies it
+    /// reported to `changed` and of no other global: what trusts the log of
+    /// edits for what moved may go on trusting it.
+    pub fn invalidate_logged(
+        &mut self,
+        preserved: &PreservedAnalyses,
+    ) {
+        self.declarations_open = true;
+        self.metadata_open = true;
+        self.invalidate_bodies(preserved);
+    }
+
     /// `invalidate` for a pass that edited only bodies, each reported to
     /// `changed` (or `body_edited`) and none of them touching the metadata
     /// or another global's declaration: the declarations and the
