@@ -78,6 +78,13 @@ use crate::support::pyrepr::{self, Repr};
 pub const OFFSET: Fix = Fix::abs(2);
 pub const BASE: Fix = Fix::plain(llrm_x86::mc::fixup::SEGMENT_BASE);
 pub const POINTER: Fix = Fix::plain(llrm_x86::mc::fixup::FAR_POINTER);
+
+/// The bytes `fix` patches. `FixupKind::width` knows only the generic kinds and
+/// says 0 for x86's, which made a far pointer in a 16-bit object trip the
+/// width assertion.
+fn width(fix: Fix) -> usize {
+    usize::from(llrm_x86::mc::fixup::kind_info(fix.kind).bits).div_ceil(8)
+}
 pub const OFFSET32: Fix = Fix::abs(4);
 pub const OFFSET64: Fix = Fix::abs(8);
 
@@ -373,9 +380,9 @@ fn pack_field(
     kind: Fix,
     value: i64,
 ) {
-    if kind.kind.width() == 8 {
+    if width(kind) == 8 {
         buffer[at..at + 8].copy_from_slice(&value.to_le_bytes());
-    } else if kind.kind.width() == 4 && kind != POINTER {
+    } else if width(kind) == 4 && kind != POINTER {
         buffer[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     } else {
         pack_into(buffer, at, i64::from(value as u16));
@@ -389,9 +396,9 @@ fn field(
     at: usize,
     kind: Fix,
 ) -> i64 {
-    if kind.kind.width() == 8 {
+    if width(kind) == 8 {
         i64::from_le_bytes(buffer[at..at + 8].try_into().expect("eight bytes"))
-    } else if kind.kind.width() == 4 && kind != POINTER {
+    } else if width(kind) == 4 && kind != POINTER {
         i64::from(i32::from_le_bytes([buffer[at], buffer[at + 1], buffer[at + 2], buffer[at + 3]]))
     } else {
         i64::from(i16::from_le_bytes([buffer[at], buffer[at + 1]]))
@@ -660,14 +667,9 @@ pub fn _data(
                         CodeModel::Segmented16 => OFFSET,
                     }
                 };
-                assert_eq!(
-                    loc.kind.width(),
-                    *bytes as usize,
-                    "a {bytes}-byte pointer in a {}-bit object",
-                    model.bits()
-                );
-                segment.put(&vec![0; loc.kind.width()], &[Fixup::new(0, loc, name.clone())]);
-                let at = segment.image.len() - loc.kind.width();
+                assert_eq!(width(loc), *bytes as usize, "a {bytes}-byte pointer in a {}-bit object", model.bits());
+                segment.put(&vec![0; width(loc)], &[Fixup::new(0, loc, name.clone())]);
+                let at = segment.image.len() - width(loc);
                 if loc == OFFSET64 {
                     pack_field(&mut segment.image, at, loc, *offset);
                 } else {
@@ -949,44 +951,60 @@ pub fn _relaxed(
     items: &mut [Encoded],
     model: CodeModel,
 ) -> Result<IndexMap<String, i64>, Unencodable> {
-    loop {
-        let (mut labels, mut at) = (IndexMap::default(), 0i64);
-        let mut starts = Vec::with_capacity(items.len());
-        for item in items.iter() {
-            if let Encoded::Label(masm::Label { name }) | Encoded::End(name) = item {
-                labels.insert(name.clone(), at);
-            }
-            starts.push(at);
-            at += _size(item, at, model) as i64;
+    let labels = llrm_object::assembler::layout(items, &model).map_err(|error| Unencodable(error.0))?;
+    let mut named = IndexMap::default();
+    for (name, at) in labels {
+        named.insert(name, at);
+    }
+    Ok(named)
+}
+
+impl llrm_object::assembler::Fragment for Encoded {
+    type Context = CodeModel;
+
+    fn label(&self) -> Option<&str> {
+        match self {
+            Encoded::Label(masm::Label { name }) | Encoded::End(name) => Some(name),
+            _ => None,
         }
-        let mut changed = false;
-        for (index, item) in items.iter_mut().enumerate() {
-            let at = starts[index];
-            match item {
-                Encoded::Jump(item) if !item.long => {
-                    let Some(target) = labels.get(&item.label) else {
-                        return Err(Unencodable(format!("a jump to {}, which is nowhere", item.label)));
-                    };
-                    if !short_reaches(target - (at + SHORT_JUMP)) {
-                        item.long = true;
-                        changed = true;
-                    }
+    }
+
+    fn size(
+        &self,
+        at: i64,
+        model: &CodeModel,
+    ) -> usize {
+        _size(self, at, *model)
+    }
+
+    fn relax(
+        &mut self,
+        at: i64,
+        labels: &std::collections::HashMap<String, i64>,
+        _: &CodeModel,
+    ) -> Result<bool, llrm_object::Unsupported> {
+        match self {
+            Encoded::Jump(item) if !item.long => {
+                let Some(target) = labels.get(&item.label) else {
+                    return Err(llrm_object::Unsupported(format!("a jump to {}, which is nowhere", item.label)));
+                };
+                if short_reaches(target - (at + SHORT_JUMP)) {
+                    return Ok(false);
                 }
-                // `relaxPrefAlign`: the body is what lies between the padding
-                // and its end, and the alignment only grows.
-                Encoded::Prefer { preferred, computed, end } => {
-                    let wanted =
-                        llrm_object::assembler::relax_pref_align(at, *computed, *preferred, labels[end.as_str()]);
-                    if wanted != *computed {
-                        *computed = wanted;
-                        changed = true;
-                    }
-                }
-                _ => {}
+                item.long = true;
+                Ok(true)
             }
-        }
-        if !changed {
-            return Ok(labels);
+            // `relaxPrefAlign`: the body is what lies between the padding and
+            // its end, and the alignment only grows.
+            Encoded::Prefer { preferred, computed, end } => {
+                let wanted = llrm_object::assembler::relax_pref_align(at, *computed, *preferred, labels[end.as_str()]);
+                if wanted == *computed {
+                    return Ok(false);
+                }
+                *computed = wanted;
+                Ok(true)
+            }
+            _ => Ok(false),
         }
     }
 }
@@ -1097,13 +1115,11 @@ pub fn _size(
     at: i64,
     model: CodeModel,
 ) -> usize {
-    let pad = |log2: u8| (at as u64).wrapping_neg() as usize & ((1usize << log2) - 1);
     match item {
         Encoded::Align(masm::CodeAlign { log2, max_skip }) => {
-            let pad = pad(*log2);
-            if *max_skip != 0 && pad > usize::from(*max_skip) { 0 } else { pad }
+            llrm_object::assembler::align_padding(at, *log2, *max_skip)
         }
-        Encoded::Prefer { computed, .. } => pad(*computed),
+        Encoded::Prefer { computed, .. } => llrm_object::assembler::align_padding(at, *computed, 0),
         other => _length(other, model),
     }
 }
@@ -1346,6 +1362,13 @@ mod tests {
     /// A segment word is two bytes LINK fills with the selector. `_data`
     /// dropped it, so a far pointer to near data lost its selector and
     /// every datum after it moved two bytes down.
+    /// x86's segment kinds left the object crate's table, and a far pointer's
+    /// width read 0: every 16-bit object with one panicked.
+    #[test]
+    fn a_far_pointer_is_four_bytes_and_a_segment_base_two() {
+        assert_eq!((super::width(super::POINTER), super::width(super::BASE)), (4, 2));
+    }
+
     #[test]
     fn test_a_segment_word_is_a_selector_fixup() {
         let mut segment = Segment::new("_DATA", Role::Data, true);
