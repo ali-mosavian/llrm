@@ -309,3 +309,58 @@ m:
     let out = combined(text);
     assert!(out.contains("phi i16 [ %0, %b ], [ 7, %a ]") || out.contains("phi i16 [ 7, %a ], [ %0, %b ]"), "{out}");
 }
+
+/// `narrowMathIfNoOverflow`: `zext (and X, 15) + 3` cannot wrap in 8 bits, so
+/// it is the narrow add, extended. Stayed a 32-bit add before.
+#[test]
+fn an_extended_value_plus_a_constant_that_cannot_wrap_is_added_narrow() {
+    check(
+        "i32",
+        "i8 %x",
+        "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %r = add i32 %a, 3\n  ret i32 %r\n",
+        "  %m = and i8 %x, 15\n  %0 = add nuw i8 %m, 3\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+    );
+}
+
+/// `narrowMathIfNoOverflow`: two extensions of the same type whose sum fits.
+#[test]
+fn two_extensions_whose_sum_fits_are_added_narrow() {
+    check(
+        "i32",
+        "i8 %x, i8 %y",
+        "  %m = and i8 %x, 15\n  %a = zext i8 %m to i32\n  %n = and i8 %y, 7\n  %b = zext i8 %n to i32\n  %r = add i32 %a, %b\n  ret i32 %r\n",
+        "  %m = and i8 %x, 15\n  %n = and i8 %y, 7\n  %0 = add nuw i8 %m, %n\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
+    );
+}
+
+/// `umax(X, C) + -C` is `usub.sat(X, C)` (`opt` agrees). Stayed a max and an
+/// add before.
+#[test]
+fn a_umax_plus_its_negated_constant_is_a_saturating_subtract() {
+    let text = "declare i32 @llvm.umax.i32(i32, i32)
+
+define i32 @f(i32 %x) {
+b0:
+  %m = call i32 @llvm.umax.i32(i32 %x, i32 5)
+  %r = add i32 %m, -5
+  ret i32 %r
+}
+";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::combine::combine_with_declared(
+        context,
+        &globals,
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        &mut declared,
+    );
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    assert!(out.contains("call i32 @llvm.usub.sat.i32(i32 %x, i32 5)"), "{out}");
+}

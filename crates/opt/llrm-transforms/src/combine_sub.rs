@@ -10,8 +10,7 @@
 //! DEVIATE 1: no vectors: `foldVectorBinop` and the `vector_reduce_add` fold
 //! (:2602) are not translated.
 //!
-//! DEVIATE 2: `narrowMathIfNoOverflow` (in `TryToNarrowDeduceFlags`),
-//! `isFreeToInvert` (`~X - ~Y`, :2587),
+//! DEVIATE 2: `isFreeToInvert` (`~X - ~Y`, :2587),
 //! `tryFoldInstWithCtpopWithNot`, `foldSubOfMinMax` and everything from the
 //! select-of-sub fold (:2799) on are the next strip, but the `usub.sat`,
 //! `umin` and `umax` identities (:2978-3006).
@@ -153,12 +152,11 @@ fn fold_with_negator(
     if !is_negation {
         return None;
     }
-    // Should have been handled in Negator: infer the flags (DEVIATE 2:
-    // narrowMathIfNoOverflow).
+    // Should have been handled in Negator: narrow, else infer the flags.
     Some(infer_sub_flags(c, inst, op0, op1, flags))
 }
 
-/// `TryToNarrowDeduceFlags` without the narrowing: `nsw`/`nuw` when
+/// `TryToNarrowDeduceFlags`: the narrowing, else `nsw`/`nuw` when
 /// `willNotOverflow{Signed,Unsigned}Sub`.
 fn infer_sub_flags(
     c: &mut Combiner,
@@ -168,6 +166,9 @@ fn infer_sub_flags(
     flags: Flags,
 ) -> Visit {
     use llrm_mir::valuetracking::range::{OverflowResult, compute_overflow_for_unsigned_sub};
+    if let Some(narrowed) = c.narrow_math_if_no_overflow(inst) {
+        return narrowed;
+    }
     let mut new = flags;
     if !flags.contains(Flags::NSW) && will_not_overflow_signed_sub(c, inst, op0, op1) {
         new.insert(Flags::NSW);
@@ -673,7 +674,10 @@ pub fn visit_sub(
         fold_xor_of_sext_bool,
         fold_saturating_difference,
     ];
-    steps.iter().find_map(|step| step(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = steps.iter().find_map(|step| step(c, inst, op0, op1)) {
+        return found;
+    }
+    infer_sub_flags(c, inst, op0, op1, flags)
 }
 
 #[cfg(test)]

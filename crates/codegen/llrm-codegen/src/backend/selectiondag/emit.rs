@@ -1519,7 +1519,17 @@ impl Emitter<'_, '_> {
                 | "CMOV_RFP64"
                 | "CMOV_RFP80"
         ) {
-            return self.lowered_select(n);
+            return self.lowered_select(n, None);
+        }
+        // The x87 conditional moves (`fcmov`) name their condition in the
+        // opcode; with no `fcmov` in the LIR they are the same diamond.
+        if let Some(cc) = name.strip_prefix("CMOV").and_then(|rest| rest.strip_suffix("_Fp80")).and_then(|cc| {
+            ["B", "NB", "E", "NE", "BE", "NBE", "P", "NP"]
+                .iter()
+                .position(|one| *one == cc)
+                .map(|at| [2, 3, 4, 5, 6, 7, 10, 11][at])
+        }) {
+            return self.lowered_select(n, Some(cc));
         }
         if name == "VASTART_SAVE_XMM_REGS" {
             return self.lowered_vastart_save_xmm(n);
@@ -1650,6 +1660,7 @@ impl Emitter<'_, '_> {
     fn lowered_select(
         &mut self,
         n: u32,
+        fixed: Option<usize>,
     ) -> Result<(), EmitError> {
         let node = self.dag.node(SDValue { node: n, res: 0 });
         let held = |loc: Loc| match loc {
@@ -1658,7 +1669,10 @@ impl Emitter<'_, '_> {
         };
         let when_false = held(self.operand(node.ops[0])?)?;
         let when_true = held(self.operand(node.ops[1])?)?;
-        let cc = self.constant(node.ops[2])? as usize;
+        let cc = match fixed {
+            Some(cc) => cc,
+            None => self.constant(node.ops[2])? as usize,
+        };
         let jump = *CONDITIONS.get(cc).ok_or_else(|| EmitError::Unsupported(format!("condition code {cc}")))?;
         // `CreateVirtualRegisters`: a result only exported by a `CopyToReg` is
         // made in that register, so the export emits no copy between this
@@ -2792,7 +2806,13 @@ impl Emitter<'_, '_> {
             // `fnstsw ax; sahf` that put its result in EFLAGS, so those pin
             // pseudos (`FNSTSW16r`, the copy of AH, `SAHF`) emit nothing and
             // `SAHF` is the producer of the flags.
-            _ if name.starts_with("UCOM_Fpr") || name.starts_with("COM_Fpr") => {
+            // `UCOM_FpIr*` (`fucomip`) sets EFLAGS itself: the same compare,
+            // with no status word between it and its user.
+            _ if name.starts_with("UCOM_Fpr")
+                || name.starts_with("COM_Fpr")
+                || name.starts_with("UCOM_FpIr")
+                || name.starts_with("COM_FpIr") =>
+            {
                 let (Loc::Held(left), Loc::Held(right)) = (self.operand(node.ops[0])?, self.operand(node.ops[1])?)
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
