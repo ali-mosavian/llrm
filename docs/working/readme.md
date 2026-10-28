@@ -4,6 +4,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 
 | Doc | Holds |
 |---|---|
+| [llrm-cc-measure](llrm-cc-measure.md) | What llrm-cc costs and emits beside the pin: `tools/cc_cost.py`, method, rows, withdrawn tables |
 | [early-taildup-plan](early-taildup-plan.md) | Early Tail Duplication translation: pin functions and lines, what LIR gives it, three steps with dates (2026-11-03..08) |
 | [constraint-elimination-plan](constraint-elimination-plan.md) | ConstraintElimination translation: why, the order CE-1 to CE-4 with dates, the oracle |
 | [knownbits-plan](knownbits-plan.md) | ValueTracking known bits (qbq-llrm d_faces): per caller against the pin, twelve dated rows (2026-10-24) |
