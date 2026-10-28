@@ -868,6 +868,14 @@ impl Printer<'_> {
                     rest.join(", ")
                 )
             }
+            ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs }) => {
+                format!(
+                    "{} ({}, {})",
+                    spelling(&crate::opcode::BINARY, *op),
+                    self.typed_constant(*lhs),
+                    self.typed_constant(*rhs)
+                )
+            }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 format!("{} ({} to {})", spelling(&CAST, *op), self.typed_constant(*value), self.ty(*ty))
             }

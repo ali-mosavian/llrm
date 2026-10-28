@@ -1957,8 +1957,9 @@ def test_the_tool_tests_of_a_landing_leave_the_dosbox_bench_programs_to_the_gate
     assert ps.GATE_ONLY_TESTS and all(f"--deselect={one}" in ran[0] for one in ps.GATE_ONLY_TESTS), ran
 
 
-def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path):
+def test_a_tool_test_that_times_out_refuses_the_batch_instead_of_crashing_it(tmp_path, monkeypatch):
     """#5690's pytest ran past 600 s: TimeoutExpired went uncaught, the batch died with a traceback and no REFUSED line, and the PR came back every pass."""
+    monkeypatch.setenv("TOOLTEST_CAP", "600")
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "test_other.py").write_text("")
 
@@ -2027,6 +2028,28 @@ def test_two_halves_that_build_apart_and_fail_together_name_the_later_pr():
     assert refused == ["3"]
     assert pending == ["1", "2", "4"]
     assert ["1", "2", "3"] in tested
+
+
+def test_a_tool_test_run_past_the_old_cap_is_no_refusal_when_the_cap_is_raised(tmp_path, monkeypatch):
+    """The tool-tests cap was a fixed 600 s: a test file that needs 15 minutes refused every batch that touched it ("ran past 600 s"). TOOLTEST_CAP sets it (default 1800)."""
+    import subprocess
+
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools/test_slow.py").write_text("")
+
+    class Done:
+        returncode = 0
+        stdout = stderr = ""
+
+    def run(command, timeout, **_):
+        if timeout < 900:  # the tests need 900 s
+            raise subprocess.TimeoutExpired(command, timeout)
+        return Done()
+
+    monkeypatch.delenv("TOOLTEST_CAP", raising=False)
+    assert ps.tool_test_failures(["tools/test_slow.py"], tmp_path, run=run, ensure=lambda: "") == []  # the default 1800 s
+    monkeypatch.setenv("TOOLTEST_CAP", "600")
+    assert ps.tool_test_failures(["tools/test_slow.py"], tmp_path, run=run, ensure=lambda: "") == ["the tool tests ran past 600 s"]
 
 
 def test_the_tests_get_the_clang_of_the_trees_own_pin(tmp_path):

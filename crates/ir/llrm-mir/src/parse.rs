@@ -544,6 +544,7 @@ impl Parser {
                 ["true", "false", "null", "poison", "undef", "zeroinitializer", "getelementptr"]
                     .contains(&word.as_str())
                     || spelled(&CAST, word).is_some()
+                    || constant_binary(word)
             }
             _ => false,
         }
@@ -1051,6 +1052,25 @@ impl Parser {
                     nuw: flags.contains(Flags::NUW),
                     operands,
                 })
+            }
+            Token::Word(word) if constant_binary(&word) => {
+                let op = spelled(&BINARY, &word).expect("a binary operator");
+                let mut flags = Flags::default();
+                if matches!(op, BinaryOp::Add | BinaryOp::Sub) {
+                    flags = self.flags(&["nuw", "nsw"]);
+                }
+                let _ = flags;
+                self.expect_punct('(')?;
+                let left_ty = self.ty()?;
+                let lhs = self.constant(left_ty)?;
+                self.expect_punct(',')?;
+                let right_ty = self.ty()?;
+                let rhs = self.constant(right_ty)?;
+                self.expect_punct(')')?;
+                if left_ty != ty || right_ty != ty {
+                    return self.fail_on(line, "a constant binary operator's operands are of its own type");
+                }
+                ConstantKind::Expr(ConstantExpr::Binary { op, lhs, rhs })
             }
             Token::Word(word) if spelled(&CAST, &word).is_some() => {
                 let op = spelled(&CAST, &word).expect("a cast");
@@ -2107,4 +2127,12 @@ fn x86_fp80_to_f64(bits: u128) -> f64 {
         }
     };
     if negative { -magnitude } else { magnitude }
+}
+
+/// The binary operators LLVM still has as constant expressions.
+fn constant_binary(word: &str) -> bool {
+    matches!(
+        spelled(&BINARY, word),
+        Some(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Xor)
+    )
 }

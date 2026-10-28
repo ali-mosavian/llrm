@@ -1289,3 +1289,22 @@ fn a_far_string_move_leaves_no_dword_join_once_dead_code_is_gone() {
     let cleaned = crate::backend::deadmi::eliminated(&done.body);
     assert_eq!(joins(&cleaned), 0, "the unread join is gone");
 }
+
+/// The pin's `(i16 0)` is the low part of a `MOV32r0`: `xor edi, edi` at m32,
+/// 2 bytes. Narrowed to a word (`xor di, di`, 66-prefixed) it grew 1 B per
+/// zero (QB `frames` -Os bq32).
+#[test]
+fn a_zero_word_at_m32_is_a_dword_xor() {
+    use crate::model::ir::Loc;
+    let ir = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i16 @f() {
+  ret i16 0
+}
+";
+    let done = select_m32(ir).unwrap_or_else(|why| panic!("{why}"));
+    let zero = done.body.insns().iter().filter_map(|one| one.what.clone()).find(|what| {
+        what.name.as_deref() == Some("mov") && matches!(what.sources.as_slice(), [Loc::Imm(imm)] if imm.value == 0)
+    });
+    let zero = zero.expect("a zero");
+    assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
+}
