@@ -25,7 +25,7 @@ on:
       - "crates/ir/llrm-lir/**"
       - "crates/ir/llrm-mir/**"
       - "crates/mc/llrm-coff/**"
-      - "crates/mc/llrm-debuginfo/**"
+      - "crates/mc/llrm-dwarf/**"
       - "crates/mc/llrm-elf/**"
       - "crates/mc/llrm-macho/**"
       - "crates/mc/llrm-object/**"

@@ -127,7 +127,7 @@ fn fusable<D: AddrDag>(
             worklist.push(op.node);
         }
     }
-    if dag.has_predecessor_helper(load.node, &mut Vec::new(), &mut worklist, 1024) {
+    if dag.has_predecessor_helper(load.node, &mut crate::dag::Visited::new(), &mut worklist, 1024) {
         return None;
     }
     let input_chain = if chain_ops.len() == 1 { chain_ops[0] } else { dag.token_factor(&chain_ops) };

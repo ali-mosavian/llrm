@@ -159,6 +159,10 @@ struct Copy {
     src: Mask,
     /// The value the copy defines and the value it reads, when each is one.
     values: Option<(u32, u32)>,
+    /// The destination is a segment register. Such a copy is only ever dropped
+    /// as a repeat: nothing is forwarded from it (`[es:di]` has no other
+    /// spelling) and it is never dead (a string instruction reads `es`).
+    segment: bool,
 }
 
 impl Copy {
@@ -573,7 +577,9 @@ impl Machine {
             .map(|(dst, src)| Some((self.unit(dst)?, self.unit(src)?)))
             .collect::<Option<Vec<_>>>()?;
         let (dst, src) = pairs.iter().fold((0 as Mask, 0 as Mask), |(dst, src), (d, s)| (dst | 1 << d, src | 1 << s));
-        (dst & src == 0 && dst >> GENERAL == 0).then_some(Copy {
+        let segment = dst >> GENERAL != 0;
+        (dst & src == 0 && (!segment || dst & (1 << GENERAL) - 1 == 0)).then_some(Copy {
+            segment,
             pairs,
             dst,
             src,
@@ -804,7 +810,7 @@ impl<'a> Walk<'a> {
         let Some(previous) = self.tracker.avail_copy(look, &self.copies) else {
             return false;
         };
-        let wanted = Copy { pairs, dst: 0, src: 0, values: None };
+        let wanted = Copy { pairs, dst: 0, src: 0, values: None, segment: false };
         if !self.copies[previous].as_ref().is_some_and(|prior| prior.repeats(&wanted)) {
             return false;
         }
@@ -851,6 +857,9 @@ impl<'a> Walk<'a> {
                 continue;
             };
             let rec = self.copies[copy].as_ref().expect("a tracked copy");
+            if rec.segment {
+                continue;
+            }
             let mut sources: Vec<Lane> = Vec::new();
             for unit in units_of(mask) {
                 let Some(source) = rec.source_of(unit) else {
@@ -904,11 +913,11 @@ impl<'a> Walk<'a> {
             if self.copies[at].is_some() && (self.erase_if_redundant(at, false) || self.erase_if_redundant(at, true)) {
                 continue;
             }
-            if self.copies[at].is_some() && self.fold_tied(at, &live_after[at]) {
+            if self.copies[at].as_ref().is_some_and(|copy| !copy.segment) && self.fold_tied(at, &live_after[at]) {
                 continue;
             }
             self.forward_uses(at);
-            if self.copies[at].is_some() {
+            if self.copies[at].as_ref().is_some_and(|copy| !copy.segment) {
                 self.maybe_dead.push(at);
                 self.dead[at] = true;
             }
@@ -1181,7 +1190,7 @@ impl<'a> Walk<'a> {
     ) {
         let machine = self.machine;
         for at in (0..self.insns.len()).rev() {
-            if let Some(copy) = self.copies[at].clone() {
+            if let Some(copy) = self.copies[at].clone().filter(|copy| !copy.segment) {
                 // `isBackwardPropagatableCopy`: its source dies here.
                 let dies = machine.lanes_of(copy.src).iter().all(|lane| !live.contains(lane));
                 if dies {

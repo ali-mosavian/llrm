@@ -294,6 +294,106 @@ fn the_debug_records_before_the_preheaders_branch_survive_a_deletion() {
     assert!(!after.contains("phi") && after.contains("#dbg_value(i16 %n"), "{after}");
 }
 
+/// A pass that only reads the dominator tree, as the pass before this one in
+/// the pipeline does.
+struct ReadsTree;
+
+impl llrm_mir::passes::FunctionPass for ReadsTree {
+    fn name(&self) -> &'static str {
+        "reads-tree"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        analyses.get::<llrm_mir::passes::Dominators>(unit.context, unit.layout, unit.function);
+        llrm_mir::passes::PreservedAnalyses::all()
+    }
+}
+
+/// The pass took a tree of its own (a build or a copy of the memoized one)
+/// where the manager held the tree already: two trees for a run that needs one.
+#[test]
+fn test_the_managers_dominator_tree_is_used_not_a_second_one() {
+    use llrm_mir::counts::{Event, get};
+    let mut module = parsed(COUNTER);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(ReadsTree);
+    manager.add(LoopDeletion);
+    let trees = || get(Event::Dominators) + get(Event::DominatorsReused);
+    let before = trees();
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    assert_eq!(trees() - before, 1);
+}
+
+/// A loop that only counts, then a counted loop `n` times: the first is
+/// deleted, the second is not touched.
+const DEAD_THEN_LIVE: &str = "define i32 @f(i32 %n) mustprogress {
+b0:
+  br label %p0
+
+p0:
+  br label %h0
+
+h0:
+  %i0 = phi i32 [ 0, %p0 ], [ %n0, %l0 ]
+  %g0 = icmp ult i32 %i0, 10
+  br i1 %g0, label %l0, label %x0
+
+l0:
+  %n0 = add nuw nsw i32 %i0, 1
+  br label %h0
+
+x0:
+  br label %p1
+
+p1:
+  br label %h1
+
+h1:
+  %i1 = phi i32 [ 0, %p1 ], [ %n1, %l1 ]
+  %g1 = icmp ult i32 %i1, %n
+  br i1 %g1, label %l1, label %x1
+
+l1:
+  %n1 = add nuw nsw i32 %i1, 1
+  br label %h1
+
+x1:
+  %r = phi i32 [ %i1, %h1 ]
+  ret i32 %r
+}
+";
+
+/// The trip counts `steps` work out: 0 is indvars, 1 loopdeletion.
+fn counts_of(
+    text: &str,
+    steps: &[u8],
+) -> usize {
+    let mut module = parsed(text);
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let mut manager = llrm_mir::passes::PassManager::default();
+    for step in steps {
+        if *step == 0 {
+            manager.add(crate::indvars::IndVars { lftr: true, size: false });
+        } else {
+            manager.add(LoopDeletion);
+        }
+    }
+    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// A run that deleted a loop dropped every expression, so the next run (and
+/// the passes after) counted the loop it left again: 2 counts for the 1 loop
+/// that stays. `forgetLoop` drops only what the deletion reached.
+#[test]
+fn test_a_deleted_loop_leaves_the_other_loops_trip_counts() {
+    assert_eq!(counts_of(DEAD_THEN_LIVE, &[1, 1]), 1);
+}
+
 /// `n` guarded counted loops in a row, each storing, so none is deleted.
 fn live_sequence(n: usize) -> String {
     let mut text = String::from(
@@ -326,4 +426,35 @@ fn collecting_loop_guards_probes_each_visited_block_once() {
     let (inserts, examined) = probes(128);
     assert!(inserts > 128 * 64, "the climb reaches the earlier loops: {inserts}");
     assert!(examined <= 2 * inserts, "{examined} elements examined for {inserts} inserts");
+}
+
+/// `n` counted loops in a row, each storing, to the same bound `%n`.
+fn stored_loops(n: usize) -> String {
+    let mut text = String::from(
+        "@a = global i32 0\n\ndefine void @f(i32 %n) {\nb0:\n  %g = icmp sgt i32 %n, 0\n  br i1 %g, label %p0, label %end\n\n",
+    );
+    for k in 0..n {
+        let next = if k + 1 == n { "end".to_owned() } else { format!("p{}", k + 1) };
+        text += &format!(
+            "p{k}:\n  br label %l{k}\n\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %n{k}, %l{k} ]\n  store i32 %i{k}, ptr @a\n  %n{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp eq i32 %n{k}, %n\n  br i1 %c{k}, label %x{k}, label %l{k}\n\nx{k}:\n  br label %{next}\n\n"
+        );
+    }
+    text + "end:\n  ret void\n}\n"
+}
+
+/// The disposition of an expression was held in a list searched whole, and an
+/// expression that every loop of a function asks about (the bound `%n`) had a
+/// list as long as the function's loops: 7 M entries looked at for 81 K
+/// lookups over 128 nests, 20 M of the 233 M instructions of
+/// `loop-load-elim`. A lookup costs the same whatever the loops before it.
+#[test]
+fn a_disposition_lookup_costs_the_same_whatever_the_loops_before_it() {
+    let looked_at = |n: usize| {
+        let mut module = parsed(&stored_loops(n));
+        let before = llrm_analysis::scev::disposition::examined();
+        managed(&mut module, LoopDeletion);
+        llrm_analysis::scev::disposition::examined() - before
+    };
+    let (a, b) = (looked_at(32), looked_at(128));
+    assert!(b * 100 <= a * 450, "32 loops: {a}, 128 loops: {b}");
 }

@@ -482,6 +482,154 @@ fn a_doubling_and_a_masked_value_are_compared_by_sign_and_zero() {
     );
 }
 
+/// `foldICmpAndXX`: `x & y` against `x` is an equality, or an unsigned compare
+/// when the signs are known (`opt`: `icmp ne i32 %a, %x`, `icmp slt i32 %x,
+/// 0`).
+#[test]
+fn an_and_compared_with_its_operand_is_an_equality_or_a_sign_test() {
+    check(
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
+        "  %a = and i32 %x, %y\n  %0 = icmp ne i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y",
+        "  %a = and i32 %y, %x\n  %r = icmp ule i32 %x, %a\n  ret i1 %r\n",
+        "  %a = and i32 %y, %x\n  %0 = icmp eq i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = or i32 %y0, -2147483648\n  %a = and i32 %x, %y\n  %r = icmp slt i32 %a, %x\n  ret i1 %r\n",
+        "  %y = or i32 %y0, -2147483648\n  %a = and i32 %x, %y\n  %0 = icmp ne i32 %a, %x\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x, i32 %y0",
+        "  %y = and i32 %y0, 2147483647\n  %a = and i32 %x, %y\n  %r = icmp sgt i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x0, i32 %y",
+        "  %x = or i32 %x0, -2147483648\n  %a = and i32 %x, %y\n  %r = icmp sle i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %y, 0\n  ret i1 %0\n",
+    );
+}
+
+/// `foldICmpXNegX`: a value against its negation (`opt`: `icmp sgt i32 %x, 0`,
+/// `icmp slt i32 %x, 0`); without `nsw` only an equality folds, to the value
+/// without its sign bit.
+#[test]
+fn a_value_compared_with_its_negation_is_compared_with_zero() {
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp eq i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp eq i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp slt i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp ult i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub nsw i32 0, %x\n  %r = icmp ule i32 %x, %n\n  ret i1 %r\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
+    );
+    check(
+        "i32 %x",
+        "  %n = sub i32 0, %x\n  %r = icmp ne i32 %n, %x\n  ret i1 %r\n",
+        "  %0 = and i32 %x, 2147483647\n  %1 = icmp ne i32 %0, 0\n  ret i1 %1\n",
+    );
+}
+
+/// `foldMultiplicationOverflowCheck`: `(-1 /u x) u< y` and `((x * y) / x) != y`
+/// were a division the target cannot do cheaply; the pin asks the multiply for
+/// its overflow bit (`opt`: `%mul.ov = extractvalue ...
+/// @llvm.umul.with.overflow.i32`).
+#[test]
+fn a_division_overflow_check_is_a_multiply_with_overflow() {
+    let wrap = |body: &str| {
+        format!(
+            "declare {{ i32, i1 }} @llvm.umul.with.overflow.i32(i32, i32)\ndeclare {{ i32, i1 }} @llvm.smul.with.overflow.i32(i32, i32)\ndefine i1 @f(i32 %x, i32 %y, ptr %p) {{\nb0:\n{body}}}\n"
+        )
+    };
+    let out = combined(&wrap("  %d = udiv i32 -1, %x\n  %r = icmp ult i32 %d, %y\n  ret i1 %r\n"));
+    assert!(out.contains("%0 = call { i32, i1 } @llvm.umul.with.overflow.i32(i32 %x, i32 %y)"), "{out}");
+    assert!(out.contains("%1 = extractvalue { i32, i1 } %0, 1\n  ret i1 %1"), "{out}");
+    assert!(!out.contains("udiv"), "{out}");
+
+    // The inverted predicate asks for the opposite answer.
+    let out = combined(&wrap("  %d = udiv i32 -1, %x\n  %r = icmp uge i32 %d, %y\n  ret i1 %r\n"));
+    assert!(out.contains("%2 = xor i1 %1, true\n  ret i1 %2"), "{out}");
+
+    let out =
+        combined(&wrap("  %m = mul i32 %x, %y\n  %d = udiv i32 %m, %x\n  %r = icmp ne i32 %d, %y\n  ret i1 %r\n"));
+    assert!(out.contains("@llvm.umul.with.overflow.i32(i32 %x, i32 %y)") && !out.contains("udiv"), "{out}");
+    assert!(out.contains("extractvalue { i32, i1 } %0, 1\n  ret i1 %1"), "{out}");
+
+    let out =
+        combined(&wrap("  %m = mul i32 %y, %x\n  %d = sdiv i32 %m, %x\n  %r = icmp eq i32 %y, %d\n  ret i1 %r\n"));
+    assert!(out.contains("@llvm.smul.with.overflow.i32") && out.contains("xor i1"), "{out}");
+
+    // A multiply read elsewhere is replaced by the intrinsic's result.
+    let out = combined(&wrap(
+        "  %m = mul i32 %x, %y\n  store i32 %m, ptr %p\n  %d = udiv i32 %m, %x\n  %r = icmp ne i32 %d, %y\n  ret i1 %r\n",
+    ));
+    assert!(out.contains("extractvalue { i32, i1 } %0, 0"), "{out}");
+    assert!(out.contains("store i32 %1, ptr %p") && !out.contains("= mul i32"), "{out}");
+}
+
+/// `foldICmpWithTruncSignExtendedVal`: a value that survives a sign-extending
+/// truncation is in the kept range (`opt`: `add i32 %x, 128` `u< 256`).
+#[test]
+fn a_value_compared_with_its_sign_extended_truncation_is_a_range_check() {
+    check(
+        "i32 %x",
+        "  %s = shl i32 %x, 24\n  %a = ashr i32 %s, 24\n  %r = icmp eq i32 %a, %x\n  ret i1 %r\n",
+        "  %0 = add i32 %x, 128\n  %1 = icmp ult i32 %0, 256\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %x",
+        "  %s = shl i32 %x, 24\n  %a = ashr i32 %s, 24\n  %r = icmp ne i32 %x, %a\n  ret i1 %r\n",
+        "  %0 = add i32 %x, -128\n  %1 = icmp ult i32 %0, -256\n  ret i1 %1\n",
+    );
+}
+
+/// `foldICmpOrXX` and `foldICmpAndXX`, the equality forms: `(x | y) == y` and
+/// `(x & y) == y` with `y` or `x` freely invertible (`getFreelyInverted`).
+#[test]
+fn an_or_or_and_against_its_operand_absorbs_a_freely_inverted_side() {
+    check(
+        "i32 %x, i32 %z",
+        "  %y = xor i32 %z, -1\n  %o = or i32 %x, %y\n  %r = icmp eq i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = and i32 %x, %z\n  %1 = icmp eq i32 %0, 0\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %xx, i32 %y",
+        "  %x = xor i32 %xx, -1\n  %o = or i32 %x, %y\n  %r = icmp ne i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = or i32 %y, %xx\n  %1 = icmp ne i32 %0, -1\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %x, i32 %z",
+        "  %y = xor i32 %z, -1\n  %o = and i32 %x, %y\n  %r = icmp eq i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = or i32 %x, %z\n  %1 = icmp eq i32 %0, -1\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %xx, i32 %y",
+        "  %x = xor i32 %xx, -1\n  %o = and i32 %x, %y\n  %r = icmp ne i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = and i32 %y, %xx\n  %1 = icmp ne i32 %0, 0\n  ret i1 %1\n",
+    );
+    check(
+        "i32 %p, i32 %y",
+        "  %x = add i32 %p, 5\n  %o = and i32 %x, %y\n  %r = icmp eq i32 %o, %y\n  ret i1 %r\n",
+        "  %0 = sub i32 -6, %p\n  %1 = and i32 %y, %0\n  %2 = icmp eq i32 %1, 0\n  ret i1 %2\n",
+    );
+}
+
 /// `foldICmpBinOp`: `(x & -P2) == INT_MIN` is `x s< INT_MIN + P2`, `!=` is
 /// `s>=` (`opt`: `icmp slt i16 %x, -32764`, `icmp sgt i16 %x, -32765`). Left
 /// alone, the masked compare reached the selector as an and plus a compare.
@@ -532,4 +680,57 @@ fn test_an_offset_and_mask_overflow_check_is_a_zero_test() {
     );
     let other = "  %s = add i16 %b, 5\n  %m = and i16 %s, 3\n  %r = icmp ult i16 %m, %b\n  ret i1 %r\n";
     check("i16 %b", other, other);
+}
+
+/// `foldICmpMulConstant`; every shape pinned by `opt -passes=instcombine`
+/// (i16). A square against a constant is a compare of roots: the sieve's
+/// `i * i < n` kept its multiply, 150 B over the pin on the QCport family.
+#[test]
+fn test_a_square_against_a_constant_is_a_compare_of_roots() {
+    let sq = |flags: &str, pred: &str, c: i32| {
+        format!("  %m = mul {flags} i16 %x, %x\n  %r = icmp {pred} i16 %m, {c}\n  ret i1 %r\n")
+    };
+    let cases = [
+        ("nuw nsw", "ult", 1024, "  %0 = icmp ult i16 %x, 32\n  ret i1 %0\n"),
+        ("nuw", "ult", 1000, "  %0 = icmp ult i16 %x, 32\n  ret i1 %0\n"),
+        ("nuw", "ugt", 1000, "  %0 = icmp ugt i16 %x, 31\n  ret i1 %0\n"),
+        ("nuw", "eq", 1000, "  ret i1 false\n"),
+        ("nuw", "ne", 900, "  %0 = icmp ne i16 %x, 30\n  ret i1 %0\n"),
+    ];
+    for (flags, pred, c, after) in cases {
+        check("i16 %x", &sq(flags, pred, c), after);
+    }
+}
+
+/// `foldICmpMulConstant`'s constant-factor arms (pinned, i16): equality
+/// divides the compare constant, an `nuw`/`nsw` multiply divides it rounding
+/// the way the predicate needs, and a sign test drops the multiply.
+#[test]
+fn test_a_product_with_a_constant_against_a_constant_divides_the_constant() {
+    let run = |body: &str, after: &str| check("i16 %x", body, after);
+    run(
+        "  %m = mul nuw i16 %x, 6\n  %r = icmp ult i16 %m, 20\n  ret i1 %r\n",
+        "  %0 = icmp ult i16 %x, 4\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nuw i16 %x, 6\n  %r = icmp ugt i16 %m, 20\n  ret i1 %r\n",
+        "  %0 = icmp ugt i16 %x, 3\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nsw i16 %x, -4\n  %r = icmp slt i16 %m, 10\n  ret i1 %r\n",
+        "  %0 = icmp sgt i16 %x, -3\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nsw i16 %x, 4\n  %r = icmp sgt i16 %m, -10\n  ret i1 %r\n",
+        "  %0 = icmp sgt i16 %x, -3\n  ret i1 %0\n",
+    );
+    run("  %m = mul i16 %x, 5\n  %r = icmp eq i16 %m, 100\n  ret i1 %r\n", "  %0 = icmp eq i16 %x, 20\n  ret i1 %0\n");
+    run(
+        "  %m = mul nsw i16 %x, 6\n  %r = icmp ne i16 %m, -18\n  ret i1 %r\n",
+        "  %0 = icmp ne i16 %x, -3\n  ret i1 %0\n",
+    );
+    run(
+        "  %m = mul nsw i16 %x, -3\n  %r = icmp slt i16 %m, 0\n  ret i1 %r\n",
+        "  %0 = icmp sgt i16 %x, 0\n  ret i1 %0\n",
+    );
 }

@@ -369,15 +369,14 @@ fn find_non_imm_use<D: AddrDag>(
     if dag.is_only_user_of(immediate_use, def) {
         return false;
     }
-    let mut visited = vec![immediate_use];
+    let mut visited = crate::dag::Visited::of(immediate_use);
     let mut worklist = Vec::new();
-    let seed = |node: u32, visited: &mut Vec<u32>, worklist: &mut Vec<u32>| {
+    let seed = |node: u32, visited: &mut crate::dag::Visited, worklist: &mut Vec<u32>| {
         for i in 0..dag.num_operands(node) {
             let op = dag.operand(node, i);
-            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || visited.contains(&op.node) {
+            if (dag.value_type(op) == mvt::Other && ignore_chains) || op.node == def || !visited.insert(op.node) {
                 continue;
             }
-            visited.push(op.node);
             worklist.push(op.node);
         }
     };
@@ -488,6 +487,12 @@ impl<D: AddrDag> Hooks<D> for X86Hooks {
             }
             "getI8Imm(Imm ^ 0x0f, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x0f) ^ 0x0f) as u8), mvt::i8),
             "getI8Imm(Imm ^ 0x03, SDLoc(N))" => dag.target_constant(i64::from(((masked & 0x03) ^ 0x03) as u8), mvt::i8),
+            // `inv_cond_XFORM`: `GetOppositeBranchCondition` flips the low bit
+            // of a condition code (O/NO, B/AE, E/NE, BE/A, S/NS, P/NP, L/GE,
+            // LE/G are adjacent pairs).
+            c if c.starts_with("CurDAG->getTargetConstant(X86::GetOppositeBranchCondition(CC)") => {
+                dag.target_constant(i64::from((masked as u8) ^ 1), mvt::i8)
+            }
             other => panic!("node transform `{other}` is not translated"),
         }
     }
