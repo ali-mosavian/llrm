@@ -4,7 +4,7 @@
 //! # How it works
 //! A translation of LLVM `d1106deb71cc` `TargetLibraryInfo.h`, `.td` and
 //! `.cpp`. The functions and their prototypes are `TargetLibraryInfo.td`'s,
-//! turned into `table.rs` by `tools/gen_libfunc.py` (the pin's TableGen
+//! turned into `table.rs` by `tools/gen/gen_libfunc.py` (the pin's TableGen
 //! emitter makes the same enum and tables); `get_lib_func` finds one by its
 //! name (`getLibFunc(StringRef)`) and checks a declaration's type against its
 //! prototype (`isValidProtoForLibFunc`).

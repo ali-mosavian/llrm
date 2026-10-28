@@ -92,6 +92,10 @@ impl llrm_target::Target for M32 {
         &REGISTER_INFO
     }
 
+    fn selects_by_dag(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "x86-m32"
     }

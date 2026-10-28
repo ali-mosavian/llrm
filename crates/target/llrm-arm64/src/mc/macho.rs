@@ -32,6 +32,16 @@ impl MachTargetWriter for Arm64MachO {
         true
     }
 
+    /// macOS 11, the first with arm64; `ld` takes the platform from this
+    /// command and warns "no platform load command" without it.
+    fn build_version(&self) -> Option<(u32, u32)> {
+        Some((llrm_macho::PLATFORM_MACOS, 11 << 16))
+    }
+
+    fn subsections_via_symbols(&self) -> bool {
+        true
+    }
+
     fn relocation(
         &self,
         reloc: &Reloc,

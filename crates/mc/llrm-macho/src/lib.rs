@@ -8,23 +8,32 @@
 //! writer does; an addend goes in an `RELOC_ADDEND` entry before its
 //! relocation.
 //!
-//! The file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section stays
-//! one atom, so a call between two functions of it may be resolved where it is
-//! written.
+//! An arm64 object carries `LC_BUILD_VERSION` (macOS 11, no tools, no SDK), as
+//! LLVM's does for `arm64-apple-macos`; `ld` takes the platform from it.
+//!
+//! An x86-64 file is not marked `MH_SUBSECTIONS_VIA_SYMBOLS`: a code section
+//! stays one atom, so a call between two functions of it may be resolved where
+//! it is written. An arm64 file is, as clang's is: a weak definition
+//! (`N_WEAK_DEF`) replaces only itself, and each reference between two symbols
+//! is a relocation.
 
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Target, Unsupported, apply_fixup};
 
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const MH_OBJECT: u32 = 1;
-const LC_SYMTAB: u32 = 0x2;
+const MH_SUBSECTIONS_VIA_SYMBOLS: u32 = 0x2000;
+pub const LC_SYMTAB: u32 = 0x2;
 const LC_DYSYMTAB: u32 = 0xB;
 const LC_SEGMENT_64: u32 = 0x19;
+pub const LC_BUILD_VERSION: u32 = 0x32;
+pub const PLATFORM_MACOS: u32 = 1;
 const S_ZEROFILL: u32 = 1;
 const S_MOD_INIT_FUNC_POINTERS: u32 = 9;
 const S_ATTR_PURE_INSTRUCTIONS: u32 = 0x8000_0000;
 const S_ATTR_SOME_INSTRUCTIONS: u32 = 0x0000_0400;
 const S_ATTR_DEBUG: u32 = 0x0200_0000;
-const N_EXT: u8 = 1;
+pub const N_EXT: u8 = 1;
+pub const N_WEAK_DEF: u16 = 0x80;
 const N_SECT: u8 = 0xE;
 /// `ARM64_RELOC_ADDEND`, the one entry Mach-O has for an addend a field cannot
 /// hold.
@@ -122,6 +131,20 @@ pub trait MachTargetWriter {
     /// relocation then names the symbol and not its section.
     fn lists_locals(&self) -> bool;
 
+    /// The platform and minimum OS (`xxxx.yy.zz` packed) of `LC_BUILD_VERSION`,
+    /// if the machine's objects carry one.
+    fn build_version(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Whether the linker may treat each symbol of a section as an atom of its
+    /// own (`MH_SUBSECTIONS_VIA_SYMBOLS`): then a weak definition replaces
+    /// only itself, and every reference between two symbols of a section
+    /// carries a relocation.
+    fn subsections_via_symbols(&self) -> bool {
+        false
+    }
+
     fn relocation(
         &self,
         reloc: &Reloc,
@@ -175,7 +198,7 @@ pub fn write<W: MachTargetWriter>(
     // within its kind.
     let mut defined: Vec<usize> = (0..object.symbols.len())
         .filter(|&one| {
-            object.symbols[one].binding == Binding::Public
+            matches!(object.symbols[one].binding, Binding::Public | Binding::Weak)
                 && matches!(object.symbols[one].definition, Definition::Defined { .. })
         })
         .collect();
@@ -206,9 +229,9 @@ pub fn write<W: MachTargetWriter>(
         put32(&mut nlist, name);
         match symbol.definition {
             Definition::Defined { section, offset } => {
-                let external = if symbol.binding == Binding::Public { N_EXT } else { 0 };
+                let external = if symbol.binding == Binding::Local { 0 } else { N_EXT };
                 nlist.extend([N_SECT | external, ordinal(section) as u8]);
-                nlist.extend(0u16.to_le_bytes());
+                nlist.extend((if symbol.binding == Binding::Weak { N_WEAK_DEF } else { 0 }).to_le_bytes());
                 put64(&mut nlist, (address[section] + offset) as u64);
             }
             Definition::Undefined => {
@@ -312,8 +335,11 @@ pub fn write<W: MachTargetWriter>(
 
     // Layout: header, load commands, section contents, relocations, symbols,
     // strings.
-    let commands = 72 + 80 * order.len() + 24 + 80;
-    let first = align_up(32 + commands, 16);
+    let version = flavor.build_version();
+    let commands = 72 + 80 * order.len() + 24 + 80 + if version.is_some() { 24 } else { 0 };
+    // The section data follows the load commands, as `MachObjectWriter` places
+    // it; with no build version the commands end 16-aligned.
+    let first = 32 + commands;
     let mut offsets = vec![0usize; object.sections.len()];
     for &one in order.iter().take(file_backed) {
         offsets[one] = first + address[one];
@@ -335,7 +361,16 @@ pub fn write<W: MachTargetWriter>(
 
     let mut out = Vec::new();
     let (cpu_type, cpu_subtype) = flavor.cpu();
-    for field in [MH_MAGIC_64, cpu_type, cpu_subtype, MH_OBJECT, 3, commands as u32, 0, 0] {
+    for field in [
+        MH_MAGIC_64,
+        cpu_type,
+        cpu_subtype,
+        MH_OBJECT,
+        if version.is_some() { 4 } else { 3 },
+        commands as u32,
+        if flavor.subsections_via_symbols() { MH_SUBSECTIONS_VIA_SYMBOLS } else { 0 },
+        0,
+    ] {
         put32(&mut out, field);
     }
     put32(&mut out, LC_SEGMENT_64);
@@ -358,6 +393,13 @@ pub fn write<W: MachTargetWriter>(
         put32(&mut out, reloc_offsets[one] as u32);
         put32(&mut out, (entries[one].len() / 8) as u32);
         for field in [flags, 0, 0, 0] {
+            put32(&mut out, field);
+        }
+    }
+    if let Some((platform, minos)) = version {
+        // No tools, and no SDK: the version of the SDK is the build's, not the
+        // object's.
+        for field in [LC_BUILD_VERSION, 24, platform, minos, 0, 0] {
             put32(&mut out, field);
         }
     }

@@ -99,6 +99,7 @@ impl Options {
         arch: std::rc::Rc<dyn llrm_target::Target>,
         selection: &'static crate::backend::isel::Compiled,
     ) -> Self {
+        let isel = crate::backend::shadow::Selector::for_target(&*arch);
         Self {
             machine,
             pipeline: Default::default(),
@@ -115,7 +116,7 @@ impl Options {
             spills_extended: false,
             code_segment: None,
             no_inline: Vec::new(),
-            isel: Default::default(),
+            isel,
             libcalls: Vec::new(),
         }
     }

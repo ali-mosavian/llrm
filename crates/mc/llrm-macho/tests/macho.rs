@@ -3,7 +3,9 @@
 use std::path::Path;
 use std::process::Command;
 
-use llrm_macho::{MachTargetWriter, write as write_with};
+use llrm_macho::{
+    LC_BUILD_VERSION, LC_SYMTAB, MachTargetWriter, N_EXT, N_WEAK_DEF, PLATFORM_MACOS, write as write_with,
+};
 use llrm_object::ObjectTarget;
 use llrm_object::{Binding, Definition, Fix, Object, Role, Section, Target, Unsupported};
 use llrm_object::{Reloc, Symbol};
@@ -325,7 +327,9 @@ fn arm64_reads_as_llvm_mc_writes_the_same_program() {
     std::fs::write(&mine, write_arm64(&arm64_program()).unwrap()).unwrap();
     std::fs::write(&source, ARM64_REFERENCE).unwrap();
     let made = Command::new(mc)
-        .args(["-triple", "arm64-apple-macos", "-filetype=obj"])
+        // macOS 11, the platform the writer names: without a version LLVM
+        // writes no LC_BUILD_VERSION.
+        .args(["-triple", "arm64-apple-macos11", "-filetype=obj"])
         .arg(&source)
         .arg("-o")
         .arg(&theirs)
@@ -485,4 +489,69 @@ fn a_debug_format_this_object_cannot_carry_is_refused() {
         let why = write(&made).unwrap_err().0;
         assert!(why.contains("cannot carry") && why.contains(name), "{why}");
     }
+}
+
+/// Every command of a Mach-O object: `(cmd, bytes)`.
+fn commands_of(object: &[u8]) -> Vec<(u32, Vec<u8>)> {
+    let word = |at: usize| u32::from_le_bytes(object[at..at + 4].try_into().unwrap());
+    let (count, mut at) = (word(16), 32);
+    (0..count)
+        .map(|_| {
+            let (cmd, size) = (word(at), word(at + 4) as usize);
+            let one = (cmd, object[at..at + size].to_vec());
+            at += size;
+            one
+        })
+        .collect()
+}
+
+/// An arm64 object had no `LC_BUILD_VERSION`: `ld` warned "no platform load
+/// command found" for every object and assumed macOS.
+#[test]
+fn an_arm64_object_names_its_platform() {
+    let mut object = program();
+    object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
+    object.symbols = vec![defined("_f", 0, 0)];
+    let written = write_arm64(&object).unwrap();
+    let build: Vec<_> = commands_of(&written).into_iter().filter(|(cmd, _)| *cmd == LC_BUILD_VERSION).collect();
+    assert_eq!(build.len(), 1);
+    let words: Vec<u32> = build[0].1.chunks(4).map(|w| u32::from_le_bytes(w.try_into().unwrap())).collect();
+    assert_eq!(words, [LC_BUILD_VERSION, 24, PLATFORM_MACOS, 11 << 16, 0, 0]);
+    // The header's byte count covers it: the symbol table is where the commands
+    // end.
+    let total: usize = commands_of(&written).iter().map(|(_, bytes)| bytes.len()).sum();
+    assert_eq!(total, u32::from_le_bytes(written[20..24].try_into().unwrap()) as usize);
+}
+
+/// An x86-64 object's bytes are unchanged: it carries no build version.
+#[test]
+fn an_x86_64_object_has_none() {
+    let written = write(&program()).unwrap();
+    assert!(commands_of(&written).iter().all(|(cmd, _)| *cmd != LC_BUILD_VERSION));
+}
+
+/// A weak definition (`__attribute__((weak))`) was written as a strong one: two
+/// objects that defined it were "duplicate symbol" to `ld`. It carries
+/// `N_WEAK_DEF`.
+#[test]
+fn a_weak_symbol_is_a_weak_definition() {
+    let mut object = program();
+    object.sections = vec![section("text", Role::Text, vec![0xC0, 0x03, 0x5F, 0xD6], vec![])];
+    object.symbols = vec![defined("_strong", 0, 0), Symbol { binding: Binding::Weak, ..defined("_hook", 0, 0) }];
+    let written = write_arm64(&object).unwrap();
+    let word = |at: usize| u32::from_le_bytes(written[at..at + 4].try_into().unwrap()) as usize;
+    let symtab = commands_of(&written).into_iter().find(|(cmd, _)| *cmd == LC_SYMTAB).unwrap().1;
+    let field = |at: usize| u32::from_le_bytes(symtab[at..at + 4].try_into().unwrap()) as usize;
+    let (symbols_at, count, strings_at) = (field(8), field(12), field(16));
+    let mut found = Vec::new();
+    for index in 0..count {
+        let entry = symbols_at + index * 16;
+        let name_at = strings_at + word(entry);
+        let name =
+            written[name_at..].iter().take_while(|byte| **byte != 0).map(|byte| *byte as char).collect::<String>();
+        let desc = u16::from_le_bytes([written[entry + 6], written[entry + 7]]);
+        found.push((name, written[entry + 4] & N_EXT != 0, desc & N_WEAK_DEF != 0));
+    }
+    found.sort();
+    assert_eq!(found, [("_hook".to_owned(), true, true), ("_strong".to_owned(), true, false)]);
 }

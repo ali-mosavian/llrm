@@ -343,6 +343,11 @@ pub trait Target {
     /// The platform description a frontend of this target defaults to.
     fn machine(&self) -> Machine;
 
+    /// Whether `--isel` unnamed selects through the DAG, not the old selector.
+    fn selects_by_dag(&self) -> bool {
+        false
+    }
+
     /// The linear ranges its platform states no program data occupies, where it
     /// is flat and states its selector's base as 0 (`Machine::flat_foreign`),
     /// worked out once, not for each profile.
@@ -593,6 +598,12 @@ pub trait Target {
         registers::parse(&self.registers_text()).map_or(0, |all| registers::of_class(&all, "x87").len())
     }
 
+    /// Whether scalar floating point lives in SSE registers: its register
+    /// file states roots of class `xmm`.
+    fn scalar_sse(&self) -> bool {
+        registers::parse(&self.registers_text()).is_ok_and(|all| !registers::of_class(&all, "xmm").is_empty())
+    }
+
     /// The indexed addresses a memory access may use, priced by `costs` (its
     /// operand-size prefix in `prefix`) and `address_stall`: native form first.
     fn address_forms(
@@ -649,6 +660,7 @@ pub trait Target {
             optional: self.frame_optional(),
             enter: self.frame_enter(),
             wrap_split_size: self.frame_wrap_split_size(),
+            slot_scratch: self.frame_slot_scratch(),
             free: false,
         }
     }
@@ -667,6 +679,12 @@ pub trait Target {
 
     /// Whether a size build wraps a frame around a shared return
     /// (`calling.toml`'s `frame_wrap_split_size`).
+    /// The registers a one-slot frame pushes and pops, where the target has
+    /// them.
+    fn frame_slot_scratch(&self) -> Option<(RegId, RegId)> {
+        None
+    }
+
     fn frame_wrap_split_size(&self) -> bool {
         false
     }
@@ -693,6 +711,9 @@ pub struct FrameRegisters {
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
+    /// The registers a one-slot frame pushes and pops (`calling.toml`'s
+    /// `frame_slot_push`/`frame_slot_pop`), where it does.
+    pub slot_scratch: Option<(RegId, RegId)>,
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.
     pub free: bool,

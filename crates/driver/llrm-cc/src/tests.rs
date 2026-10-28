@@ -46,6 +46,17 @@ fn untranslated_features_are_refused_not_dropped() {
     assert!(parse(&words("-g0 x.c")).is_ok());
 }
 
+/// Open Watcom's `char` is unsigned; clang's default on i386 is signed, so
+/// watcom_far_sum.c (`*p = 251` read back through a far `char`) printed 1229
+/// for 1485 under llrm-cc.
+#[test]
+fn the_watcom_abi_makes_char_unsigned() {
+    let unsigned = |args: &str| built(args).clang.iter().any(|one| one == "-funsigned-char");
+    assert!(unsigned("-mabi=watcom -c x.c"));
+    assert!(!unsigned("-mabi=sysv -c x.c"));
+    assert!(!unsigned("-mabi=watcom -fsigned-char -c x.c"));
+}
+
 /// `-g` was refused ("debug info is not carried yet"), so no program could
 /// carry debug info: clang gets `-g`, the backend the flag that names the
 /// format.

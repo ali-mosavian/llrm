@@ -392,8 +392,7 @@ fn successor_overwrites_flags(
 /// reads it. Built for size, a constant several instructions read stays a
 /// register.
 ///
-/// Not translated: the `COPY` and shift forms, `cmp`/`test`/`adc`/`sbb` and the
-/// 64-bit range check.
+/// Not translated: the `COPY` and shift forms and `cmp`/`test`/`adc`/`sbb`.
 pub fn immediates_folded(
     body: &LirBody,
     size: bool,
@@ -568,6 +567,11 @@ fn folded_use(
         return None;
     }
     if swapped && !defined.contains(&kept.value) {
+        return None;
+    }
+    // A 64-bit instruction's immediate is 32 bits, sign-extended
+    // (`foldImmediateImpl`: `isInt<32>`): `0xFFFFFFF7` is not -9 there.
+    if kept.width == 8 && i32::try_from(imm.value).is_err() {
         return None;
     }
     let sources = vec![Loc::Held(kept), Loc::Imm(Imm { width: kept.width, ..imm })];
