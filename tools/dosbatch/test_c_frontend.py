@@ -117,3 +117,18 @@ def test_an_absolute_runtime_file_names_an_object_in_the_work_directory():
     """llrm-nib names the hook by absolute path: the object's name began with "/", a directory that did not exist (jwasm A1106 in NibCutTests)."""
     name = dosbatch.object_name(str(dosbatch.ROOT / "runtime/nib/x86-m16/init.asm"))
     assert "/" not in name and name == dosbatch.object_name("runtime/nib/x86-m16/init.asm")
+
+
+def test_the_qb_runtime_c_sources_build_with_the_c_frontend_not_llrm_c(monkeypatch, tmp_path):
+    """qb32.build and qbruntime._compile_c named llrm-c: with it unbuilt every QB program failed the landing's link check ("llrm was built without the toolchain feature")."""
+    import qb32
+    import qbruntime
+
+    monkeypatch.delenv("LLRM_C_FRONTEND", raising=False)
+    asked = []
+    monkeypatch.setattr(dosbatch, "_host", lambda command, env=None: asked.append((command, env)))
+    qbruntime._compile_c(Path("a.c"), tmp_path / "a.obj", tmp_path)
+    (command, env), = asked
+    assert Path(command[0]).name == "llrm-cc" and "-mbss-begin" in command and env == {"LLRM_CC_TARGET": "x86_16-wat"}, (command, env)
+    assert not any(Path(one).name == "llrm-c" for one in command)
+    assert qb32._stamp(dosbatch.c_frontend()).startswith("llrm-cc")

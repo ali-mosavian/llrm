@@ -399,25 +399,9 @@ def platform_sources() -> list[Path]:
 
 
 def _compile_c(source: Path, obj: Path, include: Path) -> None:
-    dosbatch._host(
-        [
-            str(dosbatch.BIN / "llrm-c"),
-            str(source),
-            dosbatch.m_flag(dosbatch.REAL_MODE),
-            # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
-            "-mbss-begin",
-            "-Os",
-            "-I",
-            str(include),
-            "-I",
-            str(RUNTIME),
-            "-I",
-            str(platform_directory()),
-            *device_includes(),
-            "-o",
-            str(obj),
-        ]
-    )
+    # An empty BSSB ahead of each object's _BSS: start.asm zeroes from it (the objects' order is the linker's).
+    flags = ["-mbss-begin", "-I", str(include), "-I", str(RUNTIME), "-I", str(platform_directory()), *device_includes()]
+    dosbatch._host(*dosbatch.c_compile(source, obj, dosbatch.REAL_MODE, "-Os", include, [], flags))
 
 
 def remove_existing_archive(work: Path) -> None:
