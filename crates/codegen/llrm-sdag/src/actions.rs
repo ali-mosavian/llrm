@@ -8,7 +8,7 @@
 //! type), (type, memory type) for truncating stores, and (condition code,
 //! type). Everything starts `Legal`; `init_actions` makes the pin's
 //! `initActions` defaults and `x86_32` (or `aarch64`, the scalar integer arms
-//! of `AArch64TargetLowering`) the constructor's calls, in the pin's order, because a later call overwrites an earlier one. `operation_action`
+//! of `AArch64TargetLowering`, with the scalar float and atomic ones) the constructor's calls, in the pin's order, because a later call overwrites an earlier one. `operation_action`
 //! is `getOperationAction`: an integer with no simple type is `Expand`.
 //! `type_to_promote_to` is `getTypeToPromoteTo`: the recorded type, else the
 //! next wider legal type that handles the operation.
@@ -70,6 +70,12 @@ pub struct Features {
 pub struct Aarch64Features {
     /// `hasCSSC()`: scalar `ctpop`, `cttz`, `abs`, `smax` and the like are instructions.
     pub cssc: bool,
+    /// `hasLSE()`: the atomic read-modify-writes are instructions.
+    pub lse: bool,
+    /// `outlineAtomics()`: without LSE they call the `__aarch64_*` helpers.
+    pub outline_atomics: bool,
+    /// `hasLSE2()`: a 128-bit atomic load or store is one access.
+    pub lse2: bool,
 }
 
 /// `ISD::LoadExtType`.
@@ -418,6 +424,38 @@ impl TargetLowering {
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Expand);
         }
+
+        // Scalar floats (`hasFPARMv8()`; `f16`, `bf16` and `f128` are not types here).
+        let floats = [MVT::F32, MVT::F64];
+        t.set_ops(&[FRem], &floats, LibCall);
+        t.set_ops(&[FSin, FCos], &floats, Expand);
+        t.set_ops(&[FCopySign], &floats, Custom);
+        t.set_ops(&[FpExtend], &[MVT::F32], Legal);
+        t.set_ops(&[FpExtend], &[MVT::F64], Custom);
+        t.set_ops(&[FpRound], &floats, Custom);
+        t.set_ops(&[FRint, LRint], &floats, Legal);
+        t.set_ops(&[BitCast], &[MVT::I16], Custom);
+        for vt in floats {
+            for mem in floats {
+                t.set_load_ext_action(LoadExt::ExtLoad, vt, mem, Expand);
+            }
+        }
+        t.set_trunc_store_action(MVT::F64, MVT::F32, Expand);
+
+        // Atomics.
+        let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
+        t.set_ops(&[AtomicCmpSwap], &[MVT::I128], Custom);
+        let sub = if !features.lse && !features.outline_atomics { LibCall } else { Expand };
+        t.set_ops(&[AtomicLoadSub], &words, sub);
+        t.set_ops(&[AtomicLoadAnd], &words, Custom);
+        if features.outline_atomics && !features.lse {
+            t.set_ops(&[AtomicCmpSwap], &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128], LibCall);
+            t.set_ops(&[AtomicSwap, AtomicLoadAdd, AtomicLoadOr, AtomicLoadClr, AtomicLoadXor], &narrow, LibCall);
+        }
+        t.set_ops(&[Load, Store], &[MVT::I128], Custom);
+        if features.lse2 {
+            t.set_ops(&[AtomicLoad, AtomicStore], &[MVT::I128], Custom);
+        }
         t
     }
 
@@ -628,11 +666,36 @@ mod tests {
         assert_eq!(t.operation_action(ISD::MulHU, EVT::I64), Action::Legal);
     }
 
+    /// Without LSE the read-modify-writes are helper calls (or an LL/SC loop
+    /// when outlining is off); with it they are instructions.
+    #[test]
+    fn aarch64_atomics_follow_lse_and_outlining() {
+        let plain = a64();
+        assert_eq!(plain.operation_action(ISD::AtomicLoadSub, EVT::I32), Action::LibCall);
+        assert_eq!(plain.operation_action(ISD::AtomicLoadAnd, EVT::I64), Action::Custom);
+        let lse = TargetLowering::aarch64(Aarch64Features { lse: true, ..Default::default() });
+        assert_eq!(lse.operation_action(ISD::AtomicLoadSub, EVT::I32), Action::Expand);
+        let outlined = TargetLowering::aarch64(Aarch64Features { outline_atomics: true, ..Default::default() });
+        assert_eq!(outlined.operation_action(ISD::AtomicCmpSwap, EVT::I8), Action::LibCall);
+        assert_eq!(outlined.operation_action(ISD::AtomicSwap, EVT::I64), Action::LibCall);
+    }
+
+    /// Scalar float arms: `frem` is a libcall, `fsin` expands, a double
+    /// extends by hand and a single is free.
+    #[test]
+    fn aarch64_float_arms() {
+        let t = a64();
+        assert_eq!(t.operation_action(ISD::FRem, EVT::Simple(MVT::F64)), Action::LibCall);
+        assert_eq!(t.operation_action(ISD::FSin, EVT::Simple(MVT::F32)), Action::Expand);
+        assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F32)), Action::Legal);
+        assert_eq!(t.operation_action(ISD::FpExtend, EVT::Simple(MVT::F64)), Action::Custom);
+    }
+
     /// CSSC turns scalar `ctpop` from a vector sequence into one instruction.
     #[test]
     fn aarch64_ctpop_follows_cssc() {
         assert_eq!(a64().operation_action(ISD::CtPop, EVT::I32), Action::Custom);
-        let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true });
+        let cssc = TargetLowering::aarch64(Aarch64Features { cssc: true, ..Default::default() });
         assert_eq!(cssc.operation_action(ISD::CtPop, EVT::I32), Action::Legal);
     }
 
