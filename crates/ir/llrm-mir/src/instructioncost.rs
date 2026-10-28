@@ -284,6 +284,8 @@ pub fn instruction_cost_with(
         {
             tti.indexed_store_cost(kind).expect("a price")
         }
+        // BasicTTIImpl prices the other instructions at one unit.
+        Opcode::Atomic(_) => Cost::BASIC,
         Opcode::Store { .. } => match modelled(operands[0]) {
             Some(ty) => tti.memory_op_cost(MemoryOp::Store, ty, kind, info(0).constant),
             None => Cost::INVALID,

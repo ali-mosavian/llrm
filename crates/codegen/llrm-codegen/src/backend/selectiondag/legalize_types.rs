@@ -888,6 +888,11 @@ impl<'a> TypeLegalizer<'a> {
             op @ (ISD::Add | ISD::Sub) => self.expand_add_sub(value, op, half)?,
             op @ (ISD::UAddO | ISD::USubO) => self.expand_addsub_overflow(value, op, half)?,
             op @ (ISD::SAddO | ISD::SSubO) => self.expand_signed_addsub_overflow(value, op, half),
+            ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
+                // `ExpandIntRes_ADDSUBSAT`.
+                let expanded = super::expand_sat::expand_add_sub_sat(self.dag, self.tli, value);
+                self.split_integer(expanded, half)
+            }
             ISD::UMulO => self.expand_umulo(value, half),
             ISD::SMulO => self.expand_smulo(value, half),
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
@@ -911,7 +916,19 @@ impl<'a> TypeLegalizer<'a> {
                 (self.dag.get_select(half, equal, min_max, winner), hi)
             }
             ISD::Mul => self.expand_mul(value, half)?,
-            op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => self.expand_division(value, op, half)?,
+            op @ (ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem) => {
+                let by_constant = (matches!(op, ISD::UDiv | ISD::URem)
+                    && self.dag.constant(self.dag.operand(value, 1)).is_some())
+                .then(|| {
+                    let (ll, lh) = self.expanded_integer(self.dag.operand(value, 0));
+                    super::expand_divrem_const::expand_divrem_by_constant(self.dag, self.tli, value, half, ll, lh)
+                })
+                .flatten();
+                match by_constant {
+                    Some(halves) => halves,
+                    None => self.expand_division(value, op, half)?,
+                }
+            }
             op @ (ISD::Shl | ISD::Srl | ISD::Sra) => self.expand_shift(value, op, vt, half)?,
             op @ (ISD::And | ISD::Or | ISD::Xor) => {
                 let (lhs, rhs) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
