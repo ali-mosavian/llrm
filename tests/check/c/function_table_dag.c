@@ -1,4 +1,4 @@
-// RUN: llrm-c %s -m32 -mabi=sysv -march=i486 -O2 --isel=dag -S -o /dev/stdout
+// RUN: llrm-cc %s -m32 -mabi=sysv -march=i486 -O2 --isel=dag -S -o /dev/stdout
 // The call table is a switch of direct calls whose default is `unreachable` (jumptableswitch), as the pin's passes leave it. The DAG
 // builder lowers it, as SelectionDAGBuilder does, with no range test before the jump table; the MIR switchlower pass (the old selector's
 // lowering) made the default case 0's block and the builder then tested the range: `cmp 3; ja` before the table.

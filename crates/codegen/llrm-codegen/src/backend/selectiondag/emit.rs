@@ -1338,12 +1338,13 @@ impl Emitter<'_, '_> {
             // unnamed store the stackifier reads as `handleReturn`.
             let node = self.dag.node(SDValue { node: n, res: 0 });
             for &op in &node.ops {
-                // At m64 the result is in `xmm0`, put there by its `CopyToReg`.
-                if self.ctx.address_mode != AddrMode::Flat64 && self.dag.value_type(op).is_floating_point() {
-                    let Loc::Held(value) = self.operand(op)? else {
-                        return Err(EmitError::Unsupported("a floating result that is no register".to_owned()));
-                    };
-                    self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]);
+                if self.dag.value_type(op).is_floating_point() {
+                    match self.operand(op)? {
+                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
+                        // An xmm result: its `CopyToReg` already put it there.
+                        Loc::Reg(_) => {}
+                        _ => return Err(EmitError::Unsupported("a floating result that is no register".to_owned())),
+                    }
                 }
             }
             // The value is already in its register (`CopyToReg`); the frame
