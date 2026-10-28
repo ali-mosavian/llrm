@@ -10,14 +10,23 @@ use crate::capturecheck::Verify;
 use crate::testing::{DOS, corpus, layout, parsed};
 
 /// Each pointer parameter of each defined function of `module`, after
-/// attributes are inferred: (`@f`/index, inferred `nocapture`, shown uncaptured
-/// by the body).
-fn parameters(module: &mut Module) -> Vec<(String, bool, bool)> {
+/// attributes are inferred: (`@f`/index, `nocapture` now, whether the frontend
+/// stated it in the text, shown uncaptured by the body). A stated `nocapture`
+/// (Nib's by-reference parameters, which it promises of a callee it cannot see
+/// into) is the frontend's, not inferred.
+fn parameters(module: &mut Module) -> Vec<(String, bool, bool, bool)> {
+    let stated: Vec<Vec<bool>> = module
+        .functions()
+        .map(|(_, _, function)| function.parameter_attrs.iter().map(|attrs| Facts::of(attrs).no_capture()).collect())
+        .collect();
     let layout = layout(module);
     crate::functionattrs::infer_module(module, &layout, llrm_mir::target::Machine::spaces(&llrm_mir::target::Neutral));
     let verify = Verify::new(module, &layout, 8);
     let mut found = Vec::new();
-    for (id, global, function) in module.functions().filter(|(_, _, function)| !function.is_declaration()) {
+    for ((id, global, function), stated) in module.functions().zip(stated) {
+        if function.is_declaration() {
+            continue;
+        }
         for (index, &parameter) in function.parameters().iter().enumerate() {
             let is_pointer =
                 matches!(
@@ -29,7 +38,7 @@ fn parameters(module: &mut Module) -> Vec<(String, bool, bool)> {
             }
             let inferred = Facts::of(&function.parameter_attrs[index]).no_capture();
             let shown = verify.parameter(id, index).is_ok();
-            found.push((format!("@{}/{index}", global.name.as_deref().unwrap_or("")), inferred, shown));
+            found.push((format!("@{}/{index}", global.name.as_deref().unwrap_or("")), inferred, stated[index], shown));
         }
     }
     found
@@ -109,10 +118,10 @@ m:
 "
     ));
     let found = parameters(&mut module);
-    let named = |name: &str| found.iter().find(|(at, _, _)| at == name).unwrap_or_else(|| panic!("{name}"));
+    let named = |name: &str| found.iter().find(|(at, _, _, _)| at == name).unwrap_or_else(|| panic!("{name}"));
     // The premise: the readings differ across the set.
-    assert!(found.iter().any(|(_, inferred, _)| *inferred) && found.iter().any(|(_, inferred, _)| !*inferred));
-    for (at, inferred, shown) in &found {
+    assert!(found.iter().any(|(_, inferred, _, _)| *inferred) && found.iter().any(|(_, inferred, _, _)| !*inferred));
+    for (at, inferred, _, shown) in &found {
         assert_eq!(inferred, shown, "{at}: inferred nocapture {inferred}, the capture check shows {shown}");
     }
     assert!(named("@load/0").1 && named("@pass_to_known/0").1 && named("@through_gep_and_phi/0").1);
@@ -125,16 +134,20 @@ m:
 /// capture tracking counts a store of the pointer into a local slot as a
 /// capture and the check reads it back through the slot: `@floats.digits` of
 /// the nib runtime, whose parameter is spilled to a local in the emitted
-/// stage, before mem2reg. Missing a `nocapture` is the safe side.
+/// stage, before mem2reg, and `@$state3.next` of the pipeline example in the
+/// optimized stage (an irreducible body, `corpus_tests`). Missing a
+/// `nocapture` is the safe side. A `nocapture` the frontend states (Nib's
+/// by-reference parameters) is its promise, not inferred, and is not asked of
+/// the check.
 #[test]
 fn every_inferred_nocapture_in_the_corpus_is_shown_by_the_capture_check() {
     let mut unsound = Vec::new();
     let mut unstated = Vec::new();
     let mut parameters_seen = 0;
     for (name, mut module) in corpus() {
-        for (at, inferred, shown) in parameters(&mut module) {
+        for (at, inferred, stated, shown) in parameters(&mut module) {
             parameters_seen += 1;
-            if inferred && !shown {
+            if inferred && !stated && !shown {
                 unsound.push(format!("{name}/{at}"));
             }
             if !inferred && shown {
@@ -144,5 +157,9 @@ fn every_inferred_nocapture_in_the_corpus_is_shown_by_the_capture_check() {
     }
     assert!(parameters_seen > 500, "the corpus has pointer parameters: {parameters_seen}");
     assert!(unsound.is_empty(), "inferred nocapture the body keeps: {unsound:#?}");
-    assert_eq!(unstated, ["emitted/nib-runtime/@floats.digits/0"], "shown uncaptured, not stated");
+    assert_eq!(
+        unstated,
+        ["emitted/nib-runtime/@floats.digits/0", "optimized/nib-examples-pipeline/@$state3.next/0"],
+        "shown uncaptured, not stated"
+    );
 }
