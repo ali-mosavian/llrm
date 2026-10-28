@@ -937,3 +937,44 @@ fn a_division_of_a_select_of_constants_is_a_select_of_quotients() {
         "  %0 = select i1 %c, i32 2, i32 3\n  ret i32 %0\n",
     );
 }
+
+/// `foldBinopWithPhiOperands` in `visitMul`: a product of two phis whose
+/// pairs are constants in one predecessor folds there and moves the multiply
+/// to the other. Stayed a multiply of two phis before.
+#[test]
+fn a_product_of_two_phis_moves_to_the_predecessor_with_the_unknowns() {
+    let text = "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  br label %m
+
+m:
+  %p = phi i16 [ 3, %a ], [ %i, %b ]
+  %q = phi i16 [ 4, %a ], [ %j, %b ]
+  %r = mul i16 %p, %q
+  ret i16 %r
+}
+";
+    let want = "define i16 @f(i1 %c, i16 %i, i16 %j) {
+b0:
+  br i1 %c, label %a, label %b
+
+a:
+  br label %m
+
+b:
+  %0 = mul i16 %i, %j
+  br label %m
+
+m:
+  %1 = phi i16 [ %0, %b ], [ 12, %a ]
+  ret i16 %1
+}
+";
+    assert_eq!(combined(text), want);
+}
