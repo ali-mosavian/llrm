@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/argumentattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/argumentattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:e251085d1a1433035137cf9b0c56fa35780cf2b516da3adec032f26371084cd3 -->
+<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:0b8338422968c0aa94e72883587d96c42784d8732c0712d66e77979ba5b7b2d5 -->
 
 # argumentattrs
 
@@ -21,12 +21,20 @@ loads, stores, and calls by what their `memory(argmem: ...)` and the
 parameter's attributes allow, with a pass to a member of the SCC assumed
 harmless.
 
-DEVIATE A1: MIR has no `nofree` and no `initializes`-free tracking: the
-`IsFree` property is not tracked, so "all accesses" is read and write.
-DEVIATE A2: only `captures(none)` can be stated (see
+A parameter no use can free is `nofree` too (`IsFree`): a write through it
+by a call whose site, callee and parameter do not say `nofree` may free it.
+
+A parameter the entry block's guaranteed calls pass on to a `nonnull`
+`noundef` parameter of their callee is `nonnull`
+(`addArgumentAttrsFromCallsites`): the call runs on every entry, so the
+value is non-null throughout. DEVIATE A4: `nofpclass` has no MIR spelling,
+so only `nonnull` is propagated.
+
+DEVIATE A1: `nofree_obj` has no MIR spelling, so only `nofree` is looked
+for. DEVIATE A2: only `captures(none)` can be stated (see
 [`crate::capturetracking`](capturetracking.md)), so a parameter that would be
 `captures(ret: ...)` stays unstated. Not translated yet:
-`addArgumentAttrsFromCallsites` (nonnull), `returned`; `inferInitializes` is
+`returned`; `inferInitializes` is
 [`crate::initializes`](initializes.md).
 
 ## Example

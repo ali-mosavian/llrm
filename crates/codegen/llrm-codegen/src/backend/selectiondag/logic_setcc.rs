@@ -251,6 +251,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if let Some(reassociated) = self.reassociate_ops(ISD::Or, n0, n1) {
             return Some(reassociated);
         }
+        if let Some(rotated) = self.match_rotate(n0, n1) {
+            return Some(rotated);
+        }
         let c1 = c1?;
         // `(or (and x, c0), c1)` with `c0` and `c1` sharing a bit is
         // `(and (or x, c1), c0 | c1)`.
