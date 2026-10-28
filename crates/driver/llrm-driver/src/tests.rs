@@ -1708,6 +1708,26 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
     assert!(!listing.contains("-2147483648"), "{listing}");
 }
 
+/// A 72-byte zero fill and copy at m64 -Os (`pattern_fill.c`,
+/// `huffman_decode.c`, `idioms.c`): `rep stosq` took its value from EAX where
+/// its form reads RAX, and the assembler had no `stosq`/`movsq`: "a division
+/// operand (RAX) not set by a glued CopyToReg" refused the function.
+#[test]
+fn a_quadword_fill_and_copy_at_m64_are_rep_string_instructions() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare void @use(ptr, ptr)\n\
+                declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)\n\
+                declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+                define void @f(ptr %s) optsize {\n  %b = alloca [72 x i8], align 16\n  %c = alloca [72 x i8], align 16\n\
+                \x20 call void @llvm.memset.p0.i64(ptr align 16 %c, i8 0, i64 72, i1 false)\n\
+                \x20 call void @llvm.memcpy.p0.p0.i64(ptr align 16 %b, ptr align 16 %s, i64 72, i1 false)\n\
+                \x20 call void @use(ptr %b, ptr %c)\n  ret void\n}\n";
+    let (built, _) = crate::llc::compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("rep stosq") && listing.contains("rep movsq"), "{listing}");
+}
+
 /// A variable `alloca` at m64 under `--isel=dag` named the 16-bit `sp` at
 /// quadword width (`isel: 0x0004 names 25 at width 8`, the verifier): the
 /// lowering took `RegId::SP` for every pointer width. It is `rsp`.

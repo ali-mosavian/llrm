@@ -1290,6 +1290,29 @@ fn a_far_string_move_leaves_no_dword_join_once_dead_code_is_gone() {
     assert_eq!(joins(&cleaned), 0, "the unread join is gone");
 }
 
+/// The register file was parsed for each block (`Target::scalar_sse` asked per
+/// `select_block`): 226 M of the 490 M instructions of `dag isel` on joins128,
+/// 147 k instructions for each of 1,542 blocks.
+#[test]
+fn the_register_file_is_not_parsed_per_block() {
+    let parses = |blocks: usize| {
+        let mut ir = String::from(
+            "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %x) {\nentry:\n  br label %b0\n",
+        );
+        for at in 0..blocks {
+            let next = if at + 1 < blocks { format!("b{}", at + 1) } else { "end".to_owned() };
+            ir.push_str(&format!("b{at}:\n  %v{at} = add i32 %x, {at}\n  br label %{next}\n"));
+        }
+        ir.push_str("end:\n  ret i32 %x\n}\n");
+        let before = llrm_target::registers::parsed();
+        select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
+        llrm_target::registers::parsed() - before
+    };
+    // the first compile reads what the target caches once
+    parses(3);
+    assert_eq!(parses(30), parses(90));
+}
+
 /// A word divided by two is `x + (x >>u 15)` shifted once: the pin folds
 /// `srl (sra x, y), 15` to `srl x, 15`. The DAG kept both shifts and widened
 /// each (`movsx; sar 15; movzx; shr 15`), 2 more instructions in the bit
