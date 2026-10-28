@@ -51,3 +51,26 @@ fn two_constants_are_one() {
         assert_eq!(dag.constant(dag.operand(root, 1)), Some(both), "{op:?}");
     }
 }
+
+/// `x+1` stored and `(x+1)+1` stored kept the chain (matrix at m16: the
+/// matcher folded the nested constants into `[bx+si+5]` with a register
+/// holding 1, +224 bytes): an `add` of constants is `x + 2` even when a store
+/// reads it (SD210 refused any `add` with a memory user).
+#[test]
+fn a_chain_of_stored_increments_is_x_plus_k() {
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+    let mut dag = dag();
+    let x = dag.get_register(EVT::I32, 5);
+    let ptr = dag.get_register(EVT::I32, 7);
+    let one = dag.get_constant(1, EVT::I32);
+    let a = dag.get_node(ISD::Add, EVT::I32, &[x, one]);
+    let b = dag.get_node(ISD::Add, EVT::I32, &[a, one]);
+    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(0), ext: None, space: 0 };
+    let first = dag.get_store(dag.entry_node(), a, ptr, info.clone());
+    let second = dag.get_store(first, b, ptr, info);
+    dag.set_root(second);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    let value = dag.operand(root, 1);
+    assert_eq!((dag.opcode(value), dag.operand(value, 0), dag.constant(dag.operand(value, 1))), (ISD::Add, x, Some(2)));
+}

@@ -61,6 +61,10 @@ fn a_word_operation_with_a_memory_operand_stays_a_word() {
 /// A word `add` of registers ran under the operand-size prefix (`add ax, 3;
 /// add dx, ax`: two prefixed instructions a trip in a loop of 16-bit counters,
 /// where gcc and clang run both on the whole register).
+///
+/// llrm-cc: the step `a + 3` runs on the whole register of whichever number
+/// the allocator gave it, not `ecx` (pin-shape: the pin's `llc` gives it
+/// `esi`).
 #[test]
 fn a_word_add_of_registers_runs_on_the_whole_register() {
     let text = listing(
@@ -79,7 +83,8 @@ fn a_word_add_of_registers_runs_on_the_whole_register() {
     let loop_body = lines[top..back_edge].join("\n");
     let words = loop_body.lines().filter(|line| line.trim_start().starts_with("add ") && !line.contains('e')).count();
     assert_eq!(words, 0, "a word add is left in the loop:\n{text}");
-    assert!(loop_body.contains("add ecx, 3"), "{text}");
+    let whole_step = loop_body.lines().map(str::trim).any(|line| line.starts_with("add e") && line.ends_with(", 3"));
+    assert!(whole_step, "{text}");
 }
 
 /// `t(3 * n + 1)`: the word chain `mov; shl; add; add 1` is one `lea`, and the

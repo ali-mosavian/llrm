@@ -61,7 +61,7 @@ def runtime16(work: Path) -> dict[str, Path]:
             make(
                 f"{source.stem}_{group}",
                 source,
-                lambda obj, source=source, bit=bit: dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "c"), f"OS_GROUPS={bit}"),
+                lambda obj, source=source, bit=bit: dosbatch.assemble(source, obj, *dosbatch.os_defines(dosbatch.REAL_MODE, "qb"), f"OS_GROUPS={bit}"),
             )
     return made
 
@@ -106,7 +106,7 @@ def one_target(source: Path, work: Path, objects: dict[str, dict[str, Path]], fl
     libs = qbruntime.linked_objects(source, work, "llrm", tuple(extra[1:]) if target == FLAT else (), f".{target}")
     if target == FLAT:
         loaders = dosbatch.link_target(
-            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target])), image=image
+            qb32.TARGET, obj, exe, work, listing, before=before, runtime=(qb32.START_FILES, []), objects_after=(*libs, *needed((obj, *libs), objects[target])), image=image, defines=dosbatch.os_defines(qb32.TARGET, "qb")
         )
         return Built(exe, tuple(loaders))
     link16(obj, objects[target], exe, libs)

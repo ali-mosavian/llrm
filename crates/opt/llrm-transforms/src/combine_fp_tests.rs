@@ -13,6 +13,7 @@ fn visit(
     match c.function.instruction(inst).opcode {
         Opcode::Binary(BinaryOp::FDiv) => super::visit_fdiv(c, inst),
         Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => super::visit_fadd_or_fmul(c, inst),
+        Opcode::Binary(BinaryOp::FSub) => super::visit_fsub(c, inst),
         // `simplifyCastInst`, as every visit starts with.
         Opcode::Cast(_) => crate::combine_muldivrem::simplify_first(c, inst).map_or(Visit::None, Visit::Replace),
         _ => Visit::None,
@@ -109,4 +110,24 @@ fn test_a_constant_chain_folds_only_with_reassoc_and_nsz() {
 fn test_a_float_constant_goes_to_the_right_of_a_commutative_operation() {
     let out = combined("double", "  %r = fmul double 2.0, %x\n");
     assert!(out.contains("fmul double %x, 2.000000e+00"), "{out}");
+}
+
+/// Pinned `opt -passes=instcombine`: `fsub float %x, 1.5` is `fadd float %x,
+/// -1.5`. Left as a subtract, 26 QCport functions differed from the pin by
+/// this alone.
+#[test]
+fn test_a_subtraction_of_a_constant_is_the_addition_of_its_negation() {
+    let out = combined("float", "  %r = fsub float %x, 1.5\n");
+    assert!(out.contains("fadd float %x, -1.5"), "{out}");
+    let out = combined("double", "  %r = fsub fast double %x, -2.0\n");
+    assert!(out.contains("fadd fast double %x, 2.0"), "{out}");
+}
+
+/// Pinned: `fsub -0.0, %x` is `fneg %x` and `%x - (fneg %y)` is `%x + %y`.
+#[test]
+fn test_a_subtraction_from_negative_zero_is_a_negation_and_of_a_negation_an_addition() {
+    let out = combined("double", "  %r = fsub double -0.0, %x\n");
+    assert!(out.contains("fneg double %x"), "{out}");
+    let out = combined("double", "  %n = fneg double %x\n  %r = fsub double %x, %n\n");
+    assert!(out.contains("fadd double %x, %x"), "{out}");
 }

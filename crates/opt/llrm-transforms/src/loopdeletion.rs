@@ -53,6 +53,8 @@
 //! [`deleteDeadLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L521),
 //! [`breakLoopBackedge`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L746).
 
+use std::rc::Rc;
+
 use llrm_analysis::scev::analysis::Scevs;
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
@@ -66,7 +68,7 @@ use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, GlobalValue, InstId, MetadataNode, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::passes::{Analyses, FunctionPass, Outer, PreservedAnalyses, Unit};
+use llrm_mir::passes::{Analyses, Dominators, FunctionPass, Loops, Outer, PreservedAnalyses, Unit};
 use llrm_mir::valuetracking::AssumptionCache;
 
 use crate::lcssa::{arms, from_arms};
@@ -111,15 +113,26 @@ fn merge(
 }
 
 struct Analyzed {
-    tree: DomTree,
-    loops: LoopInfo,
+    tree: Rc<DomTree>,
+    loops: Rc<LoopInfo>,
     assumptions: AssumptionCache,
 }
 
 impl Analyzed {
     fn of(run: &Run) -> Self {
-        let tree = DomTree::of(run.function);
-        let loops = LoopInfo::analyze(run.function, || &tree);
+        let tree = Rc::new(DomTree::of(run.function));
+        let loops = Rc::new(LoopInfo::analyze(run.function, || &*tree));
+        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        Self { tree, loops, assumptions }
+    }
+
+    /// The manager's trees: LLVM's `LoopStandardAnalysisResults` hands the
+    /// pass the ones it holds.
+    fn held(
+        run: &Run,
+        tree: Rc<DomTree>,
+        loops: Rc<LoopInfo>,
+    ) -> Self {
         let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
         Self { tree, loops, assumptions }
     }
@@ -264,10 +277,7 @@ fn is_loop_dead(
 ) -> bool {
     let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
     let dead = is_loop_dead_with(run, analyzed, lp, exiting_blocks, exit_block, changed, preheader, &mut se);
-    // The expressions stand while this left the function as it was.
-    if !*changed {
-        run.scev = se;
-    }
+    run.scev = se;
     dead
 }
 
@@ -816,9 +826,7 @@ fn break_backedge_if_not_taken(
 ) -> Result {
     let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
     let result = break_backedge_with(run, analyzed, lp, &mut se);
-    if result == Result::Unmodified {
-        run.scev = se;
-    }
+    run.scev = se;
     result
 }
 
@@ -916,7 +924,14 @@ fn delete_loop_if_dead(
 /// `LoopDeletionPass` over a function: every loop, innermost first. Whether
 /// anything changed.
 pub fn delete_loops(run: &mut Run) -> bool {
-    let mut analyzed = Analyzed::of(run);
+    let analyzed = Analyzed::of(run);
+    delete_loops_with(run, analyzed)
+}
+
+fn delete_loops_with(
+    run: &mut Run,
+    mut analyzed: Analyzed,
+) -> bool {
     let mut work: std::collections::VecDeque<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
     let mut changed = false;
@@ -926,6 +941,7 @@ pub fn delete_loops(run: &mut Run) -> bool {
         }
         let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
         let alone = lp.get_parent_loop().is_none() && lp.get_sub_loops().next().is_none();
+        let mark = run.function.mark();
         let mut result = delete_loop_if_dead(run, &analyzed, lp);
         // If we can prove the backedge isn't taken, just break it and be done.
         // This leaves the loop structure in place which means it can handle
@@ -940,8 +956,16 @@ pub fn delete_loops(run: &mut Run) -> bool {
             continue;
         }
         changed = true;
-        // The function is not as the expressions left it.
-        run.scev = ScalarEvolution::new();
+        // What the edits reached is forgotten; the other loops keep their
+        // counts.
+        match run.function.touched_since(mark) {
+            Some(touched) => {
+                let mut se = std::mem::replace(&mut run.scev, ScalarEvolution::new());
+                se.forget_touched(&cx_of(run, &analyzed), &touched);
+                run.scev = se;
+            }
+            None => run.scev = ScalarEvolution::new(),
+        }
         // LD4: a deleted loop with no loop around or inside it leaves the
         // other loops' analyses as they were.
         if !(deleted && alone) {
@@ -984,13 +1008,12 @@ impl FunctionPass for LoopDeletion {
             scev: ScalarEvolution::new(),
         };
         run.scev = held.take();
-        let changed = delete_loops(&mut run);
-        if changed {
-            PreservedAnalyses::none()
-        } else {
-            held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
-            PreservedAnalyses::all()
-        }
+        let tree = analyses.get::<Dominators>(run.context, run.layout, run.function);
+        let loops = analyses.get::<Loops>(run.context, run.layout, run.function);
+        let analyzed = Analyzed::held(&run, tree, loops);
+        let changed = delete_loops_with(&mut run, analyzed);
+        held.put(std::mem::replace(&mut run.scev, ScalarEvolution::new()));
+        if changed { PreservedAnalyses::none().preserve::<Scevs>() } else { PreservedAnalyses::all() }
     }
 }
 

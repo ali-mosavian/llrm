@@ -383,8 +383,8 @@ def test_a_slot_checkout_keeps_its_path_and_two_processes_never_share_a_slot(tmp
     (work / "stray.txt").write_text("left by the last PR\n")
     ps._alone_checkout(work, "main", repo)
     assert work.is_dir() and not (work / "stray.txt").exists()
-    first, lock_a = ps._claim_slot(tmp_path / "slots", 2)
-    second, lock_b = ps._claim_slot(tmp_path / "slots", 2)
+    first, lock_a = ps._claim_slot(tmp_path / "slots", 2, reserved=0)
+    second, lock_b = ps._claim_slot(tmp_path / "slots", 2, reserved=0)
     assert {first, second} == {0, 1}
     lock_a.close()
     lock_b.close()
@@ -440,12 +440,12 @@ def test_an_alone_check_runs_the_source_scanning_lib_tests_of_a_crate_upstream_o
     assert seen and "llrm-mir" in seen[0], seen
 
 
-def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
-    """#4673 fixed a test without removing its xfail entry; alone dropped the `xpass` names and said clean, and batches 19 and 20 were refused for it."""
+def test_a_pr_that_makes_a_listed_unit_test_pass_warns_alone_and_so_does_a_listed_integration_target_it_reaches(tmp_path, monkeypatch):
+    """An xpass is a warning, not a refusal (08daf86026); this test still asserted the old refusal and failed on parity alone: the 08:09 pass was refused for it. The integration target an xpass reaches is still run."""
     repo, head = alone_scratch(tmp_path)
     smoke = ps.parity_smoke_module()
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), scanners=lambda f: set(), units=lambda _: {"xpass unit llrm-x::t_a"})
-    assert why and "xpass unit llrm-x::t_a" in why[0], why
+    assert why == [], why
 
     seen = []
     import xfail
@@ -457,7 +457,7 @@ def test_a_pr_that_makes_a_listed_unit_test_pass_is_refused_alone_and_so_is_a_li
     monkeypatch.setattr(smoke, "integration_failures", lambda targets, root=None, **_: seen.extend(targets) or {"xpass integration header_copy::t"})
     monkeypatch.setattr(ps, "_scanners_failing_on_head", lambda targets: set())  # the real one reads and writes ~/scratch/results/headfail
     why = ps.alone_refusals(head, base="main", cwd=repo, check=lambda cwd: "", differs=lambda *_: set(), units=lambda _: set())
-    assert "header_copy" in seen and why and "xpass integration header_copy::t" in why[0], (seen, why)
+    assert "header_copy" in seen and why == [], (seen, why)
 
 
 def test_a_head_whose_tests_did_not_run_is_not_cached_as_its_failure_set(tmp_path):
@@ -583,3 +583,45 @@ def test_a_pr_that_does_not_link_alone_is_refused_and_only_a_runtime_or_frontend
 
     got = ps.alone_link_failures(["crates/frontends/llrm-qb/src/x.rs"], tmp_path, tmp_path, run=run)
     assert got == ["qb arena_type: boom"] and len(ran) == 2, (got, ran)
+
+
+def test_a_pr_joined_only_by_the_tests_append_driver_waits_for_its_owner(tmp_path):
+    """#5462, #5481 and #5591 appended a test to a file an earlier member appended to: the batch's driver merged both, GitHub's squash refused each as conflicting."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "tools").mkdir()
+    (repo / "tools/merge_tests_append.py").write_text((Path(__file__).resolve().parent / "merge_tests_append.py").read_text())
+    (repo / ".gitattributes").write_text("at_tests.rs merge=tests-append\n")
+    (repo / "at_tests.rs").write_text("#[test]\nfn base() {}\n")
+    (repo / "other.txt").write_text("x\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    base_text = (repo / "at_tests.rs").read_text()
+    heads = {
+        "1": branch(repo, "a", "at_tests.rs", base_text + "\n#[test]\nfn first() {}\n"),
+        "2": branch(repo, "b", "at_tests.rs", base_text + "\n#[test]\nfn second() {}\n"),
+        "3": branch(repo, "c", "other.txt", "y\n"),
+    }
+    sh(repo, "checkout", "-q", "main")
+    kept, waits = ps.assemble(["1", "2", "3"], heads, base="main", cwd=repo)
+    assert kept == ["1", "3"], (kept, waits)
+    assert list(waits) == ["2"] and waits["2"].startswith("needs owner parity merge") and "at_tests.rs" in waits["2"], waits
+
+
+def test_assemble_prints_one_progress_line_per_candidate(tmp_path, capsys):
+    """The 23:03 assembly ran 13 minutes with no output: nobody could say how many of the 40 heads were merged."""
+    repo = tmp_path / "repo"
+    sh(tmp_path, "init", "-q", "-b", "main", str(repo))
+    (repo / "shared.txt").write_text("one\ntwo\nthree\n")
+    sh(repo, "add", "-A")
+    sh(repo, "commit", "-qm", "base")
+    heads = {
+        "1": branch(repo, "a", "shared.txt", "one\nTWO\nthree\n"),
+        "2": branch(repo, "b", "shared.txt", "one\n2\nthree\n"),
+        "3": branch(repo, "c", "other.txt", "y\n"),
+    }
+    sh(repo, "checkout", "-q", "main")
+    ps.assemble(["1", "2", "3"], heads, base="main", cwd=repo, limit=16)
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith("assemble:")]
+    assert [line.split(" (")[0] for line in lines] == ["assemble: #1 kept", "assemble: #2 waits", "assemble: #3 kept"], lines
+    assert "(2/16 kept," in lines[-1], lines
