@@ -850,7 +850,7 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
     // 32-bit frames keep it (Watcom's layout, not the pin's).
-    let dropped = procedure.body.bits == 64 && {
+    let dropped = matches!(procedure.body.bits, 64) && {
         let held = frame_held(&procedure);
         (!procedure.size || held || procedure.registers.free) && stack_addressed(&procedure, 0).is_some()
     };
