@@ -69,6 +69,15 @@ why = "measured 18.5 -> 52.2 Minstr (x2.82)"
 
 [[debt]]
 kind = "steps"
+axis = "cases"
+name = "analysis exposed-frames"
+ratio = 3.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2260"
+owner = "coordinator (to assign)"
+why = "measured 5.2 -> 18.7 Minstr (x3.56)"
+
+[[debt]]
+kind = "steps"
 axis = "nest"
 name = "lir coalesce"
 ratio = 3.3
@@ -135,21 +144,21 @@ why = "measured 118.9 -> 359.9 Minstr (x3.03)"
 
 [[debt]]
 kind = "events"
-axis = "functions"
-name = "scev_nodes"
-ratio = 3.2
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w10 compile-profile"
-why = "measured 17272 -> 51992 (x3.01)"
-
-[[debt]]
-kind = "events"
 axis = "nest"
 name = "lvi_icmp_patterns"
 ratio = 3.45
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
 why = "measured 5530 -> 17937 (x3.24)"
+
+[[debt]]
+kind = "events"
+axis = "cases"
+name = "lvi_icmp_patterns"
+ratio = 3.68
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 39226 -> 137384 (x3.50); 3N-pred block, MAX_PROCESSED_PER_VALUE=500 with pin-faithful solveBlockValueNonLocal restart"
 
 [[debt]]
 kind = "events"
@@ -212,7 +221,7 @@ name = "mir indvars@738"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 66.2 -> 178.3 Minstr (x2.69)"
+why = "measured 66.2 -> 178.3 Minstr (x2.69): SCEV isBasicBlockEntryGuardedByCond climbs unbounded predecessor chains, as the pin does; a function of N blocks climbs O(N) per query"
 
 [[debt]]
 kind = "steps"
@@ -848,37 +857,37 @@ why = "measured 2.8 -> 8.6 Minstr (x3.09)"
 kind = "steps"
 axis = "cases"
 name = "mir cvp@669"
-ratio = 2.9
+ratio = 2.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 29.2 -> 81.8 Minstr (x2.80); was 124.6 -> 322.6 before #5802 moved the denominator, the pass itself did not change"
+why = "measured 124.6 -> 322.6 -> 15.2 (4N) Minstr (x2.59)"
 
 [[debt]]
 kind = "steps"
 axis = "cases"
 name = "mir decide@832"
-ratio = 3.2
+ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 6.7 -> 20.5 Minstr (x3.07) after #5802 (was 56.7 -> 202.0, x3.56): the state machine is no longer threaded, as the pin leaves it"
+why = "measured 56.7 -> 202.0 Minstr (x3.56)"
 
 [[debt]]
 kind = "steps"
 axis = "cases"
 name = "mir decide@1244"
-ratio = 3.2
+ratio = 3.8
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 8.7 -> 26.5 Minstr (x3.03) after #5802 (was 53.4 -> 189.6, x3.55): the state machine is no longer threaded, as the pin leaves it"
+why = "measured 53.4 -> 189.6 Minstr (x3.55)"
 
 [[debt]]
 kind = "steps"
 axis = "cases"
 name = "mir cvp@810"
-ratio = 2.5
+ratio = 3.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w10 compile-profile"
-why = "measured 16.4 -> 38.8 Minstr (x2.37) after #5802 (was 40.2 -> 146.1, x3.64): the state machine is no longer threaded, as the pin leaves it"
+why = "measured 40.2 -> 146.1 Minstr (x3.64)"
 
 [[debt]]
 kind = "steps"
@@ -919,6 +928,15 @@ why = "measured 28.2 -> 78.3 Minstr (x2.77)"
 [[debt]]
 kind = "steps"
 axis = "cases"
+name = "mir dfajumpthreading@806"
+ratio = 3.9
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 19.0 -> 68.9 Minstr (x3.63)"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
 name = "regalloc base"
 ratio = 2.9
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
@@ -938,10 +956,10 @@ why = "measured 22.4 -> 57.6 Minstr (x2.57)"
 kind = "steps"
 axis = "cases"
 name = "mir jumpthreading@809"
-ratio = 3.1
+ratio = 3.49
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "measured 1.8 -> 5.5 Minstr (x2.99) after #5802 (was 29.8 -> 99.1, x3.32). Cause was DFAJumpThreading@806 threading the state machine (+32% instrs) that the pin does not thread: the pin's InstCombine turns `select (and x,2)==0, 6, 4` into an xor, which DFA's isCandidate rejects; foldSelectBitTest is now ported. The remaining slope is LVI per switch edge, as the decide rows"
+why = "llrm-cc 2026-10-28: measured 29.8 -> 99.1 Minstr (x3.32). Cause (w15, LLRM_DEBUG=counts,time at N=64/128/256/512): DFAJumpThreading@806 threads the state machine and grows the function 32% (jumpthreading@809 runs over 1052/2075/4123 instrs against 799/1566/3102 for @806); @809 then asks LVI about each cloned block's `c < K` and lvi_icmp_patterns reads 11.4K/39.2K/137.4K (x3.4-3.5 per doubling, ~N^1.8, patterns per predecessor list 9.5/16.2/28.3: the work per query grows with the switch's N edges). At N=512 @806 gives up (no growth, 3120 instrs) and @809 falls to 6.4 Minstr: a cliff, not a trend"
 
 [[debt]]
 kind = "steps"
@@ -968,7 +986,7 @@ name = "mir sroa@1179"
 ratio = 2.89
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 7.3 -> 20.1 Minstr (x2.75); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: measured 7.3 -> 20.1 Minstr (x2.75); N=128/256/512: 7.3 / 20.1 / 62.8 Minstr (x2.7, x3.1), no event counter grows; cause not located"
 
 [[debt]]
 kind = "steps"
@@ -986,7 +1004,7 @@ name = "mir decide@766"
 ratio = 3.6
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4; unchanged by #5802 (x3.4 after it: this pass runs before DFA, so the slope is LVI's, not the cloning)"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1022,7 +1040,7 @@ name = "mir decide@675"
 ratio = 3.55
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4; unchanged by #5802 (x3.4 after it: this pass runs before DFA, so the slope is LVI's, not the cloning)"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1031,7 +1049,7 @@ name = "mir decide@690"
 ratio = 3.55
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4; unchanged by #5802 (x3.4 after it: this pass runs before DFA, so the slope is LVI's, not the cloning)"
+why = "llrm-cc 2026-10-28: grows with lvi_icmp_patterns (x3.50 on the same input, 39226 -> 137384): decide asks LVI per switch edge, and LVI is superlinear on the 3N-pred block (MAX_PROCESSED_PER_VALUE=500 restart, pin-faithful). Minstr x3.2-3.4"
 
 [[debt]]
 kind = "steps"
@@ -1058,7 +1076,16 @@ name = "mir loop-simplifycfg@716"
 ratio = 3.56
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 1.8 -> 6.2 Minstr (x3.39); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: measured 1.8 -> 6.2 Minstr (x3.39); N=128/256/512: 16.4 / 38.3 / 59.2 Minstr (x2.3, x1.5); the doubling past 256 is under the limit, cause not located"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir cgpaddr"
+ratio = 2.8
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w10 compile-profile"
+why = "measured 2.3 -> 6.0 Minstr (x2.63)"
 
 [[debt]]
 kind = "steps"
@@ -1660,8 +1687,8 @@ axis = "live"
 name = "regalloc base"
 ratio = 2.5
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w13 regalloc"
-why = "measured 36.9 -> 87.3 Minstr (x2.37)"
+owner = "w10 compile-profile"
+why = "greedy region split on N values live across a call; ours x2.3/doubling vs pin x2.9-3.3 (llc greedy minus -regalloc=fast, instructions:u)"
 
 # [[window]] rows: steps that switch on inside an axis's window (tools/test_budgets.py,
 # test_no_step_switches_on_between_the_two_sizes_of_an_axis). A step near the bound (jump about 1.0) comes and goes with what else is in the tree; a row no longer needed is deleted by hand.
@@ -1741,7 +1768,7 @@ name = "lir peephole"
 ratio = 2.46
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
-why = "llrm-cc 2026-10-28: measured 16.4 -> 38.2 Minstr (x2.34); unprofiled, follow-up by w2"
+why = "llrm-cc 2026-10-28: measured 16.4 -> 38.2 Minstr (x2.34); N=128/256/512: 1.8 / 6.2 / 0.2 Minstr; @716 is a different instance at 512, so not one pass across N; cause not located"
 
 [[debt]]
 kind = "steps"
@@ -1750,7 +1777,16 @@ name = "lir jumps"
 ratio = 2.42
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w11"
-why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 vs 256: placement::order self x3.6, top_fall_through x3.9, build_chain x3.5 (chain building over one N-way switch; top_fall_through scans a join's preds as the pin does), the rest x2.0-2.6. succ_seen is not it (HashSet: no change). Pin ratio not measured"
+why = "llrm-cc 2026-10-28: measured 9.1 -> 20.9 Minstr (x2.30). Callgrind N=128 vs 256: placement::order self x3.6, top_fall_through x3.9, build_chain x3.5 (chain building over one N-way switch; top_fall_through scans a join's preds as the pin does), the rest x2.0-2.6. succ_seen is not it (HashSet: no change). The pin is as superlinear: Branch Probability Basic Block Placement 0.6 -> 0.8 -> 4.9 ms at N=64/128/256 (x6.1 for 128 -> 256, ours x3.6); selectBestSuccessor/hasBetterLayoutPredecessor loop a switch block's successors per candidate in both"
+
+[[debt]]
+kind = "steps"
+axis = "cases"
+name = "mir adce@815"
+ratio = 2.49
+issue = "https://github.com/ali-mosavian/llrm/issues/2369"
+owner = "w2"
+why = "llrm-cc 2026-10-28: measured 2.1 -> 5.1 Minstr (x2.37); N=128/256/512: 2.1 / 5.1 / 3.2 Minstr; @815 is a different pipeline instance at 512, so not one pass across N; cause not located"
 
 [[debt]]
 kind = "steps"
@@ -1759,7 +1795,7 @@ name = "lir jumps"
 ratio = 2.66
 issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w11"
-why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53). Callgrind N=64 vs 128: tailmerge seq_from x8.8, item_of x8.6, try_merge x12.6, merged x5.7 (candidate pairs within equal-hash groups; pin TryTailMergeBlocks is pairwise too, not measured); branchfold rules x2.5"
+why = "llrm-cc 2026-10-28: measured 44.2 -> 112.0 -> 95.3 (4N) Minstr (x2.53). Callgrind N=64 vs 128: tailmerge seq_from x8.8, item_of x8.6, try_merge x12.6, merged x5.7 (equal-hash groups of long identical predecessor blocks, re-read each round; reading them lazily from the end changed nothing: they match whole). Not like-for-like with the pin: its IR has ~6x the blocks (1542 against 260 at N=128) and its Control Flow Optimizer is flat, so the IR reaching tail merging differs; branchfold rules x2.5"
 
 [[debt]]
 kind = "steps"
@@ -1770,20 +1806,3 @@ issue = "https://github.com/ali-mosavian/llrm/issues/2369"
 owner = "w2"
 why = "llrm-cc 2026-10-28: measured 425.4 -> 1105.4 Minstr (x2.60); dse alone 326 -> 793 -> 2494 Minstr at N=820/1640/3280 (x2.4, x3.1). No event counter grows; scan limits are the pin's (150/90/5), defs per block under 5000, so the superlinear part is not located"
 
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "lir machinecp"
-ratio = 2.6
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w15"
-why = "measured 2.1 -> 5.4 Minstr (x2.53) after #5802; not new, under the floor on base while the threaded state machine doubled the compile. Cause (callgrind, llrm-llc at N=128/256): machinecp::propagated 4.9M -> 12.0M Ir, of which liveness::lanewise 4.5M -> 13.1M (x2.9, dead_at_exit): the lane-liveness worklist solve runs over a dispatch block with N back edges, so each round revisits N predecessors. The walks themselves are x1.5-1.9. ~1% of the compile; the pin runs no liveness solve here, so no fix (coordinator, 10-28)"
-
-[[debt]]
-kind = "steps"
-axis = "cases"
-name = "lir machinesched"
-ratio = 2.4
-issue = "https://github.com/ali-mosavian/llrm/issues/2369"
-owner = "w15"
-why = "measured 6.4 -> 14.8 Minstr (x2.30) after #5802; not new, under the floor on base for the same reason as lir machinecp. Cause (callgrind, llrm-llc at N=128/256): no single superlinear function; the sum is the many per-block pieces each a little over x2: transform 7.0M -> 16.1M Ir (x2.32) = graph x2.13, bottom_up x2.17, with_blocks x1.93, Lane extend_with x2.0, so the excess over x2 is spread, not one loop"

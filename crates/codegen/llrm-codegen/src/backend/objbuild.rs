@@ -1227,8 +1227,13 @@ pub fn object_of(
         }
         sections.push(Section { name, role, near, align, image, spans, relocs });
     }
+    // The module is named for the source the debug info names: CodeView finds
+    // the lines' file by the module's name (THEADR), not the `.ll` a compiler
+    // was handed.
+    let name =
+        debug.as_ref().and_then(|info| info.files.first()).map_or_else(|| source.to_owned(), |file| file.name.clone());
     Ok(Object {
-        name: source.to_owned(),
+        name,
         bits: match model {
             CodeModel::Flat64 => 64u8,
             CodeModel::Flat32 => 32u8,
@@ -1238,6 +1243,7 @@ pub fn object_of(
         symbols: table,
         omf_groups,
         omf_comdat: Vec::new(),
+        frames: Vec::new(),
         debug,
     })
 }

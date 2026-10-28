@@ -202,6 +202,7 @@ const LLC_FLAGS: &[&str] = &[
     "-mfar-bss",
     "-mno-far-bss",
     "-mregcall-default",
+    "-mc-library",
     "-mbss-begin",
     "-mno-bss-begin",
     "-fstack-usage",
