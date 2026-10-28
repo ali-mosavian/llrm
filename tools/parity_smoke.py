@@ -108,18 +108,27 @@ class Meter:
         self.value = total if seen else None
 
 
-def run_cut(command: list[str], seconds: float, cwd: Path) -> tuple[int | None, str]:
-    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was killed. A cargo killed alone leaves its test binary
-    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background."""
-    child = subprocess.Popen(command, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
+CUT_GRACE = 3.0  # seconds a cut group has to exit on SIGINT before SIGKILL
+
+
+def run_cut(command: list[str], seconds: float, cwd: Path, env: dict[str, str] | None = None) -> tuple[int | None, str]:
+    """(exit code, output) of `command`; (None, '') if it ran past `seconds` and its whole process group was stopped. A cargo killed alone leaves its test binary
+    running unseen: the unit step read '0.0 s' for 1,143 tests that went on in the background. The group gets SIGINT first, so the `perf stat` wrapped around the command
+    (see Meter) still writes the instructions it counted; SIGKILL took them to the grave and a cut step counted 0 G beside a finished one's 120 G."""
+    child = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = child.communicate(timeout=seconds)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except ProcessLookupError:  # it ended between the timeout and the kill
-            pass
-        child.communicate()
+        for sig in (signal.SIGINT, signal.SIGKILL):
+            try:
+                os.killpg(child.pid, sig)
+            except ProcessLookupError:  # it ended between the timeout and the signal
+                break
+            try:
+                child.communicate(timeout=CUT_GRACE if sig == signal.SIGINT else None)
+                break
+            except subprocess.TimeoutExpired:
+                continue
         _charged[0] += seconds
         return None, ""
     return child.returncode, out
@@ -786,7 +795,9 @@ def unit_step(package: str, allowance: float):
         ranking = selection().get("units", {})
         names = unit_tests(package, allowance, {k: [(n, s) for n, s in v.get("tests", [])] for k, v in ranking.items()})
         command = ["cargo", "test", "-q", "--lib", "-p", package] + (["--", "--exact", *names] if names else [])
-        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT)
+        # an unranked crate runs its whole lib, cut by wall time: one test thread keeps that wall time the CPU it is charged (32 threads ran 32x the budget in it)
+        env = None if names else {**os.environ, "RUST_TEST_THREADS": "1"}
+        code, output = run_cut(slotted(command), allowance + CARGO_OVERHEAD, ROOT, env=env)
         if code is None:
             return "ok", f"{package}: no ranking yet, cut at {allowance:.1f} s without a failure"
         listed = xfail.load_for(ROOT)

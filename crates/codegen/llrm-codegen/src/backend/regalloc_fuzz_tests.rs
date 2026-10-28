@@ -980,7 +980,6 @@ fn test_generated_bodies_allocate() {
         .map(|one| vec![one])
         .unwrap_or_else(|_| ["386", "486", "Core", "P5"].map(str::to_owned).to_vec());
     let mut failures = Vec::new();
-    let before = crate::backend::allocate::last_resorts();
     for seed in only.map_or(0..count, |one| one..one + 1) {
         for cpu in &cpus {
             // Pressure from a few over the registers to far over.
@@ -996,7 +995,6 @@ fn test_generated_bodies_allocate() {
             }
         }
     }
-    eprintln!("last resorts: {}", crate::backend::allocate::last_resorts() - before);
     let mut kinds: std::collections::BTreeMap<String, usize> = Default::default();
     for one in &failures {
         let why = one.lines().next().unwrap_or("").split(": ").skip(1).collect::<Vec<_>>().join(": ");
