@@ -3,7 +3,8 @@ name = "llrm-wasm"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "The WebAssembly target: its descriptions, translated from LLVM's WebAssembly backend"
+description = "The WebAssembly target: its descriptions and DAG selector tables, generated from LLVM's WebAssembly .td"
 
 [dependencies]
 llrm-target = { workspace = true }
+llrm-dagisel = { path = "../../backend/llrm-dagisel" }

@@ -1,5 +1,7 @@
 //! The WebAssembly target. Its descriptions are the files in `machines/`.
 
+pub mod dagisel;
+
 use llrm_target::layout::Layout;
 
 /// The pointer width of a module: `wasm32` or `wasm64`.
