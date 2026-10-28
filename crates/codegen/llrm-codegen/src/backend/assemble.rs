@@ -972,6 +972,7 @@ fn staged(
         segments: target.segments,
         runtime: abi.runtime_contracts(),
         frame_zeroed: zeroed,
+        facts: Some(target.facts),
     });
     let dag = match target.selector {
         Selector::Old => None,

@@ -19,7 +19,7 @@ LAYERS = [
         "mc and target interface",
         [
             "llrm-object", "llrm-debuginfo", "llrm-omf", "llrm-elf", "llrm-elf32", "llrm-elf64", "llrm-elf-arm64",
-            "llrm-coff", "llrm-coff32", "llrm-coff64", "llrm-macho", "llrm-target", "llrm-instr", "llrm-iselgen",
+            "llrm-coff", "llrm-coff32", "llrm-coff64", "llrm-macho", "llrm-target", "llrm-iselgen",
             "llrm-peepgen",
         ],
     ),

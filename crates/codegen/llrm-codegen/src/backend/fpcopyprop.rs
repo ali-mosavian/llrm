@@ -309,7 +309,7 @@ fn without_double_roundings(
 /// fused, or `None` if none changed.
 pub(super) fn propagated(body: &LirBody) -> Option<LirBody> {
     let regs = body.regs();
-    let copies = body.insns().iter().any(|one| copy_of(regs, one).is_some());
+    let copies = body.iter_insns().any(|one| copy_of(regs, one).is_some());
     let out = if copies { Some(live_out(body, regs)) } else { None };
     let mut changed = copies;
     let blocks = body
